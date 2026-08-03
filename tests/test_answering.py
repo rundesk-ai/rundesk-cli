@@ -2726,17 +2726,21 @@ class IntroducingTheAgentToSomebodyNewlyAllowed(unittest.IsolatedAsyncioTestCase
         self.assertEqual("ops", asked["on"])
         self.assertTrue(asked["fresh"], "a greeting resumed a conversation")
 
-    async def test_the_greeting_is_told_to_be_brief_and_to_invent_nothing(self):
-        """R-CH-33 — a new agent has no projects and no goals, and offering one is telling
-        an owner what they wanted before they have said it."""
+    async def test_the_greeting_carries_the_onboarding_layer_whole(self):
+        """R-CH-33 — what the greeting is asked for is rundesk's own text and the owner's
+        to word. What a turn owes it is that the layer reaches the brain intact, filled
+        with the agent it introduces, and stacked on rundesk's rules rather than instead
+        of them."""
         brain = Brain(outcome=Outcome(text="Hello."))
         held, _surface = self.channel(brain=brain)
 
         await held.welcomed("1180")
 
         preface = brain.asked[0]["preface"]
-        self.assertIn("very short", preface)
-        self.assertIn("Never invent", preface)
+        self.assertIn(
+            instructions.render(instructions.ONBOARDING_INSTRUCTIONS,
+                                {"agent": "ava"}).strip(),
+            preface)
         self.assertIn(instructions.RUNDESK_INSTRUCTIONS.splitlines()[0], preface,
                       "rundesk's own rules were displaced by the onboarding layer")
 

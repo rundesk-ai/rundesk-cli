@@ -89,9 +89,13 @@ class WithARunDirectory(unittest.IsolatedAsyncioTestCase):
         kept.made()
         return kept
 
-    def made(self, name: str = gateway.DEFAULT_NAME, records=False) -> gateway.Gateway:
+    def made(self, name: str = gateway.DEFAULT_NAME, records=False,
+             **more) -> gateway.Gateway:
+        """A gateway in this case's own directories. Anything else a case needs to hand it
+        goes through `**more`, so a new collaborator does not mean a new fixture."""
         gw = gateway.Gateway(name, where=self.where, logs=self.logs, root=self.root,
-                             records=self.records if records is False else records)
+                             records=self.records if records is False else records,
+                             **more)
         self.addCleanup(gw.release)
         return gw
 
@@ -1509,13 +1513,31 @@ class WhatEveryAdapterOfOneGatewayIsTold(WithARunDirectory):
 
     class Surface:
         env = {"SOMETHING": "kept"}
+        #: What this surface reads its own credential from, which the install's values are
+        #: never given to it under. Empty here, and named in the case that proves it.
+        channel_secrets = frozenset()
+
+    def made(self, name="gateway", **more):
+        """A gateway whose values are produced by a stand-in, never by this machine's own.
+
+        The whole point of the collaborator: these cases run with no store, no keeper and
+        nothing of the owner's, on a machine that may have all three.
+        """
+        async def kept(exclude=()):
+            from rundesk import secret
+
+            return secret.Resolved(values={one: value for one, value
+                                           in getattr(self, "keeping", {}).items()
+                                           if one not in set(exclude)})
+
+        return super().made(name, secrets_resolving=kept, **more)
 
     async def test_the_gateway_lifetime_is_shared_only_by_its_own_adapters(self):
         first = self.made()
         successor = self.made("successor")
-        one = first._for_a_channel(self.Surface())
-        two = first._for_a_channel(self.Surface())
-        later = successor._for_a_channel(self.Surface())
+        one = await first._for_a_channel(self.Surface())
+        two = await first._for_a_channel(self.Surface())
+        later = await successor._for_a_channel(self.Surface())
 
         self.assertEqual(one["RUNDESK_GATEWAY"], two["RUNDESK_GATEWAY"])
         self.assertNotEqual(one["RUNDESK_GATEWAY"], later["RUNDESK_GATEWAY"])
@@ -1527,9 +1549,67 @@ class WhatEveryAdapterOfOneGatewayIsTold(WithARunDirectory):
         newest *published* release rather than the one it is running, and one reading an
         updater transcript would have nothing to read after an unattended update."""
         from rundesk import __version__, updater
-        told = self.made()._for_a_channel(self.Surface())
+        told = await self.made()._for_a_channel(self.Surface())
         self.assertEqual(__version__, told["RUNDESK_VERSION"])
         self.assertEqual(updater.release_url(__version__), told["RUNDESK_RELEASE_URL"])
+
+    async def test_every_adapter_is_given_the_values_this_install_keeps(self):
+        """R-SEC-1 — a channel adapter is a program rundesk starts like any other, so an
+        integration command it runs finds the same credential a brain's would."""
+        self.keeping = {"GITHUB_TOKEN": "gh-x"}
+
+        told = await self.made()._for_a_channel(self.Surface())
+
+        self.assertEqual("gh-x", told["GITHUB_TOKEN"])
+
+    async def test_a_surface_is_never_given_the_value_it_reads_its_own_credential_from(self):
+        """R-SEC-29 — the adapter reads its variable before the file beside it, and two
+        agents may hold two different bots. One install-wide value would make them the same
+        bot, silently, with each agent's record still naming a file nobody read."""
+        self.keeping = {"DISCORD_TOKEN": "one-bot", "GITHUB_TOKEN": "gh-x"}
+
+        class Discord(self.Surface):
+            channel_secrets = frozenset({"DISCORD_TOKEN"})
+
+        told = await self.made()._for_a_channel(Discord())
+
+        self.assertNotIn("DISCORD_TOKEN", told)
+        self.assertEqual("gh-x", told["GITHUB_TOKEN"],
+                         "excluding one name excluded the rest with it")
+
+    async def test_what_a_keeper_said_went_wrong_never_reaches_the_gateways_own_log(self):
+        """R-SEC-26 — a keeper that fails prints the thing it was reading, and on a bad
+        wrapper the value itself. This log stands under the data directory, which is what a
+        backup copies whole, so a line carrying those words would put a credential into the
+        one place the store exists to stay out of. The name and which kind of not-given it
+        was is what an owner needs here; the keeper's own words are shown by `env check`,
+        at a terminal, where nothing writes them down."""
+        from rundesk import secret
+
+        leaked = "op: read op://work/github failed with sk-live-must-not-be-logged"
+
+        async def kept(exclude=()):
+            return secret.Resolved(values={}, trouble=(
+                secret.Trouble(name="OP_TOKEN", kept_as=secret.FETCHED,
+                               answered=True, why=leaked),))
+
+        gw = super().made("gateway", secrets_resolving=kept)
+        await gw._for_a_channel(self.Surface())
+
+        written = "".join(one.read_text(errors="replace")
+                          for one in self.logs.rglob("*") if one.is_file())
+        self.assertNotIn(leaked, written, "a keeper's own words reached a backed-up log")
+        self.assertNotIn("sk-live-must-not-be-logged", written)
+        self.assertIn("OP_TOKEN", written, "it did not say which value went missing")
+
+    async def test_what_a_gateway_already_decided_survives_a_value_claiming_its_name(self):
+        """R-SEC-14 — the merge is never over what rundesk built, at this layer too."""
+        self.keeping = {"RUNDESK_GATEWAY": "taken", "SOMETHING": "taken"}
+
+        told = await self.made()._for_a_channel(self.Surface())
+
+        self.assertNotEqual("taken", told["RUNDESK_GATEWAY"])
+        self.assertEqual("kept", told["SOMETHING"])
 
 
 class TheClockIsLookedAtAsSoonAsThereIsAGatewayToLookAtIt(WithARunDirectory):

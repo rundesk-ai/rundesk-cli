@@ -8,6 +8,30 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **A command that reads standard input because it is "not a terminal" hangs the gate,
+  and the failure names nothing.** `sys.stdin.readline()` on an *open pipe with nothing
+  in it* blocks until the far end closes, which may be never — and that is exactly what
+  a brain's tool shell hands its children and what `tests/test_cli.py` hands the surface
+  walk. Measured: `tests/test_cli.py` ran 12 seconds with `< /dev/null` and never
+  finished without it, with no output naming the verb. **Reading stdin is asked for and
+  never inferred** (`--stdin`, the shape `--token-stdin` already has); infer it and an
+  agent hangs its own turn. If a suite that passed suddenly never ends, run it with
+  `< /dev/null` before looking at anything else — finishing then is the whole diagnosis.
+
+- **`doc-lint` fails a ratified `prd/` contract that cites a `prd-drafts/` id, so a new
+  contract has to be ratified *before* the rows that cite it land.** Adding
+  `(R-SEC-26)` to `lifecycle-removal.md` while `platform-secrets.md` was still a draft
+  failed with "cites R-SEC-26 which is a prd-drafts/ proposal", naming the citing file
+  rather than the draft. `git mv` the draft into `prd/` first, then add the citations —
+  and remember the layer rule bites the other way: `platform-` (rank three) may never
+  cite `channel-` (rank six), so the dependency runs from `channel-adapter.md` to
+  `R-SEC-n` and never back.
+
+- **`doc-lint`'s `NUMERIC` rule rejects any bare digits in a requirement row**, so
+  `0600`, `600` and `4` all fail with a message about naming the tunable rather than
+  about the number. Spell it — "readable only by the owner", "the last few characters" —
+  and put the figure in the module constant where it belongs.
+
 - **"I could not tell" reaches this codebase from a subprocess as readily as from a file, and the
   rule was only ever applied to files.** `durable.read` tells `MISSING` from `UNREADABLE`,
   `_anything_left` answers "still there" when it cannot read, and `_end_left_running` keeps a record
@@ -310,6 +334,15 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   suite, or give the worktree a real `.venv` by installing it into a disposable station
   (`.knowledge/guides/testing-against-a-station.md` — `install.sh` builds `${SCRIPT_DIR}/.venv`,
   so the station's install is what puts *every* pinned dependency beside the code under test).
+- **And that same missing `.venv` adds a *second*, different failure to the conformance
+  harness, which reads like part of whatever you are reproducing.** Both shipped adapters
+  resolve the virtualenv from their own file (`parents[2]`), not from the interpreter running
+  the suite — so `tests/test_channel.py --adapter src/channels/discord` in a worktree with no
+  `.venv` also fails `everything an adapter reports is something the seam can act on`, on the
+  adapter's `{"ok": false, "why": "discord.py is not installed …"}` refusal. That is the
+  missing dependency, not the harness: build the worktree's own `.venv` (`python3 -m venv .venv
+  && .venv/bin/python -m pip install -r requirements.txt`) before believing a second failure is
+  real. #295 was filed carrying one of these as an untraced extra.
 - **Driving the adapters' `_read` from a pipe makes asyncio log `OSError: [Errno 9] Bad file
   descriptor` from a case that has already passed.** `connect_read_pipe` hands the descriptor
   to a transport that goes on reading until it sees the end of the pipe and then closes the
@@ -518,14 +551,22 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   that matters. The same run also showed that a probe naming *one* test can pass while a
   sibling catches the break, so a green probe means "this case has no teeth", never "the code
   is unprotected" — narrow to the case, then widen to its class before concluding either.
-- **Adding any `RUNDESK_*_DIR` resolver fails `test_supervisor` until the launchd job carries
-  it.** `test_the_job_carries_every_place_rundesk_can_be_pointed_at` scrapes
-  `environ.get("RUNDESK_..._DIR")` out of the *source* of `gateway`, `agent` and the package
-  `__init__`, then asserts `supervisor.describe()` names every one it found. So a new directory
-  variable is caught the moment it is written, in a suite that looks unrelated to the feature
-  adding it — which is the guard working, not a broken test. Add the variable to `describe()`'s
-  `EnvironmentVariables` in the same change; a supervised gateway resolving a different place
-  from the command that wrote its job is the failure it exists to prevent.
+- **Adding a `RUNDESK_*_DIR` resolver fails `test_supervisor` until the launchd job carries
+  it — *if the resolver is in a module that case names by hand*, and it names four.**
+  `test_the_job_carries_every_place_rundesk_can_be_pointed_at` scrapes
+  `environ.get("RUNDESK_..._DIR")` out of the *source* of `gateway`, `agent`, `secret` and the
+  package `__init__`, then asserts `supervisor.describe()` names every one it found. In one of
+  those, a new directory variable is caught the moment it is written, in a suite that looks
+  unrelated to the feature adding it — which is the guard working, not a broken test. Add the
+  variable to `describe()`'s `EnvironmentVariables` in the same change.
+  **In a fifth module it is caught by nothing.** `secret.py` was the fourth, reading
+  `RUNDESK_SECRETS_DIR`, and the case stayed green while a supervised gateway would have
+  resolved a different directory from the command that wrote its job — which is the failure
+  this whole thing exists to prevent. So **add your module to the scrape in the same commit
+  you add the resolver**, and note the asymmetry with `RUNDESK_JOB_PREFIX`: that one is
+  written into `describe()` only when set, because unset resolves the same answer through the
+  same code — which is false for anything whose default is built from a variable launchd
+  never forwards, such as `XDG_CONFIG_HOME`. Those are written unconditionally.
 - **A requirement row is capped at 25 words and `doc-lint` counts them, drafts included.** The
   message is exact — `R-ROL-38 requirement is 28 words (max 25)` — but nothing says so while you
   are writing the row, and a requirement written to be unambiguous lands at about thirty. Say the
@@ -552,6 +593,21 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `RUNDESK_AGENTS_DIR` under a scratch root before importing the module**, and assert
   `str(scratch) in str(skill.home())` as the first line that runs. Checking `env | grep
   RUNDESK` is empty proves the danger, not the safety.
+- **`secret.home()` resolves to the owner's live `~/.config/rundesk/secrets` when
+  `RUNDESK_SECRETS_DIR` is unset — and a scrubbing `env -u` prefix unsets the very variable
+  you set in front of it.** Same shape as the `skill.home()` entry below, one directory
+  along, and it bites through the ordering rather than through forgetting: writing
+  `RUNDESK_SECRETS_DIR=/tmp/scratch env -u RUNDESK_HOME -u … -u RUNDESK_SECRETS_DIR ./rundesk
+  env set DEPLOY_KEY --stdin` sets it and then the scrubber takes it away, so the fallback
+  `${XDG_CONFIG_HOME:-$HOME/.config}/rundesk/secrets` wins and the value lands in the owner's
+  own install, where every program they start is then given it. Measured here: two probes
+  created `~/.config/rundesk/secrets/{key,registry.json,values/DEPLOY_KEY}` while the command
+  reported an ordinary `KEPT`, and nothing anywhere said which directory it had used. **Put
+  the override after the scrubber** — `env -u … env RUNDESK_SECRETS_DIR=/tmp/scratch cmd` —
+  or drop it from the scrub list, and check `ls ~/.config/rundesk` before and after anything
+  that runs `env set`. `rundesk env --where` under the same prefix answers in one line and
+  settles it before you write.
+
 - **A backticked anything in an Evidence cell is read as the name of a test.** That is the whole
   mechanism keeping a ✅ honest, and it does not care that the row is ❌ or that the backticks are
   around a filename, a path or a script. Write those plainly in a note — `check-evidence` fails the

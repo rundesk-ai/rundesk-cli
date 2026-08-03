@@ -41,7 +41,7 @@ from pathlib import Path
 
 from rundesk import activity
 from rundesk import agent as agents
-from rundesk import process, provider, store, transcript
+from rundesk import process, provider, secret, store, transcript
 
 #: What a conversation is called when nobody named one. A second `rundesk ask` carries the
 #: first one on, which is what a person at a terminal means by asking again.
@@ -240,6 +240,7 @@ async def carry(
     recovery_of: str | None = None,
     started=None,
     context: "Execution | None" = None,
+    secrets_resolving=None,
 ) -> Outcome:
     """Run one turn for this agent, and write down everything about it.
 
@@ -309,9 +310,16 @@ async def carry(
     # these belong to one.
     transcript.sweep(whose["logs"])
 
+    # **Produced once for the whole turn** (R-SEC-1, R-SEC-30). Off the loop, because a
+    # value fetched by somebody else's command is a subprocess; and once, because asking
+    # twice is two prompts in front of whoever keeps a vault that wants one. Every attempt
+    # below is given this same set, so a brain started again mid-turn is started with what
+    # the first one had rather than with whatever the vault says a minute later.
+    keeping = await (secrets_resolving or secret.resolved)()
+
     can = await provider.capabilities(at, provider.environment(
         home=whose["run"], cwd=running.cwd, provider_home=home, skills=running.skills,
-        run="capabilities", posture=posture, path=None,
+        run="capabilities", posture=posture, path=None, secrets=keeping.values,
     ))
     kept = agents.records(name, where)
     where_it_is = kept.opened(store.conversation_id(on, conversation), on, kind,
@@ -371,6 +379,26 @@ async def carry(
             by_owner=stopped_by_owner), \
             _Account(kept, run, where_it_is, transcript.beside(whose["logs"], run),
                      now=now) as writing:
+        # **Said, never passed over — and never a reason to refuse the turn** (R-SEC-16,
+        # R-SEC-17). Rundesk cannot know which of these this brain needed; the program that
+        # does already fails honestly, and one locked vault must not make every agent on
+        # this machine mute, including the one somebody would ask to fix it. Written where
+        # what went wrong for this turn is written, so it is read back with the run rather
+        # than needing a gateway that a standalone `rundesk ask` does not have.
+        #
+        # **The name and which kind of not-given it was, and never the keeper's own
+        # words.** A keeper that fails routinely prints what it was reading, and this
+        # file stands under `data_home()`, which a backup copies whole — the one place
+        # R-SEC-26 exists to keep free of credentials. `rundesk env check <name>` shows
+        # the keeper's words at a terminal, where nothing writes them down.
+        for missing in keeping.trouble:
+            writing.went_wrong(
+                f"value '{missing.name}' was not given to this turn — "
+                f"{secret.plainly(missing)}; "
+                f"see: rundesk env check {missing.name}\n")
+        if keeping.unreadable:
+            writing.went_wrong("the values this install keeps could not be read: "
+                               f"{keeping.unreadable}\n")
         if recovery_of:
             # The old run names this one when it is admitted; this is the other direction.
             # Appended before the provider starts, so another interruption still leaves a
@@ -409,7 +437,7 @@ async def carry(
                     skills=running.skills, run=run,
                     model=model, resume=carrying, posture=posture, settings=settings,
                     raw=transcript.printed(whose["logs"], run), preface=preface,
-                    role_run=running.role_run,
+                    role_run=running.role_run, secrets=keeping.values,
                 ),
                 # **The agent's home, not its workspace.** A brain loads the rules it is to
                 # follow because they *stand in the directory it stands in* — that is the

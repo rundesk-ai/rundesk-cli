@@ -49,6 +49,7 @@ own act, and the dangerous half.
 | ✅ | R-BKP-26 | Copies survive removing rundesk, with or without its data (R-RM-14) | `removing rundesk keeps the copies it took`, `purging keeps the copies it took` |
 | ✅ | R-BKP-28 | Unavailable backup storage does not prevent install health from answering | `status survives a backup directory that does not answer` |
 | ✅ | R-BKP-29 | Every command that reads the backup directory answers within a bound, and names a directory that did not rather than reporting none | `listing the backups survives a directory that does not answer`, `a directory that does not answer is not reported as no backups` |
+| ✅ | R-BKP-30 | A copy of what the owner keeps holds none of the values every program is given (R-SEC-26) | `what is kept stands outside everything a copy of this install holds`, `the default stands outside the installs own data` |
 
 ## Open questions
 

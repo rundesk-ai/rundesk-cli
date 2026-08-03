@@ -44,6 +44,24 @@ DATA_DIR="$INSTALL_DIR/data"
 # and that is the worst moment to destroy the only copy they have (R-RM-14). It is declared
 # here so that what is kept can be *said*, never so that it can be removed.
 BACKUPS_DIR="${RUNDESK_BACKUP_DIR:-$INSTALL_DIR/backups}"
+# Where this install keeps what a backup deliberately never carries: the values every program
+# it starts is given. **Outside `$DATA_DIR`, so an uninstall is structurally incapable of
+# reaching it** and a purge has to name it — which is the whole reason it is declared here.
+#
+# The fallback is written out rather than asked of the command, because a purge runs while the
+# command is being taken off the machine and must not depend on it answering. It has to agree
+# with `secret.home()`, and a case in `test_secret.py` asserts that the two do.
+#
+# **A relative `XDG_CONFIG_HOME` is ignored rather than resolved**, which the specification
+# requires and which `secret.home()` does — and getting this wrong here is not cosmetic:
+# the purge below acts only `if [[ -d "$SECRETS_DIR" ]]`, so a relative path that does not
+# exist under whatever directory this script was run from makes the whole block silently
+# do nothing. A purge would then report success while leaving every credential on disk.
+case "${XDG_CONFIG_HOME:-}" in
+  /*) CONFIG_DIR="$XDG_CONFIG_HOME/rundesk" ;;
+  *)  CONFIG_DIR="$HOME/.config/rundesk" ;;
+esac
+SECRETS_DIR="${RUNDESK_SECRETS_DIR:-$CONFIG_DIR/secrets}"
 MIN_PYTHON_MINOR=9
 # The first release whose install and update paths share one counted release asset.
 COUNTED_DELIVERY_SINCE="0.22.4"
@@ -329,6 +347,10 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   removed=0
   purge=0
   [[ "${2:-}" == "--purge" ]] && purge=1
+  #: Whether a purge may take `$CONFIG_DIR` as well. Decided in the block below, where the
+  #: directory is recognised, so the deciding and the deleting are not the same line read
+  #: twice differently.
+  PURGE_CONFIG=1
   # **Asked before anything at all is removed.** `RUNDESK_BACKUP_DIR` may be pointed anywhere,
   # which includes underneath one of the directories a purge deletes — and deleting one of
   # those takes the copies with it, silently, while the message at the end still says they
@@ -348,6 +370,41 @@ would delete. Move them somewhere else, or point RUNDESK_BACKUP_DIR outside the 
 try again. Nothing has been removed." ;;
       esac
     done
+    # **Refused before anything goes, for the same reason as above.** `RUNDESK_SECRETS_DIR`
+    # may be pointed anywhere, and a purge deletes what it names outright — so a variable
+    # left at a home directory, at the root, or at a directory this install never wrote is
+    # a typo that costs somebody everything under it. Recognised by what rundesk puts
+    # there rather than by the name, which anybody may choose.
+    if [[ -d "$SECRETS_DIR" ]]; then
+      case "$SECRETS_DIR" in
+        "$HOME"|"$HOME"/|/|"") die "RUNDESK_SECRETS_DIR is $SECRETS_DIR, which --purge would
+delete whole. Point it at a directory of its own and try again. Nothing has been removed." ;;
+      esac
+      if [[ ! -e "$SECRETS_DIR/registry.json" && ! -d "$SECRETS_DIR/values" ]]; then
+        die "$SECRETS_DIR does not look like somewhere rundesk keeps values, and --purge
+would delete it whole. Check RUNDESK_SECRETS_DIR. Nothing has been removed."
+      fi
+    fi
+    # **`$CONFIG_DIR` needs the same recognition and must not refuse the uninstall for it.**
+    # `RUNDESK_SECRETS_DIR` is at least rundesk's own variable, set by somebody who meant
+    # this directory, so a mismatch there is a typo worth stopping the whole command for.
+    # `XDG_CONFIG_HOME` is nobody's in particular — shells, desktop sessions and agent turns
+    # all carry one — and it is read at the top of this script to derive a directory the
+    # purge below deletes whole. Stopping on that one would let a `.DS_Store` Finder left in
+    # `~/.config/rundesk` refuse to take rundesk off the machine, which is a worse answer
+    # than leaving a directory behind. So this one is recognised and skipped, out loud, and
+    # everything else about the removal goes ahead.
+    #
+    # Recognised by what stands in it rather than by its name, which anybody's configuration
+    # home may also spell "rundesk": `secrets/` is this script's own, and `integrations/` is
+    # where an integration skill keeps its environment.
+    case "$CONFIG_DIR" in
+      "$HOME"|"$HOME"/|/|"") PURGE_CONFIG=0 ;;
+      *) if [[ -d "$CONFIG_DIR" && -n "$(ls -A "$CONFIG_DIR" 2>/dev/null)" \
+                && ! -d "$CONFIG_DIR/secrets" && ! -d "$CONFIG_DIR/integrations" ]]; then
+           PURGE_CONFIG=0
+         fi ;;
+    esac
   fi
   # Refused rather than continued: deleting the command while a gateway is still running
   # leaves an agent nobody can reach and takes away the very thing that could stop it.
@@ -370,11 +427,23 @@ Stop it and try again, or see what is running with: rundesk status"
   done
   [[ "$removed" == 0 ]] && echo "No rundesk symlink pointing at a rundesk install was found on PATH."
 
-  config_dir="$HOME/.config/rundesk"
-  if [[ "$purge" == 1 && -d "$config_dir" ]]; then
-    rm -rf "$config_dir"; echo "removed $config_dir"
-  elif [[ -d "$config_dir" ]]; then
-    echo "Settings in $config_dir were left alone (add --purge to delete them)."
+  if [[ "$purge" == 1 && -d "$SECRETS_DIR" ]]; then
+    rm -rf "$SECRETS_DIR"
+    # "removed" and never "erased": what happens here is an unlink, and on a copying
+    # filesystem that is not the same as the bytes being gone. A command that claimed more
+    # than it did would be exactly the kind of unearned success this whole script refuses.
+    echo "removed the values every program was given ($SECRETS_DIR) — no backup held them"
+  elif [[ -d "$SECRETS_DIR" ]]; then
+    echo "kept the values every program was given ($SECRETS_DIR) — add --purge to delete them."
+  fi
+  if [[ "$purge" == 1 && "$PURGE_CONFIG" == 0 && -d "$CONFIG_DIR" ]]; then
+    # Said rather than passed over: a purge that leaves a directory standing and never
+    # mentions it is one an owner finds out about by going and looking.
+    echo "kept $CONFIG_DIR — it holds nothing rundesk wrote, so --purge left it alone."
+  elif [[ "$purge" == 1 && -d "$CONFIG_DIR" ]]; then
+    rm -rf "$CONFIG_DIR"; echo "removed $CONFIG_DIR"
+  elif [[ -d "$CONFIG_DIR" ]]; then
+    echo "Settings in $CONFIG_DIR were left alone (add --purge to delete them)."
   fi
 
   # The virtualenv is the installer's, wherever it put it — a checkout does not come with one.

@@ -20,7 +20,7 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
   reports it, the updater compares against it, and a release tag is expected to match it. Nothing else
   holds a copy. `ROOT` is the same idea for *where* this install is, resolved rather than assumed.
 
-### Where what an install keeps is decided (7 places)
+### Where what an install keeps is decided (8 places)
 
 An install's own directories are not mapped here — this is the source tree, and a layout written down
 twice is a layout that disagrees with itself. Each of these files *is* the answer for one part of it, and
@@ -35,6 +35,7 @@ none of them is a copy of another:
 | `src/migrations/` | **the shape of everything an agent keeps**, and the only description of it there is. `001.py` is the shape an agent starts from and every step after it is one change to that shape, so what the records are today is the steps read in order — never a second description kept beside them |
 | `src/rundesk/store.py` | the only way in to it, and what may be asked of it |
 | `src/rundesk/supervisor.py` — `describe()` | what the machine's own job carries, so a gateway resolves what the command that made it resolved (R-AGT-9) |
+| `src/rundesk/secret.py` — `home()` | **the one thing an install keeps that stands outside `data_home()`** — the values every program it starts is given. Outside on purpose: `backup.py` copies `data_home()` and nothing else, so a copy of an install is structurally incapable of holding a credential rather than careful not to (R-SEC-26) |
 
 **Everything that is one agent's lives in one directory**, so an agent is one thing to look at, copy or
 take away, and no name can claim a file belonging to another. What is *not* in its records is deliberate
@@ -47,7 +48,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 35 modules)
+## Backend / Services (src/rundesk/ — 36 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -197,6 +198,17 @@ file with it.
   `data_home()` and nothing else — the program is what a release publishes, so a copy of it is a
   copy of something already downloadable. **Never copies a database**; it asks `store` for a
   consistent one, because a file copied under a live writer opens, looks healthy and is wrong.
+- `src/rundesk/secret.py` — the values this install keeps, and hands to every program it
+  starts. **One set for the whole install — there is no whose**, which is what makes an
+  integration command find its credential without an owner having exported anything in a
+  shell a gateway will never see. Two ways one is kept and it knows no others: **held**
+  here in a file only its owner can read, or **fetched** by a command somebody else wrote,
+  whose words are kept and run again each spawn so the value is never on this disk at all.
+  Knows nothing of gateways, agents or channels: what a caller already has its own answer
+  for arrives as `exclude`, and what runs a fetching command arrives as an argument, so the
+  whole module is exercised with no vault and no keeper installed. **Nothing it exposes
+  gives a whole value back** — a masked hint and a mark taken with a key of this install's
+  answer "which one is this" and "did it change", and answer nothing else (R-SEC-4).
 - `src/rundesk/config.py` — how this install is configured, as opposed to how any one agent is.
   One file under `data_home()`, sections at the top level, and the source of every effective
   install-wide value. The install writes it complete; an update adds values an older release
@@ -344,6 +356,7 @@ provider. One file per contract, named for it:
 | `test_instructions.py` | 29 | Rundesk's core and trigger prompts, standard variables, the additive builder, the roles layer, and the separate role floor |
 | `test_role.py` | 87 | `agent-role` — what a role is, what makes one usable, what its revision is computed from, how the install's roles are offered, and what writing or editing one refuses, against a scratch library |
 | `test_role_run.py` | 128 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
+| `test_secret.py` | 39 | `platform-secrets` — what an install keeps for every program it starts: the refusals that are the boundary, the three answers a fetching command can give, and a scratch root that proves nothing reaches the owner's own |
 | `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and

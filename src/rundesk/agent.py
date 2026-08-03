@@ -1216,6 +1216,15 @@ class Reachable:
     #: for it would mean the gateway knowing where an agent's things stand. Defaulted so a
     #: caller building one by hand for something with no home is still a whole Reachable.
     home: Path | None = None
+    #: The names this surface's own adapter reads its credential from, which the install's
+    #: values are **never** given to it under (R-SEC-29). Two agents may hold two different
+    #: bots, so one install-wide `DISCORD_TOKEN` would silently make them the same bot,
+    #: with each agent's record still naming a file nobody read. Carried rather than
+    #: resolved by the gateway, for the reason everything else here is: a gateway that
+    #: reached back for what an agent's channel declared would end the direction this file
+    #: rests on. **The names and never the values** — this is the same list `secret` is
+    #: kept out of, not a second copy of anything.
+    channel_secrets: frozenset = frozenset()
 
 
 def reachable(name: str, where: Path | None = None, carry=None) -> list:
@@ -1245,6 +1254,11 @@ def reachable(name: str, where: Path | None = None, carry=None) -> list:
                 secret=record.get("secret")),
             answering=_answering(name, one, record, where, carry, answers),
             home=home,
+            # Read through `channel.named`, which normalizes the single-name-as-a-string
+            # form an adapter may answer with. Iterating the raw reply would walk that
+            # string's *characters*, and a one-letter exclusion set excludes nothing.
+            channel_secrets=frozenset(
+                (channels.named(record.get("secret")) or {}).get("env") or ()),
         ))
     return found
 

@@ -13,13 +13,13 @@ import asyncio
 import contextlib
 import getpass
 import os
-import shutil
 import sys
 from pathlib import Path
 
 from rundesk import channel
 from rundesk import gateway as _gateway
 from rundesk import migration
+from rundesk import secret
 from rundesk import standing
 from rundesk import store
 from rundesk.commands import _as_table, _note
@@ -107,9 +107,11 @@ def _took_a_secret(args: argparse.Namespace, said: dict, home: Path) -> bool:
     happen. `channel.named` has always kept a list and said why; this is the half that had
     not caught up. A pipe supplies them in the order they were named, one to a line.
     """
-    secret = channel.named(said.get("secret")) or {}
-    wanted = secret.get("env") or []
-    files = secret.get("files") or []
+    # Never `secret` — the module of that name is what writes each value below, and a local
+    # shadowing it would make `secret.write_private` an attribute of a dictionary.
+    asked = channel.named(said.get("secret")) or {}
+    wanted = asked.get("env") or []
+    files = asked.get("files") or []
     piped = getattr(args, "token_stdin", False)
     if not piped and not sys.stdin.isatty():
         return False
@@ -126,11 +128,13 @@ def _took_a_secret(args: argparse.Namespace, said: dict, home: Path) -> bool:
         if not given:
             continue
         kept = home / (files[at] if at < len(files) else channel.SECRET_FILE)
-        kept.write_text(given + "\n", encoding="utf-8")
-        # Nobody else's to read. What is kept about a channel says a credential is present
-        # and never what it is (R-CAD-12); this file is the credential, so the mode is the
-        # guard.
-        os.chmod(kept, 0o600)
+        # Nobody else's to read, **from the moment it exists**. What is kept about a channel
+        # says a credential is present and never what it is (R-CAD-12); this file is the
+        # credential, so the mode is the guard — and a `write_text` narrowed by a `chmod`
+        # afterwards leaves a window in which anybody on the machine can read it.
+        # `secret.write_private` is the shared form that opens with the mode and refuses to
+        # follow a link planted at the path.
+        secret.write_private(kept, given + "\n")
         took += 1
     return took > 0
 
@@ -141,9 +145,9 @@ def _credential_files(said: dict, home: Path) -> list:
     Read off what the adapter named rather than off a filename this module holds, so a
     surface needing two is carried whole and one needing none costs nothing.
     """
-    secret = channel.named(said.get("secret")) or {}
+    asked = channel.named(said.get("secret")) or {}
     return [one for one in
-            (home / name for name in secret.get("files") or []) if one.is_file()]
+            (home / name for name in asked.get("files") or []) if one.is_file()]
 
 
 def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
@@ -244,8 +248,11 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         # further along.
         if beside != home:
             for kept_secret in _credential_files(said, home):
-                shutil.copy2(kept_secret, beside / kept_secret.name)
-                os.chmod(beside / kept_secret.name, 0o600)
+                # Written rather than copied: `copy2` creates at the umask and the mode
+                # arrives afterwards, so the value is briefly readable by anybody on the
+                # machine — on a path a person never typed and would not think to look at.
+                secret.write_private(beside / kept_secret.name,
+                                     kept_secret.read_text(encoding="utf-8"))
         # **A new channel has introduced this agent to nobody**, written down before the
         # record exists so that everybody in the list that follows is owed one (R-CH-33).
         # This is also what tells a channel added today from one an older release wrote:
@@ -453,18 +460,23 @@ def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     # However many a surface needs — one that opens a connection with one credential and
     # calls its API with another names both, and an owner has to be told which of them is
     # missing rather than that "the secret" is.
-    #
-    # **Asked of both places a credential may be, because the recommended one is the file.**
-    # This looked only at the environment of the shell running `show` — and the flow the
-    # documentation recommends, `--token-stdin`, never exports anything: it writes the value
-    # beside the channel, which is where the adapter reads it. So a channel that signs in
-    # perfectly reported `not set`, and sent an owner to fix something that was not wrong.
-    secret = channel.named(it.get("secret")) or {}
-    named = secret.get("env") or []
-    files = secret.get("files") or []
+    asked = channel.named(it.get("secret")) or {}
+    named = asked.get("env") or []
+    files = asked.get("files") or []
     home = agents.channel_home(args.name, args.channel)
 
     def stands(at: int, one: str) -> str:
+        """Whether this credential is really there — **asked of both places it may be**.
+
+        The flow the documentation recommends never exports anything: `--token-stdin`
+        writes the value beside the channel, which is where the adapter reads it. Asked
+        only of this command's own shell, a channel that signs in perfectly reported
+        `not set` and sent an owner to fix something that was not wrong.
+
+        **What this install keeps is deliberately not consulted** (R-SEC-29). A value of
+        the same name is never given to this adapter — two agents may hold two different
+        bots — so counting one here would report a credential that does not arrive.
+        """
         if os.environ.get(one):
             return "present"
         kept = files[at] if at < len(files) else channel.SECRET_FILE

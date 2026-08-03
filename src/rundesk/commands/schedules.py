@@ -15,6 +15,7 @@ from datetime import datetime
 from rundesk import gateway as _gateway
 from rundesk import migration
 from rundesk import process
+from rundesk import secret
 from rundesk import store
 from rundesk.commands import _as_table, _note
 
@@ -444,8 +445,12 @@ def _run_schedule(args: argparse.Namespace, gateways, agents, kept, whose) -> in
         # Through what was passed in, never the module. Reaching for the real one here
         # read the machine's own directories from inside a suite that had redirected
         # nothing, which is the isolation every other line in this file keeps.
+        # The install's own values too, so running a schedule by hand is the same run the
+        # gateway would have made (R-SEC-1). Produced synchronously: this is a person at a
+        # terminal with nothing else waiting on this process, not a gateway carrying work.
         env=dict(process.environment(whose.run or gateways.home(),
-                                     agents=agents.agents_home()),
+                                     agents=agents.agents_home(),
+                                     secrets=secret.resolve().values),
                  **{_gateway.SCHEDULE_IS: one.name}),
         on_line=print,
     ))

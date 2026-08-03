@@ -276,14 +276,15 @@ class WhatARolesRevisionIsComputedFrom(WithSomewhereToKeepRoles):
     #: And the same for the role this release actually ships, read against a machine with
     #: none of the skills it names — which is the answer that does not depend on what any
     #: one library happens to hold.
-    #: Moved twice, deliberately: #275 reshaped `development/AGENTS.md` into the one shape
-    #: every role is written in, and #296 widened its `Your skills` step to name the skill
-    #: governing what a run *produces* and not only the stack it works in. `lay_down` never
+    #: Moved three times, deliberately: #275 reshaped `development/AGENTS.md` into the one
+    #: shape every role is written in, #296 widened its `Your skills` step to name the
+    #: skill governing what a run *produces* and not only the stack it works in, and the
+    #: soul-as-voice branch rewrote its rules and reporting outright. `lay_down` never
     #: writes over a role that is already there (R-ROL-18), so no installed role
     #: re-revisions — this is the digest of what a *fresh* install now gets, and moving it
     #: is the reason this constant is written by hand.
     SHIPPED_DEVELOPMENT = (
-        "3298235c0c8e1d7861cadde7726659d6d18074d28e54a3064bb0ca9fcd16b6cb")
+        "5f1d9eb23a8fec77507f2000249192c55b2e1a6848c4e6446754945aa8a17d86")
 
     def test_a_role_naming_neither_keeps_the_revision_it_already_had(self):
         self.wrote()
@@ -656,13 +657,23 @@ class WritingARole(WithSomewhereToKeepRoles):
         other = self.wrote_one("etymology", description="Something else entirely.")
         self.assertNotEqual(one.revision, other.revision)
 
+    def skeleton_headings(self):
+        """Every heading the shipped skeleton names, read off the file.
+
+        Listed here instead, it is a second place to be wrong the day somebody rewords
+        the skeleton — and the thing worth proving is that what `add` writes is that
+        file, not that either says one particular sentence.
+        """
+        said = role.SKELETON.read_text(encoding="utf-8")
+        return [one.strip() for one in said.splitlines() if one.startswith("## ")]
+
     def test_the_rules_a_new_role_gets_hold_every_heading_a_role_uses(self):
         """The shape a parent finds the ceiling and the definition of done in, whichever
         role it is reading."""
         made = self.wrote_one()
-        for heading in ("## Start here, in this order", "## While you work",
-                        "## The ceiling", "## Subagents", "## The report",
-                        "## Definition of done"):
+        headings = self.skeleton_headings()
+        self.assertTrue(headings, "the shipped skeleton names no sections at all")
+        for heading in headings:
             self.assertIn(heading, made.instructions)
         self.assertIn("# Archaeology", made.instructions)
         self.assertIn(self.DESCRIBED, made.instructions)
@@ -671,9 +682,7 @@ class WritingARole(WithSomewhereToKeepRoles):
         """A skeleton that read as finished prose is one nobody rewrites, and a role run
         on it returns a report that reads well and is about nothing."""
         made = self.wrote_one()
-        for heading in ("## Start here, in this order", "## While you work",
-                        "## The ceiling", "## Subagents", "## The report",
-                        "## Definition of done"):
+        for heading in self.skeleton_headings():
             section = made.instructions.split(heading, 1)[1].split("\n## ", 1)[0]
             self.assertIn("TODO", section, heading)
 
@@ -693,12 +702,19 @@ class WritingARole(WithSomewhereToKeepRoles):
         from rundesk import instructions
 
         made = self.wrote_one()
-        for said in ("You have no memory, no history, and no identity beyond this task.",
-                     "Never speak as the person who asked and never send anything to "
-                     "anyone.",
-                     "Starting another Rundesk role run is refused."):
-            self.assertIn(said, instructions.ROLE_EXECUTION_INSTRUCTIONS)
-            self.assertNotIn(said, made.instructions)
+        # Read off the floor rather than quoted from it: a copy is found by comparing the
+        # two, and quoting one of them here would be a third place to be wrong the day
+        # either is reworded. Lines carrying a placeholder cannot be compared literally,
+        # and a short one is not evidence of a copy.
+        checked = 0
+        for line in instructions.ROLE_EXECUTION_INSTRUCTIONS.splitlines():
+            said = line.strip().removeprefix("- ").strip()
+            if len(said) < 30 or "{" in said:
+                continue
+            checked += 1
+            with self.subTest(said=said[:40]):
+                self.assertNotIn(said, made.instructions)
+        self.assertGreater(checked, 3, "the floor no longer has enough to compare")
 
     def test_the_skeleton_is_not_read_as_a_role_this_release_ships(self):
         """It stands among the shipped roles, so what keeps it out of them is asked

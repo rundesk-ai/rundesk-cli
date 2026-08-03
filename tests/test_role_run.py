@@ -433,9 +433,17 @@ class WhatARoleExecutionIsToldAndGiven(WithAnAgentThatCanDelegate):
         admitted = self.admit()
         carry, _ = self.carried(admitted)
         told = carry.given["preface"]
-        self.assertIn("on behalf of the named agent elena", told)
-        self.assertIn("Never speak as the person who asked", told)
-        self.assertIn("Starting another Rundesk role run is refused", told)
+        # The floor is Rundesk's own text and the owner's to word. What a carried run owes
+        # it is that the whole of it arrives first, filled with the agent this is on behalf
+        # of — a worker told `{parent_agent}` has no one to be answerable to.
+        floor = instructions.render(
+            instructions.ROLE_EXECUTION_INSTRUCTIONS,
+            {"role": role.label("development"), "parent_agent": "elena"},
+        ).strip()
+        self.assertTrue(told.startswith(floor))
+        self.assertIn("elena", floor)
+        for variable in instructions.ROLE_VARIABLES:
+            self.assertNotIn("{" + variable + "}", floor)
 
     def test_the_execution_runs_under_the_roles_own_posture(self):
         self.wrote(posture="read")

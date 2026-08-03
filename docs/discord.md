@@ -119,6 +119,11 @@ reach, and only then saves the channel. The default command creates:
 
 Each channel has its own allowlist and instructions even though both use the same bot.
 
+A bot token belongs to the channel and is placed here, not with `rundesk env set`. A value
+kept there is given to every program rundesk starts, and a channel adapter is deliberately
+never given the one it reads its own credential from — two agents may hold two different
+bots, and one install-wide `DISCORD_TOKEN` would quietly make them the same bot.
+
 To listen in direct messages only:
 
 ```sh

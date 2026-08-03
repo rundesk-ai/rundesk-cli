@@ -58,6 +58,10 @@ rundesk roles <agent> stop <run>                                                
 rundesk status                                                                                                                                                                                                          how rundesk itself is on this machine
 rundesk version [--check]                                                                                                                                                                                               what is installed, and whether that is current
 rundesk update [--check] [--status]                                                                                                                                                                                     move to the newest published release
+rundesk env check <name>                                                                                                                                                                                                prove each can still be produced, without showing one
+rundesk env set [--stdin] [--from <command>] <name>                                                                                                                                                                     keep a value under a name, or replace the one already there
+rundesk env show <name>                                                                                                                                                                                                 one value: how it is kept, and what tells it apart
+rundesk env unset <name>                                                                                                                                                                                                take one value away, and only that one
 rundesk backups add                                                                                                                                                                                                     take a backup now
 rundesk backups off                                                                                                                                                                                                     stop the machine taking one every day
 rundesk backups on                                                                                                                                                                                                      have the machine take one every day
@@ -109,6 +113,20 @@ rundesk channels ava add discord --kind discord --allow 123456789012345678 -- --
 rundesk channels ava instructions discord-rooms "You are {agent} in {where.channel}. Others read this, so keep it short."
 # what it is reachable on, and whether it is reachable at all
 rundesk channels ava
+```
+
+**A value every program is given**
+
+```sh
+# typed here, not echoed, and never shown in full again by anything
+rundesk env set GITHUB_TOKEN
+# the words of the command are kept, and run again each time a program starts
+rundesk env set OP_GITHUB --from 'op read op://work/github/token'
+#   the value is never an argument — from a script, pipe it in instead
+# what every program rundesk starts is given: a hint and a mark, never a value
+rundesk env
+# whether each can still be produced, without producing one for you to read
+rundesk env check
 ```
 
 **A schedule**
@@ -167,6 +185,7 @@ rundesk roles ava show rol-3-vfs3
 --expired                       instead, the one-time schedules whose moment has gone — whether each ran, or whether it passed while nothing was running
 --force                         restart now even when doing so interrupts active work
 --fresh                         start the conversation again rather than carrying it on
+--from <command>                instead of keeping a value: the command that prints it, run again each time a program starts — the words of the command are kept, and what it printed never is
 --here                          run it in this terminal instead of handing it to the machine
 --in <where>                    which place on that channel to say it in, in that surface's own words — for Discord: a room name or id, or on a DM channel the person's user id (the same id as --allow) or the DM channel id. Left out, it follows the conversation
 --instructions <text>           what every turn for this agent is told before it reads a prompt, where neither the schedule nor the surface said — empty takes it off
@@ -185,6 +204,7 @@ rundesk roles ava show rol-3-vfs3
 --source <how>                  only messages belonging to work admitted this way — one of channel | role | schedule | terminal
 --source <source>               whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine
 --status                        show the last queued update and its final outcome
+--stdin                         read the value from what is piped in rather than asking for it
 --steer                         keep saying more to it while it works — a line at a time, until you stop
 --target <directory>            the project directory the work happens in — the brain stands there, so the project's own instruction files load normally
 --to <channel>                  which channel to say what this came to on, by the name it was added under — the account and `schedules` say it either way
@@ -198,6 +218,7 @@ rundesk roles ava show rol-3-vfs3
 <backup>                        which one, by the name it is listed under
 <catalog>                       which catalog
 <channel>                       what to call it, and what to name it by later
+<name>                          what programs read it as — begins with a capital letter, and the rest is capital letters, digits and underscores
 <option>                        after `--`, whatever this kind of channel needs — carried to it exactly as typed, and never read here
 <program>                       after `--`, the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH
 <prompt>                        what to ask it, in quotes

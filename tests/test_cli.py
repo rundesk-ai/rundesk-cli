@@ -34,6 +34,7 @@ from rundesk import cli  # noqa: E402
 from rundesk import catalog as real_catalog  # noqa: E402
 from rundesk import config  # noqa: E402
 from rundesk import restart_request  # noqa: E402
+from rundesk import role  # noqa: E402
 from rundesk import standing  # noqa: E402
 from rundesk.commands import agents as agent_commands  # noqa: E402
 from rundesk.commands import backups as backup_commands  # noqa: E402
@@ -59,6 +60,7 @@ _REAL_PATIENCE = (standing.START_PATIENCE, standing.CYCLE_PATIENCE,
 _REAL_REMOVAL = update_commands._remove_this_install
 _REAL_BACKUP_DIR = os.environ.get("RUNDESK_BACKUP_DIR")
 _REAL_DATA_DIR = os.environ.get("RUNDESK_DATA_DIR")
+_REAL_SECRETS_DIR = os.environ.get("RUNDESK_SECRETS_DIR")
 #: What the environment said before this file redirected it, put back in `tearDownModule`
 #: so the module is left as it was found — including for whoever runs the suites in one
 #: process. Each of these beats the data directory, so none can be left to it.
@@ -66,6 +68,7 @@ _REAL_ELSEWHERE = {name: os.environ.get(name)
                    for name in ("RUNDESK_AGENTS_DIR", "RUNDESK_SKILL_LIBRARY")}
 _TEST_BACKUP_DIR = None
 _TEST_DATA_DIR = None
+_TEST_SECRETS_DIR = None
 
 
 def _never_the_real_installer(installer, asked):
@@ -89,7 +92,7 @@ _asked_of_the_installer: list = []
 
 
 def setUpModule():
-    global _TEST_BACKUP_DIR, _TEST_DATA_DIR
+    global _TEST_BACKUP_DIR, _TEST_DATA_DIR, _TEST_SECRETS_DIR
     update_commands._remove_this_install = _never_the_real_installer
     # The automatic surface walk invokes every operation, including the real backup
     # listing. Without this boundary it reads the owner's backup directory, and under the
@@ -104,6 +107,13 @@ def setUpModule():
     _TEST_DATA_DIR = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-data-"))
     os.environ["RUNDESK_DATA_DIR"] = str(_TEST_DATA_DIR)
     config.ensure(_TEST_DATA_DIR)
+    # The walk invokes every operation, `env check` among them — and that one runs the
+    # command each value kept by a command is fetched by. Against the owner's own store
+    # that is a test suite unlocking their vault, and against a fetching command that
+    # wants a fingerprint it is a suite that cannot finish unattended. A surface test
+    # needs an empty place, never theirs.
+    _TEST_SECRETS_DIR = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-secrets-"))
+    os.environ["RUNDESK_SECRETS_DIR"] = str(_TEST_SECRETS_DIR)
     # Where roles and skills stand, for the same reason and one step further. The walk
     # types every form the reference lists, and `rundesk roles add …` is now one of them —
     # so the walk *writes a role*. `RUNDESK_AGENTS_DIR` and `RUNDESK_SKILL_LIBRARY` each
@@ -140,6 +150,12 @@ def tearDownModule():
             os.environ[name] = was
     if _TEST_DATA_DIR is not None:
         shutil.rmtree(_TEST_DATA_DIR, ignore_errors=True)
+    if _REAL_SECRETS_DIR is None:
+        os.environ.pop("RUNDESK_SECRETS_DIR", None)
+    else:
+        os.environ["RUNDESK_SECRETS_DIR"] = _REAL_SECRETS_DIR
+    if _TEST_SECRETS_DIR is not None:
+        shutil.rmtree(_TEST_SECRETS_DIR, ignore_errors=True)
 from rundesk import agent as real_agent  # noqa: E402
 from rundesk import skill as real_skill  # noqa: E402
 from rundesk import channel  # noqa: E402
@@ -509,7 +525,7 @@ class BuiltCommandTests(unittest.TestCase):
         built = {"version", "update", "uninstall", "add", "configure", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
                  "channels", "runs", "usage", "search", "messages", "skills", "scripts",
-                 "backups", "config", "roles"}
+                 "backups", "config", "env", "roles"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 
@@ -5113,8 +5129,14 @@ class WritingARoleFromTheCommandLine(unittest.TestCase):
         self.assertTrue(pathlib.Path(str(rules)).is_absolute())
         self.assertIn("rewrite it", said)
         self.assertIn("not yet about this specialty", said)
-        for heading in ("Start here, in this order", "While you work", "The ceiling",
-                        "Subagents", "The report", "Definition of done"):
+        # Read off the skeleton rather than listed here. The command builds this line
+        # from the file it just wrote, so a list in the test proves only that somebody
+        # kept two copies in step — and stops proving anything the day one is reworded.
+        skeleton = role.SKELETON.read_text(encoding="utf-8")
+        headings = [one.strip()[3:] for one in skeleton.splitlines()
+                    if one.startswith("## ")]
+        self.assertTrue(headings, "the shipped skeleton names no sections at all")
+        for heading in headings:
             self.assertIn(heading, said)
 
     def test_what_a_new_role_is_says_the_same_words_a_listing_says(self):

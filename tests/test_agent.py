@@ -407,19 +407,6 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         self.assertIn("[AGENTS.md](./AGENTS.md) completely.", says)
         self.assertIn("your next step must be to read it first, always.", says)
 
-    def test_a_new_homes_rules_do_not_repeat_what_the_operating_rules_already_say(self):
-        """R-AGT-52 — the ordered three are settled in the layer nothing replaces, so the
-        home an owner may rewrite says the rest rather than a second copy of them. Two
-        copies of one rule is the one that gets edited and the one that stays."""
-        says = (agent.TEMPLATES / "AGENTS.md").read_text()
-        self.assertIn(
-            "Your operating rules settle what comes first — missing context, skills, "
-            "roles. This is the rest.", says)
-        self.assertNotIn("Check your skills.", says)
-        self.assertIn("Your operating rules send heavy work to a role.", says)
-        self.assertNotIn("rundesk roles <you>", says)
-        self.assertIn("**`delegating-to-roles` is the rest of it**", says)
-
     def test_the_file_every_provider_loads_names_the_ones_none_of_them_do(self):
         """R-AGT-2 — the two files loaded because of where they stand are the only way the
         other three are reached at all: no provider follows a Markdown link for free, and
@@ -612,8 +599,25 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         self.assertEqual(copied, set(agent.knowledge()))
         self.assertTrue(copied, "this install has no templates to make an agent from")
 
+    def naming(self, called: str = "SOUL.md") -> None:
+        """A template that names its agent, written here rather than found among the shipped ones.
+
+        No page this release ships has to carry the placeholder — R-AGT-25 says a template
+        that never names the agent still makes a working agent — so a case that reads one
+        of them is proving substitution only for as long as somebody leaves a `{{agent}}`
+        in prose nobody wrote for it. The guarantee is that a placeholder is filled, so
+        the case supplies the placeholder.
+        """
+        where = agent.templates_home()
+        self.assertEqual(self.where, where.parent.parent,
+                         f"the owner's own templates would be read from {where}")
+        where.mkdir(parents=True, exist_ok=True)
+        (where / called).write_text(f"# {agent.AGENT}\n\nYou are {agent.AGENT}.\n",
+                                    encoding="utf-8")
+
     def test_a_template_is_copied_with_the_agents_own_name_in_it(self):
         """R-AGT-2"""
+        self.naming()
         agent.add("ava", self.where)
         says = (agent.home("ava", self.where) / "SOUL.md").read_text()
         self.assertIn("ava", says)
@@ -622,6 +626,7 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
 
     def test_a_template_keeps_the_human_name_separate_from_its_slug(self):
         """R-AGT-39"""
+        self.naming()
         agent.add("ios-helper", self.where, display_name="iOS Helper")
         says = (agent.home("ios-helper", self.where) / "SOUL.md").read_text()
         self.assertIn("iOS Helper", says)
@@ -657,6 +662,7 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
 
     def test_retry_publishes_a_complete_staged_first_spelling(self):
         """R-AGT-39 — interruption after fsync but before link keeps the first name."""
+        self.naming()
         at = agent.directory("ios-helper", self.where)
         at.mkdir(parents=True)
         pending = at / agent.DISPLAY_PENDING

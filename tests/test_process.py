@@ -198,6 +198,38 @@ class TheEnvironmentAProgramIsGiven(Quickened):
             built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
         self.assertNotIn("RUNDESK_JOB_PREFIX", built)
 
+    def test_every_program_is_given_every_value_this_install_keeps(self):
+        """R-SEC-1 — an integration command finds its credential because the shell it runs
+        in descends from a program started with this, and that is the whole delivery."""
+        built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin",
+                                    secrets={"GITHUB_TOKEN": "gh-x", "LINEAR_KEY": "ln-y"})
+        self.assertEqual("gh-x", built["GITHUB_TOKEN"])
+        self.assertEqual("ln-y", built["LINEAR_KEY"])
+
+    def test_a_value_rundesk_was_not_allowed_to_keep_is_left_out(self):
+        """R-SEC-14 — the refusal that is true whatever is in the file an owner or an agent
+        writes, including after a hand-edit. Everything rundesk decided about this program
+        must survive contact with a value that claims the same name."""
+        mine = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin",
+                                   agents=Path("/tmp/somewhere/agents"))
+        built = process.environment(
+            Path("/tmp/rundesk-home"), path="/usr/bin", agents=Path("/tmp/somewhere/agents"),
+            secrets={name: "taken" for name in mine} | {"GITHUB_TOKEN": "gh-x"})
+
+        for name, value in mine.items():
+            self.assertEqual(value, built[name], f"a kept value took {name}")
+        self.assertEqual("gh-x", built["GITHUB_TOKEN"])
+
+    def test_a_program_is_given_nothing_of_its_own_when_this_install_keeps_nothing(self):
+        """R-PROC-1 — the set is what it always was, so an install with nothing kept starts
+        programs in byte-identical environments to the ones that shipped."""
+        bare = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
+        for nothing in (None, {}):
+            with self.subTest(secrets=nothing):
+                self.assertEqual(
+                    bare, process.environment(Path("/tmp/rundesk-home"), path="/usr/bin",
+                                              secrets=nothing))
+
 
 class FindingTheProgram(Quickened):
     async def test_a_program_named_rather_than_located_is_refused(self):
