@@ -28,6 +28,11 @@ def cmd_roles(args: argparse.Namespace, agents) -> int:
         print("        what there is:  rundesk agents", file=sys.stderr)
         return 1
     act = getattr(args, "act", None)
+    if act == "add":
+        # Before the records are opened: writing a role touches none of them, and an
+        # agent whose database will not read is not a reason this install cannot have
+        # a specialist written for it.
+        return _write_a_role(args)
     if act == "run":
         return _hand_to_a_role(args, agents)
     if act in ("say", "stop", "resume"):
@@ -42,6 +47,71 @@ def cmd_roles(args: argparse.Namespace, agents) -> int:
     return _list_roles(args, whose)
 
 
+def _a_role_reads_as(one: role.Role) -> list:
+    """One role as it is shown, in the one shape both listing it and writing it use."""
+    lines = [f"{one.label}  {one.slug}  {one.revision[:12]}  "
+             f"{one.posture}  [{' '.join(one.skills)}]",
+             f"        {one.description}"]
+    if one.provider or one.model:
+        # Said before anybody hands it work, because a pinned brain decides what this
+        # role can do: not every brain can be sent to mid-turn, so a role pinned to
+        # one that cannot is a role no `say` will ever reach (R-ROL-34).
+        lines.append("        it runs on "
+                     + (provider.label(one.provider) if one.provider
+                        else "whatever this turn is on")
+                     + (f", model {one.model}" if one.model else ""))
+    if one.missing:
+        # Said every time it is shown. A set quietly smaller than its manifest is the
+        # kind of difference nobody notices until the work comes back thin.
+        lines.append(f"        not installed here, so not given: "
+                     f"{' '.join(one.missing)}")
+    return lines
+
+
+def _write_a_role(args: argparse.Namespace) -> int:
+    """Write one new role, and say what is left to do before it is given real work.
+
+    **The answer is the point of this command, not a courtesy.** What is written is a
+    generic skeleton that says nothing about the specialty, so a caller that comes away
+    without knowing there is an unfinished file and where it stands has been handed a
+    role that will return a report reading well and saying nothing. The path is absolute
+    and the instruction is explicit, and the headings to fill in are read off the file
+    that was actually written rather than restated here.
+    """
+    try:
+        made = role.write(
+            args.role,
+            description=args.description,
+            skills=[one.strip() for one in (args.skills or "").split(",")
+                    if one.strip()],
+            posture=args.posture,
+            provider_named=(args.provider or "").strip(),
+            model=(args.model or "").strip(),
+        )
+    except role.NotARole as why:
+        print(f"{args.role}: NOT WRITTEN — {why}", file=sys.stderr)
+        print(f"        what there already is:  rundesk roles {args.name}",
+              file=sys.stderr)
+        return 1
+    except OSError as why:
+        print(f"{args.role}: NOT WRITTEN — {why}", file=sys.stderr)
+        return 1
+    for line in _a_role_reads_as(made):
+        print(line)
+    print("        written for this whole install — every named agent on it may put "
+          "it on")
+    rules = made.at / role.INSTRUCTIONS
+    print(f"        its rules stand at {rules}")
+    headings = [one.strip()[3:] for one in made.instructions.splitlines()
+                if one.startswith("## ")]
+    print(f"        that file is the generic skeleton and is not yet about this "
+          f"specialty — rewrite it before {made.slug} is handed real work, filling in "
+          f"{'; '.join(headings)}")
+    print(f"        then:  rundesk roles {args.name} run {made.slug} "
+          f"--target <directory>")
+    return 0
+
+
 def _list_roles(args: argparse.Namespace, whose) -> int:
     """The roles this agent may reach for, and the runs it has already admitted."""
     installed = role.known()
@@ -53,21 +123,8 @@ def _list_roles(args: argparse.Namespace, whose) -> int:
         except role.NotARole as why:
             print(f"{slug}  UNUSABLE — {why}")
             continue
-        print(f"{one.label}  {one.slug}  {one.revision[:12]}  "
-              f"{one.posture}  [{' '.join(one.skills)}]")
-        print(f"        {one.description}")
-        if one.provider or one.model:
-            # Said before anybody hands it work, because a pinned brain decides what this
-            # role can do: not every brain can be sent to mid-turn, so a role pinned to
-            # one that cannot is a role no `say` will ever reach (R-ROL-34).
-            print("        it runs on "
-                  + (provider.label(one.provider) if one.provider
-                     else "whatever this turn is on")
-                  + (f", model {one.model}" if one.model else ""))
-        if one.missing:
-            # Said every time it is listed. A set quietly smaller than its manifest is the
-            # kind of difference nobody notices until the work comes back thin.
-            print(f"        not installed here, so not given: {' '.join(one.missing)}")
+        for line in _a_role_reads_as(one):
+            print(line)
     runs = whose.role_runs(limit=ROLE_RUNS_SHOWN)
     if not runs:
         return 0
