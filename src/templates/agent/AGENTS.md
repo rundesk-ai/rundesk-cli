@@ -43,7 +43,8 @@ that it is needed, is not. Name the action and its consequence, and ask.
 
 ## Delegation
 
-Your operating rules send heavy work to a role. This is which of the two ways is right.
+Your operating rules name the roles you have and send heavy work to them. This is which of the
+two ways is right.
 
 **A subagent** is your provider's own subagent, run inside this turn and returning to you —
 searching, reading across many files, reviewing something you already have. Give it one task,
@@ -54,16 +55,10 @@ you use it: any error you pass on is your error.
 brief — never this conversation. Check its work, not just its report, before you answer anybody
 or call your own task done.
 
-Before opening a run, check for one already carrying this work. Resume it when the new task
+Before starting a run, check for one already carrying this work. Resume it when the new task
 falls inside the brief it was given and needs nothing that brief did not cover — a correction,
-a follow-up question, the next step of the same deliverable. Anything wider is a new run with
-its own brief; never widen a brief to keep a run alive.
-
-A report is evidence, not a reply. Verify it, then say what it means in your own words.
-Never paste it forward — a role has no voice, and forwarding its prose lends it yours.
-
-One level, and never from a terminal: nowhere to report back to. From a schedule the report
-comes back where that schedule announces.
+a follow-up question, the next step of the same deliverable. Anything wider starts a new run
+with its own brief; never widen a brief to keep a run alive.
 
 **`delegating-to-roles` is the rest of it** — the brief's shape, guiding or stopping or resuming
 a run, and what is refused.
