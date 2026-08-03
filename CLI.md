@@ -46,7 +46,8 @@ rundesk usage                                                                   
 rundesk usage <agent>                                                                                                                                                                                                   what one agent has cost
 
 # handing work on
-rundesk roles <agent> add --description <text> --skills <a,b,c> --posture read|work [--provider <provider>] [--model <model>] <role>                                                                                    write a new role — a generic skeleton to rewrite for the specialty
+rundesk roles add --description <text> --skills <a,b,c> --posture read|work [--provider <provider>] [--model <model>] <role>                                                                                            write a new role — a generic skeleton to rewrite for the specialty
+rundesk roles edit [--description <text>] [--skills <a,b,c>] [--posture read|work] [--provider <provider>] [--model <model>] <role>                                                                                     change what a role says about itself — never its rules
 rundesk roles <agent> resume <run>                                                                                                                                                                                      carry a finished role run on — the further task is read from standard input
 rundesk roles <agent> run [--target <directory>] [--label <text>] [--provider <provider>] [--model <model>] <role>                                                                                                      hand one bounded task to a role — the brief is read from standard input
 rundesk roles <agent> say <run>                                                                                                                                                                                         say something to a role that is working — read from standard input
@@ -134,10 +135,12 @@ rundesk schedules ava off nightly
 **A role**
 
 ```sh
-# the specialists ava can hand heavy work to, and the runs it has admitted
+# the specialists this install has — a role is written once, and every named agent on it may put one on
+rundesk roles
+# the same, and the runs ava has admitted
 rundesk roles ava
 # write a new role — then rewrite the rules file it names, which is a generic skeleton until you do
-rundesk roles ava add archaeology --description "Trace one behaviour through the whole history of a repository." --skills python-patterns,python-testing --posture read
+rundesk roles add archaeology --description "Trace one behaviour through the whole history of a repository." --skills python-patterns,python-testing --posture read
 # one bounded task, run in that project under the role's own rules
 rundesk roles ava run development --target ~/code/exporter --label "csv export"
 #   an agent hands work on from inside its own turn, and the brief arrives on standard input — the outcome, what it may do, and what done looks like

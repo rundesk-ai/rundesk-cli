@@ -66,6 +66,17 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   Run the gate as **`<a checkout's>/.venv/bin/python .knowledge/scripts/gate`** while you are
   there: `gate` uses `sys.executable`, and a worktree with no `.venv` of its own otherwise
   skips all 208 Discord cases while printing `ok test_discord`.
+  **And it is not only `test_install` that the ceiling catches — `test_gateway` does it too,
+  from much further down.** The gate runs six suites at a time, so a loaded machine stretches
+  whichever suite happens to share a slot with the expensive ones. Measured here in one
+  sitting, on one unchanged tree: run one `FAIL test_install (180.0s)` with `test_gateway` at
+  37.4s; run two `ok test_install (171.7s)` and `FAIL test_gateway (180.0s)`; run three
+  `gate: OK` with both at 38.0s and 175.1s. `test_gateway` alone was 31.5s throughout. A suite
+  that normally finishes in a fifth of the ceiling reading `180.0s` is **the timeout, not the
+  suite** — run that one on its own and read its own "Ran N tests in Ns" line before believing
+  it is yours. `pgrep -f "/private/tmp/rundesk-<n>/tests/"` also finds another agent's gate
+  running in a copy of the checkout, which is the ordinary case here; wait it out rather than
+  killing it.
 - **Only `tests/test_install.py:38` copies the *checkout*; every other `copytree` in that file
   copies `REPO`.** So whatever that one line lets through is carried by all eighteen of them, and
   whatever it excludes is excluded everywhere. Untracked `ui/` and `site/` trees (~100 MB) beside
@@ -717,6 +728,16 @@ re-checked since, so treat these as true-when-found rather than as current.*
   the subcommand choices: `rundesk agents ava` dies with `invalid choice: 'ava'`. That is why
   what an agent is told is written by `add --instructions` rather than by `agents ava
   instructions …`, and why any new per-agent action has to go somewhere else.
+- **`roles` is the one verb whose first word argparse never sees, so a test that calls
+  `cli.build_parser().parse_args(["roles", "ava", …])` no longer parses what a person
+  types.** Its actions are split — `add` and `edit` name nobody, the five about a run keep
+  their agent — which argparse cannot express (the trap above), so `cli._whose_role` takes
+  the agent out of the words in `main` before the parser is handed them. Two cases were
+  parsing directly and failed with `argument <action>: invalid choice: 'ava'`, which reads
+  exactly like the parser being wrong rather than like the test skipping a step. **Go
+  through the same door `main` does** — `_handed_on`, then `_whose_role`, then
+  `parse_args` — and pass a stand-in with `exists`, because the split asks whether an agent
+  answers to that name before reading it as an action.
 - **`store` runs with `PRAGMA foreign_keys=ON`, so a test writing a row that references another
   must write that one first.** A schedule with `channel="ops"` on an agent with no such channel
   is `sqlite3.IntegrityError: FOREIGN KEY constraint failed`, from the writer and not from
