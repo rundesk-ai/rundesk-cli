@@ -63,6 +63,8 @@ who asked.
 
 | ✅ | R-ROL-38 | Every role a release ships ends its rules in a numbered definition of done, which is what a parent reviews an unchecked report against | `every shipped role ends in a numbered definition of done`, `every shipped role reads as a usable role` |
 
+| ✅ | R-ROL-39 | Creating a role writes both files or neither, refuses an existing slug, and answers with the rules path and the requirement to specialize it | `writing a role leaves the two files a role is made of`, `a role that is already there is never written over`, `a directory holding one of the two files says which is missing`, `a refused write leaves neither the role nor the half of one`, `a write that could not finish leaves nothing behind`, `a slug that could not be one says the shape a slug takes`, `a posture that is not one is refused before anything is written`, `skills that are not a set at all are refused`, `a description over the limit says the limit and the length given`, `a role a command wrote survives taking the release back`, `writing a role answers with the rules path and the work left in them`, `a role is written for the install rather than for the agent named`, `a slug that is already a role is refused rather than written over`, `every refusal a role writer has reaches the exit status` |
+
 ## Open questions
 
 - R-ROL-20 is closed rather than pending: the owner has decided a person never reaches a running role directly, and the named agent steers it on their behalf, which is R-ROL-23 and already works.

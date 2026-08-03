@@ -477,5 +477,247 @@ class WhatAnAgentIsToldItMayHandWorkTo(WithSomewhereToKeepRoles):
             role.offered(self.where))
 
 
+class WritingARole(WithSomewhereToKeepRoles):
+    """R-ROL-39 — a command writes a whole role or writes nothing at all.
+
+    The refusals are what this class is mostly about. `add` is the one place in the
+    product that lands on a directory somebody left half written, so it is the one place
+    that can say the words out loud instead of silently listing nothing.
+    """
+
+    DESCRIBED = ("Trace one behaviour back through the whole history of a repository — "
+                 "a subsystem held in view all at once, which is why it is not the "
+                 "parent's own work.")
+
+    def wrote_one(self, slug: str = "archaeology", **asked):
+        """One role as the command writes one, against this case's scratch library."""
+        said = {"description": self.DESCRIBED, "skills": ["writing-plans"],
+                "posture": "work"}
+        said.update(asked)
+        return role.write(slug, where=self.where, library=self.library, **said)
+
+    def refused(self, slug: str = "archaeology", **asked) -> str:
+        """The whole reason this was not written, so a case can assert on the words.
+
+        **And that it really was not written.** Every refusal here goes through this, so
+        no row of the table below can be satisfied by a message printed after a
+        directory has already been left standing.
+        """
+        was = self.standing()
+        with self.assertRaises(role.NotARole) as why:
+            self.wrote_one(slug, **asked)
+        self.assertEqual(was, self.standing(), "a refusal left something behind")
+        return str(why.exception)
+
+    def standing(self) -> list:
+        """Everything under the roles root, hidden names included."""
+        at = role.home(self.where)
+        return sorted(one.name for one in at.iterdir()) if at.is_dir() else []
+
+    def test_writing_a_role_leaves_the_two_files_a_role_is_made_of(self):
+        made = self.wrote_one()
+        at = role.home(self.where) / "archaeology"
+        self.assertTrue((at / role.MANIFEST).is_file())
+        self.assertTrue((at / role.INSTRUCTIONS).is_file())
+        self.assertEqual(["archaeology"], role.known(self.where))
+        self.assertEqual(("archaeology", "Archaeology", "work"),
+                         (made.slug, made.label, made.posture))
+        self.assertEqual(at, made.at)
+
+    def test_nothing_a_new_role_holds_duplicates_what_is_derived_from_it(self):
+        """R-ROL-2 — the slug is the directory, the label is the slug read aloud and the
+        revision is a digest, so a manifest naming any of them is a second copy to keep
+        true. **Never a version field**, whatever else changes here."""
+        self.wrote_one()
+        at = role.home(self.where) / "archaeology" / role.MANIFEST
+        said = json.loads(at.read_text(encoding="utf-8"))
+        self.assertEqual({"description", "skills", "posture"}, set(said))
+        for derived in ("version", "slug", "label", "revision", "name"):
+            self.assertNotIn(derived, said)
+
+    def test_a_brain_a_role_pins_is_written_and_one_that_pins_none_says_nothing(self):
+        """R-ROL-33 — an absent field is the answer, so an unpinned role must not be
+        written with an empty one: that would move every unpinned role's revision."""
+        pinned = self.wrote_one(provider_named="codex", model="gpt-5-codex")
+        self.assertEqual(("codex", "gpt-5-codex"), (pinned.provider, pinned.model))
+        plain = self.wrote_one(slug="etymology")
+        said = json.loads((plain.at / role.MANIFEST).read_text(encoding="utf-8"))
+        self.assertNotIn("provider", said)
+        self.assertNotIn("model", said)
+
+    def test_a_slug_that_could_not_be_one_says_the_shape_a_slug_takes(self):
+        for said in ("../escape", "Archaeology", "dig_site", "a" * 65):
+            with self.subTest(slug=said):
+                why = self.refused(said)
+                self.assertIn(said[:40], why)
+                self.assertTrue("lowercase" in why or "longer than" in why, why)
+
+    def test_a_role_that_is_already_there_is_never_written_over(self):
+        """R-ROL-18 — an existing slug is a refusal, never an overwrite and never a
+        merge. What an owner wrote is the one thing here nothing may destroy."""
+        at = self.wrote(slug="archaeology", rules="# Mine\n\nMy own rules.\n")
+        why = self.refused("archaeology")
+        self.assertIn("already", why)
+        self.assertIn("nothing was changed", why)
+        self.assertEqual("# Mine\n\nMy own rules.\n",
+                         (at / role.INSTRUCTIONS).read_text(encoding="utf-8"))
+
+    def test_a_directory_holding_one_of_the_two_files_says_which_is_missing(self):
+        """The refusal that exists for more than this command. A half-written directory
+        shadows a role of that name in silence — `lay_down` skips on the directory being
+        there while `known()` needs both files — so this is the first place in the product
+        that can name it."""
+        for missing, present in ((role.INSTRUCTIONS, role.MANIFEST),
+                                 (role.MANIFEST, role.INSTRUCTIONS)):
+            with self.subTest(missing=missing):
+                half = role.home(self.where) / "archaeology"
+                shutil.rmtree(half, ignore_errors=True)
+                half.mkdir(parents=True)
+                (half / present).write_text("{}\n", encoding="utf-8")
+                why = self.refused("archaeology")
+                self.assertIn(str(half), why)
+                self.assertIn(missing, why)
+                self.assertIn("nothing was changed", why)
+
+    def test_a_posture_that_is_not_one_is_refused_before_anything_is_written(self):
+        why = self.refused(posture="excavate")
+        self.assertIn("read", why)
+        self.assertIn("work", why)
+
+    def test_skills_that_are_not_a_set_at_all_are_refused(self):
+        self.assertIn("at least one", self.refused(skills=[]))
+        self.assertIn("more than once",
+                      self.refused(skills=["writing-plans", "writing-plans"]))
+
+    def test_a_description_over_the_limit_says_the_limit_and_the_length_given(self):
+        why = self.refused(description="x" * (role.DESCRIBED_LIMIT + 7))
+        self.assertIn(str(role.DESCRIBED_LIMIT), why)
+        self.assertIn(str(role.DESCRIBED_LIMIT + 7), why)
+
+    def test_a_role_saying_nothing_about_what_it_is_for_is_refused(self):
+        self.assertIn("says nothing about what it is for", self.refused(description="  "))
+
+    def test_a_refused_write_leaves_neither_the_role_nor_the_half_of_one(self):
+        """The whole point of validating before writing: a refusal after a partial write
+        leaves a directory that reads as half a role, which is what the row above is
+        about. Every refusal is asked, because one that wrote first would be invisible."""
+        for asked in ({"posture": "excavate"}, {"skills": []},
+                      {"skills": ["writing-plans", "writing-plans"]},
+                      {"description": "  "},
+                      {"description": "x" * (role.DESCRIBED_LIMIT + 1)}):
+            with self.subTest(**asked):
+                self.refused("etymology", **asked)
+                self.assertEqual([], role.known(self.where))
+                self.assertFalse((role.home(self.where) / "etymology").exists())
+                self.assertFalse(
+                    (role.home(self.where) / ".etymology.coming").exists())
+
+    def test_a_write_that_could_not_finish_leaves_nothing_behind(self):
+        """Not a refusal but a failure — a full disk, a directory that will not take a
+        rename. What must never be left is a name that reads as a role, or as half of one
+        that would then shadow it for good."""
+        with mock.patch.object(role.os, "replace",
+                               side_effect=OSError("no room on the device")):
+            with self.assertRaises(OSError):
+                self.wrote_one("etymology")
+        self.assertEqual([], role.known(self.where))
+        self.assertFalse((role.home(self.where) / "etymology").exists())
+        self.assertFalse((role.home(self.where) / ".etymology.coming").exists())
+
+    def test_a_role_a_command_wrote_survives_taking_the_release_back(self):
+        """R-RM-7 — `take_back` removes what the release wrote and nothing else. A role
+        this install made is the owner's the moment it exists."""
+        self.wrote_one()
+        self.assertEqual([], role.take_back(self.where))
+        self.assertEqual(["archaeology"], role.known(self.where))
+
+    def test_a_skill_this_machine_has_not_got_is_written_rather_than_refused(self):
+        """R-ROL-8 — carried, and named in what the command answers with."""
+        made = self.wrote_one(skills=["writing-plans", "reading-minds"])
+        self.assertEqual(("writing-plans",), made.skills)
+        self.assertEqual(("reading-minds",), made.missing)
+        said = json.loads((made.at / role.MANIFEST).read_text(encoding="utf-8"))
+        self.assertEqual(["reading-minds", "writing-plans"], said["skills"])
+
+    def test_the_same_role_written_twice_comes_out_at_the_same_revision(self):
+        """R-ROL-9 — the revision is a digest of what the role is, so nothing a writer
+        puts in either file may be a clock, a counter or an ordering. Written into two
+        roots rather than under two slugs: the label is part of the rules, so the same
+        arguments under a different name are honestly a different role."""
+        elsewhere = Path(tempfile.mkdtemp(prefix="rundesk-agents-"))
+        self.addCleanup(shutil.rmtree, elsewhere, True)
+        one = self.wrote_one()
+        same = role.write("archaeology", description=self.DESCRIBED,
+                          skills=["writing-plans"], posture="work",
+                          where=elsewhere, library=self.library)
+        self.assertEqual(one.revision, same.revision)
+        other = self.wrote_one("etymology", description="Something else entirely.")
+        self.assertNotEqual(one.revision, other.revision)
+
+    def test_the_rules_a_new_role_gets_hold_every_heading_a_role_uses(self):
+        """The shape a parent finds the ceiling and the definition of done in, whichever
+        role it is reading."""
+        made = self.wrote_one()
+        for heading in ("## Start here, in this order", "## While you work",
+                        "## The ceiling", "## Subagents", "## The report",
+                        "## Definition of done"):
+            self.assertIn(heading, made.instructions)
+        self.assertIn("# Archaeology", made.instructions)
+        self.assertIn(self.DESCRIBED, made.instructions)
+
+    def test_the_rules_a_new_role_gets_are_visibly_unfinished(self):
+        """A skeleton that read as finished prose is one nobody rewrites, and a role run
+        on it returns a report that reads well and is about nothing."""
+        made = self.wrote_one()
+        for heading in ("## Start here, in this order", "## While you work",
+                        "## The ceiling", "## Subagents", "## The report",
+                        "## Definition of done"):
+            section = made.instructions.split(heading, 1)[1].split("\n## ", 1)[0]
+            self.assertIn("TODO", section, heading)
+
+    def test_the_rules_a_new_role_gets_end_where_every_role_ends(self):
+        """R-ROL-38 — numbered, and the last item is the same one in every role there
+        is: undone work reported as done costs more than the task."""
+        done = self.wrote_one().instructions
+        done = done[done.index("## Definition of done"):]
+        self.assertIn("\n1. ", done)
+        self.assertIn("\n2. ", done)
+        self.assertIn("The report is true about what you did not do.", done)
+
+    def test_the_rules_a_new_role_gets_restate_none_of_the_floor(self):
+        """R-ROL-5 — Rundesk says the floor above these rules and the mechanics below
+        them. A copy here is the same words paid for twice, and a second place to be
+        wrong the day one of them is reworded."""
+        from rundesk import instructions
+
+        made = self.wrote_one()
+        for said in ("You have no memory, no history, and no identity beyond this task.",
+                     "Never speak as the person who asked and never send anything to "
+                     "anyone.",
+                     "Starting another Rundesk role run is refused."):
+            self.assertIn(said, instructions.ROLE_EXECUTION_INSTRUCTIONS)
+            self.assertNotIn(said, made.instructions)
+
+    def test_the_skeleton_is_not_read_as_a_role_this_release_ships(self):
+        """It stands among the shipped roles, so what keeps it out of them is asked
+        here rather than assumed: `lay_down` walking it would install half a role."""
+        self.assertNotIn(".skeleton", " ".join(role.shipped()))
+        role.lay_down(self.where)
+        self.assertEqual(sorted(role.shipped()), role.known(self.where))
+
+    def test_the_documented_skeleton_and_the_written_one_name_the_same_headings(self):
+        """One source of truth. `writing-a-role.md` shows the skeleton in prose and the
+        command writes it as a file; two texts nobody compares are two texts that
+        disagree the first time either is edited."""
+        guide = (ROOT / "src" / "templates" / "skills" / "managing-rundesk"
+                 / "references" / "writing-a-role.md").read_text(encoding="utf-8")
+        block = guide.split("```markdown", 1)[1].split("```", 1)[0]
+        documented = [one.split("  ")[0].strip() for one in block.splitlines()
+                      if one.startswith("## ")]
+        written = [one.strip() for one in self.wrote_one().instructions.splitlines()
+                   if one.startswith("## ")]
+        self.assertEqual(documented, written)
+
+
 if __name__ == "__main__":
     unittest.main()

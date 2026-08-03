@@ -169,6 +169,11 @@ EXAMPLES: list[tuple[str, list[tuple[str, str]]]] = [
     ("a role", [
         ("rundesk roles ava",
          "the specialists ava can hand heavy work to, and the runs it has admitted"),
+        ('rundesk roles ava add archaeology --description "Trace one behaviour through '
+         'the whole history of a repository." --skills python-patterns,python-testing '
+         '--posture read',
+         "write a new role — then rewrite the rules file it names, which is a generic "
+         "skeleton until you do"),
         ('rundesk roles ava run development --target ~/code/exporter --label "csv export"',
          "one bounded task, run in that project under the role's own rules"),
         ("", "an agent hands work on from inside its own turn, and the brief arrives on "
@@ -639,6 +644,35 @@ def build_parser() -> argparse.ArgumentParser:
                              help="whose role runs — a run belongs to the agent that "
                                   "admitted it")
     handing = specialists.add_subparsers(dest="act", metavar="<action>")
+    # The agent is named because every roles action names one, and a role is **not** that
+    # agent's: it is written once and every named agent on this install may put it on.
+    # What the command answers with says so, or the surface teaches the wrong model.
+    written = handing.add_parser(
+        "add", help="write a new role — a generic skeleton to rewrite for the specialty")
+    written.add_argument("role", metavar="<role>",
+                         help="what to call it — lowercase letters, digits and single "
+                              "hyphens, and never one this install already has")
+    # All three required, and the posture most deliberately of all: it is a real safety
+    # narrowing — on some brains `read` is an allowlist with no shell in it at all — so
+    # a default would pick the widest boundary on the author's behalf without saying so.
+    written.add_argument("--description", required=True, metavar="<text>",
+                         help="what it answers for and how heavy the work is, in one "
+                              "sentence — what a named agent reads while deciding "
+                              "whether to delegate at all")
+    written.add_argument("--skills", required=True, metavar="<a,b,c>",
+                         help="the skills every run of it is given, comma separated — at "
+                              "least one; a name this machine has not got is carried and "
+                              "reported rather than refused")
+    # Not `choices=`: what a posture may be is decided where a role is read, and a second
+    # copy here is a list that disagrees with itself the day a third one exists.
+    written.add_argument("--posture", required=True, metavar="read|work",
+                         help="how far a run of it may reach — `read` changes nothing, "
+                              "and on some brains has no shell in it at all")
+    written.add_argument("--provider", metavar="<provider>",
+                         help="the brain every run of it uses, beating the parent turn's "
+                              "— left out, a run continues on whatever its parent is on")
+    written.add_argument("--model", metavar="<model>",
+                         help="which model on that brain — what the brain itself calls it")
     handed = handing.add_parser(
         "run", help="hand one bounded task to a role — the brief is read from standard input")
     handed.add_argument("role", metavar="<role>",
