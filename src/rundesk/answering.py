@@ -263,6 +263,11 @@ class Answering:
         adapter is handed for both messages, so the two reach the same room whether or not
         rundesk has ever seen it; there is nothing to carry over and nothing that can drift.
 
+        **What goes over as `conversation` is the platform's own word for the room, and
+        what is handed back is rundesk's** (R-CAD-20). The two are resolved together and
+        must not be confused: the surface has never seen a store id and cannot act on one,
+        while the report is written down against it and the caller passes it back here.
+
         **Not written down where it was delivered**, which is the one place this differs
         from the report. R-SCH-33 exists so a person replying to what the agent *said*
         reaches a brain whose session saw it; nobody replies "nice work" to rundesk saying
@@ -273,14 +278,15 @@ class Answering:
         row = kept.schedule(named) or {}
         place = row.get("place")
         where_it_goes, said = self._where_to_say(kept, place)
-        if where_it_goes is None and not place:
+        on_the_surface = store.announces_as(kept, where_it_goes)
+        if on_the_surface is None and not place:
             self._note(f"channel '{self.channel}': nowhere to say that '{named}' has "
                        f"started — nothing has been said on this surface yet")
             return False, None
         # The schedule's name goes over with it, because that is what the surface holds the
         # posted message under and what the report names to find it again (R-DIS-30). The
         # surface is never asked to read it — it is a key, exactly as `place` is a word.
-        self._tell(type="said", conversation=where_it_goes, place=place or None,
+        self._tell(type="said", conversation=on_the_surface, place=place or None,
                    text=self.STARTING.format(named=named), schedule=named, began=True)
         if where_it_goes is None and said:
             self._note(said)
@@ -317,6 +323,13 @@ class Answering:
         under that name; a surface holding nothing posts it plainly, which is what every
         report did before there were notices at all.
 
+        **What is sent and what is written down are two names for one room** (R-CAD-20).
+        The record carries the platform's own identifier, because that is the only kind an
+        adapter can resolve; `answered` is given rundesk's own, because that is what the
+        account is keyed on (R-SCH-33). Sending the second was this path's whole defect:
+        a Discord adapter reading it as a snowflake could only fail, and did, silently
+        (#304).
+
         **`where` is where that notice went**, handed back when it went out and passed
         straight through here — the one thing this does not work out for itself. Asking
         again would ask a *different* question: the newest conversation is whichever room
@@ -331,7 +344,8 @@ class Answering:
             where_it_goes, said = where, ""
         else:
             where_it_goes, said = self._where_to_say(kept, place)
-        if where_it_goes is None and not place:
+        on_the_surface = store.announces_as(kept, where_it_goes)
+        if on_the_surface is None and not place:
             self._note(f"channel '{self.channel}': nowhere to say what '{named}' did — "
                        f"nothing has been said on this surface yet")
             return
@@ -346,7 +360,7 @@ class Answering:
         # can reach a room nobody has spoken in yet, and it is the one that knows what the word
         # means. A surface that cannot resolve one falls back to the conversation (R-CAD-16).
         if outcome_run is None:
-            self._tell(type="said", conversation=where_it_goes, place=place or None,
+            self._tell(type="said", conversation=on_the_surface, place=place or None,
                        text=text, schedule=named)
         else:
             # A scheduled turn is still a completed channel answer (R-SCH-50). Its outcome
@@ -359,10 +373,10 @@ class Answering:
                 usage = {key: tokens[key]
                          for key in ("input", "output", "cached", "written", "session")
                          if isinstance(tokens.get(key), int)}
-                self._tell(type="usage", conversation=where_it_goes,
+                self._tell(type="usage", conversation=on_the_surface,
                            run=outcome_run, schedule=named, **usage)
             final = {
-                "type": "answer", "conversation": where_it_goes,
+                "type": "answer", "conversation": on_the_surface,
                 "place": place or None, "run": outcome_run, "text": text,
                 "schedule": named, "attachments": made,
             }
