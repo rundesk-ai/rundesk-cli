@@ -4265,10 +4265,15 @@ class Delegating:
     the seam being an argument.
     """
 
-    def __init__(self, waiting=(), owed=(), carried=None, quiet=()):
+    def __init__(self, waiting=(), owed=(), carried=None, quiet=(), settled_as="",
+                 stopped_by=""):
         self._waiting = list(waiting)
         self._owed = list(owed)
         self._quiet = list(quiet)
+        #: How the records say this run ended, and who asked, exactly as the real `seen`
+        #: answers them — empty for a run nothing has settled (R-ROL-43).
+        self._settled_as = settled_as
+        self._stopped_by = stopped_by
         self.carried = carried if carried is not None else []
         self.claimed: list = []
         self.settled: list = []
@@ -4284,7 +4289,8 @@ class Delegating:
 
     def seen(self, run_id):
         return {"channel": "ops", "conversation": "one", "label": "a task",
-                "role": "development", "elapsed": 0}
+                "role": "development", "elapsed": 0,
+                "became": self._settled_as, "stopped_by": self._stopped_by}
 
     def checking_in(self, run_id, told=0):
         """Exactly what `agent.playing` answers, off the same arithmetic — a stand-in
@@ -4381,6 +4387,7 @@ class Shown(Reached):
         self.working: list = []
         self.checked_in: list = []
         self.settled: list = []
+        self.endings: list = []
 
     def told_role_working(self, conversation, run, label, role="", elapsed=0):
         self.working.append((conversation, run, label, role, elapsed))
@@ -4388,8 +4395,12 @@ class Shown(Reached):
     def told_role_checking_in(self, conversation, run, label, role="", elapsed=0):
         self.checked_in.append((conversation, run, label, role, elapsed))
 
-    def told_role_settled(self, conversation, run, ok, summary, role="", elapsed=0):
+    def told_role_settled(self, conversation, run, ok, summary, role="", elapsed=0,
+                          became="", stopped_by=""):
         self.settled.append((conversation, run, ok, summary, role, elapsed))
+        #: Kept apart from the tuple above so the cases that were written before there
+        #: were three endings go on asserting exactly what they asserted.
+        self.endings.append((became, stopped_by))
 
 
 class CarryingWhatAnAgentHandedOn(WithARunDirectory):
@@ -4619,6 +4630,40 @@ class CarryingWhatAnAgentHandedOn(WithARunDirectory):
         await asyncio.gather(*tuple(gw._role_tasks.values()))
 
         self.assertEqual(1, len(surface.working))
+        self.assertEqual([False], [one[2] for one in surface.settled])
+
+    async def test_a_run_somebody_stopped_is_shown_as_stopped_and_says_who_asked(self):
+        """R-ROL-43 — the whole point of the third ending. A stop and a fault both
+        arrive here as `outcome is None`, so a gateway that decided from the outcome
+        alone could only ever say the work did not finish."""
+        doing = Delegating(waiting=[{"id": "rol-1-aaaa"}], settled_as="stopped",
+                           stopped_by="agent")
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+
+        gw._start_admitted_roles()
+        await asyncio.gather(*tuple(gw._role_tasks.values()))
+
+        self.assertEqual([("stopped", "agent")], surface.endings)
+
+    async def test_a_run_nothing_has_settled_yet_is_shown_with_no_ending_at_all(self):
+        """A carry that threw is tried again, so the records still say `working` — and a
+        word invented for that would announce an ending the run has not reached."""
+        doing = Delegating(waiting=[{"id": "rol-1-aaaa"}])
+
+        async def broke(_run, **_given):
+            raise RuntimeError("the bundle was not there")
+
+        doing.carry = broke
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+
+        gw._start_admitted_roles()
+        await asyncio.gather(*tuple(gw._role_tasks.values()))
+
+        self.assertEqual([("", "")], surface.endings)
         self.assertEqual([False], [one[2] for one in surface.settled])
 
     async def test_a_run_still_working_says_so_once_per_window(self):

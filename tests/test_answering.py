@@ -2297,6 +2297,72 @@ class WhatARoleRunSays(CarriesAConversation):
         self.assertEqual(["settled", "settled"], [one["state"] for one in said])
         self.assertEqual([True, False], [one["ok"] for one in said])
 
+    async def test_a_settled_run_says_which_of_the_three_endings_it_reached(self):
+        """R-ROL-43 — `ok` tells two endings apart and there are three, so a run
+        somebody deliberately ended came out as one that did not finish."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+
+        held.told_role_settled("one", "rol-1-aaaa", True, "a task", "development", 60,
+                               "succeeded")
+        held.told_role_settled("one", "rol-2-bbbb", False, "a task", "development", 60,
+                               "stopped", "agent")
+        held.told_role_settled("one", "rol-3-cccc", False, "a task", "development", 60,
+                               "failed")
+
+        said = await self.shown(held, surface)
+        self.assertEqual(["succeeded", "stopped", "failed"],
+                         [one["became"] for one in said])
+        self.assertEqual([True, False, False], [one["ok"] for one in said],
+                         "an adapter that never heard of an ending lost the two it knew")
+
+    async def test_an_ending_nothing_settled_is_no_ending_rather_than_a_word_for_one(self):
+        """A carry that threw is tried again, so nothing has decided how this run ended.
+        A surface falls back to `ok`, which is the answer it has always shown there."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+
+        held.told_role_settled("one", "rol-1-aaaa", False, "a task", "development", 60)
+        held.told_role_settled("one", "rol-2-bbbb", False, "a task", "development", 60,
+                               "wandering off")
+
+        said = await self.shown(held, surface)
+        for one in said:
+            self.assertNotIn("became", one)
+            self.assertIs(False, one["ok"])
+
+    async def test_a_stop_says_who_asked_and_says_nothing_where_nobody_wrote_it_down(self):
+        """A run stopped by a release before there was anywhere to keep an asker has to
+        reach a surface as a stop with nobody named — never as one of the two guesses."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+
+        held.told_role_settled("one", "rol-1-aaaa", False, "a task", "development", 60,
+                               "stopped", "terminal")
+        held.told_role_settled("one", "rol-2-bbbb", False, "a task", "development", 60,
+                               "stopped")
+        held.told_role_settled("one", "rol-3-cccc", False, "a task", "development", 60,
+                               "stopped", "the night shift")
+
+        said = await self.shown(held, surface)
+        self.assertEqual("terminal", said[0]["stopped_by"])
+        self.assertNotIn("stopped_by", said[1])
+        self.assertNotIn("stopped_by", said[2])
+
+    async def test_who_asked_is_never_beside_an_ending_nobody_asked_anything_for(self):
+        """It answers a question only a stop raises. On a run that worked or failed it
+        would be an answer to nothing, and one a surface could render."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+
+        held.told_role_settled("one", "rol-1-aaaa", True, "a task", "development", 60,
+                               "succeeded", "agent")
+        held.told_role_settled("one", "rol-2-bbbb", False, "a task", "development", 60,
+                               "failed", "terminal")
+
+        for one in await self.shown(held, surface):
+            self.assertNotIn("stopped_by", one)
+
     async def test_a_role_record_carries_no_path_no_brief_and_no_report(self):
         """R-ROL-17 — a room is read by other people, and what a worker was asked and
         what it wrote back are neither of theirs."""
@@ -2305,14 +2371,17 @@ class WhatARoleRunSays(CarriesAConversation):
 
         held.told_role_working("one", "rol-1-aaaa", "a task", "development", 0)
         held.told_role_checking_in("one", "rol-1-aaaa", "a task", "development", 1200)
-        held.told_role_settled("one", "rol-1-aaaa", True, "a task", "development", 1800)
+        # The fullest settled record there is, so the guard covers every field a run can
+        # carry rather than only the ones it could carry when it was written.
+        held.told_role_settled("one", "rol-1-aaaa", False, "a task", "development", 1800,
+                               "stopped", "agent")
 
         said = await self.shown(held, surface)
         self.assertEqual(3, len(said))
         for one in said:
             self.assertEqual(
                 {"type", "conversation", "role_run", "state", "role", "label", "elapsed"},
-                set(one) - {"ok"},
+                set(one) - {"ok", "became", "stopped_by"},
                 "a role record carries a field nothing here decided to send")
 
     async def test_what_a_role_run_says_is_not_written_down_as_the_agents_words(self):

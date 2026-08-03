@@ -365,6 +365,21 @@ place will not fill a room with a run saying nothing has changed. An adapter tha
 know this type shows nothing and stays correct, which is what `understood` already
 guarantees for anything unrecognised.
 
+**A settled run ended in one of three ways, and only one of them is a fault.** `became` is
+`succeeded`, `stopped` or `failed`. A stop is a decision somebody made — an agent ending
+work it had taken over, or an owner ending it from a terminal — so show it as a decision:
+render it with whatever your surface uses for a turn somebody stopped rather than with the
+mark you use for something going wrong, and say the report is still unreviewed, because it
+is. `stopped_by` comes with a stop and says which: `agent` or `terminal`. **Both fields are
+optional and neither may be guessed at.** A run nothing has settled yet carries no `became`
+at all, and a run stopped before rundesk kept an asker carries no `stopped_by` — say it was
+stopped and name nobody. `ok` is still there and still means exactly what it meant, so an
+adapter that ignores all of this renders the two endings it knows and stays correct.
+
+```json
+{"type": "role", "conversation": "1180", "role_run": "rol-5-ihxy", "state": "settled", "role": "development", "label": "Backup keep-last retention", "elapsed": 4200, "ok": false, "became": "stopped", "stopped_by": "agent"}
+```
+
 **An `owner-notice` carries no conversation, because it is not about one.** It is
 rundesk's own bookkeeping about the agent — what it may do changed — and it is for the
 owner alone: the first person your channel allows, reached however your platform reaches

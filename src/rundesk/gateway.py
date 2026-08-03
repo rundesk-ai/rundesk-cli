@@ -1711,6 +1711,10 @@ class Gateway:
                 where["conversation"], run_id,
                 bool(outcome is not None and getattr(outcome, "ok", False)),
                 where["label"], where.get("role", ""), where.get("elapsed", 0),
+                # How it ended and who ended it are the records' answer, not this
+                # gateway's: a stop is a decision somebody made and a failure is not, and
+                # the one place that told them apart already wrote it down (R-ROL-43).
+                where.get("became", ""), where.get("stopped_by", ""),
             )
         except Exception as why:  # noqa: BLE001 — showing is never worth a run
             self.log.warning("could not show role run %s: %s", run_id, why)

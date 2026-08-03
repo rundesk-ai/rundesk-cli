@@ -10,7 +10,10 @@ Run: python3 tests/test_role_run.py
 
 from __future__ import annotations
 
+import argparse
 import asyncio
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -26,6 +29,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from rundesk import agent, config, instructions, role, store, turn  # noqa: E402
 from rundesk import role_run as role_runs  # noqa: E402
+from rundesk.commands import roles  # noqa: E402
 
 RULES = "# Development\n\nDo the bounded task and report exactly what you verified.\n"
 BRIEF = "Outcome: make the export work.\nAuthorization: edit and test, never publish.\n"
@@ -1278,6 +1282,120 @@ class EndingOneBeforeItFinishes(WithAnAgentThatCanDelegate):
         role_runs.stop("elena", admitted.id)
         agent.playing("elena", self.where).stopped(admitted.id)
         self.assertEqual(1, len(self.kept.owed_role_callbacks()))
+
+
+class WhoAskedForItToEnd(WithAnAgentThatCanDelegate):
+    """R-ROL-43 — a stop is somebody's decision, and the records say whose.
+
+    `stop_asked_at` said that somebody had asked and never which somebody, so an agent
+    ending work it had taken over and an owner ending it from a terminal were one fact.
+    """
+
+    def stopped_by(self, admitted, asked_by: str) -> dict:
+        role_runs.stop("elena", admitted.id, asked_by=asked_by)
+        return self.kept.role_run(admitted.id)
+
+    def test_who_asked_for_a_stop_is_written_down_with_the_ask(self):
+        for asked_by in (store.ASKED_BY_AGENT, store.ASKED_BY_TERMINAL):
+            with self.subTest(asked_by=asked_by):
+                row = self.stopped_by(self.admit(), asked_by)
+                self.assertIsNotNone(row["stop_asked_at"])
+                self.assertEqual(asked_by, row["stop_asked_by"])
+
+    def test_a_stop_nobody_named_a_source_for_records_nobody(self):
+        """What a run stopped before there was anywhere to keep this already looks like.
+        Absent is a third answer, and neither of the two words may be guessed for it."""
+        self.assertIsNone(self.stopped_by(self.admit(), "")["stop_asked_by"])
+
+    def test_a_word_this_release_does_not_know_is_kept_as_nobody(self):
+        """Rather than written through into a column a surface then renders: a value
+        nothing here recognises would come out as a stop named after a stranger."""
+        self.assertIsNone(self.stopped_by(self.admit(), "the night shift")["stop_asked_by"])
+
+    def test_a_second_ask_never_rewrites_whose_decision_the_first_one_was(self):
+        """The ask itself is already first-writer-wins, and who asked has to move with
+        it: two facts written under different rules eventually name the wrong person."""
+        admitted = self.admit()
+        self.kept.role_working(admitted.id, AT, role_runs.retained_until())
+        role_runs.stop("elena", admitted.id, asked_by=store.ASKED_BY_TERMINAL)
+        role_runs.stop("elena", admitted.id, asked_by=store.ASKED_BY_AGENT)
+        self.assertEqual(store.ASKED_BY_TERMINAL,
+                         self.kept.role_run(admitted.id)["stop_asked_by"])
+
+    def test_carrying_a_stopped_run_on_forgets_who_stopped_it(self):
+        """A run put back in hand is being asked to do something new. Left standing, the
+        asker would be read against whatever that new attempt came to."""
+        admitted = self.admit()
+        role_runs.stop("elena", admitted.id, asked_by=store.ASKED_BY_AGENT)
+        agent.playing("elena", self.where).stopped(admitted.id)
+        role_runs.resume("elena", admitted.id, "now add the header row")
+        row = self.kept.role_run(admitted.id)
+        self.assertIsNone(row["stop_asked_at"])
+        self.assertIsNone(row["stop_asked_by"])
+
+    def test_a_stop_typed_at_a_terminal_and_one_asked_inside_a_turn_are_told_apart(self):
+        """The discriminator is `RUNDESK_RUN`, which is in every program a gateway starts
+        and in nothing a person types — read in one place and never restated."""
+        for run, expected in ((None, store.ASKED_BY_TERMINAL),
+                              ("7-abcd", store.ASKED_BY_AGENT)):
+            with self.subTest(run=run):
+                admitted = self.admit()
+                before = os.environ.pop("RUNDESK_RUN", None)
+                if run is not None:
+                    os.environ["RUNDESK_RUN"] = run
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        code = roles.cmd_roles(
+                            argparse.Namespace(name="elena", act="stop", run=admitted.id),
+                            agent)
+                finally:
+                    os.environ.pop("RUNDESK_RUN", None)
+                    if before is not None:
+                        os.environ["RUNDESK_RUN"] = before
+                self.assertEqual(0, code)
+                self.assertEqual(expected,
+                                 self.kept.role_run(admitted.id)["stop_asked_by"])
+
+
+class HowASettledRunIsShown(WithAnAgentThatCanDelegate):
+    """R-ROL-43 — the three endings a surface distinguishes, read off the records.
+
+    A stop and a fault reach the gateway identically — the carry answers with no outcome
+    for either — so anything deciding between them from that outcome can only ever say
+    the work did not finish, which reads as a fault about a decision.
+    """
+
+    def test_a_run_somebody_stopped_says_it_was_stopped_and_who_asked(self):
+        admitted = self.admit()
+        role_runs.stop("elena", admitted.id, asked_by=store.ASKED_BY_TERMINAL)
+        agent.playing("elena", self.where).stopped(admitted.id)
+        where_it_shows = agent.playing("elena", self.where).seen(admitted.id)
+        self.assertEqual(store.STOPPED, where_it_shows["became"])
+        self.assertEqual(store.ASKED_BY_TERMINAL, where_it_shows["stopped_by"])
+
+    def test_a_run_stopped_before_anybody_was_written_down_names_nobody(self):
+        admitted = self.admit()
+        role_runs.stop("elena", admitted.id)
+        agent.playing("elena", self.where).stopped(admitted.id)
+        where_it_shows = agent.playing("elena", self.where).seen(admitted.id)
+        self.assertEqual(store.STOPPED, where_it_shows["became"])
+        self.assertEqual("", where_it_shows["stopped_by"])
+
+    def test_a_run_that_worked_and_one_that_failed_each_say_which(self):
+        for ok, expected in ((True, store.SUCCEEDED), (False, store.FAILED)):
+            with self.subTest(ok=ok):
+                admitted = self.admit()
+                self.carried(admitted, ok=ok)
+                where_it_shows = agent.playing("elena", self.where).seen(admitted.id)
+                self.assertEqual(expected, where_it_shows["became"])
+                self.assertEqual("", where_it_shows["stopped_by"])
+
+    def test_a_run_nothing_has_settled_has_reached_no_ending_at_all(self):
+        """A run in flight, and a run whose carry threw and will be tried again, are
+        both here — and neither has an ending to announce."""
+        admitted = self.admit()
+        self.kept.role_working(admitted.id, AT, role_runs.retained_until())
+        self.assertEqual("", agent.playing("elena", self.where).seen(admitted.id)["became"])
 
 
 class CarryingAFinishedOneOn(WithAnAgentThatCanDelegate):
