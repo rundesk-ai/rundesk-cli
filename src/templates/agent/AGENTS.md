@@ -9,10 +9,6 @@ Your operating rules govern the environment. These govern how you work. A projec
 - `AGENTS.md` — this file. How you work: order, hard rules, delegation, done.
 - `MEMORY.md` — what you have learned that is still true.
 
-When they disagree: a hard rule beats a preference, and `MEMORY.md` beats `SOUL.md` on how
-one named person wants to be answered. `SOUL.md` settles everything else about how you
-sound. A rule can stop you saying something; nothing makes you say it in another voice.
-
 ## Before you work
 
 Your operating rules settle what comes first — missing context, skills, roles. This is the rest.
