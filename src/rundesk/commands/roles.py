@@ -22,12 +22,28 @@ from rundesk import store
 ROLE_RUNS_SHOWN = 20
 
 def cmd_roles(args: argparse.Namespace, agents) -> int:
-    """What an agent can hand heavy execution to, and what it has handed over."""
+    """The specialists this install has, and what one agent has handed to them.
+
+    **The library is the install's and the runs are one agent's**, which is why only half
+    of this needs a name: writing or changing a role names nobody, and a listing shows the
+    library whether or not an agent was named. Every verb about a *run* names one, because
+    a run belongs to the agent that admitted it.
+    """
+    act = getattr(args, "act", None)
+    if act == "add":
+        # Before any agent is resolved and any records are opened: a role is the install's,
+        # and neither an agent that does not exist nor one whose database will not read is
+        # a reason this install cannot have a specialist written for it.
+        return _write_a_role(args)
+    if act == "edit":
+        return _edit_a_role(args)
+    if args.name is None:
+        # Nobody named, so nothing whose: the library, and no runs.
+        return _list_roles()
     if not agents.exists(args.name):
         print(f"{args.name}: NO SUCH AGENT", file=sys.stderr)
         print("        what there is:  rundesk agents", file=sys.stderr)
         return 1
-    act = getattr(args, "act", None)
     if act == "run":
         return _hand_to_a_role(args, agents)
     if act in ("say", "stop", "resume"):
@@ -39,11 +55,147 @@ def cmd_roles(args: argparse.Namespace, agents) -> int:
         return 1
     if act == "show":
         return _show_role_run(args, whose)
-    return _list_roles(args, whose)
+    return _list_roles(whose)
 
 
-def _list_roles(args: argparse.Namespace, whose) -> int:
-    """The roles this agent may reach for, and the runs it has already admitted."""
+def _a_role_reads_as(one: role.Role) -> list:
+    """One role as it is shown, in the one shape both listing it and writing it use."""
+    lines = [f"{one.label}  {one.slug}  {one.revision[:12]}  "
+             f"{one.posture}  [{' '.join(one.skills)}]",
+             f"        {one.description}"]
+    if one.provider or one.model:
+        # Said before anybody hands it work, because a pinned brain decides what this
+        # role can do: not every brain can be sent to mid-turn, so a role pinned to
+        # one that cannot is a role no `say` will ever reach (R-ROL-34).
+        lines.append("        it runs on "
+                     + (provider.label(one.provider) if one.provider
+                        else "whatever this turn is on")
+                     + (f", model {one.model}" if one.model else ""))
+    if one.missing:
+        # Said every time it is shown. A set quietly smaller than its manifest is the
+        # kind of difference nobody notices until the work comes back thin.
+        lines.append(f"        not installed here, so not given: "
+                     f"{' '.join(one.missing)}")
+    return lines
+
+
+def _write_a_role(args: argparse.Namespace) -> int:
+    """Write one new role, and say what is left to do before it is given real work.
+
+    **The answer is the point of this command, not a courtesy.** What is written is a
+    generic skeleton that says nothing about the specialty, so a caller that comes away
+    without knowing there is an unfinished file and where it stands has been handed a
+    role that will return a report reading well and saying nothing. The path is absolute
+    and the instruction is explicit, and the headings to fill in are read off the file
+    that was actually written rather than restated here.
+    """
+    try:
+        made = role.write(
+            args.role,
+            description=args.description,
+            skills=[one.strip() for one in (args.skills or "").split(",")
+                    if one.strip()],
+            posture=args.posture,
+            provider_named=(args.provider or "").strip(),
+            model=(args.model or "").strip(),
+        )
+    except role.NotARole as why:
+        print(f"{args.role}: NOT WRITTEN — {why}", file=sys.stderr)
+        print("        what there already is:  rundesk roles", file=sys.stderr)
+        return 1
+    except OSError as why:
+        print(f"{args.role}: NOT WRITTEN — {why}", file=sys.stderr)
+        return 1
+    for line in _a_role_reads_as(made):
+        print(line)
+    rules = made.at / role.INSTRUCTIONS
+    print(f"        its rules stand at {rules}")
+    headings = [one.strip()[3:] for one in made.instructions.splitlines()
+                if one.startswith("## ")]
+    print(f"        that file is the generic skeleton and is not yet about this "
+          f"specialty — rewrite it before {made.slug} is handed real work, filling in "
+          f"{'; '.join(headings)}")
+    # Named `<agent>` rather than filled in, because nothing here knows one: a role is
+    # written for the install, and which of its agents hands the first task to this one is
+    # not a question this command was asked.
+    print(f"        then:  rundesk roles <agent> run {made.slug} --target <directory>")
+    return 0
+
+
+def _edit_a_role(args: argparse.Namespace) -> int:
+    """Change what a role says about itself, and say what moved (R-ROL-40).
+
+    **What moved is the answer, not the new state.** A caller who asked for one field
+    and reads back a whole role cannot tell what their command did from what was already
+    true — and `--skills` replacing the set rather than joining it is exactly the
+    difference a reader assumes their way past. The revision is said twice over, old and
+    new, because it is how a run's locked bytes are identified afterwards.
+    """
+    named = {}
+    for field in role.FIELDS:
+        said = getattr(args, field, None)
+        if said is None:
+            # Omitted and empty are different answers: no flag keeps what the role says,
+            # and an empty one is a decision to say nothing (R-ROL-33).
+            continue
+        named[field] = ([one.strip() for one in said.split(",") if one.strip()]
+                        if field == "skills" else said.strip())
+    try:
+        before, after = role.edit(args.role, **named)
+    except role.NotARole as why:
+        print(f"{args.role}: NOT CHANGED — {why}", file=sys.stderr)
+        print("        what there is:  rundesk roles", file=sys.stderr)
+        return 1
+    except OSError as why:
+        print(f"{args.role}: NOT CHANGED — {why}", file=sys.stderr)
+        return 1
+    for line in _a_role_reads_as(after):
+        print(line)
+    moved = _what_moved(before, after)
+    for line in moved or ["nothing moved — it already said all of that"]:
+        print(f"        {line}")
+    print(f"        revision {before.revision[:12]} → {after.revision[:12]}")
+    print("        it lands on the next run — every run in flight keeps the bytes it "
+          "was admitted with")
+    print(f"        its rules stand at {after.at / role.INSTRUCTIONS}, and this did not "
+          f"touch them — a specialty that moved is yours to bring in line")
+    if after.slug in role.shipped():
+        # Said for a shipped slug and only for one. What proves a role is still
+        # Rundesk's is that it is byte for byte what Rundesk wrote, so this edit is what
+        # makes it the owner's — which is not a refusal, but is not reversible either.
+        print(f"        {after.slug} is a role this release ships, and one character "
+              f"different and it is yours: an uninstall now leaves it standing and no "
+              f"release will ever bring it forward")
+    return 0
+
+
+def _what_moved(before: role.Role, after: role.Role) -> list:
+    """The fields this edit actually changed, old then new — and only those.
+
+    The skills are compared as the manifest asks for them rather than as this machine
+    resolved them: a name no skill here answers to is still part of what the role says,
+    and reporting the resolved set would show a change nobody made.
+    """
+    def asked_for(one: role.Role) -> str:
+        return " ".join(sorted([*one.skills, *one.missing]))
+
+    lines = []
+    for field, was, now in (("description", before.description, after.description),
+                            ("skills", asked_for(before), asked_for(after)),
+                            ("posture", before.posture, after.posture),
+                            ("provider", before.provider, after.provider),
+                            ("model", before.model, after.model)):
+        if was != now:
+            lines.append(f"{field}: {was or 'nothing'} → {now or 'nothing'}")
+    return lines
+
+
+def _list_roles(whose=None) -> int:
+    """The roles this install has, and the runs one agent has already admitted.
+
+    The library is shown either way, because it is the install's; the runs are shown only
+    where an agent was named, because there is nobody to have admitted one otherwise.
+    """
     installed = role.known()
     if not installed:
         print("no roles installed")
@@ -53,21 +205,10 @@ def _list_roles(args: argparse.Namespace, whose) -> int:
         except role.NotARole as why:
             print(f"{slug}  UNUSABLE — {why}")
             continue
-        print(f"{one.label}  {one.slug}  {one.revision[:12]}  "
-              f"{one.posture}  [{' '.join(one.skills)}]")
-        print(f"        {one.description}")
-        if one.provider or one.model:
-            # Said before anybody hands it work, because a pinned brain decides what this
-            # role can do: not every brain can be sent to mid-turn, so a role pinned to
-            # one that cannot is a role no `say` will ever reach (R-ROL-34).
-            print("        it runs on "
-                  + (provider.label(one.provider) if one.provider
-                     else "whatever this turn is on")
-                  + (f", model {one.model}" if one.model else ""))
-        if one.missing:
-            # Said every time it is listed. A set quietly smaller than its manifest is the
-            # kind of difference nobody notices until the work comes back thin.
-            print(f"        not installed here, so not given: {' '.join(one.missing)}")
+        for line in _a_role_reads_as(one):
+            print(line)
+    if whose is None:
+        return 0
     runs = whose.role_runs(limit=ROLE_RUNS_SHOWN)
     if not runs:
         return 0

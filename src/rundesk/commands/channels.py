@@ -27,7 +27,13 @@ from rundesk.commands import _as_table, _note
 
 #: What the credential a surface reads is kept in, beside that channel's own things. The
 #: adapters that need one look here, so this is where one taken at the terminal is put.
-SECRET_FILE = "token"
+#:
+#: **Decided by the seam now, not here** — the adapter that reads it back cannot import
+#: this module, so the name belongs where the contract can state it (`channel.SECRET_FILE`).
+#: Re-exported under the name this module has always used, so nothing that reaches for
+#: `channels.SECRET_FILE` has to change.
+SECRET_FILE = channel.SECRET_FILE
+
 
 def cmd_channels(args: argparse.Namespace, gateways, agents) -> int:
     """The surfaces an agent is reachable on — list them, or change them."""
@@ -85,30 +91,63 @@ def _wants_a_secret(said: dict) -> bool:
 
 
 def _took_a_secret(args: argparse.Namespace, said: dict, home: Path) -> bool:
-    """Take the credential this surface named, and keep it where the surface looks.
+    """Take every credential this surface named, and keep each where the surface looks.
 
     From a pipe when asked for that, and otherwise from a terminal with echo off. Neither
-    is an argument, so neither reaches `ps` or a shell history. Says whether it got one:
+    is an argument, so neither reaches `ps` or a shell history. Says whether it got any:
     a check that failed for want of a credential nobody can supply is a refusal, not a
     prompt in a script that would hang waiting for one.
+
+    **One prompt each, because one value cannot be two credentials.** This read a single
+    value however many were named, joined every name into one question — `slack needs a
+    credential (SLACK_BOT_TOKEN, SLACK_APP_TOKEN):` — and wrote what it got into one file.
+    So a surface that opens its connection with one credential and calls its API with
+    another could never be added by the command that exists to add one: the second was
+    left for the owner to place by hand, which is the exact thing R-CAD-11 says must not
+    happen. `channel.named` has always kept a list and said why; this is the half that had
+    not caught up. A pipe supplies them in the order they were named, one to a line.
     """
-    named = ", ".join((said.get("secret") or {}).get("env") or [])
-    if getattr(args, "token_stdin", False):
-        given = sys.stdin.readline().strip()
-    elif sys.stdin.isatty():
-        given = getpass.getpass(f"        {args.kind} needs a credential ({named}): ").strip()
-    else:
+    # Never `secret` — the module of that name is what writes each value below, and a local
+    # shadowing it would make `secret.write_private` an attribute of a dictionary.
+    asked = channel.named(said.get("secret")) or {}
+    wanted = asked.get("env") or []
+    files = asked.get("files") or []
+    piped = getattr(args, "token_stdin", False)
+    if not piped and not sys.stdin.isatty():
         return False
-    if not given:
-        return False
+    took = 0
     home.mkdir(parents=True, exist_ok=True)
-    # Nobody else's to read, **from the moment it exists**. What is kept about a channel says
-    # a credential is present and never what it is (R-CAD-12); this file is the credential, so
-    # the mode is the guard — and a `write_text` narrowed by a `chmod` afterwards leaves a
-    # window in which anybody on the machine can read it. `secret.write_private` is the shared
-    # form that opens with the mode and refuses to follow a link planted at the path.
-    secret.write_private(home / SECRET_FILE, given + "\n")
-    return True
+    for at, one in enumerate(wanted):
+        if piped:
+            given = sys.stdin.readline().strip()
+        else:
+            # Named one at a time, so an owner pasting two tokens knows which is being
+            # asked for. Whichever is missing is what the adapter will say next.
+            given = getpass.getpass(
+                f"        {args.kind} needs a credential ({one}): ").strip()
+        if not given:
+            continue
+        kept = home / (files[at] if at < len(files) else channel.SECRET_FILE)
+        # Nobody else's to read, **from the moment it exists**. What is kept about a channel
+        # says a credential is present and never what it is (R-CAD-12); this file is the
+        # credential, so the mode is the guard — and a `write_text` narrowed by a `chmod`
+        # afterwards leaves a window in which anybody on the machine can read it.
+        # `secret.write_private` is the shared form that opens with the mode and refuses to
+        # follow a link planted at the path.
+        secret.write_private(kept, given + "\n")
+        took += 1
+    return took > 0
+
+
+def _credential_files(said: dict, home: Path) -> list:
+    """Which of the files this surface's credentials are kept in are really there.
+
+    Read off what the adapter named rather than off a filename this module holds, so a
+    surface needing two is carried whole and one needing none costs nothing.
+    """
+    asked = channel.named(said.get("secret")) or {}
+    return [one for one in
+            (home / name for name in asked.get("files") or []) if one.is_file()]
 
 
 def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
@@ -203,14 +242,17 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         # checked. One `add` may write several, and each is started with the home of the
         # name it was written under — so a token left only in the check's directory is a
         # channel that proved itself at the terminal and cannot sign in at start-up.
-        kept_secret = home / SECRET_FILE
-        if kept_secret.is_file() and beside != home:
-            # Written rather than copied, for the reason above: `copy2` creates at the
-            # umask and the mode arrives afterwards, so the value is briefly readable by
-            # anybody on the machine — on a path a person never typed and would not think
-            # to look at.
-            secret.write_private(
-                beside / SECRET_FILE, kept_secret.read_text(encoding="utf-8"))
+        # Every one of them, not only the first. A surface needing two credentials that
+        # was handed one is a channel that proved itself at the terminal and cannot sign
+        # in at start-up — the same failure this copy exists to prevent, one credential
+        # further along.
+        if beside != home:
+            for kept_secret in _credential_files(said, home):
+                # Written rather than copied: `copy2` creates at the umask and the mode
+                # arrives afterwards, so the value is briefly readable by anybody on the
+                # machine — on a path a person never typed and would not think to look at.
+                secret.write_private(beside / kept_secret.name,
+                                     kept_secret.read_text(encoding="utf-8"))
         # **A new channel has introduced this agent to nobody**, written down before the
         # record exists so that everybody in the list that follows is owed one (R-CH-33).
         # This is also what tells a channel added today from one an older release wrote:
@@ -235,8 +277,11 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
             home.rmdir()
         if home.is_dir():
             beside = ", ".join(one for one, _ in named)
-            if (home / SECRET_FILE).is_file():
-                print(f"        the credential in {home} was carried to {beside}")
+            carried = _credential_files(said, home)
+            if carried:
+                print(f"        {'the credential' if len(carried) == 1 else 'the credentials'}"
+                      f" in {home} {'was' if len(carried) == 1 else 'were'}"
+                      f" carried to {beside}")
             print(f"        {home} is not empty — what else is in it belongs beside "
                   f"{beside} now")
     if len(named) > 1:
@@ -415,11 +460,12 @@ def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     # However many a surface needs — one that opens a connection with one credential and
     # calls its API with another names both, and an owner has to be told which of them is
     # missing rather than that "the secret" is.
-    kept = channel.named(it.get("secret")) or {}
-    named = kept.get("env") or []
+    asked = channel.named(it.get("secret")) or {}
+    named = asked.get("env") or []
+    files = asked.get("files") or []
     home = agents.channel_home(args.name, args.channel)
 
-    def stands(one: str) -> str:
+    def stands(at: int, one: str) -> str:
         """Whether this credential is really there — **asked of both places it may be**.
 
         The flow the documentation recommends never exports anything: `--token-stdin`
@@ -433,10 +479,11 @@ def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         """
         if os.environ.get(one):
             return "present"
-        # Looked for and never opened: what is kept about a channel says a credential is
+        kept = files[at] if at < len(files) else channel.SECRET_FILE
+        # Never opened, only looked for: what is kept about a channel says a credential is
         # present and never what it is (R-CAD-12).
         with contextlib.suppress(OSError):
-            if (home / SECRET_FILE).is_file():
+            if (home / kept).is_file():
                 return "present"
         return "not set"
 
@@ -444,7 +491,8 @@ def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         ("kind", str(it.get("kind", "-"))),
         ("points at", str(it.get("describes") or "-")),
         ("allowed", ", ".join(it.get("allow") or []) or "nobody"),
-        ("secret", ", ".join(f"{one} — {stands(one)}" for one in named)
+        ("secret", ", ".join(
+            f"{one} — {stands(at, one)}" for at, one in enumerate(named))
             or "none needed"),
         ("instructions", str(it.get(channel.INSTRUCTIONS)
                      or "nothing of its own — rundesk says where it is")),

@@ -181,8 +181,16 @@ EXAMPLES: list[tuple[str, list[tuple[str, str]]]] = [
          "keep it, and stop it running"),
     ]),
     ("a role", [
+        ("rundesk roles",
+         "the specialists this install has — a role is written once, and every named "
+         "agent on it may put one on"),
         ("rundesk roles ava",
-         "the specialists ava can hand heavy work to, and the runs it has admitted"),
+         "the same, and the runs ava has admitted"),
+        ('rundesk roles add archaeology --description "Trace one behaviour through '
+         'the whole history of a repository." --skills python-patterns,python-testing '
+         '--posture read',
+         "write a new role — then rewrite the rules file it names, which is a generic "
+         "skeleton until you do"),
         ('rundesk roles ava run development --target ~/code/exporter --label "csv export"',
          "one bounded task, run in that project under the role's own rules"),
         ("", "an agent hands work on from inside its own turn, and the brief arrives on "
@@ -682,22 +690,86 @@ def build_parser() -> argparse.ArgumentParser:
     proved.add_argument("value_name", nargs="?", metavar="<name>",
                         help="one value — every one of them when left out")
 
-    # Named the way schedules are: the agent is the word after the verb, the channel is
-    # what you call it, and what it *is* comes from `--kind`. Everything a particular
-    # platform needs goes after `--` and is never read here (R-CAD-13).
-    # **The agent is named before the action, and it is required.** A verb cannot offer an
-    # optional `<agent>` *and* sub-actions: argparse matches the agent's name against the
-    # action names and dies with `invalid choice`, which is a usage dump about a command
-    # somebody typed correctly. `channels` and `schedules` are shaped this way for the
-    # same reason.
+    # **Two shapes under one verb, because there are two subjects.** A role is the
+    # install's — written once, and every named agent on it may put one on — so writing or
+    # changing one names nobody, exactly as `skills` names nobody. A *run* belongs to the
+    # agent that admitted it, so the five verbs about one keep the agent in front of them.
+    #
+    # argparse can hold only the first of those: a sub-parser is itself a positional and
+    # takes the first word after the verb, so an `<agent>` in front of the actions makes
+    # `roles ava` an action nobody registered and `roles add` an agent nobody has. The
+    # agent is taken out of the words before the parser sees them, by `_whose_role` —
+    # which reads *which* actions are typed after one off the usage lines below, so the
+    # split and what `--help` prints cannot come apart.
     specialists = sub.add_parser(
-        "roles", help="the specialists an agent hands heavy execution to")
-    specialists.add_argument("name", metavar="<agent>",
-                             help="whose role runs — a run belongs to the agent that "
-                                  "admitted it")
+        "roles", help="the specialists an agent hands heavy execution to",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        # The two listings, said here because argparse's usage line cannot: the first word
+        # is an agent or an action, and nothing it writes says a word about the first.
+        description="The specialists an agent hands heavy execution to.\n\n"
+                    "  rundesk roles           every role this install has\n"
+                    "  rundesk roles <agent>   the same, and the runs that agent has "
+                    "admitted")
     handing = specialists.add_subparsers(dest="act", metavar="<action>")
+    written = handing.add_parser(
+        "add", help="write a new role — a generic skeleton to rewrite for the specialty")
+    written.add_argument("role", metavar="<role>",
+                         help="what to call it — lowercase letters, digits and single "
+                              "hyphens, and never one this install already has")
+    # All three required, and the posture most deliberately of all: it is a real safety
+    # narrowing — on some brains `read` is an allowlist with no shell in it at all — so
+    # a default would pick the widest boundary on the author's behalf without saying so.
+    written.add_argument("--description", required=True, metavar="<text>",
+                         help="what it answers for and how heavy the work is, in one "
+                              "sentence — what a named agent reads while deciding "
+                              "whether to delegate at all")
+    written.add_argument("--skills", required=True, metavar="<a,b,c>",
+                         help="the skills every run of it is given, comma separated — at "
+                              "least one; a name this machine has not got is carried and "
+                              "reported rather than refused")
+    # Not `choices=`: what a posture may be is decided where a role is read, and a second
+    # copy here is a list that disagrees with itself the day a third one exists.
+    written.add_argument("--posture", required=True, metavar="read|work",
+                         help="how far a run of it may reach — `read` changes nothing, "
+                              "and on some brains has no shell in it at all")
+    written.add_argument("--provider", metavar="<provider>",
+                         help="the brain every run of it uses, beating the parent turn's "
+                              "— left out, a run continues on whatever its parent is on")
+    written.add_argument("--model", metavar="<model>",
+                         help="which model on that brain — what the brain itself calls it")
+    # The mirror of `add`, where all but the brain fields are required: here every one is
+    # optional, because what a flag does not name is what the role goes on saying. An
+    # empty value is a decision rather than a spelling of "left out" — `--provider ""`
+    # unpins a brain, which is the shape `schedules edit --instructions ""` already uses.
+    changed = handing.add_parser(
+        "edit", help="change what a role says about itself — never its rules")
+    changed.add_argument("role", metavar="<role>",
+                         help="which role — one this install has, by its own name")
+    changed.add_argument("--description", metavar="<text>",
+                         help="what it answers for and how heavy the work is, in one "
+                              "sentence — replacing what it says now")
+    # Said in these words because a reader who assumes it appends will silently narrow a
+    # role: the set they meant to add one name to comes out holding only that name.
+    changed.add_argument("--skills", metavar="<a,b,c>",
+                         help="the skills every run of it is given, comma separated — "
+                              "this replaces the whole set rather than adding to it, so "
+                              "name every skill the role is to have")
+    changed.add_argument("--posture", metavar="read|work",
+                         help="how far a run of it may reach — `read` changes nothing, "
+                              "and on some brains has no shell in it at all")
+    changed.add_argument("--provider", metavar="<provider>",
+                         help="the brain every run of it uses — an empty value unpins "
+                              "one, and a run then continues on whatever its parent is on")
+    changed.add_argument("--model", metavar="<model>",
+                         help="which model on that brain — an empty value unpins one")
+    # The five below are about one agent's runs rather than about the install's library, so
+    # the agent stays where a person already types it. Each says so in its own usage line —
+    # which argparse cannot work out, because the word never reaches it — and that line is
+    # what the reference prints *and* what `_whose_role` reads the shape off.
+    after_the_agent = f"{specialists.prog} <agent>"
     handed = handing.add_parser(
-        "run", help="hand one bounded task to a role — the brief is read from standard input")
+        "run", prog=f"{after_the_agent} run",
+        help="hand one bounded task to a role — the brief is read from standard input")
     handed.add_argument("role", metavar="<role>",
                         help="which role — one this install has, by its own name")
     handed.add_argument("--target", metavar="<directory>",
@@ -716,16 +788,28 @@ def build_parser() -> argparse.ArgumentParser:
                         help="which model on that brain, beating the role's own — what the "
                              "brain itself calls it")
     guided = handing.add_parser(
-        "say", help="say something to a role that is working — read from standard input")
+        "say", prog=f"{after_the_agent} say",
+        help="say something to a role that is working — read from standard input")
     guided.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
-    ended = handing.add_parser("stop", help="end a role run before it finishes")
+    ended = handing.add_parser("stop", prog=f"{after_the_agent} stop",
+                               help="end a role run before it finishes")
     ended.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
     again = handing.add_parser(
-        "resume", help="carry a finished role run on — the further task is read from standard input")
+        "resume", prog=f"{after_the_agent} resume",
+        help="carry a finished role run on — the further task is read from standard input")
     again.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
-    seen = handing.add_parser("show", help="one role run in full")
+    seen = handing.add_parser("show", prog=f"{after_the_agent} show", help="one role run in full")
     seen.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
 
+    # Named the way schedules are: the agent is the word after the verb, the channel is
+    # what you call it, and what it *is* comes from `--kind`. Everything a particular
+    # platform needs goes after `--` and is never read here (R-CAD-13).
+    # **The agent is named before the action, and it is required.** A verb cannot offer an
+    # optional `<agent>` *and* sub-actions: argparse matches the agent's name against the
+    # action names and dies with `invalid choice`, which is a usage dump about a command
+    # somebody typed correctly. `schedules` is shaped this way for the same reason, and
+    # `roles` above is the one verb where that constraint had to be answered rather than
+    # accepted, because half of it is about the install rather than about an agent.
     reachable = sub.add_parser("channels", help="the surfaces an agent is reachable on")
     reachable.add_argument("name", metavar="<agent>",
                            help="whose channels — a channel belongs to one agent")
@@ -850,6 +934,60 @@ def _handed_on(argv: list[str], carries: set) -> tuple[list[str], list[str]]:
     return list(argv[:at]), list(argv[at + 1:])
 
 
+#: The verb whose first word is either an agent or an action. One verb, because one
+#: subject is the install's and the other is one agent's; see the parser above.
+ROLES = "roles"
+
+
+class Ambiguous(ValueError):
+    """A word that reads as an agent and as an action, with nothing to decide it by."""
+
+
+def _names_an_agent(parser: argparse.ArgumentParser) -> set:
+    """Which actions under a verb are typed *after* an agent, off their own usage lines.
+
+    Read rather than restated, because the word never reaches argparse and so nothing else
+    on the parser records it. The usage line is what `--help` and the reference both print,
+    so a form that changes changes here too, in the same edit.
+    """
+    return {act for act, one in _offered(parser).items() if "<agent>" in one.prog}
+
+
+def _whose_role(argv: list[str], parser: argparse.ArgumentParser, agents) -> tuple:
+    """Take the agent out of `roles <agent> <action> …` before the parser sees it.
+
+    argparse cannot: a sub-parser is itself a positional and takes the first word after the
+    verb, so an `<agent>` in front of the actions makes `roles ava` an action nobody
+    registered and `roles add` an agent nobody has. Which reading the first word gets is
+    decided by the actions that name **no** agent — those are about the install's library
+    of roles, and every other first word is an agent, so listing the runs of an agent
+    called `postgres-forensics` goes on working without anybody thinking of it here.
+
+    An install with an agent named after one of those actions has a word with two true
+    readings and nothing to choose between them, which is refused rather than resolved:
+    guessing would either write a role somebody meant to list runs for, or the reverse.
+    """
+    verb = _offered(parser).get(ROLES)
+    if verb is None or not argv or argv[0] != ROLES or len(argv) < 2:
+        return list(argv), None
+    first = argv[1]
+    # An option is nobody's name: `roles --help` is the verb's own help, not an agent's.
+    if first.startswith("-"):
+        return list(argv), None
+    if first in set(_offered(verb)) - _names_an_agent(verb):
+        if agents.exists(first):
+            raise Ambiguous(
+                f"{first}: AMBIGUOUS — this install has an agent called '{first}', and "
+                f"`{first}` is also a roles action, so `rundesk roles {first}` reads "
+                f"both as that agent's role runs and as the action, and rundesk guesses "
+                f"at neither\n"
+                f"        while an agent is called '{first}', neither reading can be "
+                f"typed here\n"
+                f"        what that agent is:  rundesk agents {first}")
+        return list(argv), None
+    return [argv[0], *argv[2:]], first
+
+
 def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
          scripts=None, catalogs=None) -> int:
     """The command surface.
@@ -866,8 +1004,19 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
     catalogs = catalogs if catalogs is not None else catalog
     parser = build_parser()
     argv, handed_on = _handed_on(argv, _carries_a_tail(parser))
+    try:
+        argv, whose_role = _whose_role(argv, parser, agents)
+    except Ambiguous as why:
+        # Printed whole: what the two readings are and what to do about it is one wording,
+        # kept where the decision is made rather than half here and half there.
+        print(why, file=sys.stderr)
+        return 1
     args = parser.parse_args(argv)
     args.handed_on = handed_on
+    if args.command == ROLES:
+        # Put back where every other verb keeps it, so what resolves an agent's name below
+        # resolves this one too — a role run is asked for by the same name as a log is.
+        args.name = whose_role
 
     if args.command is None:
         parser.print_help()

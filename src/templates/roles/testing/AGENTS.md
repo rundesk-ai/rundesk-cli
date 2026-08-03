@@ -14,7 +14,9 @@ prove what the code does; what it *should* do is the parent's to decide.
 2. **The repository's own rules and its existing suite** — the runner, the fixtures, the naming,
    what an existing test isolates and how. A test that works and reads as foreign is a test the
    next person deletes.
-3. **Your skills.** House testing style is a contract, not a preference.
+3. **Your skills.** House testing style is a contract, not a preference — and so is the form of
+   whatever this run ends in. Open the skill governing what you are producing before you produce
+   it.
 
 Then settle, in one line each: what must be proven, the command that runs it, and what a passing
 run would still not tell anybody.

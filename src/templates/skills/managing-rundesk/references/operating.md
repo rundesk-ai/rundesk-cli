@@ -24,7 +24,7 @@ rundesk ask <name> "…"         one turn, streamed back
 rundesk channels <name>        add · show · remove · instructions
 ```
 
-On a single-user Discord channel, `/provider <provider>` changes the agent-wide default after
+On a single-user Discord or Slack channel, the provider command changes the agent-wide default after
 Rundesk checks authorization and the adapter; the next message starts fresh and a running turn
 finishes on the provider it began with. Shared channels cannot change a default.
 

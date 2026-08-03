@@ -60,6 +60,11 @@ _REAL_REMOVAL = update_commands._remove_this_install
 _REAL_BACKUP_DIR = os.environ.get("RUNDESK_BACKUP_DIR")
 _REAL_DATA_DIR = os.environ.get("RUNDESK_DATA_DIR")
 _REAL_SECRETS_DIR = os.environ.get("RUNDESK_SECRETS_DIR")
+#: What the environment said before this file redirected it, put back in `tearDownModule`
+#: so the module is left as it was found — including for whoever runs the suites in one
+#: process. Each of these beats the data directory, so none can be left to it.
+_REAL_ELSEWHERE = {name: os.environ.get(name)
+                   for name in ("RUNDESK_AGENTS_DIR", "RUNDESK_SKILL_LIBRARY")}
 _TEST_BACKUP_DIR = None
 _TEST_DATA_DIR = None
 _TEST_SECRETS_DIR = None
@@ -108,6 +113,14 @@ def setUpModule():
     # needs an empty place, never theirs.
     _TEST_SECRETS_DIR = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-secrets-"))
     os.environ["RUNDESK_SECRETS_DIR"] = str(_TEST_SECRETS_DIR)
+    # Where roles and skills stand, for the same reason and one step further. The walk
+    # types every form the reference lists, and `rundesk roles add …` is now one of them —
+    # so the walk *writes a role*. `RUNDESK_AGENTS_DIR` and `RUNDESK_SKILL_LIBRARY` each
+    # beat the data directory when they are set, and a suite run inside an agent's own
+    # turn inherits both pointed at the live install: without this the walk would write a
+    # role into the owner's, and resolve its skills against the owner's library.
+    os.environ["RUNDESK_AGENTS_DIR"] = str(_TEST_DATA_DIR / "agents")
+    os.environ["RUNDESK_SKILL_LIBRARY"] = str(_TEST_DATA_DIR / "skills")
     # Both turned down together. Turning the patience down alone left a wait that had room
     # for one look and a fraction of a second's margin on the second — so a case proving a
     # cycle waits passed on a quick machine and reported a failure on a loaded one.
@@ -129,6 +142,11 @@ def tearDownModule():
         os.environ.pop("RUNDESK_DATA_DIR", None)
     else:
         os.environ["RUNDESK_DATA_DIR"] = _REAL_DATA_DIR
+    for name, was in _REAL_ELSEWHERE.items():
+        if was is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = was
     if _TEST_DATA_DIR is not None:
         shutil.rmtree(_TEST_DATA_DIR, ignore_errors=True)
     if _REAL_SECRETS_DIR is None:
@@ -141,6 +159,7 @@ from rundesk import agent as real_agent  # noqa: E402
 from rundesk import skill as real_skill  # noqa: E402
 from rundesk import channel  # noqa: E402
 from rundesk import gateway as real_gateway  # noqa: E402
+from rundesk import role as real_role  # noqa: E402
 
 
 def run(argv: list[str], published: str | None = None,
@@ -3883,7 +3902,11 @@ raise SystemExit(1)
         drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
                "--allow", "2207"], self._gateways(), agents=self.agents)
         kept = self.kept()
-        self.assertEqual({"env": ["A_CHANNEL_TOKEN"]}, kept["secret"])
+        self.assertEqual(["A_CHANNEL_TOKEN"], kept["secret"]["env"])
+        # Where it is taken into, as well as where it is read from — one file for one
+        # credential, which is the name every adapter written before a surface needed two
+        # already looks for.
+        self.assertEqual(["token"], kept["secret"]["files"])
         was = os.environ.get("A_CHANNEL_TOKEN")
         os.environ["A_CHANNEL_TOKEN"] = "not for printing"
         self.addCleanup(lambda: os.environ.pop("A_CHANNEL_TOKEN", None)
@@ -3892,6 +3915,29 @@ raise SystemExit(1)
         self.assertIn("A_CHANNEL_TOKEN", said)
         self.assertIn("present", said)
         self.assertNotIn("not for printing", said, "a channel's secret was printed")
+
+    def test_a_credential_taken_at_the_terminal_is_reported_as_present(self):
+        """R-CAD-11, R-CAD-12 — the flow the documentation recommends never exports
+        anything, so a channel that signs in perfectly reported its credential `not set`
+        and sent an owner to fix something that was not wrong."""
+        kind = self._adapter(self.NEEDS_A_TOKEN)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            sys.stdin = io.StringIO("a credential nobody exported\n")
+            try:
+                cli.main(["channels", "ava", "add", "ops", "--kind", kind,
+                          "--allow", "2207", "--token-stdin"],
+                         gateways=self._gateways(), machine=FakeMachine(), agents=self.agents)
+            finally:
+                sys.stdin = sys.__stdin__
+        # The variable is deliberately *not* set: this is the state a supervised gateway
+        # spends its whole life in, and the state `show` used to be wrong about.
+        self.assertIsNone(os.environ.get("A_CHANNEL_TOKEN"),
+                          "this case proves nothing while the variable is set")
+        _, said = drive(["channels", "ava", "show", "ops"], self._gateways(),
+                        agents=self.agents)
+        self.assertIn("present", said, "a credential kept in its file was reported missing")
+        self.assertNotIn("a credential nobody exported", said,
+                         "a channel's secret was printed")
 
     def test_what_an_agent_is_told_is_written_and_read_back(self):
         """R-CH-22 — a wording that reads well in a room is found by trying it, so it is
@@ -4473,9 +4519,12 @@ class EveryExampleIsRealCommand(unittest.TestCase):
             self.assertEqual("rundesk", argv[0], f"{what}: not a rundesk command")
             with self.subTest(line):
                 parser = cli.build_parser()
-                # Through the same door a typed command goes through, tail and all —
-                # otherwise this would pass on an example the command itself refuses.
+                # Through the same door a typed command goes through — the tail argparse
+                # cannot carry, and the agent it cannot tell from an action — otherwise
+                # this would pass on an example the command itself refuses, or refuse one
+                # it accepts. Both are `main`'s first two steps, in `main`'s order.
                 read, _carried = cli._handed_on(argv[1:], cli._carries_a_tail(parser))
+                read, _whose = cli._whose_role(read, parser, FakeAgents())
                 out, err = io.StringIO(), io.StringIO()
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                     try:
@@ -4993,9 +5042,14 @@ class HandingWorkToARole(unittest.TestCase):
 
     def test_which_brain_a_run_uses_is_asked_for_on_the_way_in(self):
         """R-ROL-34 — the flag is this one run's, and it beats what the role says."""
-        handed = cli.build_parser().parse_args(
+        parser = cli.build_parser()
+        # The agent comes out before the parser sees the words, exactly as in `main`: it
+        # is a word argparse would take for an action nobody registered.
+        read, whose = cli._whose_role(
             ["roles", "ava", "run", "development", "--provider", "codex",
-             "--model", "gpt-5-codex"])
+             "--model", "gpt-5-codex"], parser, FakeAgents())
+        handed = parser.parse_args(read)
+        self.assertEqual("ava", whose)
         self.assertEqual(("codex", "gpt-5-codex"), (handed.provider, handed.model))
 
     def _a_run_on(self, named, model):
@@ -5028,6 +5082,412 @@ class HandingWorkToARole(unittest.TestCase):
         code, said = drive(["roles", "ava", "show", run], agents=agents)
         self.assertEqual(0, code)
         self.assertNotIn("brain", said)
+
+
+class WritingARoleFromTheCommandLine(unittest.TestCase):
+    """`rundesk roles add <role>` — what it writes, and what it answers with."""
+
+    DESCRIBED = ("Trace one behaviour back through the whole history of a repository — "
+                 "a subsystem held in view all at once.")
+
+    def setUp(self):
+        self.where = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-roles-add-"))
+        self.addCleanup(shutil.rmtree, self.where, True)
+        self.library = self.where / "skills"
+        made = self.library / "python-testing"
+        made.mkdir(parents=True)
+        (made / "SKILL.md").write_text(
+            "---\nname: python-testing\ndescription: unittest patterns\n---\n",
+            encoding="utf-8")
+        # Both, and not only the agents root: `skill.home()` falls back to the *owner's*
+        # own library when its variable is unset, so a case that scrubbed the environment
+        # would resolve a real name against the real install rather than against this.
+        pointed = mock.patch.dict(os.environ, {
+            "RUNDESK_AGENTS_DIR": str(self.where / "agents"),
+            "RUNDESK_SKILL_LIBRARY": str(self.library)})
+        pointed.start()
+        self.addCleanup(pointed.stop)
+
+    def add(self, *more, slug="archaeology"):
+        return drive(["roles", "add", slug,
+                      "--description", self.DESCRIBED,
+                      "--skills", "python-testing,reading-minds",
+                      "--posture", "read", *more],
+                     agents=FakeAgents(made=["ava"]))
+
+    def test_writing_a_role_answers_with_the_rules_path_and_the_work_left_in_them(self):
+        """R-ROL-39 — the whole reason this command answers at all. What it writes is a
+        generic skeleton, so a caller that reads this and comes away without knowing it
+        has an unfinished file to edit, and where, has been handed a role that will
+        return a report reading well and saying nothing."""
+        code, said = self.add()
+        self.assertEqual(0, code, said)
+        rules = self.where / "agents" / ".roles" / "archaeology" / "AGENTS.md"
+        self.assertTrue(rules.is_file())
+        self.assertIn(str(rules), said)
+        self.assertTrue(pathlib.Path(str(rules)).is_absolute())
+        self.assertIn("rewrite it", said)
+        self.assertIn("not yet about this specialty", said)
+        for heading in ("Start here, in this order", "While you work", "The ceiling",
+                        "Subagents", "The report", "Definition of done"):
+            self.assertIn(heading, said)
+
+    def test_what_a_new_role_is_says_the_same_words_a_listing_says(self):
+        code, said = self.add()
+        self.assertEqual(0, code, said)
+        self.assertIn("Archaeology  archaeology", said)
+        self.assertIn("read  [python-testing]", said)
+        self.assertIn("not installed here, so not given: reading-minds", said)
+        self.assertIn("rundesk roles <agent> run archaeology --target", said)
+
+    def test_a_role_is_written_without_naming_an_agent_at_all(self):
+        """R-ROL-41 — a role is the install's, so there is nobody to name. The answer
+        used to correct the misreading the positional invited; the reading is gone, and
+        so is the sentence.
+
+        Driven on an install with no agents at all, which is the honest test of "names
+        nobody": a command still wanting one would refuse here."""
+        code, said = drive(["roles", "add", "etymology", "--description", self.DESCRIBED,
+                            "--skills", "python-testing", "--posture", "read"],
+                           agents=FakeAgents())
+        self.assertEqual(0, code, said)
+        self.assertTrue((self.where / "agents" / ".roles" / "etymology"
+                         / "AGENTS.md").is_file())
+        self.assertNotIn("every named agent", said)
+        self.assertNotIn("NO SUCH AGENT", said)
+
+    def test_a_slug_that_is_already_a_role_is_refused_rather_than_written_over(self):
+        """R-ROL-18 — and the refusal reaches the exit status and the message, never a
+        traceback."""
+        self.add()
+        rules = self.where / "agents" / ".roles" / "archaeology" / "AGENTS.md"
+        rules.write_text("# Mine\n\nMy own rules.\n", encoding="utf-8")
+        code, said = self.add()
+        self.assertEqual(1, code)
+        self.assertIn("NOT WRITTEN", said)
+        self.assertIn("nothing was changed", said)
+        self.assertNotIn("Traceback", said)
+        self.assertEqual("# Mine\n\nMy own rules.\n",
+                         rules.read_text(encoding="utf-8"))
+
+    def test_every_refusal_a_role_writer_has_reaches_the_exit_status(self):
+        for more, expected in ((["--posture", "excavate"], "posture"),
+                               (["--skills", ""], "at least one"),
+                               (["--skills", "a,a"], "more than once"),
+                               (["--description", " "], "says nothing about")):
+            with self.subTest(more=more):
+                code, said = self.add(*more, slug="etymology")
+                self.assertEqual(1, code, said)
+                self.assertIn("NOT WRITTEN", said)
+                self.assertIn(expected, said)
+                self.assertNotIn("Traceback", said)
+                self.assertFalse(
+                    (self.where / "agents" / ".roles" / "etymology").exists())
+
+    def test_what_a_role_may_do_is_never_decided_on_the_authors_behalf(self):
+        """A posture defaulted is the widest boundary chosen silently, and a description
+        or a skill set defaulted is a role that says nothing and is given nothing."""
+        for without in (["--skills", "python-testing", "--posture", "read"],
+                        ["--description", "x", "--posture", "read"],
+                        ["--description", "x", "--skills", "python-testing"]):
+            with self.subTest(without=without):
+                code, said = drive(["roles", "add", "archaeology", *without],
+                                   agents=FakeAgents(made=["ava"]))
+                self.assertEqual(2, code)
+                self.assertIn("required", said)
+
+    def test_writing_a_role_renders_its_own_help(self):
+        code, said = drive(["roles", "add", "--help"],
+                           agents=FakeAgents(made=["ava"]))
+        self.assertEqual(0, code)
+        for flag in ("--description", "--skills", "--posture", "--provider", "--model"):
+            self.assertIn(flag, said)
+
+
+class EditingARoleFromTheCommandLine(unittest.TestCase):
+    """`rundesk roles edit <role>` — what moves, and what the answer says moved."""
+
+    DESCRIBED = ("Trace one behaviour back through the whole history of a repository — "
+                 "a subsystem held in view all at once.")
+
+    def setUp(self):
+        self.where = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-roles-edit-"))
+        self.addCleanup(shutil.rmtree, self.where, True)
+        self.library = self.where / "skills"
+        for name in ("python-testing", "writing-plans"):
+            made = self.library / name
+            made.mkdir(parents=True)
+            (made / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: what it is for\n---\n",
+                encoding="utf-8")
+        # Both, and not only the agents root: `skill.home()` falls back to the *owner's*
+        # own library when its variable is unset.
+        pointed = mock.patch.dict(os.environ, {
+            "RUNDESK_AGENTS_DIR": str(self.where / "agents"),
+            "RUNDESK_SKILL_LIBRARY": str(self.library)})
+        pointed.start()
+        self.addCleanup(pointed.stop)
+        code, said = drive(["roles", "add", "archaeology",
+                            "--description", self.DESCRIBED,
+                            "--skills", "python-testing,writing-plans",
+                            "--posture", "work"],
+                           agents=FakeAgents(made=["ava"]))
+        self.assertEqual(0, code, said)
+
+    def at(self, slug: str = "archaeology") -> pathlib.Path:
+        return self.where / "agents" / ".roles" / slug
+
+    def edit(self, *more, slug="archaeology"):
+        return drive(["roles", "edit", slug, *more], agents=FakeAgents(made=["ava"]))
+
+    def test_the_answer_names_both_revisions_and_only_the_fields_that_moved(self):
+        """R-ROL-40 — what moved is the answer. A caller who asked for one field and
+        reads back a whole role cannot tell what their command did from what was already
+        true."""
+        was = json.loads((self.at() / "role.json").read_text(encoding="utf-8"))
+        stood_at = real_role.read("archaeology", self.where / "agents").revision
+        code, said = self.edit("--posture", "read")
+        self.assertEqual(0, code, said)
+        now = json.loads((self.at() / "role.json").read_text(encoding="utf-8"))
+        self.assertEqual("read", now["posture"])
+        self.assertIn("posture: work → read", said)
+        self.assertNotIn("description:", said)
+        self.assertNotIn("skills:", said)
+        stands_at = real_role.read("archaeology", self.where / "agents").revision
+        self.assertNotEqual(stood_at, stands_at)
+        self.assertIn(f"revision {stood_at[:12]} → {stands_at[:12]}", said)
+        self.assertEqual(was["description"], now["description"])
+
+    def test_what_a_role_now_is_says_the_same_words_a_listing_says(self):
+        code, said = self.edit("--posture", "read")
+        self.assertEqual(0, code, said)
+        self.assertIn("Archaeology  archaeology", said)
+        self.assertIn("read  [python-testing writing-plans]", said)
+
+    def test_the_answer_says_the_change_lands_on_the_next_run(self):
+        """R-ROL-10 — every run locks its own copy before the brain starts, so nothing
+        in flight changes under an edit. A caller who did not know that would wait."""
+        _, said = self.edit("--posture", "read")
+        self.assertIn("next run", said)
+        self.assertIn("in flight", said)
+
+    def test_the_answer_says_the_rules_were_not_touched_and_where_they_stand(self):
+        rules = self.at() / "AGENTS.md"
+        was = rules.read_bytes()
+        _, said = self.edit("--description", "Something else entirely.")
+        self.assertIn(str(rules), said)
+        self.assertTrue(pathlib.Path(str(rules)).is_absolute())
+        self.assertIn("did not touch them", said)
+        self.assertEqual(was, rules.read_bytes())
+
+    def test_the_skills_given_replace_the_whole_set_rather_than_joining_it(self):
+        """The owner's decision, said in the flag's own help for the same reason it is
+        proven here: a reader who assumes it appends silently narrows a role."""
+        code, said = self.edit("--skills", "python-testing")
+        self.assertEqual(0, code, said)
+        self.assertEqual(["python-testing"], json.loads(
+            (self.at() / "role.json").read_text(encoding="utf-8"))["skills"])
+        self.assertIn("skills: python-testing writing-plans → python-testing", said)
+
+    def test_editing_a_role_this_release_ships_says_what_it_costs(self):
+        """R-ROL-18 — not a refusal, a consequence: what proves a role is still
+        Rundesk's is that it is byte for byte what Rundesk wrote."""
+        real_role.lay_down(self.where / "agents")
+        code, said = self.edit("--posture", "read", slug="development")
+        self.assertEqual(0, code, said)
+        self.assertIn("this release ships", said)
+        self.assertIn("uninstall", said)
+
+    def test_editing_a_role_somebody_wrote_says_nothing_about_a_release(self):
+        _, said = self.edit("--posture", "read")
+        self.assertNotIn("this release ships", said)
+        self.assertNotIn("uninstall", said)
+
+    def test_an_empty_brain_unpins_one_rather_than_naming_nothing(self):
+        """R-ROL-33 — omitted and empty are different answers, which is why there is no
+        clearing flag of its own."""
+        code, said = self.edit("--provider", "codex", "--model", "gpt-5-codex")
+        self.assertEqual(0, code, said)
+        self.assertIn("provider: nothing → codex", said)
+        code, said = self.edit("--provider", "")
+        self.assertEqual(0, code, said)
+        self.assertIn("provider: codex → nothing", said)
+        said_now = json.loads((self.at() / "role.json").read_text(encoding="utf-8"))
+        self.assertNotIn("provider", said_now)
+        self.assertEqual("gpt-5-codex", said_now["model"])
+
+    def test_an_edit_that_asked_for_what_was_already_true_says_nothing_moved(self):
+        """Naming a field is a command that ran; naming the value it already had is not
+        a refusal. What must not happen is a list of changes with nothing in it, read as
+        though something happened."""
+        was = (self.at() / "role.json").read_text(encoding="utf-8")
+        code, said = self.edit("--posture", "work")
+        self.assertEqual(0, code, said)
+        self.assertIn("nothing moved", said)
+        self.assertEqual(was, (self.at() / "role.json").read_text(encoding="utf-8"))
+
+    def test_an_edit_that_names_no_field_is_refused_rather_than_reported_as_done(self):
+        code, said = self.edit()
+        self.assertEqual(1, code, said)
+        self.assertIn("NOT CHANGED", said)
+        self.assertNotIn("Traceback", said)
+
+    def test_every_refusal_an_edit_has_reaches_the_exit_status(self):
+        """Every one of them through the message and the status, never a traceback —
+        and none of them having written half a manifest on the way."""
+        for more in (["--posture", "excavate"], ["--skills", ""], ["--skills", "a,a"],
+                     ["--description", " "],
+                     ["--description", "x" * (real_role.DESCRIBED_LIMIT + 1)]):
+            with self.subTest(more=more):
+                was = (self.at() / "role.json").read_text(encoding="utf-8")
+                code, said = self.edit(*more)
+                self.assertEqual(1, code, said)
+                self.assertIn("NOT CHANGED", said)
+                self.assertNotIn("Traceback", said)
+                self.assertEqual(was,
+                                 (self.at() / "role.json").read_text(encoding="utf-8"))
+
+    def test_a_role_this_install_has_not_got_is_refused_rather_than_written(self):
+        code, said = self.edit("--posture", "read", slug="etymology")
+        self.assertEqual(1, code, said)
+        self.assertIn("no role called 'etymology'", said)
+        self.assertNotIn("Traceback", said)
+        self.assertFalse(self.at("etymology").exists())
+
+    def test_editing_a_role_renders_its_own_help_and_says_skills_replaces_the_set(self):
+        code, said = drive(["roles", "edit", "--help"], agents=FakeAgents(made=["ava"]))
+        self.assertEqual(0, code)
+        for flag in ("--description", "--skills", "--posture", "--provider", "--model"):
+            self.assertIn(flag, said)
+        self.assertIn("replaces the whole set", " ".join(said.split()))
+        self.assertNotIn("required", said)
+
+    def test_editing_a_role_names_no_agent_and_needs_none_to_exist(self):
+        """R-ROL-41 — the mirror of writing one. An edit changes what the whole install's
+        specialist says about itself, so an install with no agents can still make one."""
+        code, said = drive(["roles", "edit", "archaeology", "--posture", "read"],
+                           agents=FakeAgents())
+        self.assertEqual(0, code, said)
+        self.assertIn("posture: work → read", said)
+        self.assertNotIn("NO SUCH AGENT", said)
+
+
+class HowTheRolesVerbIsTyped(unittest.TestCase):
+    """Which half of `roles` names an agent, and which half names nobody at all.
+
+    Two subjects under one verb: the library is the install's and a run is one agent's,
+    so the first word after the verb is either an agent or an action — and argparse never
+    sees it, because a sub-parser is itself a positional and would take an agent's name
+    for an action nobody registered.
+    """
+
+    DESCRIBED = "Trace one behaviour back through the whole history of a repository."
+
+    def setUp(self):
+        self.where = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-roles-typed-"))
+        self.addCleanup(shutil.rmtree, self.where, True)
+        self.agents_at = self.where / "agents"
+        self.library = self.where / "skills"
+        made = self.library / "python-testing"
+        made.mkdir(parents=True)
+        (made / "SKILL.md").write_text(
+            "---\nname: python-testing\ndescription: unittest patterns\n---\n",
+            encoding="utf-8")
+        # Both, and not only the agents root: `skill.home()` falls back to the *owner's*
+        # own library when its variable is unset.
+        pointed = mock.patch.dict(os.environ, {
+            "RUNDESK_AGENTS_DIR": str(self.agents_at),
+            "RUNDESK_SKILL_LIBRARY": str(self.library)})
+        pointed.start()
+        self.addCleanup(pointed.stop)
+        code, said = drive(["roles", "add", "archaeology",
+                            "--description", self.DESCRIBED,
+                            "--skills", "python-testing", "--posture", "read"],
+                           agents=FakeAgents())
+        self.assertEqual(0, code, said)
+
+    def test_the_library_is_listed_with_nobody_named_at_all(self):
+        """R-ROL-41 — a role is written once for the whole install, so asking what there
+        is is a whole command rather than half of one."""
+        code, said = drive(["roles"], agents=FakeAgents())
+        self.assertEqual(0, code, said)
+        self.assertIn("Archaeology  archaeology", said)
+
+    def _a_run_of(self, agents):
+        """One role run of ava's, through the records themselves."""
+        self.agents_at.joinpath("ava").mkdir(parents=True, exist_ok=True)
+        kept = agents.records("ava")
+        at = "2026-08-01T09:00:00Z"
+        where_it_is = store.conversation_id("discord", "general")
+        kept.opened(where_it_is, "discord", "discord", "general", at)
+        kept.remember_channel("discord", "discord", ["2207"], at)
+        parent = kept.began("channel", "codex", "work", at, conversation_id=where_it_is)
+        return kept.admit_role(
+            "archaeology", "rev", ["python-testing"], {}, "a task", "read", parent,
+            where_it_is, None, at, "2026-08-15T09:00:00Z")
+
+    def test_naming_an_agent_lists_the_same_library_and_that_agents_runs(self):
+        """R-ROL-41 — the agent is still the word after the verb where there is something
+        of that agent's to show. What it adds is the runs; the library is the same."""
+        agents = FakeAgents(made=["ava"], at=self.agents_at)
+        run = self._a_run_of(agents)
+        code, said = drive(["roles", "ava"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("Archaeology  archaeology", said)
+        self.assertIn(run, said)
+
+    def test_every_verb_about_a_run_is_still_typed_after_the_agent(self):
+        """R-ROL-41 — a run belongs to the agent that admitted it, so those five keep the
+        name. Asked of an agent this install has not got: our refusal rather than
+        argparse's usage code is what says the word was read as an agent."""
+        for act, then in (("run", ["archaeology"]), ("say", ["rol-1-aaaa"]),
+                          ("stop", ["rol-1-aaaa"]), ("resume", ["rol-1-aaaa"]),
+                          ("show", ["rol-1-aaaa"])):
+            with self.subTest(act=act):
+                code, said = drive(["roles", "nobody", act, *then],
+                                   agents=FakeAgents(made=["ava"]))
+                self.assertEqual(1, code, said)
+                self.assertIn("NO SUCH AGENT", said)
+
+    def test_which_actions_name_an_agent_is_read_off_the_parser(self):
+        """The split before argparse and the usage lines `--help` and the reference print
+        are one fact rather than two: a form that moves moves both, in the same edit."""
+        roles = _offered(cli.build_parser())["roles"]
+        self.assertEqual({"run", "say", "stop", "resume", "show"},
+                         cli._names_an_agent(roles))
+        self.assertEqual({"add", "edit"},
+                         set(_offered(roles)) - cli._names_an_agent(roles))
+        for act in ("run", "say", "stop", "resume", "show"):
+            self.assertIn("<agent>", _offered(roles)[act].format_usage())
+
+    def test_an_agent_named_after_an_action_is_refused_rather_than_guessed(self):
+        """R-ROL-42 — both readings are true, and each guess does the other's damage:
+        writing a role somebody meant to list runs for, or listing runs for somebody who
+        meant to write a role."""
+        for act in ("add", "edit"):
+            with self.subTest(act=act):
+                code, said = drive(["roles", act, "etymology",
+                                    "--description", self.DESCRIBED,
+                                    "--skills", "python-testing", "--posture", "read"],
+                                   agents=FakeAgents(made=[act]))
+                self.assertEqual(1, code, said)
+                self.assertIn("AMBIGUOUS", said)
+                self.assertIn(f"an agent called '{act}'", said)
+                self.assertIn("role runs", said)
+                self.assertIn("guesses at neither", said)
+                self.assertFalse((self.agents_at / ".roles" / "etymology").exists(),
+                                 "it guessed, and wrote a role")
+
+    def test_an_action_is_an_action_where_no_agent_answers_to_that_name(self):
+        """The other side of the refusal: nothing is ambiguous until somebody makes it
+        so, and the ordinary install must not pay for the one that did."""
+        code, said = drive(["roles", "add", "etymology",
+                            "--description", self.DESCRIBED,
+                            "--skills", "python-testing", "--posture", "read"],
+                           agents=FakeAgents(made=["ava"]))
+        self.assertEqual(0, code, said)
+        self.assertNotIn("AMBIGUOUS", said)
+        self.assertTrue((self.agents_at / ".roles" / "etymology" / "AGENTS.md").is_file())
 
 
 if __name__ == "__main__":

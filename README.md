@@ -140,7 +140,8 @@ lifecycle as shipped adapters.
 
 ### Discord
 
-Discord is the shipped channel adapter:
+Discord and Slack are the shipped channel adapters. Neither is special: each is a program
+Rundesk runs, written against the same published contract.
 
 ```sh
 rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
@@ -168,6 +169,33 @@ rundesk channels ava instructions discord-rooms \
 ```
 
 → **[Set up the Discord bot](docs/discord.md)**
+
+### Slack
+
+```sh
+rundesk channels ava add slack --kind slack --allow <your-slack-member-id>
+```
+
+Socket Mode, so there is no public URL and no inbound port. The command signs in with both
+credentials Slack requires, asks Slack which channels the bot is actually in, and creates
+separate `slack-dms` and `slack-rooms` channels by default.
+
+On Slack, Rundesk supports:
+
+- private direct messages and the channels the bot has been invited to;
+- a thread under the message that named the agent in a channel;
+- continuing inside that thread without mentioning the agent again;
+- explicit per-channel user allowlists;
+- state reactions and optional live activity;
+- long answers, generated files, and inbound attachments;
+- ordinary Markdown rendered in Slack's own dialect; and
+- stopping, forgetting or restarting from one slash command.
+
+Slack has no typing indicator a bot may raise without forcing a thread-only conversation UI
+on every exchange, so the eyes reaction and the running commentary are what say a turn is
+alive. Everything else is what Discord does.
+
+→ **[Set up the Slack bot](docs/slack.md)**
 
 ### Custom channels are first-class
 

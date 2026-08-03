@@ -56,7 +56,10 @@ file with it.
   registered and not built, each with the actions under it; every one answers and exits `NOT_AVAILABLE`
   rather than reporting a success it did not earn, and rather than argparse's usage code, which would
   make a missing command indistinguishable from a typo. An entry graduates out of that table into a real
-  command as it lands.
+  command as it lands. Two things reach the words **before** argparse does, because argparse cannot do
+  either: `_handed_on` splits off a tail meant for something that is not rundesk, and `_whose_role` takes
+  the agent out of `roles <agent> <action>` — a verb with two subjects, the install's library and one
+  agent's runs, where a sub-parser would otherwise read an agent's name as an action nobody registered.
 - `src/rundesk/commands/` — **one command group per module, and the only layer that may know
   argparse.** A group takes a `Namespace` and hands back an exit code; what it acts on — the
   gateways, the machine, the agents, the skills — arrives as an argument from `cli.main`, so every
@@ -162,6 +165,14 @@ file with it.
   a revision and every role written before the field existed keeps the one it had. A
   shipped role is laid down where one is missing and **never over one that is there**: a
   role is what an owner writes their specialists as, not a thing a release keeps true.
+  Writing one is the same rule from the other side — a whole pair or nothing, an
+  existing slug refused rather than merged, and a half-written directory named out loud
+  as the reason no role of that name works, which is the only place in the product that
+  says so. **Editing one owns the manifest and nothing else**: the rules are prose their
+  author wrote, a manifest holding a field this release cannot read is refused rather
+  than overlaid, and the new file is written beside the old one and renamed onto it —
+  because a truncated `role.json` leaves `AGENTS.md` standing, so the role goes on being
+  listed while every read of it fails.
 - `src/rundesk/role_run.py` — one isolated specialist execution, from admission to expiry.
   Assembles a bundle of locked bytes under the agent's own directory and moves it into place
   whole, hands `turn.py` an execution context standing in the target project, and settles the
@@ -320,7 +331,7 @@ provider. One file per contract, named for it:
 |---|---|---|
 | `test_gateway.py` | 264 | `platform-gateway` — real processes, real signals, waits turned down |
 | `test_agent.py` | 142 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
-| `test_cli.py` | 325 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
+| `test_cli.py` | 342 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
 | `test_catalog.py` | 27 | `lifecycle-skill-catalog` — manifests, provenance, default seeding, inert integration packages, lifecycle refresh, ownership, atomic updates, drift replacement, removal, and unsafe archives, all offline |
 | `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 81 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
@@ -332,7 +343,7 @@ provider. One file per contract, named for it:
 | `test_schedule.py` | 49 | `platform-schedule` — pure time arithmetic, the clock passed in |
 | `test_provider.py` | 41 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
 | `test_claude.py` | 65 | `provider-adapter` — the arithmetic and the postures one shipped brain decides on its own, driven against 184 captured lines rather than an account |
-| `test_grok.py` | 35 | `provider-adapter` — a brain that reports no tools, and the two flags of its that are accepted and enforce nothing |
+| `test_grok.py` | 45 | `provider-adapter` — a brain that reports no tools, the flags of its that are accepted and enforce nothing, and an ACP stand-in that scopes itself from the session the way the real one does |
 | `test_antigravity.py` | 18 | `provider-adapter` — piped prompt privacy, stream mapping, cumulative-resume usage, posture, skills and native-keyring environment, all offline |
 | `test_turn.py` | 113 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_activity.py` | 3 | live-turn concurrency, safe persisted fields, and update visibility |
@@ -340,9 +351,10 @@ provider. One file per contract, named for it:
 | `test_store.py` | 136 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
 | `test_channel.py` | 77 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
 | `test_answering.py` | 146 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
+| `test_slack.py` | 140 | `channel-slack` — the same policy on a platform with fewer registers: one slash command because a name is unique per workspace, a thread rooted at the message that named it, and ordinary Markdown translated into Slack's own dialect |
 | `test_discord.py` | 208 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
 | `test_instructions.py` | 29 | Rundesk's core and trigger prompts, standard variables, the additive builder, the roles layer, and the separate role floor |
-| `test_role.py` | 51 | `agent-role` — what a role is, what makes one usable, what its revision is computed from, and how the install's roles are offered, against a scratch library |
+| `test_role.py` | 87 | `agent-role` — what a role is, what makes one usable, what its revision is computed from, how the install's roles are offered, and what writing or editing one refuses, against a scratch library |
 | `test_role_run.py` | 128 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
 | `test_secret.py` | 39 | `platform-secrets` — what an install keeps for every program it starts: the refusals that are the boundary, the three answers a fetching command can give, and a scratch root that proves nothing reaches the owner's own |
 | `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
@@ -386,7 +398,11 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   executable plan — the last two under a `read` posture, which on some brains has no shell in it
   at all. Each opens by naming the weight of work it is for, and all six use one section skeleton
   ending in a numbered definition of done, because that is what a parent reviews an unchecked
-  report against (R-ROL-38). `managing-rundesk` carries how to write one.
+  report against (R-ROL-38). `.skeleton.md` beside them is that same section skeleton with a
+  `TODO` in every position, and is what `rundesk roles add` writes: a file rather than a string
+  in `role.py` because it is prose somebody edits, and dotted and a file rather than a directory
+  so the walk that finds the shipped roles cannot read it as one.
+  `managing-rundesk` carries how to write one.
 - `src/templates/skills/` — **the required and remaining release-owned skills.** Copied into the
   owner's library by the install and brought forward by an update, so a built-in is always the version installed
   (R-AGT-30). `managing-rundesk` is how to operate rundesk, written for **an agent running inside
