@@ -41,7 +41,7 @@ class InstructionBuilder(unittest.TestCase):
         self.assertIn("`/agents/ava/home`", built)
         self.assertIn("`/agents/ava/home/workspace`", built)
         self.assertIn(
-            "Before your first reply in a conversation, read `/agents/ava/home/AGENTS.md`.",
+            "Before your first reply in a conversation, read your three home files.",
             built,
         )
         for placeholder in ("{agent}", "{agent_slug}", "{agent_home}", "{workspace}"):
@@ -149,11 +149,40 @@ class InstructionBuilder(unittest.TestCase):
         self.assertLess(ordering, context)
         self.assertLess(context, heavy)
         self.assertIn("goes to a role. Keep it yourself only if you say why.", built)
-        self.assertLess(built.index("read `/agents/ava/home/AGENTS.md`"), ordering)
+        self.assertLess(built.index("read your three home files"), ordering)
         for cut in ("Mid-work is too late", "never guessed", "many steps",
                     "Handing it over is ordinary"):
             with self.subTest(cut=cut):
                 self.assertNotIn(cut, built)
+
+    def test_the_core_instructions_name_all_three_home_files(self):
+        """R-AGT-56 — the layer nothing replaces names every file a home keeps, and says
+        what each one is for. Naming them only in the home itself puts identity two hops
+        from anything guaranteed to be read: a provider that loads its bootstrap page late,
+        or not at all, then produces an agent with rules and no voice."""
+        built = instructions.build(variables=CORE)
+        for named, what in (
+            ("/agents/ava/home/AGENTS.md", "how you work"),
+            ("/agents/ava/home/SOUL.md", "who you are and how you speak"),
+            ("/agents/ava/home/MEMORY.md", "what you have learned that is still true"),
+        ):
+            with self.subTest(home_file=named):
+                self.assertIn(f"`{named}` — {what}.", built)
+
+    def test_the_core_instructions_bind_every_answer_to_the_agents_own_voice(self):
+        """R-AGT-56 — voice is stated where output happens rather than only where reading
+        does, and it covers work the agent did not write itself. Pasting a role's prose
+        forward is the most common way a Rundesk agent's register dies, and a role is given
+        no identity by design (R-ROL-5), so what it hands back has none to carry."""
+        built = instructions.build(variables=CORE)
+        for rule in (
+            "Everything that reaches a person is in `SOUL.md`'s voice",
+            "your own answers, and anything you carry from a role, a subagent, a tool, "
+            "or a document",
+            "What you speak through never changes how you sound.",
+        ):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, built)
 
     def test_the_roles_layer_lands_after_the_standing_rules_and_before_the_trigger(self):
         """An agent is told what it may hand work to without asking for the list, and it
@@ -375,6 +404,27 @@ class InstructionBuilder(unittest.TestCase):
         self.assertIn("on behalf of the named agent elena", built)
         self.assertIn("rol-1-aaaa", built)
         self.assertIn("/projects/exporter", built)
+
+    def test_a_role_execution_is_never_told_which_files_a_home_keeps(self):
+        """R-AGT-56, R-ROL-5 — naming the three files at the floor is what makes them
+        unskippable for a named agent, and the same move is exactly what must not leak into
+        an execution that has no home. `for_role` never calls `build`, so this is the guard
+        on that separation staying real rather than incidental."""
+        built = instructions.for_role(
+            variables={"role": "Development", "parent_agent": "elena",
+                       "role_run": "rol-1-aaaa", "target": "/projects/exporter",
+                       "agent_home": "/agents/elena/home"},
+            rules="# Development\n\nRun the tests.\n",
+        )
+        for absent in (
+            "read your three home files",
+            "who you are and how you speak",
+            "what you have learned that is still true",
+            "Everything that reaches a person is in",
+            "never changes how you sound",
+        ):
+            with self.subTest(absent=absent):
+                self.assertNotIn(absent, built)
 
     def test_a_role_execution_is_never_offered_roles_of_its_own(self):
         """R-ROL-5 — one role may not put another on, so an execution told which roles
