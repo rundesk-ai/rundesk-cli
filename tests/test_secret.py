@@ -94,9 +94,13 @@ class WhatANameMayBe(WithSomewhereToKeepThings):
     def test_a_name_that_changes_which_code_a_program_loads_is_refused(self):
         """R-SEC-12 — an agent may keep a value, and every program this install starts would
         load what one of these named, for ever, with nothing else involved in the decision."""
-        for name in ("DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "NODE_OPTIONS",
-                     "PYTHONSTARTUP", "PYTHONPATH", "BASH_FUNC_X", "GIT_SSH_COMMAND",
-                     "SSL_CERT_FILE", "IFS", "XDG_CONFIG_HOME"):
+        # `ZDOTDIR` is here because zsh sources its `.zshenv` on *every* invocation,
+        # non-interactive included, and zsh is the default shell on the platform this is
+        # for — so it is the bash startup-file hijack this list already refuses, on the
+        # shell that machine actually runs.
+        for name in ("DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "NODE_OPTIONS", "NODE_PATH",
+                     "ZDOTDIR", "FPATH", "PYTHONSTARTUP", "PYTHONPATH", "BASH_FUNC_X",
+                     "GIT_SSH_COMMAND", "SSL_CERT_FILE", "IFS", "XDG_CONFIG_HOME"):
             with self.subTest(name=name):
                 self.assertTrue(secret.refused(name))
                 with self.assertRaises(secret.Refused):
@@ -113,6 +117,15 @@ class WhatANameMayBe(WithSomewhereToKeepThings):
                 with self.assertRaises((secret.NotAName, secret.Refused)):
                     self.hold(name, A_VALUE)
         self.assertFalse(outside.exists())
+
+    def test_a_refused_name_is_told_the_rule_it_actually_broke(self):
+        """A message naming a rule the input already satisfies cannot be corrected from.
+        `github_token` is letters, digits and underscores and does not begin with a digit —
+        it is refused on case, and the words have to say so."""
+        why = secret.refused("github_token")
+
+        self.assertTrue(why)
+        self.assertIn("capital", why)
 
     def test_a_name_of_the_right_shape_is_kept(self):
         """The control: the rule refuses what it is for and nothing else."""
@@ -411,6 +424,23 @@ class WhatEveryProgramIsGiven(WithSomewhereToKeepThings):
 
         self.assertLess(len("".join(said.values.values())), secret.SET_LIMIT_BYTES)
         self.assertTrue(said.trouble)
+
+    def test_checking_one_value_runs_only_that_ones_command(self):
+        """R-SEC-23 — asking after one value must not fetch every other. A held credential
+        that answers instantly would otherwise put a prompt in front of somebody for a
+        vault they never mentioned, and run a keeper whose own side effect — a rotation, an
+        audited read — nobody asked for."""
+        marker = self.where / "was-asked"
+        self.hold("HELD_ONE", A_VALUE)
+        secret.remember_command(
+            "FETCHED_ONE", a_command(f"touch {marker}; printf %s {ANOTHER}"),
+            now=NOW, kept_from=HERE, where=self.where)
+        marker.unlink()
+
+        said = secret.resolve(where=self.where, only=["HELD_ONE"])
+
+        self.assertEqual({"HELD_ONE": A_VALUE}, said.values)
+        self.assertFalse(marker.exists(), "checking one value ran another one's keeper")
 
     def test_a_listing_fetches_nothing(self):
         """R-SEC-23 — a listing that unlocked a vault is a listing nobody runs, and one

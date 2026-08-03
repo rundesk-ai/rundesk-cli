@@ -232,10 +232,12 @@ def _check(args: argparse.Namespace) -> int:
     for one in kept:
         if one.kept_as == secret.FETCHED:
             _out_loud(f"asking: {' '.join(shlex.quote(word) for word in one.command)}")
-    said = secret.resolve()
+    # **Only the names asked after** — checking one value must not run every other
+    # keeper this install has, unannounced and possibly with side effects of its own.
+    said = secret.resolve(only=[one.name for one in kept])
     trouble = {one.name: one for one in said.trouble}
     if named:
-        return _checked_one(kept[0], trouble.get(named), said)
+        return _checked_one(kept[0], trouble.get(named))
     rows = []
     for one in kept:
         went = trouble.get(one.name)
@@ -252,7 +254,7 @@ def _check(args: argparse.Namespace) -> int:
     return 0
 
 
-def _checked_one(one: secret.Kept, went, said) -> int:
+def _checked_one(one: secret.Kept, went) -> int:
     if went is None:
         print(f"{one.name}: REACHED — {_shown(one)}")
         return 0

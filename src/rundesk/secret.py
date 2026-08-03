@@ -112,8 +112,21 @@ FAMILIES = (
 #: than what it is told. This list has no other home, so it cannot come apart from one — what
 #: could is the set of names rundesk itself decides, and that is asked rather than restated.
 NEVER = frozenset({
+    # **`ZDOTDIR` is the one this list was nearly shipped without.** zsh sources
+    # `$ZDOTDIR/.zshenv` on *every* invocation — non-interactive and non-login included,
+    # unlike bash, which reads `BASH_ENV` only in narrower cases — and zsh is the default
+    # shell on the platform this product is for. Measured: `env ZDOTDIR=<dir> zsh -c true`
+    # runs whatever that directory's `.zshenv` says.
+    #
+    # An agent can already run code this turn, so the escalation is not execution: it is
+    # **persistence and reach**. A value kept here outlives the turn, survives restarts and
+    # updates, and is handed to every program started for every agent — so one placed once
+    # runs inside all of them for ever, which is a different thing from a command that ends
+    # when the turn does. That is the argument for every name below.
+    "ZDOTDIR", "FPATH",
     "SHELL", "IFS", "ENV", "BASH_ENV", "CDPATH", "PROMPT_COMMAND", "TMPDIR",
-    "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS", "PERL5LIB", "PERL5OPT", "RUBYOPT", "GCONV_PATH",
+    "NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS",
+    "PERL5LIB", "PERL5OPT", "RUBYOPT", "GCONV_PATH",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
     "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_PAGER",
     "PAGER", "EDITOR", "VISUAL", "BROWSER",
@@ -285,7 +298,8 @@ def refused(name: str) -> str:
     which is the only place that can be sure.
     """
     if not name or not NAME_IS.fullmatch(name):
-        return "a name is letters, digits and underscores, and never begins with a digit"
+        return ("a name is capital letters, digits and underscores, and never begins "
+                "with a digit")
     if name in placed():
         return f"rundesk decides {name} for every program it starts"
     for family, why in FAMILIES:
@@ -299,8 +313,8 @@ def refused(name: str) -> str:
 def checked(name: str) -> str:
     """That name, or a refusal in our own words."""
     if not name or not NAME_IS.fullmatch(name):
-        raise NotAName(
-            "a name is letters, digits and underscores, and never begins with a digit")
+        raise NotAName("a name is capital letters, digits and underscores, and never "
+                       "begins with a digit")
     why = refused(name)
     if why:
         raise Refused(why)
@@ -653,7 +667,7 @@ def _first_line(said: bytes) -> str:
 
 
 def resolve(where: Path | None = None, run=None, timeout_seconds: float = COMMAND_SECONDS,
-            exclude=()) -> Resolved:
+            exclude=(), only=None) -> Resolved:
     """Every value this install's programs are given, produced now.
 
     Nothing is remembered between calls. A vault locked at noon means the next program
@@ -666,6 +680,13 @@ def resolve(where: Path | None = None, run=None, timeout_seconds: float = COMMAN
     `exclude` is what the caller already has an answer for. A channel adapter's own
     credential is the whole of it today: two agents may hold two different bots, and one
     install-wide value would silently make them the same one.
+
+    **`only` narrows it to the names asked after, and asking about one must never run
+    anybody else's keeper.** Checking a held credential that answers instantly would
+    otherwise fetch every other value in the registry — extra prompts nobody was told
+    about, and a keeper with a side effect of its own (a rotation, an audited read) run
+    because somebody looked at something unrelated. `None` is every name, which is what a
+    program starting wants.
     """
     running = run if run is not None else ran
     already = set(exclude)
@@ -679,6 +700,8 @@ def resolve(where: Path | None = None, run=None, timeout_seconds: float = COMMAN
     for name in sorted(kept):
         said = kept[name]
         if not isinstance(said, dict) or name in already:
+            continue
+        if only is not None and name not in set(only):
             continue
         why = refused(name)
         if why:
@@ -726,7 +749,8 @@ def _fetched(one: Kept, where, running, timeout_seconds: float) -> Ran:
 
 
 async def resolved(where: Path | None = None, run=None,
-                   timeout_seconds: float = COMMAND_SECONDS, exclude=()) -> Resolved:
+                   timeout_seconds: float = COMMAND_SECONDS, exclude=(),
+                   only=None) -> Resolved:
     """The same answer, off the event loop.
 
     A command that fetches a value is a program somebody else wrote and may take seconds.
@@ -734,4 +758,5 @@ async def resolved(where: Path | None = None, run=None,
     carrying still while it waited — which is the one thing `process.py` exists never to do.
     """
     return await asyncio.to_thread(
-        resolve, where=where, run=run, timeout_seconds=timeout_seconds, exclude=exclude)
+        resolve, where=where, run=run, timeout_seconds=timeout_seconds, exclude=exclude,
+        only=only)

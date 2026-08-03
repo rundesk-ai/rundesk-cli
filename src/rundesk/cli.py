@@ -657,8 +657,8 @@ def build_parser() -> argparse.ArgumentParser:
     put = holding.add_parser(
         "set", help="keep a value under a name, or replace the one already there")
     put.add_argument("value_name", metavar="<name>",
-                     help="what programs read it as — letters, digits and underscores, "
-                          "never beginning with a digit")
+                     help="what programs read it as — capital letters, digits and "
+                          "underscores, never beginning with a digit")
     # **No option takes the value and no positional holds one** (R-SEC-8). The moment one
     # does it is in `ps` for every user on the machine and in a shell history for ever, and
     # that is the whole reason `--token-stdin` exists one verb over.

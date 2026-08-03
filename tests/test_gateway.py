@@ -1577,6 +1577,31 @@ class WhatEveryAdapterOfOneGatewayIsTold(WithARunDirectory):
         self.assertEqual("gh-x", told["GITHUB_TOKEN"],
                          "excluding one name excluded the rest with it")
 
+    async def test_what_a_keeper_said_went_wrong_never_reaches_the_gateways_own_log(self):
+        """R-SEC-26 — a keeper that fails prints the thing it was reading, and on a bad
+        wrapper the value itself. This log stands under the data directory, which is what a
+        backup copies whole, so a line carrying those words would put a credential into the
+        one place the store exists to stay out of. The name and which kind of not-given it
+        was is what an owner needs here; the keeper's own words are shown by `env check`,
+        at a terminal, where nothing writes them down."""
+        from rundesk import secret
+
+        leaked = "op: read op://work/github failed with sk-live-must-not-be-logged"
+
+        async def kept(exclude=()):
+            return secret.Resolved(values={}, trouble=(
+                secret.Trouble(name="OP_TOKEN", kept_as=secret.FETCHED,
+                               answered=True, why=leaked),))
+
+        gw = super().made("gateway", secrets_resolving=kept)
+        await gw._for_a_channel(self.Surface())
+
+        written = "".join(one.read_text(errors="replace")
+                          for one in self.logs.rglob("*") if one.is_file())
+        self.assertNotIn(leaked, written, "a keeper's own words reached a backed-up log")
+        self.assertNotIn("sk-live-must-not-be-logged", written)
+        self.assertIn("OP_TOKEN", written, "it did not say which value went missing")
+
     async def test_what_a_gateway_already_decided_survives_a_value_claiming_its_name(self):
         """R-SEC-14 — the merge is never over what rundesk built, at this layer too."""
         self.keeping = {"RUNDESK_GATEWAY": "taken", "SOMETHING": "taken"}

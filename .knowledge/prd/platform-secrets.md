@@ -39,13 +39,13 @@ again each time a program starts. Nothing rundesk shows ever gives a whole value
 | ✅ | R-SEC-14 | A value rundesk was not allowed to keep is left out of what a program is given | `a value rundesk was not allowed to keep is left out`, `what a gateway already decided survives a value claiming its name` |
 | ✅ | R-SEC-15 | A command that gives nothing back leaves nothing kept under that name | `a command that gives nothing back keeps nothing` |
 | ✅ | R-SEC-16 | A value that cannot be produced when a program starts is left out rather than emptied | `a value that cannot be fetched is left out rather than emptied`, `a held value whose file went missing is said rather than passed over` |
-| ✅ | R-SEC-17 | A command that could not answer is told apart from one that answered that there is no value | `a command that will not answer is not a command that said no`, `a command that is not there is a definite answer` |
+| ✅ | R-SEC-17 | A command that could not answer is told apart from one that answered that there is no value | `a command that will not answer is not a command that said no`, `a command that is not there is a definite answer`, `what a keeper said went wrong never reaches the gateways own log` |
 | ✅ | R-SEC-18 | Replacing a kept value says which value was replaced | `replacing a value says which one it replaced` |
 | ✅ | R-SEC-19 | Keeping the value already held under a name leaves what is recorded about it unchanged | `keeping the value already there changes nothing` |
 | ✅ | R-SEC-20 | Taking a value away removes both the value and what was recorded about it | `taking a value away names the one that went` |
 | ✅ | R-SEC-21 | Asking about a name nothing is kept under is refused rather than answered | `asking about a name nothing is kept under is refused` |
 | ✅ | R-SEC-22 | An owner can ask whether each kept value can still be produced, without one being shown | `every kept value can be proved reachable without being shown`, `a check that could not reach one ends unsuccessfully` |
-| ✅ | R-SEC-23 | Listing what is kept produces no value and runs no command that fetches one | `a listing fetches nothing` |
+| ✅ | R-SEC-23 | Listing what is kept produces no value, and asking after one runs no other one's command | `a listing fetches nothing`, `checking one value runs only that ones command` |
 | ✅ | R-SEC-24 | What is kept is readable only by the owner of this install | `a held value is kept where nothing else can read it` |
 | ✅ | R-SEC-25 | What is kept is never written into the job the machine keeps a gateway running from | `no kept value reaches the job the machine holds` |
 | ✅ | R-SEC-26 | What is kept stands outside everything a copy of this install holds | `what is kept stands outside everything a copy of this install holds`, `the default stands outside the installs own data` |

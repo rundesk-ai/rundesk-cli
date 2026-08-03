@@ -1149,19 +1149,30 @@ class Gateway:
         and an adapter on its next start.
 
         A value that could not be produced is left out and **said in this gateway's own
-        log** — the account that outlives the gateway. What is said is the name, which kind
-        of not-given it was, and rundesk's own words for it. Never the keeper's own output,
-        which routinely holds the thing it was reading, and never the value.
+        log** — the account that outlives the gateway.
+
+        **The name and which kind of not-given it was, and nothing else.** Never
+        `Trouble.why`: that is the keeper's own words, and a keeper that fails routinely
+        prints the thing it was reading — a vault path, a key's identity, and on a bad
+        wrapper the value. This log stands under `data_home()`, which is what a backup
+        copies whole, so writing it here would put a credential into the one place
+        R-SEC-26 exists to keep structurally free of them. Whoever needs the keeper's
+        words runs `rundesk env check <name>` at a terminal, where they are shown and
+        not written down.
         """
         resolving = self._secrets_resolving or secret.resolved
         said = await resolving(exclude=exclude)
         if said.unreadable:
+            # Rundesk's own words about rundesk's own file, naming a path and never a
+            # value — the one thing here an owner cannot find out any other way.
             self.log.warning("the values this install keeps could not be read (%s) — "
                              "no program started now is given any of them", said.unreadable)
         for one in said.trouble:
             self.log.warning(
-                "value '%s' was not given to what is starting — %s", one.name,
-                one.why if one.answered else f"could not answer: {one.why}")
+                "value '%s' was not given to what is starting — %s; "
+                "see: rundesk env check %s", one.name,
+                "it gave nothing back" if one.answered else "it could not answer",
+                one.name)
         return said.values
 
     async def _for_a_channel(self, one) -> dict[str, str]:

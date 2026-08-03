@@ -385,11 +385,17 @@ async def carry(
         # this machine mute, including the one somebody would ask to fix it. Written where
         # what went wrong for this turn is written, so it is read back with the run rather
         # than needing a gateway that a standalone `rundesk ask` does not have.
+        #
+        # **The name and which kind of not-given it was, and never the keeper's own
+        # words.** A keeper that fails routinely prints what it was reading, and this
+        # file stands under `data_home()`, which a backup copies whole — the one place
+        # R-SEC-26 exists to keep free of credentials. `rundesk env check <name>` shows
+        # the keeper's words at a terminal, where nothing writes them down.
         for missing in keeping.trouble:
             writing.went_wrong(
                 f"value '{missing.name}' was not given to this turn — "
-                + (missing.why if missing.answered
-                   else f"could not answer: {missing.why}") + "\n")
+                + ("it gave nothing back" if missing.answered else "it could not answer")
+                + f"; see: rundesk env check {missing.name}\n")
         if keeping.unreadable:
             writing.went_wrong("the values this install keeps could not be read: "
                                f"{keeping.unreadable}\n")
