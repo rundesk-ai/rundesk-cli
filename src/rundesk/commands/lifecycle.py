@@ -160,6 +160,10 @@ def cmd_serve(args: argparse.Namespace, gateways, agents, skills) -> int:
         # role run needs an agent, a bundle and an account, and a gateway knows none of
         # them (R-ROL-4).
         specialists = agents.playing(args.name) if agents.exists(args.name) else None
+        # Both halves of handing work to another named agent: answering what was addressed
+        # to this agent, and waking this agent to review what it asked for. Resolved here
+        # and handed over made, for the same reason `specialists` is (R-DEL-1).
+        handed_over = agents.delegated(args.name) if agents.exists(args.name) else None
         # What this agent may do, resolved here and handed over as a question rather than
         # an answer: a grant is a link anything on the machine may add or take away while
         # the gateway runs, and the gateway is what tells the owner it changed (R-CH-32).
@@ -185,6 +189,7 @@ def cmd_serve(args: argparse.Namespace, gateways, agents, skills) -> int:
                                             records=records,
                                             asking=asking,
                                             roles=specialists,
+                                            delegations=handed_over,
                                             granted=granted).serve())
     except (gateways.AlreadyRunning, gateways.Unfit, gateways.NotAName) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)

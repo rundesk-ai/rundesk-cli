@@ -242,9 +242,10 @@ VERSION = "version"
 AGENTS = "agents"
 SKILLS = "skills"
 ROLES = "roles"
+DELEGATIONS = "delegations"
 SCHEDULES = "schedules"
 HELP = "help"
-QUERIES = (STATUS, VERSION, AGENTS, SKILLS, SCHEDULES, ROLES, HELP)
+QUERIES = (STATUS, VERSION, AGENTS, SKILLS, SCHEDULES, ROLES, DELEGATIONS, HELP)
 
 #: What is asked of an adapter to find out whether it can reach what it was pointed at.
 #: Unlike asking a brain what it can do, this one really does reach a network — that is the

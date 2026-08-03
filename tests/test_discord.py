@@ -1800,8 +1800,12 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
         return said
 
     def test_handing_work_to_a_role_is_news_rather_than_subtext(self):
+        """R-ROL-1 — the agent working in a mode, never a third party. A line reading
+        "handed X to the development role" makes the agent\'s own work sound like a
+        colleague\'s, and with delegation landing beside it "handed to" has to mean a
+        different agent and nothing else."""
         line = discord.role_line(self.handed())
-        self.assertEqual("🤖 Handed **applicant-export** to the *development* role.", line)
+        self.assertEqual("📋 Working on the **applicant-export** development task.", line)
         self.assertFalse(line.startswith("-#"), "the news was shown as grey subtext")
 
     def test_a_settled_role_run_shows_in_full_with_no_prior_handed_ever_seen(self):
@@ -1810,11 +1814,12 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
         told it went out. Asserted against `role_line`, which has no memory to have."""
         back = discord.role_line(self.handed(state="settled", ok=True, elapsed=4000))
         self.assertEqual(
-            "✅ 🤖 **applicant-export** is back from the *development* role.", back)
+            "✅ 📋 Finished the **applicant-export** development task — 1h.", back)
 
     def test_a_role_that_did_not_finish_says_so_rather_than_that_a_subagent_failed(self):
         line = discord.role_line(self.handed(state="settled", ok=False, elapsed=4000))
-        self.assertEqual("⚠️ 🤖 **applicant-export** did not finish.", line)
+        self.assertEqual(
+            "⚠️ 📋 The **applicant-export** development task did not finish — 1h.", line)
         self.assertNotIn("subagent", line)
 
     def settled(self, **also) -> str:
@@ -1826,13 +1831,14 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
         purpose after taking the work over was posted as ⚠️ work that did not finish."""
         line = self.settled(became="stopped", stopped_by="agent")
         self.assertEqual(
-            "✋ 🤖 **applicant-export** was stopped by the agent.", line)
+            "✋ 📋 Stopped the **applicant-export** development task — 1h.", line)
         self.assertNotIn("⚠️", line)
         self.assertNotIn("did not finish", line)
 
     def test_a_stop_says_which_of_the_two_it_was(self):
         self.assertEqual(
-            "✋ 🤖 **applicant-export** was stopped from a terminal.",
+            "✋ 📋 The **applicant-export** development task was stopped from a "
+            "terminal — 1h.",
             self.settled(became="stopped", stopped_by="terminal"))
 
     def test_a_stop_nobody_was_written_down_for_names_nobody(self):
@@ -1842,20 +1848,36 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
             with self.subTest(**record):
                 line = self.settled(became="stopped", **record)
                 self.assertEqual(
-                    "✋ 🤖 **applicant-export** was stopped.", line)
+                    "✋ 📋 The **applicant-export** development task was stopped — 1h.",
+                    line)
 
     def test_a_settled_record_from_a_rundesk_that_names_no_ending_still_renders(self):
         """`ok` is the fall-through and goes on meaning what it always meant, so a
         record carrying no ending — an older rundesk's, or a run nothing has settled —
         shows the two endings this surface has always shown."""
-        self.assertIn("is back from the *development* role",
+        self.assertIn("Finished the **applicant-export** development task",
                       discord.role_line(self.handed(state="settled", ok=True)))
         self.assertIn("did not finish", self.settled())
         self.assertIn("did not finish", self.settled(became="wandering off"))
 
+    def test_a_settled_record_carrying_no_elapsed_renders_with_no_dangling_dash(self):
+        """Elapsed is on every record, and a rundesk that never sent one still renders —
+        `— 0s` is a measurement, stated plainly, and wrong."""
+        for line in (discord.role_line(self.handed(state="settled", ok=True, elapsed=0)),
+                     discord.role_line({"type": "role", "state": "settled", "ok": True,
+                                        "label": "applicant export",
+                                        "role": "development"})):
+            with self.subTest(line=line):
+                self.assertEqual(
+                    "✅ 📋 Finished the **applicant-export** development task.", line)
+                self.assertNotIn("—", line)
+
     def test_a_check_in_says_how_long_the_run_has_been_going(self):
+        """The one line that is not news keeps its subtext register, and joins the family
+        in wording: every other state says the same sentence, and a check-in with no verb
+        and no noun phrase read as a different kind of message altogether."""
         self.assertEqual(
-            "-# 🤖 **applicant-export** — 40m, still working",
+            "-# 📋 Still on the **applicant-export** development task — 40m.",
             discord.role_line(self.handed(state="working", elapsed=2400)))
 
     def test_a_state_this_surface_does_not_know_shows_nothing(self):
@@ -1868,8 +1890,21 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
         """`_plain_name` answers `attachment` when it is left nothing, which is right for
         a file and would have shown *the attachment role*."""
         line = discord.role_line(self.handed(role=""))
-        self.assertEqual("🤖 Handed **applicant-export** to a role.", line)
+        self.assertEqual("📋 Working on the **applicant-export** task.", line)
         self.assertNotIn("attachment", line)
+        self.assertEqual(
+            "✅ 📋 Finished the **applicant-export** task — 1h.",
+            discord.role_line(self.handed(state="settled", ok=True, elapsed=4000,
+                                          role="")))
+        self.assertEqual(
+            "⚠️ 📋 The **applicant-export** task did not finish — 1h.",
+            discord.role_line(self.handed(state="settled", ok=False, elapsed=4000,
+                                          role="")))
+        self.assertEqual(
+            "✋ 📋 Stopped the **applicant-export** task — 1h.",
+            discord.role_line(self.handed(state="settled", ok=False, elapsed=4000,
+                                          role="", became="stopped",
+                                          stopped_by="agent")))
 
     def test_a_label_carrying_a_path_comes_out_through_the_shared_guard(self):
         """R-ROL-17, R-DIS-9 — the shared name sanitiser is not bent for a role."""
@@ -1946,7 +1981,7 @@ class HowARoleRunReachesTheRoom(unittest.IsolatedAsyncioTestCase):
 
         await discord.Agent.told(turn, self.record())
 
-        self.assertEqual(["🤖 Handed **a-task** to the *development* role."], turn.posted)
+        self.assertEqual(["📋 Working on the **a-task** development task."], turn.posted)
 
     async def test_a_settled_run_is_posted_after_the_admitting_turn_was_cleared(self):
         """**The defect, through the real dispatch.** `_state` ends its terminal branch
@@ -1999,8 +2034,8 @@ class HowARoleRunReachesTheRoom(unittest.IsolatedAsyncioTestCase):
         await discord.Agent.told(turn, self.record(state="settled", ok=True, elapsed=2524))
 
         self.assertEqual(
-            ["🤖 Handed **a-task** to the *development* role.",
-             "✅ 🤖 **a-task** is back from the *development* role."],
+            ["📋 Working on the **a-task** development task.",
+             "✅ 📋 Finished the **a-task** development task — 42m."],
             posted, "what came back was never posted")
 
     async def test_a_role_run_still_shows_when_activity_is_off(self):
@@ -2021,7 +2056,8 @@ class HowARoleRunReachesTheRoom(unittest.IsolatedAsyncioTestCase):
         await turn._role(self.record(state="working", elapsed=2500), held)
 
         self.assertEqual(1, len(turn.posted), "a second message was posted for one run")
-        self.assertEqual(["-# 🤖 **a-task** — 41m, still working"], posted.edited)
+        self.assertEqual(["-# 📋 Still on the **a-task** development task — 41m."],
+                         posted.edited)
 
     async def test_a_check_in_posts_afresh_once_something_else_has_been_said(self):
         """R-DIS-20 — a message something has been posted under is one the reader has
@@ -2050,9 +2086,9 @@ class HowARoleRunReachesTheRoom(unittest.IsolatedAsyncioTestCase):
         await turn._role(self.record(state="working", elapsed=2500), held)
 
         self.assertEqual(
-            ["-# 🤖 **a-task** — 21m, still working",
-             "-# 🤖 **another-task** — 21m, still working",
-             "-# 🤖 **a-task** — 41m, still working"], turn.posted)
+            ["-# 📋 Still on the **a-task** development task — 21m.",
+             "-# 📋 Still on the **another-task** development task — 21m.",
+             "-# 📋 Still on the **a-task** development task — 41m."], turn.posted)
         self.assertEqual([[], [], []], [one.edited for one in made],
                          "one run's check-in was written over the other's message")
         self.assertEqual({"rol-1-aaaa"}, set(held.checked_in),
@@ -2078,6 +2114,212 @@ class HowARoleRunReachesTheRoom(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual({}, held.checked_in)
         self.assertEqual([], posted.edited, "what came back was edited into a check-in")
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class WhatADelegationLooksLikeHere(unittest.TestCase):
+    """R-DEL-16, R-DEL-17 — one agent's ask of another, rendered from the record alone.
+
+    A delegation outlives the process showing it, so every line here is asserted against
+    `delegation_line`, which has no memory to correlate against and is not given one.
+    """
+
+    def handed(self, **also) -> dict:
+        said = {"type": "delegation", "conversation": "1180",
+                "delegation": "del-1-aaaa", "state": "handed", "to": "cole",
+                "label": "quote flow", "elapsed": 0}
+        said.update(also)
+        return said
+
+    def test_handing_work_to_an_agent_is_shown_where_the_person_asked(self):
+        """The whole contrast with a role line beside it: a role names no other party and
+        a delegation always names one."""
+        line = discord.delegation_line(self.handed())
+        self.assertEqual("\U0001f91d Asked **cole** to take on the **quote-flow** task.",
+                         line)
+        self.assertFalse(line.startswith("-#"), "the news was shown as grey subtext")
+        self.assertNotIn("role", line)
+
+    def test_a_delegation_still_working_is_edited_in_place_rather_than_repeated(self):
+        """The check-in keeps the subtext register, and joins the family in wording."""
+        line = discord.delegation_line(self.handed(state="working", elapsed=2400))
+        self.assertEqual(
+            "-# \U0001f91d **cole** is still on the **quote-flow** task \u2014 40m.", line)
+
+    def test_an_answer_that_came_back_says_the_agent_answered(self):
+        self.assertEqual(
+            "\u2705 \U0001f91d **cole** answered the **quote-flow** task \u2014 1h.",
+            discord.delegation_line(self.handed(state="settled", ok=True, elapsed=4000,
+                                                became="succeeded")))
+
+    def test_a_delegation_that_failed_is_shown_as_a_fault(self):
+        line = discord.delegation_line(self.handed(state="settled", ok=False,
+                                                   elapsed=4000, became="failed"))
+        self.assertEqual(
+            "\u26a0\ufe0f \U0001f91d **cole** did not answer the **quote-flow** task "
+            "\u2014 1h.", line)
+        self.assertNotIn("stopped", line)
+
+    def test_a_settled_record_from_a_rundesk_that_names_no_ending_still_renders(self):
+        self.assertIn("answered", discord.delegation_line(
+            self.handed(state="settled", ok=True, elapsed=4000)))
+        self.assertIn("did not answer", discord.delegation_line(
+            self.handed(state="settled", ok=False, elapsed=4000)))
+
+    def test_a_settled_record_carrying_no_elapsed_renders_with_no_dangling_dash(self):
+        line = discord.delegation_line(self.handed(state="settled", ok=True, elapsed=0))
+        self.assertEqual(
+            "\u2705 \U0001f91d **cole** answered the **quote-flow** task.", line)
+        self.assertNotIn("\u2014", line)
+
+    def test_a_record_this_adapter_does_not_understand_renders_nothing(self):
+        self.assertEqual("", discord.delegation_line(self.handed(state="wandering")))
+        self.assertEqual("", discord.delegation_line({"type": "delegation"}))
+
+    def test_the_agents_name_comes_out_through_the_shared_guard(self):
+        """R-DEL-15 — `to` is an agent's slug and never a person, and it is read in a room
+        where other people can see it."""
+        line = discord.delegation_line(
+            self.handed(to="/opt/agents/cole", label="/Users/somebody/secret/quotes"))
+        self.assertNotIn("/Users", line)
+        self.assertNotIn("secret", line)
+        self.assertIn("cole", line)
+
+    def test_a_role_task_and_a_delegation_are_never_the_same_mark(self):
+        """Four kinds of work, four marks. A role is this agent in a mode, a delegation is
+        another named agent, and \U0001f916 goes on meaning a provider subagent."""
+        self.assertNotEqual(discord.ROLE_MARK, discord.DELEGATION_MARK)
+        self.assertNotEqual(discord.ROLE_MARK, discord.DID["delegate"])
+        self.assertNotEqual(discord.DELEGATION_MARK, discord.DID["delegate"])
+        self.assertEqual("\U0001f916", discord.DID["delegate"])
+        role = discord.role_line({"type": "role", "state": "handed", "label": "a task",
+                                  "role": "development"})
+        handed = discord.delegation_line(self.handed())
+        self.assertNotIn(discord.DID["delegate"], role)
+        self.assertNotIn(discord.DID["delegate"], handed)
+        self.assertNotIn(discord.DELEGATION_MARK, role)
+        self.assertNotIn(discord.ROLE_MARK, handed)
+        # The subagent mark keeps every other caller it had.
+        self.assertIn(discord.DID["delegate"], discord.DELEGATED)
+        self.assertIn(discord.DID["delegate"], discord.FINISHED_HELPER)
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class HowADelegationReachesTheRoom(unittest.IsolatedAsyncioTestCase):
+    """R-DEL-16 — its own message, a check-in that does not fill a room, and shown
+    whether or not the activity switch is on."""
+
+    def surface(self, activity=None, posting=None):
+        posted, chose = [], type("Choice", (), {
+            "activity": discord.GROWS if activity is None else activity})()
+
+        class Turn:
+            live: dict = {}
+
+            def __init__(self):
+                self.chose = chose
+                self.posted = posted
+
+            async def _post(self, it, content, **kw):
+                self.posted.append(content)
+                return posting() if posting is not None else None
+
+            def _no_longer_last(self, held):
+                discord.Agent._no_longer_last(self, held)
+
+            async def _delegation(self, it, held):
+                await discord.Agent._delegation(self, it, held)
+
+        return Turn()
+
+    def record(self, **also) -> dict:
+        said = {"type": "delegation", "conversation": "1180",
+                "delegation": "del-1-aaaa", "state": "handed", "to": "cole",
+                "label": "a task", "elapsed": 0}
+        said.update(also)
+        return said
+
+    async def test_handing_work_to_an_agent_is_shown_where_the_person_asked(self):
+        turn = self.surface()
+        turn.live = {}
+
+        await discord.Agent.told(turn, self.record())
+
+        self.assertEqual(["\U0001f91d Asked **cole** to take on the **a-task** task."],
+                         turn.posted)
+
+    async def test_a_delegation_still_working_is_edited_in_place_rather_than_repeated(self):
+        held, posted = discord.Live(), HowARoleRunReachesTheRoom.Posted()
+        turn = self.surface(posting=lambda: posted)
+
+        await turn._delegation(self.record(state="working", elapsed=1300), held)
+        await turn._delegation(self.record(state="working", elapsed=2500), held)
+
+        self.assertEqual(1, len(turn.posted), "a second message was posted for one ask")
+        self.assertEqual(
+            ["-# \U0001f91d **cole** is still on the **a-task** task \u2014 41m."],
+            posted.edited)
+
+    async def test_two_asks_in_one_conversation_never_share_a_check_in(self):
+        """Keyed per ask, because one turn can hand two tasks over — and only the newest
+        is still the last thing here, so the other starts a message of its own rather
+        than rewriting one the reader has already scrolled past (R-DIS-20)."""
+        held = discord.Live()
+        made: list = []
+        turn = self.surface(
+            posting=lambda: made.append(HowARoleRunReachesTheRoom.Posted()) or made[-1])
+
+        await turn._delegation(self.record(state="working", elapsed=1300), held)
+        await turn._delegation(self.record(delegation="del-2-bbbb", label="another task",
+                                           state="working", elapsed=1300), held)
+
+        self.assertEqual(
+            ["-# \U0001f91d **cole** is still on the **a-task** task \u2014 21m.",
+             "-# \U0001f91d **cole** is still on the **another-task** task \u2014 21m."],
+            turn.posted)
+        self.assertEqual([[], []], [one.edited for one in made],
+                         "one ask's check-in was written over the other's message")
+        self.assertEqual({"del-2-bbbb"}, set(held.handed_on),
+                         "a buried check-in was kept as though it were still editable")
+
+    async def test_an_ask_that_settled_stops_being_checked_in_on(self):
+        held, posted = discord.Live(), HowARoleRunReachesTheRoom.Posted()
+        turn = self.surface(posting=lambda: posted)
+
+        await turn._delegation(self.record(state="working", elapsed=1300), held)
+        await turn._delegation(self.record(state="settled", ok=True, elapsed=1400,
+                                           became="succeeded"), held)
+
+        self.assertEqual({}, held.handed_on)
+        self.assertEqual([], posted.edited, "what came back was edited into a check-in")
+
+    async def test_a_delegation_record_is_shown_whether_or_not_activity_is_on(self):
+        """Turning activity off silences a turn's running commentary. Another agent
+        answering is not commentary — it is the only sign the work happened at all."""
+        turn = self.surface(activity=discord.OFF)
+        turn.live = {}
+
+        await discord.Agent.told(turn, self.record())
+
+        self.assertEqual(1, len(turn.posted))
+
+    async def test_the_answering_agents_own_room_is_told_nothing(self):
+        """R-DEL-16 — every record carries the *asking* agent's conversation, so there is
+        no path here by which the answering agent's own room hears about it. Held as the
+        absence it is: one conversation on the record, and it is the caller's."""
+        turn = self.surface()
+        turn.live = {}
+        said: list = []
+
+        class Watched(type(turn)):
+            async def _post(self, it, content, **kw):
+                said.append(str(it.get("conversation")))
+                return await type(turn)._post(self, it, content, **kw)
+
+        watched = Watched()
+        await discord.Agent.told(watched, self.record(conversation="1180"))
+
+        self.assertEqual(["1180"], said)
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
@@ -2116,7 +2358,7 @@ class WhatItOffersAndWhatItIsTold(unittest.TestCase):
         queries = {name: query for name, _description, query in discord.QUERY_COMMANDS}
         self.assertEqual(set(channel.QUERIES), set(queries.values()))
         self.assertEqual({"status", "version", "agents", "skills", "schedules", "roles",
-                          "help"},
+                          "delegations", "help"},
                          set(queries))
         self.assertEqual("skills", queries["skills"])
         self.assertEqual("schedules", queries["schedules"])

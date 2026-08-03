@@ -185,18 +185,6 @@ def target_of(said: str | None, whose: Path | None = None) -> str | None:
     return str(stands)
 
 
-def narrowed(parent: str | None, wanted: str) -> str:
-    """The posture this execution actually runs under.
-
-    **A role may narrow what its parent could do and may never widen it.** The parent
-    turn is the authority a worker acts under, so a role asking to change the machine
-    from a turn that was only allowed to read it is asking for authority nobody granted.
-    """
-    if parent == provider.READ or wanted == provider.READ:
-        return provider.READ
-    return provider.WORK
-
-
 def brain(asked: str | None, asked_model: str | None, wanted, parent: dict,
           chose: dict) -> tuple:
     """Which brain this run is admitted to run on, and the model on it.
@@ -272,7 +260,7 @@ def admit(name: str, slug: str, brief: str, parent_run: str,
     stands = target_of(target, agents.home(name, where))
     kept = agents.records(name, where)
     parent, owed_to = _parent(kept, parent_run, announcing)
-    posture = narrowed(parent.get("posture"), wanted.posture)
+    posture = provider.narrowed(parent.get("posture"), wanted.posture)
     on, model_named = brain(named, model, wanted, parent, kept.agent())
     _has_a_brain(name, on, runnable)
     at = store.stamped(now)

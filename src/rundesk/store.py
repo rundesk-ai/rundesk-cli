@@ -85,17 +85,18 @@ RECOVERABLE = "rundesk:recovery:available"
 RECOVERY_CLAIMED = "rundesk:recovery:claimed"
 RECOVERED_BY = "rundesk:recovery:run:"
 
-#: Every way work is admitted for an agent, and the whole of it. Four, because there are
-#: four things that start one: somebody at a terminal, somebody on a surface the agent is
-#: reachable on, the clock, and a role run this agent's own turn admitted.
+#: Every way work is admitted for an agent, and the whole of it. Five, because there are
+#: five things that start one: somebody at a terminal, somebody on a surface the agent is
+#: reachable on, the clock, a role run this agent's own turn admitted, and another named
+#: agent on this install handing this one a bounded task.
 #:
 #: **Declared and refused rather than written as free text.** This is the only record of how
 #: a run came about, and until it was a set the column took whatever a caller passed —
-#: `"hand"` existed in a test and in nothing else, which is what a fourth word arriving by
+#: `"hand"` existed in a test and in nothing else, which is what a fifth word arriving by
 #: typo looks like from the outside. A word nobody can read back is a run whose origin is
 #: lost, and this is the column somebody reads at three in the morning to find out whether
 #: they asked for what happened.
-SOURCES = ("terminal", "channel", "schedule", "role")
+SOURCES = ("terminal", "channel", "schedule", "role", "agent")
 
 #: What a role run is, from admission to the end of its retention (R-ROL-4). Closed for
 #: the same reason `SOURCES` is: this is the only word saying whether a specialist
@@ -1156,6 +1157,26 @@ class Store:
                 "SELECT * FROM conversation WHERE id = ?", (conversation_id,)
             ).fetchone()
         return _plain(row) if row else None
+
+    def reachable_conversation(self, conversation_id: str) -> bool:
+        """Whether this conversation stands on a surface this agent can be reached on.
+
+        A conversation joins a `channel` row only where the owner configured that surface,
+        so a pseudo-surface such as `schedule`, `role` or `agent` answers no — which is
+        exactly what "there would be nowhere to report the work back to" means.
+
+        **`admit_role` keeps its own copy of this statement and must go on keeping it.**
+        That one lives inside the write that admits a run, so nothing can change between
+        the asking and the answer. This is the same question asked *before* anything
+        durable exists, so a caller can refuse for nothing rather than find out afterwards.
+        """
+        with self._reading() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM conversation c JOIN channel h ON h.name = c.channel"
+                " WHERE c.id = ?",
+                (conversation_id,),
+            ).fetchone()
+        return row is not None
 
     def has_conversation(self, named: str) -> bool:
         """Is there a conversation of this name, by either way of naming one?

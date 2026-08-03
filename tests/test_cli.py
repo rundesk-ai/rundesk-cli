@@ -157,6 +157,7 @@ def tearDownModule():
     if _TEST_SECRETS_DIR is not None:
         shutil.rmtree(_TEST_SECRETS_DIR, ignore_errors=True)
 from rundesk import agent as real_agent  # noqa: E402
+from rundesk import delegation as real_delegation  # noqa: E402
 from rundesk import skill as real_skill  # noqa: E402
 from rundesk import channel  # noqa: E402
 from rundesk import gateway as real_gateway  # noqa: E402
@@ -525,7 +526,7 @@ class BuiltCommandTests(unittest.TestCase):
         built = {"version", "update", "uninstall", "add", "configure", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
                  "channels", "runs", "usage", "search", "messages", "skills", "scripts",
-                 "backups", "config", "env", "roles"}
+                 "backups", "config", "env", "roles", "delegations"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 
@@ -756,14 +757,16 @@ class FakeGateways:
         return self._written if self._written is not None else pathlib.Path("/nowhere/x.log")
 
     def Gateway(self, name, where=None, logs=None, reachable=(),
-                agents=None, records=None, asking=None, roles=None, granted=None):
+                agents=None, records=None, asking=None, roles=None, delegations=None,
+                granted=None):
         gateways = self
         # Kept, because what the command hands a gateway is the command's to get right:
         # a gateway told nothing about where agents are starts programs that cannot find
         # one (R-SCH-27), and only this side of the seam can be asked whether it was told.
         self.made_with.append({"name": name, "where": where, "logs": logs,
                                "agents": agents, "records": records, "asking": asking,
-                               "roles": roles, "granted": granted})
+                               "roles": roles, "delegations": delegations,
+                               "granted": granted})
 
         class One:
             async def serve(inner):
@@ -995,6 +998,7 @@ class FakeAgents:
         self.asked: list = []
         #: Which agents a gateway was handed role-carrying for.
         self.played: list = []
+        self.handed_over: list = []
         #: What asking what this agent keeps raises, where a case is about that failing.
         self.refuses: BaseException | None = None
         #: What was made, adopted and taken away, in the order it was asked for.
@@ -1155,6 +1159,18 @@ class FakeAgents:
             claiming=lambda _run: None, reviewing=lambda _run, _review: None,
             reviewed=lambda _run: None, giving_up=lambda _run: None,
             sweep=lambda: [], quiet=lambda: [],
+        )
+
+    def delegated(self, name, where=None, carry=None):
+        """What a gateway is handed to carry work another agent asked for. A stand-in for
+        the real one's shape and nothing more, built by keyword so a field added to
+        `agent.Delegated` fails here rather than inside a running gateway."""
+        self.handed_over.append(name)
+        return real_agent.Delegated(
+            waiting=lambda: [], carry=None, seen=lambda _ask: None,
+            checking_in=lambda _ask, _told=0: None, owed=lambda: [],
+            claiming=lambda _ask: None, collected=lambda _ask: None,
+            giving_up=lambda _ask: None, sweep=lambda: {"settled": [], "removed": []},
         )
 
     def agents_home(self):
@@ -1885,6 +1901,21 @@ class ServingAGateway(unittest.TestCase):
         code, _ = drive(["serve", "nobody"], gateways, agents=FakeAgents())
         self.assertEqual(0, code)
         self.assertIsNone(gateways.made_with[0]["granted"])
+
+    def test_a_gateway_is_handed_everything_it_does_about_delegations(self):
+        """R-DEL-1 — both halves of handing work to another named agent are resolved
+        where an agent is known and handed over made, the way role runs already are. A
+        name that is not an agent is handed none, and still runs."""
+        gateways = FakeGateways()
+        at = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-delegations-"))
+        self.addCleanup(shutil.rmtree, at, True)
+        agents = FakeAgents(made=["ava"], at=at)
+        code, _ = drive(["serve", "ava"], gateways, agents=agents)
+        self.assertEqual(0, code)
+        self.assertIsNotNone(gateways.made_with[0]["delegations"])
+        self.assertEqual(["ava"], agents.handed_over)
+        code, _ = drive(["serve", "nobody"], FakeGateways(), agents=FakeAgents())
+        self.assertEqual(0, code)
 
     def test_serving_without_a_name_is_a_usage_error(self):
         """R-CMD-5 — a verb says what and the next word says whose. There is no longer one
@@ -5021,6 +5052,23 @@ class HandingWorkToARole(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("cannot start another one", said)
 
+    def test_work_handed_over_by_another_agent_cannot_be_handed_on_to_a_role(self):
+        """R-DEL-9 — the durable refusal already holds: a delegation turn stands on a
+        surface that joins no channel, and `store.admit_role` refuses that. What was
+        missing is the reason, which is that a role reports back in a later turn — by
+        which time this agent has already answered and nobody is left to review it."""
+        os.environ["RUNDESK_RUN"] = "9-zzzz"
+        os.environ["RUNDESK_DELEGATION"] = "del-1-aaaa"
+        self.addCleanup(os.environ.pop, "RUNDESK_RUN", None)
+        self.addCleanup(os.environ.pop, "RUNDESK_DELEGATION", None)
+        os.environ.pop("RUNDESK_ROLE_RUN", None)
+        with feeding("Outcome: make it work.\n"):
+            code, said = drive(["roles", "ava", "run", "development"],
+                               agents=FakeAgents(made=["ava"]))
+        self.assertEqual(1, code)
+        self.assertIn("work another agent handed over cannot be handed on to a role", said)
+        self.assertIn("own subagents", said)
+
     def test_a_refused_word_says_nothing_on_the_way_out(self):
         """A line printed on the way in is a line a refusal cannot take back — this
         command reported that it had said something while it was busy refusing to."""
@@ -5040,6 +5088,7 @@ class HandingWorkToARole(unittest.TestCase):
         code, said = drive(["roles", "nobody"], agents=FakeAgents(made=["ava"]))
         self.assertEqual(1, code)
         self.assertIn("NO SUCH AGENT", said)
+
 
     def test_which_brain_a_run_uses_is_asked_for_on_the_way_in(self):
         """R-ROL-34 — the flag is this one run's, and it beats what the role says."""
@@ -5083,6 +5132,129 @@ class HandingWorkToARole(unittest.TestCase):
         code, said = drive(["roles", "ava", "show", run], agents=agents)
         self.assertEqual(0, code)
         self.assertNotIn("brain", said)
+
+
+class HandingWorkToAnotherAgent(unittest.TestCase):
+    """`rundesk delegations <agent> ask <to>` — who may ask, and what is refused.
+
+    Real agents and real records, because `delegation.ask` proves against both. A scratch
+    root of its own rather than the module's, and **both** variables: `agents_home()` reads
+    its own before falling back to the data root, and `delegation.home()` reads only the
+    data root — so a case that set one would still write into the other's answer.
+    """
+
+    TASK = "Look at the quote flow and say what is slow about it.\n"
+    AT = "2026-08-01T09:00:00Z"
+
+    def setUp(self):
+        root = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-delegations-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        self.where = root / "agents"
+        pointed = mock.patch.dict(os.environ, {
+            "RUNDESK_DATA_DIR": str(root),
+            "RUNDESK_AGENTS_DIR": str(self.where)})
+        pointed.start()
+        self.addCleanup(pointed.stop)
+        config.ensure(root)
+        for one in ("elena", "cole"):
+            real_agent.add(one, self.where)
+            real_agent.remember(one, self.where, provider="claude")
+        kept = real_agent.records("elena", self.where)
+        where_it_is = store.conversation_id("discord", "general")
+        kept.opened(where_it_is, "discord", "discord", "general", self.AT)
+        kept.remember_channel("discord", "discord", ["2207"], self.AT)
+        self.parent = kept.began("channel", "claude", "work", self.AT,
+                                 conversation_id=where_it_is)
+        for said in ("RUNDESK_ROLE_RUN", "RUNDESK_DELEGATION"):
+            os.environ.pop(said, None)
+
+    def asking(self, *argv, **given):
+        os.environ["RUNDESK_RUN"] = given.pop("run", self.parent)
+        self.addCleanup(os.environ.pop, "RUNDESK_RUN", None)
+        with feeding(given.pop("task", self.TASK)):
+            return drive(list(argv), agents=FakeAgents(made=["elena", "cole"]))
+
+    def test_a_delegation_is_asked_for_by_this_agents_own_turn(self):
+        """R-DEL-3 — the answer is delivered back into that agent's own conversation, so
+        the run that admits it has to be one of that agent's."""
+        code, said = self.asking("delegations", "elena", "ask", "cole",
+                                 "--label", "the quote flow")
+        self.assertEqual(0, code, said)
+        self.assertIn("del-1-", said)
+        self.assertIn("handed to cole", said)
+        self.assertIn("you are told when it answers", said)
+
+    def test_a_delegation_needs_a_turn_of_this_agents_own(self):
+        os.environ.pop("RUNDESK_RUN", None)
+        with feeding(self.TASK):
+            code, said = drive(["delegations", "elena", "ask", "cole"],
+                               agents=FakeAgents(made=["elena", "cole"]))
+        self.assertEqual(1, code)
+        self.assertIn("own turn", said)
+
+    def test_a_role_execution_cannot_hand_work_to_a_named_agent(self):
+        """The named agent that put the role on hands work to another agent itself; an
+        execution has no identity of its own to be asking on behalf of."""
+        os.environ["RUNDESK_ROLE_RUN"] = "rol-1-aaaa"
+        self.addCleanup(os.environ.pop, "RUNDESK_ROLE_RUN", None)
+        code, said = self.asking("delegations", "elena", "ask", "cole")
+        self.assertEqual(1, code)
+        self.assertIn("a role execution cannot hand work to a named agent", said)
+
+    def test_an_agent_reached_by_delegation_cannot_hand_work_on(self):
+        """R-DEL-8 — depth one, said early and cheaply; the durable record is what
+        refuses."""
+        os.environ["RUNDESK_DELEGATION"] = "del-9-zzzz"
+        self.addCleanup(os.environ.pop, "RUNDESK_DELEGATION", None)
+        code, said = self.asking("delegations", "elena", "ask", "cole")
+        self.assertEqual(1, code)
+        self.assertIn("cannot be handed on", said)
+
+    def test_every_refusal_reaches_the_exit_status(self):
+        """A command that refused and exited zero is one a script carries on past."""
+        for argv, why in (
+            (["delegations", "nobody", "ask", "cole"], "NO SUCH AGENT"),
+            (["delegations", "elena", "ask", "elena"], "cannot hand work to itself"),
+        ):
+            with self.subTest(argv=argv):
+                code, said = self.asking(*argv)
+                self.assertEqual(1, code)
+                self.assertIn(why, said)
+        code, said = self.asking("delegations", "elena", "ask", "cole", task="  \n")
+        self.assertEqual(1, code)
+        self.assertIn("needs a task", said)
+
+    def test_a_listing_shows_no_local_path_and_no_task(self):
+        """R-DEL-15 — a listing is read wherever the agent is, and the task is this
+        agent's own words to another agent."""
+        code, _ = self.asking("delegations", "elena", "ask", "cole",
+                              "--label", "/Users/somebody/private/quotes")
+        self.assertEqual(0, code)
+        code, said = drive(["delegations", "elena"],
+                           agents=FakeAgents(made=["elena", "cole"]))
+        self.assertEqual(0, code)
+        self.assertIn("cole", said)
+        self.assertNotIn("/", said.split("\n")[0])
+        self.assertNotIn("quote flow and say", said)
+        shown = [one for one in said.split("\n") if one.startswith("del-")]
+        self.assertEqual(1, len(shown), said)
+        code, said = drive(["delegations", "elena", "show", shown[0].split()[0]],
+                           agents=FakeAgents(made=["elena", "cole"]))
+        self.assertEqual(0, code)
+        self.assertNotIn("quote flow and say", said)
+        self.assertNotIn("/Users/somebody", said)
+
+    def test_a_delegation_this_agent_never_handed_over_is_no_delegation_of_its_own(self):
+        code, said = drive(["delegations", "elena", "show", "del-9-zzzz"],
+                           agents=FakeAgents(made=["elena", "cole"]))
+        self.assertEqual(1, code)
+        self.assertIn("NO SUCH DELEGATION", said)
+
+    def test_asking_after_the_delegations_of_an_agent_there_is_none_of_says_so(self):
+        code, said = drive(["delegations", "nobody"],
+                           agents=FakeAgents(made=["elena"]))
+        self.assertEqual(1, code)
+        self.assertIn("NO SUCH AGENT", said)
 
 
 class WritingARoleFromTheCommandLine(unittest.TestCase):

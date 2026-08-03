@@ -9,3 +9,4 @@ Add a row when you add a draft; `doc-lint` fails the build if one is missing.
 | Draft | Proposes | Reserved namespace |
 |---|---|---|
 | [agent-role](./agent-role.md) | a shared specialist definition a named agent hands one bounded task to, and the single reviewed handoff it gets back | `ROL` |
+| [agent-delegation](./agent-delegation.md) | one bounded task a named agent hands to another named agent on this install, answered once by that agent as itself and reviewed before anybody hears it | `DEL` |

@@ -29,7 +29,7 @@ class InstructionBuilder(unittest.TestCase):
             "agent", "agent_slug", "agent_home", "workspace", "channel_kind", "channel_config_name",
             "channel_name", "channel_id", "channel_parent_name", "channel_parent_id",
             "channel_thread_name", "channel_thread_id", "channel_where", "user",
-            "user_id", "conversation_id", "schedule", "roles",
+            "user_id", "conversation_id", "schedule", "roles", "caller_agent",
         ), instructions.STANDARD_VARIABLES)
 
     def test_rundesk_instructions_are_always_first_and_fill_agent_locations(self):
@@ -347,6 +347,75 @@ class InstructionBuilder(unittest.TestCase):
                         built.index("Owner addition."))
         self.assertNotIn("First message to a new owner",
                          instructions.build(variables={"agent": "Ava"}))
+
+    def test_a_delegation_run_is_told_the_agent_that_handed_the_work_over(self):
+        """R-DEL-6 — the one thing this agent cannot know for itself. Everything else it
+        needs is its own, which is why the layer is this small."""
+        variables = {**CORE, "caller_agent": "elena"}
+        built = instructions.build(variables=variables,
+                                   trigger=instructions.DELEGATION)
+        self.assertIn(
+            instructions.render(instructions.DELEGATION_INSTRUCTIONS, variables).strip(),
+            built)
+        self.assertIn("The named agent elena handed you this task.", built)
+        self.assertNotIn("{caller_agent}", built)
+
+    def test_a_delegation_run_is_told_nobody_is_present_and_never_to_ask(self):
+        """R-DEL-6 — nothing answers a question asked here, and the run ends when it
+        stops, so a turn that waits for a reply is one that is silently thrown away."""
+        built = instructions.build(variables={**CORE, "caller_agent": "elena"},
+                                   trigger=instructions.DELEGATION)
+        self.assertIn("elena is an agent, not a person and not your owner, and no one is "
+                      "present while you run.", built)
+        self.assertIn("Never ask a question, request approval, or wait for a reply.", built)
+        self.assertIn("stop and report `blocked`", built)
+
+    def test_a_delegation_run_is_told_its_answer_goes_to_no_channel(self):
+        """R-DEL-5 — this turn happens in a conversation of its own, where nobody is
+        reading. An agent that answered as though somebody were has answered nobody."""
+        built = instructions.build(variables={**CORE, "caller_agent": "elena"},
+                                   trigger=instructions.DELEGATION)
+        self.assertIn("Your answer goes to elena and to no channel.", built)
+        self.assertIn("never speak as though a person were reading", built)
+
+    def test_a_delegation_run_is_told_it_may_not_hand_the_work_on(self):
+        """R-DEL-8, R-DEL-9 — said as well as refused. The durable refusal is what holds,
+        and an agent that has to meet it to learn the rule has wasted a turn on it."""
+        built = instructions.build(variables={**CORE, "caller_agent": "elena"},
+                                   trigger=instructions.DELEGATION)
+        self.assertIn("You may not put on a role from here, and you may not hand it to "
+                      "another agent.", built)
+        self.assertIn("Use your provider's own subagents within this task instead.", built)
+
+    def test_a_delegation_run_still_receives_rundesks_own_standing_rules_first(self):
+        """R-DEL-2 — the opposite of a role execution, and deliberately: this agent is
+        itself, so its home, its memory and its own history are all still its own."""
+        variables = {**CORE, "caller_agent": "elena"}
+        built = instructions.build(variables=variables, trigger=instructions.DELEGATION)
+        layer = instructions.render(
+            instructions.DELEGATION_INSTRUCTIONS, variables).strip()
+        self.assertEqual(f"{instructions.build(variables=variables)}\n\n{layer}", built)
+        self.assertIn("You are ava, an agent running inside rundesk.", built)
+        for named in ("AGENTS.md", "SOUL.md", "MEMORY.md"):
+            with self.subTest(home_file=named):
+                self.assertIn(f"{CORE['agent_home']}/{named}", built)
+
+    def test_a_delegation_run_offered_no_roles_is_given_no_roles_heading(self):
+        """R-DEL-9 — the layer forbids putting a role on one paragraph after the roles
+        layer would have offered one, so whatever builds this preface leaves `roles` out."""
+        built = instructions.build(variables={**CORE, "caller_agent": "elena"},
+                                   trigger=instructions.DELEGATION)
+        self.assertNotIn("## Roles you may hand heavy work to", built)
+        self.assertNotIn("delegating-to-roles", built)
+
+    def test_delegation_instructions_apply_only_to_delegation_triggers(self):
+        variables = {**CORE, "caller_agent": "elena", "schedule": "nightly"}
+        for trigger in ("", instructions.DIRECT, instructions.PUBLIC,
+                        instructions.SCHEDULE, instructions.ONBOARDING):
+            with self.subTest(trigger=trigger):
+                built = instructions.build(variables=variables, trigger=trigger)
+                self.assertNotIn("## Work handed to you by another agent", built)
+                self.assertNotIn("handed you this task", built)
 
     def test_only_trigger_prompt_text_lives_in_this_module(self):
         for use_case in (

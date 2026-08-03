@@ -194,6 +194,19 @@ RESPONSE_SECONDS = 30 * 60
 MARKS = {"finished": "white_check_mark", "stopped": "raised_hand", "failed": "warning"}
 SEEN = "eyes"
 
+#: The mark a role task carries, and it is **not** `DID["delegate"]`. That one means a
+#: provider subagent — another worker the agent spawned — and a role is the *same agent*
+#: working in a mode, which is the whole of why its lines name no other party. Three
+#: different things sharing one mark is the thing a reader cannot tell apart.
+#:
+#: A glyph rather than a reaction name, exactly as `STOPPED_MARK` below is: `MARKS` on this
+#: platform holds what Slack is asked to put *on* a message, and this goes *in* one.
+ROLE_MARK = "📋"
+
+#: The mark a delegation carries, on the same footing and for the same reason: another
+#: named agent answered, which is neither a subagent nor this agent in a mode.
+DELEGATION_MARK = "🤝"
+
 #: The gestures this agent offers, as the words that follow its one slash command
 #: (R-SLK-10, R-SLK-22). **One command and not eleven**: a slash command name is unique
 #: across a Slack workspace and the last app to register one wins it, so an agent that
@@ -223,6 +236,7 @@ QUERY_WORDS = (
     ("skills", "list skills granted to this agent", "skills"),
     ("schedules", "list this agent's schedules that can still run", "schedules"),
     ("roles", "list the work this agent has handed to a role", "roles"),
+    ("delegations", "list the work this agent has handed to another agent", "delegations"),
     ("help", "show the gateway commands available here", "help"),
 )
 
@@ -266,6 +280,12 @@ FINISHED_HELPER = f"{DID['delegate']} subagent finished"
 #: silently never closed.
 ROLE_RECORD = "role"
 HANDED, WORKING, SETTLED = "handed", "working", "settled"
+
+#: What a delegation is called on the wire — one named agent's ask of another. A second
+#: record type beside the role one and rendered exactly the same way, for the same reason:
+#: an ask lasts hours, this program does not necessarily, and everything the line needs is
+#: in the record.
+DELEGATION_RECORD = "delegation"
 
 #: The one settled ending that is a decision rather than a fault, and how a line names who
 #: made it. A run somebody deliberately ended used to render as the ⚠️ line for a run that
@@ -619,6 +639,7 @@ class Live:
         self.tools = {}             # tool id -> broad verb/name, until its result arrives
         self.posted = None          # (channel, ts) it is growing into, while it is the last
         self.checked_in = {}        # role run -> its check-in, while it is the last thing
+        self.handed_on = {}         # delegation -> its check-in, while it is the last thing
         self.pacing = None
         self.cost = ""              # what the turn cost, shown with the answer
         self.asked_by = ""          # who spoke here last, for the answer to name
@@ -1251,6 +1272,8 @@ class Agent:
                 self.live.pop(str(it.get("conversation")), None)
         elif kind == ROLE_RECORD:
             await self._role(it, held)
+        elif kind == DELEGATION_RECORD:
+            await self._delegation(it, held)
         elif kind in ("think", "tool", "result", "usage"):
             await self._doing(it, held)
 
@@ -1371,6 +1394,39 @@ class Agent:
         await self._post(it, line)
         self._no_longer_last(held)
 
+    async def _delegation(self, it: dict, held: Live) -> None:
+        """One agent's ask of another, in a message of its own (R-DEL-16).
+
+        The same behaviour `_role` has and for the same reasons: its own message rather
+        than a line of commentary, a check-in edited in place while it is still the last
+        thing here, and **the activity switch not consulted** — an agent answering another
+        agent is not the running commentary of a turn, it is the only sign in the room that
+        the work happened at all.
+
+        Keyed on the ask rather than on the run, so two asks from one turn each keep their
+        own check-in.
+        """
+        line = delegation_line(it)
+        if not line:
+            return
+        ask = str(it.get("delegation") or "")
+        if it.get("state") == WORKING:
+            posted = held.handed_on.get(ask)
+            if posted is not None:
+                where, ts = posted
+                if await self.call("chat_update", channel=where, ts=ts, text=line) \
+                        is not None:
+                    return
+                note("could not update the check-in")
+            said = await self._post(it, line)
+            self._no_longer_last(held)
+            if said is not None:
+                held.handed_on[ask] = said
+            return
+        held.handed_on.pop(ask, None)
+        await self._post(it, line)
+        self._no_longer_last(held)
+
     async def _doing(self, it: dict, held: Live) -> None:
         """What the agent did, shown as the owner asked for it to be (R-SLK-20).
 
@@ -1448,6 +1504,7 @@ class Agent:
         held.activity = ""
         held.activity_groups = []
         held.checked_in = {}
+        held.handed_on = {}
         if held.pending and held.pending[-1] is not None:
             # Activity already waiting to be written belongs before this visible message.
             # It may still be posted afterwards, but what follows must start a new count.
@@ -1872,32 +1929,83 @@ def _role_words(said) -> str:
     return _helper_name(text) if any(ch.isalnum() for ch in text) else ""
 
 
+def _after(seconds) -> str:
+    """How long it has been, as the clause a line ends on — or nothing at all.
+
+    **Never `— 0s`.** Elapsed is carried on every record, but a rundesk that never sent
+    one, and a record made before the work had measurably begun, both arrive with none —
+    and a dangling dash beside a zero reads as a measurement rather than as its absence.
+    """
+    whole = max(0, int(seconds or 0))
+    return f" — {_duration(whole)}" if whole else ""
+
+
 def role_line(it: dict) -> str:
-    """One role run, as its own message. Empty for a record this does not understand."""
-    mark = DID["delegate"]
+    """One role task, as its own message. Empty for a record this does not understand.
+
+    **The named agent working in a mode, never a third party.** A role is not somebody the
+    agent handed work to — it is the agent itself, which is R-ROL-1 said in a room. So the
+    role name is the adjective and the label is the noun, and no form here names anybody.
+    A delegation is the line that always names an agent, and the contrast is the point.
+    """
     label = _role_words(it.get("label")) or "work"
     named = _role_words(it.get("role"))
+    # One noun phrase, built once. A record carrying no role name drops exactly that word
+    # and nothing else, so every form below reads the same either way.
+    task = f"*{label}* {named} task" if named else f"*{label}* task"
     state = it.get("state")
     if state == HANDED:
-        return (f"{mark} Handed *{label}* to the _{named}_ role."
-                if named else f"{mark} Handed *{label}* to a role.")
+        return f"{ROLE_MARK} Working on the {task}."
     if state == WORKING:
-        return f"{SUB}{mark} *{label}* — {_duration(it.get('elapsed') or 0)}, still working"
+        # The one line that is not news, and it keeps being edited in place. This platform
+        # has no quieter register, so `SUB` is empty and the mark carries the line.
+        return f"{SUB}{ROLE_MARK} Still on the {task}{_after(it.get('elapsed'))}."
     if state == SETTLED:
         # **Three endings, and only one of them is a fault.** A stop is somebody's
-        # decision — the agent's, having taken the work over, or an owner's at a terminal
-        # — so it carries the stopped mark rather than the warning beside it, and says who
-        # decided where anybody wrote that down (R-ROL-43). Read off `became`, with `ok`
-        # left as the fall-through: a record from a rundesk that never sent one, and a run
-        # nothing has settled yet, both still render the two endings there have always been.
+        # decision — the agent's own, or an owner's at a terminal — so it carries the
+        # stopped mark rather than the warning beside it, and says who decided where
+        # anybody wrote that down (R-ROL-43). Read off `became`, with `ok` left as the
+        # fall-through: a record from a rundesk that never sent one, and a run nothing has
+        # settled yet, both still render the two endings there have always been.
+        elapsed = _after(it.get("elapsed"))
         if it.get("became") == ROLE_STOPPED:
-            said = STOPPED_BY.get(it.get("stopped_by"), STOPPED_BY_NOBODY_NAMED)
-            return f"{STOPPED_MARK} {mark} *{label}* {said}."
+            asker = it.get("stopped_by")
+            if asker == "agent":
+                # The agent stopping its own task is not news about somebody else.
+                return f"{STOPPED_MARK} {ROLE_MARK} Stopped the {task}{elapsed}."
+            said = STOPPED_BY.get(asker, STOPPED_BY_NOBODY_NAMED)
+            return f"{STOPPED_MARK} {ROLE_MARK} The {task} {said}{elapsed}."
         if it.get("ok") is True:
-            return (f"✅ {mark} *{label}* is back from the _{named}_ role."
-                    if named else
-                    f"✅ {mark} *{label}* is back from a role.")
-        return f"⚠️ {mark} *{label}* did not finish."
+            return f"✅ {ROLE_MARK} Finished the {task}{elapsed}."
+        return f"⚠️ {ROLE_MARK} The {task} did not finish{elapsed}."
+    return ""
+
+
+def delegation_line(it: dict) -> str:
+    """One delegation, as its own message. Empty for a record this does not understand.
+
+    The same skeleton `role_line` uses, with the answering agent as the subject — because
+    that is the whole difference between the two: a role line names no other party and a
+    delegation line always names an agent. No fallback branch, because an agent always has
+    a name.
+    """
+    label = _role_words(it.get("label")) or "work"
+    who = _role_words(it.get("to")) or "another agent"
+    state = it.get("state")
+    if state == HANDED:
+        return f"{DELEGATION_MARK} Asked *{who}* to take on the *{label}* task."
+    if state == WORKING:
+        return (f"{SUB}{DELEGATION_MARK} *{who}* is still on the *{label}* task"
+                f"{_after(it.get('elapsed'))}.")
+    if state == SETTLED:
+        # Two endings rather than three: nothing stops a delegation, so `became` is
+        # `succeeded` or `failed` and `ok` is the fall-through for a rundesk that sent
+        # neither.
+        elapsed = _after(it.get("elapsed"))
+        if it.get("became") == "succeeded" or (
+                it.get("became") != "failed" and it.get("ok") is True):
+            return f"✅ {DELEGATION_MARK} *{who}* answered the *{label}* task{elapsed}."
+        return f"⚠️ {DELEGATION_MARK} *{who}* did not answer the *{label}* task{elapsed}."
     return ""
 
 

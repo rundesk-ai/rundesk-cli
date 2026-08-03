@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import backup, config, migration, store
+from rundesk import backup, config, delegation, migration, store
 
 #: A fixed moment, so a name and a manifest are the same in every run and on every machine.
 AT = datetime.datetime(2026, 7, 27, 4, 0, 0, tzinfo=datetime.timezone.utc)
@@ -105,6 +105,19 @@ class WhatABackupHolds(WithSomethingToBackUp):
         self.assertIn("data/agents/.roles/development/role.json", held)
         self.assertIn("data/agents/ava/role-runs/rol-1-aaaa/home/AGENTS.md", held)
         self.assertIn("data/agents/ava/role-runs/rol-1-aaaa/brief.md", held)
+
+    def test_a_backup_holds_a_delegation_that_has_not_been_collected(self):
+        """R-BKP-1, R-DEL-1 — one agent's ask of another stands under the data directory
+        rather than inside either agent, because there is no cross-agent database for it
+        to stand in. A copy taken while one is unanswered has to bring it back, or the
+        agent that handed the work over is owed a review nothing can ever deliver."""
+        self.an_agent()
+        handed = self.data / delegation.DIRECTORY
+        handed.mkdir(parents=True)
+        (handed / "del-1-aaaa.json").write_text(
+            '{"id": "del-1-aaaa", "from": "elena", "to": "cole", "state": "answered"}')
+        held = self.inside(self.taken())
+        self.assertIn(f"data/{delegation.DIRECTORY}/del-1-aaaa.json", held)
 
     def test_a_backup_holds_the_skills_library_and_this_installs_own_configuration(self):
         """R-BKP-1 — what belongs to no single agent is still the owner's, and a restore

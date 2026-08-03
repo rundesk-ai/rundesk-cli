@@ -1102,7 +1102,7 @@ class SlacksOwnCommands(unittest.TestCase):
                          {control for _n, _d, control, _s in slack.CONTROL_WORDS})
         self.assertLessEqual({query for _n, _d, query in slack.QUERY_WORDS},
                              {"status", "version", "agents", "help", "skills",
-                              "schedules", "roles"})
+                              "schedules", "roles", "delegations"})
 
     def test_every_word_is_described_where_it_is_offered(self):
         """R-SLK-10 — a command nobody can discover is a command nobody uses."""
@@ -1730,31 +1730,39 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
             self.handed(state="settled", ok=False, elapsed=4000, **also))
 
     def test_handing_work_to_a_role_is_its_own_line(self):
-        self.assertEqual("🤖 Handed *applicant-export* to the _development_ role.",
+        """R-ROL-1 — the agent working in a mode, never a third party. A line reading
+        "handed X to the development role" makes the agent's own work sound like a
+        colleague's, and with delegation landing beside it "handed to" has to mean a
+        different agent and nothing else."""
+        self.assertEqual("📋 Working on the *applicant-export* development task.",
                          slack.role_line(self.handed()))
 
     def test_a_settled_role_run_shows_in_full_with_no_prior_handed_ever_seen(self):
         self.assertEqual(
-            "✅ 🤖 *applicant-export* is back from the _development_ role.",
+            "✅ 📋 Finished the *applicant-export* development task — 1h.",
             slack.role_line(self.handed(state="settled", ok=True, elapsed=4000)))
 
     def test_a_role_that_did_not_finish_says_so_rather_than_that_a_subagent_failed(self):
         line = self.settled()
-        self.assertEqual("⚠️ 🤖 *applicant-export* did not finish.", line)
+        self.assertEqual(
+            "⚠️ 📋 The *applicant-export* development task did not finish — 1h.", line)
         self.assertNotIn("subagent", line)
 
     def test_a_run_somebody_stopped_reads_as_a_decision_rather_than_a_fault(self):
         """R-ROL-43 — the regression this exists for. A run the agent itself ended on
-        purpose after taking the work over was posted as ⚠️ work that did not finish."""
+        purpose after taking the work over was posted as ⚠️ work that did not finish.
+
+        The agent ending its own task is not news about somebody else, so this form names
+        nobody at all."""
         line = self.settled(became="stopped", stopped_by="agent")
         self.assertEqual(
-            "✋ 🤖 *applicant-export* was stopped by the agent.", line)
+            "✋ 📋 Stopped the *applicant-export* development task — 1h.", line)
         self.assertNotIn("⚠️", line)
         self.assertNotIn("did not finish", line)
 
     def test_a_stop_says_which_of_the_two_it_was(self):
         self.assertEqual(
-            "✋ 🤖 *applicant-export* was stopped from a terminal.",
+            "✋ 📋 The *applicant-export* development task was stopped from a terminal — 1h.",
             self.settled(became="stopped", stopped_by="terminal"))
 
     def test_a_stop_nobody_was_written_down_for_names_nobody(self):
@@ -1763,7 +1771,7 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
         for record in ({}, {"stopped_by": ""}, {"stopped_by": "the night shift"}):
             with self.subTest(**record):
                 self.assertEqual(
-                    "✋ 🤖 *applicant-export* was stopped.",
+                    "✋ 📋 The *applicant-export* development task was stopped — 1h.",
                     self.settled(became="stopped", **record))
 
     def test_the_stopped_mark_is_a_glyph_and_never_slacks_name_for_a_reaction(self):
@@ -1777,14 +1785,36 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
         """`ok` is the fall-through and goes on meaning what it always meant, so a
         record carrying no ending — an older rundesk's, or a run nothing has settled —
         shows the two endings this surface has always shown."""
-        self.assertIn("is back from the _development_ role",
+        self.assertIn("Finished the *applicant-export* development task",
                       slack.role_line(self.handed(state="settled", ok=True)))
         self.assertIn("did not finish", self.settled())
         self.assertIn("did not finish", self.settled(became="wandering off"))
 
-    def test_a_check_in_says_how_long_the_run_has_been_going(self):
+    def test_a_settled_record_carrying_no_elapsed_renders_with_no_dangling_dash(self):
+        """Elapsed is on every record, and a rundesk that never sent one still renders —
+        `— 0s` is a measurement, stated plainly, and wrong."""
+        for line in (slack.role_line(self.handed(state="settled", ok=True, elapsed=0)),
+                     slack.role_line({"type": "role", "state": "settled", "ok": True,
+                                      "label": "applicant export",
+                                      "role": "development"})):
+            with self.subTest(line=line):
+                self.assertEqual(
+                    "✅ 📋 Finished the *applicant-export* development task.", line)
+                self.assertNotIn("—", line)
+
+    def test_a_role_run_carrying_no_role_drops_that_word_and_nothing_else(self):
+        self.assertEqual("📋 Working on the *applicant-export* task.",
+                         slack.role_line(self.handed(role="")))
         self.assertEqual(
-            f"{slack.SUB}🤖 *applicant-export* — 40m, still working",
+            "✅ 📋 Finished the *applicant-export* task — 1h.",
+            slack.role_line(self.handed(state="settled", ok=True, elapsed=4000, role="")))
+
+    def test_a_check_in_says_how_long_the_run_has_been_going(self):
+        """The one line that is not news keeps its register, and joins the family in
+        wording: every other state says the same sentence, and a check-in with no verb
+        and no noun phrase read as a different kind of message altogether."""
+        self.assertEqual(
+            f"{slack.SUB}📋 Still on the *applicant-export* development task — 40m.",
             slack.role_line(self.handed(state="working", elapsed=2400)))
 
     def test_a_state_this_surface_does_not_know_shows_nothing(self):
@@ -1799,6 +1829,85 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
         self.assertNotIn("secret", line)
         self.assertIn("exporter", line)
         self.assertIn("development", line)
+
+
+@needs_slack
+class WhatADelegationLooksLikeHere(unittest.TestCase):
+    """R-DEL-16, R-DEL-17 — one agent's ask of another, rendered from the record alone.
+
+    A delegation outlives the process showing it, so every line here is asserted against
+    `delegation_line`, which has no memory to correlate against and is not given one.
+    """
+
+    def handed(self, **also) -> dict:
+        said = {"type": "delegation", "conversation": "C0FFEE",
+                "delegation": "del-1-aaaa", "state": "handed", "to": "cole",
+                "label": "quote flow", "elapsed": 0}
+        said.update(also)
+        return said
+
+    def test_handing_work_to_an_agent_names_the_agent(self):
+        """The whole contrast with a role line beside it: a role names no other party and
+        a delegation always names one."""
+        line = slack.delegation_line(self.handed())
+        self.assertEqual("🤝 Asked *cole* to take on the *quote-flow* task.", line)
+        self.assertNotIn("role", line)
+
+    def test_a_delegation_still_working_says_who_and_how_long(self):
+        self.assertEqual(
+            f"{slack.SUB}🤝 *cole* is still on the *quote-flow* task — 40m.",
+            slack.delegation_line(self.handed(state="working", elapsed=2400)))
+
+    def test_an_answer_that_came_back_says_the_agent_answered(self):
+        self.assertEqual(
+            "✅ 🤝 *cole* answered the *quote-flow* task — 1h.",
+            slack.delegation_line(self.handed(state="settled", ok=True, elapsed=4000,
+                                              became="succeeded")))
+
+    def test_a_delegation_that_failed_is_shown_as_a_fault(self):
+        line = slack.delegation_line(self.handed(state="settled", ok=False, elapsed=4000,
+                                                 became="failed"))
+        self.assertEqual("⚠️ 🤝 *cole* did not answer the *quote-flow* task — 1h.", line)
+        self.assertNotIn("stopped", line)
+
+    def test_a_settled_record_from_a_rundesk_that_names_no_ending_still_renders(self):
+        self.assertIn("answered", slack.delegation_line(
+            self.handed(state="settled", ok=True, elapsed=4000)))
+        self.assertIn("did not answer", slack.delegation_line(
+            self.handed(state="settled", ok=False, elapsed=4000)))
+
+    def test_a_settled_record_carrying_no_elapsed_renders_with_no_dangling_dash(self):
+        line = slack.delegation_line(self.handed(state="settled", ok=True, elapsed=0))
+        self.assertEqual("✅ 🤝 *cole* answered the *quote-flow* task.", line)
+        self.assertNotIn("—", line)
+
+    def test_a_state_this_surface_does_not_know_shows_nothing(self):
+        self.assertEqual("", slack.delegation_line(self.handed(state="wandering")))
+        self.assertEqual("", slack.delegation_line({"type": "delegation"}))
+
+    def test_the_agents_name_comes_out_through_the_shared_guard(self):
+        """R-DEL-15 — `to` is an agent's slug and never a person, and it is read in a room
+        where other people can see it."""
+        line = slack.delegation_line(self.handed(to="/opt/agents/cole",
+                                                 label="/Users/somebody/secret/quotes"))
+        self.assertNotIn("/Users", line)
+        self.assertNotIn("secret", line)
+        self.assertIn("cole", line)
+
+    def test_a_role_task_and_a_delegation_are_never_the_same_mark(self):
+        """Four kinds of work, four marks. A role is this agent in a mode, a delegation is
+        another named agent, and 🤖 goes on meaning a provider subagent."""
+        self.assertNotEqual(slack.ROLE_MARK, slack.DELEGATION_MARK)
+        self.assertNotEqual(slack.ROLE_MARK, slack.DID["delegate"])
+        self.assertNotEqual(slack.DELEGATION_MARK, slack.DID["delegate"])
+        self.assertEqual("🤖", slack.DID["delegate"])
+        role = slack.role_line({"type": "role", "state": "handed", "label": "a task",
+                                "role": "development"})
+        handed = slack.delegation_line(self.handed())
+        self.assertNotIn(slack.DID["delegate"], role)
+        self.assertNotIn(slack.DID["delegate"], handed)
+        self.assertNotIn(slack.DELEGATION_MARK, role)
+        self.assertNotIn(slack.ROLE_MARK, handed)
 
 
 @needs_slack

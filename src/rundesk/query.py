@@ -1,8 +1,8 @@
 """The read-only answers a channel may ask for, composed for a surface to show.
 
-Seven questions — status, version, agents, skills, schedules, roles, help — and nothing
-that changes anything. A channel carries the question and authorizes it; this composes the
-answer; the gateway goes on knowing nothing of agents (R-CAD-17).
+Eight questions — status, version, agents, skills, schedules, roles, delegations, help —
+and nothing that changes anything. A channel carries the question and authorizes it; this
+composes the answer; the gateway goes on knowing nothing of agents (R-CAD-17).
 
 Apart from `agent.py` because composing what somebody reads in a chat room is not what that
 module is for. Its subject is a named identity — what an agent is called, where everything
@@ -37,7 +37,8 @@ def answered(name: str, asked: str, where: Path | None = None) -> str:
     """
     if asked == "help":
         return (
-            "Read-only queries: status, version, agents, skills, schedules, roles, help\n"
+            "Read-only queries: status, version, agents, skills, schedules, roles, "
+            "delegations, help\n"
             "Conversation controls: stop, forget\n"
             "Agent control: restart"
         )
@@ -84,7 +85,43 @@ def answered(name: str, asked: str, where: Path | None = None) -> str:
         return _query_schedules(name, datetime.now(), where)
     if asked == "roles":
         return _query_roles(name, where)
+    if asked == "delegations":
+        return _query_delegations(name, where)
     raise ValueError(f"unknown read-only query: {asked}")
+
+
+def _query_delegations(name: str, where: Path | None = None, now=None) -> str:
+    """What this agent has handed to another agent, newest first (R-DEL-15).
+
+    **What is still going, and what has not been reviewed yet**, for the reason the roles
+    listing shows the same: on a surface this narrow a list of finished work pushes what is
+    actually happening off the bottom of it.
+
+    Never a local path and never the task: this is read where other people can see it.
+    """
+    # Here rather than at the top, exactly as `role_run` is: `delegation` imports `agent`,
+    # and this module imports it too, so naming it up there would close a cycle.
+    from rundesk import delegation as delegations
+
+    try:
+        mine = [one for one in delegations.every() if one.get("from") == name]
+    except delegations.Unreadable as why:
+        return f"could not read what {name} has handed on: {why}"
+    live = [one for one in mine
+            if one.get("state") in delegations.UNFINISHED
+            or one.get("state") in delegations.SETTLED]
+    if not live:
+        return "nothing handed to another agent right now"
+    lines = []
+    for row in reversed(live[-ROLES_SHOWN:]):
+        it = delegations.shown(row, now=now)
+        became = ("awaiting review" if row.get("state") in delegations.SETTLED
+                  else it["state"])
+        lines.append(f"{it['to']} — {it['label']} — {became}, "
+                     f"{_for_how_long(it['elapsed'])}")
+    if len(live) > ROLES_SHOWN:
+        lines.append(f"and {len(live) - ROLES_SHOWN} more")
+    return "\n".join(lines)
 
 
 def _query_roles(name: str, where: Path | None = None, now=None) -> str:

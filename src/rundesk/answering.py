@@ -82,6 +82,20 @@ REVIEW_HANDOFF = """Work you handed to a role has finished and reported back. No
 
 Review it: verify the claims that matter against the work itself rather than accepting them, then answer the person who asked in this conversation. Say what you checked. If the report is wrong or incomplete, say so and what you are doing about it. Do not start another role run from this turn."""
 
+# What a named agent is woken with when work it handed to *another named agent* has come
+# back (R-DEL-11). The same shape as the role handoff above and for the same reason: what
+# arrived is unchecked work by somebody else, and Rundesk read nothing out of it to find
+# out whether it is right (R-DEL-14).
+#
+# **No sentence forbidding a further delegation.** The review turn is an ordinary turn of
+# this agent's, and asking the same agent a natural follow-up question is legitimate work —
+# unlike a second role level, which the records refuse outright.
+DELEGATED_ANSWER = """The agent you handed work to has answered. Nobody has been told anything about it yet, and this answer has not been checked.
+
+{answer}
+
+Review it: verify the claims that matter against the work itself rather than accepting them, then answer the person who asked in this conversation. Say what you checked. If the answer is wrong or incomplete, say so and what you are doing about it."""
+
 
 @dataclass
 class Waiting:
@@ -527,6 +541,72 @@ class Answering:
         await held.task
         raise RuntimeError("the role review turn was not admitted")
 
+    async def told_agent_answered(self, conversation: str, row: dict,
+                                  reviewing=None, delivered=None) -> None:
+        """Wake the asking agent to review one delegated answer (R-DEL-11).
+
+        **Nothing is posted here.** What the other agent said is not an answer and is not
+        news: it is unchecked work, and a surface showing it would have delivered a result
+        this agent never reviewed — which is the whole of what this path exists to prevent
+        (R-DEL-14). What is posted is whatever this agent says after reading it.
+
+        Raised rather than returned when the review cannot start, so the caller leaves it
+        owing and tries again. An answer quietly marked collected because a room was busy
+        is work that was done and nobody was ever told about.
+
+        **This returns as soon as the turn is admitted, and `delivered` is what says it
+        arrived.** Waiting for the review itself would hold up every other delegation for
+        the minutes a review takes. A turn that was admitted and answered nobody has not
+        delivered a review, so the answer is offered again — which is that review rather
+        than a second one (R-DEL-11).
+
+        The prompt stands on its own — it is the whole answer — so the review turn is asked
+        again on a fresh session where a stale one hands it straight back. An answer lost to
+        a session that never read it is work nobody ever reads (R-RUN-24).
+        """
+        if not self.connected:
+            raise RuntimeError(f"channel '{self.channel}' is not connected")
+        if self.answering_somebody(conversation):
+            # Somebody is already being answered in this room. Two turns in one
+            # conversation are two brains on one session, and the review can wait — and
+            # this is not an attempt, which is what keeps a busy agent from spending the
+            # ceiling on being busy.
+            raise RuntimeError("the asking conversation is already answering somebody")
+        held = self.exchanges.get(conversation)
+        if held is None:
+            self._make_room()
+            held = self.exchanges.setdefault(conversation, Exchange(conversation))
+        began = asyncio.Event()
+        held.ref = None
+        held.stopped = False
+
+        def admitted(run: str) -> None:
+            if reviewing is not None:
+                reviewing(run)
+            began.set()
+
+        def finished(outcome) -> None:
+            if delivered is not None and _reviewed(outcome):
+                delivered()
+
+        held.task = asyncio.ensure_future(
+            self._one(
+                held, DELEGATED_ANSWER.format(answer=_delegated_text(row)), "",
+                prompt_author="rundesk", on_admitted=admitted,
+                stands_alone=True, on_finished=finished,
+            )
+        )
+        waiting = asyncio.ensure_future(began.wait())
+        await asyncio.wait({held.task, waiting}, return_when=asyncio.FIRST_COMPLETED)
+        waiting.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await waiting
+        if began.is_set():
+            return
+        # A turn that failed before admission never read the answer. Leave it owing.
+        await held.task
+        raise RuntimeError("the delegation review turn was not admitted")
+
     async def told_the_owner(self, text: str) -> None:
         """Say something to this agent's owner alone, wherever this surface reaches them
         (R-CH-32).
@@ -682,6 +762,63 @@ class Answering:
         # ending it would be the answer to a question nobody asked.
         if it.get("became") == self.STOPPED and stopped_by in self.STOP_ASKERS:
             it["stopped_by"] = stopped_by
+        self._tell(**it)
+
+    #: What a delegation is called on the wire. A second record type beside `ROLE`, built
+    #: the same way and for the same stated reason — a delegation outlives the adapter
+    #: process showing it, so everything a surface needs is in the record and nothing is
+    #: correlated against a mark an adapter saw hours earlier.
+    #:
+    #: **A second type rather than a state on the first**, because they are different news:
+    #: a role run is this agent working in a mode, and a delegation is a *different named
+    #: agent* answering. One vocabulary though: `HANDED`/`WORKING`/`SETTLED` and
+    #: `SUCCEEDED`/`FAILED` are reused unchanged rather than spelled twice.
+    DELEGATION = "delegation"
+
+    def told_delegation_working(self, conversation: str, ask: str, label: str,
+                                to: str = "", elapsed: int = 0) -> None:
+        """Say that work was handed to another named agent, where the person asked
+        (R-DEL-16).
+
+        **Where it posts, and where it does not.** This goes to the room the *asking*
+        agent's turn happened in — the room somebody typed in and is waiting in. The
+        answering agent's own room shows nothing: its turn is recorded in its own store
+        and reads back with `rundesk messages <agent>`, and announcing it there would post
+        one agent's work into another owner's room. That is a decision, not an omission.
+
+        **`to` is an agent's slug and never a person**, and goes through the same guard on
+        the adapter side that a role's label already does.
+        """
+        self._tell(type=self.DELEGATION, conversation=conversation, delegation=ask,
+                   state=self.HANDED, to=to, label=label, elapsed=int(elapsed))
+
+    def told_delegation_checking_in(self, conversation: str, ask: str, label: str,
+                                    to: str = "", elapsed: int = 0) -> None:
+        """Say that an ask still being answered is still being answered (R-DEL-16).
+
+        The same record as the other two and only its `state` differs, so a surface that
+        can show one can show all three.
+        """
+        self._tell(type=self.DELEGATION, conversation=conversation, delegation=ask,
+                   state=self.WORKING, to=to, label=label, elapsed=int(elapsed))
+
+    def told_delegation_settled(self, conversation: str, ask: str, ok: bool,
+                                summary: str, to: str = "", elapsed: int = 0,
+                                became: str = "") -> None:
+        """Say how the work went, wherever it was handed over (R-DEL-16).
+
+        Complete in itself for the reason handing it over is: a surface that never saw the
+        ask start still shows what came back.
+
+        **Two endings rather than three.** Nothing stops a delegation — there is no verb
+        for it and no record of one — so `became` takes `succeeded` or `failed` only, and
+        `stopped_by` has no meaning here and is not carried.
+        """
+        it = dict(type=self.DELEGATION, conversation=conversation, delegation=ask,
+                  state=self.SETTLED, to=to, label=summary, ok=bool(ok),
+                  elapsed=int(elapsed))
+        if became in (self.SUCCEEDED, self.FAILED):
+            it["became"] = became
         self._tell(**it)
 
     async def told_restart_finished(self, conversation: str, text: str) -> None:
@@ -1379,6 +1516,27 @@ def _handoff_text(handoff: dict) -> str:
     said.append("Its report, in its own words, unchecked:")
     said.append("")
     said.append(str(handoff.get("report") or "(it said nothing)"))
+    return "\n".join(said)
+
+
+def _delegated_text(row: dict) -> str:
+    """One delegated answer, as the agent that asked is given it to read.
+
+    What Rundesk knows and what the other agent said, told apart on the page. Nothing here
+    is read out of the answer or summarised from it: a line saying the work is done would
+    be Rundesk asserting the one thing the review exists to establish (R-DEL-14).
+    """
+    said = [
+        f"Agent: {row.get('to') or ''}",
+        f"Delegation: {row.get('id') or ''}",
+        f"Outcome its turn reached: {row.get('state') or ''}",
+    ]
+    if row.get("label"):
+        said.append(f"What it was asked for: {row['label']}")
+    said.append("")
+    said.append("Its answer, in its own words, unchecked:")
+    said.append("")
+    said.append(str(row.get("answer") or row.get("why") or "(it said nothing)"))
     return "\n".join(said)
 
 

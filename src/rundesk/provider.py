@@ -136,6 +136,24 @@ READ = "read"
 WORK = "work"
 POSTURES = (READ, WORK)
 
+
+def narrowed(parent: str | None, wanted: str) -> str:
+    """The posture a turn admitted by another turn actually runs under.
+
+    **What is admitted may narrow what its parent could do and may never widen it.** The
+    parent turn is the authority a worker acts under, so work asking to change the
+    machine from a turn that was only allowed to read it is asking for authority nobody
+    granted.
+
+    Here rather than beside either caller: a role run and an agent handed work by another
+    agent both settle this, and one rule written twice is a rule that disagrees with
+    itself.
+    """
+    if parent == READ or wanted == READ:
+        return READ
+    return WORK
+
+
 #: What is asked of an adapter to find out what it can do. Offline and side-effect-free by
 #: contract — but still a program being run, which is why nothing that diagnoses an agent
 #: asks it (R-AGT-11) and only admitting a turn does.
@@ -237,6 +255,7 @@ def environment(
     path: str | None = None,
     preface: str | None = None,
     role_run: str | None = None,
+    delegation: str | None = None,
     secrets: dict | None = None,
 ) -> dict[str, str]:
     """Everything an adapter is told, and the whole of it (R-PRV-3).
@@ -312,6 +331,18 @@ def environment(
         # it can already reach every other verb the command offers. What this rule buys is
         # that no ordinary path, and no adapter's own subagent, falls into a second level.
         said["RUNDESK_ROLE_RUN"] = role_run
+    if delegation:
+        # **A convenience for refusing early, and never the authority** (R-DEL-9). An agent
+        # answering work another agent handed it is refused a role run and a delegation of
+        # its own, and this is what lets the command say so before it opens anything. What
+        # decides is the durable record of the ask this turn names.
+        #
+        # **That is a correctness guard, not a security boundary**, exactly as
+        # `RUNDESK_ROLE_RUN` above is: which ask a caller claims to be carrying is an
+        # environment variable in the caller's own process, and a brain determined to get
+        # around it can clear one variable. What the rule buys is that no ordinary path,
+        # and no adapter's own subagent, falls into a second level.
+        said["RUNDESK_DELEGATION"] = delegation
     if raw is not None:
         # Somewhere to put what the *brain* said, which rundesk never sees: an adapter
         # stands between the two, so a vendor changing its stream shape would otherwise

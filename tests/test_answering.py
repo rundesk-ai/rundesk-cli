@@ -2660,6 +2660,175 @@ class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
         await self.settled(held)
         self.assertEqual([True], settled)
 
+    ANSWERED = {
+        "id": "del-1-aaaa", "from": "elena", "to": "cole", "label": "the quote flow",
+        "state": "answered", "answer": "I read it. The join is the cost.",
+        "why": "", "brief": "Look at the quote flow and say what is slow.",
+    }
+
+    async def test_a_delegated_answer_wakes_the_asking_agent_to_review_it(self):
+        """R-DEL-11 — the agent that handed the work over reads what came back; nobody
+        else is told anything until it has."""
+        brain, surface = Brain(), Surface()
+        held = self.a_parent_conversation("rundesk-delegation-review-", brain, surface)
+        reviewed: list = []
+
+        await held.told_agent_answered("one", self.ANSWERED, reviewing=reviewed.append)
+        await self.settled(held)
+
+        self.assertEqual(1, len(brain.asked))
+        self.assertEqual("rundesk", brain.asked[0]["prompt_author"])
+        self.assertIn("I read it. The join is the cost.", brain.asked[0]["prompt"])
+        self.assertIn("has not been checked", brain.asked[0]["prompt"])
+        self.assertIn("cole", brain.asked[0]["prompt"])
+        self.assertIn("del-1-aaaa", brain.asked[0]["prompt"])
+        self.assertEqual(1, len(reviewed))
+
+    async def test_a_delegated_answer_is_never_posted_where_a_person_can_read_it(self):
+        """R-DEL-14 — an unreviewed answer is not an answer, and delivering one would put
+        work this agent never checked in front of the person who asked."""
+        brain = Brain(outcome=Outcome(text="I checked it; it is right."))
+        surface = Surface()
+        held = self.a_parent_conversation("rundesk-delegation-unposted-", brain, surface)
+
+        await held.told_agent_answered("one", self.ANSWERED)
+        await self.settled(held)
+
+        self.assertEqual([], surface.of("said"))
+        self.assertNotIn("The join is the cost.",
+                         "".join(one.get("text", "") for one in surface.of("answer")))
+
+    async def test_nothing_of_a_delegated_answer_is_read_out_or_summarised(self):
+        """R-DEL-14 — Rundesk records what the other agent said and asserts nothing out of
+        it. A line saying the work is done would be Rundesk making the one claim the review
+        exists to establish. The brief is not repeated either: the agent wrote it."""
+        brain, surface = Brain(), Surface()
+        held = self.a_parent_conversation("rundesk-delegation-verbatim-", brain, surface)
+
+        await held.told_agent_answered("one", self.ANSWERED)
+        await self.settled(held)
+
+        asked = brain.asked[0]["prompt"]
+        self.assertIn("in its own words, unchecked", asked)
+        self.assertNotIn(self.ANSWERED["brief"], asked)
+        for claimed in ("succeeded", "it is right", "verified"):
+            with self.subTest(claimed=claimed):
+                self.assertNotIn(claimed, asked)
+
+    async def test_a_delegated_answer_is_left_owing_when_the_room_is_already_busy(self):
+        """R-DEL-11 — two turns in one conversation are two brains on one session. A
+        parent mid-turn is not an attempt, so nothing here spends the ceiling on it."""
+        holds = asyncio.Event()
+        brain, surface = Brain(holds=holds), Surface()
+        held = self.a_parent_conversation("rundesk-delegation-busy-", brain, surface)
+        await held.heard({"type": "arrived", "conversation": "one", "user": "2207",
+                          "text": "are you there"})
+        for _ in range(200):
+            if brain.asked:
+                break
+            await asyncio.sleep(0.005)
+
+        with self.assertRaises(RuntimeError):
+            await held.told_agent_answered("one", self.ANSWERED)
+        self.assertEqual(1, len(brain.asked))
+        holds.set()
+        await self.settled(held)
+
+    async def test_a_review_that_answered_marks_the_delegated_answer_collected(self):
+        """R-DEL-11 — the asking agent read it and said something about it, which is the
+        one review the delegation was owed."""
+        brain = Brain(outcome=Outcome(text="I checked it; the join really is the cost."))
+        surface = Surface()
+        held = self.a_parent_conversation("rundesk-delegation-collected-", brain, surface)
+        settled: list = []
+
+        await held.told_agent_answered("one", self.ANSWERED,
+                                       delivered=lambda: settled.append(True))
+        await self.settled(held)
+
+        self.assertEqual([True], settled)
+
+    async def test_a_review_that_answered_nobody_leaves_the_delegated_answer_owed(self):
+        """R-DEL-11 — the turn was admitted and said nothing, which is exactly what a
+        stale session does. Written off on admission, the work was done, the provider was
+        paid for it, and nobody was ever told."""
+        brain, surface = Brain(outcome=Outcome(ok=True, text="")), Surface()
+        held = self.a_parent_conversation("rundesk-delegation-silent-", brain, surface)
+        settled: list = []
+
+        await held.told_agent_answered("one", self.ANSWERED,
+                                       delivered=lambda: settled.append(True))
+        await self.settled(held)
+
+        self.assertEqual(1, len(brain.asked), "the review turn never ran at all")
+        self.assertEqual([], settled, "a review that answered nobody was written off")
+
+    async def test_handing_work_to_an_agent_is_shown_where_the_person_asked(self):
+        """R-DEL-16 — one self-contained record either way, so a surface renders it
+        without remembering anything it was told hours earlier."""
+        brain, surface = Brain(), Surface()
+        held = self.a_parent_conversation("rundesk-delegation-shown-", brain, surface)
+
+        held.told_delegation_working("one", "del-1-aaaa", "the quote flow", "cole", 0)
+        held.told_delegation_checking_in("one", "del-1-aaaa", "the quote flow", "cole",
+                                         1300)
+        held.told_delegation_settled("one", "del-1-aaaa", True, "the quote flow", "cole",
+                                     2400, "succeeded")
+        await self.settled(held)
+
+        shown = surface.of("delegation")
+        self.assertEqual(["handed", "working", "settled"],
+                         [one["state"] for one in shown])
+        self.assertEqual(["del-1-aaaa"] * 3, [one["delegation"] for one in shown])
+        self.assertEqual(["cole"] * 3, [one["to"] for one in shown])
+        self.assertEqual([0, 1300, 2400], [one["elapsed"] for one in shown])
+        self.assertEqual("succeeded", shown[-1]["became"])
+        self.assertTrue(shown[-1]["ok"])
+
+    async def test_nothing_stops_a_delegation_so_no_record_ever_says_one_was(self):
+        """Two endings rather than three: there is no verb for stopping an ask and no
+        record of one, so a word invented for it must not reach a surface."""
+        brain, surface = Brain(), Surface()
+        held = self.a_parent_conversation("rundesk-delegation-endings-", brain, surface)
+
+        held.told_delegation_settled("one", "del-1-aaaa", False, "the quote flow",
+                                     "cole", 60, "stopped")
+        held.told_delegation_settled("one", "del-2-bbbb", False, "the quote flow",
+                                     "cole", 60, "failed")
+        await self.settled(held)
+
+        shown = surface.of("delegation")
+        self.assertNotIn("became", shown[0], "a word nothing settles reached a surface")
+        self.assertNotIn("stopped_by", shown[0])
+        self.assertEqual("failed", shown[1]["became"])
+
+    async def test_a_delegation_record_carries_no_task_and_no_answer(self):
+        """R-DEL-15 — what a surface is shown is what Rundesk knows about the delegation
+        and never a word of what was asked or answered."""
+        brain, surface = Brain(), Surface()
+        held = self.a_parent_conversation("rundesk-delegation-private-", brain, surface)
+
+        held.told_delegation_settled("one", "del-1-aaaa", True, "the quote flow", "cole",
+                                     60, "succeeded")
+        await self.settled(held)
+
+        said = json.dumps(surface.of("delegation"))
+        self.assertNotIn("brief", said)
+        self.assertNotIn("answer", said)
+        self.assertNotIn(self.ANSWERED["answer"], said)
+
+    async def test_the_delegation_review_turn_is_asked_as_a_prompt_that_stands_on_its_own(self):
+        """R-RUN-24 — the prompt is the whole answer and asks for it to be checked, so a
+        fresh session answers it exactly as well as a resumed one."""
+        brain, surface = Brain(), Surface()
+        held = self.a_parent_conversation("rundesk-delegation-standalone-", brain, surface)
+
+        await held.told_agent_answered("one", self.ANSWERED)
+        await self.settled(held)
+
+        self.assertTrue(brain.asked[0]["stands_alone"],
+                        "a stale session may consume the answer and nothing retries it")
+
     async def test_a_completed_restart_is_delivered_without_starting_another_turn(self):
         """R-GW-43"""
         where = Path(tempfile.mkdtemp(prefix="rundesk-restart-notice-"))

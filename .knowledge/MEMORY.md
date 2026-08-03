@@ -371,6 +371,30 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   failing. Wait for `reading.closed` (bounded, yielding with `await asyncio.sleep(0)`) instead
   of closing it yourself. Worst in the cancellation case, where the loop leaves before the
   transport has seen the end at all.
+- **A test class inserted *between two methods* of an existing class quietly adopts every
+  method below it**, and the failures name your fixture rather than the edit. Putting
+  `class HandingWorkToAnotherAgent` in the middle of `HandingWorkToARole` in
+  `tests/test_cli.py` moved four of that class's own methods — and its `_a_run_on` helper —
+  into the new one, so they ran against the new `setUp` and died on
+  `KeyError: 'RUNDESK_AGENTS_DIR'` and `TypeError: str expected, not PosixPath`, neither of
+  which is anywhere near the change. Anchor a new class on the **next** `class` line rather
+  than on a method you recognise, and check `grep -n "^class "` before and after: the count
+  moves by one and nothing else does. Same family as the `__main__` guard trap below, and
+  louder only by luck.
+- **A role naming no skills is refused, so `role.offered()` answers the empty string and a
+  case that wrote one "so there is a role on offer" proves nothing.** R-ROL-8 refuses
+  `"skills": []` when the role is *read*, and `offered()` skips a definition that will not
+  read rather than raising — which is right, and means a fixture role with an empty skill
+  list is invisible with no error anywhere. Give a fixture role at least one skill name (it
+  need not be a skill this machine has), and assert `role.offered(where).strip()` is
+  non-empty before relying on it.
+- **A task `asyncio.ensure_future`d and cancelled before the loop ever ran it never executes
+  its `finally`.** So a gateway case that starts work and cancels it immediately finds the
+  bookkeeping the `finally` clears still populated, and reads as the cleanup being broken.
+  The real gateway never sees this — `serve` cancels and then *gathers*, so every task has
+  run. Put one `await asyncio.sleep(0)` between starting and cancelling, and the case is
+  about what it says it is about.
+
 - **A test class appended to the end of a suite file lands *after* the `__main__` guard and
   never runs — and the suite still says `OK`.** `tests/test_gateway.py` reported the same 184
   cases with a new four-case class in it, which reads exactly like a class that passed. Insert

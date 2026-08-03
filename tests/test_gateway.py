@@ -33,7 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import activity, config, gateway, process, recovery, schedule, store  # noqa: E402
+from rundesk import activity, config, delegation, gateway, process, recovery, schedule, store  # noqa: E402
 from rundesk import role_run as role_runs  # noqa: E402
 
 PY = sys.executable
@@ -4373,6 +4373,19 @@ class Reached:
         if delivered is not None and self._answers:
             delivered()
 
+    async def told_agent_answered(self, conversation, row, reviewing=None,
+                                  delivered=None):
+        """The delegation half, with exactly the surface the real one has: it returns the
+        moment the review turn is admitted and settles the answer only once that turn has
+        actually said something."""
+        if self._raises is not None:
+            raise self._raises
+        if reviewing is not None:
+            reviewing("11-rrrr")
+        self.told.append((conversation, row))
+        if delivered is not None and self._answers:
+            delivered()
+
     async def told_the_owner(self, text):
         if self._owner_raises is not None:
             raise self._owner_raises
@@ -4388,6 +4401,9 @@ class Shown(Reached):
         self.checked_in: list = []
         self.settled: list = []
         self.endings: list = []
+        self.handed_over: list = []
+        self.asked_after: list = []
+        self.answered_back: list = []
 
     def told_role_working(self, conversation, run, label, role="", elapsed=0):
         self.working.append((conversation, run, label, role, elapsed))
@@ -4401,6 +4417,16 @@ class Shown(Reached):
         #: Kept apart from the tuple above so the cases that were written before there
         #: were three endings go on asserting exactly what they asserted.
         self.endings.append((became, stopped_by))
+
+    def told_delegation_working(self, conversation, ask, label, to="", elapsed=0):
+        self.handed_over.append((conversation, ask, label, to, elapsed))
+
+    def told_delegation_checking_in(self, conversation, ask, label, to="", elapsed=0):
+        self.asked_after.append((conversation, ask, label, to, elapsed))
+
+    def told_delegation_settled(self, conversation, ask, ok, summary, to="", elapsed=0,
+                                became=""):
+        self.answered_back.append((conversation, ask, ok, summary, to, elapsed, became))
 
 
 class CarryingWhatAnAgentHandedOn(WithARunDirectory):
@@ -5292,6 +5318,405 @@ class WhatAChannelHasWrittenDownAboutWhoItGreeted(WithARunDirectory):
         gateway.remember_welcomed(at, "2207")
         self.assertFalse(gateway.welcomed_path(at).exists())
         self.assertEqual([], gateway.owed_a_welcome(at, ["2207", "1180"]))
+
+
+class HandingOn:
+    """What a gateway is handed to carry delegations with, as a stand-in.
+
+    The real one is `agent.delegated`, made where an agent is known. Every case here runs
+    with no agent, no record and no brain anywhere near it — which is the whole point of
+    the seam being an argument. Not to be confused with `Delegating` above, which stands in
+    for the **roles** collaborator and keeps its name.
+    """
+
+    def __init__(self, waiting=(), owed=(), settled_as="", ok=False):
+        self._waiting = list(waiting)
+        self._owed = list(owed)
+        self._settled_as = settled_as
+        self._ok = ok
+        self.carried: list = []
+        self.claimed: list = []
+        self.collected_asks: list = []
+        self.given_up: list = []
+        self.swept = 0
+        self.to_settle: list = []
+        self.to_remove: list = []
+        #: Where each ask this stand-in knows about is shown, and how long it has been.
+        self.check_ins: dict = {}
+
+    def waiting(self):
+        return list(self._waiting)
+
+    def seen(self, ask_id):
+        return {"channel": "ops", "conversation": "one", "delegation": ask_id,
+                "label": "the quote flow", "to": "cole", "elapsed": 0,
+                "became": self._settled_as, "ok": self._ok}
+
+    def checking_in(self, ask_id, told=0):
+        """Exactly what `agent.delegated` answers, off the same arithmetic — a stand-in
+        more generous than the real thing hides whole features."""
+        where = self.check_ins.get(ask_id)
+        if where is None:
+            return None
+        due = delegation.check_in_due(where["elapsed"], told)
+        return None if not due else {**where, "due": due}
+
+    async def carry(self, ask_id):
+        self.carried.append(ask_id)
+        self._waiting = [one for one in self._waiting if one["id"] != ask_id]
+        return None
+
+    def owed(self):
+        return list(self._owed)
+
+    def claiming(self, ask_id):
+        self.claimed.append(ask_id)
+
+    def collected(self, ask_id):
+        self.collected_asks.append(ask_id)
+        self._owed = [one for one in self._owed if one["delegation"] != ask_id]
+
+    def giving_up(self, ask_id):
+        """Exactly what `agent.delegated` does — the same write `collected` makes, so it
+        stops being offered."""
+        self.given_up.append(ask_id)
+        self._owed = [one for one in self._owed if one["delegation"] != ask_id]
+
+    def sweep(self):
+        self.swept += 1
+        settled, self.to_settle = list(self.to_settle), []
+        removed, self.to_remove = list(self.to_remove), []
+        self._waiting = [one for one in self._waiting if one["id"] not in settled]
+        return {"settled": settled, "removed": removed}
+
+
+class AnsweringWhatAnotherAgentAsked(WithARunDirectory):
+    """R-DEL-1, R-DEL-11 — an ask admitted while nothing was up is still answered, and
+    the agent that handed the work over is told exactly once."""
+
+    def one(self, doing) -> gateway.Gateway:
+        gw = gateway.Gateway("cole", where=self.where, logs=self.logs, root=self.root,
+                             delegations=doing)
+        self.addCleanup(gw.release)
+        return gw
+
+    async def test_a_gateway_carries_every_ask_addressed_to_it_that_it_finds(self):
+        doing = HandingOn(waiting=[
+            {"id": "del-1-aaaa", "from": "elena", "parent_run": "1-aaaa"},
+            {"id": "del-2-bbbb", "from": "dana", "parent_run": "2-bbbb"},
+        ])
+        gw = self.one(doing)
+
+        gw._start_asked_delegations()
+        await asyncio.gather(*tuple(gw._delegation_tasks.values()))
+
+        self.assertEqual(["del-1-aaaa", "del-2-bbbb"], sorted(doing.carried))
+
+    async def test_an_ask_already_in_flight_is_never_started_a_second_time(self):
+        """R-GW-15 — the same work started twice answers the caller twice."""
+        held = asyncio.Event()
+        doing = HandingOn(waiting=[{"id": "del-1-aaaa", "from": "elena",
+                                    "parent_run": "1-aaaa"}])
+
+        async def carrying(ask_id):
+            doing.carried.append(ask_id)
+            await held.wait()
+
+        doing.carry = carrying
+        gw = self.one(doing)
+
+        gw._start_asked_delegations()
+        gw._start_asked_delegations()
+        held.set()
+        await asyncio.gather(*tuple(gw._delegation_tasks.values()))
+
+        self.assertEqual(["del-1-aaaa"], doing.carried)
+
+    async def test_two_asks_in_one_conversation_are_carried_one_at_a_time(self):
+        """R-DEL-5 — the conversation is keyed by the agent that asked and the run it
+        asked from, so a turn that handed over two tasks would otherwise put two brains
+        on one provider session."""
+        held = asyncio.Event()
+        doing = HandingOn(waiting=[
+            {"id": "del-1-aaaa", "from": "elena", "parent_run": "1-aaaa"},
+            {"id": "del-2-bbbb", "from": "elena", "parent_run": "1-aaaa"},
+        ])
+
+        async def carrying(ask_id):
+            doing.carried.append(ask_id)
+            doing._waiting = [one for one in doing._waiting if one["id"] != ask_id]
+            await held.wait()
+
+        doing.carry = carrying
+        gw = self.one(doing)
+
+        gw._start_asked_delegations()
+        await asyncio.sleep(0)      # let the one that was started reach its first await
+        self.assertEqual(["del-1-aaaa"], doing.carried,
+                         "two brains were put on one conversation")
+        held.set()
+        await asyncio.gather(*tuple(gw._delegation_tasks.values()))
+        gw._start_asked_delegations()
+        await asyncio.gather(*tuple(gw._delegation_tasks.values()))
+
+        self.assertEqual(["del-1-aaaa", "del-2-bbbb"], doing.carried)
+
+    async def test_a_gateway_standing_down_leaves_an_ask_to_be_carried_on(self):
+        """Nothing settles it here on purpose: the record still says it is unfinished, so
+        the next gateway to claim this name picks it up."""
+        held = asyncio.Event()
+        doing = HandingOn(waiting=[{"id": "del-1-aaaa", "from": "elena",
+                                    "parent_run": "1-aaaa"}])
+
+        async def carrying(ask_id):
+            doing.carried.append(ask_id)
+            await held.wait()
+
+        doing.carry = carrying
+        gw = self.one(doing)
+        gw._start_asked_delegations()
+        await asyncio.sleep(0)      # it is really running, as a gateway standing down is
+        task = gw._delegation_tasks["del-1-aaaa"]
+
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        self.assertEqual([], doing.collected_asks)
+        self.assertEqual({}, gw._delegation_tasks)
+        self.assertEqual({}, gw._delegation_rooms)
+
+    async def test_an_answer_is_delivered_once_and_stops_being_owed(self):
+        doing = HandingOn(owed=[{"delegation": "del-1-aaaa", "to": "cole",
+                                 "attempts": 0, "channel": "ops", "conversation": "one",
+                                 "row": {"id": "del-1-aaaa", "answer": "done"}}])
+        gw = self.one(doing)
+        surface = Reached()
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_delegated_answer()
+
+        self.assertEqual([("one", {"id": "del-1-aaaa", "answer": "done"})], surface.told)
+        self.assertEqual(["del-1-aaaa"], doing.claimed)
+        self.assertEqual(["del-1-aaaa"], doing.collected_asks)
+        self.assertEqual([], doing.owed())
+
+    async def test_an_answer_is_left_owing_while_the_surface_is_down(self):
+        doing = HandingOn(owed=[{"delegation": "del-1-aaaa", "to": "cole", "attempts": 0,
+                                 "channel": "ops", "conversation": "one", "row": {}}])
+        gw = self.one(doing)
+        gw._reached["ops"] = Reached(connected=False)
+
+        await gw._deliver_one_delegated_answer()
+
+        self.assertEqual([], doing.collected_asks)
+        self.assertEqual([], doing.claimed)
+
+    async def test_an_answer_is_left_owing_when_the_room_is_already_busy(self):
+        doing = HandingOn(owed=[{"delegation": "del-1-aaaa", "to": "cole", "attempts": 0,
+                                 "channel": "ops", "conversation": "one", "row": {}}])
+        gw = self.one(doing)
+        gw._reached["ops"] = Reached(busy=True)
+
+        await gw._deliver_one_delegated_answer()
+
+        self.assertEqual([], doing.collected_asks)
+
+    async def test_a_busy_asker_adds_nothing_to_the_attempt_count(self):
+        """The answer waits, which is correct — but counting each look would put hundreds
+        of attempts on an agent that was simply busy for an hour, and that count is the
+        one thing an owner has for spotting a surface that is never coming back."""
+        doing = HandingOn(owed=[{"delegation": "del-1-aaaa", "to": "cole", "attempts": 0,
+                                 "channel": "ops", "conversation": "one", "row": {}}])
+        gw = self.one(doing)
+        gw._reached["ops"] = Reached(busy=True)
+
+        for _ in range(5):
+            await gw._deliver_one_delegated_answer()
+
+        self.assertEqual([], doing.claimed, "being busy was counted as an attempt")
+
+    async def test_a_review_that_answered_nobody_leaves_the_answer_owed(self):
+        doing = HandingOn(owed=[{"delegation": "del-1-aaaa", "to": "cole", "attempts": 1,
+                                 "channel": "ops", "conversation": "one",
+                                 "row": {"answer": "done"}}])
+        gw = self.one(doing)
+        gw._reached["ops"] = Reached(answers=False)
+
+        await gw._deliver_one_delegated_answer()
+
+        self.assertEqual(["del-1-aaaa"], doing.claimed, "it was not even attempted")
+        self.assertEqual([], doing.collected_asks,
+                         "a review that answered nobody was written off as delivered")
+        self.assertEqual(["del-1-aaaa"], [one["delegation"] for one in doing.owed()])
+
+    async def test_an_answer_at_the_ceiling_is_written_off_and_the_owner_told(self):
+        """R-DEL-12 — an agent that fails every time would otherwise be woken for the same
+        answer every few seconds for the whole retention window, and the one place nothing
+        can be said about it is the conversation whose review turn is the thing failing."""
+        doing = HandingOn(owed=[{"delegation": "del-1-aaaa", "to": "cole",
+                                 "attempts": delegation.REVIEW_CEILING,
+                                 "channel": "ops", "conversation": "one",
+                                 "row": {"answer": "done"}}])
+        gw = self.one(doing)
+        surface = Reached()
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_delegated_answer()
+        await gw._deliver_one_delegated_answer()
+
+        self.assertEqual([], surface.told, "the agent was woken past the ceiling")
+        self.assertEqual(1, len(surface.owner_told),
+                         "the owner was told twice or not at all")
+        self.assertIn("del-1-aaaa", surface.owner_told[0])
+        self.assertIn("cole", surface.owner_told[0])
+        self.assertEqual(["del-1-aaaa"], doing.given_up)
+        self.assertEqual([], doing.owed())
+
+    async def test_the_undeliverable_notice_repeats_no_word_of_the_answer(self):
+        """R-DEL-14 — the answer has still been read by nobody, so putting any of it in
+        front of the owner would publish unreviewed work by the one route built to stop
+        exactly that. The ask and the agent are enough to go and ask for it."""
+        answer = "Landed the change; the suite passes."
+        doing = HandingOn(owed=[{"delegation": "del-1-aaaa", "to": "cole",
+                                 "attempts": delegation.REVIEW_CEILING,
+                                 "channel": "ops", "conversation": "one",
+                                 "row": {"answer": answer,
+                                         "brief": "rewrite the exporter"}}])
+        gw = self.one(doing)
+        surface = Reached()
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_delegated_answer()
+
+        said = surface.owner_told[0]
+        self.assertNotIn(answer, said, "an unreviewed answer reached a person")
+        self.assertNotIn("rewrite the exporter", said)
+
+    async def test_an_undeliverable_answer_never_holds_up_the_ones_behind_it(self):
+        """R-DEL-11 — one answer that cannot be delivered must not sit at the head keeping
+        every later one behind it, or work that was done is never reported."""
+        doing = HandingOn(owed=[
+            {"delegation": "del-1-aaaa", "to": "cole",
+             "attempts": delegation.REVIEW_CEILING, "channel": "ops",
+             "conversation": "one", "row": {"answer": "the first"}},
+            {"delegation": "del-2-bbbb", "to": "dana", "attempts": 0, "channel": "ops",
+             "conversation": "two", "row": {"answer": "the second"}},
+        ])
+        gw = self.one(doing)
+        surface = Reached()
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_delegated_answer()
+
+        self.assertEqual(["del-1-aaaa"], doing.given_up)
+        self.assertEqual([("two", {"answer": "the second"})], surface.told,
+                         "the answer behind an undeliverable one was never offered")
+
+    async def test_the_sweep_settles_what_went_unanswered_and_clears_what_expired(self):
+        doing = HandingOn()
+        doing.to_settle = ["del-1-aaaa"]
+        doing.to_remove = ["del-2-bbbb"]
+        gw = self.one(doing)
+
+        gw._sweep_delegations()
+
+        self.assertEqual(1, doing.swept)
+
+    async def test_handing_work_to_an_agent_is_shown_where_the_person_asked(self):
+        """R-DEL-16 — an ask that was handed over and never heard of again reads as work
+        still running for ever."""
+        doing = HandingOn(waiting=[{"id": "del-1-aaaa", "from": "elena",
+                                    "parent_run": "1-aaaa"}], settled_as="answered",
+                          ok=True)
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+
+        gw._start_asked_delegations()
+        await asyncio.gather(*tuple(gw._delegation_tasks.values()))
+
+        self.assertEqual([("one", "del-1-aaaa", "the quote flow", "cole", 0)],
+                         surface.handed_over, "nothing said the work had been handed on")
+        self.assertEqual([("one", "del-1-aaaa", True, "the quote flow", "cole", 0,
+                           "answered")], surface.answered_back,
+                         "nothing said what came of it")
+
+    async def test_a_delegation_that_could_not_be_carried_still_says_how_it_went(self):
+        doing = HandingOn(waiting=[{"id": "del-1-aaaa", "from": "elena",
+                                    "parent_run": "1-aaaa"}])
+
+        async def carrying(ask_id):
+            raise RuntimeError("the brain has gone")
+
+        doing.carry = carrying
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+
+        gw._start_asked_delegations()
+        await asyncio.gather(*tuple(gw._delegation_tasks.values()))
+
+        self.assertEqual(1, len(surface.answered_back))
+        self.assertFalse(surface.answered_back[0][2])
+
+    async def test_an_ask_still_being_answered_says_so_once_per_window(self):
+        doing = HandingOn()
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+        gw._delegation_tasks["del-1-aaaa"] = None
+        doing.check_ins = {"del-1-aaaa": {
+            "channel": "ops", "conversation": "one", "label": "the quote flow",
+            "to": "cole", "elapsed": 1300}}
+
+        gw._check_in_on_delegations()
+        gw._check_in_on_delegations()   # the same window, a second look
+
+        self.assertEqual([("one", "del-1-aaaa", "the quote flow", "cole", 1300)],
+                         surface.asked_after,
+                         "an ask still being answered was said twice, or never")
+        self.assertEqual({"del-1-aaaa": 1}, gw._delegation_checked)
+
+    async def test_an_ask_this_gateway_is_not_carrying_is_never_checked_in_on(self):
+        """A check-in that outlived the work it describes is a room being told an ask is
+        going by the one process that would know it is not."""
+        doing = HandingOn()
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+        doing.check_ins = {"del-1-aaaa": {
+            "channel": "ops", "conversation": "one", "label": "the quote flow",
+            "to": "cole", "elapsed": 1300}}
+
+        gw._check_in_on_delegations()
+
+        self.assertEqual([], surface.asked_after)
+
+    async def test_a_surface_that_cannot_be_told_never_holds_up_the_work(self):
+        """Showing is never worth an ask: a platform that cannot be told is a platform
+        that shows less, and the work carries on either way."""
+        doing = HandingOn(waiting=[{"id": "del-1-aaaa", "from": "elena",
+                                    "parent_run": "1-aaaa"}])
+        gw = self.one(doing)
+
+        class Refuses(Shown):
+            def told_delegation_working(self, *given, **also):
+                raise RuntimeError("the platform would not take it")
+
+        gw._reached["ops"] = Refuses()
+
+        gw._start_asked_delegations()
+        await asyncio.gather(*tuple(gw._delegation_tasks.values()))
+
+        self.assertEqual(["del-1-aaaa"], doing.carried)
+
+    async def test_a_gateway_with_no_agent_behind_it_sweeps_no_delegations(self):
+        """A name nothing was made for neither answers an ask nor is owed one, and still
+        runs — the same whole gateway a name with no schedules is."""
+        gw = gateway.Gateway("nobody", where=self.where, logs=self.logs, root=self.root)
+        self.addCleanup(gw.release)
+        gw._sweep_delegations()      # raises nothing, does nothing
 
 
 if __name__ == "__main__":

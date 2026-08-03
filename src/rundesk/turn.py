@@ -68,6 +68,12 @@ CHANNEL = "channel"
 #: resumed one carries on exactly where it stopped.
 ROLE = "role"
 
+#: The fifth: a turn another named agent on this install asked for (R-DEL-5). A
+#: conversation of its own on a surface that joins no channel — keyed by the agent that
+#: asked and the run it asked from — so work handed over is never in the conversation a
+#: person is typing into, and two asks from one turn carry on from each other.
+AGENT = "agent"
+
 #: How many lines of what a brain said went wrong are carried back with the outcome. The
 #: whole of it is in the run's own file; this is the tail worth putting in front of a person.
 TROUBLE_KEPT = 20
@@ -158,6 +164,17 @@ class Outcome:
                        if one.get("type") == "text")
 
     @property
+    def close(self) -> str:
+        """The last whole thing the brain said, for a caller that returns one message.
+
+        The same reading `_close` gives a turn the clock started (R-SCH-45), asked here so
+        a caller carrying an answer *out* of this turn can have it without walking the
+        records a second time. What the turn's own conversation holds is unchanged and is
+        still everything it said: this is what is handed on, not what is written down.
+        """
+        return _close(self.said)
+
+    @property
     def became(self) -> str:
         """What this turn came to, in one word — the word the run's own record holds.
 
@@ -198,6 +215,10 @@ class Execution:
     role_run: str | None = None
     #: Which shared role that execution is running, for the account to say so.
     role: str | None = None
+    #: Which ask of another agent's this turn is answering, if it is answering one. The
+    #: same kind of marker `role_run` is and refused on in the same way: work handed over
+    #: by another agent may not be handed on again (R-DEL-8, R-DEL-9).
+    delegating: str | None = None
 
     @classmethod
     def ordinary(cls, whose: dict) -> "Execution":
@@ -320,6 +341,7 @@ async def carry(
     can = await provider.capabilities(at, provider.environment(
         home=whose["run"], cwd=running.cwd, provider_home=home, skills=running.skills,
         run="capabilities", posture=posture, path=None, secrets=keeping.values,
+        delegation=running.delegating,
     ))
     kept = agents.records(name, where)
     where_it_is = kept.opened(store.conversation_id(on, conversation), on, kind,
@@ -437,7 +459,8 @@ async def carry(
                     skills=running.skills, run=run,
                     model=model, resume=carrying, posture=posture, settings=settings,
                     raw=transcript.printed(whose["logs"], run), preface=preface,
-                    role_run=running.role_run, secrets=keeping.values,
+                    role_run=running.role_run, delegation=running.delegating,
+                    secrets=keeping.values,
                 ),
                 # **The agent's home, not its workspace.** A brain loads the rules it is to
                 # follow because they *stand in the directory it stands in* — that is the

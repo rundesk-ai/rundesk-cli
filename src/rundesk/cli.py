@@ -53,6 +53,9 @@ from rundesk.commands.channels import (  # noqa: E402
 from rundesk.commands.roles import (  # noqa: E402
     cmd_roles,
 )
+from rundesk.commands.delegations import (  # noqa: E402
+    cmd_delegations,
+)
 from rundesk.commands.schedules import (  # noqa: E402
     cmd_schedules,
 )
@@ -197,6 +200,19 @@ EXAMPLES: list[tuple[str, list[tuple[str, str]]]] = [
              "standard input — the outcome, what it may do, and what done looks like"),
         ("rundesk roles ava show rol-3-vfs3",
          "one run: which role and revision, where it worked, and whether ava has reviewed it"),
+    ]),
+    ("a delegation", [
+        ("rundesk delegations ava",
+         "the work ava has handed to other agents on this install, and what came of each"),
+        ('rundesk delegations ava ask cole --label "the quote flow"',
+         "one bounded task for cole to answer as itself, the task read from standard input"),
+        ("", "an agent hands work over from inside its own turn — cole answers once, with "
+             "its own home, memory, skills and brain, and ava reviews that answer before "
+             "anybody else hears about it"),
+        ("rundesk delegations ava ask cole --posture read",
+         "narrower than the turn handing it over; it can never be wider"),
+        ("rundesk delegations ava show del-3-vfs3",
+         "one delegation: which agent, what state it is in, and whether ava has reviewed it"),
     ]),
 
 ]
@@ -801,6 +817,35 @@ def build_parser() -> argparse.ArgumentParser:
     seen = handing.add_parser("show", prog=f"{after_the_agent} show", help="one role run in full")
     seen.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
 
+    # Shaped like `channels` and `schedules` rather than like `roles`: every verb here is
+    # about one agent's own asks, so the agent is the word after the verb and argparse
+    # holds it directly. `roles` needed the words split before the parser only because half
+    # of it names nobody at all.
+    handed_over = sub.add_parser(
+        "delegations", help="the work this agent has handed to another agent")
+    handed_over.add_argument("name", metavar="<agent>",
+                             help="whose asks — the agent that handed the work over")
+    asking = handed_over.add_subparsers(dest="act", metavar="<action>")
+    asked = asking.add_parser(
+        "ask", help="hand one bounded task to another agent — read from standard input")
+    # Named `<to>` rather than `<agent>`: both words in `delegations <agent> ask <agent>`
+    # are agents, and a reference printing the same bracket twice says which is which to
+    # nobody.
+    asked.add_argument("to", metavar="<to>",
+                       help="which agent answers it — one this install has, and never "
+                            "this one")
+    asked.add_argument("--label", metavar="<text>",
+                       help="a short safe name for the task, shown where other people can "
+                            "read it — never a path and never the task itself")
+    # Not `choices=`: what a posture may be is decided at the provider seam, for the same
+    # reason `roles add --posture` says nothing about what one may be.
+    asked.add_argument("--posture", metavar="read|work",
+                       help="how far the answering agent may reach — never wider than the "
+                            "turn handing the work over already had")
+    shown = asking.add_parser("show", help="one delegation in full")
+    shown.add_argument("ask", metavar="<id>",
+                       help="which delegation — the id `delegations` lists")
+
     # Named the way schedules are: the agent is the word after the verb, the channel is
     # what you call it, and what it *is* comes from `--kind`. Everything a particular
     # platform needs goes after `--` and is never read here (R-CAD-13).
@@ -1083,6 +1128,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         return cmd_scripts(args, scripts)
     if args.command == "roles":
         return cmd_roles(args, agents)
+    if args.command == "delegations":
+        return cmd_delegations(args, agents)
     if args.command == "channels":
         return cmd_channels(args, gateways, agents)
     if args.command == "schedules":

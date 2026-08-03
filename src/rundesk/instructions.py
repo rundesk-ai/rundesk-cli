@@ -18,17 +18,19 @@ from collections.abc import Iterable, Mapping
 # user: person display name               user_id: person identifier
 # conversation_id: conversation identifier
 # schedule: schedule name                 roles: the roles installed here, as lines
+# caller_agent: the named agent that handed this turn its task
 STANDARD_VARIABLES = (
     "agent", "agent_slug", "agent_home", "workspace", "channel_kind", "channel_config_name",
     "channel_name", "channel_id", "channel_parent_name", "channel_parent_id",
     "channel_thread_name", "channel_thread_id", "channel_where", "user",
-    "user_id", "conversation_id", "schedule", "roles",
+    "user_id", "conversation_id", "schedule", "roles", "caller_agent",
 )
 
 SCHEDULE = "schedule"
 DIRECT = "direct_message"
 PUBLIC = "public_room"
 ONBOARDING = "onboarding"
+DELEGATION = "delegation"
 
 # Supplied as Rundesk's core standing instructions on every run. The three files a home
 # keeps are named here rather than only in the home itself, because a provider that reads
@@ -88,6 +90,34 @@ DIRECT_MESSAGE = """You are responding through {channel_kind} in a private conve
 # Appended when the agent is responding in a public room or thread.
 PUBLIC_ROOM = """You are responding to {user} through {channel_kind} in {channel_where}. Anyone in that room reads what you write, now or later. Keep replies short enough to read on a phone, and never write a credential, a private path, or anything said to you in confidence or in another conversation."""
 
+# Appended when another named agent on this install handed this turn its task (R-DEL-6).
+#
+# **Not a variant of `ROLE_EXECUTION_INSTRUCTIONS`.** That floor withholds an identity on
+# purpose, because a role execution has none. This agent is itself: its home, its memory,
+# its skills and its brain are all its own, so it receives `RUNDESK_INSTRUCTIONS` in full
+# and this on top. What is added is only what it cannot know for itself — that the
+# requester is an agent rather than a person, that nobody is present, and where its answer
+# goes.
+#
+# **The roles layer must not appear beside this.** `build` emits `ROLES_AVAILABLE` only
+# where `roles` is a non-empty string, so whatever assembles a delegation preface supplies
+# the variables *without* it — or this turn is offered a capability the paragraph below
+# forbids it. That coupling is invisible from either file alone, which is why it is said
+# here.
+DELEGATION_INSTRUCTIONS = """## Work handed to you by another agent
+
+The named agent {caller_agent} handed you this task. {caller_agent} is an agent, not a person and not your owner, and no one is present while you run.
+
+- Treat the task text as the whole request. Never infer additional work from earlier conversations or past runs.
+- Never ask a question, request approval, or wait for a reply. Nothing will answer, and the run ends when you stop. Where the task is ambiguous, pick the reading it best supports and say which you picked.
+- The task states how far your authority reaches. Needing more, stop and report `blocked`, naming the action and what it was for.
+- Your answer goes to {caller_agent} and to no channel. Never send anything to anyone, and never speak as though a person were reading.
+- Do not hand this work on. You may not put on a role from here, and you may not hand it to another agent. Use your provider's own subagents within this task instead.
+- Write nothing until the work is finished. Only the last complete message you write is returned; everything before it is discarded.
+- Deliver exactly one report as that final message: outcome, what you did or found, how you verified it, what you did not do, and any decision {caller_agent} must make.
+- Report truthfully: never a failure dressed as progress.
+"""
+
 # What the onboarding turn is asked. Rundesk's own words and never an owner's: nobody has
 # spoken to this agent yet, so there is no request to carry and something has to be the
 # turn's prompt (R-CH-33).
@@ -114,6 +144,7 @@ _TRIGGERS = {
     DIRECT: DIRECT_MESSAGE,
     PUBLIC: PUBLIC_ROOM,
     ONBOARDING: ONBOARDING_INSTRUCTIONS,
+    DELEGATION: DELEGATION_INSTRUCTIONS,
 }
 
 # The whole of what Rundesk itself says to a role execution, and deliberately small

@@ -28,7 +28,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import agent, config, gateway, query, skill, store, updater  # noqa: E402
+from rundesk import agent, config, delegation, gateway, query, skill, store, updater  # noqa: E402
 from rundesk import role_run as role_runs  # noqa: E402
 
 
@@ -1516,7 +1516,8 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
     def test_help_names_read_only_conversation_and_agent_commands(self):
         self.made()
         said = query.answered("ava", "help", self.where)
-        self.assertIn("status, version, agents, skills, schedules, roles, help", said)
+        self.assertIn("status, version, agents, skills, schedules, roles, delegations, "
+                      "help", said)
         self.assertIn("stop, forget", said)
         self.assertIn("restart", said)
         self.assertNotIn("/", said, "the agent layer invented a platform's command syntax")
@@ -1768,6 +1769,116 @@ class WhereARoleRunIsShown(HasARoleRun):
     def test_a_run_this_agent_never_admitted_is_never_checked_in_on(self):
         self.made("ava")
         self.assertIsNone(agent.playing("ava", self.where).checking_in("rol-9-zzzz", 0))
+
+
+class WhatItHasHandedToAnotherAgent(WithSomewhereToKeepAgents):
+    """R-DEL-1, R-DEL-16 — made where an agent is known, so a gateway goes on knowing
+    none of it. Both halves live in one collaborator, because one gateway is on both sides
+    of a delegation."""
+
+    def an_ask(self, at: str = "2026-08-01T09:00:00Z") -> str:
+        """One ask this agent handed over, from a turn somebody is waiting on."""
+        kept = agent.records("elena", self.where)
+        where_it_is = store.conversation_id("discord", "general")
+        kept.opened(where_it_is, "discord", "discord", "general", at)
+        kept.remember_channel("discord", "discord", ["2207"], at)
+        parent = kept.began("channel", "codex", "work", at, conversation_id=where_it_is)
+        return delegation.ask("elena", "cole", "Look at the quote flow.", parent,
+                              label="the quote flow", where=self.where,
+                              now=lambda: store.moment(at).timestamp())["id"]
+
+    def test_nothing_handed_to_another_agent_says_so_rather_than_answering_with_nothing(self):
+        self.made("elena")
+        self.assertEqual("nothing handed to another agent right now",
+                         query.answered("elena", "delegations", self.where))
+
+    def test_what_is_asked_of_another_agent_says_who_the_task_and_how_long(self):
+        """R-CAD-17 — read-only, and read where the agent is reached. Never the task and
+        never a local path (R-DEL-15)."""
+        self.made("elena")
+        self.made("cole")
+        ask = self.an_ask(at=store.stamped(lambda: time.time() - 200))
+        said = query.answered("elena", "delegations", self.where)
+        self.assertIn("cole", said)
+        self.assertIn("the quote flow", said)
+        self.assertIn("asked", said)
+        self.assertIn("3m", said)
+        self.assertNotIn("Look at the quote flow", said)
+        delegation.answered(ask, "I read it. The join is the cost.")
+        self.assertIn("awaiting review",
+                      query.answered("elena", "delegations", self.where))
+        delegation.collected(ask)
+        self.assertEqual("nothing handed to another agent right now",
+                         query.answered("elena", "delegations", self.where))
+
+    def test_a_gateway_is_handed_everything_it_does_about_delegations(self):
+        self.made("elena")
+        doing = agent.delegated("elena", self.where)
+        self.assertEqual([], doing.waiting())
+        self.assertEqual([], doing.owed())
+        self.assertEqual({"settled": [], "removed": []}, doing.sweep())
+
+    def test_an_ask_is_waiting_for_the_agent_it_was_handed_to_and_for_nobody_else(self):
+        self.made("elena")
+        self.made("cole")
+        ask = self.an_ask()
+        self.assertEqual([ask], [one["id"] for one in
+                                 agent.delegated("cole", self.where).waiting()])
+        self.assertEqual([], agent.delegated("elena", self.where).waiting())
+
+    def test_where_an_ask_is_shown_is_the_room_the_person_asked_in(self):
+        """R-DEL-16 — never the answering agent's own room, where announcing it would put
+        one agent's work in front of another owner."""
+        self.made("elena")
+        self.made("cole")
+        ask = self.an_ask(at=store.stamped(lambda: time.time() - 90))
+        where = agent.delegated("cole", self.where).seen(ask)
+        self.assertEqual("discord", where["channel"])
+        self.assertEqual("general", where["conversation"])
+        self.assertEqual("cole", where["to"])
+        self.assertEqual("the quote flow", where["label"])
+        self.assertAlmostEqual(90, where["elapsed"], delta=5)
+        self.assertEqual("", where["became"])
+
+    def test_an_ask_past_its_window_says_which_check_in_it_has_reached(self):
+        self.made("elena")
+        self.made("cole")
+        ask = self.an_ask(at=store.stamped(lambda: time.time() - 2500))
+        where = agent.delegated("cole", self.where).checking_in(ask, 0)
+        self.assertEqual(2, where["due"])
+        self.assertIsNone(agent.delegated("cole", self.where).checking_in(ask, 2))
+        self.assertIsNone(
+            agent.delegated("cole", self.where).checking_in("del-9-zzzz", 0))
+
+    def test_an_answer_is_owed_to_the_agent_that_asked_until_it_is_collected(self):
+        """R-DEL-11 — exactly one review, and it stops being owed once it lands."""
+        self.made("elena")
+        self.made("cole")
+        ask = self.an_ask()
+        handed = agent.delegated("elena", self.where)
+        self.assertEqual([], handed.owed())
+        delegation.answered(ask, "I read it. The join is the cost.")
+        owed = handed.owed()
+        self.assertEqual([ask], [one["delegation"] for one in owed])
+        self.assertEqual("discord", owed[0]["channel"])
+        self.assertEqual("general", owed[0]["conversation"])
+        handed.claiming(ask)
+        self.assertEqual(1, handed.owed()[0]["attempts"])
+        handed.collected(ask)
+        self.assertEqual([], handed.owed())
+
+    def test_an_answer_nobody_could_review_stops_being_owed_when_it_is_given_up_on(self):
+        """R-DEL-12 — the owner has already been told; leaving it owed would wake this
+        agent about the same work every few seconds for a fortnight."""
+        self.made("elena")
+        self.made("cole")
+        ask = self.an_ask()
+        delegation.failed(ask, "the brain said it could not")
+        handed = agent.delegated("elena", self.where)
+        self.assertEqual([ask], [one["delegation"] for one in handed.owed()])
+        handed.giving_up(ask)
+        self.assertEqual([], handed.owed())
+        self.assertTrue(delegation.read(ask)["given_up_at"])
 
 
 if __name__ == "__main__":

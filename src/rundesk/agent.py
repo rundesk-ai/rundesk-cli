@@ -1572,6 +1572,157 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
                    giving_up=giving_up, sweep=sweep, quiet=quiet)
 
 
+@dataclass(frozen=True)
+class Delegated:
+    """How a gateway carries work handed to this agent, and delivers what came back.
+
+    Handed over already made, for the reason `Playing` is: an ask needs an agent, a brain
+    and an account, and a gateway knows none of the three. **Both halves live here**,
+    because one gateway is on both sides of a delegation — it answers what was addressed to
+    its agent, and it wakes its agent to review what its agent asked for.
+    """
+
+    waiting: object
+    carry: object
+    seen: object
+    checking_in: object
+    owed: object
+    claiming: object
+    collected: object
+    giving_up: object
+    sweep: object
+
+
+def delegated(name: str, where: Path | None = None, carry=None) -> Delegated:
+    """Everything a gateway does about delegations, made where an agent is known.
+
+    No state of its own: the record outside every agent's store is what two gateways agree
+    through, and the gateway holds which asks are in flight exactly as it already holds
+    which role runs are.
+    """
+    import asyncio
+
+    from rundesk import delegation as delegations
+
+    def waiting() -> list:
+        """Asks addressed to this agent that are ready to be carried now — oldest first.
+
+        One left `working` by a gateway that died is here too, and is carried on rather
+        than started again. **One whose last attempt threw is not ready yet**: something is
+        looking every few seconds, so a fault that raises every time would be three
+        attempts inside fifteen seconds and a ceiling that bounded nothing worth bounding.
+        """
+        return [one for one in delegations.waiting(name)
+                if delegations.ready_to_carry(one)]
+
+    async def carrying(ask_id: str):
+        """Answer one ask, and leave it settled however that goes.
+
+        **An ask that cannot be carried is still an ask its caller has to be told about.**
+        A brain the agent no longer has, a record nobody can vouch for — each ends this
+        work, and one left unsettled would be picked up again on the next look for ever
+        while the agent that asked was never told anything.
+        """
+        try:
+            return await delegations.carry(name, ask_id, where=where, carrying=carry)
+        except asyncio.CancelledError:
+            # A gateway standing down leaves the ask unfinished on purpose: the next
+            # gateway to claim this name carries it on. Nothing stops a delegation, so
+            # unlike a role run there is no second reading of this to make.
+            raise
+        except BaseException as why:  # noqa: BLE001 — a boundary, and see below
+            # Every other way this can fail ends the work truthfully — after a ceiling. A
+            # blip and a fault raise identically here, so the attempt is counted and the
+            # ask left alone until three of them have been spent; then it is settled with
+            # the reason, which owes the asking agent its one review (R-DEL-11).
+            delegations.carry_failed(ask_id, str(why) or why.__class__.__name__)
+            return None
+
+    def seen(ask_id: str):
+        """Where an ask's progress is shown, and what to call it there.
+
+        The conversation the *asking* agent's turn happened in, because that is where
+        somebody asked for the work and where they are waiting for it — the same place the
+        review lands. **Never the answering agent's own room**: its turn is recorded in its
+        own store and reads back with `rundesk messages`, and announcing it there would
+        post one agent's work into another owner's room (R-DEL-16).
+        """
+        row = delegations.read(ask_id)
+        if row is None:
+            return None
+        kept = reading(row["from"], where)
+        room = kept.conversation_of(row.get("parent_conversation") or "")
+        if room is None:
+            return None
+        it = delegations.shown(row)
+        return {"channel": room.get("channel"), "conversation": room.get("space"),
+                "delegation": row["id"], "label": it["label"], "to": it["to"],
+                "elapsed": it["elapsed"],
+                "became": row["state"] if row["state"] in delegations.SETTLED else "",
+                "ok": row["state"] == delegations.ANSWERED}
+
+    def checking_in(ask_id: str, told: int = 0):
+        """Whether this ask owes a check-in now, and what to say in it.
+
+        Answered here rather than in the gateway for the reason `seen` is: how long an ask
+        has been going and how often that is worth saying are facts about delegations, and
+        a gateway that worked them out itself would be a second place they could be worked
+        out differently.
+        """
+        where_it_shows = seen(ask_id)
+        if where_it_shows is None:
+            return None
+        due = delegations.check_in_due(where_it_shows["elapsed"], told)
+        return None if not due else {**where_it_shows, "due": due}
+
+    def owed() -> list:
+        """Every answer this agent is still owed a review of, oldest first.
+
+        **A list rather than the oldest one.** One answer that cannot be delivered — a
+        channel the owner has since removed — would otherwise sit at the head for ever and
+        keep every later one behind it, so work that was done would never be reported and
+        nothing would say why (R-DEL-11).
+        """
+        kept = reading(name, where)
+        found = []
+        for row in delegations.owed(name):
+            room = kept.conversation_of(row.get("parent_conversation") or "")
+            if room is None:
+                continue
+            found.append({
+                "delegation": row["id"],
+                "to": row.get("to") or "",
+                "label": row.get("label") or "",
+                "attempts": int(row.get("review_attempts") or 0),
+                "channel": room.get("channel"),
+                "conversation": room.get("space"),
+                "row": row,
+            })
+        return found
+
+    def claiming(ask_id: str) -> None:
+        """This review is being attempted now — counted where trying is what happened."""
+        delegations.claim_review(ask_id)
+
+    def collected(ask_id: str) -> None:
+        delegations.collected(ask_id)
+
+    def giving_up(ask_id: str) -> None:
+        """This answer will not be reviewed, and it stops being owed (R-DEL-12).
+
+        Whoever calls this has already told the owner — settling it here and saying nothing
+        would be the silence this exists to end.
+        """
+        delegations.giving_up(ask_id)
+
+    def sweep() -> dict:
+        return delegations.sweep()
+
+    return Delegated(waiting=waiting, carry=carrying, seen=seen, checking_in=checking_in,
+                     owed=owed, claiming=claiming, collected=collected,
+                     giving_up=giving_up, sweep=sweep)
+
+
 def unrunnable_channels(name: str, where: Path | None = None) -> list:
     """Which of this agent's channels name a kind that is not on this machine."""
     from rundesk import channel as channels

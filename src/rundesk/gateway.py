@@ -526,6 +526,17 @@ ROLE_SECONDS = 5.0
 #: nothing (R-ROL-12).
 ROLE_SWEEP_SECONDS = 3600.0
 
+#: How often the gateway looks for work another agent handed this one, and for an answer
+#: its own agent is owed. The same pace as role runs and for the same reason: an agent that
+#: just handed work over is waiting for it to begin, and one whose answer has come back is
+#: waiting to be told (R-DEL-11).
+DELEGATION_SECONDS = 5.0
+
+#: How often delegations that went unanswered are settled and settled ones past their
+#: retention are taken away. Once an hour, because both windows are measured in hours and
+#: days and what a sweep finds on a quiet machine is nothing (R-DEL-13).
+DELEGATION_SWEEP_SECONDS = 3600.0
+
 #: How long stopping may take before the gateway stops waiting for what it is running and
 #: goes anyway (R-GW-7). Under what the supervisor allows: launchd sends SIGTERM, waits,
 #: and then sends SIGKILL — and being killed is how children get left behind.
@@ -804,6 +815,7 @@ class Gateway:
         records=None,
         asking=None,
         roles=None,
+        delegations=None,
         granted=None,
         secrets_resolving=None,
     ):
@@ -918,6 +930,21 @@ class Gateway:
         #: number rather than a moment, so a gateway looking every five seconds says a
         #: run is still working once per window rather than once per look (R-ROL-36).
         self._role_checked: dict = {}
+        #: Both halves of handing work to another named agent, handed over already made by
+        #: whoever knows what an agent is, the way `roles` is; `None` is a gateway with no
+        #: agent behind it, which neither answers an ask nor is owed one (R-DEL-1).
+        self.delegations = delegations
+        #: Which asks have a turn in flight, by the ask each is answering. Kept apart from
+        #: `running` for the same reason `_role_tasks` is: a turn's brain is not a program
+        #: this gateway started.
+        self._delegation_tasks: dict = {}
+        #: Which conversation each in-flight ask is keyed on. **Two asks from one turn are
+        #: two brains on one session**, so the guard against starting one twice is keyed on
+        #: the conversation rather than on the ask.
+        self._delegation_rooms: dict = {}
+        #: Which check-in each ask in flight has already been told about, by ask. A number
+        #: rather than a moment, for the reason the role one is (R-DEL-16).
+        self._delegation_checked: dict = {}
         #: Backend update turns this gateway owns. They remain pending durably until one
         #: returns, and shutdown cancels and awaits every task here.
         self._update_turn_tasks: dict[int, asyncio.Task] = {}
@@ -1561,6 +1588,13 @@ class Gateway:
         sweeping = asyncio.ensure_future(self._over_and_over(
             ROLE_SWEEP_SECONDS, self._sweep_roles,
             "could not sweep expired role runs: %s", at_once=True))
+        # Work another named agent handed this one, and the answers this agent's own asks
+        # are still owed. A loop rather than a reaction for the reason the role one is:
+        # both are durable facts a restart has to find again (R-DEL-11).
+        handed_over = asyncio.ensure_future(self._carry_delegations())
+        clearing = asyncio.ensure_future(self._over_and_over(
+            DELEGATION_SWEEP_SECONDS, self._sweep_delegations,
+            "could not sweep delegations: %s", at_once=True))
         watching = asyncio.ensure_future(self._tell_about_skills())
         greeting = asyncio.ensure_future(self._welcome_new_owners())
         try:
@@ -1572,11 +1606,15 @@ class Gateway:
             notices.cancel()
             specialists.cancel()
             sweeping.cancel()
+            handed_over.cancel()
+            clearing.cancel()
             watching.cancel()
             greeting.cancel()
             for task in self._update_turn_tasks.values():
                 task.cancel()
             for task in self._role_tasks.values():
+                task.cancel()
+            for task in self._delegation_tasks.values():
                 task.cancel()
             with contextlib.suppress(BaseException):
                 await holding
@@ -1587,6 +1625,10 @@ class Gateway:
             with contextlib.suppress(BaseException):
                 await sweeping
             with contextlib.suppress(BaseException):
+                await handed_over
+            with contextlib.suppress(BaseException):
+                await clearing
+            with contextlib.suppress(BaseException):
                 await watching
             with contextlib.suppress(BaseException):
                 await greeting
@@ -1596,6 +1638,9 @@ class Gateway:
             if self._role_tasks:
                 await asyncio.gather(
                     *tuple(self._role_tasks.values()), return_exceptions=True)
+            if self._delegation_tasks:
+                await asyncio.gather(
+                    *tuple(self._delegation_tasks.values()), return_exceptions=True)
             # The handlers stay installed across `_go()`. Removing them here restores the
             # system default, which for these two signals is *terminate* — so a second
             # signal arriving during the shutdown window would kill the gateway outright,
@@ -1851,6 +1896,214 @@ class Gateway:
                 task.cancel()
             self.log.warning(
                 "role run %s stopped producing activity and was settled", run_id)
+
+    async def _carry_delegations(self) -> None:
+        """Answer what another agent handed this one, and deliver what this one asked for.
+
+        Both halves are driven off the durable record rather than off anything held in this
+        process, so a gateway that starts finds asks admitted while nothing was up and
+        answers nobody was ever told about. Two agents' gateways meet only here, and only
+        through that record: neither ever opens the other's store.
+        """
+        while not self._stopping:
+            if self.delegations is not None:
+                try:
+                    self._start_asked_delegations()
+                    self._check_in_on_delegations()
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as why:  # noqa: BLE001 — this loop must not die
+                    self.log.warning("could not start a delegation: %s", why)
+                try:
+                    await self._deliver_one_delegated_answer()
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as why:  # noqa: BLE001 — retried after reconnect
+                    self.log.warning("could not deliver a delegated answer: %s", why)
+            await asyncio.sleep(DELEGATION_SECONDS)
+
+    def _start_asked_delegations(self) -> None:
+        """Answer every ask addressed here that nothing is already answering (R-GW-15).
+
+        **Two asks sharing a conversation are carried one at a time.** The conversation is
+        keyed by the agent that asked and the run it asked from, so a turn that handed over
+        two tasks would otherwise put two brains on one provider session. The second waits
+        for the first, which is what the next look picks up.
+        """
+        for row in self.delegations.waiting():
+            ask_id = row["id"]
+            if ask_id in self._delegation_tasks:
+                continue
+            room = (row.get("from"), row.get("parent_run"))
+            if room in self._delegation_rooms.values():
+                continue
+            self._delegation_rooms[ask_id] = room
+            self._delegation_tasks[ask_id] = asyncio.ensure_future(
+                self._answer_one(ask_id))
+            self.log.info("answering delegation %s from %s", ask_id, row.get("from"))
+
+    async def _answer_one(self, ask_id: str) -> None:
+        """One ask, from here to its settled state and no further.
+
+        What a provider-native subagent does inside the turn belongs to that turn and
+        returns to it; nothing about one reaches this gateway and none of them settles the
+        ask.
+        """
+        outcome = None
+        self._show_delegation(ask_id, working=True)
+        try:
+            outcome = await self.delegations.carry(ask_id)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as why:  # noqa: BLE001 — a boundary, reported truthfully
+            self.log.warning("delegation %s could not be answered: %s", ask_id, why)
+        finally:
+            self._delegation_tasks.pop(ask_id, None)
+            self._delegation_rooms.pop(ask_id, None)
+            self._delegation_checked.pop(ask_id, None)
+            # Said however it went, including the ways it can go wrong: work handed over
+            # and never heard of again reads as work still running for ever. Said before
+            # the answer is delivered for review, and never instead of it.
+            self._show_delegation(ask_id, working=False, outcome=outcome)
+
+    def _show_delegation(self, ask_id: str, working: bool, outcome=None) -> None:
+        """Show the work where the person who asked for it is waiting (R-DEL-16).
+
+        One self-contained record either way, so a surface renders it without remembering
+        anything it was told hours earlier. Never allowed to interrupt the work: a platform
+        that cannot be told is a platform that shows less, and the ask carries on.
+        """
+        try:
+            where = self.delegations.seen(ask_id)
+            answering = self._reached.get((where or {}).get("channel"))
+            if where is None or answering is None or not answering.connected:
+                return
+            if working:
+                answering.told_delegation_working(
+                    where["conversation"], ask_id, where["label"],
+                    where.get("to", ""), where.get("elapsed", 0))
+                return
+            answering.told_delegation_settled(
+                where["conversation"], ask_id, bool(where.get("ok")),
+                where["label"], where.get("to", ""), where.get("elapsed", 0),
+                # How it ended is the record's answer and never this gateway's: the ask is
+                # settled in the record before anything is told about it.
+                where.get("became", ""),
+            )
+        except Exception as why:  # noqa: BLE001 — showing is never worth the work
+            self.log.warning("could not show delegation %s: %s", ask_id, why)
+
+    def _check_in_on_delegations(self) -> None:
+        """Say that an ask still being answered is still being answered (R-DEL-16).
+
+        Driven off the asks this gateway is carrying, so a check-in cannot outlive the work
+        it describes.
+        """
+        for ask_id in list(self._delegation_tasks):
+            try:
+                where = self.delegations.checking_in(
+                    ask_id, self._delegation_checked.get(ask_id, 0))
+                if where is None:
+                    continue
+                answering = self._reached.get(where.get("channel"))
+                if (answering is None or not answering.connected
+                        or not where.get("conversation")):
+                    continue
+                # Written before the record is queued: a surface that throws costs one
+                # skipped line rather than a line every five seconds for ever.
+                self._delegation_checked[ask_id] = where["due"]
+                answering.told_delegation_checking_in(
+                    where["conversation"], ask_id, where["label"],
+                    where.get("to", ""), where.get("elapsed", 0))
+            except Exception as why:  # noqa: BLE001 — showing is never worth the work
+                self.log.warning("could not check in on delegation %s: %s", ask_id, why)
+
+    async def _deliver_one_delegated_answer(self) -> None:
+        """Wake this agent for the oldest answer it is still owed, if it can be woken.
+
+        Nothing is marked collected until the review turn has actually answered, so a
+        surface that is down means the answer waits rather than being lost, a review that
+        answered nobody leaves it owed, and a gateway that died anywhere in between finds
+        it owing again.
+        """
+        # Imported here rather than at the top, the way `_deliver_one_role_review` imports
+        # `role_run` and for the same reason: what a delegation is reaches back through an
+        # agent to this file, so a module-level import would close that circle.
+        from rundesk import delegation
+
+        for owed in self.delegations.owed():
+            answering = self._reached.get(owed.get("channel"))
+            if answering is None or not answering.connected or not owed.get("conversation"):
+                # Not deliverable now, and possibly not ever — a channel the owner has
+                # removed never comes back. Every later answer is still tried, so one
+                # undeliverable answer cannot hold up the rest (R-DEL-11).
+                continue
+            if int(owed.get("attempts") or 0) >= delegation.REVIEW_CEILING:
+                await self._give_up_on_one_delegated_answer(answering, owed)
+                continue
+            if answering.answering_somebody(owed["conversation"]):
+                # **An agent mid-turn is not an attempt.** The answer waits, which is
+                # correct and is retried every few seconds — but counting each look would
+                # put hundreds of attempts on an agent that was simply busy for an hour,
+                # and that count is the one thing an owner has for spotting a surface that
+                # is never coming back.
+                continue
+            self.delegations.claiming(owed["delegation"])
+            await answering.told_agent_answered(
+                owed["conversation"], owed["row"],
+                # **Settled when the review answered, never when it was admitted.** A turn
+                # a stale session handed straight back read nothing and reviewed nothing,
+                # and writing the answer off against one is work that was done, paid for
+                # and read by nobody (R-DEL-11).
+                delivered=lambda at=owed["delegation"]: self._delegated_answer_collected(at),
+            )
+            return
+
+    def _delegated_answer_collected(self, ask_id: str) -> None:
+        """One answer, reviewed by the agent that asked for it and settled for good."""
+        self.delegations.collected(ask_id)
+        self.log.info("delivered the answer for delegation %s", ask_id)
+
+    async def _give_up_on_one_delegated_answer(self, answering, owed: dict) -> None:
+        """Settle an answer nobody could be woken for, and tell the owner (R-DEL-12).
+
+        A review that fails every time would otherwise be offered round a loop for the
+        whole retention window, and the asking agent's own conversation is exactly where
+        nothing can be said about it — the review turn there is the thing that is not
+        working.
+
+        **The owner is told before it is written off**, so a surface that throws leaves the
+        answer owed and the notice is tried again rather than lost. And the notice carries
+        the ask and the agent and nothing else: that answer has still been read by nobody,
+        and repeating a word of it here would publish unreviewed work by the one route
+        built to prevent that (R-DEL-14).
+        """
+        from rundesk import delegation
+
+        await answering.told_the_owner(delegation.ANSWER_UNDELIVERABLE.format(
+            ask=owed["delegation"], to=owed.get("to") or "",
+            attempts=int(owed.get("attempts") or 0),
+        ))
+        self.delegations.giving_up(owed["delegation"])
+        self.log.warning(
+            "gave up on the answer for delegation %s after %s attempts",
+            owed["delegation"], owed.get("attempts"),
+        )
+
+    def _sweep_delegations(self) -> None:
+        """Settle what went unanswered, then take away what is past its retention.
+
+        One timer for both, because both are the same question asked of the same directory
+        and neither finds anything on a quiet machine (R-DEL-13).
+        """
+        if self.delegations is None:
+            return
+        said = self.delegations.sweep()
+        for ask_id in said.get("settled") or ():
+            self.log.warning(
+                "delegation %s stopped producing activity and was settled", ask_id)
+        for ask_id in said.get("removed") or ():
+            self.log.info("delegation %s is past its retention window", ask_id)
 
     async def _deliver_update_notices(self) -> None:
         """Deliver a completed self-update once the originating channel is connected."""

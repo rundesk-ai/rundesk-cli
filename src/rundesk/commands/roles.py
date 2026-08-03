@@ -281,6 +281,19 @@ def _hand_to_a_role(args: argparse.Namespace, agents) -> int:
         print(f"{args.name}: NOT ADMITTED — a role run cannot start another one",
               file=sys.stderr)
         return 1
+    if os.environ.get("RUNDESK_DELEGATION"):
+        # **The refusal already exists; this is only the wording** (R-DEL-9). A delegation
+        # turn stands on the pseudo-surface `agent`, which joins no channel row, so
+        # `store.admit_role` already refuses it — but it says "this turn is not happening
+        # on a surface the agent can be reached on", which is true and is not the reason.
+        #
+        # The reason is that a role reports back in a *later* turn, by which time this
+        # agent has already answered the work it was handed and there is nobody left to
+        # review the role's report.
+        print(f"{args.name}: NOT ADMITTED — work another agent handed over cannot be "
+              "handed on to a role; use this brain's own subagents, and the agent that "
+              "asked runs a role itself if the work is role-sized", file=sys.stderr)
+        return 1
     brief = sys.stdin.read()
     try:
         admitted = role_runs.admit(

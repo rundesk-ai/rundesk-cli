@@ -61,7 +61,8 @@ if "--capabilities" in sys.argv:
 prompt = sys.stdin.read()
 told = {what: os.environ.get(what) for what in (
     "RUNDESK_CWD", "RUNDESK_PROVIDER_HOME", "RUNDESK_MODEL", "RUNDESK_RUN",
-    "RUNDESK_RESUME", "RUNDESK_POSTURE", "RUNDESK_SETTINGS", "RUNDESK_PREFACE")}
+    "RUNDESK_RESUME", "RUNDESK_POSTURE", "RUNDESK_SETTINGS", "RUNDESK_PREFACE",
+    "RUNDESK_SKILLS", "RUNDESK_ROLE_RUN", "RUNDESK_DELEGATION")}
 say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
 say(type="text", text=json.dumps({"told": told, "prompt": prompt}))
 say(type="done", ok=True, session="a-handle")
@@ -1604,6 +1605,29 @@ class WhereATurnStands(unittest.TestCase):
         self.assertEqual(Path("/agents/ava/home/skills"), running.skills)
         self.assertIsNone(running.role_run)
         self.assertIsNone(running.role)
+        self.assertIsNone(running.delegating)
+
+
+class ATurnAnsweringAnotherAgent(WithAnAgentToRunTurnsFor):
+    """R-DEL-2, R-DEL-9 — the answering agent keeps its whole identity, and the marker a
+    command refuses a second level on reaches its brain like any other."""
+
+    async def test_a_turn_carrying_a_delegation_names_it_in_the_environment_the_adapter_is_given(self):
+        whose = agent.paths("ava", self.where)
+        said = await self.ask("nosy", context=turn.Execution(
+            cwd=whose["home"], skills=whose["skills"], delegating="del-1-aaaa"))
+        told = json.loads(self.answer(said.run))["told"]
+        self.assertEqual("del-1-aaaa", told["RUNDESK_DELEGATION"])
+        # Its own home and its own skills — the opposite of a role execution, which is
+        # the whole point of handing work to a named agent rather than to a role.
+        self.assertEqual(str(whose["home"]), told["RUNDESK_CWD"])
+        self.assertEqual(str(whose["skills"]), told["RUNDESK_SKILLS"])
+        self.assertIsNone(told["RUNDESK_ROLE_RUN"])
+
+    async def test_an_ordinary_turn_is_told_nothing_about_a_delegation(self):
+        said = await self.ask("nosy")
+        told = json.loads(self.answer(said.run))["told"]
+        self.assertIsNone(told["RUNDESK_DELEGATION"])
 
 
 if __name__ == "__main__":

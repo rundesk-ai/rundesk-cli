@@ -53,6 +53,8 @@ rundesk roles <agent> run [--target <directory>] [--label <text>] [--provider <p
 rundesk roles <agent> say <run>                                                                                                                                                                                         say something to a role that is working — read from standard input
 rundesk roles <agent> show <run>                                                                                                                                                                                        one role run in full
 rundesk roles <agent> stop <run>                                                                                                                                                                                        end a role run before it finishes
+rundesk delegations <agent> ask [--label <text>] [--posture read|work] <to>                                                                                                                                             hand one bounded task to another agent — read from standard input
+rundesk delegations <agent> show <id>                                                                                                                                                                                   one delegation in full
 
 # rundesk itself
 rundesk status                                                                                                                                                                                                          how rundesk itself is on this machine
@@ -166,6 +168,20 @@ rundesk roles ava run development --target ~/code/exporter --label "csv export"
 rundesk roles ava show rol-3-vfs3
 ```
 
+**A delegation**
+
+```sh
+# the work ava has handed to other agents on this install, and what came of each
+rundesk delegations ava
+# one bounded task for cole to answer as itself, the task read from standard input
+rundesk delegations ava ask cole --label "the quote flow"
+#   an agent hands work over from inside its own turn — cole answers once, with its own home, memory, skills and brain, and ava reviews that answer before anybody else hears about it
+# narrower than the turn handing it over; it can never be wider
+rundesk delegations ava ask cole --posture read
+# one delegation: which agent, what state it is in, and whether ava has reviewed it
+rundesk delegations ava show del-3-vfs3
+```
+
 ## What the arguments mean
 
 ```sh
@@ -201,7 +217,7 @@ rundesk roles ava show rol-3-vfs3
 --set <key=value>               anything that brain takes, carried to it unread; repeatable
 --since <id>                    only what was said after this one, by the id shown beside it
 --skills <a,b,c>                the skills every run of it is given, comma separated — at least one; a name this machine has not got is carried and reported rather than refused
---source <how>                  only messages belonging to work admitted this way — one of channel | role | schedule | terminal
+--source <how>                  only messages belonging to work admitted this way — one of agent | channel | role | schedule | terminal
 --source <source>               whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine
 --status                        show the last queued update and its final outcome
 --stdin                         read the value from what is piped in rather than asking for it
@@ -218,6 +234,7 @@ rundesk roles ava show rol-3-vfs3
 <backup>                        which one, by the name it is listed under
 <catalog>                       which catalog
 <channel>                       what to call it, and what to name it by later
+<id>                            which delegation — the id `delegations` lists
 <name>                          what programs read it as — begins with a capital letter, and the rest is capital letters, digits and underscores
 <option>                        after `--`, whatever this kind of channel needs — carried to it exactly as typed, and never read here
 <program>                       after `--`, the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH
@@ -228,6 +245,7 @@ rundesk roles ava show rol-3-vfs3
 <schedule>                      what to call it, and what to name it by later
 <skill>                         which skill, by the name it is under
 <text>                          what to tell it, with {agent} {channel} {surface} {where} {called} {user} {conversation} filled in — empty takes it back off, and left out shows what is there
+<to>                            which agent answers it — one this install has, and never this one
 <words>                         what to look for, in the words that were actually said
 ```
 

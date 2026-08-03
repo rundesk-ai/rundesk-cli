@@ -962,6 +962,22 @@ class WhereAConversationIsHappening(WithAnAgentsOwnRecords):
         self.assertEqual("c2", kept.conversation("terminal", "general")["id"])
         self.assertEqual(["c1"], [one["id"] for one in kept.conversations(channel="discord")])
 
+    def test_a_conversation_on_a_channel_this_agent_has_is_one_it_can_be_reached_on(self):
+        """Asked before anything durable is written, so work that could never be reported
+        back is refused for nothing rather than found out afterwards."""
+        kept = self.built()
+        kept.remember_channel("discord", "discord", ["u1"], AT)
+        kept.opened("c1", "discord", "discord", "general", AT)
+        self.assertTrue(kept.reachable_conversation("c1"))
+
+    def test_a_conversation_on_a_surface_that_joins_no_channel_is_not_reachable(self):
+        """The pseudo-surface work handed to another agent happens on. Nobody can be woken
+        there, which is the whole of why a turn standing on one may not hand work over."""
+        kept = self.built()
+        kept.opened("c-agent", "agent", "agent", "ava/1-aaaa", AT)
+        self.assertFalse(kept.reachable_conversation("c-agent"))
+        self.assertFalse(kept.reachable_conversation("no-such-conversation"))
+
 
 class WhereASchedulesWorkIsAnnounced(WithAnAgentsOwnRecords):
     """One answer for what a schedule says it did and for where a role admitted by it
@@ -1049,19 +1065,26 @@ class WhichBrainAConversationIsCarriedOnBy(WithAnAgentsOwnRecords):
 
 class HowWorkCameToBeAdmitted(WithAnAgentsOwnRecords):
     """R-RUN-16 — the only record of how a run came about. Free text until now: `"hand"`
-    existed in this suite and in nothing else, which is exactly what a fourth word arriving
+    existed in this suite and in nothing else, which is exactly what a word arriving
     by typo looks like from outside. A word nothing can read back is a run whose origin is
     lost, and this is the column somebody reads at three in the morning to find out whether
     they asked for what happened."""
 
     def test_every_way_work_is_admitted_is_named_here(self):
-        """R-RUN-16 — three, because there are three things that start work: somebody at a
-        terminal, somebody on a surface the agent is reachable on, and the clock."""
+        """R-RUN-16 — five, because there are five things that start work: somebody at a
+        terminal, somebody on a surface the agent is reachable on, the clock, a role run,
+        and another named agent on this install."""
         kept = self.built()
         for source in store.SOURCES:
             with self.subTest(source=source):
                 run = self.a_run(kept, source=source)
                 self.assertEqual(source, kept.run(run)["source"])
+
+    def test_the_ways_work_is_admitted_are_exactly_these_five_in_this_order(self):
+        """R-RUN-16 — asserted whole, so a sixth arriving by typo is caught here rather
+        than becoming a word nothing can read back. The order is what a listing offers."""
+        self.assertEqual(
+            ("terminal", "channel", "schedule", "role", "agent"), store.SOURCES)
 
     def test_work_admitted_from_somewhere_nobody_declared_is_refused(self):
         """R-RUN-16 — refused where an author and a record kind already are, so the set is
@@ -1627,18 +1650,18 @@ class WhenAGatewayWasLastUpIsAMomentNotAString(WithAnAgentsOwnRecords):
 
 class HowWorkIsAdmittedIsSpelledOneWay(unittest.TestCase):
     """R-RUN-16 — `store.began` refuses a word that is not one of `SOURCES`, and `turn.py`
-    names all three so a caller has something to pass. Two spellings of one set is two too
+    names every one so a caller has something to pass. Two spellings of one set is two too
     many: they would agree until one of them did not, and the way that fails is a turn refused
     at the moment it is admitted — the one place a refusal costs the work."""
 
     def test_the_words_a_turn_names_are_the_words_the_records_declare(self):
-        """R-RUN-16 — asked of both rather than written down here, so a fourth one added to
+        """R-RUN-16 — asked of both rather than written down here, so one added to
         either side has to be added to the other in the same commit."""
         from rundesk import turn
 
         self.assertEqual(
             set(store.SOURCES),
-            {turn.TERMINAL, turn.CHANNEL, turn.SCHEDULE, turn.ROLE},
+            {turn.TERMINAL, turn.CHANNEL, turn.SCHEDULE, turn.ROLE, turn.AGENT},
         )
 
 

@@ -889,6 +889,43 @@ class WhatARoleExecutionIsTold(unittest.TestCase):
         self.assertEqual("/project", said["RUNDESK_CWD"])
         self.assertEqual("/runs/rol-1-aaaa/skills", said["RUNDESK_SKILLS"])
 
+    def test_an_ordinary_turn_is_told_nothing_about_a_delegation(self):
+        said = provider.environment(
+            home=Path("/run"), cwd=Path("/home"), provider_home=Path("/brain"),
+            skills=Path("/skills"), run="1-aaaa",
+        )
+        self.assertNotIn("RUNDESK_DELEGATION", said)
+
+    def test_a_turn_answering_another_agent_is_told_which_delegation(self):
+        """R-DEL-9 — the marker a command refuses early on. An agent answering work handed
+        to it stands in its own home with its own skills, which is the whole difference
+        from a role execution beside it."""
+        said = provider.environment(
+            home=Path("/run"), cwd=Path("/agents/cole/home"), provider_home=Path("/brain"),
+            skills=Path("/agents/cole/skills"), run="2-bbbb",
+            delegation="del-1-aaaa",
+        )
+        self.assertEqual("del-1-aaaa", said["RUNDESK_DELEGATION"])
+        self.assertNotIn("RUNDESK_ROLE_RUN", said)
+        self.assertEqual("/agents/cole/home", said["RUNDESK_CWD"])
+        self.assertEqual("/agents/cole/skills", said["RUNDESK_SKILLS"])
+
+
+class HowMuchOfTheMachineAdmittedWorkMayTouch(unittest.TestCase):
+    """The one rule both a role run and a delegation settle their posture by."""
+
+    def test_work_admitted_by_a_turn_that_may_only_look_may_only_look(self):
+        self.assertEqual(provider.READ, provider.narrowed(provider.READ, provider.WORK))
+
+    def test_work_asking_only_to_look_looks_however_much_its_parent_could_do(self):
+        self.assertEqual(provider.READ, provider.narrowed(provider.WORK, provider.READ))
+
+    def test_work_admitted_by_a_working_turn_that_wants_to_work_may_work(self):
+        self.assertEqual(provider.WORK, provider.narrowed(provider.WORK, provider.WORK))
+
+    def test_a_parent_turn_that_recorded_no_posture_is_not_read_as_a_narrower_one(self):
+        self.assertEqual(provider.WORK, provider.narrowed(None, provider.WORK))
+
 
 if __name__ == "__main__":
     ADAPTER, rest = _taken(sys.argv[1:], "--adapter")
