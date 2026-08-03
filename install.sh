@@ -381,6 +381,27 @@ delete whole. Point it at a directory of its own and try again. Nothing has been
 would delete it whole. Check RUNDESK_SECRETS_DIR. Nothing has been removed."
       fi
     fi
+    # **The same two guards, and `$CONFIG_DIR` needs them more.** `RUNDESK_SECRETS_DIR` is at
+    # least rundesk's own variable; `XDG_CONFIG_HOME` is nobody's in particular, is set by
+    # shells, desktop sessions and agent turns alike, and is read at the top of this script
+    # to derive a directory the line below deletes whole. So a purge run anywhere that
+    # carries one reaches a directory nobody pointed it at — the owner's settings, and the
+    # credentials R-SEC-26 promises no backup holds. Recognised by what stands in it rather
+    # than by its name, which anybody's configuration home may also spell "rundesk".
+    if [[ -d "$CONFIG_DIR" ]]; then
+      case "$CONFIG_DIR" in
+        "$HOME"|"$HOME"/|/|"") die "the configuration directory is $CONFIG_DIR, which --purge
+would delete whole. Check XDG_CONFIG_HOME. Nothing has been removed." ;;
+      esac
+      # An empty one has nothing to lose and is deleted; one holding somebody else's files
+      # and none of rundesk's is refused. `secrets/` is this script's own (above), and
+      # `integrations/` is where an integration skill keeps its environment.
+      if [[ -n "$(ls -A "$CONFIG_DIR" 2>/dev/null)" \
+            && ! -d "$CONFIG_DIR/secrets" && ! -d "$CONFIG_DIR/integrations" ]]; then
+        die "$CONFIG_DIR holds nothing rundesk wrote, and --purge would delete it whole.
+Check XDG_CONFIG_HOME. Nothing has been removed."
+      fi
+    fi
   fi
   # Refused rather than continued: deleting the command while a gateway is still running
   # leaves an agent nobody can reach and takes away the very thing that could stop it.
