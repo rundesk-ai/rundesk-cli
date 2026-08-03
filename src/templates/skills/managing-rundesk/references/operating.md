@@ -42,6 +42,37 @@ rundesk usage [<name>]         what it has cost
 rundesk logs <name>            what a gateway has been saying, when something failed
 ```
 
+## The values every program here is given
+
+```sh
+rundesk env                    every value kept, and never one of them
+rundesk env show <NAME>        how one is kept, and what tells it apart
+rundesk env check [<NAME>]     whether each can still be produced
+rundesk env --where            the directory they are kept in
+```
+
+One set for the whole install. Every brain, every channel adapter, every schedule and every
+integration command is given all of it — which is why an integration command finds its
+credential without anybody exporting anything: the shell you run it in descends from a
+program rundesk started with these in its environment.
+
+A value is either **held** by this install or **fetched** by a command whose words are kept
+and run again each time a program starts. `check` is the only thing that runs those, which
+is why a listing is free and a check may take a moment.
+
+**No form of this shows a value.** The last few characters and a mark are what you get, and
+the mark is taken with a key of this install's, so two names showing one mark hold one
+value and the same value on another machine marks differently. There is no flag for the
+rest — asked what a value is, say that nothing on this machine can answer that.
+
+`check` distinguishes two failures and so must you: **refused** means there is no value,
+and **could not answer** means the command timed out or would not run, which says nothing
+about whether the value is good. Never advise replacing a credential on the second.
+
+Placing one is the owner's at a terminal — `rundesk env set <NAME>`, typed with echo off.
+You may run it for a value **you** minted; never ask a person to send you one, because
+anything said to you is in the record and possibly in a chat room.
+
 ## When something is not there
 
 A command that does not exist means an older rundesk than this file describes — check

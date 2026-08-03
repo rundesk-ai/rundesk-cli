@@ -22,16 +22,16 @@ again each time a program starts. Nothing rundesk shows ever gives a whole value
 
 |  | ID | Requirement | Evidence |
 |:--:|---|---|---|
-| ❌ | R-SEC-1 | Every program rundesk starts is given every value this install keeps (R-PROC-1) | src/rundesk/secret.py — the values are produced, and no builder hands them to a program yet |
+| ✅ | R-SEC-1 | Every program rundesk starts is given every value this install keeps (R-PROC-1) | `every program is given every value this install keeps`, `a program is given nothing of its own when this install keeps nothing` |
 | ✅ | R-SEC-2 | The values are the install's, resolved from where it keeps them rather than from any agent | `every kept value is produced`, `its own variable says where things are kept` |
 | ✅ | R-SEC-3 | A value is either held by this install or fetched by a command rundesk runs | `a held value is kept where nothing else can read it`, `the command is kept and what it printed is not` |
 | ✅ | R-SEC-4 | What this install records about a value never holds the value | `what is kept holds no value` |
 | ✅ | R-SEC-5 | A value is identified by a masked hint of it rather than by the value | `a hint shows the end of a long value and none of a short one` |
 | ✅ | R-SEC-6 | Two names holding one value carry one mark, and two holding different values do not | `two names holding one value share a mark`, `two names holding different values do not` |
 | ✅ | R-SEC-7 | A mark taken by one install says nothing about the same value on another | `a mark from one install does not match another`, `this installs own key is made once and kept to its owner` |
-| ❌ | R-SEC-8 | A value being kept is never an argument to the command that keeps it | — |
-| ❌ | R-SEC-9 | A value is taken from a terminal that does not echo it, or from what is piped in | — |
-| ❌ | R-SEC-10 | A value nobody is there to supply is refused rather than waited for | — |
+| ✅ | R-SEC-8 | A value being kept is never an argument to the command that keeps it | `a value given as an argument is refused`, `no option on the command takes a value` |
+| ✅ | R-SEC-9 | A value is taken from a terminal that does not echo it, or from what is piped in | `a value is taken from a pipe`, `a value is typed without being echoed` |
+| ✅ | R-SEC-10 | A value nobody is there to supply is refused rather than waited for | `a value nobody can supply is a refusal rather than a wait` |
 | ✅ | R-SEC-11 | A name rundesk itself decides for the programs it starts is refused | `every name rundesk decides for a program is refused` |
 | ✅ | R-SEC-12 | A name that would change what code a program loads or runs is refused | `a name that changes which code a program loads is refused` |
 | ✅ | R-SEC-13 | A name that could reach outside where values are kept is refused | `a name that could reach outside where values are kept is refused` |
@@ -43,16 +43,16 @@ again each time a program starts. Nothing rundesk shows ever gives a whole value
 | ✅ | R-SEC-19 | Keeping the value already held under a name leaves what is recorded about it unchanged | `keeping the value already there changes nothing` |
 | ✅ | R-SEC-20 | Taking a value away removes both the value and what was recorded about it | `taking a value away names the one that went` |
 | ✅ | R-SEC-21 | Asking about a name nothing is kept under is refused rather than answered | `asking about a name nothing is kept under is refused` |
-| ❌ | R-SEC-22 | An owner can ask whether each kept value can still be produced, without one being shown | — |
+| ✅ | R-SEC-22 | An owner can ask whether each kept value can still be produced, without one being shown | `every kept value can be proved reachable without being shown`, `a check that could not reach one ends unsuccessfully` |
 | ✅ | R-SEC-23 | Listing what is kept produces no value and runs no command that fetches one | `a listing fetches nothing` |
 | ✅ | R-SEC-24 | What is kept is readable only by the owner of this install | `a held value is kept where nothing else can read it` |
-| ❌ | R-SEC-25 | What is kept is never written into the job the machine keeps a gateway running from | — |
+| ✅ | R-SEC-25 | What is kept is never written into the job the machine keeps a gateway running from | `no kept value reaches the job the machine holds` |
 | ✅ | R-SEC-26 | What is kept stands outside everything a copy of this install holds | `what is kept stands outside everything a copy of this install holds`, `the default stands outside the installs own data` |
 | ✅ | R-SEC-27 | What is kept and cannot be read is refused rather than read as nothing being kept | `what is kept and cannot be read is said rather than taken as nothing` |
 | ✅ | R-SEC-28 | What is kept cannot grow past what a program can be started with | `what is kept cannot grow past what a program can be started with` |
 | ✅ | R-SEC-29 | A value a caller already has its own answer for is left out of what it is given | `what the caller already has an answer for is left out` |
 | ✅ | R-SEC-30 | Producing the values never runs a fetching command on the loop a gateway is carrying work on | `the same answer is given off the event loop` |
-| ✅ | R-SEC-31 | Where values are kept stands where an integration command already looks for its own | `it stands where every integration command already looks`, `a relative configuration home is ignored rather than resolved` |
+| ✅ | R-SEC-31 | Where values are kept stands where an integration command already looks for its own | `it stands where every integration command already looks`, `a relative configuration home is ignored rather than resolved`, `where values are kept is printed and nothing else` |
 
 ## Open questions
 

@@ -18,6 +18,11 @@ machine is rundesk, whatever it calls its schedules or jobs.
 - **Never stop or restart your own agent.** It stands down the gateway your turn runs inside —
   you stop mid-sentence. Give your owner the command instead.
 - **Never remove an agent or uninstall rundesk** unless asked for that exact thing.
+- **Never ask anybody to send you a credential.** Not in a room, not in a DM. Anything said to
+  you is in the record for ever and may be in a chat app besides — a token pasted to you is a
+  token you have just published. Send your owner the command to type at their own terminal:
+  `rundesk env set <NAME>`. Placing one yourself is for a value **you** minted, never one a
+  person typed at you.
 - **Never put a backup back unless asked for that exact copy.** A restore replaces everything,
   and agents made since that copy go away — one of them may be you.
 - **`rundesk update` refuses while you are running.** Correct, not a fault.
@@ -30,6 +35,7 @@ These list. **Read the reference before changing anything in that area.**
 |---|---|---|
 | What was said, what you did, what it cost | `messages` · `runs` · `usage` | `references/where-you-are.md` |
 | Agents, gateways, channels, the install, skills | `agents` · `doctor` · `channels` · `status` · `config` · `skills` | `references/operating.md` |
+| The values every program here is given | `env` · `env check <NAME>` | `references/operating.md` |
 | Your gateway's own account | `logs <you>` | `references/operating.md` |
 | Copies of everything your owner keeps | `backups` | `references/backups.md` |
 | The specialists work is handed to | `roles <you>` | `references/writing-a-role.md` |
@@ -65,5 +71,14 @@ Narrow before you widen. **`messages` first** — `runs` is ids and costs, and c
   not on every machine; it says `SEARCHING UNAVAILABLE` rather than returning nothing.
 - **A schedule is the owner's clock, not your queue.** Never add one to move your own work out
   of the turn you are in — background work is a role.
-- **Never write a path down.** Ask: `rundesk skills --where`, `rundesk backups --where`.
+- **`rundesk env` never shows a value — to anyone, you included.** The last few characters and
+  a mark are how you tell one from another. Asked what one *is*, the answer is that nothing on
+  this machine can say, and there is no flag for it. Two names showing one mark hold one value.
+- **Before saying an integration command is broken, run `rundesk env check <NAME>`.** A value
+  fetched by a command can be there one hour and unreachable the next, and "could not answer"
+  is not the same as "there is no value" — never replace a credential on the strength of it.
+- **A value placed now reaches your *next* turn, not this one.** Your environment was built
+  when this turn started, and nothing can change a running program's.
+- **Never write a path down.** Ask: `rundesk skills --where`, `rundesk backups --where`,
+  `rundesk env --where`.
 - **What you changed goes to your log**, not to this conversation.

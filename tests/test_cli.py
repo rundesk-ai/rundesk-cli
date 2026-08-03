@@ -59,8 +59,10 @@ _REAL_PATIENCE = (standing.START_PATIENCE, standing.CYCLE_PATIENCE,
 _REAL_REMOVAL = update_commands._remove_this_install
 _REAL_BACKUP_DIR = os.environ.get("RUNDESK_BACKUP_DIR")
 _REAL_DATA_DIR = os.environ.get("RUNDESK_DATA_DIR")
+_REAL_SECRETS_DIR = os.environ.get("RUNDESK_SECRETS_DIR")
 _TEST_BACKUP_DIR = None
 _TEST_DATA_DIR = None
+_TEST_SECRETS_DIR = None
 
 
 def _never_the_real_installer(installer, asked):
@@ -84,7 +86,7 @@ _asked_of_the_installer: list = []
 
 
 def setUpModule():
-    global _TEST_BACKUP_DIR, _TEST_DATA_DIR
+    global _TEST_BACKUP_DIR, _TEST_DATA_DIR, _TEST_SECRETS_DIR
     update_commands._remove_this_install = _never_the_real_installer
     # The automatic surface walk invokes every operation, including the real backup
     # listing. Without this boundary it reads the owner's backup directory, and under the
@@ -99,6 +101,13 @@ def setUpModule():
     _TEST_DATA_DIR = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-data-"))
     os.environ["RUNDESK_DATA_DIR"] = str(_TEST_DATA_DIR)
     config.ensure(_TEST_DATA_DIR)
+    # The walk invokes every operation, `env check` among them — and that one runs the
+    # command each value kept by a command is fetched by. Against the owner's own store
+    # that is a test suite unlocking their vault, and against a fetching command that
+    # wants a fingerprint it is a suite that cannot finish unattended. A surface test
+    # needs an empty place, never theirs.
+    _TEST_SECRETS_DIR = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-secrets-"))
+    os.environ["RUNDESK_SECRETS_DIR"] = str(_TEST_SECRETS_DIR)
     # Both turned down together. Turning the patience down alone left a wait that had room
     # for one look and a fraction of a second's margin on the second — so a case proving a
     # cycle waits passed on a quick machine and reported a failure on a loaded one.
@@ -122,6 +131,12 @@ def tearDownModule():
         os.environ["RUNDESK_DATA_DIR"] = _REAL_DATA_DIR
     if _TEST_DATA_DIR is not None:
         shutil.rmtree(_TEST_DATA_DIR, ignore_errors=True)
+    if _REAL_SECRETS_DIR is None:
+        os.environ.pop("RUNDESK_SECRETS_DIR", None)
+    else:
+        os.environ["RUNDESK_SECRETS_DIR"] = _REAL_SECRETS_DIR
+    if _TEST_SECRETS_DIR is not None:
+        shutil.rmtree(_TEST_SECRETS_DIR, ignore_errors=True)
 from rundesk import agent as real_agent  # noqa: E402
 from rundesk import skill as real_skill  # noqa: E402
 from rundesk import channel  # noqa: E402
@@ -490,7 +505,7 @@ class BuiltCommandTests(unittest.TestCase):
         built = {"version", "update", "uninstall", "add", "configure", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
                  "channels", "runs", "usage", "search", "messages", "skills", "scripts",
-                 "backups", "config", "roles"}
+                 "backups", "config", "env", "roles"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 

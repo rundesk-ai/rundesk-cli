@@ -58,3 +58,59 @@ rundesk backups
 ```
 
 Use `rundesk backups restore <backup>` to preview and restore a saved installation.
+
+## The values every program is given
+
+Rundesk builds the environment for every program it starts rather than inheriting one, so a
+variable exported in your own shell never reaches a gateway, a brain or an integration
+command. `rundesk env` is how you place one that does:
+
+```sh
+rundesk env set GITHUB_TOKEN                      # typed here, not echoed
+printf '%s' "$TOKEN" | rundesk env set GH --stdin # from a script
+rundesk env set OP_GH --from 'op read op://work/github/token'
+rundesk env                                       # what is kept, and never a value
+rundesk env check                                 # whether each can still be produced
+rundesk env unset GITHUB_TOKEN
+```
+
+There is one set for the whole install. Every brain, every channel adapter, every schedule
+and every integration command is given all of it, which is why an integration finds its
+credential with nothing exported first — the shell it runs in descends from a program
+rundesk started.
+
+A value is kept one of two ways. **Held** puts it in a file only you can read. **Fetched**
+keeps the words of a command that prints one — `op read`, `pass show`, `gpg -d` — and runs
+it again each time a program starts, so the value is never on this disk at all. The words
+of that command are kept and are shown by `rundesk env show`, so do not write a value into
+one.
+
+**Nothing shows a value in full, to you or to an agent.** What is shown is the last few
+characters and a mark taken with a key of this install's: two names holding one value carry
+one mark, so you can see at a glance that a credential reached you by two routes. There is
+no flag that prints the rest.
+
+Some names are refused, and the refusal is the point rather than a formality: anything
+rundesk itself decides for a program (`PATH`, `HOME`, anything beginning `RUNDESK_`), and
+anything that would change what code a program loads or runs (`DYLD_*`, `LD_*`, `PYTHON*`,
+`NODE_OPTIONS`). A value under one of those names would run somebody's code inside every
+turn of every agent, for ever.
+
+A channel's own credential always wins over one kept here. Two agents may hold two
+different bots, so a value named for a channel's own variable is never given to that
+channel's adapter — place a channel credential with `rundesk channels <agent> add`.
+
+Where they are kept:
+
+```sh
+rundesk env --where     # ${XDG_CONFIG_HOME:-$HOME/.config}/rundesk/secrets
+```
+
+`RUNDESK_SECRETS_DIR` moves it. It stands **outside** the data directory deliberately, so
+**a backup never carries a credential** — and a restore onto a new machine brings back
+everything except these, which have to be placed again. An update does nothing to them; an
+uninstall leaves them, and `--purge` takes them.
+
+A replaced value reaches every program started from then on. A brain picks it up on its
+next turn with no restart; a channel adapter, which is held open for as long as the gateway
+is up, picks it up when that gateway next starts it.

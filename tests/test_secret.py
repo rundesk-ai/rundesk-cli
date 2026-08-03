@@ -502,5 +502,219 @@ class WhereThingsAreKept(unittest.TestCase):
         self.assertNotIn(data_home().resolve(), secret.home().resolve().parents)
 
 
+class ATerminalThatIsNotThere:
+    """Standard input that exists, is not a terminal, and will never hand anything over.
+
+    What a brain's tool shell gives its children, and what a suite walking the surface
+    gives the command. Reading it blocks until the far end closes, which may be never — so
+    a case that lets the real one through proves the opposite of what it says.
+    """
+
+    def __init__(self, said: str = "", terminal: bool = False):
+        self.said = said
+        self.terminal = terminal
+        self.asked = 0
+
+    def isatty(self) -> bool:
+        return self.terminal
+
+    def readline(self) -> str:
+        self.asked += 1
+        return self.said
+
+
+class WhatTheCommandSays(unittest.TestCase):
+    """The surface, driven through `cli.main` — nothing here reaches the owner's own."""
+
+    def setUp(self):
+        self.where = Path(tempfile.mkdtemp(prefix="rundesk-env-surface-"))
+        self.addCleanup(shutil.rmtree, self.where, ignore_errors=True)
+        was = os.environ.get("RUNDESK_SECRETS_DIR")
+        os.environ["RUNDESK_SECRETS_DIR"] = str(self.where)
+        self.addCleanup(
+            lambda: os.environ.__setitem__("RUNDESK_SECRETS_DIR", was) if was is not None
+            else os.environ.pop("RUNDESK_SECRETS_DIR", None))
+        self.assertIn(str(self.where), str(secret.home()),
+                      "this suite would otherwise read the owner's own values")
+
+    def typed(self, argv, stdin=None):
+        """One command, exactly as `rundesk` runs it, with nothing of the owner's near it."""
+        import contextlib
+        import io
+
+        from rundesk import cli
+
+        out, err = io.StringIO(), io.StringIO()
+        was = sys.stdin
+        sys.stdin = stdin if stdin is not None else ATerminalThatIsNotThere()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                try:
+                    code = cli.main(argv)
+                except SystemExit as why:
+                    code = why.code
+        finally:
+            sys.stdin = was
+        return code, out.getvalue(), err.getvalue()
+
+    def keep(self, name: str, value: str) -> None:
+        secret.remember(name, value, now=NOW, kept_from=HERE, where=self.where)
+
+    def actions(self) -> list:
+        """Every action under `env`, read off the parser rather than listed here.
+
+        So an action added tomorrow is covered by the case below the day it lands, rather
+        than the day somebody remembers this list exists.
+        """
+        import argparse
+
+        from rundesk import cli
+
+        parser = cli.build_parser()
+        under = next(one for one in parser._actions
+                     if isinstance(one, argparse._SubParsersAction))
+        env = under.choices["env"]
+        beneath = next((one for one in env._actions
+                        if isinstance(one, argparse._SubParsersAction)), None)
+        return sorted(beneath.choices) if beneath else []
+
+    def test_no_action_ever_prints_a_whole_value(self):
+        """R-SEC-4 — walked off the parser, so an action added tomorrow is covered the day
+        it lands rather than the day somebody remembers to add it here."""
+        self.keep("GITHUB_TOKEN", A_VALUE)
+        asked = [["env"], ["env", "--help"]]
+        asked += [["env", act] for act in self.actions()]
+        asked += [["env", act, "GITHUB_TOKEN"] for act in self.actions()]
+
+        for argv in asked:
+            with self.subTest(argv=" ".join(argv)):
+                _code, out, err = self.typed(argv)
+                self.assertNotIn(A_VALUE, out)
+                self.assertNotIn(A_VALUE, err)
+
+    def test_a_value_given_as_an_argument_is_refused(self):
+        """R-SEC-8 — an option's value is in the process table for every user on the
+        machine and in a shell history for ever."""
+        code, _out, _err = self.typed(["env", "set", "GITHUB_TOKEN", A_VALUE])
+
+        self.assertEqual(2, code)
+        self.assertEqual([], secret.listed(self.where))
+
+    def test_no_option_on_the_command_takes_a_value(self):
+        """R-SEC-8 — the guard on the one above: the only thing `set` takes is a name, a
+        way to read one, and the words of a command that prints one."""
+        import argparse
+
+        from rundesk import cli
+
+        parser = cli.build_parser()
+        under = next(one for one in parser._actions
+                     if isinstance(one, argparse._SubParsersAction))
+        beneath = next(one for one in under.choices["env"]._actions
+                       if isinstance(one, argparse._SubParsersAction))
+        put = beneath.choices["set"]
+
+        positional = [one.dest for one in put._actions if not one.option_strings]
+        self.assertEqual(["value_name"], positional)
+        taking = sorted(one.dest for one in put._actions
+                        if one.option_strings and one.nargs != 0 and one.dest != "help")
+        self.assertEqual(["fetched_by"], taking)
+
+    def test_a_value_nobody_can_supply_is_a_refusal_rather_than_a_wait(self):
+        """R-SEC-10 — reading standard input is asked for and never inferred. Inferring it
+        reads an open pipe with nothing in it, which is what a brain's tool shell hands its
+        children, and blocks until the far end closes — which may be never."""
+        nobody = ATerminalThatIsNotThere()
+
+        code, _out, err = self.typed(["env", "set", "GITHUB_TOKEN"], stdin=nobody)
+
+        self.assertEqual(1, code)
+        self.assertEqual(0, nobody.asked, "it read a pipe nobody was going to write to")
+        self.assertIn("NOT KEPT", err)
+        self.assertEqual([], secret.listed(self.where))
+
+    def test_a_value_is_taken_from_a_pipe(self):
+        """R-SEC-9 — the shape a script uses, and the only one that reads standard input."""
+        code, out, _err = self.typed(["env", "set", "GITHUB_TOKEN", "--stdin"],
+                                     stdin=ATerminalThatIsNotThere(A_VALUE + "\n"))
+
+        self.assertEqual(0, code)
+        self.assertIn("KEPT", out)
+        self.assertEqual(A_VALUE, secret.resolve(where=self.where).values["GITHUB_TOKEN"])
+
+    def test_a_value_is_typed_without_being_echoed(self):
+        """R-SEC-9 — at a terminal it is asked for through the one call that turns echo
+        off, so it is not left on the screen behind whoever typed it."""
+        from rundesk.commands import env as command
+
+        asked = []
+        real = command.getpass.getpass
+        command.getpass.getpass = lambda prompt="": (asked.append(prompt) or A_VALUE)
+        self.addCleanup(setattr, command.getpass, "getpass", real)
+
+        code, _out, _err = self.typed(["env", "set", "GITHUB_TOKEN"],
+                                      stdin=ATerminalThatIsNotThere(terminal=True))
+
+        self.assertEqual(0, code)
+        self.assertEqual(1, len(asked), "the value was not asked for with echo off")
+        self.assertIn("GITHUB_TOKEN", asked[0])
+
+    def test_every_kept_value_can_be_proved_reachable_without_being_shown(self):
+        """R-SEC-22 — the answer an owner needs before they replace a credential that was
+        working, and the one an agent needs before it says an integration is broken."""
+        self.keep("GITHUB_TOKEN", A_VALUE)
+
+        code, out, _err = self.typed(["env", "check"])
+
+        self.assertEqual(0, code)
+        self.assertIn("GITHUB_TOKEN", out)
+        self.assertNotIn(A_VALUE, out)
+
+    def test_a_check_that_could_not_reach_one_ends_unsuccessfully(self):
+        """R-SEC-22 — a script reads the code, so saying so on the screen is not enough."""
+        self.keep("GITHUB_TOKEN", A_VALUE)
+        (secret.values_home(self.where) / "GITHUB_TOKEN").unlink()
+
+        code, _out, _err = self.typed(["env", "check"])
+
+        self.assertEqual(1, code)
+
+    def test_where_values_are_kept_is_printed_and_nothing_else(self):
+        """R-SEC-31 — the installer asks the command rather than resolving the directory a
+        second time in shell, where the fallback would be a second copy of one rule."""
+        code, out, _err = self.typed(["env", "--where"])
+
+        self.assertEqual(0, code)
+        self.assertEqual(str(self.where), out.strip())
+
+    def test_a_listing_with_nothing_kept_says_so_rather_than_printing_nothing(self):
+        code, out, _err = self.typed(["env"])
+
+        self.assertEqual(0, code)
+        self.assertIn("NO VALUES KEPT", out)
+
+    def test_a_name_the_command_may_not_keep_is_refused_in_our_own_words(self):
+        """R-SEC-11, R-SEC-12 — a usage dump would read as a command somebody typed wrong."""
+        for name in ("PATH", "DYLD_INSERT_LIBRARIES"):
+            with self.subTest(name=name):
+                code, _out, err = self.typed(["env", "set", name, "--stdin"],
+                                             stdin=ATerminalThatIsNotThere(A_VALUE))
+                self.assertEqual(1, code)
+                self.assertIn("NOT KEPT", err)
+        self.assertEqual([], secret.listed(self.where))
+
+    def test_a_change_records_where_it_was_made_from(self):
+        """The only account a change to install-wide state an agent may make can have."""
+        from rundesk.commands import env as command
+
+        self.assertEqual("this terminal", command.kept_from())
+        os.environ["RUNDESK_RUN"] = "run-1"
+        os.environ["RUNDESK_AGENT_NAME"] = "ava"
+        self.addCleanup(os.environ.pop, "RUNDESK_RUN", None)
+        self.addCleanup(os.environ.pop, "RUNDESK_AGENT_NAME", None)
+
+        self.assertEqual("ava's gateway", command.kept_from())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
