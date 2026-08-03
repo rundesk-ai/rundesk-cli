@@ -262,6 +262,28 @@ def announces_into(kept, channel: str | None, place: str | None) -> "str | None"
     return seen[0]["id"] if seen else None
 
 
+def announces_as(kept, conversation: str | None) -> "str | None":
+    """What the platform itself calls the conversation `announces_into` answered with.
+
+    **The pair, and why there are two.** `announces_into` answers in rundesk's own
+    namespace — a derived id, which is what the store's bookkeeping is keyed on and what a
+    role run's review is owed to. An adapter has never seen that id and cannot: the only
+    identifier it can act on is the platform's own, which is what every record handed
+    across the seam carries (R-CAD-20). So a caller resolves the room once, writes down
+    against the first and sends the second.
+
+    Nothing here parses the space or knows what a platform means by one — it is handed
+    back exactly as the surface gave it (R-CAD-13, R-CAD-14).
+
+    A conversation nothing knows about answers with nothing, which is the same answer as
+    never having announced at all: there is no word for a room that is not there.
+    """
+    if not conversation:
+        return None
+    room = kept.conversation_of(conversation)
+    return (room or {}).get("space") or None
+
+
 def _one_conversation(named: str, of: str = "") -> tuple:
     """Match one conversation by either name it goes by, as a clause and its values.
 

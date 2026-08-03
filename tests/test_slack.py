@@ -17,14 +17,17 @@ Run: python3 tests/test_slack.py
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -1705,6 +1708,75 @@ class TheSeamHoldsBothWays(unittest.TestCase):
         at = ROOT / "src" / "channels" / "slack"
         self.assertTrue(os.access(at, os.X_OK), "the adapter is not executable")
         self.assertTrue(at.read_text(encoding="utf-8").startswith("#!/usr/bin/env python3"))
+
+
+@needs_slack
+class WhenARecordCannotBeActedOn(unittest.IsolatedAsyncioTestCase):
+    """R-CH-12 — a delivery that fails is a delivery that failed, and it is written down.
+
+    The read loop wrapped every record in `contextlib.suppress(Exception)`, so anything
+    raised anywhere under `told()` was discarded without a word. The same hole as the
+    Discord adapter's, closed the same way: this one is not specific to schedules and not
+    specific to a platform.
+    """
+
+    class Refuses:
+        """A client that cannot act on one kind of record, and remembers every one."""
+
+        def __init__(self):
+            self.seen: list = []
+
+        async def told(self, it):
+            self.seen.append(it)
+            if it.get("type") == "said":
+                raise RuntimeError("the room went away")
+
+    async def _read(self, client, *records) -> str:
+        """Drive the real loop over these records, and hand back what it wrote down."""
+        read_at, write_at = os.pipe()
+        os.write(write_at, b"".join(json.dumps(one).encode("utf-8") + b"\n"
+                                    for one in records))
+        os.close(write_at)
+        reading, said = os.fdopen(read_at, "rb"), io.StringIO()
+        try:
+            with mock.patch.object(sys, "stdin", reading), \
+                    contextlib.redirect_stderr(said):
+                await slack._read(client)
+        finally:
+            # **The loop's own transport owns that descriptor until it has seen the end of
+            # the pipe, and closes it itself.** Closing it underneath makes asyncio log a
+            # read error against a case that has already finished, which reads exactly like
+            # the adapter failing. Bounded, so a transport that never closes fails here
+            # rather than hanging.
+            for _ in range(1000):
+                if reading.closed:
+                    break
+                await asyncio.sleep(0)
+            else:  # pragma: no cover - the transport has always closed by here
+                reading.close()
+        return said.getvalue()
+
+    async def test_a_record_that_could_not_be_acted_on_is_written_down(self):
+        client = self.Refuses()
+        said = await self._read(client,
+                                {"type": "said", "conversation": "C0FFEE"},
+                                {"type": "answer", "conversation": "C0FFEE"})
+        self.assertIn("could not act on said", said,
+                      f"the failure was swallowed without a word: {said!r}")
+        self.assertIn("the room went away", said, "it did not say what went wrong")
+        self.assertEqual(["said", "answer"], [one["type"] for one in client.seen],
+                         "the loop stopped reading at the record it could not act on")
+
+    async def test_the_loop_going_away_is_not_a_delivery_that_failed(self):
+        """Cancellation ends the loop and is never written down as a platform refusing:
+        a catch wide enough to hold it would leave a channel reading after its gateway
+        had gone."""
+        class Cancelled:
+            async def told(self, _it):
+                raise asyncio.CancelledError()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await self._read(Cancelled(), {"type": "said", "conversation": "C0FFEE"})
 
 
 if __name__ == "__main__":
