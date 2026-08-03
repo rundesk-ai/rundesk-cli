@@ -177,9 +177,11 @@ file with it.
   Assembles a bundle of locked bytes under the agent's own directory and moves it into place
   whole, hands `turn.py` an execution context standing in the target project, and settles the
   root into exactly one review its named parent is owed. **Takes back what an adapter stood in
-  that project on its way in**: every brain presents skills beside the directory it stands in,
-  so a run that simply ended left a vendor directory in somebody's checkout holding links into
-  a bundle swept a fortnight later. Vendor-neutral — it removes only a link resolving inside
+  that project on its way in, on every ending there is**: every brain presents skills beside the
+  directory it stands in, so a run left a vendor directory in somebody's checkout holding links
+  into a bundle swept a fortnight later. One terminal function does both — the links, then the
+  record — because a turn that came back with an outcome is the rarest of the five ways a run
+  ends and was the only one tidying up. Vendor-neutral — it removes only a link resolving inside
   this run's own snapshot, and only a directory that removal emptied. **Knows nothing of channels or
   gateways**: what carries it and what tells its parent are `agent.playing`'s, handed to a
   gateway already made the way `agent.asking` already is. **Which brain carries it is settled
@@ -355,7 +357,7 @@ provider. One file per contract, named for it:
 | `test_discord.py` | 208 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
 | `test_instructions.py` | 29 | Rundesk's core and trigger prompts, standard variables, the additive builder, the roles layer, and the separate role floor |
 | `test_role.py` | 87 | `agent-role` — what a role is, what makes one usable, what its revision is computed from, how the install's roles are offered, and what writing or editing one refuses, against a scratch library |
-| `test_role_run.py` | 128 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
+| `test_role_run.py` | 143 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
 | `test_secret.py` | 39 | `platform-secrets` — what an install keeps for every program it starts: the refusals that are the boundary, the three answers a fetching command can give, and a scratch root that proves nothing reaches the owner's own |
 | `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 

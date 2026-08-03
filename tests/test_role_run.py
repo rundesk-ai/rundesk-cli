@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import importlib.machinery
+import importlib.util
 import io
 import json
 import os
@@ -30,6 +32,27 @@ sys.path.insert(0, str(ROOT / "src"))
 from rundesk import agent, config, instructions, role, store, turn  # noqa: E402
 from rundesk import role_run as role_runs  # noqa: E402
 from rundesk.commands import roles  # noqa: E402
+
+CODEX_AT = ROOT / "src" / "providers" / "codex"
+
+
+def _codex():
+    """The shipped Codex adapter, loaded from its path — it is a program, not a module.
+
+    Loaded so that what a run leaves in a checkout is stood there by the code that really
+    stands it, rather than by a case's idea of what that looks like: the adapter writes a
+    *relative* link, and every case that built an absolute one by hand agreed with itself
+    while the shipped shape went untested. Nothing here starts it — `_present` makes
+    links and reaches no brain.
+    """
+    loader = importlib.machinery.SourceFileLoader("rundesk_codex", str(CODEX_AT))
+    spec = importlib.util.spec_from_loader("rundesk_codex", loader)
+    made = importlib.util.module_from_spec(spec)
+    loader.exec_module(made)
+    return made
+
+
+codex = _codex()
 
 RULES = "# Development\n\nDo the bounded task and report exactly what you verified.\n"
 BRIEF = "Outcome: make the export work.\nAuthorization: edit and test, never publish.\n"
@@ -1113,6 +1136,151 @@ class WhatARunLeavesInTheTargetProject(WithAnAgentThatCanDelegate):
                            now=lambda: store.moment("2026-09-01T09:00:00Z").timestamp())
         self.assertFalse(stood.exists())
         self.assertFalse((self.target / ".agents").exists())
+
+
+class WhatEveryEndingLeavesInTheTargetProject(WithAnAgentThatCanDelegate):
+    """R-ROL-22 — a run is tidied out of somebody's checkout however it ended.
+
+    Only the ending where the turn came back with an outcome ever took its links back,
+    and that is the rarest of the five: a run somebody stopped is cancelled where it
+    stands, so the turn never returns; one nothing was carrying never reached a turn at
+    all; and one that could not be carried or that went quiet is settled by whatever
+    noticed rather than by the execution. Each of those left a vendor directory in a
+    repository the worker was told to leave as it found it, holding links into a bundle
+    swept a fortnight later.
+
+    Presented by the shipped adapter itself, not by hand. The cases above build absolute
+    links, which no brain writes — `_present` computes a relative one — so the shape that
+    actually reaches an owner's checkout had never been driven through any of this.
+    """
+
+    def presented(self, admitted) -> Path:
+        """This run's skills, stood in the target by the code that really stands them."""
+        skills = role_runs.paths("elena", admitted.id, self.where)["skills"]
+        before = os.environ.get("RUNDESK_SKILLS")
+        os.environ["RUNDESK_SKILLS"] = str(skills)
+        try:
+            codex._present(str(self.target))
+        finally:
+            if before is None:
+                os.environ.pop("RUNDESK_SKILLS", None)
+            else:
+                os.environ["RUNDESK_SKILLS"] = before
+        stood = self.target / codex.SKILLS_ROOT
+        link = stood / "writing-plans"
+        self.assertTrue(link.is_symlink(), "the adapter presented nothing to take back")
+        self.assertFalse(os.path.isabs(os.readlink(link)),
+                         "this is no longer the shape the adapter stands there")
+        return stood
+
+    def tidied(self, stood: Path, named: str = "") -> None:
+        """The checkout back as the worker found it, and its own files untouched."""
+        self.assertFalse(stood.exists(), named)
+        self.assertFalse((self.target / ".agents").exists(), named)
+        self.assertTrue((self.target / "AGENTS.md").is_file(), named)
+
+    def cancelled_after_a_stop_was_asked(self, admitted) -> None:
+        """The owner stop: the gateway cancels the task, so the turn never returns."""
+        role_runs.stop("elena", admitted.id)
+
+        async def cancelled(*_said, **_given):
+            raise asyncio.CancelledError()
+
+        asyncio.run(agent.playing("elena", self.where, carry=cancelled).carry(admitted.id))
+
+    def stopped_with_nothing_carrying_it(self, admitted) -> None:
+        """A run picked up, presented and left by a gateway that went, then stopped."""
+        role_runs.stop("elena", admitted.id)
+        agent.playing("elena", self.where).stopped(admitted.id)
+
+    def spent_its_carry_ceiling(self, admitted) -> None:
+        """Every attempt threw, so no attempt ever reached the end of a turn."""
+        async def went_wrong(*_said, **_given):
+            raise RuntimeError("the provider is gone")
+
+        playing = agent.playing("elena", self.where, carry=went_wrong)
+        for _ in range(role_runs.CARRY_CEILING):
+            asyncio.run(playing.carry(admitted.id))
+
+    def went_quiet(self, admitted) -> None:
+        """Settled by whatever noticed the silence, not by the execution."""
+        self.kept.role_working(admitted.id, store.stamped(), role_runs.retained_until())
+        role_runs.gone_quiet(
+            "elena", self.where,
+            now=lambda: time.time() + (role_runs.QUIET_HOURS + 1) * 3600)
+
+    def endings(self) -> dict:
+        """Every terminal path that is not the turn coming back with an outcome."""
+        return {
+            "somebody stopped it mid-flight": self.cancelled_after_a_stop_was_asked,
+            "nothing was carrying it": self.stopped_with_nothing_carrying_it,
+            "it could not be carried": self.spent_its_carry_ceiling,
+            "it went quiet": self.went_quiet,
+        }
+
+    def test_a_run_somebody_stopped_is_taken_back_out_of_the_checkout(self):
+        """R-ROL-24 arrives as a cancellation, so the line that tidied up was never
+        reached — and a stop is the ending most likely to have presented something."""
+        admitted = self.admit()
+        stood = self.presented(admitted)
+
+        self.cancelled_after_a_stop_was_asked(admitted)
+
+        self.assertEqual(store.STOPPED, self.kept.role_run(admitted.id)["state"])
+        self.tidied(stood)
+
+    def test_a_run_nothing_was_carrying_is_taken_back_out_of_the_checkout(self):
+        """A gateway that presented this run's skills and then died leaves the stop to be
+        honoured by the next one, which has no execution to cancel."""
+        admitted = self.admit()
+        stood = self.presented(admitted)
+
+        self.stopped_with_nothing_carrying_it(admitted)
+
+        self.assertEqual(store.STOPPED, self.kept.role_run(admitted.id)["state"])
+        self.tidied(stood)
+
+    def test_a_run_that_could_not_be_carried_is_taken_back_out_of_the_checkout(self):
+        """R-ROL-29 — the ceiling settles the run without any turn ever returning, so
+        nothing on that path had ever taken a link back."""
+        admitted = self.admit()
+        stood = self.presented(admitted)
+
+        self.spent_its_carry_ceiling(admitted)
+
+        self.assertEqual(store.FAILED, self.kept.role_run(admitted.id)["state"])
+        self.tidied(stood)
+
+    def test_a_run_that_went_quiet_is_taken_back_out_of_the_checkout(self):
+        """R-ROL-30 — settled by whatever noticed the silence. The wedged provider this
+        exists for is exactly the one still holding a checkout open."""
+        admitted = self.admit()
+        stood = self.presented(admitted)
+
+        self.went_quiet(admitted)
+
+        self.assertEqual(store.FAILED, self.kept.role_run(admitted.id)["state"])
+        self.tidied(stood)
+
+    def test_what_the_owner_put_there_survives_every_one_of_those_endings(self):
+        """The other half of R-ROL-22, and the reason removal is narrow: an owner's own
+        entries stand in the very directory being tidied, and every ending leaves them."""
+        theirs = self.target / ".agents" / "settings.json"
+        theirs.parent.mkdir(parents=True)
+        theirs.write_text("{}", encoding="utf-8")
+        for named, ending in sorted(self.endings().items()):
+            with self.subTest(ending=named):
+                admitted = self.admit()
+                stood = self.presented(admitted)
+                # Already there after the first ending, which is the assertion below
+                # holding: each ending in turn finds the owner's own entry standing.
+                (stood / "theirs").mkdir(exist_ok=True)
+
+                ending(admitted)
+
+                self.assertFalse((stood / "writing-plans").exists(), named)
+                self.assertTrue((stood / "theirs").is_dir(), named)
+                self.assertTrue(theirs.is_file(), named)
 
 
 class SayingSomethingToWorkInFlight(WithAnAgentThatCanDelegate):
