@@ -310,6 +310,15 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   suite, or give the worktree a real `.venv` by installing it into a disposable station
   (`.knowledge/guides/testing-against-a-station.md` — `install.sh` builds `${SCRIPT_DIR}/.venv`,
   so the station's install is what puts *every* pinned dependency beside the code under test).
+- **And that same missing `.venv` adds a *second*, different failure to the conformance
+  harness, which reads like part of whatever you are reproducing.** Both shipped adapters
+  resolve the virtualenv from their own file (`parents[2]`), not from the interpreter running
+  the suite — so `tests/test_channel.py --adapter src/channels/discord` in a worktree with no
+  `.venv` also fails `everything an adapter reports is something the seam can act on`, on the
+  adapter's `{"ok": false, "why": "discord.py is not installed …"}` refusal. That is the
+  missing dependency, not the harness: build the worktree's own `.venv` (`python3 -m venv .venv
+  && .venv/bin/python -m pip install -r requirements.txt`) before believing a second failure is
+  real. #295 was filed carrying one of these as an untraced extra.
 - **Driving the adapters' `_read` from a pipe makes asyncio log `OSError: [Errno 9] Bad file
   descriptor` from a case that has already passed.** `connect_read_pipe` hands the descriptor
   to a transport that goes on reading until it sees the end of the pipe and then closes the

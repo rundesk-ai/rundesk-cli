@@ -575,10 +575,14 @@ MY_TOKEN=… /opt/my-channel --check --room 1180
 # {"ok": true, "settings": {"room": "1180"}, "secret": {"env": "MY_TOKEN"}, "describes": "#ops"}
 ```
 
-**2. Run the suite against it.** It needs no platform and no token:
+**2. Run the suite against it.** It reaches no platform. Two of its cases drive a whole
+turn, and they ask your `--check` in this shell first for what a turn needs — so export
+your credential and they run; leave it out and they report unmet setup and skip, rather
+than failing you for a refusal you were right to make:
 
 ```sh
 git clone https://github.com/rundesk-ai/rundesk-cli && cd rundesk-cli
+export MY_TOKEN=…    # or leave it out, and the two whole-turn cases skip
 python3 tests/test_channel.py --adapter /opt/my-channel -- --room 1180
 ```
 
@@ -660,6 +664,13 @@ Run bare it needs no account, no token and no network — the adapters it drives
 small programs, which is the same thing yours is. Pointed at yours it really runs your
 adapter, though not your platform: what a fake cannot prove is your surface's own limits
 and timings, and that is what a canary against a private server of your own is for.
+
+**A refusal is not a failure.** The two cases that drive a whole turn ask your `--check`
+first, in the shell you ran the suite from, because a turn told to an adapter that was
+never given its credential proves nothing about you. If your check says no, those two say
+so and skip — `OK (skipped=2)` — and everything else still holds you to the contract. Both
+shipped adapters read exactly that way on a machine with no token, which is why it is
+written down here rather than left for you to work out.
 
 **If your adapter follows this page and the suite still fails it, this page is wrong** — it
 is the contract, and the code is what has to move.

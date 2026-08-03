@@ -197,8 +197,48 @@ told = {k: v for k, v in os.environ.items() if k.startswith(("RUNDESK_", "MY_CHA
 say(type="arrived", conversation="one", user="somebody", text=json.dumps(told, sort_keys=True))
 '''
 
+#: Refuses its check because its credential is absent, names it on the way out, and
+#: refuses to start for the same reason — which is exactly what both shipped adapters do
+#: on a machine with no token, and what `--adapter src/channels/discord` therefore is.
+UNSET = '''
+import json, sys
+
+if "--check" in sys.argv:
+    sys.stdout.write(json.dumps({"ok": False, "secret": {"env": ["MY_CHANNEL_TOKEN"]},
+                                 "why": "no token — MY_CHANNEL_TOKEN is not set"}) + "\\n")
+    sys.stdout.flush()
+    raise SystemExit(1)
+
+sys.stderr.write("WARNING\\tno token — MY_CHANNEL_TOKEN is not set\\n")
+sys.stderr.flush()
+raise SystemExit(1)
+'''
+
+#: Set up, reachable, and then dies on the first record it is told. This is the failure
+#: the whole-turn case exists to catch, and no allowance made for the one above may
+#: excuse it.
+BRITTLE = '''
+import json, sys
+
+if "--check" in sys.argv:
+    sys.stdout.write(json.dumps({"ok": True, "settings": {}}) + "\\n")
+    sys.stdout.flush()
+    raise SystemExit(0)
+
+sys.stdin.readline()
+raise SystemExit(1)
+'''
+
 STAND_INS = {"plain": PLAIN, "bare": BARE, "strange": STRANGE, "refusing": REFUSING,
-             "gibberish": GIBBERISH, "mute": MUTE, "nosy": NOSY}
+             "gibberish": GIBBERISH, "mute": MUTE, "nosy": NOSY, "unset": UNSET,
+             "brittle": BRITTLE}
+
+
+def written(at: Path, source: str) -> Path:
+    """One whole adapter on disk and runnable, which is all an adapter is."""
+    at.write_text("#!%s\n%s" % (PY, source), encoding="utf-8")
+    at.chmod(at.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return at
 
 
 class Held:
@@ -227,10 +267,7 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
 
     def stand_in(self, which: str) -> Path:
         """One of the adapters above, on disk and runnable — which is all an adapter is."""
-        at = self.where / which
-        at.write_text("#!%s\n%s" % (PY, STAND_INS[which]), encoding="utf-8")
-        at.chmod(at.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-        return at
+        return written(self.where / which, STAND_INS[which])
 
     def under_test(self) -> Path:
         return ADAPTER if ADAPTER is not None else self.stand_in("plain")
@@ -249,6 +286,19 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
         # being broken.
         said = await channel.checked(self.under_test(), OPTIONS,
                                      self.told(checking=True))
+        # **An adapter that has just said it cannot reach its platform has not been set
+        # up, and a turn driven at it proves nothing about the contract.** Both shipped
+        # adapters refuse without their credential and say so here, so the harness read
+        # its own unmet setup as the reference implementations violating the one thing it
+        # exists to establish — and an author checking their own adapter had no way to
+        # tell which of the two they were looking at (#295). Whether the refusal itself is
+        # answered properly is R-CAD-9's own row, which asserts on it a few cases above;
+        # this is only about not building a turn on top of it.
+        if not said["ok"]:
+            self.skipTest(
+                "unmet setup, not a contract failure: this adapter refused its own check, "
+                "so it has not been given what a turn needs — "
+                f"{said['why'] or 'it said nothing about why'}")
         return self.told(settings=said["settings"], secret=said["secret"])
 
     def told(self, **extra) -> dict:
@@ -1218,6 +1268,62 @@ class TheClaimTheWholeSeamRestsOn(DrivesAnAdapter):
         self.assertTrue(arrived, f"nothing arrived from it: {held.errors[-400:]}")
         self.assertEqual("what changed today?", arrived[0]["text"])
         self.assertEqual("2207", arrived[0]["user"])
+
+
+class WhatTheHarnessItselfReports(unittest.TestCase):
+    """#295 — the harness is what this repository offers an adapter author as proof of
+    conformance, so a failure it reports has to belong to the adapter and not to the
+    machine it was run on.
+
+    Driven the way an author drives it: `TheContract` pointed at an adapter, run for
+    real, and the result read. A plain `TestCase` rather than `DrivesAnAdapter`, because
+    each case here runs a whole `IsolatedAsyncioTestCase`, which brings up an event loop
+    of its own — and one of those cannot be started inside a loop that is already running.
+    """
+
+    def setUp(self):
+        self.where = Path(tempfile.mkdtemp(prefix="rundesk-conformance-"))
+        self.addCleanup(shutil.rmtree, self.where, True)
+
+    def driving(self, which: str, case: str) -> unittest.TestResult:
+        """One contract case against one stand-in, exactly as `--adapter` points it."""
+        global ADAPTER
+        was, ADAPTER = ADAPTER, written(self.where / which, STAND_INS[which])
+        try:
+            result = unittest.TestResult()
+            TheContract(case).run(result)
+            return result
+        finally:
+            ADAPTER = was
+
+    def test_an_adapter_that_refused_its_own_check_is_reported_as_unmet_setup(self):
+        """The reported defect. Both shipped adapters refuse to start without their
+        credential, so with no token the harness failed them on a whole-turn row that
+        was never reached — an author has no way to tell that from a real violation."""
+        result = self.driving("unset", "test_an_adapter_survives_a_whole_turn_being_told_to_it")
+        self.assertEqual([], result.failures + result.errors,
+                         "an adapter that was never set up was failed on the contract")
+        self.assertEqual(1, len(result.skipped), "it was neither failed nor reported")
+        self.assertIn("MY_CHANNEL_TOKEN", result.skipped[0][1],
+                      "it did not say what setup was missing")
+
+    def test_an_adapter_that_dies_being_told_a_turn_is_still_failed(self):
+        """The other half, and the reason this is not a tolerance. A surface that dies
+        on a record it does not care about loses the answer after it, and the allowance
+        above may not reach it: this adapter said it was reachable."""
+        result = self.driving("brittle", "test_an_adapter_survives_a_whole_turn_being_told_to_it")
+        self.assertEqual([], result.skipped, "an adapter that was set up was excused")
+        self.assertEqual(1, len(result.failures),
+                         f"it died being told a turn and was not failed: {result.errors}")
+
+    def test_an_adapter_that_is_set_up_is_held_to_the_whole_turn_as_before(self):
+        """The control, written down because `OK` and `OK (skipped=1)` are the same word
+        to whoever reads a run. The reference stand-in answers its check, so nothing here
+        may excuse it from anything."""
+        result = self.driving("plain", "test_an_adapter_survives_a_whole_turn_being_told_to_it")
+        self.assertEqual([], result.skipped, "a reachable adapter was excused")
+        self.assertTrue(result.wasSuccessful(),
+                        f"{result.failures}{result.errors}")
 
 
 def _taken(argv: list, flag: str) -> tuple[Path | None, list]:
