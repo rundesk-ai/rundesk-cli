@@ -209,7 +209,7 @@ rundesk roles ava show rol-3-vfs3
 <backup>                        which one, by the name it is listed under
 <catalog>                       which catalog
 <channel>                       what to call it, and what to name it by later
-<name>                          what programs read it as — capital letters, digits and underscores, never beginning with a digit
+<name>                          what programs read it as — begins with a capital letter, and the rest is capital letters, digits and underscores
 <option>                        after `--`, whatever this kind of channel needs — carried to it exactly as typed, and never read here
 <program>                       after `--`, the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH
 <prompt>                        what to ask it, in quotes

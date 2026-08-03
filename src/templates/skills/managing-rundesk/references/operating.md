@@ -57,17 +57,20 @@ credential without anybody exporting anything: the shell you run it in descends 
 program rundesk started with these in its environment.
 
 A value is either **held** by this install or **fetched** by a command whose words are kept
-and run again each time a program starts. `check` is the only thing that runs those, which
-is why a listing is free and a check may take a moment.
+and run again each time a program starts. A listing never runs one, so it is free; `check`
+does, which is why it may take a moment — and `env set --from` runs one once, when it is
+placed, to prove it works before anything is written down. Nothing else does.
 
 **No form of this shows a value.** The last few characters and a mark are what you get, and
 the mark is taken with a key of this install's, so two names showing one mark hold one
 value and the same value on another machine marks differently. There is no flag for the
 rest — asked what a value is, say that nothing on this machine can answer that.
 
-`check` distinguishes two failures and so must you: **refused** means there is no value,
-and **could not answer** means the command timed out or would not run, which says nothing
-about whether the value is good. Never advise replacing a credential on the second.
+`check` tells two failures apart and so must you. **`could not answer`** means the command
+timed out or would not start — that says nothing about whether the value is good, so never
+advise replacing a credential on it. Anything else it prints is the command's own words for
+why there is no value to give. Neither is the same as a name being *refused*, which is
+`env set` rejecting a name outright and is a different situation entirely.
 
 Placing one is the owner's at a terminal — `rundesk env set <NAME>`, typed with echo off.
 You may run it for a value **you** minted; never ask a person to send you one, because

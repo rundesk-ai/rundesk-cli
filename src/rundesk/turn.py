@@ -394,8 +394,8 @@ async def carry(
         for missing in keeping.trouble:
             writing.went_wrong(
                 f"value '{missing.name}' was not given to this turn — "
-                + ("it gave nothing back" if missing.answered else "it could not answer")
-                + f"; see: rundesk env check {missing.name}\n")
+                f"{secret.plainly(missing)}; "
+                f"see: rundesk env check {missing.name}\n")
         if keeping.unreadable:
             writing.went_wrong("the values this install keeps could not be read: "
                                f"{keeping.unreadable}\n")

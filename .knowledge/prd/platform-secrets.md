@@ -42,7 +42,7 @@ again each time a program starts. Nothing rundesk shows ever gives a whole value
 | ✅ | R-SEC-17 | A command that could not answer is told apart from one that answered that there is no value | `a command that will not answer is not a command that said no`, `a command that is not there is a definite answer`, `what a keeper said went wrong never reaches the gateways own log` |
 | ✅ | R-SEC-18 | Replacing a kept value says which value was replaced | `replacing a value says which one it replaced` |
 | ✅ | R-SEC-19 | Keeping the value already held under a name leaves what is recorded about it unchanged | `keeping the value already there changes nothing` |
-| ✅ | R-SEC-20 | Taking a value away removes both the value and what was recorded about it | `taking a value away names the one that went` |
+| ✅ | R-SEC-20 | Taking a value away removes both the value and what was recorded about it | `taking a value away names the one that went`, `what is recorded never outlives the value it names` |
 | ✅ | R-SEC-21 | Asking about a name nothing is kept under is refused rather than answered | `asking about a name nothing is kept under is refused` |
 | ✅ | R-SEC-22 | An owner can ask whether each kept value can still be produced, without one being shown | `every kept value can be proved reachable without being shown`, `a check that could not reach one ends unsuccessfully` |
 | ✅ | R-SEC-23 | Listing what is kept produces no value, and asking after one runs no other one's command | `a listing fetches nothing`, `checking one value runs only that ones command` |

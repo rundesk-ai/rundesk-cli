@@ -106,6 +106,14 @@ FAMILIES = (
     ("PYTHON", "a name beginning PYTHON makes a program run code before its own arguments"),
     ("BASH_FUNC_", "a name beginning BASH_FUNC_ puts a function into every shell that starts"),
     ("XDG_", "a name beginning XDG_ decides where a program looks for its own configuration"),
+    # npm maps every `NPM_CONFIG_<KEY>` onto its own configuration, so this one family
+    # carries both halves of what the list above refuses: `NPM_CONFIG_SCRIPT_SHELL` is the
+    # interpreter every `package.json` lifecycle script runs under, and `NPM_CONFIG_CAFILE`
+    # and `NPM_CONFIG_CA` are who the registry is trusted on. A prefix rather than three
+    # names, because `userconfig` and `globalconfig` point at a file that can set the rest.
+    # Measured on this machine against npm and pnpm; a coding-agent gateway runs `npm` from
+    # a brain's own tool shell as an ordinary thing, so the reach is not hypothetical.
+    ("NPM_CONFIG_", "a name beginning NPM_CONFIG_ changes what code npm and pnpm run or trust"),
 )
 
 #: Names outside those families that decide what a program *is*, or who it trusts, rather
@@ -298,8 +306,8 @@ def refused(name: str) -> str:
     which is the only place that can be sure.
     """
     if not name or not NAME_IS.fullmatch(name):
-        return ("a name is capital letters, digits and underscores, and never begins "
-                "with a digit")
+        return ("a name begins with a capital letter, and the rest is capital letters, "
+                "digits and underscores")
     if name in placed():
         return f"rundesk decides {name} for every program it starts"
     for family, why in FAMILIES:
@@ -313,8 +321,8 @@ def refused(name: str) -> str:
 def checked(name: str) -> str:
     """That name, or a refusal in our own words."""
     if not name or not NAME_IS.fullmatch(name):
-        raise NotAName("a name is capital letters, digits and underscores, and never "
-                       "begins with a digit")
+        raise NotAName("a name begins with a capital letter, and the rest is capital "
+                       "letters, digits and underscores")
     why = refused(name)
     if why:
         raise Refused(why)
@@ -600,10 +608,11 @@ def remember_command(name: str, command, *, now: str, kept_from: str, run=None,
                                            kept_from=before.kept_from)
         kept[name] = _row(now_kept)
         keeping["version"] = VERSION
-        # A name that was held here and is now fetched leaves no value behind on the disk.
-        if before is not None and before.kept_as == HELD:
-            with contextlib.suppress(OSError):
-                _standing(name, where).unlink()
+    # A name that was held here and is now fetched leaves no value behind on the disk —
+    # taken away after the record says it is fetched, for the reason `forget` gives.
+    if before is not None and before.kept_as == HELD:
+        with contextlib.suppress(OSError):
+            _standing(name, where).unlink()
     return Change(kept=now_kept, before=before, unchanged=unchanged)
 
 
@@ -617,8 +626,14 @@ def forget(name: str, where: Path | None = None) -> Kept:
             raise Unknown(f"nothing is kept under {name}")
         gone = _as_kept(name, was)
         del kept[name]
-        with contextlib.suppress(OSError):
-            standing.unlink()
+    # **Outside the change, and that is the whole point of where it stands.** `changing`
+    # writes the record when its body returns, so unlinking inside it would put the value
+    # beyond reach *before* the record saying so is on disk — and a machine that died in
+    # between would leave a name still listed as held with nothing behind it. `remember`
+    # states the same principle from the other side: the order that survives an
+    # interruption is the one that wastes a file rather than misreporting.
+    with contextlib.suppress(OSError):
+        standing.unlink()
     return gone
 
 
@@ -664,6 +679,19 @@ def _first_line(said: bytes) -> str:
         return ""
     first = text.splitlines()[0].strip()
     return first[:WHY_CHARACTERS] + "…" if len(first) > WHY_CHARACTERS else first
+
+
+def plainly(trouble: Trouble) -> str:
+    """Which kind of not-given this was, in words that may be written down.
+
+    **Never `Trouble.why`**, which is the keeper's own output and routinely holds the thing
+    it was reading. A gateway's log and a run's account both stand under `data_home()`,
+    which a backup copies whole, so this is what goes there — and it lives here rather than
+    being spelled out at each of them, because two hand-written copies of one sentence are
+    two sentences the day somebody rewords one. What the keeper actually said is shown by
+    `rundesk env check`, at a terminal, where nothing writes it down.
+    """
+    return "it gave nothing back" if trouble.answered else "it could not answer"
 
 
 def resolve(where: Path | None = None, run=None, timeout_seconds: float = COMMAND_SECONDS,

@@ -217,9 +217,11 @@ def _unset(args: argparse.Namespace) -> int:
 def _check(args: argparse.Namespace) -> int:
     """Whether each kept value can still be produced — **without showing one**.
 
-    This is the one verb that runs a fetching command, which is why it is a verb rather
-    than something the listing does: a vault that wants a fingerprint would otherwise be
-    asked for one every time somebody looked at what they had (R-SEC-22, R-SEC-23).
+    The one verb that runs a fetching command **and writes nothing down** — `set --from`
+    runs one too, once, to earn the hint before anything is recorded. It is a verb rather
+    than something the listing does because a vault that wants a fingerprint would
+    otherwise be asked for one every time somebody looked at what they had, and because
+    asking after one value must not fetch every other (R-SEC-22, R-SEC-23).
     """
     named = getattr(args, "value_name", None)
     try:

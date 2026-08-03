@@ -98,8 +98,13 @@ class WhatANameMayBe(WithSomewhereToKeepThings):
         # non-interactive included, and zsh is the default shell on the platform this is
         # for — so it is the bash startup-file hijack this list already refuses, on the
         # shell that machine actually runs.
+        # `NPM_CONFIG_SCRIPT_SHELL` is the interpreter every package.json lifecycle script
+        # runs under, and `NPM_CONFIG_CAFILE` is who the registry is trusted on — measured
+        # against the npm and pnpm on this machine. A coding-agent gateway runs npm from a
+        # brain's own tool shell as an ordinary thing.
         for name in ("DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "NODE_OPTIONS", "NODE_PATH",
                      "ZDOTDIR", "FPATH", "PYTHONSTARTUP", "PYTHONPATH", "BASH_FUNC_X",
+                     "NPM_CONFIG_SCRIPT_SHELL", "NPM_CONFIG_CAFILE", "NPM_CONFIG_CA",
                      "GIT_SSH_COMMAND", "SSL_CERT_FILE", "IFS", "XDG_CONFIG_HOME"):
             with self.subTest(name=name):
                 self.assertTrue(secret.refused(name))
@@ -122,10 +127,13 @@ class WhatANameMayBe(WithSomewhereToKeepThings):
         """A message naming a rule the input already satisfies cannot be corrected from.
         `github_token` is letters, digits and underscores and does not begin with a digit —
         it is refused on case, and the words have to say so."""
-        why = secret.refused("github_token")
-
-        self.assertTrue(why)
-        self.assertIn("capital", why)
+        # Both shapes the rule actually refuses, and neither is described by a message
+        # that recites clauses the input already satisfies.
+        for name in ("github_token", "_TOKEN", "9LIVES"):
+            with self.subTest(name=name):
+                why = secret.refused(name)
+                self.assertTrue(why)
+                self.assertIn("begins with a capital letter", why)
 
     def test_a_name_of_the_right_shape_is_kept(self):
         """The control: the rule refuses what it is for and nothing else."""
@@ -222,6 +230,32 @@ class WhatIsKept(WithSomewhereToKeepThings):
         self.assertEqual(secret.hint(A_VALUE), gone.hint)
         self.assertFalse(standing.exists())
         self.assertEqual([], secret.listed(self.where))
+
+    def test_what_is_recorded_never_outlives_the_value_it_names(self):
+        """R-SEC-20 — the record goes first and the file second, so a machine that dies
+        between them wastes a file rather than leaving a name listed as held with nothing
+        behind it. `remember` states the same principle from the other side."""
+        from rundesk import durable
+
+        self.hold("GITHUB_TOKEN", A_VALUE)
+        standing = secret.values_home(self.where) / "GITHUB_TOKEN"
+
+        # The moment that decides it: the record cannot be written. Whatever happens next,
+        # what must not be true afterwards is a name still listed with nothing behind it.
+        real = durable.write_whole
+        durable.write_whole = lambda *a, **k: (_ for _ in ()).throw(OSError("no room"))
+        self.addCleanup(setattr, durable, "write_whole", real)
+
+        with self.assertRaises(OSError):
+            secret.forget("GITHUB_TOKEN", where=self.where)
+        durable.write_whole = real
+
+        self.assertTrue(standing.exists(),
+                        "the value went before the record saying it had, so what is kept "
+                        "now names a value nothing can produce")
+        self.assertEqual(["GITHUB_TOKEN"],
+                         [one.name for one in secret.listed(self.where)])
+        self.assertEqual(A_VALUE, secret.resolve(where=self.where).values["GITHUB_TOKEN"])
 
     def test_asking_about_a_name_nothing_is_kept_under_is_refused(self):
         """R-SEC-21 — answered rather than invented, both ways round."""

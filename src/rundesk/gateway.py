@@ -1170,9 +1170,8 @@ class Gateway:
         for one in said.trouble:
             self.log.warning(
                 "value '%s' was not given to what is starting — %s; "
-                "see: rundesk env check %s", one.name,
-                "it gave nothing back" if one.answered else "it could not answer",
-                one.name)
+                "see: rundesk env check %s",
+                one.name, secret.plainly(one), one.name)
         return said.values
 
     async def _for_a_channel(self, one) -> dict[str, str]:
