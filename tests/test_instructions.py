@@ -29,7 +29,7 @@ class InstructionBuilder(unittest.TestCase):
             "agent", "agent_slug", "agent_home", "workspace", "channel_kind", "channel_config_name",
             "channel_name", "channel_id", "channel_parent_name", "channel_parent_id",
             "channel_thread_name", "channel_thread_id", "channel_where", "user",
-            "user_id", "conversation_id", "schedule",
+            "user_id", "conversation_id", "schedule", "roles",
         ), instructions.STANDARD_VARIABLES)
 
     def test_rundesk_instructions_are_always_first_and_fill_agent_locations(self):
@@ -119,19 +119,79 @@ class InstructionBuilder(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertIn(f"`{command}`", built)
-        self.assertIn("read it before answering", built)
+        self.assertIn("Missing context is read, never guessed", built)
         self.assertIn("only after running `rundesk schedules ava`", built)
         self.assertIn("Never substitute another scheduler.", built)
         self.assertIn("Treat `rundesk --help` as authoritative.", built)
         self.assertIn("`managing-rundesk` or applicable skill", built)
 
     def test_core_instructions_require_applicable_skills_before_work(self):
-        """R-AGT-52 — granted procedures govern work instead of waiting to be named."""
+        """R-AGT-52 — granted procedures govern work instead of waiting to be named, and
+        they are one of three checks settled before the first tool call rather than the
+        only one. Mid-work is too late for all three, which is why the ordering is the
+        sentence rather than a preference stated beside it."""
         built = instructions.build(variables=CORE)
         self.assertIn(
-            "Before starting work, review your available skills and follow every one that applies.",
+            "**Before you start work, in this order: read back the context you are "
+            "missing, follow every skill that applies, and hand heavy work to a role.** "
+            "Mid-work is too late for all three.",
             built,
         )
+
+    def test_three_checks_are_settled_before_work_in_one_order(self):
+        """R-AGT-52 — all three are decided before the first tool call of the work, which
+        is earlier than any skill the agent would have opened and earlier than a home an
+        owner may have rewritten. So each says what it is, in the order stated."""
+        built = instructions.build(variables=CORE)
+        ordering = built.index("in this order: read back the context you are missing")
+        context = built.index("Missing context is read, never guessed")
+        heavy = built.index("Heavy is many steps, a repository rather than this conversation")
+        self.assertLess(ordering, context)
+        self.assertLess(context, heavy)
+        self.assertIn("Handing it over is ordinary; carrying it yourself is the exception "
+                      "you say out loud.", built)
+        self.assertLess(built.index("read `/agents/ava/home/AGENTS.md`"), ordering)
+
+    def test_the_roles_layer_lands_after_the_standing_rules_and_before_the_trigger(self):
+        """An agent is told what it may hand work to without asking for the list, and it
+        is told before anything about the turn it is in."""
+        built = instructions.build(
+            variables={**CORE, "roles": "- **research** (read) — Answer one question.",
+                       "schedule": "nightly"},
+            trigger=instructions.SCHEDULE,
+            append="Owner addition.",
+        )
+        self.assertLess(built.index("You are ava"),
+                        built.index("## Roles you may hand heavy work to"))
+        self.assertLess(built.index("## Roles you may hand heavy work to"),
+                        built.index("## Scheduled run"))
+        self.assertLess(built.index("## Scheduled run"), built.index("Owner addition."))
+        self.assertIn("- **research** (read) — Answer one question.", built)
+
+    def test_the_roles_layer_says_what_one_run_is_and_how_it_is_started(self):
+        built = instructions.build(
+            variables={**CORE, "roles": "- **research** (read) — Answer one question."})
+        for rule in (
+            "Each runs outside your turn, under its own rules and skills",
+            "`read` changes nothing; `work` may change the target.",
+            "One report comes back later and it is unchecked",
+            "`rundesk roles ava run <role> --target <project>`, brief on stdin.",
+            "`delegating-to-roles` is the rest.",
+        ):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, built)
+        self.assertNotIn("{agent_slug}", built)
+
+    def test_an_install_with_no_roles_is_given_no_heading_at_all(self):
+        """A heading with nothing under it is an agent told it has a capability and then
+        shown none, which costs a turn to find out."""
+        for listed in (None, "", "   "):
+            with self.subTest(roles=listed):
+                variables = dict(CORE) if listed is None else {**CORE, "roles": listed}
+                built = instructions.build(variables=variables)
+                self.assertNotIn("## Roles you may hand heavy work to", built)
+                self.assertNotIn("delegating-to-roles", built)
+                self.assertEqual(instructions.build(variables=CORE), built)
 
     def test_schedule_and_owner_instructions_append_in_order(self):
         built = instructions.build(
@@ -180,6 +240,23 @@ class InstructionBuilder(unittest.TestCase):
         ):
             with self.subTest(rule=rule):
                 self.assertIn(rule, built)
+
+    def test_a_scheduled_run_is_told_it_cannot_hand_work_to_a_role(self):
+        """The standing rules send heavy work to a role, and a run the clock started has
+        nowhere for one to report back to — so it is refused when it is admitted. Said up
+        front rather than spent as a turn on a refusal that was knowable."""
+        unavailable = "Roles are unavailable here"
+        self.assertIn(unavailable, schedule.by_default("nightly"))
+        self.assertIn("Do the work in this run, or report `blocked`.",
+                      schedule.by_default("nightly"))
+        variables = {**CORE, "schedule": "nightly",
+                     "roles": "- **research** (read) — Answer one question."}
+        self.assertIn(unavailable, instructions.build(
+            variables=variables, trigger=instructions.SCHEDULE))
+        for trigger in ("", instructions.DIRECT, instructions.PUBLIC):
+            with self.subTest(trigger=trigger):
+                self.assertNotIn(unavailable, instructions.build(
+                    variables=variables, trigger=trigger))
 
     def test_schedule_instructions_require_a_name(self):
         for missing in ("", "   ", None):
@@ -288,6 +365,19 @@ class InstructionBuilder(unittest.TestCase):
         self.assertIn("on behalf of the named agent elena", built)
         self.assertIn("rol-1-aaaa", built)
         self.assertIn("/projects/exporter", built)
+
+    def test_a_role_execution_is_never_offered_roles_of_its_own(self):
+        """R-ROL-5 — one role may not put another on, so an execution told which roles
+        this install has is being shown a door it is refused at."""
+        built = instructions.for_role(
+            variables={"role": "Development", "parent_agent": "elena",
+                       "role_run": "rol-1-aaaa", "target": "/projects/exporter",
+                       "roles": "- **research** (read) — Answer one question."},
+            rules="# Development\n\nRun the tests.\n",
+        )
+        self.assertNotIn("## Roles you may hand heavy work to", built)
+        self.assertNotIn("- **research** (read)", built)
+        self.assertNotIn("delegating-to-roles", built)
 
     def test_a_roles_own_rules_reach_the_brain_exactly_as_they_were_written(self):
         """R-ROL-10 — a run resumes with byte-identical rules, and a substitution is a

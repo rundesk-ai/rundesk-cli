@@ -307,7 +307,7 @@ provider. One file per contract, named for it:
 | File | Cases | Covers |
 |---|---|---|
 | `test_gateway.py` | 264 | `platform-gateway` — real processes, real signals, waits turned down |
-| `test_agent.py` | 139 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
+| `test_agent.py` | 142 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
 | `test_cli.py` | 325 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
 | `test_catalog.py` | 27 | `lifecycle-skill-catalog` — manifests, provenance, default seeding, inert integration packages, lifecycle refresh, ownership, atomic updates, drift replacement, removal, and unsafe archives, all offline |
 | `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
@@ -329,8 +329,8 @@ provider. One file per contract, named for it:
 | `test_channel.py` | 77 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
 | `test_answering.py` | 146 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
 | `test_discord.py` | 208 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
-| `test_instructions.py` | 20 | Rundesk's core and trigger prompts, standard variables, the additive builder, and the separate role floor |
-| `test_role.py` | 43 | `agent-role` — what a role is, what makes one usable, and what its revision is computed from, against a scratch library |
+| `test_instructions.py` | 29 | Rundesk's core and trigger prompts, standard variables, the additive builder, the roles layer, and the separate role floor |
+| `test_role.py` | 51 | `agent-role` — what a role is, what makes one usable, what its revision is computed from, and how the install's roles are offered, against a scratch library |
 | `test_role_run.py` | 123 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
 | `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 

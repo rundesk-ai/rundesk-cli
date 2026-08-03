@@ -407,6 +407,19 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         self.assertIn("[AGENTS.md](./AGENTS.md) completely.", says)
         self.assertIn("your next step must be to read it first, always.", says)
 
+    def test_a_new_homes_rules_do_not_repeat_what_the_operating_rules_already_say(self):
+        """R-AGT-52 — the ordered three are settled in the layer nothing replaces, so the
+        home an owner may rewrite says the rest rather than a second copy of them. Two
+        copies of one rule is the one that gets edited and the one that stays."""
+        says = (agent.TEMPLATES / "AGENTS.md").read_text()
+        self.assertIn(
+            "Your operating rules settle what comes first — missing context, skills, "
+            "roles. This is the rest.", says)
+        self.assertNotIn("Check your skills.", says)
+        self.assertIn("Your operating rules send heavy work to a role.", says)
+        self.assertNotIn("rundesk roles <you>", says)
+        self.assertIn("**`delegating-to-roles` is the rest of it**", says)
+
     def test_the_file_every_provider_loads_names_the_ones_none_of_them_do(self):
         """R-AGT-2 — the two files loaded because of where they stand are the only way the
         other three are reached at all: no provider follows a Markdown link for free, and
@@ -1569,6 +1582,37 @@ class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):
         said = agent.standing("ava", self.where)
         self.assertIn("rundesk messages ava", said)
         self.assertIn("managing-rundesk", said)
+
+    def a_role(self, slug: str, described: str, posture: str = "work") -> None:
+        """One role as an owner writes one, where this install keeps them."""
+        at = self.where / ".roles" / slug
+        at.mkdir(parents=True)
+        (at / "role.json").write_text(json.dumps(
+            {"description": described, "skills": ["writing-plans"],
+             "posture": posture}), encoding="utf-8")
+        (at / "AGENTS.md").write_text(f"# {slug}\n\nDo the task.\n", encoding="utf-8")
+
+    def test_a_turn_is_told_which_roles_this_install_has(self):
+        """An agent that has to run a command to learn it has specialists at all is one
+        that never does. The listing is install-wide, so it sits after the standing rules
+        and before anything about this turn."""
+        self.a_role("development", "Implement one bounded change.")
+        self.a_role("research", "Answer one bounded question.", posture="read")
+        said = agent.standing("ava", self.where)
+        self.assertIn("## Roles you may hand heavy work to", said)
+        self.assertIn("- **development** (work) — Implement one bounded change.", said)
+        self.assertIn("- **research** (read) — Answer one bounded question.", said)
+        self.assertLess(said.index("- **development**"), said.index("- **research**"))
+        self.assertIn("rundesk roles ava run <role> --target <project>", said)
+        self.assertLess(said.index("You are ava,"),
+                        said.index("## Roles you may hand heavy work to"))
+
+    def test_an_install_with_no_roles_is_told_of_none(self):
+        """A heading with nothing under it is a capability an agent finds out it has not
+        got by spending a turn on it."""
+        said = agent.standing("ava", self.where)
+        self.assertNotIn("Roles you may hand heavy work to", said)
+        self.assertNotIn("rundesk roles ava run", said)
 
 
 class WhatARoleIsNot(WithSomewhereToKeepAgents):
