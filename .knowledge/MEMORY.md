@@ -302,6 +302,15 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 - **A fresh worktree has no `.venv`, so its Discord regression test skips and looks green.**
   Run the worktree's test path with the main checkout's `.venv/bin/python`; the interpreter
   supplies `discord.py` while the working directory and imported adapter remain the worktree's.
+- **And that same missing `.venv` adds a *second*, different failure to the conformance
+  harness, which reads like part of whatever you are reproducing.** Both shipped adapters
+  resolve the virtualenv from their own file (`parents[2]`), not from the interpreter running
+  the suite — so `tests/test_channel.py --adapter src/channels/discord` in a worktree with no
+  `.venv` also fails `everything an adapter reports is something the seam can act on`, on the
+  adapter's `{"ok": false, "why": "discord.py is not installed …"}` refusal. That is the
+  missing dependency, not the harness: build the worktree's own `.venv` (`python3 -m venv .venv
+  && .venv/bin/python -m pip install -r requirements.txt`) before believing a second failure is
+  real. #295 was filed carrying one of these as an untraced extra.
 - **A test class appended to the end of a suite file lands *after* the `__main__` guard and
   never runs — and the suite still says `OK`.** `tests/test_gateway.py` reported the same 184
   cases with a new four-case class in it, which reads exactly like a class that passed. Insert

@@ -101,8 +101,10 @@ The same suite every shipped channel passes:
 python3 tests/test_channel.py --adapter /path/to/your-adapter
 ```
 
-It reaches no platform and needs no token — the adapters it drives are small programs, which is
-what yours is. Then:
+It reaches no platform — the adapters it drives are small programs, which is what yours is. The
+two cases that drive a whole turn ask your `--check` first and skip as unmet setup if it refuses,
+so with no credential exported you get `OK (skipped=2)` rather than a failure you did not earn.
+Then:
 
 ```sh
 rundesk channels ava add ops --kind /opt/my-channel --allow someone -- <your options>
