@@ -192,12 +192,17 @@ SEEN = "👀"
 #: picks the word its people will recognise, and the seam keeps the meaning. `/new` is
 #: what forgetting a conversation is called to somebody using it: they are not clearing
 #: state, they are starting again.
+#: **The acknowledgement says the gesture was heard, never what it did.** These claimed an
+#: effect before rundesk had been told anything — and rundesk then drops a `stop` where no
+#: turn is running, and drops any gesture from somebody this channel does not allow. So the
+#: two ordinary cases ended with a person told something that never happened. What a
+#: control actually did arrives as the turn's own outcome (R-DIS-12).
 CONTROL_COMMANDS = (
-    ("stop", "Stop the turn running here", "stop", "✋ stopping this turn."),
+    ("stop", "Stop the turn running here", "stop", "✋ asked to stop the turn here."),
     ("new", "Start a new session — the next message begins fresh", "forget",
-     "🧹 this conversation starts fresh."),
+     "🧹 asked to start this conversation fresh."),
     ("restart", "Restart this agent's gateway", "restart",
-     "♻️ restarting the agent — it will be back in a moment."),
+     "♻️ asked to restart the agent."),
 )
 
 #: Read-only agent and gateway questions (R-DIS-22, R-DIS-36, R-DIS-37). Their names are
@@ -521,6 +526,16 @@ class Agent(discord.Client):
     def _control_command(self, control: str):
         async def ran(interaction: discord.Interaction) -> None:
             if not self._owns(interaction):
+                return
+            # Advisory only, exactly as `_query_command` and `_provider_command` already
+            # are; rundesk checks again and drops the gesture in silence. Without it,
+            # somebody this channel does not allow typed `/restart` in a shared room and
+            # was told the agent was restarting — a promise nothing kept, and a
+            # confirmation to a stranger that the agent is listening.
+            if self.chose.allow and str(interaction.user.id) not in self.chose.allow:
+                with contextlib.suppress(Exception):
+                    await interaction.response.send_message(
+                        "This command is not available to you.", ephemeral=True)
                 return
             # Answered inside the three seconds Discord allows, and answered *only* that
             # it was heard (R-DIS-11, R-DIS-12). What the control did comes back as the

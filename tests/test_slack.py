@@ -1071,7 +1071,25 @@ class SlacksOwnCommands(unittest.TestCase):
         [said], answered = self._ran(client, "stop")
         self.assertEqual("control", said["type"])
         self.assertEqual(1, len(answered))
-        self.assertIn("stopping", answered[0][1])
+        self.assertIn("asked to stop", answered[0][1])
+        # **It says the gesture was heard, never what it did.** Rundesk drops a `stop`
+        # where no turn is running, so an acknowledgement claiming the turn is stopping is
+        # a promise nothing kept in one of the two ordinary cases.
+        self.assertNotIn("stopping", answered[0][1],
+                         "the acknowledgement claimed an effect rundesk had not reported")
+
+    def test_a_gesture_from_somebody_not_allowed_is_refused_before_it_is_reported(self):
+        """R-SLK-12 — somebody this channel does not allow typed `restart` in a shared room
+        and was told the agent was restarting: a promise nothing kept, and a confirmation
+        to a stranger that the agent is listening. Advisory, exactly as the read-only
+        questions already are — rundesk checks again and drops it in silence."""
+        client = an_agent(FakeSlack(), dm=True)
+        client.chose.allow = ["U-SOMEBODY-ELSE"]
+        for word in ("stop", "new", "restart"):
+            said, answered = self._ran(client, word)
+            self.assertEqual([], said, f"'{word}' from a stranger reached rundesk")
+            self.assertEqual(1, len(answered))
+            self.assertIn("not available to you", answered[0][1])
 
     def test_a_read_only_question_is_reported_for_authorization_and_held(self):
         """R-SLK-22 — rundesk authorizes it and answers; this file only correlates."""

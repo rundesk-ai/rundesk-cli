@@ -200,12 +200,17 @@ SEEN = "eyes"
 #: claimed `/stop` would take it from every other app and two Rundesk agents in one
 #: workspace could not both be reached. The name is the owner's — `--command` — and the
 #: gesture is its first word.
+#: **The acknowledgement says the gesture was heard, never what it did.** These claimed an
+#: effect before rundesk had been told anything — and rundesk then drops a `stop` where no
+#: turn is running, and drops any gesture from somebody this channel does not allow. So the
+#: two ordinary cases ended with a person told something that never happened. What a
+#: control actually did arrives as the turn's own outcome (R-SLK-12).
 CONTROL_WORDS = (
-    ("stop", "stop the turn running here", "stop", "✋ stopping this turn."),
+    ("stop", "stop the turn running here", "stop", "✋ asked to stop the turn here."),
     ("new", "start a new session — the next message begins fresh", "forget",
-     "🧹 this conversation starts fresh."),
+     "🧹 asked to start this conversation fresh."),
     ("restart", "restart this agent's gateway", "restart",
-     "♻️ restarting the agent — it will be back in a moment."),
+     "♻️ asked to restart the agent."),
 )
 
 #: Read-only agent and gateway questions (R-SLK-22, R-SLK-36, R-SLK-37). Their words are
@@ -939,6 +944,14 @@ class Agent:
         word, rest = word.strip().lower(), rest.strip()
         gesture = next((c for n, _d, c, _s in CONTROL_WORDS if n == word), None)
         if gesture:
+            # Advisory only, exactly as the two branches below already are; rundesk checks
+            # again and drops the gesture in silence. Without it, somebody this channel
+            # does not allow typed `restart` in a shared room and was told the agent was
+            # restarting — a promise nothing kept, and a confirmation to a stranger that
+            # the agent is listening.
+            if self.chose.allow and who not in self.chose.allow:
+                await self._privately(answer, "This command is not available to you.")
+                return
             acknowledged = next(s for n, _d, _c, s in CONTROL_WORDS if n == word)
             # Answered *only* that it was heard (R-SLK-11, R-SLK-12). What the control did
             # comes back as the turn's own outcome — acknowledging it with the running
