@@ -16,8 +16,16 @@ again each time a program starts. Nothing rundesk shows ever gives a whole value
   with nobody having exported anything in a shell a gateway will never see.
 - A credential is placed once for the whole install, replaced in one command, and told apart
   from another without anybody reading either.
-- A value an owner placed cannot afterwards be read back off this machine, by them or by an
-  agent, and no copy of this install carries one.
+- Nothing rundesk itself shows gives a value back — not a listing, not a record, not a log —
+  and no copy of this install carries one.
+
+**Where that stops, said plainly.** R-SEC-1 gives every value to every program rundesk
+starts, which is the whole point of the feature, so an agent whose turn runs under them can
+print one and its transcript stands under the data directory. What this is for is placing a
+credential without it passing through the process table or a shell history, telling one from
+another without reading either, replacing it in one command, and keeping every one of them
+out of what a backup carries. It is not confidentiality against an agent that has been given
+one.
 
 ## Requirements
 
@@ -55,7 +63,7 @@ again each time a program starts. Nothing rundesk shows ever gives a whole value
 | ✅ | R-SEC-30 | Producing the values never runs a fetching command on the loop a gateway is carrying work on | `the same answer is given off the event loop` |
 | ✅ | R-SEC-31 | Where values are kept stands where an integration command already looks for its own | `it stands where every integration command already looks`, `a relative configuration home is ignored rather than resolved`, `where values are kept is printed and nothing else` |
 
-| ✅ | R-SEC-32 | A value placed from a turn is kept only under a name plainly shaped like a credential | `a turn keeps only what is plainly a credential`, `what a turn may never place is refused however it is named` |
+| ✅ | R-SEC-32 | A turn keeps a value only under a name plainly shaped like a credential — a guard on the ordinary path, not a boundary | `a turn keeps only what is plainly a credential`, `what a turn may never place is refused however it is named` |
 
 ## Open questions
 

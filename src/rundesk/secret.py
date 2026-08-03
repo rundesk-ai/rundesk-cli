@@ -36,6 +36,7 @@ import hmac
 import os
 import re
 import subprocess
+import threading
 from pathlib import Path
 
 from rundesk import durable
@@ -165,6 +166,20 @@ NEVER = frozenset({
 #: an agent legitimately needs and none of what the three gaps were.
 CREDENTIAL_ENDS = ("_TOKEN", "_API_KEY", "_KEY", "_SECRET", "_PASSWORD", "_PASSPHRASE",
                    "_CREDENTIAL", "_CREDENTIALS", "_AUTH")
+
+#: What makes "in order and never at once" true of concurrent callers as well as of one
+#: call's own loop. `resolved()` hands each caller its own thread, so ten schedules firing
+#: together were ten `resolve()` calls overlapping — measured, eight put eight prompts up in
+#: half a second — while the docstring below promised the opposite. Held across the fetching
+#: part alone, so nothing reading the registry waits on somebody's vault.
+#:
+#: **One process, and it says so rather than implying more.** Two gateways, or a gateway and
+#: a `rundesk env check` at a terminal, are two processes and this does not reach between
+#: them; that is the same bound `COMMAND_SECONDS` and every other in-process decision here
+#: has. The trade is deliberate: a keeper that hangs already costs its own caller the full
+#: ceiling, and under this it costs the callers queued behind it the same again — which is
+#: the price of not putting ten passphrase prompts in front of one person at once.
+_FETCHING = threading.Lock()
 
 
 def a_credential(name: str) -> bool:
@@ -749,8 +764,10 @@ def resolve(where: Path | None = None, run=None, timeout_seconds: float = COMMAN
     started is missing a variable and says so, and the one after it is unlocked has it
     back — with no restart, no state and nothing to invalidate.
 
-    Commands run **in order and never at once**: ten schedules firing together must not put
-    ten prompts in front of somebody, and a keyed vault would ask each time.
+    Commands run **in order and never at once**, across concurrent callers as well as
+    within one call: ten schedules firing together must not put ten prompts in front of
+    somebody, and a keyed vault would ask each time. `_FETCHING` is what makes the second
+    half of that true, and says what it does and does not reach.
 
     `exclude` is what the caller already has an answer for. A channel adapter's own
     credential is the whole of it today: two agents may hold two different bots, and one
@@ -772,34 +789,35 @@ def resolve(where: Path | None = None, run=None, timeout_seconds: float = COMMAN
     values: dict = {}
     trouble: list = []
     held = 0
-    for name in sorted(kept):
-        said = kept[name]
-        if not isinstance(said, dict) or name in already:
-            continue
-        if only is not None and name not in set(only):
-            continue
-        why = refused(name)
-        if why:
-            # Written by a hand-edit, or by a release whose rule was narrower than this
-            # one's. Refusing on the way out is what makes a name added to the builder
-            # tomorrow stop being given out today, with nobody re-running a command.
-            trouble.append(Trouble(name=name, kept_as=_as_kept(name, said).kept_as,
-                                   answered=True, why=why))
-            continue
-        one = _as_kept(name, said)
-        got = _fetched(one, where, running, timeout_seconds)
-        if not got.ok:
-            trouble.append(Trouble(name=name, kept_as=one.kept_as,
-                                   answered=got.answered, why=got.why))
-            continue
-        weight = len(name.encode("utf-8")) + len(got.value.encode("utf-8")) + 2
-        if held + weight > SET_LIMIT_BYTES:
-            trouble.append(Trouble(
-                name=name, kept_as=one.kept_as, answered=True,
-                why="what is kept is larger than a program can be started with"))
-            continue
-        held += weight
-        values[name] = got.value
+    with _FETCHING:
+        for name in sorted(kept):
+            said = kept[name]
+            if not isinstance(said, dict) or name in already:
+                continue
+            if only is not None and name not in set(only):
+                continue
+            why = refused(name)
+            if why:
+                # Written by a hand-edit, or by a release whose rule was narrower than this
+                # one's. Refusing on the way out is what makes a name added to the builder
+                # tomorrow stop being given out today, with nobody re-running a command.
+                trouble.append(Trouble(name=name, kept_as=_as_kept(name, said).kept_as,
+                                       answered=True, why=why))
+                continue
+            one = _as_kept(name, said)
+            got = _fetched(one, where, running, timeout_seconds)
+            if not got.ok:
+                trouble.append(Trouble(name=name, kept_as=one.kept_as,
+                                       answered=got.answered, why=got.why))
+                continue
+            weight = len(name.encode("utf-8")) + len(got.value.encode("utf-8")) + 2
+            if held + weight > SET_LIMIT_BYTES:
+                trouble.append(Trouble(
+                    name=name, kept_as=one.kept_as, answered=True,
+                    why="what is kept is larger than a program can be started with"))
+                continue
+            held += weight
+            values[name] = got.value
     return Resolved(values=values, trouble=tuple(trouble))
 
 

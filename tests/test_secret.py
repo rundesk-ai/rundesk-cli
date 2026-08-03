@@ -574,6 +574,46 @@ class WhatEveryProgramIsGiven(WithSomewhereToKeepThings):
 
         self.assertEqual({"GITHUB_TOKEN": A_VALUE}, said.values)
 
+    def test_keepers_never_run_at_once_however_many_programs_start_together(self):
+        """The promise `resolve` makes in words, which nothing held it to. "In order and
+        never at once" was true inside one call and false across calls — `resolved` hands
+        every caller its own thread, so ten schedules firing together were ten keepers at
+        once and ten passphrase prompts in front of one person. Measured before the lock:
+        eight callers, eight at once, in half a second. One process; no row claims more."""
+        import asyncio
+        import threading
+        import time
+
+        secret.remember_command("OP_TOKEN", a_command("true"), now=NOW, kept_from=HERE,
+                                where=self.where, run=lambda *a, **k: secret.Ran(
+                                    answered=True, ok=True, value=ANOTHER))
+        at_once = 0
+        most_at_once = 0
+        invocations = 0
+        counting = threading.Lock()
+
+        def keeper(command, timeout_seconds=secret.COMMAND_SECONDS):
+            nonlocal at_once, most_at_once, invocations
+            with counting:
+                invocations += 1
+                at_once += 1
+                most_at_once = max(most_at_once, at_once)
+            # Long enough that an overlap is an overlap rather than a scheduling accident.
+            time.sleep(0.05)
+            with counting:
+                at_once -= 1
+            return secret.Ran(answered=True, ok=True, value=ANOTHER)
+
+        async def eight_at_once():
+            await asyncio.gather(*[secret.resolved(where=self.where, run=keeper)
+                                   for _ in range(8)])
+
+        asyncio.run(eight_at_once())
+
+        self.assertEqual(8, invocations, "a caller was not given the value at all")
+        self.assertEqual(1, most_at_once,
+                         f"{most_at_once} keepers ran at once, and the promise is never")
+
 
 class WhereThingsAreKept(unittest.TestCase):
     """The resolver a gateway actually uses, which no case above goes through."""
@@ -687,19 +727,75 @@ class ATerminalThatIsNotThere:
     What a brain's tool shell gives its children, and what a suite walking the surface
     gives the command. Reading it blocks until the far end closes, which may be never — so
     a case that lets the real one through proves the opposite of what it says.
+
+    Reads the way a real stream does — `readline` stops at the first newline and `read`
+    takes the rest — so a case proving a whole value arrives cannot be proved by a stand-in
+    that hands everything over whichever call it is asked with.
     """
 
     def __init__(self, said: str = "", terminal: bool = False):
         self.said = said
         self.terminal = terminal
         self.asked = 0
+        self.left = said
 
     def isatty(self) -> bool:
         return self.terminal
 
     def readline(self) -> str:
         self.asked += 1
-        return self.said
+        line, newline, rest = self.left.partition("\n")
+        self.left = rest
+        return line + newline
+
+    def read(self, size: int = -1) -> str:
+        self.asked += 1
+        said, self.left = self.left, ""
+        return said
+
+
+class WhatIsPromisedInWriting(unittest.TestCase):
+    """What the contract and the shipped skill say, against what this module does.
+
+    Not style. Both documents stated a guarantee the code does not make, and a person or an
+    agent reading either would place a credential believing something about it that is not
+    true — which is the one kind of documentation error that has a security consequence.
+    """
+
+    REPO = Path(__file__).resolve().parent.parent
+
+    def contract(self) -> str:
+        return (self.REPO / ".knowledge" / "prd" / "platform-secrets.md").read_text()
+
+    def skill(self) -> str:
+        return (self.REPO / "src" / "templates" / "skills" / "managing-rundesk"
+                / "SKILL.md").read_text()
+
+    def test_the_contract_stops_where_the_code_stops(self):
+        """R-SEC-1 hands every value to every program and `tests/test_secret.py` asserts a
+        brain receives one in full, so any turn can print one and its transcript stands
+        under the data directory. The contract claimed the opposite in the same file."""
+        said = self.contract()
+
+        # `assertTrue` rather than `assertIn`: these are whole documents, and a failure that
+        # prints one buries the sentence it is about in four thousand characters.
+        self.assertTrue("cannot afterwards be read back" not in said,
+                        "the contract still promises what R-SEC-1 gives away")
+        self.assertTrue("not confidentiality against an agent" in said,
+                        "the contract does not say where the guarantee stops")
+
+    def test_what_a_turn_may_place_is_called_a_guard_everywhere_it_is_stated(self):
+        """It is stated in three places and is one rule. `commands/env.py` has said in code
+        from the start that clearing `RUNDESK_RUN` gets round it; the contract and the skill
+        both read as a boundary that holds, and the skill is what an agent is given."""
+        from rundesk.commands import env as command
+
+        for where, said in (("the module", command.in_a_turn.__doc__),
+                            ("the contract", self.contract()),
+                            ("the skill", self.skill())):
+            with self.subTest(where=where):
+                self.assertTrue("not a boundary" in said,
+                                f"{where} states the rule without stating its limit")
 
 
 class WhatTheCommandSays(unittest.TestCase):
@@ -820,6 +916,27 @@ class WhatTheCommandSays(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertIn("KEPT", out)
         self.assertEqual(A_VALUE, secret.resolve(where=self.where).values["GITHUB_TOKEN"])
+
+    def test_a_value_with_lines_in_it_is_kept_whole(self):
+        """R-SEC-9 — reading one line of a piped value kept the first line of a private key,
+        reported KEPT, and took the hint and the mark off the truncation, so no later
+        command could reveal it. `--from` reads the whole of a command's output, so the two
+        ways of placing one value disagreed about the same key."""
+        deploy_key = ("-----BEGIN RSA PRIVATE KEY-----\n"
+                      "bm90IGEga2V5LCBhbmQgbmV2ZXIgd2FzIG9uZQ==\n"
+                      "aXQgaXMgZm91ciBsaW5lcywgd2hpY2ggaXMgdGhlIHdob2xlIHBvaW50\n"
+                      "-----END RSA PRIVATE KEY-----\n")
+
+        code, out, _err = self.typed(["env", "set", "DEPLOY_KEY", "--stdin"],
+                                     stdin=ATerminalThatIsNotThere(deploy_key))
+
+        self.assertEqual(0, code)
+        self.assertIn("KEPT", out)
+        # Byte for byte what was piped in, less the one trailing newline every keeper adds
+        # and `normalised` takes off — which is what `--from` does with the same value.
+        self.assertEqual(deploy_key[:-1],
+                         secret.resolve(where=self.where).values["DEPLOY_KEY"],
+                         "a program was given something other than what was piped in")
 
     def test_a_value_is_typed_without_being_echoed(self):
         """R-SEC-9 — at a terminal it is asked for through the one call that turns echo

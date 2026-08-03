@@ -147,11 +147,19 @@ def _taken(name: str, piped: bool):
     turn, and a suite walking the surface would hang the gate, with nothing anywhere saying
     what it was waiting for.
 
+    **The whole of standard input, never one line of it.** A private key is four lines and
+    this verb exists to place credentials, so a `readline` here kept
+    `-----BEGIN RSA PRIVATE KEY-----` and nothing else, said `KEPT`, and took the hint and
+    the mark off the truncation — which is what made it invisible afterwards. `--from` reads
+    the whole of a command's output, and the two ways of placing one value have to agree.
+    `secret.carried` refuses anything past the size a program can be started with on the way
+    in, so the cap and the empty check both still do their work.
+
     Answers `None` when there is nobody to ask and nothing was piped, so the caller can say
     which of those it was.
     """
     if piped:
-        return sys.stdin.readline()
+        return sys.stdin.read()
     if not sys.stdin.isatty():
         return None
     return getpass.getpass(f"        the value for {name} (it will not be echoed): ")
