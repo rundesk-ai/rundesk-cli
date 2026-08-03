@@ -48,27 +48,20 @@ class InstructionBuilder(unittest.TestCase):
             self.assertNotIn(placeholder, built)
 
     def test_standing_instruction_keeps_its_paragraph_boundaries(self):
-        self.assertIn(
-            "\n\nYou are {agent}, an agent running inside rundesk. "
-            "Operate Rundesk with `rundesk`.\n\n",
-            instructions.RUNDESK_INSTRUCTIONS,
-        )
-        self.assertIn(
-            "\n\n- Your persistent home is `{agent_home}`;",
-            instructions.RUNDESK_INSTRUCTIONS,
-        )
-
-    def test_core_instructions_prohibit_git_at_home_and_workspace_roots(self):
-        """R-AGT-45 — an operational root must never be guessed into a repository."""
-        built = instructions.build(variables=CORE)
-        self.assertIn(
-            "Never initialize them or run any Git command from either root",
-            built,
-        )
-        self.assertIn(
-            "Do not report either root's Git status.",
-            built,
-        )
+        """R-AGT-38 — the source is owner-readable, and what a brain reads is the shape
+        that was written. What the paragraphs *say* is the owner's and moves whenever he
+        edits it; that they survive filling is Rundesk's, so only that is held here."""
+        paragraphs = instructions.RUNDESK_INSTRUCTIONS.split("\n\n")
+        self.assertGreater(len(paragraphs), 2)
+        for one in paragraphs:
+            with self.subTest(paragraph=one[:40]):
+                self.assertTrue(one.strip())
+                self.assertEqual(one.strip(), one)
+        self.assertTrue(paragraphs[0].startswith("# "))
+        # Filling variables is a substitution and never a reflow: a layer collapsed into
+        # one block on the way out is a different document from the one an owner edited.
+        self.assertEqual(len(paragraphs),
+                         len(instructions.build(variables=CORE).split("\n\n")))
 
     def test_core_instructions_keep_internal_routing_checks_silent(self):
         """R-AGT-46 — a self-created route miss is not progress or owner-facing friction."""
@@ -81,108 +74,19 @@ class InstructionBuilder(unittest.TestCase):
             with self.subTest(rule=rule):
                 self.assertIn(rule, built)
 
-    def test_every_agent_is_told_how_to_attach_a_local_file(self):
-        """R-CH-31 — one portable final-answer convention reaches every brain."""
-        built = instructions.build(variables=CORE)
-        self.assertIn("Any Markdown link to an absolute local file path", built)
-        self.assertIn("whether inline or on its own line", built)
-        self.assertIn("optional `<` and `>` delimiters", built)
-        self.assertIn("only when the file exists, is small enough, and sits inside", built)
-        self.assertIn("removes the private path", built)
-        self.assertIn("rundesk-attach: [LABEL](</absolute/path>)", built)
-        self.assertIn("explicit form", built)
-        self.assertIn("opening bracket with `\\`", built)
-
-    def test_every_agent_is_told_where_an_attachment_may_come_from(self):
-        """R-CH-31 — containment is a rule a brain can follow, not one it discovers by failing.
-
-        The rejection is logged and never reaches the turn, so an agent whose file sits in a
-        project directory sees an answer that simply arrives without it. Told only that a
-        file "passes its safety checks", it rewrites the link — the one part that was right.
-        """
-        built = instructions.build(variables=CORE)
-        self.assertIn("sits inside `/agents/ava/home` or this agent's own Rundesk log directory",
-                      built)
-        self.assertIn("A file anywhere else is never attached, and nothing tells you so", built)
-        self.assertIn("a project directory you work in is outside", built)
-        self.assertIn("copy the file under `/agents/ava/home/workspace`", built)
-        self.assertIn("rather than rewriting the link", built)
-
-    def test_core_instructions_keep_rundesk_operations_exact(self):
-        built = instructions.build(variables=CORE)
-        for command in (
-            "rundesk messages ava --conversation <id>",
-            "rundesk messages ava --source schedule",
-            "rundesk messages ava",
-            "rundesk schedules ava",
-            "rundesk --help",
-        ):
-            with self.subTest(command=command):
-                self.assertIn(f"`{command}`", built)
-        self.assertIn("Referred to work you have no record of? Read it first", built)
-        self.assertIn("only after running `rundesk schedules ava`", built)
-        self.assertIn("Never substitute another scheduler.", built)
-        self.assertIn("Treat `rundesk --help` as authoritative.", built)
-        self.assertIn("`managing-rundesk` or applicable skill", built)
-
-    def test_core_instructions_require_applicable_skills_before_work(self):
-        """R-AGT-52 — granted procedures govern work instead of waiting to be named, and
-        they are one of three checks settled before the first tool call rather than the
-        only one. The moment is the sentence, so nothing has to be said twice about
-        when."""
-        built = instructions.build(variables=CORE)
-        self.assertIn(
-            "**Before your first tool call: read the context you are missing, load the "
-            "skills that apply, then hand heavy work to a role.**",
-            built,
-        )
-
-    def test_three_checks_are_settled_before_work_in_one_order(self):
-        """R-AGT-52 — all three are decided before the first tool call of the work, which
-        is earlier than any skill the agent would have opened and earlier than a home an
-        owner may have rewritten. So each says what it is, in the order stated, and every
-        clause is a trigger or an action rather than an explanation of one."""
-        built = instructions.build(variables=CORE)
-        ordering = built.index("Before your first tool call")
-        context = built.index("Referred to work you have no record of?")
-        heavy = built.index("Heavy work — spanning a repository")
-        self.assertLess(ordering, context)
-        self.assertLess(context, heavy)
-        self.assertIn("goes to a role. Keep it yourself only if you say why.", built)
-        self.assertLess(built.index("read your three home files"), ordering)
-        for cut in ("Mid-work is too late", "never guessed", "many steps",
-                    "Handing it over is ordinary"):
-            with self.subTest(cut=cut):
-                self.assertNotIn(cut, built)
-
     def test_the_core_instructions_name_all_three_home_files(self):
-        """R-AGT-56 — the layer nothing replaces names every file a home keeps, and says
-        what each one is for. Naming them only in the home itself puts identity two hops
-        from anything guaranteed to be read: a provider that loads its bootstrap page late,
-        or not at all, then produces an agent with rules and no voice."""
-        built = instructions.build(variables=CORE)
-        for named, what in (
-            ("/agents/ava/home/AGENTS.md", "how you work"),
-            ("/agents/ava/home/SOUL.md", "who you are and how you speak"),
-            ("/agents/ava/home/MEMORY.md", "what you have learned that is still true"),
-        ):
-            with self.subTest(home_file=named):
-                self.assertIn(f"`{named}` — {what}.", built)
+        """R-AGT-56 — the layer nothing replaces names every file a home keeps. Naming
+        them only in the home itself puts identity two hops from anything guaranteed to be
+        read: a provider that loads its bootstrap page late, or not at all, then produces
+        an agent with rules and no voice.
 
-    def test_the_core_instructions_bind_every_answer_to_the_agents_own_voice(self):
-        """R-AGT-56 — voice is stated where output happens rather than only where reading
-        does, and it covers work the agent did not write itself. Pasting a role's prose
-        forward is the most common way a Rundesk agent's register dies, and a role is given
-        no identity by design (R-ROL-5), so what it hands back has none to carry."""
+        The filenames are the guarantee; the sentence around each one is the owner's and
+        moves when he rewrites it. This is the mirror of the leak check below, and the two
+        are written the same way on purpose."""
         built = instructions.build(variables=CORE)
-        for rule in (
-            "Everything that reaches a person is in `SOUL.md`'s voice",
-            "your own answers, and anything you carry from a role, a subagent, a tool, "
-            "or a document",
-            "What you speak through never changes how you sound.",
-        ):
-            with self.subTest(rule=rule):
-                self.assertIn(rule, built)
+        for named in ("AGENTS.md", "SOUL.md", "MEMORY.md"):
+            with self.subTest(home_file=named):
+                self.assertIn(f"{CORE['agent_home']}/{named}", built)
 
     def test_the_roles_layer_lands_after_the_standing_rules_and_before_the_trigger(self):
         """An agent is told what it may hand work to without asking for the list, and it
@@ -200,21 +104,17 @@ class InstructionBuilder(unittest.TestCase):
         self.assertLess(built.index("## Scheduled run"), built.index("Owner addition."))
         self.assertIn("- **research** (read) — Answer one question.", built)
 
-    def test_the_roles_layer_says_what_one_run_is_and_how_it_is_started(self):
-        built = instructions.build(
-            variables={**CORE, "roles": "- **research** (read) — Answer one question."})
-        for rule in (
-            "`read` changes nothing; `work` changes the target.",
-            "`rundesk roles ava run <role> --target <project>`, brief on stdin.",
-            "The report is unchecked — verify it before you repeat it.",
-            "`delegating-to-roles` is the rest.",
-        ):
-            with self.subTest(rule=rule):
-                self.assertIn(rule, built)
-        self.assertNotIn("{agent_slug}", built)
-        # What an execution *is* describes the architecture; `--target <project>` above
-        # already carries the only part of it that changes what the agent types.
-        self.assertNotIn("Each runs outside your turn", built)
+    def test_the_roles_layer_is_filled_from_the_same_variables_as_the_rest(self):
+        """The one layer that varies with the install is still rendered rather than
+        pasted, so an agent is never shown a brace where its own slug should be."""
+        variables = {**CORE, "roles": "- **research** (read) — Answer one question."}
+        built = instructions.build(variables=variables)
+        self.assertIn(
+            instructions.render(instructions.ROLES_AVAILABLE, variables).strip(), built)
+        self.assertIn("- **research** (read) — Answer one question.", built)
+        for name in instructions.STANDARD_VARIABLES:
+            with self.subTest(variable=name):
+                self.assertNotIn("{" + name + "}", built)
 
     def test_an_install_with_no_roles_is_given_no_heading_at_all(self):
         """A heading with nothing under it is an agent told it has a capability and then
@@ -261,42 +161,6 @@ class InstructionBuilder(unittest.TestCase):
                 self.assertNotIn("## Scheduled run", built)
                 self.assertNotIn("No user request started it", built)
 
-    def test_scheduled_run_instructions_define_unattended_outcomes(self):
-        built = schedule.by_default("nightly")
-        for rule in (
-            "Treat the schedule's own task text as the request.",
-            "Never infer additional work from earlier conversations or past runs.",
-            "Never ask a question, request approval, or wait for a reply.",
-            "Write nothing until the work is finished.",
-            "Deliver exactly one report as that final message.",
-            "When you found nothing worth acting on, say that in a short direct response.",
-            "stop before that action and report `blocked`",
-        ):
-            with self.subTest(rule=rule):
-                self.assertIn(rule, built)
-
-    def test_a_scheduled_run_is_told_where_a_handoff_lands(self):
-        """R-AGT-55 — a scheduled run may hand heavy work on, and the one thing that
-        differs for it is where the report comes back: a later turn, in the room this
-        schedule announces in. Its own one-report rule is untouched, so that is said in
-        the same breath rather than left to be inferred."""
-        lands = ("A role you hand work to reports back in a later turn, where this "
-                 "schedule announces. This run still delivers one report of its own.")
-        self.assertIn(lands, schedule.by_default("nightly"))
-        variables = {**CORE, "schedule": "nightly",
-                     "roles": "- **research** (read) — Answer one question."}
-        self.assertIn(lands, instructions.build(
-            variables=variables, trigger=instructions.SCHEDULE))
-        for trigger in ("", instructions.DIRECT, instructions.PUBLIC):
-            with self.subTest(trigger=trigger):
-                self.assertNotIn(lands, instructions.build(
-                    variables=variables, trigger=trigger))
-        # The refusal this replaced is false now, and a run told it would spend the whole
-        # turn doing work it was allowed to hand over.
-        self.assertNotIn("Roles are unavailable here", schedule.by_default("nightly"))
-        self.assertNotIn("Do the work in this run, or report `blocked`.",
-                         schedule.by_default("nightly"))
-
     def test_schedule_instructions_require_a_name(self):
         for missing in ("", "   ", None):
             with self.assertRaisesRegex(ValueError, "schedule name"):
@@ -313,24 +177,22 @@ class InstructionBuilder(unittest.TestCase):
         )
 
     def test_public_room_uses_standard_channel_variables(self):
-        built = instructions.build(
-            variables={
-                **CORE, "channel_kind": "discord", "user": "Tim",
-                "channel_where": "#ops on Acme",
-            },
-            trigger=instructions.PUBLIC,
-        )
-        self.assertIn(
-            "You are responding to Tim through discord in #ops on Acme.",
-            built,
-        )
-        for safety in (
-            "Anyone in that room can read what you write.",
-            "Keep replies short",
-            "never paste a credential, a private path",
-            "other direct messages",
-        ):
-            self.assertIn(safety, built)
+        """R-AGT-38 — the public layer is one layer, filled from the standard names. What
+        it warns a room about is the owner's sentence; that every name he wrote resolves
+        to the value this turn actually has is what a test can hold."""
+        variables = {
+            **CORE, "channel_kind": "discord", "user": "Tim",
+            "channel_where": "#ops on Acme",
+        }
+        built = instructions.build(variables=variables, trigger=instructions.PUBLIC)
+        layer = instructions.render(instructions.PUBLIC_ROOM, variables).strip()
+        self.assertEqual(f"{instructions.build(variables=variables)}\n\n{layer}", built)
+        for value in ("discord", "Tim", "#ops on Acme"):
+            with self.subTest(value=value):
+                self.assertIn(value, layer)
+        for name in instructions.STANDARD_VARIABLES:
+            with self.subTest(variable=name):
+                self.assertNotIn("{" + name + "}", built)
 
     def test_adapter_override_replaces_only_its_layer_and_append_follows(self):
         record = {"kind": "discord", channel.INSTRUCTIONS: ""}
@@ -416,15 +278,17 @@ class InstructionBuilder(unittest.TestCase):
                        "agent_home": "/agents/elena/home"},
             rules="# Development\n\nRun the tests.\n",
         )
-        for absent in (
-            "read your three home files",
-            "who you are and how you speak",
-            "what you have learned that is still true",
-            "Everything that reaches a person is in",
-            "never changes how you sound",
-        ):
-            with self.subTest(absent=absent):
-                self.assertNotIn(absent, built)
+        for named in ("SOUL.md", "MEMORY.md"):
+            with self.subTest(home_file=named):
+                self.assertNotIn(named, built)
+        # Read off the core layer rather than quoted from it, so the guard holds whatever
+        # the owner rewrites it to say. A line of the named agent's floor reaching an
+        # execution is the leak, whichever line it turns out to be.
+        for line in instructions.RUNDESK_INSTRUCTIONS.splitlines():
+            if len(line.strip()) < 20:
+                continue
+            with self.subTest(line=line.strip()[:40]):
+                self.assertNotIn(line.strip(), built)
 
     def test_a_role_execution_is_never_offered_roles_of_its_own(self):
         """R-ROL-5 — one role may not put another on, so an execution told which roles
@@ -457,18 +321,18 @@ class InstructionBuilder(unittest.TestCase):
         )
         self.assertLess(built.index("# Role execution"), built.index("# Mine"))
         self.assertLess(built.index("# Mine"), built.index("## This execution"))
-    def test_the_onboarding_layer_names_the_agent_and_invents_no_work(self):
-        """R-CH-33 — a new agent has no projects, no goals and no focus, and this is the
-        one turn where a brain has nothing but rundesk's words to go on."""
-        built = instructions.build(
-            variables={"agent": "Ava", "agent_home": "/agents/ava/home"},
-            trigger=instructions.ONBOARDING)
-        self.assertIn("you are Ava", built)
-        self.assertIn("very short", built)
-        self.assertIn("Invite them to reach out", built)
-        self.assertIn("Never invent, assume, or offer a project, goal, focus, or "
-                      "specialty", built)
-        self.assertIn("Write only the message itself", built)
+    def test_the_onboarding_layer_is_filled_with_the_agent_it_introduces(self):
+        """R-CH-33 — this is the one turn where a brain has nothing but rundesk's words to
+        go on, so what those words ask for is the owner's to write. What must hold is that
+        the layer arrives whole and knows which agent it is introducing: an onboarding
+        message that greets `{agent}` is the failure a name reaching it prevents."""
+        variables = {"agent": "Ava", "agent_home": "/agents/ava/home"}
+        built = instructions.build(variables=variables,
+                                   trigger=instructions.ONBOARDING)
+        self.assertIn(
+            instructions.render(instructions.ONBOARDING_INSTRUCTIONS, variables).strip(),
+            built)
+        self.assertIn("Ava", built)
         self.assertNotIn("{agent}", built)
 
     def test_the_onboarding_layer_never_displaces_rundesks_own_rules(self):

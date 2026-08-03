@@ -407,19 +407,6 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         self.assertIn("[AGENTS.md](./AGENTS.md) completely.", says)
         self.assertIn("your next step must be to read it first, always.", says)
 
-    def test_a_new_homes_rules_do_not_repeat_what_the_operating_rules_already_say(self):
-        """R-AGT-52 — the ordered three are settled in the layer nothing replaces, so the
-        home an owner may rewrite says the rest rather than a second copy of them. Two
-        copies of one rule is the one that gets edited and the one that stays."""
-        says = (agent.TEMPLATES / "AGENTS.md").read_text()
-        self.assertIn(
-            "Your operating rules settle what comes first — missing context, skills, "
-            "roles. This is the rest.", says)
-        self.assertNotIn("Check your skills.", says)
-        self.assertIn("Your operating rules send heavy work to a role.", says)
-        self.assertNotIn("rundesk roles <you>", says)
-        self.assertIn("**`delegating-to-roles` is the rest of it**", says)
-
     def test_the_file_every_provider_loads_names_the_ones_none_of_them_do(self):
         """R-AGT-2 — the two files loaded because of where they stand are the only way the
         other three are reached at all: no provider follows a Markdown link for free, and

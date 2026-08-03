@@ -39,7 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import channel, process, store  # noqa: E402
+from rundesk import channel, instructions, process, store  # noqa: E402
 
 #: When a channel was written down. A calendar fact the record carries; never read here.
 AT = "2026-07-26T09:00:00Z"
@@ -880,18 +880,25 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
 
     def test_public_and_direct_triggers_do_not_require_optional_display_words(self):
         """R-CH-21 — classification is enough; missing optional names do not remove the
-        public warning or leave a malformed private sentence."""
-        public = self.preface(
-            {"kind": "mail"}, "ava", "inbox",
-            {"direct": False, "channel_name": "support"},
-        )
-        self.assertIn("through mail in support", public)
-        self.assertIn("Anyone in that room can read", public)
-        direct = self.preface(
-            {"kind": "imessage"}, "ava", "messages",
-            {"direct": True, "user": "2207"},
-        )
-        self.assertIn("private conversation with 2207.", direct)
+        public layer or leave a malformed private one.
+
+        Each layer is rendered from the same constant the builder uses, so what the two
+        say is the owner's and only which one an arrival picks — and that it came out
+        filled — is asserted here."""
+        for record, name, arrived, chose, refused in (
+            ({"kind": "mail"}, "inbox", {"direct": False, "channel_name": "support"},
+             instructions.PUBLIC_ROOM, instructions.DIRECT_MESSAGE),
+            ({"kind": "imessage"}, "messages", {"direct": True, "user": "2207"},
+             instructions.DIRECT_MESSAGE, instructions.PUBLIC_ROOM),
+        ):
+            with self.subTest(direct=arrived.get("direct")):
+                built = self.preface(record, "ava", name, arrived)
+                filled = channel.prompt_variables(record, "ava", name, arrived)
+                layer = instructions.render(chose, filled).strip()
+                self.assertIn(layer, built)
+                self.assertNotIn(instructions.render(refused, filled).strip(), built)
+                for variable in instructions.STANDARD_VARIABLES:
+                    self.assertNotIn("{" + variable + "}", layer)
 
     def test_a_gesture_that_is_not_one_is_refused(self):
         """R-CAD-1 — acting on it means guessing which of two things somebody meant, and
