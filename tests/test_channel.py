@@ -79,8 +79,14 @@ if "--check" in sys.argv:
     settings = {}
     for i in range(0, len(rest) - 1, 2):
         settings[rest[i].lstrip("-")] = rest[i + 1]
+    # **Named whether or not it is set**, which is what a real adapter does — Discord and
+    # Slack both say where they read a credential from on the refusal path as well as on
+    # success. Conditional, this stand-in named none under the gate's own environment, so
+    # every row guarding what an adapter may hand back was skipped where it is run without
+    # `--adapter`: a privacy row could be broken for months and only a person who pointed
+    # the suite at a real adapter would ever see it.
     say(ok=True, settings=settings, describes="a file on this machine",
-        secret={"env": "MY_CHANNEL_TOKEN"} if os.environ.get("MY_CHANNEL_TOKEN") else None)
+        secret={"env": "MY_CHANNEL_TOKEN"})
     raise SystemExit(0)
 
 shown = open(os.path.join(os.environ["RUNDESK_CHANNEL_HOME"], "shown"), "a")
@@ -310,13 +316,26 @@ class TheContract(DrivesAnAdapter):
     async def test_an_adapter_names_a_credential_rather_than_giving_one(self):
         """R-CAD-11, R-CAD-12 — where it found the secret, never what it is. A token in
         the answer would be a token in a file that outlives the channel."""
-        said = await channel.checked(self.under_test(), OPTIONS, self.told())
+        told = self.told()
+        said = await channel.checked(self.under_test(), OPTIONS, told)
         if said["secret"] is not None:
-            self.assertEqual(["env"], list(said["secret"]),
-                             "it handed back more than the name of a variable")
             self.assertIsInstance(said["secret"]["env"], list)
             for one in said["secret"]["env"]:
                 self.assertIsInstance(one, str)
+            # **The whole of what this row is for: the name crossed and the value did
+            # not.** Asserted against the credential itself rather than against the shape
+            # of the reply, so a seam that grows a field cannot fail a privacy check by
+            # growing — which is exactly what happened when `named` began saying which
+            # file each credential is kept in. The gate could not see it: run with no
+            # `--adapter` the stand-in names no credential at all, so the branch this
+            # guards was skipped, and every real adapter — Discord, Slack, a stranger's —
+            # failed a row about privacy for a reason that had nothing to do with privacy.
+            handed = json.dumps(said["secret"])
+            for name in said["secret"]["env"]:
+                value = told.get(name)
+                if value:
+                    self.assertNotIn(value, handed,
+                                     "it handed over a credential rather than naming one")
 
     async def test_an_adapter_survives_a_whole_turn_being_told_to_it(self):
         """R-CAD-1, R-CAD-5 — every record the seam sends, in the order it sends them, at
@@ -1178,7 +1197,12 @@ class TheClaimTheWholeSeamRestsOn(DrivesAnAdapter):
 
         said = await channel.checked(adapter, ["--station", "1180"], told)
         self.assertTrue(said["ok"], f"it could not reach what it was pointed at: {said['why']}")
-        self.assertEqual({"env": ["SEMAPHORE_TOKEN"]}, said["secret"],
+        self.assertEqual(["SEMAPHORE_TOKEN"], said["secret"]["env"],
+                         "it named a different place than the one it reads")
+        # The whole of what this row is for: the *name* crossed and the value did not.
+        # Asserted against the credential itself rather than against the shape of the
+        # reply, so a seam that grows a field cannot fail a privacy check by growing.
+        self.assertNotIn(told["SEMAPHORE_TOKEN"], json.dumps(said["secret"]),
                          "it handed over a credential rather than naming one")
 
         held = await self.hold(adapter, env=dict(told, FAKE_SAYS="what changed today?",

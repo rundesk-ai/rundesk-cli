@@ -1,0 +1,2309 @@
+#!/usr/bin/env python3
+"""Slack, as an agent is reached on it.
+
+Everything about this platform is in this file and nowhere else (R-CAD-13). A channel id, a
+`ts`, a `thread_ts`, a Socket Mode envelope, the four-thousand-character message limit and
+the three seconds a slash command has to be acknowledged in are all Slack's, and none of
+them appears outside this program. Nothing here is imported by Rundesk, and nothing here
+imports Rundesk.
+
+What it does, in the order somebody experiences it:
+
+    named in a channel -> the turn happens in a thread under it   (R-SLK-1)
+    inside that thread -> it answers without being named again    (R-SLK-3)
+    in a direct message -> it answers where it was spoken to      (R-SLK-4)
+    taken up -> 👀            finished -> ✅ and the answer, whole
+    stopped  -> ✋            failed   -> ⚠️ and what failed
+
+The contract this implements is
+`docs/extending/channel-adapters/references/the-contract.md`. Where the two disagree, the
+reference is right. `.knowledge/prd/channel-slack.md` is what it is held to.
+
+**Where this is deliberately not Discord.** Slack has no generic typing indicator for a
+bot — `assistant.threads.setStatus` exists but requires the Agents/AI Apps feature and
+forces a thread-only UI on every conversation — so a turn says it is working through the
+👀 mark and the running commentary, and there is no indicator to renew. Presence is not
+set here either: `users.setPresence` is a user-token method, and a bot installed with
+`always_online: false` shows as active for exactly as long as its socket is open, which is
+this program's own lifetime and the one thing worth meaning.
+
+The cost of the choice: `slack_sdk` is a dependency, pinned in `requirements.txt` and
+installed by `install.sh` into the install's own virtualenv. Python's standard library has
+no websocket client, and a Socket Mode connection cannot be held open without one. Its
+*built-in* Socket Mode client is used rather than the aiohttp or websockets variants,
+because that one implements the protocol itself and pulls in nothing further.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import contextlib
+import hashlib
+import json
+import os
+import re
+import signal
+import stat
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+# The install's own virtualenv, found the way the launcher finds it. A channel adapter is
+# a program run with a built environment and almost no PATH, so nothing has put this on
+# the path for us — and being honest about not finding it beats an import error nobody
+# can act on. Counted from where this file stands, never written as a number.
+_ROOT = Path(__file__).resolve().parents[2]
+for _packages in sorted((_ROOT / ".venv" / "lib").glob("python3.*/site-packages")):
+    sys.path.insert(0, str(_packages))
+
+try:
+    from slack_sdk.errors import SlackApiError
+    from slack_sdk.socket_mode import SocketModeClient
+    from slack_sdk.socket_mode.response import SocketModeResponse
+    from slack_sdk.web import WebClient
+except ImportError:  # pragma: no cover - proved by the install, not by the suite
+    print(json.dumps({"ok": False, "why": (
+        "slack_sdk is not installed — run ./install.sh, which puts it in rundesk's own "
+        f"virtualenv (looked in {_ROOT / '.venv'})")}), flush=True)
+    raise SystemExit(1)
+
+#: Where the two credentials are read from unless the owner names other variables. Slack
+#: needs both: the app-level token opens the socket and the bot token calls the Web API,
+#: and one without the other reaches nothing. Never an argument — a command line is
+#: readable through the process list and lands in shell history — and never written down
+#: either; what is kept is these names (R-CAD-11, R-CAD-12).
+BOT_TOKEN_FROM = "SLACK_BOT_TOKEN"
+APP_TOKEN_FROM = "SLACK_APP_TOKEN"
+
+#: The files each is read from when its variable is not set — files the owner already
+#: controls, in this channel's own directory.
+#:
+#: **A supervised gateway has no shell.** The machine that keeps an agent up starts it
+#: with a built environment, so a token exported in somebody's terminal is a token the
+#: agent will never see once it is being kept up properly. Nothing here ever writes these
+#: files — they are reported to rundesk as `secret.files`, so that `channels add` takes
+#: each credential at the terminal and puts it exactly where this reads it back.
+#:
+#: **Naming them is what makes a two-credential surface addable at all.** Rundesk wrote one
+#: file whatever it was told, so before these were declared the app-level token had no way
+#: in and was left for the owner to place by hand — which is the thing R-CAD-11 exists to
+#: prevent.
+BOT_TOKEN_FILE = "token"
+APP_TOKEN_FILE = "app-token"
+
+#: The kinds of place Slack is, each of which becomes a channel of its own (R-CAD-15). A
+#: direct message and a channel full of people are not the same thing to talk in, and a
+#: channel carries who may reach the agent through it — so an owner pointed at both gets an
+#: allowed list and a set of instructions for each.
+DMS, ROOMS = "dms", "rooms"
+
+#: How many channels to name when saying what a room channel reaches. A bot in forty
+#: channels has a description nobody reads; the count of the rest says the same thing.
+ROOMS_SHOWN = 3
+
+#: The pieces of a place, which an owner writes as `{where.channel}` and
+#: `{where.workspace}`. Declared here so a misspelt one is refused when it is written;
+#: `where` on its own is still the whole phrase, for anyone who wants it in one go.
+FILLS = {DMS: (), ROOMS: ("channel", "workspace", "thread")}
+
+#: Slack recommends four thousand characters in a message's text and truncates hard at
+#: forty thousand. Left short of the recommendation on purpose: a reply is split at a line
+#: break where there is one, and the room to do that has to come from somewhere (R-SLK-13).
+LIMIT = 3800
+
+#: How long to leave between writes of the running commentary. `chat.postMessage` is
+#: special-tiered at roughly one message per second per channel with short bursts allowed,
+#: and `chat.update` is cheaper than posting again — so a message that grows is written
+#: more often than one that is posted, and a turn running a dozen tools in a second must
+#: not spend the budget the answer needs (R-SLK-14).
+POST_SECONDS = 2.5
+GROW_SECONDS = 1.2
+
+#: How the running commentary is shown, and the default (R-SLK-20).
+#:
+#: `grows` is one message that is edited as the turn goes, which reads as a single thing
+#: happening. `posts` is a message per batch, which survives a surface that cannot edit
+#: and buries a busy channel. `off` shows none of it, and Rundesk already decides that
+#: with the channel-level `--no-activity` switch.
+GROWS, POSTS, OFF = "grows", "posts", "off"
+
+#: How much of the running commentary is kept in one growing message. Slack refuses a
+#: message past its own limit, and a turn that ran fifty tools would otherwise write one
+#: that cannot be sent at all — so the oldest lines go and a mark says they did.
+ACTIVITY_CHARS = 1500
+
+#: What a thread opened by being named is called, where this file has to name one. Slack
+#: names a thread after its first message rather than storing a title, so this is only
+#: ever used to *say* where the agent is.
+THREAD_CHARS = 80
+
+#: How long to spend saying goodbye. Rundesk signals a channel and waits a few seconds
+#: before insisting, so anything slower than this is a message nobody receives — and
+#: holding the shutdown open for it would only turn a clean stop into a kill.
+GOODBYE_SECONDS = 3.0
+
+#: How much of that the message to the owner may take. **Well inside it, because the close
+#: is the part that matters.** Telling the owner is two round trips — a conversation opened
+#: and a message sent — and an owner who cannot be reached would otherwise spend the whole
+#: budget on them, leaving the socket dropped rather than closed (R-SLK-16).
+TELLING_SECONDS = 1.0
+
+#: How many attachments to carry in from one message, and how big one may be. A chat
+#: platform accepts far more than a turn can use, and an agent's own directory is not
+#: somewhere anybody who can message it gets to fill.
+ATTACHED_MOST = 10
+ATTACHED_BYTES = 32 * 1024 * 1024
+
+#: How long to wait for one file to come down from Slack. Bounded because a turn is over
+#: by the time anybody notices, and an adapter blocked on a download is an adapter that
+#: has stopped listening.
+FETCH_SECONDS = 60.0
+
+#: How many messages an answer may be split across before it is sent as a file instead.
+#: Past this it is a document rather than a message, and a dozen numbered fragments is
+#: not a thing anybody reads.
+ATTACH_AFTER = 3
+
+#: How many recent messages to keep hold of, so a mark can be put on one without asking
+#: Slack for it again. Bounded because this process runs for weeks.
+SEEN_KEPT = 200
+
+#: How many conversations to hold state for. An entry is made for each and taken away
+#: when a turn ends in it, so one that never reached a turn would otherwise stay for the
+#: life of the process — which is weeks.
+LIVE_KEPT = 200
+
+#: How many threads to remember having already answered in, and how many display names to
+#: keep. Both are caches of what Slack would otherwise be asked again for every message in
+#: a busy thread, and both are bounded for the same reason everything else here is.
+THREADS_KEPT = 200
+NAMES_KEPT = 200
+
+#: How long a slash command's `response_url` stays usable, as Slack documents it. Nothing
+#: waits on it here; it is the reason a query result is answered through that URL rather
+#: than through a message the bot would have to be in the channel to post.
+RESPONSE_SECONDS = 30 * 60
+
+#: What each state looks like here (R-CAD-4). The system decides which one a turn is in;
+#: this is the whole of what this file decides about it. Slack names a reaction rather
+#: than carrying the character, and it has no replace — so a mark that supersedes another
+#: is an add and a remove, in that order.
+MARKS = {"finished": "white_check_mark", "stopped": "raised_hand", "failed": "warning"}
+SEEN = "eyes"
+
+#: The gestures this agent offers, as the words that follow its one slash command
+#: (R-SLK-10, R-SLK-22). **One command and not eleven**: a slash command name is unique
+#: across a Slack workspace and the last app to register one wins it, so an agent that
+#: claimed `/stop` would take it from every other app and two Rundesk agents in one
+#: workspace could not both be reached. The name is the owner's — `--command` — and the
+#: gesture is its first word.
+#: **The acknowledgement says the gesture was heard, never what it did.** These claimed an
+#: effect before rundesk had been told anything — and rundesk then drops a `stop` where no
+#: turn is running, and drops any gesture from somebody this channel does not allow. So the
+#: two ordinary cases ended with a person told something that never happened. What a
+#: control actually did arrives as the turn's own outcome (R-SLK-12).
+CONTROL_WORDS = (
+    ("stop", "stop the turn running here", "stop", "✋ asked to stop the turn here."),
+    ("new", "start a new session — the next message begins fresh", "forget",
+     "🧹 asked to start this conversation fresh."),
+    ("restart", "restart this agent's gateway", "restart",
+     "♻️ asked to restart the agent."),
+)
+
+#: Read-only agent and gateway questions (R-SLK-22, R-SLK-36, R-SLK-37). Their words are
+#: this surface's; the values are Rundesk's closed query vocabulary, so this never becomes
+#: an arbitrary command runner.
+QUERY_WORDS = (
+    ("status", "show this agent gateway's current status", "status"),
+    ("version", "show the installed and running Rundesk versions", "version"),
+    ("agents", "list configured agents and whether they are running", "agents"),
+    ("skills", "list skills granted to this agent", "skills"),
+    ("schedules", "list this agent's schedules that can still run", "schedules"),
+    ("roles", "list the work this agent has handed to a role", "roles"),
+    ("help", "show the gateway commands available here", "help"),
+)
+
+#: What a tool did, in a mark. One per verb the seam defines, and never keyed on a
+#: brain's own name for a tool — recognising those would carry one vendor's vocabulary
+#: into this file forever. A verb with no mark here would silently show as the fallback,
+#: so the suite checks this covers the seam's list rather than trusting it to.
+DID = {"read": "📖", "search": "🔎", "run": "💻", "edit": "✏️", "list": "📁",
+       "make": "🎨", "delegate": "🤖",
+       # What the agent changed of its own (R-PRV-29). Marked apart from `edit` because
+       # they are apart: a file the agent was working on and a file the agent lives by
+       # are the same pencil and different news.
+       "memory": "🧠", "rules": "📜", "identity": "✨"}
+UNKNOWN = "💭"
+
+#: The same verbs as a person would say them. A commentary is read as a sentence, and
+#: `edit` beside a pencil reads as an instruction rather than as something that happened.
+SHOWN = {"read": "read file", "search": "searched", "run": "ran command",
+         "edit": "edited file", "list": "listed files", "make": "made something",
+         "delegate": "delegated to subagent",
+         "memory": "updated my memory", "rules": "updated my rules",
+         "identity": "updated my identity"}
+
+#: What a line of running commentary is prefixed with. **Slack has no subtext.** Discord
+#: writes `-# ` and gets a quieter, smaller line; the nearest thing here is italics, and
+#: italicising a line that already carries an emoji reads as emphasis rather than as
+#: quiet. So the prefix is nothing at all and the mark carries the line, which is what a
+#: surface with fewer registers than another is supposed to do (R-CAD-5).
+SUB = ""
+
+#: The two lines a delegation is bracketed by, written once. Both are said in three places
+#: — the line itself, the prefix a repeat is counted under, and the prefix a name is
+#: appended to — and a delegation counted under a heading that no longer matches the line
+#: above it is a silent break with nothing to see in a diff.
+DELEGATED = f"{DID['delegate']} {SHOWN['delegate']}"
+FINISHED_HELPER = f"{DID['delegate']} subagent finished"
+
+#: What a role run is called on the wire, and the three things one can be. Rendered from
+#: the record and nothing else: a run lasts hours, this program does not necessarily, and
+#: a mark that could only be closed by a process that remembered opening it was a mark that
+#: silently never closed.
+ROLE_RECORD = "role"
+HANDED, WORKING, SETTLED = "handed", "working", "settled"
+
+#: What a failed tool says without relaying its arguments or result. Those remain in the
+#: run account; activity here is broad, because a command or path may be private
+#: (R-SLK-9, R-SLK-20).
+FAILED = {"read": "file read failed", "search": "search failed", "run": "command failed",
+          "edit": "file edit failed", "list": "file listing failed",
+          "make": "creation failed", "delegate": "subagent failed",
+          "memory": "could not update my memory", "rules": "could not update my rules",
+          "identity": "could not update my identity"}
+
+#: Message subtypes that are not somebody speaking. A join notice, an edit and a deletion
+#: all arrive on the same event as a message does, and answering one is answering nothing.
+IGNORED_SUBTYPES = frozenset({
+    "message_changed", "message_deleted", "message_replied", "thread_broadcast",
+    "channel_join", "channel_leave", "group_join", "group_leave", "channel_topic",
+    "channel_purpose", "channel_name", "channel_archive", "channel_unarchive",
+    "bot_message", "tombstone",
+})
+
+#: What separates a channel from the thread inside it, in the one string Rundesk keeps a
+#: session under. Rundesk never parses this; what matters is only that the same exchange
+#: produces the same one every time, and that a thread and the channel around it are not
+#: the same conversation.
+IN = ":"
+
+
+def say(**it) -> None:
+    """One record, one line, flushed — because rundesk is watching this as it happens."""
+    sys.stdout.write(json.dumps(it) + "\n")
+    sys.stdout.flush()
+
+
+def note(said: str, level: str = "WARNING") -> None:
+    """One line for the gateway log, marked for what it is."""
+    sys.stderr.write(f"{level}\t{said}\n")
+    sys.stderr.flush()
+
+
+def options(argv) -> argparse.Namespace:
+    """What this platform needs, parsed here and nowhere else (R-CAD-13)."""
+    said = argparse.ArgumentParser(prog="slack", add_help=False)
+    said.add_argument("--workspace", metavar="<team id>")
+    said.add_argument("--channel", metavar="<id>")
+    said.add_argument("--dm", action="store_true")
+    said.add_argument("--command", metavar="<name>")
+    said.add_argument("--activity", choices=(GROWS, POSTS), default=None, metavar="<how>")
+    said.add_argument("--token-from", default=BOT_TOKEN_FROM, metavar="<variable>")
+    said.add_argument("--app-token-from", default=APP_TOKEN_FROM, metavar="<variable>")
+    known, rest = said.parse_known_args(list(argv))
+    known.unknown = rest
+    return known
+
+
+def token_for(named: str, beside: str) -> str:
+    """One credential, from the variable it was named in or the file the owner controls.
+
+    In that order, and never from anywhere else. An argument is readable through the
+    process list; the record rundesk keeps holds the *names* of these variables and never
+    what is in them; and nothing here writes either file down.
+    """
+    said = os.environ.get(named)
+    if said:
+        return said.strip()
+    at = Path(os.environ.get("RUNDESK_CHANNEL_HOME") or ".") / beside
+    try:
+        return at.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _plain_name(name: str) -> str:
+    """A filename that can only ever be a filename.
+
+    What somebody attached is their text, and a name is the one place a path could be
+    smuggled in — so it is rebuilt from what is left rather than trusted after a check.
+    """
+    kept = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in name).strip(".-")
+    return kept[-120:] or "attachment"
+
+
+def _somewhere_new(where: Path, named: str) -> Path:
+    """That name in this directory, or the next one along if it is already taken.
+
+    Two files on one message can differ only in a character the rebuilding above has to
+    remove — `report v2.csv` and `report-v2.csv` are both `report-v2.csv` — so the second
+    would be written over the first, and the agent handed two names that were one file
+    (R-CH-17).
+    """
+    at, nth = where / named, 1
+    stem, dot, rest = named.partition(".")
+    while at.exists():
+        nth += 1
+        at = where / f"{stem}-{nth}{dot}{rest}"
+    return at
+
+
+def clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def split_at(text: str, limit: int):
+    """The first message's worth, and the rest — broken at a line where there is one.
+
+    Never cut in silence (R-SLK-13). A break at a newline keeps a code block or a list
+    readable; past that a hard cut is the honest answer, because a word that does not fit
+    is still a word that has to go somewhere.
+
+    **A break near the very beginning is not a break, it is a wasted message.** The last
+    newline before the limit is the right place in ordinary prose, and the wrong place in
+    the one shape every long answer has: a completion line, a newline, and then thousands
+    of characters with nothing to break on. That found the newline at character twenty and
+    posted the completion line entirely on its own, which is a notification saying nothing
+    followed by the answer somebody was waiting for — and the name the first piece carries
+    (R-SLK-31) went on the empty one.
+    """
+    if len(text) <= limit:
+        return text, ""
+    at = text.rfind("\n", 0, limit)
+    if at < limit // 2:
+        return text[:limit], text[limit:]
+    return text[:at], text[at + 1:]
+
+
+def thread_name(text: str) -> str:
+    """What to call the thread a turn happens in: the first line of what was asked."""
+    first = (text.strip().splitlines() or ["rundesk"])[0].strip()
+    return clip(first, THREAD_CHARS) or "rundesk"
+
+
+#: Where a fenced code block starts or ends. Held apart from everything below because the
+#: one rule that matters when translating is that nothing inside a fence is translated.
+_FENCE = re.compile(r"^\s*```")
+
+#: The three characters Slack reserves in message text, in the order they must be replaced
+#: — the ampersand first, or the entities written after it are escaped a second time.
+RESERVED = (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"))
+
+
+def escaped(said: str) -> str:
+    """A brain's own words, made safe to hand to Slack (R-SLK-45).
+
+    **Slack does not do this for you, and a fence does not protect it.** `<…>` is Slack's
+    own syntax for a link, a mention and a broadcast, and it is read as that wherever it
+    appears — inside inline code and inside a fenced block as much as in prose. So an
+    ordinary answer carrying a generic (`Map<string, int>`), a comparison, a shell
+    redirect or a snippet of XML arrived garbled, with the angle-bracketed part eaten.
+
+    The one that is worse than garbled: an agent that writes `<!channel>` — explaining
+    Slack's own syntax, quoting a message, or reporting a string it found — sends a
+    broadcast notification to everybody in the room. Nothing in the turn asked for that
+    and nothing in the room can tell it was not meant.
+
+    Done on the way in to the translation rather than on the way out, because everything
+    the translation *builds* — `<url|text>` for a link — is ours and must survive intact.
+    """
+    for character, entity in RESERVED:
+        said = said.replace(character, entity)
+    return said
+
+
+def to_mrkdwn(text: str) -> str:
+    """Markdown as an agent writes it, in the dialect Slack renders.
+
+    **Slack's `mrkdwn` is not Markdown.** It is inspired by it and uses different rules:
+    one asterisk is bold rather than italic, an underscore is italic, and a link is
+    `<url|text>` rather than `[text](url)`. An agent writes ordinary Markdown — every
+    brain does — so a reply that was not translated arrived with its asterisks showing and
+    its links written out twice.
+
+    **Nothing inside a fenced code block is touched.** A shell line full of asterisks is
+    not emphasis, and rewriting one is rewriting the thing somebody asked for. Inline code
+    is left alone for the same reason.
+
+    Headings become bold on their own line: Slack has no heading, and a line beginning
+    with a hash renders as a literal hash, which reads as noise rather than as structure.
+    """
+    out, fenced = [], False
+    # **Escaped whole, before a line of it is read as markup** — including what is fenced,
+    # which Slack's own reserved syntax reaches into (R-SLK-45).
+    for line in escaped(text).split("\n"):
+        if _FENCE.match(line):
+            fenced = not fenced
+            out.append(line)
+            continue
+        out.append(line if fenced else _mrkdwn_line(line))
+    return "\n".join(out)
+
+
+#: The pieces of one line: inline code first, so nothing inside it is rewritten, then the
+#: constructs that have a Slack spelling. Ordered longest-marker-first, because `**` has to
+#: be seen before `*`.
+_INLINE_CODE = re.compile(r"`[^`]*`")
+_LINK = re.compile(r"\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+_BOLD = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", re.S)
+_BOLD_UNDER = re.compile(r"__(?=\S)(.+?)(?<=\S)__", re.S)
+_ITALIC_STAR = re.compile(r"(?<![\w*])\*(?=[^\s*])([^*]+?)(?<=[^\s*])\*(?![\w*])")
+_HEADING = re.compile(r"^(\s*)#{1,6}\s+(.*?)\s*#*\s*$")
+
+
+def _mrkdwn_line(line: str) -> str:
+    """One line, with the spans of inline code held out of the way while the rest moves."""
+    kept: list[str] = []
+
+    def park(match: re.Match) -> str:
+        kept.append(match.group(0))
+        return f"\x00{len(kept) - 1}\x00"
+
+    def park_bold(match: re.Match) -> str:
+        # **Bold is parked, not merely converted first.** Slack spells bold with the one
+        # asterisk Markdown spells italic with, so `**x**` becomes `*x*` and the italic
+        # rule below then reads its own output back as italic and produced `_x_`. Held out
+        # of the way, the two rules cannot see each other.
+        kept.append(f"*{match.group(1)}*")
+        return f"\x00{len(kept) - 1}\x00"
+
+    said = _INLINE_CODE.sub(park, line)
+    heading = _HEADING.match(said)
+    if heading and heading.group(2):
+        said = f"{heading.group(1)}*{heading.group(2)}*"
+    else:
+        said = _LINK.sub(lambda m: f"<{m.group(2)}|{m.group(1)}>" if m.group(1)
+                         else f"<{m.group(2)}>", said)
+        said = _BOLD.sub(park_bold, said)
+        said = _BOLD_UNDER.sub(park_bold, said)
+        said = _ITALIC_STAR.sub(lambda m: f"_{m.group(1)}_", said)
+    for nth, code in enumerate(kept):
+        said = said.replace(f"\x00{nth}\x00", code)
+    return said
+
+
+def _a_direct_message(channel: str) -> bool:
+    """Whether this channel id is one person's own.
+
+    Asked of the id itself, which is the one thing every payload carries: Slack names a
+    direct message `D…`, a public channel `C…` and a private one `G…` or `C…`. The
+    `channel_type` on an event says the same thing and is not always there — on a slash
+    command, for instance — so this is the answer that is always available.
+    """
+    return str(channel or "").startswith("D")
+
+
+def _mentioning(recipient: str, content: str) -> str:
+    """The mention on its own line, under the completion line rather than in front of it.
+
+    The completion line is the one line meant to sit quietly out of the way (R-SLK-17,
+    R-SLK-33, R-SLK-41), and a mention in front of it makes it the loudest thing in the
+    message.
+    """
+    tag = f"<@{recipient}>"
+    stats, newline, rest = content.partition("\n")
+    if newline and stats.startswith("_") and stats.endswith("_"):
+        return f"{stats}\n{tag} {rest}"
+    return f"{tag} {content}"
+
+
+def where_to_answer(direct: bool, in_thread: bool, ours: bool, mentioned: bool):
+    """Whether this message is for us, and where the answer goes.
+
+    Five cases, and the two that are easy to get wrong are the ones this exists for: an
+    agent answering inside a thread it was never part of, and an agent starting a thread
+    just to say that it stopped.
+    """
+    if direct:
+        return "here"          # nobody else is here, and a DM thread helps no one (R-SLK-4)
+    if ours:
+        return "here"          # a thread this agent has answered in is its own (R-SLK-3)
+    if not mentioned:
+        return "ignore"        # silence in a shared channel until named (R-SLK-2)
+    if in_thread:
+        return "here"          # already in a thread, so the turn stays in it
+    return "open-thread"       # named in a channel: the turn happens in a thread
+
+
+def within(direct: bool, belongs_to, listens_in, dms: bool, a_workspace=None) -> bool:
+    """Whether this is somewhere the owner said this agent listens.
+
+    A thread is asked about by the channel it is in, never by its own root timestamp: an
+    owner confining an agent to one channel means the conversations under it too, and a
+    thread is where those conversations happen.
+
+    **A channel that named only direct messages takes only direct messages** (R-CAD-15).
+    One `add` makes one channel per kind of place, so the direct-message channel is not
+    the only one — the rooms have a channel of their own, with their own allowed list.
+    Were this the other way, both would match a message in a room and the agent would
+    answer it twice, from two processes, neither aware of the other.
+
+    What naming a place *does* mean is narrowing: `--workspace` confines to that
+    workspace and `--channel` to that channel, for an owner who wants an agent in one room
+    and not the next one along.
+    """
+    if direct:
+        return bool(dms)
+    if listens_in:
+        return str(belongs_to) == str(listens_in)
+    # It named a place, because `--check` refuses a channel that named none — so having
+    # named no room, it named direct messages, and this is not one.
+    return not dms
+
+
+def room_matches(said: str, named: str) -> bool:
+    """Whether the word an owner wrote for a room names this one.
+
+    The hash is how Slack writes a channel and how anybody would type one, and it is not
+    part of the name — so `#operations` and `operations` are the same room asked for two
+    ways. Case-insensitively, because nobody types a room name the way Slack stores it.
+    """
+    return said.strip().lstrip("#").casefold() == (named or "").strip().casefold()
+
+
+def conversation_of(channel: str, thread: str | None) -> str:
+    """The key a conversation's session is kept under.
+
+    A channel on its own where there is no thread, and the channel and the thread's root
+    where there is one. Rundesk never parses it and never shows it to anybody; the only
+    thing that matters is that the same exchange produces the same one every time.
+    """
+    return f"{channel}{IN}{thread}" if thread else str(channel)
+
+
+def where_of(conversation) -> tuple:
+    """That key, back apart: the channel, and the thread if it named one."""
+    said = str(conversation or "")
+    channel, _, thread = said.partition(IN)
+    return channel, (thread or None)
+
+
+class Live:
+    """One conversation, and what this agent is showing in it right now."""
+
+    def __init__(self, clock=None):
+        self.anchor = None          # (channel, ts) of the message that asked
+        self.activity = ""          # the running commentary, as it stands
+        self.activity_groups = []   # adjacent equal lines and how many times each occurred
+        self.pending = []           # what has happened since it was last written
+        self.tools = {}             # tool id -> broad verb/name, until its result arrives
+        self.posted = None          # (channel, ts) it is growing into, while it is the last
+        self.checked_in = {}        # role run -> its check-in, while it is the last thing
+        self.pacing = None
+        self.cost = ""              # what the turn cost, shown with the answer
+        self.asked_by = ""          # who spoke here last, for the answer to name
+        self.writes = 0             # which write is the newest, across an await
+        self.clock = time.monotonic if clock is None else clock
+        self.started = None
+
+
+class Agent:
+    """The Socket Mode connection, held open for as long as this program runs.
+
+    **Two worlds, joined in one place.** `slack_sdk`'s built-in Socket Mode client runs on
+    its own threads, and everything else here is asyncio — the stdin reader, the pacing of
+    the commentary, the timers. So the listener below does the one thing it must do on
+    Slack's clock, acknowledge the envelope, and hands the rest to the loop. Nothing else
+    crosses that line, and nothing here touches the socket from the loop's side.
+    """
+
+    def __init__(self, chose, web=None, socket=None, loop=None):
+        self.chose = chose
+        self.web = web
+        self.socket = socket
+        self.loop = loop
+        self.me = ""                # this bot's own user id, from auth.test
+        self.bot_id = ""            # and its bot id, for telling its own messages apart
+        self.team = ""              # the workspace's name, for saying where we are
+        self.team_id = ""           # and its id, for the shared parent-place variables
+        self.live: dict = {}
+        #: Presentation state for unattended turns, kept apart from a person whose newer
+        #: interactive turn may be running in the same room (R-SLK-35, R-SCH-50).
+        self.scheduled: dict = {}
+        #: Recent messages by their `ts`, so a mark can be put on one without asking Slack
+        #: for it again. Bounded, because this process runs for weeks.
+        self.seen: dict = {}
+        #: Envelopes already handled. **Socket Mode redelivers**: a reconnection replays
+        #: what it was not acknowledged for, and a turn run twice is a turn charged twice.
+        self.handled: dict = {}
+        #: Threads this app has already answered in, so being named once is enough
+        #: (R-SLK-3). Cached because otherwise every message in a busy thread costs a call.
+        self.ours: dict = {}
+        #: The root message of each of those threads, kept from the same fetch, because a
+        #: threaded reply is oriented by it (R-SLK-34) and asking twice is asking twice.
+        self.roots: dict = {}
+        #: What Slack shows for a person, by id. Cached for the same reason.
+        self.names: dict = {}
+        #: Whether the owner has been told this agent came up. Once for this process,
+        #: because coming up is what the message says happened (R-SLK-15).
+        self.greeted = False
+        #: Slash commands waiting for an authorized read-only answer, by `ref`. Bounded
+        #: because the adapter lives for weeks and a broken gateway must not turn one
+        #: unanswered command into permanent memory.
+        self.asked: dict = {}
+        #: The message that said a scheduled run had started, by schedule name, so what it
+        #: found is posted as a reply to it (R-SLK-30). **Memory only, deliberately**: if
+        #: this process goes, the run it was carrying goes with it, so there is no report
+        #: left to anchor and nothing durable worth keeping.
+        self.started: dict = {}
+
+    # -- talking to Slack ---------------------------------------------------------------
+
+    async def call(self, method: str, **arguments):
+        """One Web API call, off the loop — `slack_sdk`'s WebClient is synchronous.
+
+        Answers `None` rather than raising, because every caller here is showing something
+        and none of them may cost the turn it is showing (R-CH-12). What went wrong is
+        said on our own stderr, which is where an owner will look.
+        """
+        if self.web is None:
+            return None
+        try:
+            return await asyncio.to_thread(getattr(self.web, method), **arguments)
+        except SlackApiError as why:
+            note(f"{method} refused: {_slack_error(why)}")
+        except Exception as why:  # noqa: BLE001 — a platform boundary
+            note(f"{method} failed: {type(why).__name__}: {why}")
+        return None
+
+    # -- coming up and going down --------------------------------------------------------
+
+    async def opened(self) -> None:
+        """Signed in, and this is what we found — said once per connection.
+
+        **The record every time, the message once.** `ready` goes out on every connection,
+        which is how a quiet agent is told from a deaf one — but an owner told "the gateway
+        is up" after a blip is told about something that did not happen, and there is no
+        going-down message to pair it with (R-SLK-15).
+        """
+        say(type="ready")
+        # **Once per gateway, not once per adapter.** An agent reachable both by direct
+        # message and in rooms runs *two* of these, so the owner was otherwise told the
+        # gateway was online twice, a minute apart, which reads as it having restarted in
+        # between. Settled by the filesystem rather than by asking, so two coming up
+        # together cannot both win it.
+        if self.greeted or not self._claim("online"):
+            return
+        self.greeted = True
+        if _maintenance():
+            landed = _running_release()
+            await self._tell_the_owner(
+                f"👋 *I'm back* — new rundesk update installed, "
+                f"release notes for {landed}"
+                if landed else
+                "👋 *I'm back* — new rundesk update installed.")
+            _finish_maintenance()
+        else:
+            # Unchanged, deliberately: a reconnection is not a release, and a version
+            # offered here would read as one having just been installed.
+            await self._tell_the_owner(
+                "🟢 *Gateway online* — rundesk is up and listening.")
+
+    def _claim(self, what: str) -> bool:
+        """True for exactly one adapter of this gateway, and false for every other.
+
+        **Settled by the filesystem, not by asking.** Two adapters coming up together would
+        both read "nobody has greeted yet" and both greet; creating a file that must not
+        already exist is one operation the machine decides, so exactly one of them wins it.
+
+        The claim lives in the directory rundesk hands every adapter of one agent, but is
+        named for the gateway lifetime rundesk also hands it, because that directory
+        deliberately survives a stop. A reconnect keeps the same lifetime and stays quiet,
+        while a real restart gets a fresh claim.
+
+        A machine that will not let it be written is answered `True` — being told once too
+        often is a smaller failure than never being told a gateway came up at all.
+        """
+        home = os.environ.get("RUNDESK_HOME")
+        gateway = os.environ.get("RUNDESK_GATEWAY")
+        if not home or not gateway:
+            return True
+        gateway = "".join(char for char in gateway if char.isalnum() or char in "-_")
+        if not gateway:
+            return True
+        marker = Path(home) / f".said-{what}-{gateway}"
+        try:
+            os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        except FileExistsError:
+            return False
+        except OSError:
+            return True
+        for old in Path(home).glob(f".said-{what}*"):
+            if old != marker:
+                with contextlib.suppress(OSError):
+                    old.unlink()
+        return True
+
+    async def _tell_the_owner(self, said: str, who: str | None = None) -> None:
+        """R-SLK-15, R-SLK-38, R-SLK-39 — one person hears about it privately.
+
+        The first allowed user is the owner; the rest are guests. A notice that names
+        somebody goes to *that* person instead — which is how a newly allowed user is
+        introduced to the agent (R-CH-33) — and one naming somebody this channel does not
+        allow is refused here as well as above (R-CAD-16). A bot that would message any id
+        it was handed is one bug away from messaging a stranger.
+
+        Failures are said out loud rather than swallowed: a greeting that silently never
+        arrives is indistinguishable from an agent that never came up, which is the one
+        thing this message exists to tell apart.
+        """
+        if not self.chose.allow:
+            note("nobody to greet — RUNDESK_ALLOW is empty")
+            return
+        if who is not None and who not in self.chose.allow:
+            note(f"not telling {who}, who this channel does not allow")
+            return
+        who = who or self.chose.allow[0]
+        opened = await self.call("conversations_open", users=who)
+        where = _channel_id(opened)
+        if not where:
+            note(f"could not open a direct message with {who}")
+            return
+        wrote = await self.call("chat_postMessage", channel=where, text=said)
+        if wrote is None:
+            note(f"could not tell the owner ({who})")
+        else:
+            # Said on success as well as on failure. "It reported nothing" reads as "it
+            # worked", and the two are only the same thing when success has a line of its
+            # own.
+            note(f"told the owner ({who}): {said.splitlines()[0]}", "INFO")
+
+    async def going(self) -> None:
+        """The goodbye, bounded, and before the close rather than instead of it."""
+        # The same once-per-gateway rule on the way out, and for a worse reason than
+        # tidiness: two goodbyes for one shutdown read as two gateways. Claimed separately
+        # from the greeting so an adapter that came up second — and therefore said no
+        # hello — can still say the goodbye if it gets there first.
+        if self._claim("offline"):
+            with contextlib.suppress(BaseException):
+                await asyncio.wait_for(
+                    self._tell_the_owner(
+                        "🛠️ *Installing an update* — I'm installing the new rundesk "
+                        "update, be back shortly."
+                        if _maintenance() else
+                        "🔴 *Gateway offline* — rundesk has shut down."),
+                    TELLING_SECONDS)
+        for held in self.live.values():
+            if held.pacing is not None:
+                held.pacing.cancel()
+        if self.socket is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(self.socket.close)
+
+    # -- what arrives --------------------------------------------------------------------
+
+    def envelope(self, request) -> None:
+        """One Socket Mode envelope, on Slack's own thread and on Slack's own clock.
+
+        **Acknowledged first and immediately** (R-SLK-11). Slack allows three seconds and
+        resends what it was not acknowledged for, so anything done before the
+        acknowledgement is done again on the retry — and a turn run twice is a turn charged
+        twice. Everything after this line happens on the loop.
+        """
+        with contextlib.suppress(Exception):
+            self.socket.send_socket_mode_response(
+                SocketModeResponse(envelope_id=request.envelope_id))
+        if self.loop is None:
+            return
+        with contextlib.suppress(RuntimeError):
+            asyncio.run_coroutine_threadsafe(self.arrived(request), self.loop)
+
+    async def arrived(self, request) -> None:
+        """One envelope, once, whatever Slack has already sent us."""
+        at = str(getattr(request, "envelope_id", "") or "")
+        if at:
+            if at in self.handled:
+                note(f"envelope {at} was already handled", "INFO")
+                return
+            self.handled[at] = True
+            while len(self.handled) > SEEN_KEPT:
+                self.handled.pop(next(iter(self.handled)))
+        kind = getattr(request, "type", "")
+        payload = getattr(request, "payload", None) or {}
+        try:
+            if kind == "events_api":
+                await self.on_message(payload.get("event") or {})
+            elif kind == "slash_commands":
+                await self.on_command(payload)
+        except Exception as why:  # noqa: BLE001 — a platform boundary
+            note(f"could not handle {kind}: {type(why).__name__}: {why}")
+
+    async def on_message(self, event: dict) -> None:
+        """One message, and whether it is for this agent."""
+        kind = str(event.get("type") or "")
+        if kind not in ("message", "app_mention"):
+            return
+        # **`app_mention` and `message.channels` are the same message twice.** A bot
+        # subscribed to both is told about a mention in a channel by each of them, so only
+        # one of the two may be taken — and it is the message event, because that one is
+        # also what carries a thread reply nobody named.
+        if kind == "app_mention":
+            return
+        if event.get("subtype") in IGNORED_SUBTYPES:
+            return
+        if event.get("bot_id") or str(event.get("user") or "") == self.me:
+            return
+        channel = str(event.get("channel") or "")
+        if not channel:
+            return
+        direct = _a_direct_message(channel) or event.get("channel_type") == "im"
+        if not direct and self.chose.workspace and \
+                str(event.get("team") or self.chose.workspace) != str(self.chose.workspace):
+            return
+        ts = str(event.get("ts") or "")
+        root = str(event.get("thread_ts") or "")
+        in_thread = bool(root) and root != ts
+        mentioned = f"<@{self.me}>" in str(event.get("text") or "") if self.me else False
+        # A thread is asked about by the channel it is in, and that is what an owner
+        # confined this agent to.
+        if not within(direct, channel, self.chose.channel, self.chose.dm,
+                      self.chose.workspace):
+            return
+        # **Nothing expensive or visible before this.** Whether somebody may be answered is
+        # rundesk's to decide and it still decides it — but working for a stranger first
+        # means downloading whatever they attached and asking Slack about threads on their
+        # say-so, and in a busy channel it means an agent visibly reacting to somebody it
+        # is about to ignore. This is not the authorization; it is refusing to *work* for
+        # somebody who cannot be answered.
+        who = str(event.get("user") or "")
+        if self.chose.allow and who not in self.chose.allow:
+            return
+        ours = await self._answered_in(channel, root) if in_thread else False
+        where = where_to_answer(direct, in_thread, ours, mentioned)
+        if where == "ignore":
+            return
+        if ts and self.seen.get(f"{channel}{IN}{ts}"):
+            return                      # already reported; a redelivery beyond the envelope
+        text = _without_mentions(str(event.get("text") or ""), self.me)
+        brought = await self._fetch(event)
+        if not text and not brought:
+            return
+        # Being named in a channel makes the turn happen in a thread under that message
+        # (R-SLK-1). No call is needed: a thread on Slack is a reply carrying `thread_ts`,
+        # so this is a decision about where to write rather than something to create — and
+        # nothing can fail here, which is the whole of what Discord's degrade path is for.
+        thread = root if in_thread else (ts if where == "open-thread" else None)
+        conversation = conversation_of(channel, thread)
+        if thread:
+            self._remember_thread(channel, thread)
+        # **Not the anchor.** Which message a turn is *for* is rundesk's to say, and it says
+        # so with the `ref` on the state; all this has to do is be able to find it. Somebody
+        # has spoken here, so whatever commentary was growing is no longer the last thing.
+        held = self.live.setdefault(conversation, Live())
+        # **Who to name when the answer comes back** (R-SLK-31). Kept here because the seam
+        # does not carry it: an `answer` record says what was said and what it cost, and
+        # never who asked — Discord does not need it, because its reply mentions the author
+        # of the message it quotes and Slack has no such thing. Read off the answer record
+        # instead, this silently named nobody in every room, for every turn.
+        held.asked_by = who
+        self._no_longer_last(held)
+        while len(self.live) > LIVE_KEPT:
+            if not self._make_room(conversation):
+                break
+        if ts:
+            self.seen[f"{channel}{IN}{ts}"] = True
+            while len(self.seen) > SEEN_KEPT:
+                self.seen.pop(next(iter(self.seen)))
+        parent = await self._reply_to(channel, root) if in_thread else None
+        # **A Slack thread has no name of its own** — it is named, to a reader, by the
+        # message that started it. So the label is the first line of that message where it
+        # could be fetched, and of this one where the turn is opening the thread itself.
+        label = thread_name(str((parent or {}).get("text") or "") or text)
+        room = self._named(channel)
+        say(type="arrived", conversation=conversation, user=who, text=text, ref=ts,
+            direct=direct, attachments=brought,
+            where=_place(room, self.team, direct, bool(thread), label),
+            called=await self._who(who),
+            parts=_parts(room, self.team, direct, bool(thread), label),
+            **({"reply_to": parent} if parent else {}),
+            **_prompt_context(channel, room, self.team, self.team_id, direct,
+                              bool(thread), thread, label))
+
+    async def on_command(self, payload: dict) -> None:
+        """The one slash command, whose first word is the gesture (R-SLK-10, R-SLK-22)."""
+        named = str(payload.get("command") or "")
+        if named and self.chose.command and named != self.chose.command:
+            return
+        channel = str(payload.get("channel_id") or "")
+        who = str(payload.get("user_id") or "")
+        answer = str(payload.get("response_url") or "")
+        direct = _a_direct_message(channel) or payload.get("channel_name") == "directmessage"
+        # One command may reach both this agent's DM adapter and its room adapter. Only the
+        # scoped one may report it, or one gesture executes twice (R-SLK-23).
+        if not within(direct, channel, self.chose.channel, self.chose.dm,
+                      self.chose.workspace):
+            return
+        said = str(payload.get("text") or "").strip()
+        word, _, rest = said.partition(" ")
+        word, rest = word.strip().lower(), rest.strip()
+        gesture = next((c for n, _d, c, _s in CONTROL_WORDS if n == word), None)
+        if gesture:
+            # Advisory only, exactly as the two branches below already are; rundesk checks
+            # again and drops the gesture in silence. Without it, somebody this channel
+            # does not allow typed `restart` in a shared room and was told the agent was
+            # restarting — a promise nothing kept, and a confirmation to a stranger that
+            # the agent is listening.
+            if self.chose.allow and who not in self.chose.allow:
+                await self._privately(answer, "This command is not available to you.")
+                return
+            acknowledged = next(s for n, _d, _c, s in CONTROL_WORDS if n == word)
+            # Answered *only* that it was heard (R-SLK-11, R-SLK-12). What the control did
+            # comes back as the turn's own outcome — acknowledging it with the running
+            # turn's half-written output is how a half-finished sentence gets published as
+            # the reply.
+            await self._privately(answer, acknowledged)
+            say(type="control", conversation=channel, user=who, control=gesture)
+            return
+        query = next((q for n, _d, q in QUERY_WORDS if n == word), None)
+        if query:
+            # Advisory only; rundesk checks again before answering. This stops a command
+            # hanging for ever for somebody rundesk will correctly answer with silence.
+            if self.chose.allow and who not in self.chose.allow:
+                await self._privately(answer, "This command is not available to you.")
+                return
+            self._await(payload, answer)
+            say(type="query", conversation=channel, user=who, query=query,
+                ref=str(payload.get("trigger_id") or ""))
+            return
+        if word == "provider":
+            if len(self.chose.allow) != 1 or who != self.chose.allow[0]:
+                await self._privately(answer, "This command is not available to you.")
+                return
+            if not rest:
+                await self._privately(answer, "Say which provider, as "
+                                              f"`{named} provider <name>`.")
+                return
+            self._await(payload, answer)
+            say(type="configure", conversation=channel, user=who, provider=rest,
+                ref=str(payload.get("trigger_id") or ""))
+            return
+        # **Never an arbitrary command.** A word this file does not know is answered with
+        # what it does know, and reported to rundesk as nothing at all — turning a typed
+        # word into an argument is how a read-only surface becomes a command runner.
+        await self._privately(answer, _usage(named))
+
+    def _await(self, payload: dict, answer: str) -> None:
+        """Hold where to answer a read-only question, correlated by the ref we reported."""
+        ref = str(payload.get("trigger_id") or "")
+        if not ref:
+            return
+        self.asked[ref] = answer
+        while len(self.asked) > SEEN_KEPT:
+            self.asked.pop(next(iter(self.asked)))
+
+    async def _privately(self, answer: str, said: str) -> None:
+        """Back to the person who typed it, and to nobody else.
+
+        Through the command's own `response_url` rather than through a message: that URL
+        works for half an hour, needs no channel membership, and is what Slack gives a
+        slash command precisely so an app can answer one privately.
+        """
+        if not answer or not said:
+            return
+        body = json.dumps({"response_type": "ephemeral", "text": said}).encode("utf-8")
+        request = urllib.request.Request(
+            answer, data=body, headers={"Content-Type": "application/json"})
+        try:
+            await asyncio.to_thread(
+                lambda: urllib.request.urlopen(request, timeout=10).read())
+        except Exception as why:  # noqa: BLE001 — a platform boundary
+            note(f"could not answer privately: {type(why).__name__}: {why}")
+
+    async def _answered_in(self, channel: str, thread: str) -> bool:
+        """Whether this app has already spoken in this thread (R-SLK-3).
+
+        **Slack cannot be asked directly.** A thread's parent is the message that started
+        it, which is the person's own — so unlike Discord, where a thread has an owner,
+        being "ours" is a question about what is inside it. Asked once per thread and kept,
+        because otherwise every message in a busy thread costs a call.
+
+        A lookup that fails answers `False`: answering only when named is the safe way to
+        be wrong, and the other way round is an agent joining a conversation nobody invited
+        it to.
+        """
+        at = f"{channel}{IN}{thread}"
+        if at in self.ours:
+            return self.ours[at]
+        # **One call answers both questions.** The same fetch carries the thread's root,
+        # which is what a threaded reply is oriented by (R-SLK-34) — asked separately, a
+        # busy thread cost two calls for every message in it.
+        found = await self.call("conversations_replies", channel=channel, ts=thread,
+                                limit=200)
+        replies = (found or {}).get("messages") or []
+        ours = any(str(one.get("user") or "") == self.me
+                   or (self.bot_id and str(one.get("bot_id") or "") == self.bot_id)
+                   for one in replies[1:])
+        if found is not None:
+            self._remember_thread(channel, thread, ours)
+            self.roots[at] = replies[0] if replies else None
+            while len(self.roots) > THREADS_KEPT:
+                self.roots.pop(next(iter(self.roots)))
+        return ours
+
+    def _remember_thread(self, channel: str, thread: str, ours: bool = True) -> None:
+        at = f"{channel}{IN}{thread}"
+        self.ours[at] = ours
+        while len(self.ours) > THREADS_KEPT:
+            self.ours.pop(next(iter(self.ours)))
+
+    async def _who(self, user: str) -> str:
+        """What Slack shows for the person who spoke, rather than their id."""
+        if not user:
+            return ""
+        if user in self.names:
+            return self.names[user]
+        found = await self.call("users_info", user=user)
+        person = (found or {}).get("user") or {}
+        profile = person.get("profile") or {}
+        called = str(profile.get("display_name") or profile.get("real_name")
+                     or person.get("real_name") or person.get("name") or "")
+        if found is not None:
+            self.names[user] = called
+            while len(self.names) > NAMES_KEPT:
+                self.names.pop(next(iter(self.names)))
+        return called
+
+    def _named(self, channel: str) -> str:
+        """What this channel is called, from whatever `--check` already found out."""
+        return str((self.chose.rooms or {}).get(channel) or "")
+
+    async def _reply_to(self, channel: str, thread: str) -> dict | None:
+        """The message a threaded reply is under, in Rundesk's shared arrival shape.
+
+        Slack has no reply reference of its own — being in a thread *is* the reference —
+        so this is the parent of the thread the new message landed in (R-SLK-34). A parent
+        that cannot be fetched is still reported, unresolved, and the arrival goes on.
+        """
+        if not thread:
+            return None
+        at = f"{channel}{IN}{thread}"
+        if at in self.roots:
+            parent = self.roots[at]
+        else:
+            found = await self.call("conversations_replies", channel=channel, ts=thread,
+                                    limit=1, inclusive=True)
+            parent = ((found or {}).get("messages") or [None])[0]
+        if not parent:
+            return {"id": thread, "resolved": False}
+        author = str(parent.get("user") or parent.get("bot_id") or "")
+        return {"id": thread, "resolved": True,
+                "author": await self._who(author) or author,
+                "text": str(parent.get("text") or "")}
+
+    async def _fetch(self, event: dict) -> list:
+        """Put whatever somebody attached where the agent can read it (R-CH-17).
+
+        Onto this machine rather than passed on as a link: the brain that will read it runs
+        here, holds no credential for this platform, and handing it a URL would be handing
+        it an instruction to go and fetch something on a stranger's say-so.
+
+        **Slack needs the bot token to hand a file over.** `url_private_download` is not a
+        public URL; without an `Authorization` header it answers with the sign-in page,
+        which downloads perfectly and is not the file.
+        """
+        files = [one for one in (event.get("files") or []) if isinstance(one, dict)]
+        if not files:
+            return []
+        where = Path(os.environ.get("RUNDESK_CHANNEL_HOME") or ".") / "attachments" \
+            / _plain_name(str(event.get("ts") or "message"))
+        brought = []
+        for one in files[:ATTACHED_MOST]:
+            named = str(one.get("name") or one.get("title") or "attachment")
+            size = one.get("size")
+            if isinstance(size, int) and size > ATTACHED_BYTES:
+                note(f"{named} is too big to bring in ({size} bytes)")
+                continue
+            link = str(one.get("url_private_download") or one.get("url_private") or "")
+            if not link:
+                note(f"{named} has nothing to download from")
+                continue
+            try:
+                where.mkdir(parents=True, exist_ok=True)
+                # Named by us from its own name, never by the name it arrived under: a
+                # filename is somebody else's text, and a path is a thing it must not be
+                # able to become. Two rebuilt to the same name is one file, so the second
+                # goes beside the first rather than over it.
+                at = _somewhere_new(where, _plain_name(named))
+                await asyncio.to_thread(self._download, link, at)
+                brought.append({"name": named, "at": str(at)})
+                note(f"brought in {named} -> {at}", "INFO")
+            except Exception as why:  # noqa: BLE001 — a platform boundary
+                note(f"could not bring in {named}: {type(why).__name__}: {why}")
+        return brought
+
+    def _download(self, link: str, at: Path) -> None:
+        """One file, with the credential Slack requires and the bound this file sets."""
+        request = urllib.request.Request(
+            link, headers={"Authorization": f"Bearer {self.chose.bot_token}"})
+        with urllib.request.urlopen(request, timeout=FETCH_SECONDS) as source, \
+                open(at, "wb") as sink:
+            written = 0
+            while block := source.read(1024 * 1024):
+                written += len(block)
+                if written > ATTACHED_BYTES:
+                    raise OSError("larger than this channel carries")
+                sink.write(block)
+
+    # -- what rundesk says ---------------------------------------------------------------
+
+    async def told(self, it: dict) -> None:
+        """One record from rundesk, shown the way this platform shows things.
+
+        What arrived, and what came of it, both said. A record that is received and then
+        does nothing is indistinguishable from one that never arrived, and the two need
+        entirely different fixes — so neither is left to be inferred.
+        """
+        kind = it.get("type")
+        # Answered before anything is kept for a conversation, because this one has none:
+        # it is about the agent and not about a turn, and a place held under an absent
+        # conversation is a live exchange nobody is in.
+        if kind == "owner-notice":
+            who = str(it.get("user") or "") or None
+            rest = str(it.get("text") or "")
+            while rest:
+                piece, rest = split_at(rest, LIMIT)
+                await self._tell_the_owner(to_mrkdwn(piece), who)
+            return
+        if kind in ("state", "answer"):
+            note(f"told {kind}"
+                 f"{'/' + str(it.get('state')) if kind == 'state' else ''}"
+                 f" for {it.get('conversation')}"
+                 f" ({len(str(it.get('text') or ''))} chars,"
+                 f" {len(it.get('attachments') or [])} files)", "INFO")
+        named = str(it.get("schedule") or "")
+        if named:
+            held = self.scheduled.setdefault(named, Live())
+        else:
+            held = self.live.setdefault(str(it.get("conversation")), Live())
+        if kind == "state":
+            await self._state(it, held)
+        elif kind == "answer":
+            if named:
+                held.anchor = self.started.pop(named, None)
+            await self._answer(it, held)
+            if named:
+                self.scheduled.pop(named, None)
+        elif kind == "query-result":
+            await self._query_result(it)
+        elif kind == "configure-result":
+            await self._configuration_result(it)
+        elif kind == "said":
+            # A finished thing the agent said while it was still working, in a message of
+            # its own. Not the answer and not anchored to anything: it is a remark, and
+            # quoting the question on every remark buries the question.
+            #
+            # Cancelled first, the way ending a turn does it. Left running, a paced flush
+            # already suspended inside a write would finish *after* this one had buried the
+            # message, and its assignment would put the buried message back — so the next
+            # line grew into something nobody could see.
+            if held.pacing is not None:
+                held.pacing.cancel()
+                held.pacing = None
+            await self._flush(it, held)
+            # **A scheduled run's two messages, joined** (R-SCH-46, R-SLK-30). A remark
+            # naming a schedule is either that run saying it has begun — held, so what it
+            # finds can quote it — or the report itself, which replies to whatever is being
+            # held under that name.
+            began = bool(it.get("began"))
+            anchor = None if began else (self.started.pop(named, None) if named else None)
+            rest, notice = str(it.get("text") or ""), None
+            while rest:
+                piece, rest = split_at(rest, LIMIT)
+                posted = await self._post(it, to_mrkdwn(piece), anchor=anchor)
+                notice = posted if notice is None else notice
+                anchor = None
+            if began and named and notice is not None:
+                self._holding(named, notice)
+            self._no_longer_last(held)
+            if named and not began:
+                self.scheduled.pop(named, None)
+            elif not (it.get("continues", True) or held.started is not None):
+                self.live.pop(str(it.get("conversation")), None)
+        elif kind == ROLE_RECORD:
+            await self._role(it, held)
+        elif kind in ("think", "tool", "result", "usage"):
+            await self._doing(it, held)
+
+    def _holding(self, named: str, message) -> None:
+        """Keep what was posted to say a schedule started, until its report replies to it.
+
+        Newest wins for a name, which is what a schedule firing again after its last notice
+        was answered leaves behind. Bounded, because this process runs for weeks and a
+        schedule taken away mid-run would otherwise be remembered for the whole of it.
+        """
+        self.started[named] = message
+        while len(self.started) > SEEN_KEPT:
+            self.started.pop(next(iter(self.started)))
+
+    async def _query_result(self, it: dict) -> None:
+        """Complete the exact command that asked, and nowhere public."""
+        answer = self.asked.pop(str(it.get("ref")), None)
+        if not answer:
+            note(f"nowhere to answer {it.get('query')}")
+            return
+        rest = str(it.get("text") or "No information available.")
+        while rest:
+            piece, rest = split_at(rest, LIMIT)
+            await self._privately(answer, to_mrkdwn(piece))
+
+    async def _configuration_result(self, it: dict) -> None:
+        """Complete the exact private command that requested a provider change."""
+        answer = self.asked.pop(str(it.get("ref")), None)
+        if not answer:
+            note("nowhere to answer a provider change")
+            return
+        await self._privately(
+            answer, clip(to_mrkdwn(str(it.get("text") or "Provider was not changed.")),
+                         LIMIT))
+
+    async def _state(self, it: dict, held: Live) -> None:
+        state = it.get("state")
+        if state == "taken":
+            # The adapter owns the visible duration and starts it when the seam says the
+            # turn was taken. A monotonic clock cannot jump when the wall clock does, and a
+            # repeated record cannot restart the measurement (R-SLK-24).
+            if held.started is None:
+                held.started = held.clock()
+            # 👀 the moment it is heard. **This is the whole of what says a turn is
+            # running here** — Slack has no typing indicator a bot may raise, so everything
+            # else can be late and this one is the difference between an agent that is
+            # working and one that is broken (R-SLK-5).
+            await self._react(it, held, SEEN)
+            return
+        if state == "running":
+            return
+        if state in MARKS:
+            if held.pacing is not None:
+                held.pacing.cancel()
+                held.pacing = None
+            await self._flush(it, held)
+            self._no_longer_last(held)
+            if state == "failed" and it.get("why"):
+                await self._post(it, f"⚠ {clip(str(it['why']), 400)}")
+            await self._react(it, held, MARKS[state], instead_of=SEEN)
+            self.live.pop(str(it.get("conversation")), None)
+
+    async def _react(self, it: dict, held: Live, mark: str, instead_of=None) -> None:
+        """One mark at a time (R-SLK-8). 👀 means "working on it", and leaving it up beside
+        ✅ says the opposite of what happened.
+
+        **Slack has no replace**, so superseding a mark is an add and a remove — the add
+        first, so a turn is never momentarily unmarked. `already_reacted` and `no_reaction`
+        are ordinary outcomes here rather than failures: two states arriving quickly, or a
+        mark somebody took off by hand, produce both.
+        """
+        channel, _thread = where_of(it.get("conversation"))
+        ref = str(it.get("ref") or "")
+        at = (channel, ref) if channel and ref else held.anchor
+        if not at:
+            return
+        held.anchor = at
+        where, ts = at
+        await self.call("reactions_add", channel=where, name=mark, timestamp=ts)
+        if instead_of:
+            await self.call("reactions_remove", channel=where, name=instead_of,
+                            timestamp=ts)
+
+    async def _role(self, it: dict, held: Live) -> None:
+        """A role run, in a message of its own (R-ROL-27, R-ROL-36).
+
+        Its own message and not a line of commentary. A commentary line is edited into
+        whatever turn is running, so handing work over and getting it back would land
+        inside an unrelated conversation's subtext and neither would be a thing anybody was
+        told. This is news about work somebody asked for, hours after they asked.
+
+        A check-in is the exception and is edited in place while it is still the last thing
+        here: four lines saying the same run is still going is a room filling up to say
+        nothing has changed.
+
+        **The activity switch is not consulted.** Turning activity off silences the running
+        commentary of a turn, and a role coming back is not commentary — it is the only
+        sign there is that work somebody asked for happened at all.
+        """
+        line = role_line(it)
+        if not line:
+            return
+        run = str(it.get("role_run") or "")
+        if it.get("state") == WORKING:
+            posted = held.checked_in.get(run)
+            if posted is not None:
+                where, ts = posted
+                if await self.call("chat_update", channel=where, ts=ts, text=line) \
+                        is not None:
+                    return
+                note("could not update the check-in")
+            said = await self._post(it, line)
+            self._no_longer_last(held)
+            if said is not None:
+                held.checked_in[run] = said
+            return
+        held.checked_in.pop(run, None)
+        await self._post(it, line)
+        self._no_longer_last(held)
+
+    async def _doing(self, it: dict, held: Live) -> None:
+        """What the agent did, shown as the owner asked for it to be (R-SLK-20).
+
+        What it cost is kept either way, because it goes above the answer whatever else is
+        shown. The rest is only worth a message if somebody asked to watch: a phone that
+        buzzes eleven times to say an agent read a file is worse than one that buzzes once
+        with the reply.
+        """
+        if it.get("type") == "usage":
+            held.cost = _as_a_line(it) or held.cost
+            return
+        if self.chose.activity == OFF:
+            return
+        line = _activity_line(it, held.tools)
+        if not line:
+            return
+        held.pending.extend(one for one in line.splitlines() if one.strip())
+        if held.pacing is None or held.pacing.done():
+            held.pacing = asyncio.ensure_future(self._paced(it, held))
+
+    async def _paced(self, it: dict, held: Live) -> None:
+        """A burst of tools is one write rather than ten (R-SLK-14)."""
+        await asyncio.sleep(GROW_SECONDS if self.chose.activity == GROWS else POST_SECONDS)
+        await self._flush(it, held)
+        # A record can arrive while Slack is answering the post or update above. At that
+        # point `_doing` sees this task as still live, so it cannot own another one. Take
+        # responsibility for anything that arrived during the write before this task ends.
+        if held.pending:
+            held.pacing = asyncio.ensure_future(self._paced(it, held))
+
+    async def _flush(self, it: dict, held: Live) -> None:
+        """Write whatever has happened since the last time, the way this owner asked.
+
+        `grows` edits one message, so a turn reads as a single thing happening. `posts`
+        starts a new one each time — and this is why the message being edited is *never*
+        the answer: a reply that rewrites itself in place is unreadable, and only the
+        commentary may.
+        """
+        pending, held.pending = held.pending, []
+        if not pending:
+            return
+        if self.chose.activity == POSTS:
+            await self._post(it, _render_activity(_group_activity([], pending)))
+            return
+        # **Only while it is still the last thing in the conversation.** A message that
+        # something has been posted under is one the reader has already scrolled past, and
+        # editing it changes history rather than showing progress. So anything else being
+        # said starts a fresh one, and this grows only for as long as it is the newest
+        # thing there (R-SLK-20).
+        if held.posted is None:
+            held.activity_groups = []
+        held.activity_groups = _group_activity(held.activity_groups, pending)
+        held.activity, held.activity_groups = _bounded_activity(held.activity_groups)
+        if held.posted is None:
+            # Which write this was, kept across the await. Something else may bury the
+            # commentary while this is in flight, and a write that comes back afterwards
+            # must not put the buried message back for the next line to grow into.
+            mine = held.writes = held.writes + 1
+            said = await self._post(it, held.activity)
+            if mine == held.writes:
+                held.posted = said
+            return
+        where, ts = held.posted
+        if await self.call("chat_update", channel=where, ts=ts, text=held.activity) is None:
+            held.posted = None   # start a fresh one rather than keep failing on this
+
+    def _no_longer_last(self, held: Live) -> None:
+        """Something else has been said here, so the commentary stops growing.
+
+        Called wherever a message that is not the commentary is posted, and when somebody
+        speaks: both put something under it, and both mean the next thing to show belongs
+        in a message of its own.
+        """
+        held.posted = None
+        held.activity = ""
+        held.activity_groups = []
+        held.checked_in = {}
+        if held.pending and held.pending[-1] is not None:
+            # Activity already waiting to be written belongs before this visible message.
+            # It may still be posted afterwards, but what follows must start a new count.
+            held.pending.append(None)
+        # Anything already in flight is no longer the newest, so its result is dropped
+        # rather than becoming the message the next line grows into.
+        held.writes += 1
+
+    def _make_room(self, keeping: str) -> bool:
+        """Drop one conversation, and never one with a turn still running in it.
+
+        Says whether it found one to drop, so a caller making room cannot spin on a
+        conversation it is not allowed to take. Idle ones first, and whatever has to go is
+        cancelled on the way out rather than merely forgotten (R-CH-11).
+        """
+        idle = [at for at, held in self.live.items()
+                if at != keeping and held.pacing is None]
+        going = idle[0] if idle else next(
+            (at for at in self.live if at != keeping), None)
+        if going is None:
+            return False
+        held = self.live.pop(going)
+        if held.pacing is not None:
+            held.pacing.cancel()
+        return True
+
+    async def _answer(self, it: dict, held: Live) -> None:
+        """The answer, whole, at the end — split across messages rather than cut.
+
+        Written into the thread the turn is happening in (R-SLK-28), or under a schedule's
+        start notice (R-SLK-30), so it is findable in a busy channel. **And it names
+        whoever asked** (R-SLK-31): a message that mentions you is drawn by your own client
+        with a tint no bot can draw for itself, and it is the only way the report somebody
+        is waiting for stops looking like the bookkeeping in front of it. So it is this one
+        message and nothing else this file posts — commentary, a mid-turn remark, a failure
+        line and a schedule's start notice all go through `_post` too, and a surface where
+        everything is tinted has tinted nothing.
+        """
+        self._no_longer_last(held)
+        whole = to_mrkdwn(str(it.get("text") or ""))
+        footer = held.cost
+        provider_name = it.get("provider")
+        if isinstance(provider_name, str) and provider_name:
+            footer = (f"{provider_name}{footer[1:]}" if footer.startswith("·")
+                      else provider_name)
+        elapsed_seconds = it.get("elapsed")
+        if not isinstance(elapsed_seconds, (int, float)) and held.started is not None:
+            elapsed_seconds = held.clock() - held.started
+        if isinstance(elapsed_seconds, (int, float)):
+            elapsed = f"{_duration(elapsed_seconds)} elapsed"
+            footer = f"{footer} · {elapsed}" if footer else f"· {elapsed}"
+        if footer:
+            # The completion line above the answer rather than below it (R-SLK-17,
+            # R-SLK-33): a long answer pushes anything after it off a phone screen, and
+            # which brain ran the turn and what it cost are worth seeing without scrolling.
+            # Italic because Slack has no subtext and this is the quietest register it has.
+            footer = f"_{footer}_"
+            whole = f"{footer}\n{whole}"
+        files = [one for one in (it.get("attachments") or []) if isinstance(one, dict)]
+        recipient = str(it.get("recipient") or "")
+        # **Nobody needs telling they are the only reader** (R-SLK-40). The tint exists to
+        # pick one message out of a busy room; a direct message has one human in it and
+        # every message in it is already theirs.
+        channel, _thread = where_of(it.get("conversation"))
+        alone = _a_direct_message(channel)
+        mention = ("" if alone else
+                   recipient if it.get("schedule") else
+                   held.asked_by)
+        # **In a direct message the question is the message directly above the answer**, so
+        # threading under it hides the reply behind a click and buys nothing (R-SLK-4).
+        # Slack's thread is not Discord's inline quote: what reads there as "this is the one
+        # you asked" reads here as "the answer is somewhere else". A schedule's report is
+        # the exception and keeps its anchor — it may be hours and many messages away from
+        # the notice it belongs to, which is the whole reason that notice is held
+        # (R-SLK-30).
+        anchor = held.anchor if (not alone or it.get("schedule")) else None
+        # Past a certain length an answer is a document rather than a message, and a dozen
+        # numbered fragments is not something anybody reads (R-SLK-13, R-SLK-18).
+        if len(whole) > LIMIT * ATTACH_AFTER:
+            covering = f"{footer}\n_the answer is long, so it is attached_".strip()
+            await self._post(it, covering, anchor=anchor, files=files,
+                             text_as=whole, mention=mention)
+            return
+        rest = whole
+        while rest:
+            piece, rest = split_at(rest, LIMIT)
+            # **Once, on the first piece** (R-SLK-13, R-SLK-31). A long answer that
+            # mentioned on every piece would be five notifications for one reply.
+            await self._post(it, piece, anchor=anchor, mention=mention,
+                             files=files if not rest else [])
+            anchor, mention = None, ""
+
+    async def _where_to_write(self, it: dict):
+        """The room to write in: the place rundesk was told to say it in, or the
+        conversation.
+
+        **A place is a word rundesk carried and never read** — `#operations`, a channel id,
+        a person — so resolving it is ours, and it is the only way to reach a room nobody
+        has spoken in yet: rundesk has no conversation for one, so it has nothing to hand
+        us but the word (R-CAD-16). A place we cannot find falls back to the conversation
+        rather than failing, because a report in the wrong room beats a report nowhere; it
+        is said out loud so nobody has to wonder which happened.
+        """
+        place = it.get("place")
+        if place:
+            found, why = await self._room_named(str(place))
+            if found is not None:
+                return found, None
+            note(why or f"could not find '{place}' on this surface — "
+                        f"saying it in the conversation instead")
+        at = it.get("conversation")
+        if at is None:
+            return None, None
+        channel, thread = where_of(at)
+        return (channel or None), thread
+
+    async def _room_named(self, said: str):
+        """One room, by the word an owner wrote for it: an id, or a name with or without
+        its hash.
+
+        **A direct-message place may be a person, not a channel** (R-CAD-16). The id an
+        owner already typed for `--allow` is a *user* id, and a DM channel id is a
+        different string that only exists once somebody has spoken. So on the
+        direct-message surface a `U…` is opened as a conversation with that person — and
+        only for somebody this channel already authorizes, because a schedule must not
+        message a stranger.
+
+        Answers with the room and, when there is none, why — so the one caller can tell a
+        word it could not find from a person it declined to message.
+        """
+        digits = said.strip().lstrip("#")
+        if digits.startswith(("C", "D", "G")) and " " not in digits:
+            return digits, None
+        if digits.startswith("U"):
+            if not getattr(self.chose, "dm", False):
+                return None, (f"'{said}' is a person, and this channel writes in rooms — "
+                              f"saying it in the conversation instead")
+            if digits not in {str(one) for one in (self.chose.allow or ())}:
+                return None, (f"'{said}' is not on this channel's allowed list — "
+                              f"saying it in the conversation instead")
+            opened = await self.call("conversations_open", users=digits)
+            found = _channel_id(opened)
+            return (found or None), None
+        for at, named in (self.chose.rooms or {}).items():
+            if room_matches(said, named):
+                return at, None
+        found = await self.call(
+            "conversations_list", exclude_archived=True, limit=1000,
+            types="public_channel,private_channel")
+        for one in (found or {}).get("channels") or []:
+            if room_matches(said, str(one.get("name") or "")):
+                return str(one.get("id") or ""), None
+        return None, None
+
+    async def _post(self, it: dict, content: str, anchor=None, files=(), text_as=None,
+                    mention=""):
+        """One message, and never at the turn's expense: a delivery that fails is written
+        to our own stderr and the turn goes on (R-CH-12).
+
+        **`mention` is off unless a caller asks for it, and only `_answer` does**
+        (R-SLK-31). Everything this surface writes comes through here — the running
+        commentary, a remark said mid-turn, a failure line, a schedule's start notice — and
+        the tint an owner is being given is worth something only while it means *this is
+        the answer*.
+
+        Answers with `(channel, ts)` where something was written, so a caller that will
+        grow or reply to it can find it again.
+        """
+        channel, thread = await self._where_to_write(it)
+        if channel is None:
+            note(f"nowhere to write in {it.get('place') or it.get('conversation')}")
+            return None
+        # **Only if it is in the same place** (R-SLK-28). A schedule reporting into a room
+        # rundesk has never seen a word in sends no conversation at all, only the word — so
+        # an anchor from somewhere else would thread this message under a timestamp that
+        # does not exist here, which Slack answers by posting it nowhere.
+        if anchor is not None:
+            where, ts = anchor
+            thread = ts if str(where) == str(channel) else thread
+        if mention:
+            content = _mentioning(mention, content)
+        if not content and not files and text_as is None:
+            return None
+        wrote = None
+        if content:
+            wrote = await self.call(
+                "chat_postMessage", channel=channel, text=content,
+                **({"thread_ts": thread} if thread else {}))
+            if wrote is None:
+                note(f"could not write {len(content)} chars to {channel}")
+            else:
+                note(f"wrote {len(content)} chars to {channel}", "INFO")
+        # Uploaded after the message rather than with it: `files_upload_v2` posts its own
+        # message, and Slack has no way to carry both in one call.
+        for attachment in files:
+            ready = await asyncio.to_thread(_outbound_attachment, attachment)
+            if ready is None:
+                continue
+            named, blob = ready
+            await self.call("files_upload_v2", channel=channel, filename=named,
+                            content=blob, **({"thread_ts": thread} if thread else {}))
+        if text_as is not None:
+            await self.call("files_upload_v2", channel=channel, filename="answer.md",
+                            content=text_as.encode("utf-8"),
+                            **({"thread_ts": thread} if thread else {}))
+        return _posted_at(wrote, channel)
+
+
+def _slack_error(why) -> str:
+    """What Slack refused with, without the whole response body."""
+    response = getattr(why, "response", None)
+    with contextlib.suppress(Exception):
+        return str(response.get("error") or why)
+    return str(why)
+
+
+def _channel_id(response) -> str:
+    """The channel id out of whatever `conversations.open` answered."""
+    channel = (response or {}).get("channel") or {}
+    return str(channel.get("id") or "") if isinstance(channel, dict) else str(channel)
+
+
+def _posted_at(response, channel: str):
+    """Where a message landed, as `(channel, ts)` — or nothing, if it did not."""
+    if response is None:
+        return None
+    ts = str((response or {}).get("ts") or "")
+    return (channel, ts) if ts else None
+
+
+def _outbound_attachment(attachment):
+    """Open, verify, and snapshot exactly the bytes core approved for delivery.
+
+    Read once and sent as that snapshot rather than by reopening the path, and refusing a
+    symlink in every component on the way down: together these stop a concurrent turn
+    replacing an approved file, or its parent directory, between the check and the send.
+    """
+    at = attachment.get("at")
+    expected_size = attachment.get("bytes")
+    expected_digest = attachment.get("sha256")
+    if (not isinstance(at, str) or not isinstance(expected_size, int)
+            or isinstance(expected_size, bool) or expected_size < 0
+            or expected_size > ATTACHED_BYTES
+            or not isinstance(expected_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_digest) is None):
+        note(f"could not attach {at}: missing or invalid verification")
+        return None
+    digest = hashlib.sha256()
+    blocks: list[bytes] = []
+    size = 0
+    directory = None
+    descriptor = None
+    try:
+        path = Path(at)
+        if not path.is_absolute() or not path.parts[1:]:
+            raise OSError("not an absolute file")
+        directory = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        for part in path.parts[1:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=directory)
+            os.close(directory)
+            directory = child
+        descriptor = os.open(path.parts[-1],
+                             os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+                             dir_fd=directory)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("not a regular file")
+        with os.fdopen(descriptor, "rb") as source:
+            descriptor = None
+            while block := source.read(min(1024 * 1024, ATTACHED_BYTES + 1 - size)):
+                size += len(block)
+                if size > ATTACHED_BYTES:
+                    break
+                digest.update(block)
+                blocks.append(block)
+    except (OSError, ValueError) as why:
+        note(f"could not attach {at}: {why}")
+        return None
+    finally:
+        if directory is not None:
+            os.close(directory)
+        if descriptor is not None:
+            os.close(descriptor)
+    if size != expected_size or digest.hexdigest() != expected_digest:
+        note(f"could not attach {at}: file changed after validation")
+        return None
+    return Path(at).name, b"".join(blocks)
+
+
+def _place(channel: str, workspace: str, direct: bool, in_thread: bool,
+           thread: str) -> str:
+    """What Slack calls the place this was said, as a person reading it would say it.
+
+    For the agent's own benefit, not for routing: where an answer goes is decided from the
+    conversation and never from this. An id told a brain nothing, so it answered a room of
+    forty people in exactly the voice it used for a direct message.
+    """
+    if direct:
+        return "a direct message"
+    room = f"#{channel}" if channel else "a channel"
+    said = f"the thread '{thread}' under {room}" if in_thread else room
+    return f"{said} in the {workspace} workspace" if workspace else said
+
+
+def _parts(channel: str, workspace: str, direct: bool, in_thread: bool,
+           thread: str) -> dict:
+    """The place, in pieces, so an owner can name one without dragging the rest along.
+
+    `where` is a phrase this file composed, and a phrase is all it could ever be used as.
+    These are the same facts, separately, and the names are declared by `--check` so one
+    written wrongly is refused rather than left quietly blank.
+    """
+    if direct:
+        return {}
+    return {what: value for what, value in (
+        # With the hash, because that is how Slack writes a channel and how anyone reading
+        # the agent's reply would expect to see it named.
+        ("channel", f"#{channel}" if channel else None),
+        ("workspace", workspace or None),
+        ("thread", thread if in_thread else None),
+    ) if value}
+
+
+def _prompt_context(channel_id: str, channel: str, workspace: str, workspace_id: str,
+                    direct: bool, in_thread: bool, thread, called: str) -> dict:
+    """Map Slack's places onto the communication-agnostic prompt variables.
+
+    A workspace is the parent place; a thread is the nested conversation. Neither teaches
+    Rundesk a Slack noun, which is the point of the shared names.
+
+    A thread has no name of its own on Slack — it is named by the message that started it —
+    so what is given here is the first line of what was asked, which is the same thing a
+    person reads down the side of their client.
+    """
+    return {
+        "channel_name": "a direct message" if direct else channel,
+        "channel_id": str(channel_id or ""),
+        "channel_parent_name": "" if direct else (workspace or ""),
+        "channel_parent_id": "" if direct else str(workspace_id or ""),
+        "channel_thread_name": called if in_thread else "",
+        "channel_thread_id": str(thread or "") if in_thread else "",
+    }
+
+
+def _without_mentions(text: str, ours=None) -> str:
+    """What was said, with *our* naming taken out — it addressed us, it is not the ask.
+
+    **Ours and nobody else's.** Who else somebody named is part of what they asked, and a
+    word they typed is not this file's to remove. Given nobody to strip — which cannot
+    happen once we are signed in — what was said is handed over as it was typed.
+    """
+    if not ours:
+        return text.strip()
+    return text.replace(f"<@{ours}>", "").strip()
+
+
+def _usage(command: str) -> str:
+    """What this command understands, for somebody who typed something it does not."""
+    said = command or "/rundesk"
+    lines = [f"*{said}* understands:"]
+    lines += [f"• `{said} {name}` — {describes}"
+              for name, describes, _control, _ack in CONTROL_WORDS]
+    lines += [f"• `{said} {name}` — {describes}"
+              for name, describes, _query in QUERY_WORDS]
+    lines.append(f"• `{said} provider <name>` — change this agent's default provider")
+    return "\n".join(lines)
+
+
+def commentary(it: dict) -> str:
+    """What belongs in the running commentary, and nothing else.
+
+    What a turn *cost* is not commentary: it goes above the answer, where somebody reading
+    the reply can see it without going back for it. And a turn that neither thought nor ran
+    anything has nothing to show while it works — so it gets no commentary message at all
+    rather than an empty one, which would be a notification that says nothing (R-SLK-20).
+    """
+    if it.get("type") == "usage":
+        return ""
+    return _as_a_line(it)
+
+
+def _activity_line(it: dict, tools: dict) -> str:
+    """One broad activity line, correlating only what needs a later state.
+
+    Tool arguments and results stay out. A delegation's id is enough to turn its successful
+    result into "subagent finished", while every other successful result remains quiet.
+    """
+    kind = it.get("type")
+    at = str(it.get("id") or "")
+    if kind == "tool":
+        did = it.get("did")
+        who = _helper_name(it.get("who")) if did == "delegate" else ""
+        if at:
+            tools[at] = {"did": did, "who": who}
+        if did == "delegate":
+            return f"{SUB}{DELEGATED}{': ' + who if who else ''}"
+        return commentary(it)
+    if kind == "result":
+        remembered = tools.pop(at, None) if at else None
+        if isinstance(remembered, dict):
+            did, who = remembered.get("did"), remembered.get("who") or ""
+        else:  # an in-memory turn begun by an older adapter shape during an update
+            did, who = remembered, ""
+        if it.get("ok") is False:
+            return f"{SUB}⚠ {FAILED.get(did, 'tool failed')}"
+        if did == "delegate" and it.get("ok") is True:
+            return f"{SUB}{FINISHED_HELPER}{': ' + who if who else ''}"
+    return commentary(it)
+
+
+def _role_words(said) -> str:
+    """One safe word out of a role record — the guard a helper's name already goes through.
+
+    `_helper_name` and not `_plain_name` directly: the second rewrites a path into one long
+    name rather than dropping it, so a label somebody wrote as an absolute path would have
+    been posted with every component of it still readable. Nothing stays nothing, because
+    underneath them `_plain_name` answers `attachment` when it is left with no characters at
+    all — right for a file, and a record carrying no role would have been shown as *the
+    attachment role*.
+    """
+    text = str(said or "").strip()
+    return _helper_name(text) if any(ch.isalnum() for ch in text) else ""
+
+
+def role_line(it: dict) -> str:
+    """One role run, as its own message. Empty for a record this does not understand."""
+    mark = DID["delegate"]
+    label = _role_words(it.get("label")) or "work"
+    named = _role_words(it.get("role"))
+    state = it.get("state")
+    if state == HANDED:
+        return (f"{mark} Handed *{label}* to the _{named}_ role."
+                if named else f"{mark} Handed *{label}* to a role.")
+    if state == WORKING:
+        return f"{SUB}{mark} *{label}* — {_duration(it.get('elapsed') or 0)}, still working"
+    if state == SETTLED:
+        # **What is true at this moment, and no more.** The record is sent the instant the
+        # run settles, and the review may not start for many minutes. "Reviewing it" would
+        # promise something that has not begun.
+        if it.get("ok") is True:
+            return (f"✅ {mark} *{label}* is back from the _{named}_ role — not reviewed yet."
+                    if named else
+                    f"✅ {mark} *{label}* is back from a role — not reviewed yet.")
+        return f"⚠️ {mark} *{label}* did not finish — what came back is not reviewed yet."
+    return ""
+
+
+def _group_activity(groups: list, lines: list) -> list:
+    """Add lines to adjacent groups, preserving every event as a count."""
+    grouped = list(groups)
+    may_join = True
+    for line in lines:
+        if line is None:
+            may_join = False
+            continue
+        category = _activity_category(line)
+        if may_join and grouped and _activity_category(grouped[-1][0]) == category:
+            # Names are useful on one helper, but listing every name defeats compact
+            # counting. Once the category repeats, its broad wording owns the count.
+            grouped[-1] = (category, grouped[-1][1] + 1)
+        else:
+            grouped.append((line, 1))
+        may_join = True
+    return grouped
+
+
+def _activity_category(line: str) -> str:
+    """The broad line counted even when one helper's safe name is shown."""
+    if line.startswith(f"{SUB}{DELEGATED}"):
+        return f"{SUB}{DELEGATED}"
+    if line.startswith(f"{SUB}{FINISHED_HELPER}"):
+        return f"{SUB}{FINISHED_HELPER}"
+    return line
+
+
+def _helper_name(raw) -> str:
+    """One safe, compact helper name — never its full provider path."""
+    named = str(raw or "").strip().replace("\\", "/").rsplit("/", 1)[-1]
+    return _plain_name(named)[-48:] if named else ""
+
+
+def _render_activity(groups: list) -> str:
+    """Render adjacent groups; one occurrence needs no visual noise."""
+    return "\n".join(line if count == 1 else f"{line} *(x{count})*"
+                     for line, count in groups)
+
+
+def _bounded_activity(groups: list) -> tuple:
+    """Keep whole recent groups inside one Slack commentary message."""
+    kept = list(groups)
+    clipped = False
+    while len(kept) > 1:
+        prefix = "…\n" if clipped else ""
+        if len(prefix + _render_activity(kept)) <= ACTIVITY_CHARS:
+            break
+        kept.pop(0)
+        clipped = True
+    shown = _render_activity(kept)
+    if clipped:
+        shown = "…\n" + shown
+    return shown, kept
+
+
+def _as_a_line(it: dict) -> str:
+    """One record of what the agent did, as one line of running commentary."""
+    kind = it.get("type")
+    if kind == "think":
+        return f"{SUB}💭 thinking" if str(it.get("text") or "").strip() else ""
+    if kind == "tool":
+        # **What it did, never what its brain calls it.** Showing `name` would put one
+        # vendor's identifiers — `commandExecution`, `Bash` — in front of somebody who has
+        # never heard of that vendor. A brain that gave no verb is doing something this
+        # vocabulary has no word for yet, so it joins the broad thinking category rather
+        # than inventing a vendor-shaped label.
+        did = it.get("did")
+        return f"{SUB}{DID.get(did, UNKNOWN)} {SHOWN.get(did, 'thinking')}"
+    if kind == "result":
+        # Only when it went wrong, and never with its raw summary: an uncorrelated result
+        # is still broad rather than a route around the privacy boundary above.
+        if it.get("ok") is False:
+            return f"{SUB}⚠ tool failed"
+        return ""
+    if kind == "usage":
+        # **How big this session is now, then what the turn wrote** (R-SLK-29). A footer is
+        # read to decide one thing — whether to start a fresh conversation — and none of the
+        # billed quantities answers it. A brain that does not say gets the useful cost
+        # summary. Absent means "could not tell" on either side.
+        slots = (("session", "output") if isinstance(it.get("session"), int)
+                 else ("input", "output", "cached"))
+        parts = [f"{_amount(it[what])} {what}"
+                 for what in slots if isinstance(it.get(what), int)]
+        return f"· {' · '.join(parts)}" if parts else ""
+    return ""
+
+
+def _duration(seconds: float) -> str:
+    """A compact elapsed duration that stays readable in a completion line."""
+    whole = max(0, int(seconds))
+    if whole < 60:
+        return f"{whole}s"
+    if whole < 3600:
+        return f"{whole // 60}m"
+    return f"{whole // 3600}h"
+
+
+def _amount(tokens: int) -> str:
+    """A count somebody can read, without rounding it into a lie.
+
+    Small numbers are shown as themselves, so a turn that answered in thirteen tokens does
+    not report `0k output`. Thousands stop at a thousand of them; millions keep a decimal,
+    because rounding one away is half a million tokens.
+    """
+    if tokens < 1000:
+        return str(tokens)
+    if tokens < 10000:
+        return f"{tokens / 1000:.1f}k".replace(".0k", "k")
+    if round(tokens / 1000) < 1000:
+        return f"{round(tokens / 1000)}k"
+    return f"{tokens / 1000000:.1f}M".replace(".0M", "M")
+
+
+def _maintenance() -> bool:
+    marker = os.environ.get("RUNDESK_MAINTENANCE")
+    return bool(marker and Path(marker).is_file())
+
+
+def _running_release() -> str:
+    """This gateway's version as Slack should show it, linked where there is a link.
+
+    Both parts are handed over by rundesk: the version is the process that actually came
+    up, and the URL is built from the repository this install updates itself from. Nothing
+    is composed here, so this adapter never learns a repository name.
+    """
+    version = (os.environ.get("RUNDESK_VERSION") or "").strip()
+    if not version:
+        return ""
+    shown = version if version.startswith("v") else f"v{version}"
+    where = (os.environ.get("RUNDESK_RELEASE_URL") or "").strip()
+    return f"<{where}|{shown}>" if where else shown
+
+
+def _finish_maintenance() -> None:
+    marker = os.environ.get("RUNDESK_MAINTENANCE")
+    if marker:
+        with contextlib.suppress(OSError):
+            Path(marker).unlink()
+
+
+def wanted(chose) -> tuple[bool, bool]:
+    """Which kinds of place this `add` is for: direct messages, and rooms.
+
+    **Nothing said means both**, because a bot is reachable in both and asking an owner
+    which of them they meant is asking them to say something this can find out for itself.
+    The flags narrow rather than choose: `--dm` on its own leaves the rooms out,
+    `--workspace` or `--channel` on their own leave direct messages out, and naming neither
+    takes both.
+    """
+    confined = bool(chose.workspace or chose.channel)
+    return (bool(chose.dm) or not confined, confined or not chose.dm)
+
+
+def _shape(chose, suffix: str, describes: str, **where) -> dict:
+    """One kind of place this bot was pointed at, as its own channel.
+
+    The settings are narrowed to that place and nothing else: the direct-message channel is
+    told nothing about a room, so it cannot drift into answering in one, and neither can be
+    widened by editing the other. **No token is ever in here** — this is written to a file
+    that outlives the process (R-CAD-12).
+    """
+    settings = {what: value for what, value in (
+        ("command", chose.command), ("token_from", chose.token_from),
+        ("app_token_from", chose.app_token_from), ("activity", chose.activity),
+        *where.items()) if value}
+    return {"suffix": suffix, "describes": describes, "settings": settings,
+            "fills": list(FILLS[suffix])}
+
+
+async def check(chose) -> int:
+    """Connect, sign in, and see whether what we were pointed at is really there.
+
+    Nothing about this channel is written down unless this says yes (R-CAD-9). The whole of
+    the owner's diagnosis is what comes back from here, so it says what was wrong rather
+    than that something was.
+
+    **Both credentials, always.** One of them working proves nothing about the other, and
+    an owner who pasted them into the wrong two variables must find that out while they are
+    standing at a terminal rather than at three in the morning.
+    """
+    bot = token_for(chose.token_from, BOT_TOKEN_FILE)
+    app = token_for(chose.app_token_from, APP_TOKEN_FILE)
+    if not bot or not app:
+        # **Named on the way out, not only on the way in.** Saying where the credentials
+        # are read from here as well as on success is what lets rundesk offer to take them
+        # without ever string-matching this sentence (R-CAD-12, R-CAD-13).
+        missing = [name for name, value in
+                   ((chose.token_from, bot), (chose.app_token_from, app)) if not value]
+        say(ok=False, secret={"env": [chose.token_from, chose.app_token_from],
+                              "files": [BOT_TOKEN_FILE, APP_TOKEN_FILE]},
+            why=f"no Slack credentials — {' and '.join(missing)} "
+                f"{'are' if len(missing) > 1 else 'is'} not set and there is no matching "
+                f"file ('{BOT_TOKEN_FILE}' for the bot token, '{APP_TOKEN_FILE}' for the "
+                f"app-level one) in this channel's own directory; never as an argument")
+        return 0
+    if chose.unknown:
+        say(ok=False, why=f"this channel does not understand {' '.join(chose.unknown)}")
+        return 0
+    web = WebClient(token=bot)
+    shapes = []
+    try:
+        me = await asyncio.to_thread(web.auth_test)
+        # The app-level token is a different credential with a different failure, and the
+        # only way to know it can open a socket is to open one.
+        socket = SocketModeClient(app_token=app, web_client=web)
+        await asyncio.to_thread(socket.issue_new_wss_url)
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(socket.close)
+    except SlackApiError as why:
+        say(ok=False, why=f"Slack refused the credentials: {_slack_error(why)}")
+        return 0
+    except Exception as why:  # noqa: BLE001 — a platform boundary, and the diagnosis
+        say(ok=False, why=f"could not reach Slack: {type(why).__name__}: {why}")
+        return 0
+    team = str(me.get("team") or "")
+    wants_dms, wants_rooms = wanted(chose)
+    try:
+        if wants_dms:
+            shapes.append(_shape(chose, DMS,
+                                 f"direct messages to @{me.get('user') or 'this bot'}"
+                                 + (f" in {team}" if team else ""),
+                                 dm=True))
+        if wants_rooms:
+            where, rooms = await _room(web, chose, team)
+            if where is None:
+                return 0        # `_room` has already said why
+            shapes.append(_shape(chose, ROOMS, where,
+                                 workspace=chose.workspace or me.get("team_id"),
+                                 channel=chose.channel, rooms=rooms))
+    except SlackApiError as why:
+        say(ok=False, why=f"Slack refused: {_slack_error(why)}")
+        return 0
+    say(ok=True, secret={"env": [chose.token_from, chose.app_token_from],
+                         "files": [BOT_TOKEN_FILE, APP_TOKEN_FILE]}, shapes=shapes,
+        describes=" and ".join(one["describes"] for one in shapes),
+        # What one channel would have been given, for anything that reads the old shape.
+        settings={what: value for what, value in (
+            ("workspace", chose.workspace or me.get("team_id")),
+            ("channel", chose.channel), ("dm", chose.dm), ("command", chose.command),
+            ("token_from", chose.token_from), ("app_token_from", chose.app_token_from),
+            ("activity", chose.activity)) if value})
+    return 0
+
+
+async def _room(web, chose, team: str):
+    """What the room channel is pointed at, said the way a person would — or `None`, said.
+
+    Checked rather than assumed, which is the whole of what `--check` is for. Answers the
+    description and the channels found, so the adapter can name a room later without asking
+    Slack again for something it already knew.
+    """
+    where = f" in {team}" if team else ""
+    if chose.channel:
+        found = await asyncio.to_thread(web.conversations_info, channel=chose.channel)
+        room = (found or {}).get("channel") or {}
+        named = str(room.get("name") or "")
+        if not named:
+            say(ok=False, why=f"channel {chose.channel} is not one this bot can see — "
+                              f"invite it with /invite @<the bot>")
+            return None, None
+        if not room.get("is_member"):
+            say(ok=False, why=f"this bot is not in #{named} — invite it with "
+                              f"/invite @<the bot>, then add the channel again")
+            return None, None
+        return f"#{named}{where}", {str(chose.channel): named}
+    # **Asked of Slack, not of the owner.** A bot knows which channels it is in, and one
+    # call at check time says so — asking somebody to go and copy an id out of a URL is
+    # asking them a question this can answer itself.
+    found = await asyncio.to_thread(
+        web.conversations_list, exclude_archived=True, limit=1000,
+        types="public_channel,private_channel")
+    joined = [one for one in ((found or {}).get("channels") or []) if one.get("is_member")]
+    if not joined:
+        say(ok=False, why="this bot is not in any channel — invite it with "
+                          "/invite @<the bot>, or use --dm on its own for direct "
+                          "messages only")
+        return None, None
+    rooms = {str(one.get("id") or ""): str(one.get("name") or "") for one in joined}
+    named = ", ".join(f"#{one.get('name')}" for one in joined[:ROOMS_SHOWN])
+    more = f" and {len(joined) - ROOMS_SHOWN} more" if len(joined) > ROOMS_SHOWN else ""
+    return f"{named}{more}{where}", rooms
+
+
+async def carry(chose) -> int:
+    """Hold the connection open, and carry conversations until rundesk ends us."""
+    chose.bot_token = token_for(chose.token_from, BOT_TOKEN_FILE)
+    app = token_for(chose.app_token_from, APP_TOKEN_FILE)
+    if not chose.bot_token or not app:
+        # Said where the gateway's log will show it: a machine keeping this agent up has no
+        # shell, so a variable an owner exported by hand is not here.
+        note(f"no Slack credentials — {chose.token_from} and {chose.app_token_from} are "
+             f"not both set and there is no matching file in this channel's own directory")
+        return 1
+    web = WebClient(token=chose.bot_token)
+    client = Agent(chose, web=web, loop=asyncio.get_running_loop())
+    try:
+        me = await asyncio.to_thread(web.auth_test)
+        client.me = str(me.get("user_id") or "")
+        client.bot_id = str(me.get("bot_id") or "")
+        client.team = str(me.get("team") or "")
+        client.team_id = str(me.get("team_id") or "")
+    except Exception as why:  # noqa: BLE001 — a platform boundary
+        note(f"could not sign in to Slack: {type(why).__name__}: {why}")
+        return 1
+    stopping = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    # **Asked to stop, rather than killed where we stand.** Rundesk ends a channel by
+    # signalling its whole process group and giving it a few seconds before it insists, and
+    # the default for these two signals is to die immediately — so the goodbye and every
+    # last write would simply never be reached.
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(NotImplementedError, ValueError):
+            loop.add_signal_handler(sig, stopping.set)
+    socket = SocketModeClient(app_token=app, web_client=web)
+    client.socket = socket
+    socket.socket_mode_request_listeners.append(
+        lambda _client, request: client.envelope(request))
+    # **Said when it happens, both ways** (R-CAD contract, "say when you have gone"). The
+    # library reconnects on its own; what it cannot do is tell rundesk, and an owner
+    # looking at a quiet agent needs to know whether it is quiet or deaf.
+    socket.on_close_listeners.append(
+        lambda code, reason: _from_the_socket(loop, _gone, code, reason))
+    socket.on_error_listeners.append(
+        lambda why: _from_the_socket(loop, _gone, "", str(why)))
+    reading = asyncio.ensure_future(_read(client))
+    asked = asyncio.ensure_future(stopping.wait())
+    try:
+        await asyncio.to_thread(socket.connect)
+        await client.opened()
+        await asyncio.wait({reading, asked}, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        pass
+    except Exception as why:  # noqa: BLE001 — a platform boundary
+        note(f"the Slack connection failed: {type(why).__name__}: {why}")
+    finally:
+        say(type="gone", why="the connection is closing")
+        # Bounded: rundesk waits a few seconds before it insists, and a goodbye that takes
+        # longer than that is one nobody will receive anyway.
+        with contextlib.suppress(BaseException):
+            await asyncio.wait_for(client.going(), timeout=GOODBYE_SECONDS)
+        for task in (reading, asked):
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+    return 0
+
+
+def _from_the_socket(loop, what, *arguments) -> None:
+    """Run one thing on the loop, from one of the library's own threads."""
+    with contextlib.suppress(RuntimeError):
+        loop.call_soon_threadsafe(what, *arguments)
+
+
+def _gone(code, reason) -> None:
+    say(type="gone", why=str(reason or code or "the socket closed"))
+
+
+async def _read(client: Agent) -> None:
+    """Everything rundesk says, a record at a time, for as long as it is saying it."""
+    loop = asyncio.get_event_loop()
+    reader = asyncio.StreamReader()
+    await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
+    while True:
+        line = await reader.readline()
+        if not line:
+            return   # rundesk has stopped speaking, which means the turn of this is over
+        try:
+            it = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(it, dict):
+            with contextlib.suppress(Exception):
+                await client.told(it)
+
+
+#: What is taken from what rundesk wrote down about this channel when it was not given on
+#: the command line. The two are the same words, so an owner who set one in either place
+#: gets the same thing.
+FROM_SETTINGS = ("workspace", "channel", "command", "token_from", "app_token_from",
+                 "activity")
+
+
+def settled(chose, settings: dict, allow: str = ""):
+    """Everything this adapter was told, from wherever it was told it — and the defaults.
+
+    A function of its arguments and nothing else, so what an owner who said nothing ends up
+    with can be read by a test rather than by opening a socket.
+    """
+    # Who may use this is rundesk's, and it enforces it — but the owner is who a hello and
+    # a goodbye go to, so the adapter is told who they are.
+    chose.allow = [one for one in (allow or "").split(",") if one]
+    for what in FROM_SETTINGS:
+        value = settings.get(what)
+        if what == "activity" and value == OFF:
+            # Rundesk owns whether commentary is shown and already withholds every activity
+            # record when the channel-level `--no-activity` switch is set. A second `off`
+            # kept here would leave records saying the channel is on while the adapter
+            # silently drops every line.
+            continue
+        if not getattr(chose, what, None) and value:
+            setattr(chose, what, value)
+    # `grows` rather than `posts` because it is the quiet one: a turn is a single message
+    # that fills in, not a room filling with commentary.
+    chose.activity = chose.activity or GROWS
+    chose.command = chose.command or "/rundesk"
+    if not chose.command.startswith("/"):
+        chose.command = f"/{chose.command}"
+    chose.dm = chose.dm or bool(settings.get("dm"))
+    # What `--check` already found out about the rooms this bot is in, so a place named by
+    # word can be resolved without asking Slack for a list it was handed once.
+    rooms = settings.get("rooms")
+    chose.rooms = {str(at): str(named) for at, named in rooms.items()} \
+        if isinstance(rooms, dict) else {}
+    chose.bot_token = ""
+    return chose
+
+
+def main(argv) -> int:
+    asking = "--check" in argv
+    chose = settled(options([one for one in argv if one != "--check"]),
+                    json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}"),
+                    os.environ.get("RUNDESK_ALLOW") or "")
+    return asyncio.run(check(chose) if asking else carry(chose))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -173,6 +173,21 @@ REPLY_TEXT_TRUNCATED = "...(truncated)"
 ATTACHED_MOST = 10
 ATTACHED_BYTES = 32 * 1024 * 1024
 
+#: Where a credential taken at the terminal is kept, beside that channel's own things —
+#: **the seam's decision and not one command's**, because the adapter that reads it back
+#: is on the other side of a boundary nothing imports across (R-CAD-11).
+#:
+#: It was private to `commands/channels.py`, so the name existed three times and agreed by
+#: luck: rundesk wrote `token`, the Discord adapter declared `TOKEN_FILE = "token"`, and a
+#: stranger's adapter — given only the contract, which states no name at all — hedged with
+#: two guesses. One of them is enough to make an owner's channel silently deaf.
+SECRET_FILE = "token"
+
+#: What a credential's file may be called, when an adapter names its own. One path
+#: component and nothing that could climb out of the channel's own directory: the value
+#: arrives from a program rundesk did not write and becomes a path rundesk writes to.
+SECRET_FILE_IS = r"[a-z0-9][a-z0-9._-]{0,63}"
+
 #: What an adapter is told, and the whole of it. Four of these are the brain's own records
 #: passed through in the words no brain owns; `state` and `answer` are rundesk's.
 #:
@@ -618,7 +633,47 @@ def named(secret) -> dict | None:
     if not isinstance(named_as, list):
         return None
     wanted = [one for one in named_as if isinstance(one, str) and one]
-    return {"env": wanted} if wanted else None
+    if not wanted:
+        return None
+    return {"env": wanted, "files": kept_in(secret.get("files"), wanted)}
+
+
+def kept_in(said, wanted: list) -> list:
+    """Which file each named credential is taken into, one per name and in that order.
+
+    **A surface that needs two credentials needs two files**, and only the adapter knows
+    which is which — it is the thing that reads them back, from the far side of a boundary
+    nothing imports across. So it may say, and what it says is checked here rather than
+    trusted: a name that could climb out of the channel's own directory is not a name.
+
+    An adapter that says nothing gets `SECRET_FILE` for its first credential, which is
+    what every adapter written before a surface needed two already looks for — so the one
+    file Discord has read since it shipped is still exactly the file rundesk writes. The
+    rest are derived from the variable, deterministically, so that an adapter naming two
+    credentials and no files is still supplied rather than silently left half-configured.
+    """
+    if isinstance(said, str):
+        said = [said]
+    said = said if isinstance(said, list) else []
+    kept = []
+    for at, one in enumerate(wanted):
+        asked = said[at] if at < len(said) else None
+        if isinstance(asked, str) and re.fullmatch(SECRET_FILE_IS, asked):
+            kept.append(asked)
+        else:
+            kept.append(SECRET_FILE if at == 0 else _from_variable(one))
+    return kept
+
+
+def _from_variable(named_as: str) -> str:
+    """A credential's file, worked out from the variable it is otherwise read from.
+
+    Only for an adapter that named more than one and said where none of them go. Lowercase
+    with separators flattened, so `SLACK_APP_TOKEN` is `slack-app-token` — long, and never
+    a collision with `SECRET_FILE` or with another variable's.
+    """
+    plain = re.sub(r"[^a-z0-9]+", "-", named_as.lower()).strip("-")
+    return plain or SECRET_FILE
 
 
 def answered(said: object) -> dict:

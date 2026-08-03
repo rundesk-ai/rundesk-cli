@@ -53,6 +53,7 @@ high-level map.
   - [channel-adapter](./channel-adapter.md) — the seam a surface is reached through: a program rundesk runs rather than code it loads, and what any channel adapter must do.
   - [channel-messaging](./channel-messaging.md) — what any channel does with what arrives on it, whatever its platform can and cannot show.
   - [channel-discord](./channel-discord.md) — what a turn looks like on Discord: threads, marks, its own commands, and what it costs.
+  - [channel-slack](./channel-slack.md) — what a turn looks like on Slack: threads, marks, one slash command, and what Slack cannot show.
   - [agent-usage](./agent-usage.md) — what every run cost in tokens, and how sure anything derived from them is.
 - **Lifecycle**
   - [lifecycle-install](./lifecycle-install.md) — getting rundesk onto a machine, and knowing it worked.
