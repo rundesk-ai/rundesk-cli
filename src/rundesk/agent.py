@@ -931,6 +931,10 @@ def chosen(name: str, where: Path | None = None) -> dict:
 #: or every turn pays for a prefix that no longer matches. The agent's name and resolved
 #: home/workspace paths are byte-for-byte identical from one turn to the next.
 #:
+#: The roles this install has are named directly after it and before anything per-turn:
+#: install-wide and stable between turns, so the cached prefix holds — but varying with
+#: the machine, which is why they are a layer of their own rather than a sentence in here.
+#:
 #: Said here rather than left to the home an agent loads, because a home is the owner's to edit
 #: and this is the one thing that must be true whatever they wrote — an agent that has been
 #: given no rules at all still knows what it is running inside and how to find out what it did.
@@ -939,11 +943,16 @@ STANDING = instructions.RUNDESK_INSTRUCTIONS
 
 def instruction_variables(name: str, where: Path | None = None) -> dict[str, str]:
     """The agent-owned values Rundesk fills into every core instruction layer."""
+    from rundesk import role          # local: role.py imports this module
+
     return {
         "agent": display_name(name, where) if exists(name, where) else name,
         "agent_slug": name,
         "agent_home": str(home(name, where)),
         "workspace": str(workspace(name, where)),
+        # Install-wide rather than this agent's, and named here because an agent that has
+        # to run a command to learn it has specialists at all is one that never does.
+        "roles": role.offered(where),
     }
 
 

@@ -17,12 +17,12 @@ from collections.abc import Iterable, Mapping
 # channel_where: human-readable place
 # user: person display name               user_id: person identifier
 # conversation_id: conversation identifier
-# schedule: schedule name
+# schedule: schedule name                 roles: the roles installed here, as lines
 STANDARD_VARIABLES = (
     "agent", "agent_slug", "agent_home", "workspace", "channel_kind", "channel_config_name",
     "channel_name", "channel_id", "channel_parent_name", "channel_parent_id",
     "channel_thread_name", "channel_thread_id", "channel_where", "user",
-    "user_id", "conversation_id", "schedule",
+    "user_id", "conversation_id", "schedule", "roles",
 )
 
 SCHEDULE = "schedule"
@@ -39,14 +39,31 @@ You are {agent}, an agent running inside rundesk. Operate Rundesk with `rundesk`
 
 - Your persistent home is `{agent_home}`; your workspace is `{workspace}`. Projects may be elsewhere.
 - Before your first reply in a conversation, read `{agent_home}/AGENTS.md`.
-- Before starting work, review your available skills and follow every one that applies.
+- **Before your first tool call: read the context you are missing, load the skills that apply, then hand heavy work to a role.**
+- Referred to work you have no record of? Read it first — `rundesk messages {agent_slug} --conversation <id>` when the conversation is known, `rundesk messages {agent_slug} --source schedule` for scheduled work, `rundesk messages {agent_slug}` otherwise.
+- Heavy work — spanning a repository, or producing more output than you will read — goes to a role. Keep it yourself only if you say why.
 - You may use the shell and installed tools.
 - Home and workspace roots are not Git repositories. Never initialize them or run any Git command from either root; first resolve the actual project directory. Do not report either root's Git status.
 - Perform startup, instruction loading, context recovery, routing, and repository discovery silently. Mention routing only when the confirmed route is unavailable and blocks the requested outcome.
-- If referenced work is absent from the conversation, read it before answering with `rundesk messages {agent_slug} --conversation <id>` when the conversation is known, `rundesk messages {agent_slug} --source schedule` for scheduled work, or `rundesk messages {agent_slug}` otherwise.
 - Answer schedule questions only after running `rundesk schedules {agent_slug}`. Never substitute another scheduler.
 - Treat `rundesk --help` as authoritative. For other Rundesk operations, use the `managing-rundesk` or applicable skill.
 - Any Markdown link to an absolute local file path declares that file for attachment, whether inline or on its own line and whether the path uses optional `<` and `>` delimiters. Rundesk attaches it only when the file exists, is small enough, and sits inside `{agent_home}` or this agent's own Rundesk log directory. **A file anywhere else is never attached, and nothing tells you so** — a project directory you work in is outside, so copy the file under `{workspace}` and declare it from there rather than rewriting the link. Rundesk then removes the private path from the visible answer. The explicit form `rundesk-attach: [LABEL](</absolute/path>)` also works; prefix it or an ordinary link's opening bracket with `\\` when showing it literally."""
+
+# The roles this install has, named to every turn rather than looked up by one. A layer of
+# its own rather than part of `RUNDESK_INSTRUCTIONS`: the standing rules are the same
+# sentence on every machine, and this varies with what an owner has written. It still sits
+# inside the cached prefix `agent.STANDING` protects, because roles are install-wide and
+# change only when one is added or removed — never between an agent's turns.
+#
+# Absent entirely where nothing is installed. An empty heading is an agent told it has a
+# capability and then shown nothing, which costs a turn to find out.
+ROLES_AVAILABLE = """## Roles you may hand heavy work to
+
+`read` changes nothing; `work` changes the target.
+
+{roles}
+
+`rundesk roles {agent_slug} run <role> --target <project>`, brief on stdin. The report is unchecked — verify it before you repeat it. `delegating-to-roles` is the rest."""
 
 # Appended when a named schedule starts the run.
 SCHEDULE_INSTRUCTIONS = """## Scheduled run
@@ -55,6 +72,7 @@ The schedule '{schedule}' came due and started this run. No user request started
 
 - Treat the schedule's own task text as the request. Never infer additional work from earlier conversations or past runs.
 - Never ask a question, request approval, or wait for a reply. Nothing will answer, and the run ends when you stop.
+- A role you hand work to reports back in a later turn, where this schedule announces. This run still delivers one report of its own.
 - Write nothing until the work is finished. Only the last complete message you write is delivered; everything before it is discarded.
 - Deliver exactly one report as that final message. It is recorded and posted where this agent is reached.
 - Report what you found. When you found nothing worth acting on, say that in a short direct response.
@@ -145,16 +163,21 @@ def render(template: str, variables: Mapping[str, object] | None = None) -> str:
 
 def build(*, variables: Mapping[str, object] | None = None, trigger: str = "",
           override: str | None = None, append: Iterable[str] = ()) -> str:
-    """Build core instructions, one trigger layer, then every additive instruction.
+    """Build core instructions, the roles layer, one trigger layer, then every addition.
 
     An adapter override replaces only its trigger-specific layer. Nothing replaces
     `RUNDESK_INSTRUCTIONS`; owner, agent, schedule, adapter, and middleware instructions
     belong in `append` and are kept in the order supplied.
+
+    The roles layer lands only where there is something to list, so an install that has
+    none is not given a heading with nothing under it.
     """
     default = SCHEDULE_INSTRUCTIONS if trigger == SCHEDULE else _TRIGGERS.get(trigger, "")
     specific = override if override is not None else default
     additions = (append,) if isinstance(append, str) else tuple(append)
-    layers = (RUNDESK_INSTRUCTIONS, specific, *additions)
+    listed = str((variables or {}).get("roles") or "").strip()
+    layers = (RUNDESK_INSTRUCTIONS, ROLES_AVAILABLE if listed else "", specific,
+              *additions)
     return "\n\n".join(
         rendered
         for template in layers

@@ -17,6 +17,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -414,6 +415,66 @@ class WhatAReleaseShips(WithSomewhereToKeepRoles):
         self.assertNotIn("development", role.lay_down(self.where))
         self.assertEqual("# Mine\n\nMy own rules.\n",
                          (at / role.INSTRUCTIONS).read_text(encoding="utf-8"))
+
+
+class WhatAnAgentIsToldItMayHandWorkTo(WithSomewhereToKeepRoles):
+    """The installed roles as instruction lines, so nobody has to ask for the list."""
+
+    def setUp(self):
+        super().setUp()
+        # `read` resolves skill names through the library when none is passed, and the
+        # fallback is the owner's own. Point it at this case's scratch one instead.
+        pointed = mock.patch.dict(
+            os.environ, {"RUNDESK_SKILL_LIBRARY": str(self.library_at)})
+        pointed.start()
+        self.addCleanup(pointed.stop)
+
+    def test_every_installed_role_is_one_line_with_its_posture_and_whole_description(self):
+        self.wrote(slug="development")
+        said = role.offered(self.where)
+        self.assertEqual(
+            "- **development** (work) — Implement and verify a bounded change.", said)
+
+    def test_the_shipped_roles_are_offered_in_sorted_order(self):
+        """User-visible output never relies on the order a directory hands back."""
+        role.lay_down(self.where)
+        lines = role.offered(self.where).splitlines()
+        self.assertEqual(len(role.shipped()), len(lines))
+        self.assertEqual(sorted(lines), lines)
+        for slug in role.shipped():
+            with self.subTest(role=slug):
+                one = role.read(slug, self.where, {})
+                self.assertIn(f"- **{slug}** ({one.posture}) — {one.description}", lines)
+
+    def test_a_description_reaches_the_agent_whole(self):
+        """A truncation takes the clause deciding whether this is the right role."""
+        long = ("Apply one settled pattern to every site it names across a repository — "
+                "the sites counted before anything changes, and a stop rather than an "
+                "improvisation where the pattern does not fit.")
+        self.wrote(slug="migration", description=long)
+        self.assertIn(long, role.offered(self.where))
+
+    def test_an_install_with_no_roles_offers_nothing_at_all(self):
+        self.assertEqual("", role.offered(self.where))
+
+    def test_a_directory_missing_one_of_its_two_files_is_not_offered(self):
+        self.wrote(slug="development")
+        half = role.home(self.where) / "research"
+        half.mkdir()
+        (half / role.MANIFEST).write_text("{}", encoding="utf-8")
+        self.assertEqual(
+            "- **development** (work) — Implement and verify a bounded change.",
+            role.offered(self.where))
+
+    def test_a_definition_that_will_not_read_costs_only_its_own_line(self):
+        """An unusable role is refused where somebody tries to run it. Raising here
+        would take the whole layer — every other role on the install with it."""
+        self.wrote(slug="development")
+        self.wrote(slug="archaeology", posture="excavate")
+        self.assertEqual(["archaeology", "development"], role.known(self.where))
+        self.assertEqual(
+            "- **development** (work) — Implement and verify a bounded change.",
+            role.offered(self.where))
 
 
 if __name__ == "__main__":

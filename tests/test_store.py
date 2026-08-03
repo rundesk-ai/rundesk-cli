@@ -963,6 +963,53 @@ class WhereAConversationIsHappening(WithAnAgentsOwnRecords):
         self.assertEqual(["c1"], [one["id"] for one in kept.conversations(channel="discord")])
 
 
+class WhereASchedulesWorkIsAnnounced(WithAnAgentsOwnRecords):
+    """One answer for what a schedule says it did and for where a role admitted by it
+    reports back. Two resolutions of this would eventually put the notice in one room and
+    the work it announced in another."""
+
+    def setUp(self):
+        super().setUp()
+        self.kept = self.built()
+        self.kept.remember_channel("discord", "discord", ["2207"], AT)
+
+    def test_a_place_the_schedule_named_is_the_conversation_in_that_place(self):
+        self.kept.opened("c1", "discord", "discord", "general", AT)
+        self.kept.opened("c2", "discord", "discord", "operations", LATER)
+        self.assertEqual("c1", store.announces_into(self.kept, "discord", "general"))
+        self.assertEqual("c2", store.announces_into(self.kept, "discord", "operations"))
+
+    def test_a_place_nothing_has_been_said_in_is_left_to_the_surface(self):
+        """The adapter is the only thing that knows what that word means on its platform,
+        so answering with some other room would say it where nobody asked."""
+        self.kept.opened("c1", "discord", "discord", "general", LATER)
+        self.assertIsNone(store.announces_into(self.kept, "discord", "operations"))
+
+    def test_naming_no_place_is_the_newest_conversation_on_that_channel(self):
+        self.kept.opened("c1", "discord", "discord", "general", AT)
+        self.kept.opened("c2", "discord", "discord", "operations", LATER)
+        self.assertEqual("c2", store.announces_into(self.kept, "discord", None))
+        self.kept.opened("c1", "discord", "discord", "general", "2026-07-26T11:00:00Z")
+        self.assertEqual("c1", store.announces_into(self.kept, "discord", None))
+
+    def test_a_schedule_that_has_never_announced_anywhere_resolves_to_nothing(self):
+        """A surface nobody has spoken on, and a schedule naming no surface at all. The
+        second must never fall through to whatever room was last used: a schedule that
+        named no channel asked for nothing to be said anywhere."""
+        self.assertIsNone(store.announces_into(self.kept, "discord", None))
+        self.kept.opened("c1", "discord", "discord", "general", AT)
+        for named in (None, ""):
+            with self.subTest(channel=named):
+                self.assertIsNone(store.announces_into(self.kept, named, None))
+                self.assertIsNone(store.announces_into(self.kept, named, "general"))
+
+    def test_another_channels_conversation_is_never_where_this_one_announces(self):
+        self.kept.remember_channel("terminal", "terminal", ["2207"], AT)
+        self.kept.opened("c1", "terminal", "terminal", "general", LATER)
+        self.assertIsNone(store.announces_into(self.kept, "discord", None))
+        self.assertIsNone(store.announces_into(self.kept, "discord", "general"))
+
+
 class WhichBrainAConversationIsCarriedOnBy(WithAnAgentsOwnRecords):
     def setUp(self):
         super().setUp()
