@@ -1,7 +1,7 @@
 ---
 id: PRV
 name: The seam a brain is reached through
-last_verified: 2026-07-28
+last_verified: 2026-08-02
 ---
 
 ## What this is
@@ -43,7 +43,7 @@ is a whole brain with that work absent, rather than a broken one.
 | ✅ | R-PRV-15 | An adapter says what it can do before a turn is admitted, and nothing else is assumed of it | `an adapter says what it can do without carrying a turn`, `an adapter that says it can do nothing is believed`, `an adapter that cannot answer the question can do nothing`, `what a brain says it can do is recorded with the run`, `a brain that cannot carry a conversation on is not asked to` |
 | ✅ | R-PRV-16 | What an owner set for a brain reaches it unread and unchanged | `what an owner set reaches the brain unread and unchanged`, `what an owner set reaches the brain and is written down` |
 | ✅ | R-PRV-17 | An adapter is handed the handle it last reported for that conversation, and never another conversation's | `an adapter is handed back the handle it reported`, `a second turn resumes the conversations session`, `changing the brain does not hand over the other ones session` |
-| ✅ | R-PRV-18 | An adapter is told how much of the machine a turn may touch, in words no brain owns | `an adapter is told how much of the machine a turn may touch`, `a turn asked to only look says so to the brain` |
+| ✅ | R-PRV-18 | An adapter is told how much of the machine a turn may touch, in words no brain owns | `an adapter is told how much of the machine a turn may touch`, `a turn asked to only look says so to the brain`, `a posture is never claimed on a flag acp does not read`, `a read turn is scoped to only the measured read tools`, `a read conversation is opened as an agent that only has the read tools`, `a read conversation is narrowed again each time it is carried on`, `a work conversation is opened as no agent of ours` |
 | ✅ | R-PRV-19 | A brain that says it can be sent to mid-turn is, and the turn carries on rather than starting again | `a brain that can be steered hears a word said mid turn`, `a brain that cannot be steered is not left waiting for more`, `an adapter can be steered exactly as much as it said it could` |
 | ❌ | R-PRV-20 | A brain says when it made a file, rather than a reader guessing from what a tool printed | src/rundesk/turn.py:78 — the record is carried and codex reports it from savedPath. Grok ACP reports tool calls and locations but not whether a path was made, and the 184 captured lines of claude contain no file-making tool, so its path field is unmeasured. Guessing it is what MEMORY says costs a whole feature silently — a capture with explicit file semantics is what this row needs |
 | ✅ | R-PRV-21 | What a tool did is one of a closed set of words, or is left unsaid | `the words for what a tool did are the same on both seams`, `every verb the seam defines has a mark of its own`, `a tool is shown by what it did and never by its brains name for it`, `a tool with no verb says something true rather than the vendors word`, `every verb has something a person would say` |
