@@ -74,6 +74,14 @@ rundesk env check                                 # whether each can still be pr
 rundesk env unset GITHUB_TOKEN
 ```
 
+`--stdin` takes **the whole of what is piped in**, so a value with lines in it — a deploy key,
+a PEM — arrives entire; one trailing newline is dropped, because every keeper adds one.
+`--from` has two limits worth knowing before you rely on it. **It runs no shell**: the words
+you give it are run directly, so a pipe, a redirect or a `$(…)` inside that string is kept as
+literal words and the value comes out wrong rather than refused. And it is given **ten seconds
+to answer**, which `op read` can exceed the first time it raises a Touch ID prompt — run it
+once by hand so the vault is already unlocked, and use `rundesk env check` afterwards.
+
 There is one set for the whole install. Every brain, every channel adapter, every schedule
 and every integration command is given all of it, which is why an integration finds its
 credential with nothing exported first — the shell it runs in descends from a program
@@ -94,7 +102,10 @@ Some names are refused, and the refusal is the point rather than a formality: an
 rundesk itself decides for a program (`PATH`, `HOME`, anything beginning `RUNDESK_`), and
 anything that would change what code a program loads or runs (`DYLD_*`, `LD_*`, `PYTHON*`,
 `NPM_CONFIG_*`, `NODE_OPTIONS`, `ZDOTDIR`). A value under one of those names would run
-somebody's code inside every turn of every agent, for ever.
+somebody's code inside every turn of every agent, for ever. **Those are examples, not the
+list** — around thirty more are refused for the same reason, among them every shell startup
+variable, `GIT_SSH_COMMAND`, `PERL5OPT` and every CA bundle. `rundesk env set` says which
+check refused a name and why, so try it rather than working from this paragraph.
 
 **An agent may place less than you can, and the difference is deliberate.** From inside a
 turn only a name plainly shaped like a credential is kept — one ending `_TOKEN`, `_API_KEY`,
@@ -105,6 +116,12 @@ because every new brain and every new integration brings its own runtime's varia
 what an agent may place is stated positively instead. `HTTPS_PROXY` is the example worth
 knowing: it routes every brain, adapter, `git` and `npm` through an address of its choosing,
 and you may well need it behind a corporate proxy — so you can set it and an agent cannot.
+**What nobody can set beside it is the certificate**: `SSL_CERT_FILE`, `SSL_CERT_DIR`,
+`REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `NODE_EXTRA_CA_CERTS` are refused to you as well,
+because a name saying who a program trusts decides what code it will accept. A proxy that
+presents its own certificate therefore has to be trusted by the machine — in the system
+keychain, or wherever that runtime reads its trust from — and `rundesk env` cannot do it for
+you.
 
 A channel's own credential always wins over one kept here. Two agents may hold two
 different bots, so a value named for a channel's own variable is never given to that

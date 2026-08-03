@@ -568,6 +568,21 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `RUNDESK_AGENTS_DIR` under a scratch root before importing the module**, and assert
   `str(scratch) in str(skill.home())` as the first line that runs. Checking `env | grep
   RUNDESK` is empty proves the danger, not the safety.
+- **`secret.home()` resolves to the owner's live `~/.config/rundesk/secrets` when
+  `RUNDESK_SECRETS_DIR` is unset — and a scrubbing `env -u` prefix unsets the very variable
+  you set in front of it.** Same shape as the `skill.home()` entry below, one directory
+  along, and it bites through the ordering rather than through forgetting: writing
+  `RUNDESK_SECRETS_DIR=/tmp/scratch env -u RUNDESK_HOME -u … -u RUNDESK_SECRETS_DIR ./rundesk
+  env set DEPLOY_KEY --stdin` sets it and then the scrubber takes it away, so the fallback
+  `${XDG_CONFIG_HOME:-$HOME/.config}/rundesk/secrets` wins and the value lands in the owner's
+  own install, where every program they start is then given it. Measured here: two probes
+  created `~/.config/rundesk/secrets/{key,registry.json,values/DEPLOY_KEY}` while the command
+  reported an ordinary `KEPT`, and nothing anywhere said which directory it had used. **Put
+  the override after the scrubber** — `env -u … env RUNDESK_SECRETS_DIR=/tmp/scratch cmd` —
+  or drop it from the scrub list, and check `ls ~/.config/rundesk` before and after anything
+  that runs `env set`. `rundesk env --where` under the same prefix answers in one line and
+  settles it before you write.
+
 - **A backticked anything in an Evidence cell is read as the name of a test.** That is the whole
   mechanism keeping a ✅ honest, and it does not care that the row is ❌ or that the backticks are
   around a filename, a path or a script. Write those plainly in a note — `check-evidence` fails the
