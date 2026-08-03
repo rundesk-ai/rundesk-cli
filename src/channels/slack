@@ -605,6 +605,7 @@ class Live:
         self.checked_in = {}        # role run -> its check-in, while it is the last thing
         self.pacing = None
         self.cost = ""              # what the turn cost, shown with the answer
+        self.asked_by = ""          # who spoke here last, for the answer to name
         self.writes = 0             # which write is the newest, across an await
         self.clock = time.monotonic if clock is None else clock
         self.started = None
@@ -902,7 +903,14 @@ class Agent:
         # **Not the anchor.** Which message a turn is *for* is rundesk's to say, and it says
         # so with the `ref` on the state; all this has to do is be able to find it. Somebody
         # has spoken here, so whatever commentary was growing is no longer the last thing.
-        self._no_longer_last(self.live.setdefault(conversation, Live()))
+        held = self.live.setdefault(conversation, Live())
+        # **Who to name when the answer comes back** (R-SLK-31). Kept here because the seam
+        # does not carry it: an `answer` record says what was said and what it cost, and
+        # never who asked — Discord does not need it, because its reply mentions the author
+        # of the message it quotes and Slack has no such thing. Read off the answer record
+        # instead, this silently named nobody in every room, for every turn.
+        held.asked_by = who
+        self._no_longer_last(held)
         while len(self.live) > LIVE_KEPT:
             if not self._make_room(conversation):
                 break
@@ -1490,16 +1498,24 @@ class Agent:
         channel, _thread = where_of(it.get("conversation"))
         alone = _a_direct_message(channel)
         mention = ("" if alone else
-                   recipient if (it.get("schedule") and recipient) else
-                   str(it.get("user") or "") if not it.get("schedule") else "")
+                   recipient if it.get("schedule") else
+                   held.asked_by)
+        # **In a direct message the question is the message directly above the answer**, so
+        # threading under it hides the reply behind a click and buys nothing (R-SLK-4).
+        # Slack's thread is not Discord's inline quote: what reads there as "this is the one
+        # you asked" reads here as "the answer is somewhere else". A schedule's report is
+        # the exception and keeps its anchor — it may be hours and many messages away from
+        # the notice it belongs to, which is the whole reason that notice is held
+        # (R-SLK-30).
+        anchor = held.anchor if (not alone or it.get("schedule")) else None
         # Past a certain length an answer is a document rather than a message, and a dozen
         # numbered fragments is not something anybody reads (R-SLK-13, R-SLK-18).
         if len(whole) > LIMIT * ATTACH_AFTER:
             covering = f"{footer}\n_the answer is long, so it is attached_".strip()
-            await self._post(it, covering, anchor=held.anchor, files=files,
+            await self._post(it, covering, anchor=anchor, files=files,
                              text_as=whole, mention=mention)
             return
-        rest, anchor = whole, held.anchor
+        rest = whole
         while rest:
             piece, rest = split_at(rest, LIMIT)
             # **Once, on the first piece** (R-SLK-13, R-SLK-31). A long answer that

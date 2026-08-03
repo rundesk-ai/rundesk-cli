@@ -751,15 +751,23 @@ class WhatOneTurnLooksLike(unittest.TestCase):
 
     def test_an_answer_names_who_asked_in_a_room_and_nobody_in_a_direct_message(self):
         """R-SLK-31, R-SLK-40 — the tint picks one message out of a busy room; a direct
-        message has one human in it and every message in it is already theirs."""
+        message has one human in it and every message in it is already theirs.
+
+        **Driven from the message that asked, not from a field on the answer.** The seam's
+        `answer` record says what was said and what it cost and never who asked — Discord
+        does not need it, because its reply mentions the author of the message it quotes.
+        Fabricating `user` here passed while every room answer named nobody."""
         client, fake = self._turn(dm=False)
-        self._told(client, {"type": "answer", "conversation": "C1:1700.1",
-                            "text": "there", "provider": "claude", "user": "U1"})
-        self.assertIn("<@U1>", fake.named("chat_postMessage")[0]["text"])
+        said_by(client, client.on_message(a_message(text="<@UBOT> what changed?")))
+        self._told(client, {"type": "answer", "conversation": "C1:1700.0001",
+                            "text": "there", "provider": "claude"})
+        self.assertIn("<@U1>", fake.named("chat_postMessage")[0]["text"],
+                      "an answer in a room named nobody")
 
         client, fake = self._turn(dm=True)
+        said_by(client, client.on_message(a_message(channel="D1", text="what changed?")))
         self._told(client, {"type": "answer", "conversation": "D1", "text": "there",
-                            "provider": "claude", "user": "U1"})
+                            "provider": "claude"})
         self.assertNotIn("<@U1>", fake.named("chat_postMessage")[0]["text"])
 
     def test_a_name_written_into_an_answer_stands_under_the_completion_line(self):
@@ -771,7 +779,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
     def test_only_the_first_piece_of_a_split_answer_names_anybody(self):
         """R-SLK-31 — five notifications for one reply is four too many."""
         client, fake = self._turn(dm=False)
-        self._told(client, {"type": "answer", "conversation": "C1:1700.1", "user": "U1",
+        said_by(client, client.on_message(a_message(text="<@UBOT> go")))
+        self._told(client, {"type": "answer", "conversation": "C1:1700.0001",
                             "text": "y" * (slack.LIMIT + 200), "provider": "claude"})
         wrote = [one["text"] for one in fake.named("chat_postMessage")]
         self.assertEqual(2, len(wrote))
@@ -780,8 +789,10 @@ class WhatOneTurnLooksLike(unittest.TestCase):
     def test_a_remark_said_mid_turn_names_nobody(self):
         """R-SLK-31 — a surface where everything is tinted has tinted nothing."""
         client, fake = self._turn(dm=False)
-        self._told(client, {"type": "said", "conversation": "C1:1700.1",
-                            "text": "I'll look at the logs.", "user": "U1"})
+        said_by(client, client.on_message(a_message(text="<@UBOT> go")))
+        fake.calls.clear()
+        self._told(client, {"type": "said", "conversation": "C1:1700.0001",
+                            "text": "I'll look at the logs."})
         self.assertNotIn("<@U1>", fake.named("chat_postMessage")[0]["text"])
 
     def test_an_answer_is_written_into_the_thread_the_turn_is_in(self):
@@ -794,11 +805,60 @@ class WhatOneTurnLooksLike(unittest.TestCase):
 
     def test_an_answer_in_a_direct_message_starts_no_thread(self):
         """R-SLK-4 — a thread in a one-to-one conversation puts the reply somewhere the
-        person has to go and find."""
+        person has to go and find.
+
+        **Driven from `taken`, not from the answer alone.** Asserted on a bare `answer`
+        record this passed while the real thing was broken: the anchor a turn threads under
+        is set by the mark put on when the turn was taken, so a case that never marked
+        anything had no anchor to get wrong. Caught by watching one real turn through a
+        gateway, which is what a fake cannot be trusted to tell you on its own."""
         client, fake = self._turn(dm=True)
-        self._told(client, {"type": "answer", "conversation": "D1", "text": "so",
-                            "provider": "claude"})
+        self._told(client,
+                   {"type": "state", "conversation": "D1", "state": "taken",
+                    "ref": "1700.1"},
+                   {"type": "answer", "conversation": "D1", "text": "so",
+                    "provider": "claude"})
+        [wrote] = fake.named("chat_postMessage")
+        self.assertNotIn("thread_ts", wrote,
+                         "the answer was threaded under the question in a direct message")
+
+    def test_an_answer_in_a_room_is_threaded_even_though_a_direct_message_is_not(self):
+        """R-SLK-1, R-SLK-28 — the same sequence in a channel keeps the thread, so the
+        rule above narrows one case rather than removing threading."""
+        client, fake = self._turn(dm=False)
+        self._told(client,
+                   {"type": "state", "conversation": "C1:1700.1", "state": "taken",
+                    "ref": "1700.1"},
+                   {"type": "answer", "conversation": "C1:1700.1", "text": "so",
+                    "provider": "claude"})
+        self.assertEqual("1700.1", fake.named("chat_postMessage")[0]["thread_ts"])
+
+    def test_a_long_answer_in_a_direct_message_also_starts_no_thread(self):
+        """R-SLK-4, R-SLK-18 — the attached-answer path takes the same decision, because
+        two paths deciding one thing separately is how they come to disagree."""
+        client, fake = self._turn(dm=True)
+        self._told(client,
+                   {"type": "state", "conversation": "D1", "state": "taken",
+                    "ref": "1700.1"},
+                   {"type": "answer", "conversation": "D1", "provider": "claude",
+                    "text": "y" * (slack.LIMIT * slack.ATTACH_AFTER + 10)})
         self.assertNotIn("thread_ts", fake.named("chat_postMessage")[0])
+        self.assertNotIn("thread_ts", fake.named("files_upload_v2")[0])
+
+    def test_a_scheduled_report_in_a_direct_message_still_replies_to_its_notice(self):
+        """R-SLK-30 — the exception, and the reason the rule above is not simply "never
+        thread in a direct message": a report may be hours and many messages away from the
+        notice that said its run had begun."""
+        client, fake = self._turn(dm=True)
+        self._told(client,
+                   {"type": "said", "conversation": "D1", "schedule": "nightly",
+                    "began": True, "text": "starting"},
+                   {"type": "answer", "conversation": "D1", "schedule": "nightly",
+                    "text": "nothing broke", "provider": "claude"})
+        wrote = fake.named("chat_postMessage")
+        self.assertEqual(2, len(wrote))
+        self.assertNotIn("thread_ts", wrote[0])
+        self.assertEqual("1700.0001", wrote[1]["thread_ts"])
 
     def test_a_terminal_notice_does_not_erase_a_newer_running_turn(self):
         """R-SLK-35 — an unattended run's presentation is kept apart from a person's."""
@@ -1360,8 +1420,9 @@ class FilesGoingOut(unittest.TestCase):
         """R-SLK-18 — past a certain length an answer is a document, and a dozen numbered
         fragments is not something anybody reads."""
         client = an_agent(FakeSlack(), dm=False)
+        said_by(client, client.on_message(a_message(text="<@UBOT> go")))
         said_by(client, client.told(
-            {"type": "answer", "conversation": "C1:1700.1", "user": "U1",
+            {"type": "answer", "conversation": "C1:1700.0001",
              "text": "y" * (slack.LIMIT * slack.ATTACH_AFTER + 10), "provider": "claude"}))
         [uploaded] = client.web.named("files_upload_v2")
         self.assertEqual("answer.md", uploaded["filename"])
