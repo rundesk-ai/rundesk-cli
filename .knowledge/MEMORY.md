@@ -566,8 +566,31 @@ re-checked since, so treat these as true-when-found rather than as current.*
   `session/new`.** The root flag works in one-shot mode and is silently accepted by `agent stdio`,
   but a live ACP marker disappeared there. The session metadata field returned the exact marker
   and the indirect attachment protocol on 0.2.112. Do not send it on `session/load`: rules bind
-  when the conversation is created. Root `--tools` is also ignored by ACP and remains tracked in
-  issue #250 rather than being mistaken for a working read boundary.
+  when the conversation is created.
+- **Nothing on Grok's root command line scopes an ACP turn's tools — not `--tools`, and not the
+  `--allow`/`--deny` permission rules either.** All three are accepted in silence and the turn gets
+  every built-in: measured on 0.2.112, a session opened with `--tools read_file,list_dir,grep`
+  listed all 31 tools and ran `pwd` (#250). The one that holds is `session/new._meta.agentProfile`,
+  and unlike `_meta.rules` it **also binds on `session/load`**, so a resumed turn is narrowed by
+  the posture the owner holds now. Its `tools` is an allowlist only with
+  `injectDefaultTools: false`, and `search_tool`/`use_tool` survive it — take those out through
+  `disallowedTools` by their built-in ids, because `MCPTool` is a permission-rule class and
+  permission rules are the row above. Re-probe with
+  `python3 .knowledge/scripts/probe-grok --acp-tools` on every version bump.
+- **A `_meta.agentProfile` Grok cannot parse is not refused — the conversation quietly gets every
+  tool there is.** `session/new` returns a perfectly ordinary session id, and the only thing said
+  is one line on **stderr**: `ERROR Failed to parse _meta.agentProfile JSON object, falling back to
+  default agent`. Nothing in the ACP responses names which agent resolved, so there is no way to
+  confirm the boundary from the protocol — read the run's stderr, not the result.
+- **Grok's agent-definition field names are in the binary and in no document.** The installed
+  `docs/user-guide/15-agent-mode.md` says `_meta.agentProfile` takes an "Agent profile name or JSON
+  object" and stops there, and the bundled `~/.grok/bundled/agents/*.md` show only five snake_case
+  frontmatter keys — so a JSON object built from those is missing the ones that matter. The real
+  list is camelCase and comes out of
+  `LC_ALL=C grep -ao '.\{300\}disallowedToolseffort' ~/.grok/downloads/grok-macos-aarch64`:
+  `description promptMode toolConfig capabilityMode permissionMode skills discoverSkills
+  inheritSkills injectDefaultTools tools disallowedTools …`, 27 in all. Mine the binary before
+  guessing a field name here; a wrong one is the silent fallback above.
 - **Claude reports `loggedIn: false` on a signed-in machine when `USER` is unset.** Its
   sign-in is in the macOS login keychain (`Claude Code-credentials`, `acct=<username>`), and
   the lookup is keyed on the account name — so under the environment rundesk *builds*

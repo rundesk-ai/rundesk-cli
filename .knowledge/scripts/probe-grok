@@ -5,10 +5,11 @@ Evidence, never a CI dependency: the live half reaches a real account and costs 
 money, so nothing in the suite runs it. Rerun it when the CLI version moves and write what
 changed into `.knowledge/research/2026-07-26-grok-cli-as-a-brain.md`.
 
-    python3 .knowledge/scripts/probe-grok            # everything, including live turns
-    python3 .knowledge/scripts/probe-grok --offline  # only what costs nothing
+    python3 .knowledge/scripts/probe-grok             # everything, including live turns
+    python3 .knowledge/scripts/probe-grok --offline   # only what costs nothing
+    python3 .knowledge/scripts/probe-grok --acp-tools # only what scopes an ACP turn
 
-Four questions, and nothing else — the rest of this brain is already measured and
+Five questions, and nothing else — the rest of this brain is already measured and
 committed at `tests/samples/`. Re-buying it costs money and answers nothing.
 
 **Does a resume round trip carry context?** Asked mechanically rather than by reading a
@@ -29,16 +30,27 @@ run fails closed the way a fresh `CODEX_HOME` and a fresh `CLAUDE_CONFIG_DIR` bo
 **Can the prompt stay off the command line?** `--prompt-file` is on this CLI's help and
 appears in none of the evidence. What somebody asks their agent is readable through the
 process list, so a file that answers the same way is worth having.
+
+**What scopes an ACP turn's tools?** The one that shipped wrong (#250). Root `--tools` is
+the vendor's own headless-only flag: `grok agent stdio` accepts it, says nothing, and
+hands the turn every built-in, so a read posture built on it ran `run_terminal_command`
+while the argv looked deliberate. `--acp-tools` opens one session per candidate and asks
+each to name its tools and then to run `pwd`, believing the recorded tool calls rather
+than the prose. Re-run it whenever this CLI's version moves: a profile the vendor stops
+being able to parse is not refused — the session quietly gets the default agent, and the
+only thing said is one line on stderr.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 
 GROK = os.environ.get("RUNDESK_GROK_BIN", "grok")
@@ -245,6 +257,190 @@ def keeps_the_prompt_off_the_command_line(where: str) -> None:
         "value and is readable through the process list. Say so rather than hiding it."))
 
 
+#: The three read tools the shipped adapter admits a `read` posture to, and the two the
+#: vendor keeps on regardless of an allowlist.
+READ_TOOLS = ["read_file", "list_dir", "grep"]
+META_TOOLS = ["search_tool", "use_tool"]
+
+#: The agent definition the adapter hands over, in the vendor's own camelCase.
+#: `injectDefaultTools` is what makes `tools` an allowlist rather than an addition.
+READ_PROFILE = {
+    "name": "rundesk-read",
+    "description": "A Rundesk turn admitted to read only.",
+    "promptMode": "extend",
+    "injectDefaultTools": False,
+    "tools": READ_TOOLS,
+    "disallowedTools": META_TOOLS,
+}
+
+#: One turn's whole input. Both halves matter: what the model *says* it has is a hint, and
+#: whether a shell call is recorded is the measurement.
+SCOPING = (
+    "Do exactly two things, in this order, and nothing else.\n"
+    "1. On one line starting `TOOLS:` list the exact names of every tool you can call, "
+    "comma separated.\n"
+    "2. Call the `run_terminal_command` tool with the command `pwd`. If you have no such "
+    "tool, say so. Report what happened on one line starting `PWD:`.\n"
+)
+
+
+class _ACP:
+    """One sequential ACP conversation, and every tool call it reported."""
+
+    def __init__(self, argv, where):
+        self.brain = subprocess.Popen(
+            argv, cwd=where, text=True, bufsize=1,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.lines, self.trouble, self.called, self.next_id = queue.Queue(), [], [], 0
+        self.reply = []
+        threading.Thread(target=self._out, daemon=True).start()
+        threading.Thread(target=self._err, daemon=True).start()
+
+    def _out(self):
+        for line in self.brain.stdout:
+            self.lines.put(line)
+        self.lines.put(None)
+
+    def _err(self):
+        for line in self.brain.stderr:
+            self.trouble.append(line.rstrip())
+
+    def _send(self, message):
+        self.brain.stdin.write(json.dumps(message) + "\n")
+        self.brain.stdin.flush()
+
+    def request(self, method: str, params: dict) -> dict:
+        self.next_id += 1
+        wanted = self.next_id
+        self._send({"jsonrpc": "2.0", "id": wanted, "method": method, "params": params})
+        while True:
+            line = self.lines.get(timeout=ANSWER_SECONDS)
+            if line is None:
+                raise RuntimeError(f"Grok closed its ACP stream during {method}")
+            try:
+                message = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(message, dict):
+                continue
+            self._watch(message)
+            # Nothing was advertised, so refuse rather than leave Grok waiting for ever.
+            if message.get("method") and "id" in message:
+                self._send({"jsonrpc": "2.0", "id": message["id"],
+                            "error": {"code": -32601, "message": "method not supported"}})
+                continue
+            if message.get("id") != wanted:
+                continue
+            if isinstance(message.get("error"), dict):
+                raise RuntimeError(f"{method}: {message['error']}")
+            return message.get("result") or {}
+
+    def _watch(self, message):
+        update = (message.get("params") or {}).get("update")
+        if not isinstance(update, dict):
+            return
+        if update.get("sessionUpdate") == "tool_call":
+            self.called.append(str(update.get("title") or ""))
+        if update.get("sessionUpdate") == "agent_message_chunk":
+            self.reply.append(str((update.get("content") or {}).get("text") or ""))
+
+    def close(self):
+        try:
+            self.brain.stdin.close()
+        except OSError:
+            pass
+        try:
+            self.brain.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.brain.kill()
+            self.brain.wait()
+
+
+def _signed_in(acp: _ACP, initialized: dict) -> None:
+    """The login this CLI itself advertises, without reading a credential."""
+    methods = initialized.get("authMethods")
+    if not isinstance(methods, list) or not methods:
+        return
+    offered = {str(one.get("id")) for one in methods if isinstance(one, dict)}
+    preferred = str((initialized.get("_meta") or {}).get("defaultAuthMethodId") or "")
+    if preferred not in offered:
+        preferred = "cached_token" if "cached_token" in offered else sorted(offered)[0]
+    acp.request("authenticate", {"methodId": preferred, "_meta": {"headless": True}})
+
+
+def acp_turn(where: str, root_flags: list, meta: dict, prompt=SCOPING) -> dict:
+    """One ACP session opened the way this case describes, and what it could reach."""
+    argv = [GROK, "--no-auto-update", "--no-memory",
+            "--permission-mode", "bypassPermissions"] + root_flags \
+        + ["agent", "--always-approve", "stdio"]
+    acp = _ACP(argv, where)
+    got = {"argv": argv, "meta": meta}
+    try:
+        _signed_in(acp, acp.request("initialize", {"protocolVersion": 1,
+                                                   "clientCapabilities": {}}))
+        params = {"cwd": where, "mcpServers": []}
+        if meta:
+            params["_meta"] = meta
+        made = acp.request("session/new", params)
+        got["session"] = str(made.get("sessionId") or "")
+        if prompt is not None:
+            acp.request("session/prompt", {
+                "sessionId": got["session"],
+                "prompt": [{"type": "text", "text": prompt}],
+            })
+    except Exception as gone:                      # a probe reports; it does not raise
+        got["failed"] = str(gone)
+    finally:
+        got["called"] = list(acp.called)
+        got["reply"] = "".join(acp.reply)
+        got["stderr"] = acp.trouble[-6:]
+        acp.close()
+    return got
+
+
+def acp_tools() -> int:
+    """What narrows an ACP turn's tool set, and what only looks as though it does."""
+    where = tempfile.mkdtemp(prefix="probe-grok-acp-tools-")
+    print(f"probing {GROK} in {where} — this reaches a real account and costs real money")
+
+    denials = [one for rule in ("Bash", "Edit", "Write", "WebFetch", "WebSearch", "MCPTool")
+               for one in ("--deny", rule)]
+    cases = [
+        ("root --tools", ["--tools", ",".join(READ_TOOLS)], {}),
+        ("root --deny rules", denials, {}),
+        ("_meta.agentProfile", [], {"agentProfile": READ_PROFILE}),
+        ("nothing at all", [], {}),
+    ]
+    contained = []
+    for label, flags, meta in cases:
+        got = acp_turn(where, flags, meta)
+        shell = [one for one in got["called"] if "terminal" in one]
+        contained.append((label, not shell))
+        says(label, f"argv: {' '.join(got['argv'])}\n"
+                    f"session/new _meta: {json.dumps(meta, sort_keys=True)}\n"
+                    f"tool calls recorded: {got['called'] or '(none)'}\n"
+                    f"reply: {got['reply'][:600]!r}\n"
+                    f"{got.get('failed') or ''}")
+
+    # Free, and the reason this has to be re-run rather than read off a schema: a profile
+    # this vendor cannot parse is not refused. No prompt is sent, so no turn is bought.
+    broken = acp_turn(where, [], {"agentProfile": {"tools": 12345}}, prompt=None)
+    says("a profile this vendor cannot parse",
+         f"session/new: {'made ' + broken.get('session', '') if broken.get('session') else broken.get('failed')}\n"
+         f"stderr: {' | '.join(broken['stderr']) or '(said nothing)'}")
+
+    held = dict(contained)
+    says("verdict — what scopes an ACP turn", "\n".join(
+        f"{label:<22} {'no shell reached it' if kept else 'RAN A SHELL COMMAND'}"
+        for label, kept in contained) + "\n\n" + (
+        "AS SHIPPED — the agent profile is what holds, and the root flags do not. Keep\n"
+        "the posture on `session/new._meta.agentProfile` and never on the command line."
+        if held.get("_meta.agentProfile") and not held.get("root --tools") else
+        "SOMETHING MOVED — re-read the table above before believing the adapter. If the\n"
+        "profile no longer contains a turn, the read posture is open and #250 is back."))
+    return 0
+
+
 def live() -> int:
     """The three questions that need a real account, and what they settled."""
     where = tempfile.mkdtemp(prefix="grok-probe-work-")
@@ -260,6 +456,8 @@ def main() -> int:
         print(f"there is no {GROK} on this machine's path — install the Grok CLI, or "
               f"point RUNDESK_GROK_BIN at where it stands", file=sys.stderr)
         return 2
+    if "--acp-tools" in sys.argv:
+        return acp_tools()
     offline()
     return 0 if "--offline" in sys.argv else live()
 

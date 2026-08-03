@@ -1,6 +1,6 @@
 # Research: The Grok CLI as an agent's brain
 
-**Last updated:** 2026-08-01
+**Last updated:** 2026-08-02
 **Question it answers:** What does the installed Grok CLI actually do when it is driven headlessly, and which of it has to be absorbed by an adapter?
 
 ## What they do
@@ -22,7 +22,7 @@ read off a flag surface, a help string or a vendor write-up and never exercised.
 | Say what a turn cost | Measured: on the `end` line, `usage.{input_tokens, cache_read_input_tokens, output_tokens, reasoning_tokens, total_tokens}` plus `total_cost_usd` and a `modelUsage` map — and **per turn, not cumulative**: three one-word replies on one session reported `output_tokens` of 31, 21 and 21.[1][12] |
 | Say which model answered | Measured: the first key of `end.modelUsage` — `grok-4.5-build`, with `modelCalls: 1`.[1] |
 | Keep one agent's sign-in from another's | Measured: `GROK_HOME`. A fresh directory fails the turn closed — exit 1, `Error: Not signed in`, naming `grok login --device-code` — and the CLI fills it with `config.toml`, `sessions/`, `logs/`, `agent_id` and its own lockfiles.[12] |
-| Choose how much of the machine it may touch | Measured: the `--tools` list, and only the `--tools` list. Two flags that look like they would help do not — see below.[4] Re-measured 2026-07-27 on 0.2.112: with `--tools read_file,list_dir,grep` a turn could not create a file, with the fuller list it could, and **with the flag left off entirely it could** — so omitting `--tools` is how this CLI says every built-in. Note `-p/--single` is the single-turn form; piping a prompt on stdin fails with `Device not configured (os error 6)`. |
+| Choose how much of the machine it may touch | **Depends entirely on the transport, and the two answers do not overlap.** One-shot: the `--tools` list, and only that list — with `--tools read_file,list_dir,grep` a turn could not create a file, with the fuller list it could, and with the flag left off entirely it could, so omitting it is how this CLI says every built-in.[4] ACP: **not `--tools` at all** — it is documented headless-only, and `agent stdio` accepts it in silence and hands the turn every built-in. What holds there is `session/new._meta.agentProfile`, measured 2026-08-02 on 0.2.112 and detailed below.[16] Two flags that merely look like they would help do neither — see below.[4] Note `-p/--single` is the single-turn form; piping a prompt on stdin fails with `Device not configured (os error 6)`. |
 | Be sent to mid-turn | ACP keeps stdin open and supports a long-lived session, but sending another prompt during an active turn is not measured.[13] |
 
 ### The one-shot format has three line kinds
@@ -171,8 +171,8 @@ and system paths, it read a planted marker well outside that directory and repor
 contents.[4]
 
 Measured consequence: **what scopes this brain is the tool list, and only the tool list.** A tool
-never granted cannot be called. Read-only on the shipped adapter is
-`--tools read_file,list_dir,grep` with no mode at all.[3]
+never granted cannot be called. On the one-shot transport that list is `--tools`; on ACP it is
+`_meta.agentProfile`, and the flag is one more thing accepted that enforces nothing.[3][16]
 
 Measured consequence of that: **a read-only Grok agent has no shell.** `run_terminal_command` is
 the only shell this CLI offers and it cannot be scoped to a command prefix the way another brain
@@ -195,6 +195,49 @@ appended to the system prompt.” `systemPromptOverride` replaces the prompt and
 
 Rules bind when an ACP conversation is created. The adapter sends `_meta.rules` on `session/new`
 and nothing on `session/load`, matching the conversation-bound behavior measured for Codex.[15]
+
+### What scopes an ACP turn's tools, and the three things that do not
+
+Measured 2026-08-02 against 0.2.112, one live turn per row, each asked to name its tools and then
+to call `run_terminal_command` with `pwd`. What is believed is the recorded `tool_call` updates.[16]
+
+| Session opened as | Tools the turn reported | Ran `pwd` |
+|---|---|:--:|
+| root `--tools read_file,list_dir,grep` | all 31 built-ins | **yes** |
+| root `--deny Bash --deny Edit --deny Write --deny WebFetch --deny WebSearch --deny MCPTool` | all 31 built-ins | **yes** |
+| `_meta.agentProfile` with `injectDefaultTools: false`, `tools: [read_file, list_dir, grep]` | those three, plus `search_tool` and `use_tool` | no |
+| the same, plus `disallowedTools: [search_tool, use_tool]` | exactly those three | no |
+| nothing | all 31 built-ins | **yes** |
+
+So **the root command line does not reach an ACP turn's tool set at all** — neither the allowlist
+nor the permission rules, both of which the vendor's own help calls headless-only or describes as
+working "in both modes" meaning TUI and headless. This is the `dontAsk` trap a third time: accepted,
+silent, enforcing nothing.
+
+`_meta.agentProfile` takes an agent definition — the same shape as a `.grok/agents/*.md`
+frontmatter, in camelCase — and its `tools` is an allowlist only when `injectDefaultTools` is
+`false`; the vendor documents a stock profile as injecting its optional tools *before* the
+allowlist applies. `search_tool` and `use_tool` are documented as always-on MCP meta-tools and
+survive `tools`; they are removed by name through `disallowedTools`, which the vendor documents as
+winning over the allowlist. Naming the `MCPTool` permission class instead does nothing, because
+permission rules are the row above.
+
+Two things it does that `_meta.rules` does not:
+
+- **It binds on `session/load` too.** A conversation created with no profile at all came back, when
+  loaded with the read profile attached, naming exactly the three read tools and unable to run a
+  shell command. So a resumed turn is narrowed by the posture the owner holds *now*, and an agent
+  moved to `read` after a working conversation was opened does not keep that conversation's tools.
+- **A profile it cannot parse is not refused.** `session/new` succeeds and the conversation quietly
+  gets the default agent, which is every tool there is. The only thing said is on stderr:
+  `ERROR Failed to parse _meta.agentProfile JSON object, falling back to default agent`. That line
+  is the whole drift signal, and it is why this has to be re-probed when the version moves rather
+  than assumed from the schema.
+
+Read posture bounds **tools, not paths**: the live read turn read `~/.grok/docs/user-guide/*.md`
+and `~/.grok/README.md` while hunting for a shell, which is the same finding as `--sandbox`
+enforcing nothing. A posture is a tool boundary on this brain and must never be described as
+containment.
 
 ### Isolation: the one thing every other brain proved, now proved here too
 
@@ -321,8 +364,10 @@ existing in Grok's vocabulary is not evidence of either.[11]
   cannot be told at all.
 - **Take the model from `modelUsage`, which is reported rather than requested.** A silent model
   substitution would show up there and nowhere else.
-- **Pass the tool list and nothing that implies a limit we do not have.** No `--sandbox`, no
-  `--permission-mode` outside the one value that is applied.
+- **Pass the tool list where the transport reads it, and nothing that implies a limit we do not
+  have.** On ACP that is `_meta.agentProfile`; the root `--tools` and `--deny` flags belong to the
+  one-shot transport and are silently inert here. No `--sandbox`, and no `--permission-mode` outside
+  the one value that is applied.
 - **`git init` in an agent's own directory, for this brain, is worth 2,729 tokens a turn.**
 - **Grok is the cheap brain.** At 5,842 tokens of baseline against Claude's 24,252, it is the one
   to reach for when a turn is small; ACP no longer trades away tool visibility.
@@ -360,10 +405,11 @@ results come from structured ACP updates, while steering remains unmeasured.[13]
 format is still a useful proof that a lossy vendor stream must not be mistaken for the agent's
 whole activity.
 
-**We take the ACP invocation, update mapping, usage split, resume handle, private home and standing
-instruction transport as settled.** Root `--rules` is not an ACP transport; `_meta.rules` on
-`session/new` is. Root tool scoping remains a separate live defect: ACP ignored `--tools` and exposed
-`run_terminal_command` in read posture.[15]
+**We take the ACP invocation, update mapping, usage split, resume handle, private home, standing
+instruction transport and tool scoping as settled.** Root `--rules` is not an ACP transport;
+`_meta.rules` on `session/new` is. Root `--tools` and the root permission rules are not either;
+`_meta.agentProfile` on both `session/new` and `session/load` is, and a read posture built on it
+came back naming exactly `read_file, list_dir, grep`.[15][16]
 
 **Two transport choices are non-negotiable on every turn, for opposite reasons.** `--no-memory`, because
 without it a conversation reads conversations it was never given and a resume handle stops meaning
@@ -386,11 +432,14 @@ the version moves.
 ## Open questions
 
 The original transport questions are answered: resume carries context, usage is a turn's own,
-`GROK_HOME` isolates login, prompts need not enter the process list, and ACP standing rules append
-at conversation creation.[12][15] What remains:
+`GROK_HOME` isolates login, prompts need not enter the process list, ACP standing rules append
+at conversation creation, and an ACP session is scoped by its agent profile.[12][15][16] What
+remains:
 
-- **ACP tool scoping.** Root `--tools` is accepted but ignored by `agent stdio`; the supported ACP
-  mechanism for narrowing a session has not been established.[15]
+- **Whether an agent profile can be confirmed rather than only sent.** `session/new` reports the
+  session's model, working directory and available commands, and nothing about which agent
+  resolved — so a profile this vendor stops being able to parse reopens the whole tool set with
+  only a stderr line to say so.[16]
 - **What else reaches across sessions, and whether `--no-memory` closes all of it.** The control
   turn named "recent sessions" specifically; whether that is the documented cross-session memory,
   a tool, or something else was not established, and only the observable symptom was tested.
@@ -425,3 +474,4 @@ Beyond those:
 13. SpaceXAI, “Headless & Scripting” — https://docs.x.ai/build/cli/headless-scripting
 14. Controlled ACP tool and resume probes against `grok 0.2.112`, 2026-07-27 — (internal)
 15. Installed official `docs/user-guide/15-agent-mode.md` plus controlled ACP rule, posture and attachment probes against `grok 0.2.112`, 2026-08-01 — (internal)
+16. `.knowledge/scripts/probe-grok --acp-tools` against `grok 0.2.112`, 2026-08-02, plus the installed official `docs/user-guide/14-headless-mode.md`, `16-subagents.md` and `22-permissions-and-safety.md` — (internal)
