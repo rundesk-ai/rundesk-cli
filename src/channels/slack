@@ -2251,8 +2251,15 @@ async def _read(client: Agent) -> None:
         except ValueError:
             continue
         if isinstance(it, dict):
-            with contextlib.suppress(Exception):
+            try:
                 await client.told(it)
+            except Exception as why:  # noqa: BLE001 — a delivery boundary (R-CH-12)
+                # **Said, and then read on.** This was `suppress(Exception)`, which discarded
+                # every failure under `told()` without a word — so a report that never
+                # arrived left no trace at all, unlike a room that could not be found. The
+                # loop must not end either: one record nobody could act on is not a channel
+                # going away.
+                note(f"could not act on {it.get('type')}: {type(why).__name__}: {why}")
 
 
 #: What is taken from what rundesk wrote down about this channel when it was not given on
