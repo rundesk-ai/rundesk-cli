@@ -66,14 +66,26 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def kept_from() -> str:
-    """Where a change was made from — the only account a set an agent may run can have.
+def in_a_turn() -> bool:
+    """Whether an agent is running this rather than a person at a terminal.
 
-    Read off the turn's own environment. `RUNDESK_RUN` is present in every program a
-    gateway starts and in nothing a person types, so its absence is the honest answer for
-    a terminal rather than a guess about one.
+    `RUNDESK_RUN` is in every program a gateway starts and in nothing a person types. It
+    decides two things: what is recorded as having made the change, and what may be placed
+    at all — a turn keeps only what is plainly a credential, because the names that are not
+    are the ones a denylist keeps turning out to have missed.
+
+    **It is a guard against the ordinary path, not a boundary.** The variable is in the
+    caller's own environment and a brain determined to get round it can clear one, exactly
+    as it can already reach every other verb this command offers — the same thing
+    `RUNDESK_ROLE_RUN` says about itself. What it buys is that no ordinary path, and no
+    adapter's own subagent, places a name nobody meant it to.
     """
-    if not os.environ.get("RUNDESK_RUN"):
+    return bool(os.environ.get("RUNDESK_RUN"))
+
+
+def kept_from() -> str:
+    """Where a change was made from — the only account a set an agent may run can have."""
+    if not in_a_turn():
         return "this terminal"
     named = os.environ.get("RUNDESK_AGENT_NAME") or os.environ.get("RUNDESK_AGENT")
     return f"{named}'s gateway" if named else "an agent's turn"
@@ -149,10 +161,14 @@ def _set(args: argparse.Namespace) -> int:
     """Keep a value under a name, or replace the one already kept there."""
     name = args.value_name
     fetched_by = getattr(args, "fetched_by", None)
+    turn = in_a_turn()
     try:
-        secret.checked(name)
+        secret.checked(name, turn)
     except (secret.NotAName, secret.Refused) as why:
-        return _not_kept(name, str(why))
+        return _not_kept(
+            name, str(why),
+            f"ask your owner to run it at theirs:  rundesk env set {name}"
+            if turn and not secret.a_credential(name) else "")
 
     try:
         if fetched_by:
@@ -161,7 +177,8 @@ def _set(args: argparse.Namespace) -> int:
                 return _not_kept(name, "no command was given to fetch it with")
             _out_loud(f"asking: {' '.join(shlex.quote(word) for word in command)}")
             change = secret.remember_command(name, command, now=_now(),
-                                             kept_from=kept_from(), replace=True)
+                                             kept_from=kept_from(), replace=True,
+                                             in_a_turn=turn)
         else:
             given = _taken(name, getattr(args, "stdin", False))
             if given is None:
@@ -174,7 +191,7 @@ def _set(args: argparse.Namespace) -> int:
                     name, "nothing was given, and an empty value is not a value",
                     f"take it away instead:  rundesk env unset {name}")
             change = secret.remember(name, given, now=_now(), kept_from=kept_from(),
-                                     replace=True)
+                                     replace=True, in_a_turn=turn)
     except (secret.NotKept, secret.NotAName, secret.Refused) as why:
         return _not_kept(name, str(why))
     except OSError as why:

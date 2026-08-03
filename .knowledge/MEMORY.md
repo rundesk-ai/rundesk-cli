@@ -8,18 +8,6 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
-- **`test_the_job_carries_every_place_rundesk_can_be_pointed_at` names its modules by
-  hand, so a *new* module reading a `RUNDESK_*_DIR` is invisible to the guard that
-  exists to catch exactly that.** It scrapes `inspect.getsource` of `gateway`, `agent`
-  and the package `__init__` only. `secret.py` was a fourth, reading
-  `RUNDESK_SECRETS_DIR`, and the case stayed green while a supervised gateway would
-  have resolved a different directory from the command that wrote its job — because
-  launchd forwards neither `XDG_CONFIG_HOME` nor anything else of the owner's shell.
-  **Add your module to that scrape in the same commit you add the resolver**, and note
-  the asymmetry with `RUNDESK_JOB_PREFIX`: that one is written into `describe()` only
-  when set, because unset resolves the same answer through the same code — which is
-  false for anything whose default is built from a variable a job never receives.
-
 - **A command that reads standard input because it is "not a terminal" hangs the gate,
   and the failure names nothing.** `sys.stdin.readline()` on an *open pipe with nothing
   in it* blocks until the far end closes, which may be never — and that is exactly what
@@ -518,14 +506,22 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   that matters. The same run also showed that a probe naming *one* test can pass while a
   sibling catches the break, so a green probe means "this case has no teeth", never "the code
   is unprotected" — narrow to the case, then widen to its class before concluding either.
-- **Adding any `RUNDESK_*_DIR` resolver fails `test_supervisor` until the launchd job carries
-  it.** `test_the_job_carries_every_place_rundesk_can_be_pointed_at` scrapes
-  `environ.get("RUNDESK_..._DIR")` out of the *source* of `gateway`, `agent` and the package
-  `__init__`, then asserts `supervisor.describe()` names every one it found. So a new directory
-  variable is caught the moment it is written, in a suite that looks unrelated to the feature
-  adding it — which is the guard working, not a broken test. Add the variable to `describe()`'s
-  `EnvironmentVariables` in the same change; a supervised gateway resolving a different place
-  from the command that wrote its job is the failure it exists to prevent.
+- **Adding a `RUNDESK_*_DIR` resolver fails `test_supervisor` until the launchd job carries
+  it — *if the resolver is in a module that case names by hand*, and it names four.**
+  `test_the_job_carries_every_place_rundesk_can_be_pointed_at` scrapes
+  `environ.get("RUNDESK_..._DIR")` out of the *source* of `gateway`, `agent`, `secret` and the
+  package `__init__`, then asserts `supervisor.describe()` names every one it found. In one of
+  those, a new directory variable is caught the moment it is written, in a suite that looks
+  unrelated to the feature adding it — which is the guard working, not a broken test. Add the
+  variable to `describe()`'s `EnvironmentVariables` in the same change.
+  **In a fifth module it is caught by nothing.** `secret.py` was the fourth, reading
+  `RUNDESK_SECRETS_DIR`, and the case stayed green while a supervised gateway would have
+  resolved a different directory from the command that wrote its job — which is the failure
+  this whole thing exists to prevent. So **add your module to the scrape in the same commit
+  you add the resolver**, and note the asymmetry with `RUNDESK_JOB_PREFIX`: that one is
+  written into `describe()` only when set, because unset resolves the same answer through the
+  same code — which is false for anything whose default is built from a variable launchd
+  never forwards, such as `XDG_CONFIG_HOME`. Those are written unconditionally.
 - **A requirement row is capped at 25 words and `doc-lint` counts them, drafts included.** The
   message is exact — `R-ROL-38 requirement is 28 words (max 25)` — but nothing says so while you
   are writing the row, and a requirement written to be unambiguous lands at about thirty. Say the

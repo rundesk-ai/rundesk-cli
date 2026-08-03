@@ -76,6 +76,16 @@ Placing one is the owner's at a terminal — `rundesk env set <NAME>`, typed wit
 You may run it for a value **you** minted; never ask a person to send you one, because
 anything said to you is in the record and possibly in a chat room.
 
+**From a turn you may place only a name plainly shaped like a credential** — ending
+`_TOKEN`, `_API_KEY`, `_KEY`, `_SECRET`, `_PASSWORD`, `_PASSPHRASE`, `_CREDENTIAL`,
+`_CREDENTIALS` or `_AUTH`. Anything else is refused with a message saying so, and is your
+owner's to place at their own terminal. The reason is not that the other names are all
+dangerous: it is that the list of dangerous ones can never be complete, since every brain
+and every integration brings its own runtime's variables — so what you may place is stated
+positively instead. If an integration needs a value under some other name, say so and give
+your owner the command; renaming it to end in `_TOKEN` to get past this is defeating a
+guard, not solving a problem.
+
 ## When something is not there
 
 A command that does not exist means an older rundesk than this file describes — check

@@ -35,7 +35,7 @@ again each time a program starts. Nothing rundesk shows ever gives a whole value
 | ✅ | R-SEC-10 | A value nobody is there to supply is refused rather than waited for | `a value nobody can supply is a refusal rather than a wait` |
 | ✅ | R-SEC-11 | A name rundesk itself decides for the programs it starts is refused | `every name rundesk decides for a program is refused` |
 | ✅ | R-SEC-12 | A name that would change what code a program loads or runs is refused | `a name that changes which code a program loads is refused` |
-| ✅ | R-SEC-13 | A name that could reach outside where values are kept is refused | `a name that could reach outside where values are kept is refused` |
+| ✅ | R-SEC-13 | A name that could reach outside where values are kept is refused | `a name that could reach outside where values are kept is refused`, `taking a value away cannot be made to unlink anything else` |
 | ✅ | R-SEC-14 | A value rundesk was not allowed to keep is left out of what a program is given | `a value rundesk was not allowed to keep is left out`, `what a gateway already decided survives a value claiming its name` |
 | ✅ | R-SEC-15 | A command that gives nothing back leaves nothing kept under that name | `a command that gives nothing back keeps nothing` |
 | ✅ | R-SEC-16 | A value that cannot be produced when a program starts is left out rather than emptied | `a value that cannot be fetched is left out rather than emptied`, `a held value whose file went missing is said rather than passed over` |
@@ -55,10 +55,13 @@ again each time a program starts. Nothing rundesk shows ever gives a whole value
 | ✅ | R-SEC-30 | Producing the values never runs a fetching command on the loop a gateway is carrying work on | `the same answer is given off the event loop` |
 | ✅ | R-SEC-31 | Where values are kept stands where an integration command already looks for its own | `it stands where every integration command already looks`, `a relative configuration home is ignored rather than resolved`, `where values are kept is printed and nothing else` |
 
+| ✅ | R-SEC-32 | A value placed from a turn is kept only under a name plainly shaped like a credential | `a turn keeps only what is plainly a credential`, `what a turn may never place is refused however it is named` |
+
 ## Open questions
 
 - Whether an owner may run a program under these values from their own terminal, given that
   such a program can print one back.
+- Which name endings count as plainly a credential, and whether an owner may extend that set.
 - Whether the length of a kept value may be shown beside its hint.
 - Whether a change to what every program is given belongs in the account of every agent, of
   the one it was made from, or of none.

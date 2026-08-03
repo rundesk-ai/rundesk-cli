@@ -119,6 +119,14 @@ FAMILIES = (
 #: Names outside those families that decide what a program *is*, or who it trusts, rather
 #: than what it is told. This list has no other home, so it cannot come apart from one — what
 #: could is the set of names rundesk itself decides, and that is asked rather than restated.
+#:
+#: **These are refused whoever places them**, because none has an owner-side use that is
+#: worth the blast radius. The proxy family is deliberately *not* here and is a good
+#: illustration of the line: `HTTPS_PROXY` routes every brain, every adapter, `git` and
+#: `npm` through an address somebody chose — measured, `git ls-remote` under a rogue one
+#: connected to it rather than to GitHub — but an owner behind a corporate proxy has a real
+#: reason to set it. It is not a credential's shape, so `CREDENTIAL_ENDS` keeps it out of a
+#: turn's reach, which is where the danger actually was.
 NEVER = frozenset({
     # **`ZDOTDIR` is the one this list was nearly shipped without.** zsh sources
     # `$ZDOTDIR/.zshenv` on *every* invocation — non-interactive and non-login included,
@@ -139,6 +147,34 @@ NEVER = frozenset({
     "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_PAGER",
     "PAGER", "EDITOR", "VISUAL", "BROWSER",
 })
+
+
+#: What a name has to look like for anything but a person at a terminal to place it.
+#:
+#: **The refusals below are a denylist, and a denylist cannot converge.** Three adversarial
+#: passes over this list each found a live way through — a shell's startup file, one package
+#: manager's whole configuration namespace, and every HTTP client's proxy — and each time the
+#: fix was to add what had just been demonstrated. The set of programs this install runs grows
+#: with every provider and every integration, each bringing its own runtime's environment
+#: surface, so the next gap is a question of when rather than whether.
+#:
+#: So the *agent's* half is an allowlist instead, and it is keyed on what a credential actually
+#: looks like. An owner at a terminal keeps every capability they have — a proxy, a redirect,
+#: anything they can name a reason for — because a person placing a value has already decided.
+#: A turn may place only something plainly shaped like a credential, which is the whole of what
+#: an agent legitimately needs and none of what the three gaps were.
+CREDENTIAL_ENDS = ("_TOKEN", "_API_KEY", "_KEY", "_SECRET", "_PASSWORD", "_PASSPHRASE",
+                   "_CREDENTIAL", "_CREDENTIALS", "_AUTH")
+
+
+def a_credential(name: str) -> bool:
+    """Whether that name is plainly one a credential goes under.
+
+    Read off the end of the name and nothing else. Deliberately not clever: a rule anybody
+    can predict from the name they are about to type is one they can work with, and one that
+    guessed from a value would be reading the thing this module exists never to read.
+    """
+    return any(name.endswith(one) for one in CREDENTIAL_ENDS)
 
 
 class NotAName(Exception):
@@ -296,8 +332,14 @@ def placed() -> frozenset:
     return frozenset(process.environment(nowhere, path="", agents=nowhere))
 
 
-def refused(name: str) -> str:
+def refused(name: str, in_a_turn: bool = False) -> str:
     """Why a value may never be kept under that name, or an empty string.
+
+    `in_a_turn` says an agent is placing this rather than a person at a terminal, and it
+    narrows what may be placed to names plainly shaped like a credential — see
+    `CREDENTIAL_ENDS` for why the two halves have different shapes. Passed in rather than
+    read from the environment here, so the decision is the caller's to make and this
+    module stays exercised without one.
 
     Asked at three moments, each for its own reason: when a value is placed, so the person
     standing there is told why; when one is resolved, because what is kept is a file
@@ -315,15 +357,18 @@ def refused(name: str) -> str:
             return why
     if name in NEVER:
         return f"{name} decides what a program runs or who it trusts, rather than what it is told"
+    if in_a_turn and not a_credential(name):
+        return ("a name that is not plainly a credential is placed by its owner at a "
+                "terminal, and never from a turn")
     return ""
 
 
-def checked(name: str) -> str:
+def checked(name: str, in_a_turn: bool = False) -> str:
     """That name, or a refusal in our own words."""
     if not name or not NAME_IS.fullmatch(name):
         raise NotAName("a name begins with a capital letter, and the rest is capital "
                        "letters, digits and underscores")
-    why = refused(name)
+    why = refused(name, in_a_turn)
     if why:
         raise Refused(why)
     return name
@@ -539,7 +584,8 @@ def _row(kept: Kept) -> dict:
 
 
 def remember(name: str, value: str, *, now: str, kept_from: str,
-             where: Path | None = None, replace: bool = False) -> Change:
+             where: Path | None = None, replace: bool = False,
+             in_a_turn: bool = False) -> Change:
     """Hold this value under that name, and say what that did to what stood there.
 
     The value is written before the record of it. A machine that dies between the two
@@ -547,7 +593,7 @@ def remember(name: str, value: str, *, now: str, kept_from: str,
     nothing ever reads; the other order leaves a name whose value does not exist, which
     every program then reports as missing.
     """
-    checked(name)
+    checked(name, in_a_turn)
     value = carried(name, value)
     standing = _standing(name, where)
     with _changing(where) as keeping:
@@ -576,7 +622,8 @@ def remember(name: str, value: str, *, now: str, kept_from: str,
 
 def remember_command(name: str, command, *, now: str, kept_from: str, run=None,
                      where: Path | None = None, replace: bool = False,
-                     timeout_seconds: float = COMMAND_SECONDS) -> Change:
+                     timeout_seconds: float = COMMAND_SECONDS,
+                     in_a_turn: bool = False) -> Change:
     """Keep the words of a command that prints this value, and never what it printed.
 
     **Run once here, before anything is written.** That is what earns the hint and the
@@ -584,7 +631,7 @@ def remember_command(name: str, command, *, now: str, kept_from: str, run=None,
     produce a value now is one every program would be told nothing by, quietly, for as long
     as nobody looked.
     """
-    checked(name)
+    checked(name, in_a_turn)
     command = tuple(str(one) for one in command)
     if not command:
         raise NotKept("no command was given to fetch it with")

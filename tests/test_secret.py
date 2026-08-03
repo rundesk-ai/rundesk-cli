@@ -135,6 +135,67 @@ class WhatANameMayBe(WithSomewhereToKeepThings):
                 self.assertTrue(why)
                 self.assertIn("begins with a capital letter", why)
 
+    def test_taking_a_value_away_cannot_be_made_to_unlink_anything_else(self):
+        """R-SEC-13 — **the one path where that guard is the only protection.**
+
+        `forget` deliberately does not call `checked`: a name kept before a later release
+        started refusing it must still be removable, or an owner is stuck with a value they
+        cannot take away. So what stands between a name and any file on the machine is
+        `_standing`'s own check, and it is reachable with a hand-edited registry — which is
+        the same thing the refusal filter in `resolve` exists for.
+
+        The case above never reaches it: every name in it fails the shape rule first, so
+        deleting this guard outright leaves the whole suite green.
+        """
+        canary = self.where / "outside-canary"
+        canary.write_text("not rundesk's to delete\n")
+        secret.values_home(self.where).mkdir(parents=True, exist_ok=True)
+        smuggled = {"version": secret.VERSION, "secrets": {
+            f"..{os.sep}outside-canary": {"kept_as": secret.HELD, "hint": secret.HINT_MASK,
+                                          "mark": "aaaaaaaa", "kept_at": NOW,
+                                          "kept_from": HERE}}}
+        secret.registry_path(self.where).write_text(json.dumps(smuggled))
+
+        with self.assertRaises(secret.NotAName):
+            secret.forget(f"..{os.sep}outside-canary", where=self.where)
+
+        self.assertTrue(canary.exists(),
+                        "taking a value away unlinked a file outside where values are kept")
+
+    def test_a_turn_keeps_only_what_is_plainly_a_credential(self):
+        """R-SEC-32 — the half of this that does not depend on knowing what to deny.
+
+        Three adversarial passes each found a live way through the refusal list, so what an
+        *agent* may place is an allowlist keyed on what a credential looks like, and the
+        owner's half stays a denylist because a person placing a value has already decided.
+        """
+        for named in ("GITHUB_TOKEN", "STRIPE_API_KEY", "OP_SECRET", "PG_PASSWORD"):
+            with self.subTest(name=named):
+                self.assertEqual("", secret.refused(named, in_a_turn=True))
+
+        # `HTTPS_PROXY` routes every brain, adapter, `git` and `npm` through an address
+        # somebody chose — and an owner behind a corporate proxy has a real reason to set
+        # it. It is not a credential's shape, so this is what keeps it out of a turn's
+        # reach without taking it away from the person whose machine it is.
+        for named in ("HTTPS_PROXY", "ALL_PROXY", "MY_SETTING", "CLAUDE_CONFIG_DIR",
+                      "GIT_CONFIG_GLOBAL"):
+            with self.subTest(name=named):
+                # A person at their own terminal may place any of these.
+                self.assertEqual("", secret.refused(named))
+                self.assertIn("terminal", secret.refused(named, in_a_turn=True))
+                with self.assertRaises(secret.Refused):
+                    self.hold(named, A_VALUE, in_a_turn=True)
+
+        self.assertEqual([], secret.listed(self.where))
+
+    def test_what_a_turn_may_never_place_is_refused_however_it_is_named(self):
+        """The allowlist narrows what a turn may place; it never widens it. A name shaped
+        like a credential that is also one of the refused ones is still refused."""
+        for named in ("NPM_CONFIG_KEY", "SSL_CERT_FILE", "DYLD_TOKEN"):
+            with self.subTest(name=named):
+                self.assertTrue(secret.refused(named), "an owner could place it either")
+                self.assertTrue(secret.refused(named, in_a_turn=True))
+
     def test_a_name_of_the_right_shape_is_kept(self):
         """The control: the rule refuses what it is for and nothing else."""
         for name in ("GITHUB_TOKEN", "A", "X9_Z"):

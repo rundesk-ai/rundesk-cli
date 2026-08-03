@@ -93,8 +93,18 @@ no flag that prints the rest.
 Some names are refused, and the refusal is the point rather than a formality: anything
 rundesk itself decides for a program (`PATH`, `HOME`, anything beginning `RUNDESK_`), and
 anything that would change what code a program loads or runs (`DYLD_*`, `LD_*`, `PYTHON*`,
-`NODE_OPTIONS`). A value under one of those names would run somebody's code inside every
-turn of every agent, for ever.
+`NPM_CONFIG_*`, `NODE_OPTIONS`, `ZDOTDIR`). A value under one of those names would run
+somebody's code inside every turn of every agent, for ever.
+
+**An agent may place less than you can, and the difference is deliberate.** From inside a
+turn only a name plainly shaped like a credential is kept — one ending `_TOKEN`, `_API_KEY`,
+`_KEY`, `_SECRET`, `_PASSWORD`, `_PASSPHRASE`, `_CREDENTIAL`, `_CREDENTIALS` or `_AUTH`.
+Anything else is yours to place at your own terminal. That is not a list of what is
+dangerous — it is the other way round: the list of what is dangerous can never be finished,
+because every new brain and every new integration brings its own runtime's variables, so
+what an agent may place is stated positively instead. `HTTPS_PROXY` is the example worth
+knowing: it routes every brain, adapter, `git` and `npm` through an address of its choosing,
+and you may well need it behind a corporate proxy — so you can set it and an agent cannot.
 
 A channel's own credential always wins over one kept here. Two agents may hold two
 different bots, so a value named for a channel's own variable is never given to that

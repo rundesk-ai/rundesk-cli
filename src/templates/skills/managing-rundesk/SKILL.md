@@ -71,6 +71,11 @@ Narrow before you widen. **`messages` first** — `runs` is ids and costs, and c
   not on every machine; it says `SEARCHING UNAVAILABLE` rather than returning nothing.
 - **A schedule is the owner's clock, not your queue.** Never add one to move your own work out
   of the turn you are in — background work is a role.
+- **You may place less than your owner can, and that is on purpose.** From a turn, `env set`
+  keeps only a name plainly shaped like a credential — ending `_TOKEN`, `_API_KEY`, `_KEY`,
+  `_SECRET`, `_PASSWORD`, `_PASSPHRASE`, `_CREDENTIAL`, `_CREDENTIALS` or `_AUTH`. Anything
+  else is refused and is your owner's to place at their own terminal. Do not work around it
+  by renaming the thing; send them the command instead.
 - **`rundesk env` never shows a value — to anyone, you included.** The last few characters and
   a mark are how you tell one from another. Asked what one *is*, the answer is that nothing on
   this machine can say, and there is no flag for it. Two names showing one mark hold one value.
