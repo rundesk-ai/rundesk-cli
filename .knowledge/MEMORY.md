@@ -705,6 +705,16 @@ re-checked since, so treat these as true-when-found rather than as current.*
   the subcommand choices: `rundesk agents ava` dies with `invalid choice: 'ava'`. That is why
   what an agent is told is written by `add --instructions` rather than by `agents ava
   instructions …`, and why any new per-agent action has to go somewhere else.
+- **`roles` is the one verb whose first word argparse never sees, so a test that calls
+  `cli.build_parser().parse_args(["roles", "ava", …])` no longer parses what a person
+  types.** Its actions are split — `add` and `edit` name nobody, the five about a run keep
+  their agent — which argparse cannot express (the trap above), so `cli._whose_role` takes
+  the agent out of the words in `main` before the parser is handed them. Two cases were
+  parsing directly and failed with `argument <action>: invalid choice: 'ava'`, which reads
+  exactly like the parser being wrong rather than like the test skipping a step. **Go
+  through the same door `main` does** — `_handed_on`, then `_whose_role`, then
+  `parse_args` — and pass a stand-in with `exists`, because the split asks whether an agent
+  answers to that name before reading it as an action.
 - **`store` runs with `PRAGMA foreign_keys=ON`, so a test writing a row that references another
   must write that one first.** A schedule with `channel="ops"` on an agent with no such channel
   is `sqlite3.IntegrityError: FOREIGN KEY constraint failed`, from the writer and not from

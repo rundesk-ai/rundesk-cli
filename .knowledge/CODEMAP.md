@@ -55,7 +55,10 @@ file with it.
   registered and not built, each with the actions under it; every one answers and exits `NOT_AVAILABLE`
   rather than reporting a success it did not earn, and rather than argparse's usage code, which would
   make a missing command indistinguishable from a typo. An entry graduates out of that table into a real
-  command as it lands.
+  command as it lands. Two things reach the words **before** argparse does, because argparse cannot do
+  either: `_handed_on` splits off a tail meant for something that is not rundesk, and `_whose_role` takes
+  the agent out of `roles <agent> <action>` — a verb with two subjects, the install's library and one
+  agent's runs, where a sub-parser would otherwise read an agent's name as an action nobody registered.
 - `src/rundesk/commands/` — **one command group per module, and the only layer that may know
   argparse.** A group takes a `Namespace` and hands back an exit code; what it acts on — the
   gateways, the machine, the agents, the skills — arrives as an argument from `cli.main`, so every
@@ -316,7 +319,7 @@ provider. One file per contract, named for it:
 |---|---|---|
 | `test_gateway.py` | 264 | `platform-gateway` — real processes, real signals, waits turned down |
 | `test_agent.py` | 142 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
-| `test_cli.py` | 335 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
+| `test_cli.py` | 342 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
 | `test_catalog.py` | 27 | `lifecycle-skill-catalog` — manifests, provenance, default seeding, inert integration packages, lifecycle refresh, ownership, atomic updates, drift replacement, removal, and unsafe archives, all offline |
 | `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 81 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
