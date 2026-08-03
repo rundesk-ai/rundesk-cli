@@ -42,6 +42,50 @@ rundesk usage [<name>]         what it has cost
 rundesk logs <name>            what a gateway has been saying, when something failed
 ```
 
+## The values every program here is given
+
+```sh
+rundesk env                    every value kept, and never one of them
+rundesk env show <NAME>        how one is kept, and what tells it apart
+rundesk env check [<NAME>]     whether each can still be produced
+rundesk env --where            the directory they are kept in
+```
+
+One set for the whole install. Every brain, every channel adapter, every schedule and every
+integration command is given all of it — which is why an integration command finds its
+credential without anybody exporting anything: the shell you run it in descends from a
+program rundesk started with these in its environment.
+
+A value is either **held** by this install or **fetched** by a command whose words are kept
+and run again each time a program starts. A listing never runs one, so it is free; `check`
+does, which is why it may take a moment — and `env set --from` runs one once, when it is
+placed, to prove it works before anything is written down. Nothing else does.
+
+**No form of this shows a value.** The last few characters and a mark are what you get, and
+the mark is taken with a key of this install's, so two names showing one mark hold one
+value and the same value on another machine marks differently. There is no flag for the
+rest — asked what a value is, say that nothing on this machine can answer that.
+
+`check` tells two failures apart and so must you. **`could not answer`** means the command
+timed out or would not start — that says nothing about whether the value is good, so never
+advise replacing a credential on it. Anything else it prints is the command's own words for
+why there is no value to give. Neither is the same as a name being *refused*, which is
+`env set` rejecting a name outright and is a different situation entirely.
+
+Placing one is the owner's at a terminal — `rundesk env set <NAME>`, typed with echo off.
+You may run it for a value **you** minted; never ask a person to send you one, because
+anything said to you is in the record and possibly in a chat room.
+
+**From a turn you may place only a name plainly shaped like a credential** — ending
+`_TOKEN`, `_API_KEY`, `_KEY`, `_SECRET`, `_PASSWORD`, `_PASSPHRASE`, `_CREDENTIAL`,
+`_CREDENTIALS` or `_AUTH`. Anything else is refused with a message saying so, and is your
+owner's to place at their own terminal. The reason is not that the other names are all
+dangerous: it is that the list of dangerous ones can never be complete, since every brain
+and every integration brings its own runtime's variables — so what you may place is stated
+positively instead. If an integration needs a value under some other name, say so and give
+your owner the command; renaming it to end in `_TOKEN` to get past this is defeating a
+guard, not solving a problem.
+
 ## When something is not there
 
 A command that does not exist means an older rundesk than this file describes — check

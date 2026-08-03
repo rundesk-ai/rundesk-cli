@@ -41,6 +41,9 @@ from rundesk.commands.status import (  # noqa: E402
 from rundesk.commands.config import (  # noqa: E402
     cmd_config,
 )
+from rundesk.commands.env import (  # noqa: E402
+    cmd_env,
+)
 from rundesk.commands.lifecycle import (  # noqa: E402
     cmd_remove, cmd_restart, cmd_serve, cmd_start, cmd_stop,
 )
@@ -148,6 +151,17 @@ EXAMPLES: list[tuple[str, list[tuple[str, str]]]] = [
         ("rundesk channels ava",
          "what it is reachable on, and whether it is reachable at all"),
     ]),
+    ("a value every program is given", [
+        ("rundesk env set GITHUB_TOKEN",
+         "typed here, not echoed, and never shown in full again by anything"),
+        ("rundesk env set OP_GITHUB --from 'op read op://work/github/token'",
+         "the words of the command are kept, and run again each time a program starts"),
+        ("", "the value is never an argument — from a script, pipe it in instead"),
+        ("rundesk env",
+         "what every program rundesk starts is given: a hint and a mark, never a value"),
+        ("rundesk env check",
+         "whether each can still be produced, without producing one for you to read"),
+    ]),
     ("a schedule", [
         ('rundesk schedules ava add nightly --when "0 3 * * *" --ask "summarise what changed today"',
          "at three every morning, one turn, in a conversation of its own"),
@@ -201,6 +215,7 @@ FORMS: dict[str, list[tuple[str, str]]] = {
              "with standing instructions, told apart from the prompt")],
     "usage": [("", "what every agent has cost"),
               ("<agent>", "what one agent has cost")],
+    "env": [("", "every value kept, told apart by a hint and a mark rather than shown")],
 }
 
 
@@ -633,6 +648,48 @@ def build_parser() -> argparse.ArgumentParser:
     keeping.add_parser("on", help="have the machine take one every day")
     keeping.add_parser("off", help="stop the machine taking one every day")
 
+    # The values every program rundesk starts is given. Shaped like `backups` and `skills`,
+    # with the same absence of a word for *whose*: there is one set for the install, and a
+    # value an agent could not see would be a credential an owner placed and a brain then
+    # failed on, with nothing saying why (R-SEC-2). The comment above `skills` is why there
+    # is no optional positional in front of the actions here either.
+    #
+    # **The name of a value is never `name`.** `main` runs any `name` attribute through
+    # agent resolution, so `rundesk env set GITHUB_TOKEN` would answer INVALID NAME about
+    # an agent nobody asked after.
+    given = sub.add_parser(
+        "env", help="the values every program rundesk starts is given")
+    given.add_argument("--where", action="store_true",
+                       help="print the directory they are kept in, and nothing else")
+    holding = given.add_subparsers(dest="act", metavar="<action>")
+    put = holding.add_parser(
+        "set", help="keep a value under a name, or replace the one already there")
+    put.add_argument("value_name", metavar="<name>",
+                     help="what programs read it as — begins with a capital letter, and "
+                          "the rest is capital letters, digits and underscores")
+    # **No option takes the value and no positional holds one** (R-SEC-8). The moment one
+    # does it is in `ps` for every user on the machine and in a shell history for ever, and
+    # that is the whole reason `--token-stdin` exists one verb over.
+    put.add_argument("--stdin", action="store_true",
+                     help="read the value from what is piped in rather than asking for it")
+    # `dest` is spelled out because `from` is a keyword and `args.from` will not compile.
+    put.add_argument("--from", dest="fetched_by", metavar="<command>",
+                     help="instead of keeping a value: the command that prints it, run "
+                          "again each time a program starts — the words of the command "
+                          "are kept, and what it printed never is")
+    seen = holding.add_parser(
+        "show", help="one value: how it is kept, and what tells it apart")
+    seen.add_argument("value_name", metavar="<name>",
+                      help="which value, by the name programs read it as")
+    dropped_value = holding.add_parser(
+        "unset", help="take one value away, and only that one")
+    dropped_value.add_argument("value_name", metavar="<name>",
+                               help="which value, by the name programs read it as")
+    proved = holding.add_parser(
+        "check", help="prove each can still be produced, without showing one")
+    proved.add_argument("value_name", nargs="?", metavar="<name>",
+                        help="one value — every one of them when left out")
+
     # **Two shapes under one verb, because there are two subjects.** A role is the
     # install's — written once, and every named agent on it may put one on — so writing or
     # changing one names nobody, exactly as `skills` names nobody. A *run* belongs to the
@@ -1016,6 +1073,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         return cmd_status(args, gateways, machine, agents)
     if args.command == "config":
         return cmd_config(args)
+    if args.command == "env":
+        return cmd_env(args)
     if args.command == "backups":
         return cmd_backups(args, gateways, machine, agents)
     if args.command == "skills":

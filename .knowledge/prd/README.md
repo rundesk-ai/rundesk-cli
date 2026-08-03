@@ -41,6 +41,7 @@ high-level map.
 - **Platform**
   - [platform-process](./platform-process.md) — a program rundesk runs, and how it keeps hold of it while it does.
   - [platform-gateway](./platform-gateway.md) — the part that stays running, one of each name, and what it takes with it.
+  - [platform-secrets](./platform-secrets.md) — the named values this install keeps for every program it starts, and how one is told apart without ever being shown.
   - [platform-schedule](./platform-schedule.md) — work rundesk begins because the time came, belonging to one gateway each.
 - **Provider**
   - [provider-adapter](./provider-adapter.md) — the seam a brain is reached through: a program rundesk runs rather than code it loads, and what any adapter must do.

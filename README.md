@@ -280,6 +280,9 @@ dotenv option.
 
 - Install, automatic daily updates, version checks, status, and doctor commands
 - Manual and automatic daily backups, restore, and configurable backup location
+- One set of environment values every program rundesk starts is given, so integration
+  commands find their credentials without anything being exported — held here or fetched
+  by a command you name, never shown in full, and kept where no backup can carry them
 - Program files under `~/.rundesk/app`; agent data and configuration under
   `~/.rundesk/data`
 - Agent removal that preserves its home unless purge is explicitly requested
@@ -341,7 +344,7 @@ others from being checked or rolling back an otherwise healthy CLI update.
 
 - **[CLI reference](CLI.md)** — every command and argument, generated from the parser
 - **[Discord setup](docs/discord.md)** — create, authorize, connect, and test an agent's bot
-- **[Install-wide configuration](docs/configuration.md)** — update time, backups, and required skills
+- **[Install-wide configuration](docs/configuration.md)** — update time, backups, required skills, and the values every program is given
 - **[Provider adapter contract](docs/extending/provider-adapters/references/the-contract.md)** — put another coding CLI behind an agent
 - **[Channel adapter contract](docs/extending/channel-adapters/references/the-contract.md)** — reach an agent from another platform
 - **[Integration CLI guide](docs/extending/integration-clis/README.md)** — give every agent a custom command

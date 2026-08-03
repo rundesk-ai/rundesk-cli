@@ -50,17 +50,37 @@ there; never install into the machine's Python.
 Rundesk deliberately gives programs a small environment, so an integration must not rely
 on variables exported in the owner's interactive shell reaching an agent.
 
+**`rundesk env` is the answer to that, and it needs nothing of you.** An owner places a
+value once and rundesk puts it in the environment of every program it starts; your command
+runs in a shell descended from one of those, so it arrives as an ordinary variable. Reading
+the process environment first is all an integration has to do:
+
+```sh
+rundesk env set CLOUDFLARE_API_TOKEN
+rundesk env set CLOUDFLARE_API_TOKEN --from 'op read op://work/cloudflare/token'
+```
+
 Use this order:
 
-1. Explicit process environment, when present.
+1. Explicit process environment, when present — **this is where rundesk puts what an owner
+   placed with `rundesk env set`, and it is the ordinary case now.**
 2. A command-specific credential file under
-   `${XDG_CONFIG_HOME:-$HOME/.config}/<command>/env`.
+   `${XDG_CONFIG_HOME:-$HOME/.config}/<command>/env`, for an owner who keeps one by hand.
 3. The macOS Keychain when the service or organization already uses it.
 
 Keep credential values outside the script library and skills library because Rundesk
 backs up everything under its data directory. Accept a named environment-file override
 such as `<COMMAND>_ENV_FILE` when development or an existing workspace keeps credentials
 elsewhere.
+
+What rundesk keeps stands outside that data directory for the same reason, so a backup
+never carries one — which also means a restore onto a new machine brings the integration
+back with no credential, and `rundesk env check` is what says so.
+
+Do not print a value, and do not offer a flag that takes one: rundesk refuses to keep a
+value given as an argument because an argument is in the process table for every user on
+the machine and in a shell history for ever, and an integration that accepts one undoes
+that a level down.
 
 Require the credential file to be owner-readable only and warn when group or other
 permission bits are present. Commit only variable names and synthetic examples. Never

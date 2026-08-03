@@ -19,6 +19,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 #: Everything here works on a **copy** of the checkout, made once for the whole file.
 #:
@@ -55,9 +56,16 @@ def installer(*args: str, home: Path, bindir: Path, cwd: Path | None = None,
     # built-in skills back out of their library. Begin with none of Rundesk's locations;
     # the scratch HOME and install below then derive every default downwards, while a case
     # may still opt into one explicit location through extra_env.
+    # `XDG_CONFIG_HOME` goes with them, and for a sharper reason than the rest. It is not
+    # rundesk's variable — any shell may carry one, and an agent's does — and the installer
+    # derives `$CONFIG_DIR` and `$SECRETS_DIR` from it, both of which `--purge` deletes
+    # outright. Left through, a suite run on such a machine takes the owner's own settings
+    # and the credentials R-SEC-26 guarantees no backup holds, from a run that redirected
+    # everything it knew to redirect. The scratch HOME below then derives it downwards; a
+    # case that wants an explicit one still passes it through extra_env.
     isolated = {
         key: value for key, value in os.environ.items()
-        if not key.startswith("RUNDESK_")
+        if not key.startswith("RUNDESK_") and key != "XDG_CONFIG_HOME"
     }
     requested = dict(extra_env or {})
     inherited_path = requested.pop("PATH", isolated.get("PATH", ""))
@@ -545,17 +553,113 @@ class RemovalTests(Sandbox):
 
     def test_removing_rundesk_keeps_settings_unless_asked_to_take_them(self):
         settings = self.home / ".config" / "rundesk"
-        settings.mkdir(parents=True)
-        (settings / "kept.txt").write_text("mine\n")
+        # What an integration skill keeps its own environment in, which is what makes this
+        # directory rundesk's rather than somebody's whose name happens to match — see
+        # `test_a_purge_leaves_a_configuration_directory_holding_nothing_rundesk_wrote`.
+        (settings / "integrations" / "github").mkdir(parents=True)
+        (settings / "integrations" / "github" / "env").write_text("mine\n")
 
         self.install()
         self.uninstall()
-        self.assertTrue((settings / "kept.txt").exists(), "an ordinary uninstall took the owner's settings")
+        self.assertTrue((settings / "integrations" / "github" / "env").exists(),
+                        "an ordinary uninstall took the owner's settings")
 
         self.install()
         purged = self.uninstall("--purge")
         self.assertEqual(purged.returncode, 0, purged.stderr)
         self.assertFalse(settings.exists(), "--purge left the settings behind")
+
+    def test_removing_rundesk_keeps_the_values_every_program_was_given_unless_asked(self):
+        """R-RM-16, R-SEC-26 — no backup holds these, so a purge that took them without
+        saying so would be the one deletion an owner has no copy of anywhere. And an
+        uninstall that left them while reporting everything gone would leave credentials
+        on a machine somebody believes rundesk is off."""
+        kept_at = self.home / ".config" / "rundesk" / "secrets"
+        (kept_at / "values").mkdir(parents=True)
+        (kept_at / "registry.json").write_text('{"version": 1, "secrets": {}}\n')
+        (kept_at / "values" / "GITHUB_TOKEN").write_text("gh-secret\n")
+
+        self.install()
+        kept = self.uninstall()
+
+        self.assertEqual(kept.returncode, 0, kept.stderr)
+        self.assertTrue((kept_at / "values" / "GITHUB_TOKEN").exists(),
+                        "an ordinary uninstall took the owner's credentials")
+        self.assertIn("--purge", kept.stdout, "it never said how to take them")
+
+        self.install()
+        purged = self.uninstall("--purge")
+
+        self.assertEqual(purged.returncode, 0, purged.stderr)
+        self.assertFalse(kept_at.exists(), "--purge left the credentials behind")
+
+    def test_a_purge_refuses_a_secrets_directory_it_did_not_write(self):
+        """R-RM-16 — a purge deletes what it is pointed at outright, so a variable left at
+        a home directory or a typo is somebody's whole tree. Recognised by what rundesk
+        puts there rather than by the name, which anybody may choose."""
+        somewhere = self.home / "not-rundesks"
+        somewhere.mkdir(parents=True)
+        (somewhere / "important.txt").write_text("mine\n")
+
+        self.install()
+        said = self.uninstall("--purge",
+                              extra_env={"RUNDESK_SECRETS_DIR": str(somewhere)})
+
+        self.assertNotEqual(0, said.returncode, "it purged a directory it never wrote")
+        self.assertTrue((somewhere / "important.txt").exists())
+        self.assertIn("Nothing has been removed", said.stdout + said.stderr)
+
+    def test_a_purge_leaves_a_configuration_home_the_installer_was_not_given(self):
+        """R-RM-16, R-SEC-26 — `XDG_CONFIG_HOME` is nobody's variable in particular, so a
+        purge deriving what it deletes from an ambient one deletes a directory it was never
+        pointed at. Every location this suite knows about was redirected here and the
+        installer still reached the owner's own settings and their credentials, which is
+        the one deletion no backup can undo."""
+        elsewhere = self.root / "someone-elses-config"
+        planted = elsewhere / "rundesk" / "secrets" / "values" / "GITHUB_TOKEN"
+        planted.parent.mkdir(parents=True)
+        planted.write_text("gh-secret\n")
+        (elsewhere / "rundesk" / "secrets" / "registry.json").write_text(
+            '{"version": 1, "secrets": {}}\n')
+
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(elsewhere)}):
+            self.install()
+            purged = self.uninstall("--purge")
+
+        self.assertEqual(purged.returncode, 0, purged.stderr)
+        self.assertTrue(planted.exists(),
+                        "a purge took a credential from a configuration home nobody gave it")
+        self.assertNotIn(str(elsewhere), purged.stdout + purged.stderr,
+                         "it named a directory it was never pointed at")
+
+    def test_a_purge_leaves_a_configuration_directory_holding_nothing_rundesk_wrote(self):
+        """R-RM-16 — the same recognition as the secrets directory case above, and
+        deliberately not the same refusal. `$CONFIG_DIR` is derived rather than chosen, a
+        purge deletes it whole, and a directory called rundesk under somebody's
+        configuration home may still be none of rundesk's.
+
+        **Skipped and said, never a refusal of the whole command.** `RUNDESK_SECRETS_DIR` is
+        set by somebody who meant that directory, so a mismatch there is worth stopping the
+        command for. This one is derived from `XDG_CONFIG_HOME`, and refusing on it would
+        let a `.DS_Store` that Finder left in `~/.config/rundesk` stop an owner taking
+        rundesk off their machine — the worse of the two answers. The removal goes ahead and
+        says what it left standing."""
+        settings = self.home / ".config" / "rundesk"
+        settings.mkdir(parents=True)
+        (settings / ".DS_Store").write_bytes(b"\x00\x01")
+        (settings / "important.txt").write_text("mine\n")
+
+        self.install()
+        said = self.uninstall("--purge")
+
+        self.assertEqual(0, said.returncode,
+                         "a directory it never wrote refused the whole uninstall")
+        self.assertTrue((settings / "important.txt").exists(),
+                        "it purged a directory it never wrote")
+        self.assertIn("holds nothing rundesk wrote", said.stdout,
+                      "it left the directory standing without saying so")
+        self.assertNotIn(f"removed {settings}", said.stdout,
+                         "it said it removed what it left")
 
     def test_removing_rundesk_keeps_what_the_gateways_wrote_unless_asked_to_take_it(self):
         """R-RM-10 — `rm -rf` on the install directory took the whole audit trail with the
