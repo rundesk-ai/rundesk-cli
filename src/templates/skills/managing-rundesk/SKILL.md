@@ -75,11 +75,10 @@ Narrow before you widen. **`messages` first** — `runs` is ids and costs, and c
   keeps only a name plainly shaped like a credential — ending `_TOKEN`, `_API_KEY`, `_KEY`,
   `_SECRET`, `_PASSWORD`, `_PASSPHRASE`, `_CREDENTIAL`, `_CREDENTIALS` or `_AUTH`. Anything
   else is refused and is your owner's to place at their own terminal. **It is a guard on the
-  ordinary path and not a boundary** — it reads `RUNDESK_RUN` out of your own environment, so
-  a shell that clears that variable places anything, and `env show` then records the change
-  as having been made at your owner's own terminal, which falsifies the one account there is
-  of who made it. Do not work around it that way or by renaming the thing; send them the
-  command instead.
+  ordinary path and not a boundary**, and the difference is yours to hold rather than to
+  test: what stops you is a reading of your own environment, and the account of who placed a
+  value is only as true as your not going round it. Do not go round it, and do not rename the
+  thing; send them the command instead.
 - **`rundesk env` never shows a value — to anyone, you included.** The last few characters and
   a mark are how you tell one from another. Asked what one *is*, the answer is that nothing on
   this machine can say, and there is no flag for it. Two names showing one mark hold one value.

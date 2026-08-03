@@ -37,13 +37,22 @@ NOT_PRODUCED = "—"
 
 def cmd_env(args: argparse.Namespace) -> int:
     """The values this install keeps, and what may be done to one."""
+    act = getattr(args, "act", None)
     if getattr(args, "where", False):
-        # One line and nothing else: `install.sh` asks this rather than resolving the
-        # directory a second time in shell, where the fallback would be a second copy of a
-        # rule that already has one home (R-SEC-31).
+        # **Refused with an action rather than quietly winning over one.** This printed the
+        # directory and returned before `act` was read at all, so `rundesk env --where check`
+        # exited 0 having checked nothing — which a script reads as every value being
+        # reachable. One line and nothing else is the whole of what this flag is for, and a
+        # verb asked to do two things answers neither well (R-SEC-31).
+        if act:
+            print(f"env: NOT DONE — --where prints where values are kept and does nothing "
+                  f"else, so it cannot be asked for `{act}` in the same breath",
+                  file=sys.stderr)
+            print(f"        one at a time:  rundesk env --where  then  rundesk env {act}",
+                  file=sys.stderr)
+            return 1
         print(secret.home())
         return 0
-    act = getattr(args, "act", None)
     try:
         if act == "set":
             return _set(args)
@@ -170,6 +179,16 @@ def _set(args: argparse.Namespace) -> int:
     name = args.value_name
     fetched_by = getattr(args, "fetched_by", None)
     turn = in_a_turn()
+    # **Two ways of giving one value is a question, never a precedence.** `--from` was tested
+    # first and simply won, so a script piping a credential in *and* naming a command kept
+    # the command, never read the pipe, and said `KEPT` — with the value the author meant
+    # nowhere and nothing saying which of the two had been believed.
+    if fetched_by and getattr(args, "stdin", False):
+        return _not_kept(
+            name, "--stdin and --from each say where the value comes from, and they "
+                  "disagree",
+            f"keep what is piped in:  … | rundesk env set {name} --stdin\n"
+            f"        keep the command instead:  rundesk env set {name} --from '<command>'")
     try:
         secret.checked(name, turn)
     except (secret.NotAName, secret.Refused) as why:

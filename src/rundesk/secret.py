@@ -460,28 +460,15 @@ def _made(where: Path | None = None) -> Path:
 def write_private(at: Path, text: str) -> None:
     """Put a value where only its owner can read it, from the moment it exists.
 
-    **Created with the mode, never narrowed to it afterwards.** `Path.write_text` creates at
-    `0666 & ~umask` and a `chmod` after it leaves a window in which anybody on the machine
-    can read the file. Every other durable write in this tree already opens with the mode;
-    this is the shared form of it, and `commands/channels.py` uses it too.
+    Created with the mode and never narrowed to it afterwards; the whole of that argument,
+    and the write itself, is `durable.write_private`, which is also what `write_whole`
+    reaches for when it is asked for a private file. Kept as a name here because this is
+    where a credential is written from, and `commands/channels.py` reads it as that.
 
-    `O_NOFOLLOW` for the same reason `agent._write_pending` uses it: a link planted at this
-    path would otherwise make rundesk write a credential wherever it points. Written beside
-    and renamed into place, so a reader never sees half a value.
+    Written beside and renamed into place, so a reader never sees half a value.
     """
-    at.parent.mkdir(parents=True, exist_ok=True)
     beside = at.with_name(f".{at.name}.{os.getpid()}.writing")
-    with contextlib.suppress(OSError):
-        beside.unlink()
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    opened = os.open(beside, flags, 0o600)
-    try:
-        with os.fdopen(opened, "w", encoding="utf-8") as handle:
-            handle.write(text)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            beside.unlink()
-        raise
+    durable.write_private(beside, text)
     os.replace(beside, at)
 
 
@@ -577,10 +564,18 @@ def _key(where: Path | None = None) -> bytes:
 
 
 def _changing(where: Path | None = None):
-    """The read, the decision and the write, under one hold nobody else has."""
+    """The read, the decision and the write, under one hold nobody else has.
+
+    **Written readable by nobody else, like everything else in this directory.** This holds
+    no value, and it holds every name, every hint, every mark and the words of every
+    fetching command — an inventory of what an owner keeps and where they keep it. It stood
+    at the umask, protected only by the directory's `0o700`, whose own `chmod` is allowed to
+    fail (`_made`). Two guards where one may not hold is the shape the rest of this module
+    already has.
+    """
     _made(where)
     return durable.changing(registry_path(where), {"version": VERSION, "secrets": {}},
-                            "what this install keeps")
+                            "what this install keeps", private=True)
 
 
 def _row(kept: Kept) -> dict:

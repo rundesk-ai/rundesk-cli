@@ -80,7 +80,9 @@ a PEM — arrives entire; one trailing newline is dropped, because every keeper 
 you give it are run directly, so a pipe, a redirect or a `$(…)` inside that string is kept as
 literal words and the value comes out wrong rather than refused. And it is given **ten seconds
 to answer**, which `op read` can exceed the first time it raises a Touch ID prompt — run it
-once by hand so the vault is already unlocked, and use `rundesk env check` afterwards.
+once by hand so the vault is already unlocked, and use `rundesk env check` afterwards. Name
+one of the two and never both: they each say where the value comes from, so asking for both
+is refused rather than one of them quietly winning.
 
 There is one set for the whole install. Every brain, every channel adapter, every schedule
 and every integration command is given all of it, which is why an integration finds its

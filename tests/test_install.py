@@ -633,20 +633,33 @@ class RemovalTests(Sandbox):
                          "it named a directory it was never pointed at")
 
     def test_a_purge_leaves_a_configuration_directory_holding_nothing_rundesk_wrote(self):
-        """R-RM-16 — the same argument as the secrets directory case above. `$CONFIG_DIR`
-        is derived rather than chosen, a purge deletes it whole, and a directory called
-        rundesk under somebody's configuration home may still be none of rundesk's.
-        Recognised by what stands in it, and an empty one has nothing to lose."""
+        """R-RM-16 — the same recognition as the secrets directory case above, and
+        deliberately not the same refusal. `$CONFIG_DIR` is derived rather than chosen, a
+        purge deletes it whole, and a directory called rundesk under somebody's
+        configuration home may still be none of rundesk's.
+
+        **Skipped and said, never a refusal of the whole command.** `RUNDESK_SECRETS_DIR` is
+        set by somebody who meant that directory, so a mismatch there is worth stopping the
+        command for. This one is derived from `XDG_CONFIG_HOME`, and refusing on it would
+        let a `.DS_Store` that Finder left in `~/.config/rundesk` stop an owner taking
+        rundesk off their machine — the worse of the two answers. The removal goes ahead and
+        says what it left standing."""
         settings = self.home / ".config" / "rundesk"
         settings.mkdir(parents=True)
+        (settings / ".DS_Store").write_bytes(b"\x00\x01")
         (settings / "important.txt").write_text("mine\n")
 
         self.install()
         said = self.uninstall("--purge")
 
-        self.assertNotEqual(0, said.returncode, "it purged a directory it never wrote")
-        self.assertTrue((settings / "important.txt").exists())
-        self.assertIn("Nothing has been removed", said.stdout + said.stderr)
+        self.assertEqual(0, said.returncode,
+                         "a directory it never wrote refused the whole uninstall")
+        self.assertTrue((settings / "important.txt").exists(),
+                        "it purged a directory it never wrote")
+        self.assertIn("holds nothing rundesk wrote", said.stdout,
+                      "it left the directory standing without saying so")
+        self.assertNotIn(f"removed {settings}", said.stdout,
+                         "it said it removed what it left")
 
     def test_removing_rundesk_keeps_what_the_gateways_wrote_unless_asked_to_take_it(self):
         """R-RM-10 — `rm -rf` on the install directory took the whole audit trail with the

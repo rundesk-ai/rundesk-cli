@@ -938,6 +938,45 @@ class WhatTheCommandSays(unittest.TestCase):
                          secret.resolve(where=self.where).values["DEPLOY_KEY"],
                          "a program was given something other than what was piped in")
 
+    def test_two_ways_of_giving_one_value_is_asked_about_rather_than_ranked(self):
+        """R-SEC-9 — `--from` was tested first and simply won, so a script that piped a
+        credential in *and* named a command kept the command, never read the pipe, and said
+        KEPT. The value its author meant was then nowhere, and nothing said which of the two
+        had been believed."""
+        pipe = ATerminalThatIsNotThere(A_VALUE + "\n")
+
+        code, _out, err = self.typed(
+            ["env", "set", "GITHUB_TOKEN", "--stdin", "--from", "printf x"], stdin=pipe)
+
+        self.assertEqual(1, code)
+        self.assertIn("NOT KEPT", err)
+        self.assertEqual(0, pipe.asked, "it read the pipe it was refusing to believe")
+        self.assertEqual([], secret.listed(self.where), "it kept one of the two anyway")
+
+    def test_where_things_are_kept_is_printed_or_an_action_is_done_and_never_both(self):
+        """R-SEC-31 — `--where` printed the directory and returned before the action was
+        read at all, so `env --where check` exited 0 having checked nothing. A script reads
+        that as every value being reachable."""
+        self.keep("GITHUB_TOKEN", A_VALUE)
+
+        code, out, err = self.typed(["env", "--where", "check"])
+
+        self.assertEqual(1, code, "it answered 0 for a check it never ran")
+        self.assertIn("NOT DONE", err)
+        self.assertEqual("", out, "it printed the directory as though that were the answer")
+
+    def test_what_is_kept_is_recorded_where_nobody_else_can_read_it(self):
+        """R-SEC-4, R-SEC-12 — this holds no value and holds every name, hint, mark and
+        fetching command, which is an inventory of what an owner keeps. It stood at the
+        umask, guarded only by the directory's own mode, whose `chmod` is allowed to fail."""
+        self.keep("GITHUB_TOKEN", A_VALUE)
+
+        at = secret.registry_path(self.where)
+
+        self.assertTrue(at.is_file(), "nothing was recorded")
+        self.assertEqual(0o600, at.stat().st_mode & 0o777,
+                         "what is kept about every value is readable by somebody else")
+
     def test_a_value_is_typed_without_being_echoed(self):
         """R-SEC-9 — at a terminal it is asked for through the one call that turns echo
         off, so it is not left on the screen behind whoever typed it."""

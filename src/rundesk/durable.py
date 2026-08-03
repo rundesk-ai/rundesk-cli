@@ -34,8 +34,35 @@ class Unreadable(Exception):
     """A file that is there and could not be read or understood (R-SCH-17)."""
 
 
+def write_private(at: Path, text: str) -> None:
+    """Put a value where only its owner can read it, from the moment it exists.
+
+    **Created with the mode, never narrowed to it afterwards.** `Path.write_text` creates at
+    `0666 & ~umask` and a `chmod` after it leaves a window in which anybody on the machine
+    can read the file. Every other durable write in this tree already opens with the mode;
+    this is the shared form of it, which `secret.py` and `commands/channels.py` both reach
+    through and `write_whole(private=True)` uses for what it writes beside.
+
+    `O_NOFOLLOW` for the same reason `agent._write_pending` uses it: a link planted at this
+    path would otherwise make rundesk write a credential wherever it points.
+    """
+    at.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        at.unlink()
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    opened = os.open(at, flags, 0o600)
+    try:
+        with os.fdopen(opened, "w", encoding="utf-8") as handle:
+            handle.write(text)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            at.unlink()
+        raise
+
+
 @contextlib.contextmanager
-def changing(target: Path, empty, what: str, durable: bool = False):
+def changing(target: Path, empty, what: str, durable: bool = False,
+             private: bool = False):
     """Read this file, change it, and write it back — alone, and whole.
 
     The one place a file rundesk keeps is read, decided on and written under a single
@@ -50,6 +77,9 @@ def changing(target: Path, empty, what: str, durable: bool = False):
     already happened must not come back looking as though it never did (R-SCH-20). Not
     paid on what a gateway rewrites every few seconds — only on what records what has
     already happened.
+
+    `private` writes it readable by nobody else, created with the mode — asked for by what
+    records the values every program is given, which holds no value and every name.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     guard = os.open(target.with_suffix(".changing"), os.O_RDWR | os.O_CREAT, 0o600)
@@ -64,7 +94,7 @@ def changing(target: Path, empty, what: str, durable: bool = False):
         # A writer that decided to change nothing writes nothing (R-SCH-19). Rewriting an
         # unchanged file puts all of it at the mercy of a failure nobody asked to risk.
         if after != before:
-            write_whole(target, after + "\n", durable)
+            write_whole(target, after + "\n", durable, private)
     finally:
         fcntl.flock(guard, fcntl.LOCK_UN)
         os.close(guard)
@@ -86,7 +116,8 @@ def _understood(target: Path, empty, what: str):
     return said
 
 
-def write_whole(target: Path, text: str, durable: bool = False) -> None:
+def write_whole(target: Path, text: str, durable: bool = False,
+                private: bool = False) -> None:
     """Put this where it belongs, whole, in one move.
 
     Beside and then renamed: a reader arriving mid-write would otherwise find half a
@@ -98,9 +129,18 @@ def write_whole(target: Path, text: str, durable: bool = False) -> None:
     disk, and so does the directory entry naming them, or the rename is the thing that is
     lost. Not asked for on what is rewritten every few seconds — the cost is real, and a
     beat that is a moment out of date costs nothing.
+
+    `private` creates it readable by nobody else, **with the mode rather than narrowed to
+    it afterwards** — the same rule `secret.write_private` states, asked for here because
+    what records the values every program is given holds every name, hint, mark and fetching
+    command, and stood at the umask inside a directory whose own `chmod` may fail.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     beside = target.with_suffix(f".{os.getpid()}.writing")
+    if private:
+        write_private(beside, text)
+        os.replace(beside, target)
+        return
     if not durable:
         beside.write_text(text)
         os.replace(beside, target)
