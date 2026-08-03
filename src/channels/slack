@@ -267,6 +267,22 @@ FINISHED_HELPER = f"{DID['delegate']} subagent finished"
 ROLE_RECORD = "role"
 HANDED, WORKING, SETTLED = "handed", "working", "settled"
 
+#: The one settled ending that is a decision rather than a fault, and how a line names who
+#: made it. A run somebody deliberately ended used to render as the ⚠️ line for a run that
+#: did not finish, which reads as something having gone wrong with work that went exactly
+#: as somebody meant it to (R-ROL-43). An ending nobody wrote an asker down for — a run
+#: stopped by a release before there was anywhere to keep one — names nobody rather than
+#: picking the likelier of the two words.
+#:
+#: The glyph is written out here rather than taken from `MARKS`, which on this platform
+#: holds reaction *names*: `raised_hand` is what Slack is asked to put on a message and is
+#: not something to put in one, exactly as the ticks and warnings below are already spelled.
+ROLE_STOPPED = "stopped"
+STOPPED_MARK = "✋"
+STOPPED_BY = {"agent": "was stopped by the agent",
+              "terminal": "was stopped from a terminal"}
+STOPPED_BY_NOBODY_NAMED = "was stopped"
+
 #: What a failed tool says without relaying its arguments or result. Those remain in the
 #: run account; activity here is broad, because a command or path may be private
 #: (R-SLK-9, R-SLK-20).
@@ -1871,6 +1887,17 @@ def role_line(it: dict) -> str:
         # **What is true at this moment, and no more.** The record is sent the instant the
         # run settles, and the review may not start for many minutes. "Reviewing it" would
         # promise something that has not begun.
+        #
+        # **Three endings, and only one of them is a fault.** A stop is somebody's
+        # decision — the agent's, having taken the work over, or an owner's at a terminal
+        # — so it carries the stopped mark rather than the warning beside it, and says who
+        # decided where anybody wrote that down (R-ROL-43). Read off `became`, with `ok`
+        # left as the fall-through: a record from a rundesk that never sent one, and a run
+        # nothing has settled yet, both still render the two endings there have always been.
+        if it.get("became") == ROLE_STOPPED:
+            said = STOPPED_BY.get(it.get("stopped_by"), STOPPED_BY_NOBODY_NAMED)
+            return (f"{STOPPED_MARK} {mark} *{label}* {said} — what came back is "
+                    "not reviewed yet.")
         if it.get("ok") is True:
             return (f"✅ {mark} *{label}* is back from the _{named}_ role — not reviewed yet."
                     if named else

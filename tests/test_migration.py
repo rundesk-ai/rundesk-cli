@@ -1154,6 +1154,71 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
         self.assertEqual({"ava": MINE}, migration.carry_every(self.where, MINE, where=self.steps))
 
 
+class ARoleRunStoppedBeforeThereWasAnywhereToKeepWhoAsked(WithStepsOfThisCasesOwn):
+    """R-ROL-43 — a run stopped by the release before the column existed still reads.
+
+    The shipped step, against records really built by the release before it, which is the
+    one arrangement that can prove this: a run somebody stopped last week is still inside
+    its retention window when the step runs, and back-filling it with either of the two
+    words would be inventing a fact about somebody's work.
+    """
+
+    #: The shape an owner running the release before this step is on.
+    BEFORE = store.VERSION - 1
+
+    def stopped_at_the_shape_before(self) -> str:
+        """One role run, asked to stop, written exactly as that release wrote one."""
+        self.assertEqual(self.BEFORE, migration.carry(self.at, self.home,
+                                                      want=self.BEFORE))
+        kept = store.Store(self.at, version=self.BEFORE)
+        kept.made()
+        kept.remember_channel("ops", "discord", ["u1"], AT)
+        kept.opened("c1", "ops", "thread", "99123", AT)
+        parent = kept.began("channel", "codex", "work", AT, conversation_id="c1")
+        named = kept.admit_role("development", "abc123", ["writing-plans"], {},
+                                "applicant export", "work", parent, "c1", None, AT, LATER)
+        # The one thing that release could write and this one cannot ask for: the ask with
+        # nobody beside it. Written here rather than through `ask_role_stop`, which now
+        # names a column those records do not have.
+        conn = sqlite3.connect(str(self.at), isolation_level=None, timeout=5.0)
+        try:
+            conn.execute("UPDATE role_run SET stop_asked_at = ? WHERE id = ?", (LATER, named))
+        finally:
+            # Closed before anything migrates it: a connection left open holds the
+            # write-ahead log's read lock on newer Pythons and not on the floor version.
+            conn.close()
+        kept.finish_role(named, LATER, store.STOPPED, "this run was stopped", LATER)
+        return named
+
+    def test_a_run_stopped_before_the_column_existed_is_carried_forward_naming_nobody(self):
+        named = self.stopped_at_the_shape_before()
+
+        self.assertEqual(store.VERSION,
+                         migration.carry(self.at, self.home, want=store.VERSION))
+
+        self.assertIn("stop_asked_by", self.columns("role_run"),
+                      "the step never really ran")
+        kept = store.Store(self.at)
+        kept.made()
+        row = kept.role_run(named)
+        self.assertEqual(store.STOPPED, row["state"], "the ending it reached was lost")
+        self.assertEqual(LATER, row["stop_asked_at"], "the ask itself was lost")
+        self.assertIsNone(row["stop_asked_by"],
+                          "a word was invented for somebody who never wrote one")
+
+    def test_a_stop_recorded_once_the_column_exists_keeps_who_asked(self):
+        """The guard on the one above: leaving old rows alone must not leave the column
+        inert. What is written after the step has run is kept and read back."""
+        named = self.stopped_at_the_shape_before()
+        migration.carry(self.at, self.home, want=store.VERSION)
+        kept = store.Store(self.at)
+        kept.made()
+        kept.resume_role(named, LATER, LATER)
+
+        self.assertTrue(kept.ask_role_stop(named, LATER, store.ASKED_BY_AGENT))
+        self.assertEqual(store.ASKED_BY_AGENT, kept.role_run(named)["stop_asked_by"])
+
+
 class WhatAnUpdateMustNotCost(WithStepsOfThisCasesOwn):
     """R-MIG-17, R-MIG-18 — an update never costs an owner what their agents said, did or
     were told, and nothing moved forward is ever moved back."""

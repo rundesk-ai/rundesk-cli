@@ -634,16 +634,23 @@ def say(name: str, run_id: str, said: str, where: Path | None = None, now=None) 
     return "it is added to what this run is asked when it starts"
 
 
-def stop(name: str, run_id: str, where: Path | None = None, now=None) -> bool:
+def stop(name: str, run_id: str, where: Path | None = None, now=None,
+         asked_by: str = "") -> bool:
     """Ask this execution to end, and say whether there was one to end.
 
     The ask is durable and the acting is the gateway's: what has to be ended is a task it
     owns, and a person asking may not have reached the gateway carrying it.
+
+    **Who asked arrives rather than being read here** (R-ROL-43). Whether this is an agent
+    ending work it took over or a person ending it from a terminal is a fact about the
+    environment the ask was typed in, and this module never reads one — the surface that
+    was typed at knows, and hands it over. Given nothing, nobody is recorded, which is what
+    a run stopped before there was anywhere to write it down already looks like.
     """
     kept = agents.records(name, where)
     _held(kept, run_id)
     try:
-        return kept.ask_role_stop(run_id, store.stamped(now))
+        return kept.ask_role_stop(run_id, store.stamped(now), asked_by)
     except store.Refused as why:
         raise NotDelegable(str(why)) from None
 

@@ -611,6 +611,18 @@ class Answering:
     ROLE = "role"
     HANDED, WORKING, SETTLED = "handed", "working", "settled"
 
+    #: The three ways a settled run can have ended, as a surface is told them (R-ROL-43).
+    #: Spelled here rather than borrowed from `store`, exactly as the three states above
+    #: are: what an adapter nobody here wrote is promised is a vocabulary of this seam's,
+    #: and a schema free to change underneath it is not that promise.
+    SUCCEEDED, STOPPED, FAILED = "succeeded", "stopped", "failed"
+
+    #: Who asked for a stop, where anybody wrote it down. Only ever on a `stopped` record,
+    #: and absent rather than empty where nobody did — a surface that guessed between the
+    #: two would be naming somebody for a decision nothing recorded.
+    BY_AGENT, BY_TERMINAL = "agent", "terminal"
+    STOP_ASKERS = (BY_AGENT, BY_TERMINAL)
+
     def told_role_working(self, conversation: str, run: str, label: str,
                           role: str = "", elapsed: int = 0) -> None:
         """Say that work was handed to a role, where the person who asked can see it
@@ -642,16 +654,35 @@ class Answering:
                    state=self.WORKING, role=role, label=label, elapsed=int(elapsed))
 
     def told_role_settled(self, conversation: str, run: str, ok: bool,
-                          summary: str, role: str = "", elapsed: int = 0) -> None:
-        """Say how the work went, wherever it was handed over (R-ROL-27).
+                          summary: str, role: str = "", elapsed: int = 0,
+                          became: str = "", stopped_by: str = "") -> None:
+        """Say how the work went, wherever it was handed over (R-ROL-27, R-ROL-43).
 
         Complete in itself for the reason handing it over is: a surface that never saw
         the run start still shows what came back, rather than showing nothing because it
         has nothing to close.
+
+        **Three endings rather than two, and `ok` is kept.** A run somebody deliberately
+        ended is not a run that failed, and told apart by `ok` alone the two were one
+        ⚠️ line saying work did not finish — which reads as a fault about a decision. So
+        `became` says which of the three it was and `stopped_by` says who asked, while
+        `ok` goes on meaning exactly what it meant: an adapter written before any of this
+        renders the two endings it knows about and stays correct.
+
+        An ending nothing settled is no ending. A carry that threw and will be tried again
+        reaches this with `became` empty rather than with a word invented for it, and a
+        surface falls back to `ok` — which is the answer it has always shown there.
         """
-        self._tell(type=self.ROLE, conversation=conversation, role_run=run,
-                   state=self.SETTLED, role=role, label=summary, ok=bool(ok),
-                   elapsed=int(elapsed))
+        it = dict(type=self.ROLE, conversation=conversation, role_run=run,
+                  state=self.SETTLED, role=role, label=summary, ok=bool(ok),
+                  elapsed=int(elapsed))
+        if became in (self.SUCCEEDED, self.STOPPED, self.FAILED):
+            it["became"] = became
+        # Only ever beside a stop, and only where somebody wrote it down: on any other
+        # ending it would be the answer to a question nobody asked.
+        if it.get("became") == self.STOPPED and stopped_by in self.STOP_ASKERS:
+            it["stopped_by"] = stopped_by
+        self._tell(**it)
 
     async def told_restart_finished(self, conversation: str, text: str) -> None:
         """Deliver one queued restart outcome after reconnect (R-GW-43)."""

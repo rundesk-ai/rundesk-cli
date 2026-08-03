@@ -115,6 +115,17 @@ EXPIRED = "expired"
 UNFINISHED_ROLES = (ADMITTED, WORKING)
 FINISHED_ROLES = (SUCCEEDED, FAILED, STOPPED)
 
+#: Who asked a role run to end (R-ROL-43). Two words, because two is all this install can
+#: honestly tell apart: an ask made from inside a turn and an ask made by somebody typing.
+#: Nothing here names a person — `agent` is the named agent whose gateway carries the run,
+#: and `terminal` is whoever was at one, which is not a fact these records hold.
+#:
+#: A run stopped before there was anywhere to write this down has neither, and that is a
+#: third answer rather than a default: nobody wrote who asked, so nothing may say who did.
+ASKED_BY_AGENT = "agent"
+ASKED_BY_TERMINAL = "terminal"
+STOP_ASKERS = (ASKED_BY_AGENT, ASKED_BY_TERMINAL)
+
 
 class Unreadable(Exception):
     """There is something there and it could not be understood. Never treated as empty."""
@@ -1973,12 +1984,19 @@ class Store:
             ).fetchone()
         return int(row["waiting"] or 0)
 
-    def ask_role_stop(self, role_run_id: str, at: str) -> bool:
+    def ask_role_stop(self, role_run_id: str, at: str, by: str = "") -> bool:
         """Ask for this execution to end, and say whether there was one to ask about.
 
         Durable rather than sent to whatever is carrying it: the thing that must act is a
         task inside a gateway, which may not be the gateway the asking reached, and an ask
         that lived only in one process is one a restart loses.
+
+        **Who asked is written with the ask and never separately** (R-ROL-43). A stop is
+        the one ending here that is a decision rather than a fault, and the notice that
+        says so names who decided — so the two facts move together, and a second ask never
+        rewrites whose decision the first one was. A word this release does not know, and
+        no word at all, are both kept as nobody: what is shown then names nobody rather
+        than guessing.
         """
         with self._writing() as conn:
             row = conn.execute(
@@ -1989,8 +2007,9 @@ class Store:
             if row["state"] not in UNFINISHED_ROLES:
                 return False
             conn.execute(
-                "UPDATE role_run SET stop_asked_at = ? WHERE id = ? AND stop_asked_at IS NULL",
-                (at, role_run_id),
+                "UPDATE role_run SET stop_asked_at = ?, stop_asked_by = ?"
+                " WHERE id = ? AND stop_asked_at IS NULL",
+                (at, by if by in STOP_ASKERS else None, role_run_id),
             )
             return True
 
@@ -2016,7 +2035,8 @@ class Store:
             # is being asked to do something new, and starting it against a ceiling three
             # attempts of a fortnight ago reached would settle it on its first hiccup.
             conn.execute(
-                "UPDATE role_run SET state = ?, stop_asked_at = NULL, latest_at = ?,"
+                "UPDATE role_run SET state = ?, stop_asked_at = NULL,"
+                " stop_asked_by = NULL, latest_at = ?,"
                 " retained_until = ?, carry_attempts = 0, carry_failed_at = NULL"
                 " WHERE id = ?",
                 (ADMITTED, at, retained_until, role_run_id),

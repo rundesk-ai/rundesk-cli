@@ -1820,6 +1820,45 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
             line)
         self.assertNotIn("subagent", line)
 
+    def settled(self, **also) -> str:
+        return discord.role_line(
+            self.handed(state="settled", ok=False, elapsed=4000, **also))
+
+    def test_a_run_somebody_stopped_reads_as_a_decision_rather_than_a_fault(self):
+        """R-ROL-43 — the regression this exists for. A run the agent itself ended on
+        purpose after taking the work over was posted as ⚠️ work that did not finish."""
+        line = self.settled(became="stopped", stopped_by="agent")
+        self.assertEqual(
+            "✋ 🤖 **applicant-export** was stopped by the agent"
+            " — what came back is not reviewed yet.", line)
+        self.assertNotIn("⚠️", line)
+        self.assertNotIn("did not finish", line)
+
+    def test_a_stop_says_which_of_the_two_it_was(self):
+        self.assertEqual(
+            "✋ 🤖 **applicant-export** was stopped from a terminal"
+            " — what came back is not reviewed yet.",
+            self.settled(became="stopped", stopped_by="terminal"))
+
+    def test_a_stop_nobody_was_written_down_for_names_nobody(self):
+        """A run stopped by a release before there was anywhere to keep an asker. Neither
+        word may be guessed for it, and it is still a stop rather than a failure."""
+        for record in ({}, {"stopped_by": ""}, {"stopped_by": "the night shift"}):
+            with self.subTest(**record):
+                line = self.settled(became="stopped", **record)
+                self.assertEqual(
+                    "✋ 🤖 **applicant-export** was stopped"
+                    " — what came back is not reviewed yet.", line)
+
+    def test_a_settled_record_from_a_rundesk_that_names_no_ending_still_renders(self):
+        """`ok` is the fall-through and goes on meaning what it always meant, so a
+        record carrying no ending — an older rundesk's, or a run nothing has settled —
+        shows the two endings this surface has always shown."""
+        self.assertIn("is back from the *development* role",
+                      discord.role_line(self.handed(state="settled", ok=True)))
+        self.assertIn("did not finish", self.settled())
+        self.assertIn("did not finish", self.settled(became="wandering off"))
+
     def test_a_check_in_says_how_long_the_run_has_been_going(self):
         self.assertEqual(
             "-# 🤖 **applicant-export** — 40m, still working",
@@ -1851,8 +1890,11 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
     def test_a_role_is_not_called_a_subagent(self):
         """R-ROL-27 — both are delegation and only one is a subagent. Naming the wrong
         mechanism misleads somebody deciding whether to wait."""
-        for state, also in (("handed", {}), ("working", {}), ("settled", {"ok": True})):
-            with self.subTest(state):
+        for state, also in (("handed", {}), ("working", {}), ("settled", {"ok": True}),
+                            ("settled", {"ok": False}),
+                            ("settled", {"ok": False, "became": "stopped",
+                                         "stopped_by": "agent"})):
+            with self.subTest(state, **also):
                 self.assertNotIn(
                     "subagent", discord.role_line(self.handed(state=state, **also)))
         self.assertNotIn(

@@ -1408,6 +1408,14 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
         Which role it is and how long it has been going come from `shown`, which is what
         `rundesk roles` already prints, so a line in a room and a listing in a terminal
         can never disagree about the same run.
+
+        **How it ended, and who ended it, come off the row too** (R-ROL-43). A run that has
+        settled is settled in the records before anything is told about it, so the three
+        endings a surface distinguishes are read from the one place that decided them
+        rather than worked out a second time from an outcome object. A run that has not
+        reached a terminal state has no ending here — an attempt that threw and will be
+        tried again is not a run that stopped and not a run that failed — and `stopped_by`
+        is absent for a run nobody wrote an asker down for.
         """
         kept = reading(name, where)
         row = kept.role_run(run_id)
@@ -1418,7 +1426,11 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
             return None
         return {"channel": room.get("channel"), "conversation": room.get("space"),
                 "label": row["label"] or row["role"], "role": row["role"],
-                "elapsed": role_runs.shown(row)["elapsed"]}
+                "elapsed": role_runs.shown(row)["elapsed"],
+                # Off the row rather than through the listing, which is where how long it
+                # has been is worked out and this needs no working out at all.
+                "became": row["state"] if row["state"] in store.FINISHED_ROLES else "",
+                "stopped_by": row.get("stop_asked_by") or ""}
 
     def checking_in(run_id: str, told: int = 0):
         """Whether this run owes a check-in now, and what to say in it.

@@ -138,6 +138,18 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   **Restore from that copy and never from git** until the work is committed — and take the
   copy *before* breaking anything, which is the same command either way.
 
+- **`slack.SUB` is the empty string, so any `startswith(SUB)` assertion is true of every
+  line ever rendered.** Discord has a subtext register (`-# `) and Slack has none, so a case
+  carried across from `tests/test_discord.py` — `assertFalse(line.startswith(slack.SUB))` —
+  fails on the *handed* line, which is not subtext and could not be, and would have passed
+  just as meaninglessly had it been written the other way round. The message reads "the news
+  was shown as grey subtext", which sends you into `role_line` looking for a register that
+  does not exist on that platform. Assert the whole line instead; `f"{slack.SUB}…"` is fine
+  in an equality, where an empty prefix costs nothing. Grep a constant's definition before
+  reusing an adapter case on the other adapter — `MARKS` is the same trap one step along,
+  holding glyphs on Discord and Slack *reaction names* (`raised_hand`) here, so a mark put
+  into a line rather than onto a message posts the literal word.
+
 - **Nothing correlated in the Discord adapter's `Live` survives the turn that put it
   there.** `_state`'s terminal branch ends with `self.live.pop(...)`, so a `finished`,
   `stopped` or `failed` state throws away the whole entry — `held.tools` with it. Anything
@@ -334,6 +346,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   suite, or give the worktree a real `.venv` by installing it into a disposable station
   (`.knowledge/guides/testing-against-a-station.md` — `install.sh` builds `${SCRIPT_DIR}/.venv`,
   so the station's install is what puts *every* pinned dependency beside the code under test).
+  **Where the network is not yours to reach, build the worktree's `.venv` off packages the
+  machine already has.** Every python3 here is 3.9, and the *live install's* virtualenv holds
+  every pinned dependency including `slack_sdk`, so `python3 -m venv .venv` and then copying
+  `~/.rundesk/app/.venv/lib/python3.9/site-packages/*` into it — skipping `pip`, `setuptools`,
+  `pkg_resources` and `_distutils_hack`, which the new venv made for itself — gives the
+  worktree a real one with no pip and no network. It is the one thing `~/.rundesk` is safe
+  for: reading. Check the interpreter versions match first; a 3.9 reading a 3.14 virtualenv
+  is the `yarl` trap two entries down and looks nothing like a version mismatch.
 - **And that same missing `.venv` adds a *second*, different failure to the conformance
   harness, which reads like part of whatever you are reproducing.** Both shipped adapters
   resolve the virtualenv from their own file (`parents[2]`), not from the interpreter running

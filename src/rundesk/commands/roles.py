@@ -15,6 +15,9 @@ from rundesk import provider
 from rundesk import role
 from rundesk import role_run as role_runs
 from rundesk import store
+# One way, never a cycle: `env` knows nothing of roles. Imported rather than restated,
+# because a discriminator spelled twice is one that eventually disagrees with itself.
+from rundesk.commands.env import in_a_turn
 
 
 #: How many of an agent's role runs a listing shows. Enough to cover what is in flight
@@ -300,6 +303,23 @@ def _hand_to_a_role(args: argparse.Namespace, agents) -> int:
     return 0
 
 
+def _who_asked() -> str:
+    """Whether this stop is the agent's own decision or somebody's at a terminal
+    (R-ROL-43).
+
+    **The same discriminator `env` already keeps, rather than a second one.** `RUNDESK_RUN`
+    is in every program a gateway starts and in nothing a person types, so an agent that
+    took work over and ended it and an owner who ended it are told apart here and nowhere
+    else — and a second reading of the same variable is a second reading that could
+    disagree.
+
+    It is a guard against the ordinary path and not a boundary, exactly as it is there: a
+    brain determined to be mistaken for a terminal can clear the variable, and what that
+    buys it is a notice naming the wrong one of two words nobody is authorized by.
+    """
+    return store.ASKED_BY_AGENT if in_a_turn() else store.ASKED_BY_TERMINAL
+
+
 def _guide_a_role(args: argparse.Namespace, act: str) -> int:
     """Say something to a role run, end one, or carry a finished one on (R-ROL-23).
 
@@ -311,7 +331,7 @@ def _guide_a_role(args: argparse.Namespace, act: str) -> int:
     said = sys.stdin.read() if act in ("say", "resume") else ""
     try:
         if act == "stop":
-            if not role_runs.stop(args.name, args.run):
+            if not role_runs.stop(args.name, args.run, asked_by=_who_asked()):
                 print(f"{args.name}/{args.run}: ALREADY OVER — nothing was running to end",
                       file=sys.stderr)
                 return 1

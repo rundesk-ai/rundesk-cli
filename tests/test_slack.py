@@ -1711,6 +1711,103 @@ class TheSeamHoldsBothWays(unittest.TestCase):
 
 
 @needs_slack
+class WhatARoleRunLooksLikeHere(unittest.TestCase):
+    """R-ROL-27, R-ROL-43 — work handed to a specialist, rendered from the record alone.
+
+    A role run outlives the process showing it, so every line here is asserted against
+    `role_line`, which has no memory to correlate against and is not given one.
+    """
+
+    def handed(self, **also) -> dict:
+        said = {"type": "role", "conversation": "C0FFEE", "role_run": "rol-1-aaaa",
+                "state": "handed", "role": "development", "label": "applicant export",
+                "elapsed": 0}
+        said.update(also)
+        return said
+
+    def settled(self, **also) -> str:
+        return slack.role_line(
+            self.handed(state="settled", ok=False, elapsed=4000, **also))
+
+    def test_handing_work_to_a_role_is_its_own_line(self):
+        self.assertEqual("🤖 Handed *applicant-export* to the _development_ role.",
+                         slack.role_line(self.handed()))
+
+    def test_a_settled_role_run_shows_in_full_with_no_prior_handed_ever_seen(self):
+        self.assertEqual(
+            "✅ 🤖 *applicant-export* is back from the _development_ role"
+            " — not reviewed yet.",
+            slack.role_line(self.handed(state="settled", ok=True, elapsed=4000)))
+
+    def test_a_role_that_did_not_finish_says_so_rather_than_that_a_subagent_failed(self):
+        line = self.settled()
+        self.assertEqual(
+            "⚠️ 🤖 *applicant-export* did not finish — what came back is not reviewed yet.",
+            line)
+        self.assertNotIn("subagent", line)
+
+    def test_a_run_somebody_stopped_reads_as_a_decision_rather_than_a_fault(self):
+        """R-ROL-43 — the regression this exists for. A run the agent itself ended on
+        purpose after taking the work over was posted as ⚠️ work that did not finish."""
+        line = self.settled(became="stopped", stopped_by="agent")
+        self.assertEqual(
+            "✋ 🤖 *applicant-export* was stopped by the agent"
+            " — what came back is not reviewed yet.", line)
+        self.assertNotIn("⚠️", line)
+        self.assertNotIn("did not finish", line)
+
+    def test_a_stop_says_which_of_the_two_it_was(self):
+        self.assertEqual(
+            "✋ 🤖 *applicant-export* was stopped from a terminal"
+            " — what came back is not reviewed yet.",
+            self.settled(became="stopped", stopped_by="terminal"))
+
+    def test_a_stop_nobody_was_written_down_for_names_nobody(self):
+        """A run stopped by a release before there was anywhere to keep an asker. Neither
+        word may be guessed for it, and it is still a stop rather than a failure."""
+        for record in ({}, {"stopped_by": ""}, {"stopped_by": "the night shift"}):
+            with self.subTest(**record):
+                self.assertEqual(
+                    "✋ 🤖 *applicant-export* was stopped"
+                    " — what came back is not reviewed yet.",
+                    self.settled(became="stopped", **record))
+
+    def test_the_stopped_mark_is_a_glyph_and_never_slacks_name_for_a_reaction(self):
+        """`MARKS` here holds what Slack is asked to *put on* a message. Reaching for one
+        of those in a line would post the literal word `raised_hand`."""
+        line = self.settled(became="stopped", stopped_by="agent")
+        self.assertIn("✋", line)
+        self.assertNotIn(slack.MARKS["stopped"], line)
+
+    def test_a_settled_record_from_a_rundesk_that_names_no_ending_still_renders(self):
+        """`ok` is the fall-through and goes on meaning what it always meant, so a
+        record carrying no ending — an older rundesk's, or a run nothing has settled —
+        shows the two endings this surface has always shown."""
+        self.assertIn("is back from the _development_ role",
+                      slack.role_line(self.handed(state="settled", ok=True)))
+        self.assertIn("did not finish", self.settled())
+        self.assertIn("did not finish", self.settled(became="wandering off"))
+
+    def test_a_check_in_says_how_long_the_run_has_been_going(self):
+        self.assertEqual(
+            f"{slack.SUB}🤖 *applicant-export* — 40m, still working",
+            slack.role_line(self.handed(state="working", elapsed=2400)))
+
+    def test_a_state_this_surface_does_not_know_shows_nothing(self):
+        self.assertEqual("", slack.role_line(self.handed(state="wandering")))
+        self.assertEqual("", slack.role_line({"type": "role"}))
+
+    def test_a_label_carrying_a_path_comes_out_through_the_shared_guard(self):
+        """R-ROL-17 — a room is read where other people can see it."""
+        line = slack.role_line(self.handed(label="/Users/somebody/secret/exporter",
+                                           role="/opt/roles/development"))
+        self.assertNotIn("/Users", line)
+        self.assertNotIn("secret", line)
+        self.assertIn("exporter", line)
+        self.assertIn("development", line)
+
+
+@needs_slack
 class WhenARecordCannotBeActedOn(unittest.IsolatedAsyncioTestCase):
     """R-CH-12 — a delivery that fails is a delivery that failed, and it is written down.
 
