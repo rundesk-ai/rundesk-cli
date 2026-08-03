@@ -1178,7 +1178,12 @@ class TheClaimTheWholeSeamRestsOn(DrivesAnAdapter):
 
         said = await channel.checked(adapter, ["--station", "1180"], told)
         self.assertTrue(said["ok"], f"it could not reach what it was pointed at: {said['why']}")
-        self.assertEqual({"env": ["SEMAPHORE_TOKEN"]}, said["secret"],
+        self.assertEqual(["SEMAPHORE_TOKEN"], said["secret"]["env"],
+                         "it named a different place than the one it reads")
+        # The whole of what this row is for: the *name* crossed and the value did not.
+        # Asserted against the credential itself rather than against the shape of the
+        # reply, so a seam that grows a field cannot fail a privacy check by growing.
+        self.assertNotIn(told["SEMAPHORE_TOKEN"], json.dumps(said["secret"]),
                          "it handed over a credential rather than naming one")
 
         held = await self.hold(adapter, env=dict(told, FAKE_SAYS="what changed today?",

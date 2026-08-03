@@ -1384,9 +1384,25 @@ class WhatAnOwnerConfigured(unittest.TestCase):
         self.assertFalse(answered["ok"])
         self.assertEqual([slack.BOT_TOKEN_FROM, slack.APP_TOKEN_FROM],
                          answered["secret"]["env"])
-        self.assertEqual({"env": [slack.BOT_TOKEN_FROM, slack.APP_TOKEN_FROM]},
+        self.assertEqual({"env": [slack.BOT_TOKEN_FROM, slack.APP_TOKEN_FROM],
+                          "files": [slack.BOT_TOKEN_FILE, slack.APP_TOKEN_FILE]},
                          channel.named(answered["secret"]),
                          "the seam does not carry both names this adapter needs")
+
+    def test_both_credentials_have_a_file_to_be_taken_into(self):
+        """R-CAD-11 — a credential is taken and kept for an owner who has not placed it,
+        and a surface needing two needs two files. `channels add` writes what the adapter
+        named; naming nothing meant rundesk wrote one file however many were needed, and
+        the app-level token was left for the owner to place by hand — which is a channel
+        that proved itself at the terminal and cannot sign in at start-up."""
+        named = channel.named(_checked([])["secret"])
+        self.assertEqual([slack.BOT_TOKEN_FILE, slack.APP_TOKEN_FILE], named["files"],
+                         "the app-level token has nowhere to be taken into")
+        self.assertEqual(len(named["env"]), len(named["files"]),
+                         "a credential was named with no file, or the other way round")
+        # The files it says rundesk should write are the files it reads back itself.
+        self.assertEqual([slack.BOT_TOKEN_FILE, slack.APP_TOKEN_FILE],
+                         named["files"], "it reads one place and asks to be given another")
 
     def test_an_option_it_does_not_understand_is_refused_by_name(self):
         """R-CAD-9 — a misconfigured channel must be found while somebody is standing at a

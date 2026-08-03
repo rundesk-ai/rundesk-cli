@@ -84,7 +84,13 @@ APP_TOKEN_FROM = "SLACK_APP_TOKEN"
 #: **A supervised gateway has no shell.** The machine that keeps an agent up starts it
 #: with a built environment, so a token exported in somebody's terminal is a token the
 #: agent will never see once it is being kept up properly. Nothing here ever writes these
-#: files; they are the owner's to put there.
+#: files — they are reported to rundesk as `secret.files`, so that `channels add` takes
+#: each credential at the terminal and puts it exactly where this reads it back.
+#:
+#: **Naming them is what makes a two-credential surface addable at all.** Rundesk wrote one
+#: file whatever it was told, so before these were declared the app-level token had no way
+#: in and was left for the owner to place by hand — which is the thing R-CAD-11 exists to
+#: prevent.
 BOT_TOKEN_FILE = "token"
 APP_TOKEN_FILE = "app-token"
 
@@ -2005,7 +2011,8 @@ async def check(chose) -> int:
         # without ever string-matching this sentence (R-CAD-12, R-CAD-13).
         missing = [name for name, value in
                    ((chose.token_from, bot), (chose.app_token_from, app)) if not value]
-        say(ok=False, secret={"env": [chose.token_from, chose.app_token_from]},
+        say(ok=False, secret={"env": [chose.token_from, chose.app_token_from],
+                              "files": [BOT_TOKEN_FILE, APP_TOKEN_FILE]},
             why=f"no Slack credentials — {' and '.join(missing)} "
                 f"{'are' if len(missing) > 1 else 'is'} not set and there is no matching "
                 f"file ('{BOT_TOKEN_FILE}' for the bot token, '{APP_TOKEN_FILE}' for the "
@@ -2048,7 +2055,8 @@ async def check(chose) -> int:
     except SlackApiError as why:
         say(ok=False, why=f"Slack refused: {_slack_error(why)}")
         return 0
-    say(ok=True, secret={"env": [chose.token_from, chose.app_token_from]}, shapes=shapes,
+    say(ok=True, secret={"env": [chose.token_from, chose.app_token_from],
+                         "files": [BOT_TOKEN_FILE, APP_TOKEN_FILE]}, shapes=shapes,
         describes=" and ".join(one["describes"] for one in shapes),
         # What one channel would have been given, for anything that reads the old shape.
         settings={what: value for what, value in (
