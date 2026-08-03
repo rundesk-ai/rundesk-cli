@@ -51,6 +51,18 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   edit and naming neither function. Nothing failed at import and the module still parsed.
   **When you move a definition, take it from `min(decorator_list, lineno)`, not from `def`**,
   and assert the moved text still starts with its decorator.
+- **`test_install` alone is already 165 s against the gate's 180 s per-check ceiling, so a
+  busy machine fails the whole gate on a suite nothing touched.** Measured here: two gate
+  runs on a branch and two on its *untouched baseline*, extracted to `/tmp` with
+  `git archive <commit> | tar -x -C /tmp/<somewhere>` — all four ended
+  `gate: FAILED — test_install … exceeded 180 seconds`, while the suite on its own said
+  `Ran 82 tests in 165s / OK`. The cause was ambient (`smbd` at ~200% CPU and three live
+  gateways), and `gate` runs six suites at once, so the margin is gone before anything of
+  yours is involved — and the traceback names `subprocess.communicate`, which reads exactly
+  like the installer hanging. **Run that suite on its own and read its seconds, then run the
+  gate on a scratch copy of the baseline commit, before attributing it to your change**;
+  `ps -Ao pid,%cpu,command -r | head` names the real cause in seconds. The tree-size version
+  of this trap is the entry below, and it is a different cause with the same symptom.
 - **Only `tests/test_install.py:38` copies the *checkout*; every other `copytree` in that file
   copies `REPO`.** So whatever that one line lets through is carried by all eighteen of them, and
   whatever it excludes is excluded everywhere. Untracked `ui/` and `site/` trees (~100 MB) beside

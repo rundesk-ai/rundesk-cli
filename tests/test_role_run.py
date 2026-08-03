@@ -30,6 +30,7 @@ from rundesk import role_run as role_runs  # noqa: E402
 RULES = "# Development\n\nDo the bounded task and report exactly what you verified.\n"
 BRIEF = "Outcome: make the export work.\nAuthorization: edit and test, never publish.\n"
 AT = "2026-08-01T09:00:00Z"
+LATER = "2026-08-01T10:00:00Z"
 
 
 def a_skill(at: Path, name: str) -> Path:
@@ -673,6 +674,99 @@ class WhoMayHandWorkOn(WithAnAgentThatCanDelegate):
         self.wrote(posture="read")
         admitted = self.admit()
         self.assertEqual("read", admitted.posture)
+
+
+class WhenTheClockHandsWorkOn(WithAnAgentThatCanDelegate):
+    """R-AGT-55 — a scheduled turn may delegate, and its report lands where that schedule
+    announces.
+
+    A scheduled run opens its conversation on the pseudo-surface `schedule`, which joins
+    no channel and is nowhere anybody can be woken — so what is owed the review is the
+    room the schedule already says what it did in, resolved once at admission.
+    """
+
+    def a_schedule(self, named: str = "nightly", **held) -> int:
+        settled = {"cron": "0 3 * * *", "prompt": "Sweep the logs.",
+                   "channel": "discord", "created_at": AT}
+        settled.update(held)
+        self.kept.remember_schedule(named, **settled)
+        return self.kept.schedule(named)["id"]
+
+    def a_scheduled_turn(self, named: str = "nightly", **held) -> str:
+        """One turn the clock started, exactly as `agent.starting` opens it."""
+        schedule_id = self.a_schedule(named, **held)
+        where_it_is = store.conversation_id(turn.SCHEDULE, named)
+        self.kept.opened(where_it_is, turn.SCHEDULE, turn.SCHEDULE, named, AT)
+        return self.kept.began(turn.SCHEDULE, "codex", "work", AT,
+                               conversation_id=where_it_is, schedule_id=schedule_id)
+
+    def test_a_scheduled_turn_owes_its_review_where_that_schedule_announces(self):
+        self.kept.opened("c-ops", "discord", "discord", "operations", AT)
+        fired = self.a_scheduled_turn(place="operations")
+        admitted = role_runs.admit("elena", "development", BRIEF, fired,
+                                   target=str(self.target), where=self.where,
+                                   library=self.library)
+        self.assertEqual("c-ops", admitted.parent_conversation)
+        row = self.kept.role_run(admitted.id)
+        self.assertEqual("c-ops", row["parent_conversation"])
+        # The parent is still the scheduled run itself. Only where the answer is owed moved.
+        self.assertEqual(fired, admitted.parent_run)
+        self.assertEqual(fired, row["parent_run"])
+        self.assertNotEqual(self.kept.run(fired)["conversation_id"],
+                            row["parent_conversation"])
+
+    def test_a_schedule_that_named_no_place_owes_it_where_the_agent_was_last_reached(self):
+        self.kept.opened("c-general", "discord", "discord", "general", AT)
+        self.kept.opened("c-ops", "discord", "discord", "operations", LATER)
+        admitted = role_runs.admit(
+            "elena", "development", BRIEF, self.a_scheduled_turn(),
+            target=str(self.target), where=self.where, library=self.library)
+        self.assertEqual("c-ops", admitted.parent_conversation)
+
+    def test_a_schedule_that_has_never_announced_is_refused_by_name(self):
+        """Refused where it is asked for, so the schedule is named while somebody can still
+        act on it — never found out a fortnight later as a review nobody could be woken
+        for."""
+        for held in ({"channel": None}, {"place": "operations"}):
+            with self.subTest(**held):
+                self.kept.opened("c-general", "discord", "discord", "general", AT)
+                fired = self.a_scheduled_turn(f"nightly-{len(self.kept.schedules())}",
+                                              **held)
+                with self.assertRaises(role_runs.NotDelegable) as refused:
+                    role_runs.admit("elena", "development", BRIEF, fired,
+                                    target=str(self.target), where=self.where,
+                                    library=self.library)
+                self.assertIn("has never announced anywhere", str(refused.exception))
+                self.assertIn("nightly-", str(refused.exception))
+                self.assertEqual([], self.kept.role_runs())
+                self.assertFalse(role_runs.home("elena", self.where).exists())
+
+    def test_where_a_schedule_announces_is_asked_of_one_collaborator(self):
+        """The same answer schedule delivery resolves, asked through the seam rather than
+        worked out again here — two resolutions of it would eventually put the notice in
+        one room and the work it announced in another."""
+        self.kept.opened("c-ops", "discord", "discord", "operations", AT)
+        asked = []
+
+        def announcing(kept, channel, place):
+            asked.append((channel, place))
+            return "c-ops"
+
+        admitted = role_runs.admit(
+            "elena", "development", BRIEF,
+            self.a_scheduled_turn(place="operations"),
+            target=str(self.target), where=self.where, library=self.library,
+            announcing=announcing)
+        self.assertEqual([("discord", "operations")], asked)
+        self.assertEqual("c-ops", admitted.parent_conversation)
+
+    def test_an_ordinary_turn_still_reports_back_where_it_was_asked(self):
+        """Nothing about a turn somebody started moved, so the schedule branch cannot be
+        what an ordinary conversation is resolved through."""
+        self.kept.opened("c-ops", "discord", "discord", "operations", LATER)
+        admitted = self.admit()
+        self.assertEqual(self.kept.run(self.parent)["conversation_id"],
+                         admitted.parent_conversation)
 
 
 class WhenCarryingGoesWrong(WithAnAgentThatCanDelegate):

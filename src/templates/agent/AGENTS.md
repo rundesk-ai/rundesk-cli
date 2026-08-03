@@ -48,7 +48,8 @@ what comes back; it is yours the moment you use it.
 over a bounded brief — never this conversation — and check its report before you answer anybody,
 because it is unchecked work.
 
-One level, and never from a schedule or a terminal: nowhere to report back to.
+One level, and never from a terminal: nowhere to report back to. From a schedule the report
+comes back where that schedule announces.
 **`delegating-to-roles` is the rest of it** — the brief's shape, guiding or stopping or resuming
 a run, and what is refused.
 

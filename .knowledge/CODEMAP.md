@@ -325,13 +325,13 @@ provider. One file per contract, named for it:
 | `test_turn.py` | 113 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_activity.py` | 3 | live-turn concurrency, safe persisted fields, and update visibility |
 | `test_transcript.py` | 28 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
-| `test_store.py` | 124 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
+| `test_store.py` | 136 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
 | `test_channel.py` | 77 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
 | `test_answering.py` | 146 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
 | `test_discord.py` | 208 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
 | `test_instructions.py` | 29 | Rundesk's core and trigger prompts, standard variables, the additive builder, the roles layer, and the separate role floor |
 | `test_role.py` | 51 | `agent-role` — what a role is, what makes one usable, what its revision is computed from, and how the install's roles are offered, against a scratch library |
-| `test_role_run.py` | 123 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
+| `test_role_run.py` | 128 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
 | `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and

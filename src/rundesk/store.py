@@ -237,6 +237,31 @@ def conversation_id(channel: str, space: str, thread: str = "") -> str:
     return hashlib.sha256(said).hexdigest()[:16]
 
 
+def announces_into(kept, channel: str | None, place: str | None) -> "str | None":
+    """The conversation a schedule announces into, or None where it has never announced.
+
+    **One answer for two questions that must never differ.** Where a schedule's own
+    outcome is said, and where a role run admitted by a scheduled turn owes its review,
+    are the same room — a scheduled turn's own conversation is on a pseudo-surface that
+    joins no channel, so both have to resolve the real one from the channel and the place
+    the schedule names. Two resolutions of that would eventually put the notice in one
+    room and the report of the work in another.
+
+    A place the owner named resolves to a conversation in that place and to nothing else:
+    a room nobody has spoken in yet is the adapter's to find, and answering with some
+    other room would say it where nobody asked. With no place named it is the newest
+    conversation on that channel, which is what a channel reaching one place already
+    means.
+
+    The records are passed in rather than reached for, because whose records they are is
+    the caller's — and a reader and a writer must be able to ask this the same way.
+    """
+    if not channel:
+        return None
+    seen = kept.conversations(channel=channel, space=place or None, limit=1)
+    return seen[0]["id"] if seen else None
+
+
 def _one_conversation(named: str, of: str = "") -> tuple:
     """Match one conversation by either name it goes by, as a clause and its values.
 
@@ -1664,10 +1689,16 @@ class Store:
             if reachable is None:
                 # **Nowhere to report back to.** A worker finishes long after the turn
                 # that admitted it has ended, and the review is delivered by waking the
-                # agent on the surface the request arrived on. A turn from a terminal, a
-                # schedule or another role has no such surface — and left to be found
-                # out afterwards, that is a review owed for ever and work nobody is told
-                # about (R-ROL-15).
+                # agent on a surface it can be reached on. A turn from a terminal or from
+                # another role has no such surface — and left to be found out afterwards,
+                # that is a review owed for ever and work nobody is told about (R-ROL-15).
+                #
+                # **What is checked is the conversation handed in, not the parent run's
+                # own.** A turn the clock started is owed to the room its schedule
+                # announces in, resolved by `role_run._parent` before it reaches here
+                # (R-AGT-55) — so a scheduled turn passes this by being handed a real
+                # channel conversation, and one whose schedule announces nowhere never
+                # arrives, having been refused by that schedule's name instead.
                 raise Refused(
                     "this turn is not happening on a surface the agent can be reached on, "
                     "so there would be nowhere to report the work back to"

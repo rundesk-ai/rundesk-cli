@@ -71,8 +71,10 @@ checked, and `resume` it with a correction rather than passing a gap on.
 ## Gotchas
 
 - **One level.** Neither a role nor the turn reviewing one may start another. Refused.
-- **You must be in your own turn, on a surface you can be reached on** — from a terminal or a
-  schedule it is refused, because there would be nowhere to report back to.
+- **You must be in your own turn, on a surface you can be reached on** — from a terminal it is
+  refused, because there would be nowhere to report back to. From a schedule it is allowed: the
+  report comes back where that schedule announces, and one that has never announced anywhere is
+  refused by name.
 - **Some brains cannot be sent to mid-turn.** `say` refuses and names it; stop, or resume. A
   role pinned to one of those can never be steered, on any run of it.
 - **A brain this machine has not got is refused as you hand the work over**, naming it — never

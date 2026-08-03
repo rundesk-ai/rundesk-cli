@@ -241,7 +241,7 @@ def admit(name: str, slug: str, brief: str, parent_run: str,
           target: str | None = None, label: str | None = None,
           where: Path | None = None, library: dict | None = None,
           now=None, pick=None, named: str | None = None, model: str | None = None,
-          runnable=None) -> Admitted:
+          runnable=None, announcing=None) -> Admitted:
     """Admit one role run for this agent, and seal everything it will run with.
 
     The order is the whole of the safety here. Everything refusable is refused first and
@@ -254,6 +254,9 @@ def admit(name: str, slug: str, brief: str, parent_run: str,
     in rather than imported for the reason every other collaborator here is: what is being
     asked is a question about the machine, and a decision that reached for it itself could
     not be exercised against a machine that has a different one.
+
+    `announcing` is where a schedule announces, asked the same way and for the same reason:
+    a turn the clock started reports back where that schedule already says what it did.
     """
     if not str(brief or "").strip():
         raise NotDelegable("a role run needs a task brief, and none was given")
@@ -268,7 +271,7 @@ def admit(name: str, slug: str, brief: str, parent_run: str,
         raise NotDelegable(str(why)) from None
     stands = target_of(target, agents.home(name, where))
     kept = agents.records(name, where)
-    parent, owed_to = _parent(kept, parent_run)
+    parent, owed_to = _parent(kept, parent_run, announcing)
     posture = narrowed(parent.get("posture"), wanted.posture)
     on, model_named = brain(named, model, wanted, parent, kept.agent())
     _has_a_brain(name, on, runnable)
@@ -366,23 +369,70 @@ def _steering(name: str, run_id: str, where, now):
     return steering(name, run_id, where, now=now)
 
 
-def _parent(kept, parent_run: str):
+def _parent(kept, parent_run: str, announcing=None):
     """The turn delegating this, and the conversation the answer is owed to.
 
     Only what the caller needs before the write: which turn, and where its answer is owed.
     **Whether that turn may delegate at all is settled inside the write that admits the
     run**, so nothing can change between the asking and the answer, and the whole rule is
     stated once rather than in two places that would drift.
+
+    **A turn the clock started is owed to where its schedule announces, not to its own
+    conversation.** A scheduled run opens a conversation on the pseudo-surface `schedule`,
+    which joins no channel and is nowhere anybody can be woken — so the run itself is
+    never a place to report to, while the room that schedule already says what it did in
+    is. Only this answer differs for such a turn: it is still the parent run, and every
+    other reason it may not delegate is still asked where it always was.
     """
     row = kept.run(parent_run)
     if row is None:
         raise NotDelegable(f"'{parent_run}' is not a run of this agent's")
+    started_by = _the_schedule_that_started(kept, row)
+    if started_by is not None:
+        return row, _where_it_announces(kept, started_by, announcing)
     where_it_is = row.get("conversation_id")
     if not where_it_is:
         raise NotDelegable(
             f"'{parent_run}' happened in no conversation, so there is nowhere to report back"
         )
     return row, where_it_is
+
+
+def _the_schedule_that_started(kept, row: dict):
+    """The schedule behind this turn, where the clock started it.
+
+    Found by the id the run recorded rather than by any name, because that id is what
+    correlates a run with its schedule and survives the schedule being renamed. A schedule
+    the owner has since deleted leaves nothing to find, and the turn then falls through to
+    the ordinary rule — where its own conversation refuses it, which is the truthful
+    answer: there is no longer anywhere for that work to be announced.
+    """
+    schedule_id = row.get("schedule_id")
+    if not schedule_id:
+        return None
+    for one in kept.schedules():
+        if one.get("id") == schedule_id:
+            return one
+    return None
+
+
+def _where_it_announces(kept, started_by: dict, announcing=None) -> str:
+    """Where a schedule announces, or a refusal naming the schedule (R-AGT-55).
+
+    **Refused here rather than discovered afterwards.** A schedule that has never
+    announced anywhere — no channel named, or a place nothing has ever been said in —
+    would admit a run whose report nobody could ever be woken to review, and that is a
+    fortnight of retries and one silent piece of work. Said at the moment the handoff is
+    asked for, and named, so the fix is the schedule rather than the role.
+    """
+    found = (announcing or store.announces_into)(
+        kept, started_by.get("channel"), started_by.get("place"))
+    if not found:
+        raise NotDelegable(
+            f"schedule '{started_by.get('name')}' has never announced anywhere, so a "
+            "role's report would have nowhere to go"
+        )
+    return found
 
 
 def _assemble(name: str, run_id: str, wanted, brief: str, posture: str,

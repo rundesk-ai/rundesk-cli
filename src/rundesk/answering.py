@@ -657,15 +657,18 @@ class Answering:
         A place we have already seen is a conversation of ours. One we have not is the
         adapter's to resolve, so nothing here is refused for it — the record goes over with the
         place on it and no conversation, and a surface that can find the room says it there.
+
+        **Which conversation that is, is `store.announces_into`'s and not this method's.**
+        A role run admitted by a scheduled turn owes its review to the same room, and the
+        day the two resolved it separately is the day a notice and the work it announced
+        went to different places. What is left here is the sentence explaining a room this
+        agent has never spoken in, which only a surface can act on.
         """
-        if place:
-            for one in kept.conversations(channel=self.channel, limit=CONVERSATIONS):
-                if one.get("space") == place:
-                    return one["id"], ""
+        found = store.announces_into(kept, self.channel, place)
+        if place and found is None:
             return None, (f"channel '{self.channel}': nothing has been said in '{place}' yet, "
                           f"so it is left to the surface to find it")
-        seen = kept.conversations(channel=self.channel, limit=1)
-        return (seen[0]["id"] if seen else None), ""
+        return found, ""
 
     @staticmethod
     def _what_it_did(kept, named: str, became: str) -> str:
