@@ -498,22 +498,55 @@ class TheJobCarriesWhereThingsAre(WithAJobDirectory):
         import rundesk as package
         from rundesk import agent as agents
         from rundesk import gateway as real
+        from rundesk import secret as kept
 
         # Read off what a supervised gateway actually asks the environment for, rather
         # than a list kept by hand here — a hand-kept list has the same gap as the one in
-        # `describe` and goes stale in the same moment. All three, because an agent
-        # resolves a directory of its own, the gateway the machine starts is an agent's,
-        # and the root both of those default from is the package's: reading only some of
-        # them is how the next one added is left out.
+        # `describe` and goes stale in the same moment. An agent resolves a directory of
+        # its own, the gateway the machine starts is an agent's, the root both of those
+        # default from is the package's, and what every program that gateway starts is
+        # given is `secret`'s: reading only some of them is how the next one added is left
+        # out.
+        #
+        # **The modules are named by hand here, and that is this guard's own gap.** It read
+        # three, and `secret` was a fourth reading a place rundesk can be pointed at that
+        # nothing in those three mentions — so the case that exists to catch exactly that
+        # could not have caught it. A module added below this line is the price of the
+        # guard working at all; leaving one out costs a supervised gateway resolving
+        # somewhere the command that wrote its job did not.
         pointed = set(regex.findall(
             r'environ\.get\("(RUNDESK_[A-Z_]+_DIR)"',
             inspect.getsource(real) + inspect.getsource(agents)
-            + inspect.getsource(package)))
+            + inspect.getsource(package) + inspect.getsource(kept)))
         self.assertTrue(pointed, "nothing reads a directory from the environment at all")
         said = supervisor.describe("gateway", self.root)["EnvironmentVariables"]
         for variable in sorted(pointed):
             self.assertIn(variable, said,
                           f"the gateway reads {variable}, and the job never tells it one")
+
+    def test_no_kept_value_reaches_the_job_the_machine_holds(self):
+        """R-SEC-25 — a job is a file in the owner's LaunchAgents directory, which is not a
+        place a credential goes. The job says *where* the values are kept, and the gateway
+        produces them itself when it starts a program; folding them in here would put every
+        one of them into a plist that outlives the gateway and is readable at rest."""
+        from rundesk import secret as kept
+
+        where = Path(tempfile.mkdtemp(prefix="rundesk-supervisor-secrets-"))
+        self.addCleanup(shutil.rmtree, where, ignore_errors=True)
+        was = os.environ.get("RUNDESK_SECRETS_DIR")
+        os.environ["RUNDESK_SECRETS_DIR"] = str(where)
+        self.addCleanup(
+            lambda: os.environ.__setitem__("RUNDESK_SECRETS_DIR", was) if was is not None
+            else os.environ.pop("RUNDESK_SECRETS_DIR", None))
+        kept.remember("GITHUB_TOKEN", "gh-secret-value-0000", now="2026-08-02T00:00:00Z",
+                      kept_from="this terminal", where=where)
+
+        said = supervisor.describe("gateway", self.root)["EnvironmentVariables"]
+
+        self.assertEqual(str(where), said["RUNDESK_SECRETS_DIR"])
+        self.assertNotIn("GITHUB_TOKEN", said)
+        self.assertNotIn("gh-secret-value-0000", plistlib.dumps(
+            supervisor.describe("gateway", self.root)).decode("utf-8"))
 
 
     def test_the_job_carries_the_directories_it_was_given_rather_than_its_own(self):

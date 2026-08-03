@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from rundesk import ROOT, backups_home, data_home, gateway
+from rundesk import ROOT, backups_home, data_home, gateway, secret
 
 #: Every job rundesk writes is named this way, so what belongs to rundesk is obvious in
 #: a directory full of other people's jobs, and one gateway's job never collides with
@@ -243,6 +243,17 @@ def _environment(logs: Path, run: Path | None = None, agents: Path | None = None
         # owner has ever seen sits on their external disk — two sets, and the one they would
         # look for after trouble is the one that stopped being written to.
         "RUNDESK_BACKUP_DIR": str(backups_home()),
+        # **Where this install keeps the values every program it starts is given** — and it
+        # is written unconditionally, which is the opposite call from the prefix below and
+        # deliberately so. That one is conditional because unset already resolves to the
+        # same answer through the same code; this one does not. Its default is built from
+        # `XDG_CONFIG_HOME`, and the machine hands a job neither that nor anything else of
+        # the owner's shell — so a supervised gateway would resolve a *different* directory
+        # from the command that wrote its job, on exactly the machines whose owner set that
+        # variable. That is the split R-AGT-9 already records having caused one directory
+        # over, and here it would present as an agent whose credentials silently vanished
+        # the moment the machine restarted it (R-SEC-2).
+        "RUNDESK_SECRETS_DIR": str(secret.home()),
     }
     # **Named only when this install was told one.** Writing the default in unconditionally
     # would put a new key in every description, and `install_automatic_update` compares the
