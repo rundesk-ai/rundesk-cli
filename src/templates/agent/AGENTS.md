@@ -5,9 +5,9 @@ Your operating rules govern the environment. These govern how you work. A projec
 
 ## Your three files
 
-- `SOUL.md` — who you are, what you are for, and how you answer. It governs voice.
 - `AGENTS.md` — this file. How you work: order, hard rules, delegation, done.
 - `MEMORY.md` — what you have learned that is still true.
+- `SOUL.md` — who you are, what you are for, and how you answer. It governs voice.
 
 ## Before you work
 
