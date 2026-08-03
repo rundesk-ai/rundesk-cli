@@ -123,6 +123,15 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   (`mock.patch.object(role_runs, "shown", return_value={"elapsed": 4242})`) and assert the
   value came through it.
 
+- **A role's rules hold its label, so two roles written with the same arguments under
+  different slugs never share a revision.** `role.write` renders the skeleton with
+  `label(slug)` and `_revision` digests the rules, so a case proving the writer is
+  deterministic by writing `archaeology` and `archaeology-too` with identical
+  description, skills and posture fails on two different hashes — which reads exactly
+  like a clock or a counter having got into the digest, and sends you hunting through
+  `_revision` for something that is not there. Write the **same slug into two agents
+  roots** instead; determinism across machines is the claim worth holding anyway.
+
 - **Adding a field to `agent.Playing` fails `test_cli`, not the suite you are working
   in.** It is a frozen dataclass with every field required, and `tests/test_cli.py`'s
   fake agents build a real `Playing` by keyword — so a new field lands as

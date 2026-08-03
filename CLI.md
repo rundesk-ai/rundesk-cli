@@ -46,6 +46,7 @@ rundesk usage                                                                   
 rundesk usage <agent>                                                                                                                                                                                                   what one agent has cost
 
 # handing work on
+rundesk roles <agent> add --description <text> --skills <a,b,c> --posture read|work [--provider <provider>] [--model <model>] <role>                                                                                    write a new role — a generic skeleton to rewrite for the specialty
 rundesk roles <agent> resume <run>                                                                                                                                                                                      carry a finished role run on — the further task is read from standard input
 rundesk roles <agent> run [--target <directory>] [--label <text>] [--provider <provider>] [--model <model>] <role>                                                                                                      hand one bounded task to a role — the brief is read from standard input
 rundesk roles <agent> say <run>                                                                                                                                                                                         say something to a role that is working — read from standard input
@@ -135,6 +136,8 @@ rundesk schedules ava off nightly
 ```sh
 # the specialists ava can hand heavy work to, and the runs it has admitted
 rundesk roles ava
+# write a new role — then rewrite the rules file it names, which is a generic skeleton until you do
+rundesk roles ava add archaeology --description "Trace one behaviour through the whole history of a repository." --skills python-patterns,python-testing --posture read
 # one bounded task, run in that project under the role's own rules
 rundesk roles ava run development --target ~/code/exporter --label "csv export"
 #   an agent hands work on from inside its own turn, and the brief arrives on standard input — the outcome, what it may do, and what done looks like
@@ -157,6 +160,7 @@ rundesk roles ava show rol-3-vfs3
 --confirm                       install after reviewing what the repository declares
 --conversation <conversation>   which conversation to carry on — this terminal's, when left out
 --conversation <where>          only what was said in one place on it — the direct message or room, either as the WHERE column prints it or in the platform's own word alone
+--description <text>            what it answers for and how heavy the work is, in one sentence — what a named agent reads while deciding whether to delegate at all
 --expired                       instead, the one-time schedules whose moment has gone — whether each ran, or whether it passed while nothing was running
 --force                         restart now even when doing so interrupts active work
 --fresh                         start the conversation again rather than carrying it on
@@ -167,12 +171,14 @@ rundesk roles ava show rol-3-vfs3
 --label <text>                  a short safe name for the task, shown where other people can read it — never a path and never the brief
 --model <model>                 which model, in that brain's own words
 --most <n>                      how many to show, newest first (default: 20)
+--posture read|work             how far a run of it may reach — `read` changes nothing, and on some brains has no shell in it at all
 --provider <provider>           which brain answers for it when a turn does not say
 --purge                         also take every agent's home, log and history
 --read-only                     let this turn look at the machine without changing it
 --remove <user>                 stop allowing this person — repeatable, and never the last one
 --set <key=value>               anything that brain takes, carried to it unread; repeatable
 --since <id>                    only what was said after this one, by the id shown beside it
+--skills <a,b,c>                the skills every run of it is given, comma separated — at least one; a name this machine has not got is carried and reported rather than refused
 --source <how>                  only messages belonging to work admitted this way — one of channel | role | schedule | terminal
 --source <source>               whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine
 --status                        show the last queued update and its final outcome
@@ -193,7 +199,7 @@ rundesk roles ava show rol-3-vfs3
 <program>                       after `--`, the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH
 <prompt>                        what to ask it, in quotes
 <repository>                    a GitHub repository URL, local directory or archive
-<role>                          which role — one this install has, by its own name
+<role>                          what to call it — lowercase letters, digits and single hyphens, and never one this install already has
 <run>                           which role run — the id `roles` lists
 <schedule>                      what to call it, and what to name it by later
 <skill>                         which skill, by the name it is under

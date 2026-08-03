@@ -5042,5 +5042,115 @@ class HandingWorkToARole(unittest.TestCase):
         self.assertNotIn("brain", said)
 
 
+class WritingARoleFromTheCommandLine(unittest.TestCase):
+    """`rundesk roles <agent> add <role>` — what it writes, and what it answers with."""
+
+    DESCRIBED = ("Trace one behaviour back through the whole history of a repository — "
+                 "a subsystem held in view all at once.")
+
+    def setUp(self):
+        self.where = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-roles-add-"))
+        self.addCleanup(shutil.rmtree, self.where, True)
+        self.library = self.where / "skills"
+        made = self.library / "python-testing"
+        made.mkdir(parents=True)
+        (made / "SKILL.md").write_text(
+            "---\nname: python-testing\ndescription: unittest patterns\n---\n",
+            encoding="utf-8")
+        # Both, and not only the agents root: `skill.home()` falls back to the *owner's*
+        # own library when its variable is unset, so a case that scrubbed the environment
+        # would resolve a real name against the real install rather than against this.
+        pointed = mock.patch.dict(os.environ, {
+            "RUNDESK_AGENTS_DIR": str(self.where / "agents"),
+            "RUNDESK_SKILL_LIBRARY": str(self.library)})
+        pointed.start()
+        self.addCleanup(pointed.stop)
+
+    def add(self, *more, slug="archaeology"):
+        return drive(["roles", "ava", "add", slug,
+                      "--description", self.DESCRIBED,
+                      "--skills", "python-testing,reading-minds",
+                      "--posture", "read", *more],
+                     agents=FakeAgents(made=["ava"]))
+
+    def test_writing_a_role_answers_with_the_rules_path_and_the_work_left_in_them(self):
+        """R-ROL-39 — the whole reason this command answers at all. What it writes is a
+        generic skeleton, so a caller that reads this and comes away without knowing it
+        has an unfinished file to edit, and where, has been handed a role that will
+        return a report reading well and saying nothing."""
+        code, said = self.add()
+        self.assertEqual(0, code, said)
+        rules = self.where / "agents" / ".roles" / "archaeology" / "AGENTS.md"
+        self.assertTrue(rules.is_file())
+        self.assertIn(str(rules), said)
+        self.assertTrue(pathlib.Path(str(rules)).is_absolute())
+        self.assertIn("rewrite it", said)
+        self.assertIn("not yet about this specialty", said)
+        for heading in ("Start here, in this order", "While you work", "The ceiling",
+                        "Subagents", "The report", "Definition of done"):
+            self.assertIn(heading, said)
+
+    def test_what_a_new_role_is_says_the_same_words_a_listing_says(self):
+        code, said = self.add()
+        self.assertEqual(0, code, said)
+        self.assertIn("Archaeology  archaeology", said)
+        self.assertIn("read  [python-testing]", said)
+        self.assertIn("not installed here, so not given: reading-minds", said)
+        self.assertIn("rundesk roles ava run archaeology --target", said)
+
+    def test_a_role_is_written_for_the_install_rather_than_for_the_agent_named(self):
+        """The positional is there because a run belongs to an agent. A role does not,
+        and a surface that let that go unsaid would teach the wrong model."""
+        _, said = self.add()
+        self.assertIn("every named agent", said)
+
+    def test_a_slug_that_is_already_a_role_is_refused_rather_than_written_over(self):
+        """R-ROL-18 — and the refusal reaches the exit status and the message, never a
+        traceback."""
+        self.add()
+        rules = self.where / "agents" / ".roles" / "archaeology" / "AGENTS.md"
+        rules.write_text("# Mine\n\nMy own rules.\n", encoding="utf-8")
+        code, said = self.add()
+        self.assertEqual(1, code)
+        self.assertIn("NOT WRITTEN", said)
+        self.assertIn("nothing was changed", said)
+        self.assertNotIn("Traceback", said)
+        self.assertEqual("# Mine\n\nMy own rules.\n",
+                         rules.read_text(encoding="utf-8"))
+
+    def test_every_refusal_a_role_writer_has_reaches_the_exit_status(self):
+        for more, expected in ((["--posture", "excavate"], "posture"),
+                               (["--skills", ""], "at least one"),
+                               (["--skills", "a,a"], "more than once"),
+                               (["--description", " "], "says nothing about")):
+            with self.subTest(more=more):
+                code, said = self.add(*more, slug="etymology")
+                self.assertEqual(1, code, said)
+                self.assertIn("NOT WRITTEN", said)
+                self.assertIn(expected, said)
+                self.assertNotIn("Traceback", said)
+                self.assertFalse(
+                    (self.where / "agents" / ".roles" / "etymology").exists())
+
+    def test_what_a_role_may_do_is_never_decided_on_the_authors_behalf(self):
+        """A posture defaulted is the widest boundary chosen silently, and a description
+        or a skill set defaulted is a role that says nothing and is given nothing."""
+        for without in (["--skills", "python-testing", "--posture", "read"],
+                        ["--description", "x", "--posture", "read"],
+                        ["--description", "x", "--skills", "python-testing"]):
+            with self.subTest(without=without):
+                code, said = drive(["roles", "ava", "add", "archaeology", *without],
+                                   agents=FakeAgents(made=["ava"]))
+                self.assertEqual(2, code)
+                self.assertIn("required", said)
+
+    def test_writing_a_role_renders_its_own_help(self):
+        code, said = drive(["roles", "ava", "add", "--help"],
+                           agents=FakeAgents(made=["ava"]))
+        self.assertEqual(0, code)
+        for flag in ("--description", "--skills", "--posture", "--provider", "--model"):
+            self.assertIn(flag, said)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
