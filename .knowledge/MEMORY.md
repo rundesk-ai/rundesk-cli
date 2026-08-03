@@ -51,6 +51,21 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   edit and naming neither function. Nothing failed at import and the module still parsed.
   **When you move a definition, take it from `min(decorator_list, lineno)`, not from `def`**,
   and assert the moved text still starts with its decorator.
+- **`test_install` now finishes within a few seconds of the gate's 180 s per-check ceiling,
+  so ambient load on the machine fails the whole gate on a suite nothing touched.** Measured
+  here in one sitting: two runs on a branch and two on its *untouched baseline* — extracted
+  to `/tmp` with `git archive <commit> | tar -x -C /tmp/<somewhere>`, which is how you prove
+  it is not yours without disturbing a worktree somebody is working in — all four
+  `gate: FAILED — test_install … exceeded 180 seconds`, and a fifth `gate: OK` with
+  `test_install (175.7s)`. Nothing in the tree changed between the fourth and the fifth;
+  `smbd` at ~200% CPU did. The traceback names `subprocess.communicate`, which reads exactly
+  like the installer hanging, and the suite on its own says `Ran 82 tests in 165s / OK`.
+  **Read the seconds, look at `ps -Ao pid,%cpu,command -r | head`, and run it again before
+  attributing it to your change**; a baseline copy in `/tmp` settles it for good. The
+  tree-size version of this trap is the entry below — different cause, identical symptom.
+  Run the gate as **`<a checkout's>/.venv/bin/python .knowledge/scripts/gate`** while you are
+  there: `gate` uses `sys.executable`, and a worktree with no `.venv` of its own otherwise
+  skips all 208 Discord cases while printing `ok test_discord`.
 - **Only `tests/test_install.py:38` copies the *checkout*; every other `copytree` in that file
   copies `REPO`.** So whatever that one line lets through is carried by all eighteen of them, and
   whatever it excludes is excluded everywhere. Untracked `ui/` and `site/` trees (~100 MB) beside

@@ -200,6 +200,29 @@ def known(where: Path | None = None) -> list[str]:
     return [name for name in found if ALLOWED.match(name)]
 
 
+def offered(where: Path | None = None) -> str:
+    """Every installed role as the lines an agent is told about, or nothing.
+
+    Sorted by slug, because what a person and a brain read is never left to the order a
+    directory happens to hand back. The description goes in whole: it is what a role
+    promises, and the clause a truncation takes is usually the one deciding whether this
+    is the right role for the work in front of the agent.
+
+    **A definition that will not read is skipped rather than raised.** One unusable role
+    must not cost every agent on this install the whole layer naming the others — and it
+    is already refused where somebody tries to run it, which is where the error belongs
+    and where it can name what is wrong.
+    """
+    lines = []
+    for slug in known(where):
+        try:
+            one = read(slug, where)
+        except NotARole:
+            continue
+        lines.append(f"- **{one.slug}** ({one.posture}) — {one.description}")
+    return "\n".join(lines)
+
+
 def shipped() -> tuple:
     """The role slugs this release ships, asked of the directory rather than listed."""
     if not SHIPPED.is_dir():
