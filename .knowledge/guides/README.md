@@ -20,29 +20,12 @@ Add a row when you add a guide; `doc-lint` fails the build if one is missing.
 
 ### Project how-tos
 
-| Guide | How to |
-|---|---|
-| [the-command-surface.md](./the-command-surface.md) | Read the command's shape, and check a new verb against it |
-| [instruction-layers.md](./instruction-layers.md) | Assemble a system prompt — the four layers, what may go in each, and what must never leak between them |
-| [moving-onto-the-store.md](./moving-onto-the-store.md) | Move a reader or writer off the old layout and onto what an agent keeps |
-| [testing-against-a-station.md](./testing-against-a-station.md) | Run a checkout against a disposable install, so testing never reaches the live one |
-| [cutting-a-release.md](./cutting-a-release.md) | Answer what `publishing-github-releases` asks of this repository — the version literal, the release branch, the gate, who merges, and what has gone wrong before |
+_(none yet)_
 
-## Moved out of here
-
-Three how-tos are no longer here, and they did not all go to the same place.
-
-**Writing a skill** ships as a skill — `src/templates/skills/writing-skills/` — so the
-agent doing the work is handed it rather than being expected to find it.
-
-**Building a provider adapter** and **building a channel adapter** are documentation, under
-`docs/extending/`, each carrying the full contract beside it as `references/the-contract.md`.
-They are not skills: writing an adapter is a thing a person does once against this repository,
-not a thing an agent needs in front of it on every turn. Named rather than linked — a catalog
-link out of `.knowledge` is checked against a tree that holds `.knowledge` alone.
-
-Edit them where they live. A guide that duplicated one would be a second place for the same
-rule to be wrong.
+The how-tos written for the build being replaced went with it. Each described a procedure against code
+that no longer exists — how the command surface was shaped, how a system prompt was layered, how to move
+a reader onto the store, how to test against a disposable install. Rewriting one before the thing it
+describes is rebuilt would be writing fiction, so each returns when its part lands and is proven.
 
 ## Rules for a project how-to
 

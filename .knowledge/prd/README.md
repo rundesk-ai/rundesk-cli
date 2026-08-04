@@ -26,8 +26,10 @@ work for an agent, while an agent is the same agent whatever it is reached on. `
 `lifecycle-` because moving this copy of rundesk has to account for what is connected, while a channel
 knows nothing of how rundesk arrived.
 
-Every component in the list above now has at least one contract, except `base-`. Adding another is the
-owner's call at the time its work arrives, and it is a row here.
+The ontology is unchanged by the rebuild and is not an agent's to change. Requirement IDs are permanent,
+so a `R-<AREA>-<n>` retired here is never reissued: a contract written for the rebuilt product starts its
+numbering after the highest the retired one reached, and the retired contract stays readable in this
+branch's history.
 
 ## Contents — maintained by hand
 
@@ -35,31 +37,15 @@ Add a row when you add a PRD; `doc-lint` fails the build if one is missing. Comp
 a link to the contract followed by a one-line gloss. Read top to bottom, this list is the product's
 high-level map.
 
+**The product is being rebuilt one part at a time, so this catalog is deliberately empty.** A contract
+lands here when the behavior it describes is built and proven in the new `src/` — never before, and never
+carried over from the build being replaced. The first will cover the command surface and the `rundesk`
+lifecycle verbs: `status`, `version`, `update` and `uninstall`.
+
 - **Base** — _(none yet)_
-- **Command**
-  - [command-surface](./command-surface.md) — every operation the command offers, and how one that is not built behaves.
-- **Platform**
-  - [platform-process](./platform-process.md) — a program rundesk runs, and how it keeps hold of it while it does.
-  - [platform-gateway](./platform-gateway.md) — the part that stays running, one of each name, and what it takes with it.
-  - [platform-secrets](./platform-secrets.md) — the named values this install keeps for every program it starts, and how one is told apart without ever being shown.
-  - [platform-schedule](./platform-schedule.md) — work rundesk begins because the time came, belonging to one gateway each.
-- **Provider**
-  - [provider-adapter](./provider-adapter.md) — the seam a brain is reached through: a program rundesk runs rather than code it loads, and what any adapter must do.
-- **Agent**
-  - [agent-home](./agent-home.md) — the named identity work is run for, the home it loads from, and how far apart two of them are kept.
-  - [agent-gateway](./agent-gateway.md) — the one gateway an agent runs in, made with it and taken away with it.
-  - [agent-run](./agent-run.md) — one occurrence of work, the account it leaves behind, and what a conversation is continued from.
-  - [agent-store](./agent-store.md) — everything one agent keeps that outlives the moment: what it is configured to do, what it has done, and how it is whole again from that alone.
-- **Channel**
-  - [channel-adapter](./channel-adapter.md) — the seam a surface is reached through: a program rundesk runs rather than code it loads, and what any channel adapter must do.
-  - [channel-messaging](./channel-messaging.md) — what any channel does with what arrives on it, whatever its platform can and cannot show.
-  - [channel-discord](./channel-discord.md) — what a turn looks like on Discord: threads, marks, its own commands, and what it costs.
-  - [channel-slack](./channel-slack.md) — what a turn looks like on Slack: threads, marks, one slash command, and what Slack cannot show.
-  - [agent-usage](./agent-usage.md) — what every run cost in tokens, and how sure anything derived from them is.
-- **Lifecycle**
-  - [lifecycle-install](./lifecycle-install.md) — getting rundesk onto a machine, and knowing it worked.
-  - [lifecycle-update](./lifecycle-update.md) — which version this is, which has been published, and moving between them.
-  - [lifecycle-migration](./lifecycle-migration.md) — bringing what is already on a machine into the shape a newer rundesk expects, in the window an update already stands every gateway down for.
-  - [lifecycle-backup](./lifecycle-backup.md) — copies of everything an owner keeps, kept where neither an update nor a removal can reach them, and putting one back.
-  - [lifecycle-removal](./lifecycle-removal.md) — taking rundesk off a machine, and what is left when it goes.
-  - [lifecycle-skill-catalog](./lifecycle-skill-catalog.md) — versioned repositories that install, update, and remove complete skill collections.
+- **Command** — _(none yet)_
+- **Platform** — _(none yet)_
+- **Provider** — _(none yet)_
+- **Agent** — _(none yet)_
+- **Channel** — _(none yet)_
+- **Lifecycle** — _(none yet)_

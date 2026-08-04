@@ -1,8 +1,7 @@
 name: release
 
-# Push a vX.Y.Z tag → publish one program archive. Remote installs and updates
-# both fetch this asset, so GitHub's cumulative release-download count records
-# each delivery once (R-INS-20, R-UPD-49).
+# Push a vX.Y.Z tag → publish one program archive. Remote installs and updates both fetch this
+# asset, so GitHub's cumulative release-download count records each delivery once.
 on:
   push:
     tags: ['v*.*.*']
@@ -20,17 +19,18 @@ jobs:
           python-version: '3.9'
 
       - name: The tag and the version in the code agree
-        # A release tagged differently from what the command reports is a release
-        # nobody can reason about: `rundesk version` would name one thing and the
-        # update it offers another.
+        # A release tagged differently from what the command reports is a release nobody can reason
+        # about: `rundesk version` would name one thing and the update it offers another. Compared
+        # here against `__version__` directly rather than through a product module, so cutting a
+        # release never depends on which parts of the rebuild have landed.
         run: |
           python - "$GITHUB_REF_NAME" <<'CHECK'
           import sys
           sys.path.insert(0, "src")
-          from rundesk import __version__, updater
+          from rundesk import __version__
           tag = sys.argv[1]
           print(f"tag={tag}  code={__version__}")
-          if not updater.tag_matches(tag, __version__):
+          if tag.lstrip("v") != __version__:
               print(f"::error::tag {tag} does not name the version the command reports ({__version__})")
               raise SystemExit(1)
           CHECK

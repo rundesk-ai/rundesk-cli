@@ -9,11 +9,14 @@ the parts are and how something moves through them. Follow a link to learn what 
 ## What this is
 
 `rundesk` is the command a person uses to run a small team of AI assistants on their own computer and
-reach them from a chat app. Today it puts itself on your machine and keeps itself current, runs the
-long-lived process an assistant works inside, and **reaches an assistant's brain and gets an answer
-back** — you can ask one a question and read what it did afterwards. What is not here yet is the chat
-apps: reaching an assistant from somewhere other than your own terminal. It is a self-hosted tool, not
-something sold; there is no revenue model.
+reach them from a chat app. It is a self-hosted tool, not something sold; there is no revenue model.
+
+**Everything below is the platform as designed, and it is being rebuilt part by part.** A first build
+reached all of it and taught us what the shape should have been; the rebuild starts again from the
+outside — putting itself on your machine, saying which version it is, moving to a newer one, and taking
+itself off again — and adds a part only once that part is proven. Anything not yet rebuilt is still
+listed by the command and says plainly that it is not available, so the command never claims something
+it cannot do. Which parts are proven is recorded row by row in [`prd/`](./prd/).
 
 ## The platform
 
