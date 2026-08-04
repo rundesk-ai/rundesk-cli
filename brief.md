@@ -1,0 +1,208 @@
+
+
+```bash
+
+# managing the agents 
+rundesk agents list
+rundesk agents add <agent> --provider <provider>
+rundesk agents <agent> configure --provider <provider>
+rundesk agents <agent> remove
+
+# rundesk ask <agent> <prompt>
+rundesk messages <agent> [--adapter <adapter>] [--limit <n>] [--search <query>]
+
+# managing the schedules
+rundesk schedules <agent> 
+rundesk schedules <agent> add <schedule> [--when <cron>] [--at <moment>] [--ask <prompt>] [--provider <provider>]
+rundesk schedules <agent> update <schedule> [--when <cron>] [--at <moment>] [--ask <prompt>] [--provider <provider>]
+rundesk schedules <agent> run <schedule>
+rundesk schedules <agent> show <schedule>
+rundesk schedules <agent> remove <schedule>
+
+# managing the skills
+rundesk skills list
+rundesk skills catalogs
+rundesk skills install <repository> [--confirm]
+rundesk skills remove <catalog> [--confirm]
+rundesk skills update <catalog> [--confirm]
+rundesk skills grant <agent> <skill>
+rundesk skills revoke <agent> <skill>
+
+# managing the channels
+rundesk channels <agent> add <adapter> --owner <user> [--allow <user>] [--token-stdin]
+rundesk channels <agent> update <adapter> [--owner <user>] [--allow <user>]
+rundesk channels <agent> show <adapter>
+rundesk channels <agent> remove <adapter>
+
+# managing the backups
+rundesk backups
+rundesk backups add
+rundesk backups configure [--status <on|off>] [--location <path>]
+
+# managing the env
+rundesk env list
+rundesk env check <key>
+rundesk env set <key>
+rundesk env unset <key>
+
+# managing the gateways
+rundesk gateways
+rundesk gateways start <agent>
+rundesk gateways stop <agent> [--all]
+rundesk gateways restart <agent> [--all] [--force]
+rundesk gateways logs <agent> [-n <lines>]
+
+# managing rundesk
+rundesk status
+rundesk version [--check]
+rundesk update
+rundesk uninstall [--purge]
+
+```
+
+Database `state.db`
+
+config
+- agent_name  (string)
+- agent_provider (string)
+- agent_model (string | nullable | unused)
+- agent_instructions (string | nullable | unused)
+- agent_settings (json)
+- owner_name (string)
+- last_seen_at (datetime | nullable)
+
+migrations
+- key (string | PK)
+- completed_at (datetime)
+
+schedules
+- id (int)
+- name (string | Unique)
+- enabled (boolean)
+- cron (string | nullable)
+- run_at (datetime | nullable)
+- expire_at (datetime | nullable)
+- agent_provider (string | nullable)
+- agent_model (string | nullable | unused)
+- agent_prompt (text | nullable)
+- command (text | nullable)
+- channel (string | nullable)
+- channel_place_id (string | nullable)
+- last_outcome (string | nullable) -> 'stopped' | 'failed' | 'completed'
+- last_run_at (datetime | nullable)
+- created_at (datetime)
+
+channels
+- key (string | PK)
+- owner_id (string)
+- allowed (json)
+- settings (json)
+- secrets (json)
+- agent_provider (string | nullable)
+- agent_model (string | nullable | unused)
+- agent_instructions (string | nullable | unused)
+- created_at (datetime)
+
+conversations
+- id (int | PK)
+- source (string) -> 'channel' | 'schedule' | 'terminal' | 'agent' | 'role'
+- source_id (string)
+- channel (string | nullable)
+- created_at (datetime)
+- last_at (datetime)
+
+conversation_messages
+- id (int | PK)
+- conversation_id (string | FK)
+- turn_id (int | FK)
+- author (string) -> 'agent' | 'user' | 'rundesk'
+- author_id (string)
+- body (text)
+- created_at (datetime)
+
+Indexed message tables: 
+- conversation_messages_fts
+- conversation_messages_fts_config
+- conversation_messages_fts_data
+- conversation_messages_fts_docsize
+- conversation_messages_fts_idx
+
+delegations
+- id (int | PK)
+- label (string)
+- parent_turn_id (int | FK)
+- report_message_id (int | FK)
+- turn_id (int | FK)
+- type (string) -> 'role' | 'agent'
+- target (string) -> 'development' | 'research' | 'planning' etc or agent 'cole" etc
+- brief (text)
+- state (string) -> 'queued' | 'running' | 'reporting' | 'delivered' | 'failed'
+- outcome (string) -> 'stopped' | 'failed' | 'completed'
+- attempts (int)
+- claimed_at (datetime | nullable)
+- delivered_at (datetime | nullable)
+- created_at (datetime)
+- latest_at (datetime)
+
+turns
+- id (int | PK)
+- conversation_id (int | FK)
+- message_id (int | FK)
+- provider (string | nullable)
+- model (string | nullable | unused)
+- session_resumed (boolean)
+- started_at (datetime)
+- ended_at (datetime | nullable)
+- outcome (string) -> 'stopped' | 'failed' | 'completed'
+- exit_code (int | nullable)
+- tokens_in (int)
+- tokens_out (int)
+- tokens_cached (int)
+
+turn_records
+- id (int | PK)
+- turn_id (int | FK)
+- seq (int)
+- received_at (datetime)
+- type (string) -> 'think' | 'tool' | 'result' | 'done' | 'usage' etc
+- event_data (json)
+
+provider_sessions
+- conversation_id (string | FK)
+- provider (string)
+- session_id (string)
+
+
+Rundesk local:
+
+/.rundesk/~  everything is stored here
+/.rundesk/data/~ all agent/user data is stored here
+/.rundesk/app/~ the installed app that is replaced on updates (does not hold state/data)
+/.rundesk/backups/~ the backups of 'data' and symlinked if moved
+/.rundesk/projects/~ a empty/shared directory for agents to install repos into 
+
+/.rundesk/data/agents/~ houses each of the agents that are added
+/.rundesk/data/logs/~ all rundesk level logs like updates, backups etc
+/.rundesk/data/catalog/~ the catalog of skills installed
+/.rundesk/data/skills/~ all individual skills get stored here (and symlinked to the catalog if installed)
+
+/.rundesk/data/config.json - the configuration for all of rundesk (backup_enabled, backup_retention, update_enabled, update_time).
+
+/.rundesk/data/agents/alan/~ the specific agent directory
+/.rundesk/data/agents/alan/logs/~ all logs related to alan's gateway, starts, failures etc
+/.rundesk/data/agents/alan/state.db - the state database for alan's gateway (all his presistent state, messages, history etc)
+
+/.rundesk/data/agents/alan/home/~ the lander of where the agent starts
+
+/.rundesk/data/agents/alan/sessions/<id>/~ each individual session goes into an isolated home directory 
+
+Each sesison has:
+- AGENTS.md
+- CLAUDE.md
+
+All the symlinked skills are here for CLI agents to auto load.
+- /.grok/skills/~
+- /.claude/skills/~
+- /.codex/skills/~
+- /.agents/skills/~
+- /skills/~
