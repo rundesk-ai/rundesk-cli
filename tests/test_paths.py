@@ -67,6 +67,40 @@ class ARootThatMustNotBeUsed(support.Isolated):
             paths.home()
         return str(refusal.exception)
 
+    def test_a_root_that_reaches_the_home_directory_through_a_dotdot_is_refused(self):
+        # `pathlib` never normalises `..` and never follows a symlink to decide `==`, so comparing
+        # the path as typed compares a string that is not the directory anything will use. This got
+        # through, and `uninstall --purge` removes `data/` below whatever root got through.
+        self.assertIn("home directory", self._refused(str(Path.home() / "Library" / "..")))
+
+    def test_a_root_that_reaches_the_home_directory_through_a_link_is_refused(self):
+        pointing = self.home / "a-link-to-home"
+        pointing.symlink_to(Path.home())
+        self.assertIn("home directory", self._refused(str(pointing)))
+
+    def test_a_root_that_reaches_the_filesystem_root_through_a_dotdot_is_refused(self):
+        self.assertIn("root of the filesystem", self._refused("/tmp/../.."))
+
+    def test_a_refusal_names_what_was_typed_and_what_it_turned_out_to_be(self):
+        # Naming only what was typed reads as arbitrary; naming only what it resolved to reads as a
+        # value nobody set. The person needs both to see why.
+        said = self._refused(str(Path.home() / "Library" / ".."))
+        self.assertIn("Library", said)
+        self.assertIn(str(Path.home()), said)
+
+    def test_a_relative_path_is_still_refused_rather_than_made_absolute(self):
+        # Resolving makes a relative path absolute against whatever directory the command ran in, so
+        # asking about it after resolving would quietly accept the exact thing this refuses.
+        self.assertIn("absolute", self._refused("rundesk-somewhere"))
+
+    def test_an_ordinary_root_is_handed_back_resolved(self):
+        # What comes back is what everything below the root is derived from, so it is the canonical
+        # form — otherwise a value that passed the check could still resolve elsewhere afterwards.
+        through = self.home / "by-another-name"
+        through.symlink_to(self.home)
+        os.environ[paths.HOME_IS] = str(through / "root")
+        self.assertEqual((self.home / "root").resolve(), paths.home())
+
     def test_a_root_that_is_set_and_empty_is_refused_rather_than_treated_as_unset(self):
         # The dangerous one. An empty value read as "nobody said" resolves to the owner's live
         # install at the exact moment something was trying to point the command elsewhere.

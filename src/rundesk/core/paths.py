@@ -122,13 +122,39 @@ def allowed(where: Path, called: str) -> Path:
     command that moves the copies somewhere would otherwise be the second command written to empty a
     home. `called` is what the caller knows the directory as, so the refusal names the thing somebody
     actually set rather than a variable they have never heard of.
+
+    **Compared after resolving, and the resolved value is what comes back.** `pathlib` never
+    normalises a `..` segment and never follows a symlink to decide `==`, so comparing the path as
+    typed compares a string that is not the directory anything will actually use. This guard read
+    `~/Library/..` as "not the home directory" and `/tmp/../..` as "not the root", which is both
+    refusals defeated by one segment — and `uninstall --purge` removes `data/` below whatever root
+    got through. That is precisely the incident `docs/layout.md` records: an install pointed at a
+    home directory emptied it, and reported success.
+
+    Handing back the resolved path rather than the typed one is the other half. A value that passed
+    the check and then went on being used as typed could still resolve somewhere else afterwards, so
+    every location derived below the root is derived from the canonical form.
     """
     if not where.is_absolute():
+        # Asked of the value as typed, and before anything is resolved: `resolve()` makes a relative
+        # path absolute against whatever directory the command happened to run in, so asking after
+        # would quietly accept the exact thing this refuses.
         raise Refused(f"{called} must be an absolute path, and is {where}")
-    if where == Path(where.anchor):
-        raise Refused(f"{called} must not be the root of the filesystem, and is {where}")
-    if where == Path.home():
-        raise Refused(f"{called} must not be the home directory itself, and is {where}")
-    if where.parent == where:
-        raise Refused(f"{called} has no parent, and is {where}")
-    return where
+
+    settled = where.resolve()
+    if settled == Path(settled.anchor):
+        raise Refused(f"{called} must not be the root of the filesystem, and is {_both(where, settled)}")
+    if settled == Path.home().resolve():
+        raise Refused(f"{called} must not be the home directory itself, and is {_both(where, settled)}")
+    if settled.parent == settled:
+        raise Refused(f"{called} has no parent, and is {_both(where, settled)}")
+    return settled
+
+
+def _both(where: Path, settled: Path) -> str:
+    """What was typed, and what it turned out to be when they differ.
+
+    A refusal naming only `~/Library/..` reads as arbitrary; naming only `/Users/you` reads as a
+    value nobody set. The person needs both to see why.
+    """
+    return str(where) if settled == where else f"{where}, which is {settled}"
