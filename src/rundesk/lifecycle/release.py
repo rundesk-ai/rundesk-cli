@@ -116,12 +116,16 @@ def _asked_of_the_api() -> Tuple[Optional[str], Optional[str]]:
             headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"})
         with urllib.request.urlopen(asked, timeout=ASK_SECONDS) as answered:
             said = json.loads(answered.read().decode("utf-8"))
-        tag = said.get("tag_name")
+        tag = said.get("tag_name") if isinstance(said, dict) else None
         return (tag, None) if parsed(tag) else (None, UNREACHABLE)
     except urllib.error.HTTPError as why:
         return (None, NOTHING_PUBLISHED) if why.code == 404 else (None, UNREACHABLE)
     except (urllib.error.URLError, OSError, ValueError):
         return None, UNREACHABLE
+    # `said` is whatever the other end sent. Valid JSON that is a list, or `null`, would have made
+    # `.get` raise out of this function and out of the command as a traceback — an answer nobody
+    # could act on, from the one function in the product whose whole job is to come back with one of
+    # three states rather than fall over. Asked rather than caught, so the answer stays UNREACHABLE.
 
 
 def described(installed: str, published: Optional[str], why: Optional[str] = None) -> str:

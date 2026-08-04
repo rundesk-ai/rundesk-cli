@@ -12,6 +12,7 @@ import os
 import tarfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import support
 from rundesk import __version__
@@ -51,7 +52,8 @@ class Updating(support.Isolated):
         config.write_fresh(paths.data())
         migration.stamp_without_running(paths.data())
 
-    def an_archive(self, marker: str = "after", steps=None, broken: bool = False) -> Path:
+    def an_archive(self, marker: str = "after", steps=None, broken: bool = False,
+                   escaping_link: str = "") -> Path:
         """A release tarball, built on disk, exactly as one arrives from GitHub."""
         inside = self.home / "release" / "rundesk-cli-v99"
         support.a_real_tree(inside, marker)
@@ -64,8 +66,29 @@ class Updating(support.Isolated):
                 escaping = tarfile.TarInfo("../escaped")
                 escaping.size = 0
                 held.addfile(escaping, io.BytesIO(b""))
+            if escaping_link:
+                held.addfile(self.a_link_out(escaping_link))
             held.add(inside, arcname=inside.name)
         return at
+
+    def a_link_out(self, kind: str) -> tarfile.TarInfo:
+        """A link member, nested one directory deep, whose target really lands outside the download.
+
+        The two kinds need different targets to escape, and that asymmetry *is* the defect. A
+        symlink is resolved against its own directory, so from `<release>/src/` it takes three `..`
+        to get out of the download. A hard link is resolved by `tarfile` against the extraction root
+        itself, so one `..` is already outside — while the old guard, measuring it from the member's
+        directory like a symlink, saw it land harmlessly inside the release tree.
+        """
+        member = tarfile.TarInfo("rundesk-cli-v99/src/escaped")
+        member.size = 0
+        if kind == "symlink":
+            member.type = tarfile.SYMTYPE
+            member.linkname = "../../../escaped-out-of-the-download"
+        else:
+            member.type = tarfile.LNKTYPE
+            member.linkname = "../escaped-out-of-the-download"
+        return member
 
     def fetching(self, archive: Path):
         def fetch(_url, into):
@@ -192,6 +215,50 @@ class AnUpdateThatDoesNotLand(Updating):
         self.assertEqual(FAILED, code)
         self.assertIn("NOT APPLIED", err)
         self.assertFalse((self.home / "escaped").exists())
+
+    def test_an_archive_whose_symlink_points_outside_the_download_is_refused(self):
+        code, _, err = self.update(archive=self.an_archive(escaping_link="symlink"))
+        self.assertEqual(FAILED, code)
+        self.assertIn("points outside the download", err)
+        self.assertEqual("before", (paths.app() / "README.md").read_text())
+
+    def test_an_archive_whose_hard_link_points_outside_the_download_is_refused(self):
+        # The branch that had no test at all, and was wrong. A symlink's target is resolved against
+        # the link's own directory; a hard link's is resolved by `tarfile` against the extraction
+        # root. Measuring a hard link the first way made `../x` look like it landed inside the
+        # release tree when it really lands beside the download — so the link was created pointing
+        # at a real file outside it, and `tree.place` then copies that file's contents into `app/`
+        # as though the release had shipped it. One `..` and one directory of nesting is enough.
+        code, _, err = self.update(archive=self.an_archive(escaping_link="hardlink"))
+        self.assertEqual(FAILED, code)
+        # The guard's own words, not merely "it failed": measured the wrong way this member sails
+        # through the check and the update dies later for an unrelated reason, which is the same
+        # exit code and tells nobody the escape was caught.
+        self.assertIn("points outside the download", err)
+        self.assertEqual("before", (paths.app() / "README.md").read_text())
+
+    def test_an_api_answer_that_is_not_an_object_is_unreachable_rather_than_a_traceback(self):
+        # `said.get` on a list or on `null` raises out of the one function whose whole job is to
+        # come back with one of three states rather than fall over, and nothing up the chain
+        # catches it — the command would end in a traceback instead of saying UNKNOWN.
+        import contextlib
+        import io as _io
+        import json as _json
+        import urllib.request
+
+        from rundesk.lifecycle import release
+
+        @contextlib.contextmanager
+        def answering(body):
+            def opened(*_args, **_named):
+                return contextlib.closing(_io.BytesIO(_json.dumps(body).encode()))
+            with mock.patch.object(urllib.request, "urlopen", opened):
+                yield
+
+        for body in ([], None, "a string", 7):
+            with self.subTest(body=body):
+                with answering(body):
+                    self.assertEqual((None, release.UNREACHABLE), release._asked_of_the_api())
 
     def test_a_download_that_fails_leaves_the_install_as_it_was(self):
         def refuses(_url, _into):

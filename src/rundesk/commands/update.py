@@ -221,7 +221,17 @@ def _brought_down(tag: str, into: Path, fetching: Optional[Fetching] = None) -> 
             if into.resolve() not in settled.parents and settled != into.resolve():
                 raise ValueError(f"{member.name} would be written outside the download")
             if member.issym() or member.islnk():
-                pointed = (settled.parent / member.linkname).resolve()
+                # **The two kinds of link do not resolve their target the same way, and checking
+                # them as though they did is a check that passes while the escape happens.** A
+                # symlink's target is resolved by the filesystem against the link's own directory.
+                # A hard link's is resolved by `tarfile` itself against the extraction root —
+                # `os.path.join(path, tarinfo.linkname)`, unchanged in every version from the floor
+                # here upwards. So a hard link one directory deep naming `../something` was measured
+                # against the wrong place, came out looking contained, and was then created pointing
+                # at a real file outside the download. That file's contents are then indistinguishable
+                # from an ordinary member and get copied into `app/` with the rest of the release.
+                against = into if member.islnk() else settled.parent
+                pointed = (against / member.linkname).resolve()
                 if into.resolve() not in pointed.parents:
                     raise ValueError(f"{member.name} points outside the download")
         held.extractall(into)
