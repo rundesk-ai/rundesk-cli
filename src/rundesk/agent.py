@@ -1470,10 +1470,8 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
         The same settlement a cancelled one reaches, so a stop looks like a stop however
         far the execution had got — including not having started at all.
         """
-        records(name, where).finish_role(
-            run_id, store.stamped(), store.STOPPED,
-            "this run was stopped before it finished", role_runs.retained_until(),
-        )
+        role_runs.end(name, run_id, store.STOPPED,
+                      "this run was stopped before it finished", where=where)
 
     async def carrying(run_id: str):
         """Carry one root, and leave it settled however that goes.
@@ -1494,10 +1492,8 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
             asked = (reading(name, where).role_run(run_id) or {}).get("stop_asked_at")
             if not asked:
                 raise
-            records(name, where).finish_role(
-                run_id, store.stamped(), store.STOPPED,
-                "this run was stopped before it finished", role_runs.retained_until(),
-            )
+            role_runs.end(name, run_id, store.STOPPED,
+                          "this run was stopped before it finished", where=where)
             return None
         except BaseException as why:  # noqa: BLE001 — a boundary, and see below
             # **Every other way this can fail ends the execution truthfully — after a

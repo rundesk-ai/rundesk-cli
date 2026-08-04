@@ -728,7 +728,6 @@ async def carry(name: str, run_id: str, where: Path | None = None, carrying=None
     if row["state"] in store.FINISHED_ROLES:
         raise NotDelegable(f"'{run_id}' has already finished")
     it = verified(name, row, where)
-    bundled = paths(name, run_id, where)
     parent = kept.run(row["parent_run"]) or {}
     chose = kept.agent()
     named, model, settings = carried_with(row, parent, chose)
@@ -764,10 +763,6 @@ async def carry(name: str, run_id: str, where: Path | None = None, carrying=None
         now=now,
     )
     kept.role_active(run_id, store.stamped(now), retained_until(now))
-    # Before the outcome is settled, because settling is what makes the parent's review
-    # owing — and a report that says the checkout was left as it was found should be true
-    # by the time anybody reads it.
-    unpresent(row.get("target"), bundled["skills"])
     settle(name, run_id, outcome, where=where, now=now)
     return outcome
 
@@ -876,6 +871,36 @@ def _shallow(root: Path, depth: int):
     return found
 
 
+def end(name: str, run_id: str, became: str, report: str, where: Path | None = None,
+        now=None) -> bool:
+    """Take back what this run stood in the target project, then finish its record.
+
+    **The one way a role run ends, whichever way it ended** (R-ROL-22). A turn that
+    returned an outcome is the path everybody thinks of, and it is the rarest of the five:
+    a run somebody stopped is cancelled where it stands, a run nothing was carrying never
+    reached a turn at all, and one that could not be carried or went quiet is settled by
+    whatever noticed. Every one of those left a vendor directory in somebody's checkout,
+    holding links into a bundle swept a fortnight later — so taking them back belongs
+    where the record is written rather than beside one caller of it.
+
+    Before the record and not after, because settling is what makes the parent's review
+    owing — and a report saying the checkout was left as it was found should be true by
+    the time anybody reads it.
+    """
+    kept = agents.records(name, where)
+    try:
+        unpresent((kept.role_run(run_id) or {}).get("target"),
+                  paths(name, run_id, where)["skills"])
+    except (NotDelegable, OSError):
+        # A bundle that cannot even be resolved is not a reason to leave a run unsettled:
+        # its parent is owed exactly one review however this ended (R-ROL-15), and the
+        # sweep takes back anything still standing when the window closes.
+        pass
+    return kept.finish_role(
+        run_id, store.stamped(now), became, report, retained_until(now)
+    )
+
+
 def settle(name: str, run_id: str, outcome: turn.Outcome, where: Path | None = None,
            now=None) -> bool:
     """Write down what this execution came to, and owe its parent one review.
@@ -885,14 +910,11 @@ def settle(name: str, run_id: str, outcome: turn.Outcome, where: Path | None = N
     the named parent's to check, and a gateway that inferred it would be manufacturing the
     one fact the review exists to establish.
     """
-    kept = agents.records(name, where)
-    at = store.stamped(now)
     became = store.SUCCEEDED if outcome.ok else (
         store.STOPPED if outcome.became == turn.INTERRUPTED else store.FAILED
     )
-    return kept.finish_role(
-        run_id, at, became, outcome.text or (outcome.why or ""), retained_until(now)
-    )
+    return end(name, run_id, became, outcome.text or (outcome.why or ""),
+               where=where, now=now)
 
 
 #: How many times carrying one run may throw before it is settled rather than tried again.
@@ -970,14 +992,13 @@ def carry_failed(name: str, run_id: str, why: str, where: Path | None = None,
     Answers how many attempts there have been and whether this one settled it.
     """
     kept = agents.records(name, where)
-    at = store.stamped(now)
-    attempts = kept.role_carry_failed(run_id, at)
+    attempts = kept.role_carry_failed(run_id, store.stamped(now))
     if attempts < CARRY_CEILING:
         return {"attempts": attempts, "settled": False}
-    settled = kept.finish_role(
-        run_id, at, store.FAILED,
+    settled = end(
+        name, run_id, store.FAILED,
         COULD_NOT_CARRY.format(attempts=attempts, why=why or "it gave no reason"),
-        retained_until(now),
+        where=where, now=now,
     )
     return {"attempts": attempts, "settled": settled}
 
@@ -998,11 +1019,9 @@ def gone_quiet(name: str, where: Path | None = None, now=None,
     quiet_before = store.stamped(lambda: (at - timedelta(hours=hours)).timestamp())
     settled = []
     for row in kept.role_runs_gone_quiet(quiet_before):
-        if kept.finish_role(
-            row["id"], store.stamped(now), store.FAILED,
-            WENT_QUIET.format(seen=_latest_seen(row), hours=hours),
-            retained_until(now),
-        ):
+        if end(name, row["id"], store.FAILED,
+               WENT_QUIET.format(seen=_latest_seen(row), hours=hours),
+               where=where, now=now):
             settled.append(row["id"])
     return settled
 
