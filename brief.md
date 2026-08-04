@@ -1,5 +1,3 @@
-
-
 ```bash
 
 # managing the agents 
@@ -34,11 +32,6 @@ rundesk channels <agent> update <adapter> [--owner <user>] [--allow <user>]
 rundesk channels <agent> show <adapter>
 rundesk channels <agent> remove <adapter>
 
-# managing the backups
-rundesk backups
-rundesk backups add
-rundesk backups configure [--status <on|off>] [--location <path>]
-
 # managing the env
 rundesk env list
 rundesk env check <key>
@@ -52,11 +45,30 @@ rundesk gateways stop <agent> [--all]
 rundesk gateways restart <agent> [--all] [--force]
 rundesk gateways logs <agent> [-n <lines>]
 
-# managing rundesk
+# MANAGING BACKUPS
+# --------------------------------------------
+# displays a list of available backups newest to oldest (names of each backup in location)
+rundesk backups
+# create a new on-demand back up and returns the backup name
+rundesk backups save
+# restores the data from a given back up and it must have a hook that runs after
+# the hook later will be used for things like running migrations if the data is older. 
+rundesk backups restore <backup>
+# moves the backups to a new location and symlinks it back to the original location
+rundesk backups set-location <path>
+
+# MANAGING RUNDESK
+# --------------------------------------------
+# displays the current version, the rundesk location, config values
 rundesk status
-rundesk version [--check]
+# displays the current version and auto-checks if out of date
+rundesk version
+# updates the rundesk install otherwise says up to date with version
 rundesk update
-rundesk uninstall [--purge]
+# uninstalls rundesk (confim is required, and purge deletes all data, otherwise data remains)
+rundesk uninstall [--confirm] [--purge]
+# configures the rundesk config.json
+rundesk configure [--key <value>]
 
 ```
 
@@ -176,10 +188,13 @@ provider_sessions
 Rundesk local:
 
 /.rundesk/~  everything is stored here
+/.rundesk/app/~ the installed app that is replaced on updates (does not hold state/data), this is the full repo download.
 /.rundesk/data/~ all agent/user data is stored here
-/.rundesk/app/~ the installed app that is replaced on updates (does not hold state/data)
+/.rundesk/data/README.md - tells an agent what this folder is briefly.
 /.rundesk/backups/~ the backups of 'data' and symlinked if moved
+/.rundesk/backups/README.md - tells an agent what this folder is briefly. 
 /.rundesk/projects/~ a empty/shared directory for agents to install repos into 
+/.rundesk/projects/README.md - tells the agent what this directory can be used for if they enter it. a simple message about using it for shared projects, like git repos.
 
 /.rundesk/data/agents/~ houses each of the agents that are added
 /.rundesk/data/logs/~ all rundesk level logs like updates, backups etc
@@ -206,3 +221,6 @@ All the symlinked skills are here for CLI agents to auto load.
 - /.codex/skills/~
 - /.agents/skills/~
 - /skills/~
+
+/.rundesk/data/agents/alan/home/MEMORY.md
+/.rundesk/data/agents/alan/home/SOUL.md
