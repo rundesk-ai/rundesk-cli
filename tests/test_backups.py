@@ -291,6 +291,42 @@ class LettingGoOfOldOnes(Copies):
             ["2026-08-02T03-00-00Z", "notes-of-my-own", "0000-not-a-copy", "README.md"],
             self.entries())
 
+    def test_a_copy_that_cannot_be_put_back_never_evicts_one_that_can(self):
+        # The whole reason retention has to ask what a copy is. `kept` and `prune` counted anything
+        # shaped like a name while `_a_copy` refused anything without a readable config.json, so an
+        # unrestorable copy sat at the newest end of the list, counted towards the number the owner
+        # asked to keep, and pushed the last good one out. The owner asked to keep one copy and was
+        # left holding the only one that does not work.
+        self.given_copy("2020-01-01T00-00-00Z")
+        broken = self.at / "2026-08-04T00-00-00Z"
+        broken.mkdir()
+        (broken / "config.json").write_text("{ not valid json")
+
+        backups.prune(1, self.at)
+
+        self.assertTrue((self.at / "2020-01-01T00-00-00Z").is_dir(),
+                        "the only restorable copy was let go of")
+
+    def test_it_leaves_a_copy_it_cannot_read_alone_rather_than_sweeping_it(self):
+        # Still the owner's, and rundesk cannot say what is in it. Quietly deleting a directory
+        # because a file inside it would not parse is not this command's decision to make.
+        broken = self.at / "2026-08-04T00-00-00Z"
+        broken.mkdir()
+        (broken / "config.json").write_text("{ not valid json")
+        self.given_copy("2020-01-01T00-00-00Z")
+
+        backups.prune(1, self.at)
+
+        self.assertTrue(broken.is_dir())
+
+    def test_whether_a_copy_can_be_put_back_is_one_question_with_one_answer(self):
+        self.given_copy(ITS_NAME)
+        nameless = self.at / "2020-01-01T00-00-00Z"
+        nameless.mkdir()
+        self.assertTrue(backups.restorable(self.at, ITS_NAME))
+        self.assertFalse(backups.restorable(self.at, "2020-01-01T00-00-00Z"))
+        self.assertFalse(backups.restorable(self.at, "never-made"))
+
     def test_it_says_which_it_could_not_remove(self):
         if os.geteuid() == 0:
             self.skipTest("root may remove from a directory with no write permission")
@@ -738,6 +774,14 @@ class WhenTheCopiesAreSomewhereUnplugged(Copies):
         self.assertEqual(self.elsewhere.resolve(), self.at.resolve(),
                          "the link was re-pointed away from the copies")
 
+    def test_saving_says_what_happened_rather_than_an_errno(self):
+        # The operation most likely to be running unattended when a disk is unplugged, and the one
+        # entry point the guard did not reach: `mkdir(exist_ok=True)` raises on a broken link
+        # because the directory entry is there, so this came out as `[Errno 17] File exists`.
+        with self.assertRaises(backups.Refused) as refused:
+            backups.save(self.data, self.at, A_MOMENT)
+        self.assertIn("which is not there", str(refused.exception))
+
     def test_the_command_fails_rather_than_offering_to_make_a_first_copy(self):
         code, out, err = self.rundesk("backups")
         self.assertEqual(FAILED, code)
@@ -837,6 +881,21 @@ class PointingTheOldPlaceAtTheNew(Copies):
         self.assertTrue(self.at.is_symlink(), "the link was removed and never put back")
         self.assertEqual(self.elsewhere.resolve(), self.at.resolve())
         self.assertEqual([ITS_NAME], backups.kept(self.at))
+
+    def test_a_link_that_cannot_be_put_back_either_is_said_and_not_swallowed(self):
+        # Both the new link and the rollback failing leaves no link at all where the copies were
+        # reached through. Swallowed, that is the worse of the two bugs: a missing directory is not
+        # a broken symlink, so `_reachable` never fires on it, `kept` legitimately answers "none",
+        # and the owner is told they have no copies while every one sits intact on the other disk.
+        self.given_copies(ITS_NAME)
+        backups.relocate(self.elsewhere, self.at)
+
+        with mock.patch.object(Path, "symlink_to", side_effect=OSError("the disk is full")):
+            with self.assertRaises(backups.HalfRestored) as half:
+                backups._point_at(self.at, self.home / "further")
+
+        self.assertIn(str(self.elsewhere), str(half.exception),
+                      "the message does not say where the copies still are")
 
     def test_the_directory_is_put_back_when_the_link_cannot_be_made(self):
         # Between removing a directory and creating a link there is a moment with neither, and what

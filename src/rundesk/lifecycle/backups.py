@@ -184,6 +184,11 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
     at = backups or paths.backups()
     if not from_where.is_dir():
         raise Refused(f"there is nothing to copy: {from_where} is not there")
+    # The one entry point this guard did not reach. `mkdir(exist_ok=True)` still raises on a broken
+    # link — the directory *entry* is there — so an unplugged disk came out of the most-likely-to-be
+    # -unattended operation as a raw `[Errno 17] File exists`, while every other verb said plainly
+    # what had happened.
+    _reachable(at)
 
     at.mkdir(parents=True, exist_ok=True)
     name = named(when, at)
@@ -219,14 +224,33 @@ def prune(keeping: int, backups: Optional[Path] = None,
     at = backups or paths.backups()
     said = saying or (lambda _line: None)
 
+    # **Only copies that could actually be put back are counted, and only those are let go of.**
+    # Retention is a promise about how many copies you have, and a directory that cannot be restored
+    # is not one of them however it is named. Counting it meant an unreadable copy could sit at the
+    # newest end of the list and evict the last good one — the owner asked to keep one copy and was
+    # left with the only one that does not work.
+    #
+    # The broken ones are left alone rather than swept: they are still the owner's, rundesk cannot
+    # say what is in them, and quietly deleting a directory because a file inside it would not parse
+    # is not a decision this command is entitled to make. `save` says when it has made one.
     stuck = []
-    for name in kept(at)[keeping:]:
+    for name in [one for one in kept(at) if restorable(at, one)][keeping:]:
         try:
             shutil.rmtree(at / name)
             said(f"let go of {name}")
         except OSError:
             stuck.append(name)
     return stuck
+
+
+def restorable(at: Path, name: str) -> bool:
+    """Whether this copy could actually be put back, as opposed to merely being named like one.
+
+    The question retention has to ask before it lets anything go, and the question a listing has to
+    ask before it lets somebody believe they are covered.
+    """
+    where = at / name
+    return where.is_dir() and _has_the_mark(where)
 
 
 def restore(name: str, data: Optional[Path] = None, backups: Optional[Path] = None,
@@ -357,11 +381,19 @@ def _point_at(at: Path, to: Path) -> None:
         at.unlink()
         try:
             at.symlink_to(to)
-        except OSError:
+        except OSError as why:
             try:
                 at.symlink_to(was)
-            except OSError:
-                pass
+            except OSError as also:
+                # Both the new link and putting the old one back failed, so there is now no link at
+                # all where the copies were reached through. Swallowing this was the worse bug of
+                # the two: a missing directory is not a broken symlink, so `_reachable` never fires
+                # on it, `kept` legitimately answers "none", and the owner is told they have no
+                # copies while every one of them sits intact on the other disk.
+                raise HalfRestored(
+                    f"{at} no longer points anywhere ({why}), and could not be pointed back at "
+                    f"{was} either ({also}) — the copies are still there, and this is the path to "
+                    "link it at again") from also
             raise
         return
 
@@ -413,12 +445,24 @@ def _a_copy(at: Path, name: str) -> Path:
     where = at / name
     if not where.is_dir():
         raise Refused(f"there is no copy called {name} in {at}")
-    how, said = jsonfile.read(where / THE_MARK)
-    if how != jsonfile.READ or not isinstance(said, dict):
+    if not _has_the_mark(where):
         raise Refused(
             f"{name} has no readable {THE_MARK}, so it is not a copy of an install's data — "
             "putting it back would leave rundesk unable to tell how far it has been carried")
     return where
+
+
+def _has_the_mark(where: Path) -> bool:
+    """Whether this directory holds a readable `config.json`, which is what makes it a copy.
+
+    **One definition, asked by everything that has an opinion about what a copy is.** It used to be
+    asked only on the restore path, and the result was three functions quietly disagreeing: `kept`
+    and `prune` counted anything shaped like a name, `_a_copy` refused anything without the mark.
+    A copy that could not be put back therefore sat at the top of the list, counted towards the
+    number the owner asked to keep, and pushed a real one out. See `restorable`.
+    """
+    how, said = jsonfile.read(where / THE_MARK)
+    return how == jsonfile.READ and isinstance(said, dict)
 
 
 def _swap(a_copy: Path, into: Path) -> None:
