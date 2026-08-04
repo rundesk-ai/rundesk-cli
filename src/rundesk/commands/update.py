@@ -6,7 +6,8 @@ archive is fetched — arrives as an argument and the whole of it runs offline i
 The order is chosen so that the failure which cannot damage anything happens first:
 
 1. Ask what is published. Cannot ask → **stop, non-zero**, and change nothing.
-2. Not newer → say so and stop.
+2. Not newer → settle the install anyway, and stop. Being on the newest release is not the same as
+   being settled on it, and an update interrupted between the two would otherwise never finish.
 3. Fetch the archive and check it is a rundesk tree, in a temporary directory. Nothing installed has
    been touched yet, so everything up to here is free to fail.
 4. Replace `app/`, staged and renamed, putting back what was there if any part fails.
@@ -62,6 +63,23 @@ def cmd_update(_args: argparse.Namespace, asking=None, fetching=None) -> int:
     print(line)
 
     if not release.newer(published, __version__):
+        # **Being on the newest release is not the same as being settled on it.** An update that
+        # was interrupted between replacing the files and settling — a machine that slept, a
+        # terminal that closed — leaves an install whose code is current and whose configuration and
+        # migrations belong to the release before it. Asking GitHub then answers UP TO DATE for
+        # ever, and the settling never happens: a value the new release added is never written, and
+        # a migration step it shipped is never run.
+        #
+        # So this settles rather than checking whether settling is needed. Every part of it is
+        # already idempotent — the directories are made if absent, configuration values are filled
+        # in only where missing, and a migration step that has run is recorded and skipped — so
+        # doing it unconditionally costs one process and makes the half-updated state impossible to
+        # be left in, rather than merely unlikely.
+        if not paths.app().exists():
+            return OK
+        gone_wrong = settled_by_the_new_release(paths.app())
+        if gone_wrong:
+            return _failed(f"this install is on {__version__} and is not settled — {gone_wrong}")
         return OK
 
     try:

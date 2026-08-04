@@ -214,6 +214,40 @@ class CarryingTheInstallForward(Updating):
         self.assertEqual(FAILED, code)
         self.assertIn("0001_broken", err)
 
+    def test_an_update_interrupted_before_settling_is_finished_by_running_it_again(self):
+        """The half-updated state: current code, and configuration and migrations from before it.
+
+        A machine that slept between the file swap and the settle leaves exactly this. Asking GitHub
+        afterwards answers UP TO DATE for ever, so unless being current also settles, the release's
+        migration step never runs and the value it added is never written — and nothing ever says so.
+        """
+        # Exactly what a swap leaves behind: the new release's files in place, nothing settled.
+        support.a_real_tree(paths.app(), "after")
+        (paths.app() / "src" / "rundesk" / "lifecycle" / "steps" / "0001_first.py").write_text(A_STEP)
+        self.assertIsNone(config.read(paths.data())["migration"])
+
+        code, _, err = self.update(published=f"v{__version__}")
+
+        self.assertEqual(OK, code, err)
+        self.assertTrue((paths.data() / "carried").exists(),
+                        "an install left half-updated was never carried forward")
+        self.assertEqual("0001_first", config.read(paths.data())["migration"])
+
+    def test_being_up_to_date_and_settled_runs_no_step_a_second_time(self):
+        support.a_real_tree(paths.app(), "after")
+        (paths.app() / "src" / "rundesk" / "lifecycle" / "steps" / "0001_first.py").write_text(A_STEP)
+        self.update(published=f"v{__version__}")
+        (paths.data() / "carried").unlink()
+        self.update(published=f"v{__version__}")
+        self.assertFalse((paths.data() / "carried").exists(), "the step ran a second time")
+
+    def test_being_up_to_date_with_nothing_installed_settles_nothing(self):
+        # Running from a checkout against a root that has no install: there is no release to settle.
+        import shutil as _shutil
+        _shutil.rmtree(paths.app())
+        code, _, err = self.update(published=f"v{__version__}")
+        self.assertEqual(OK, code, err)
+
     def test_an_update_with_no_steps_to_run_still_succeeds(self):
         code, _, err = self.update(archive=self.an_archive())
         self.assertEqual(OK, code, err)

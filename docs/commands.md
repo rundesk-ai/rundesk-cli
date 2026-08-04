@@ -101,6 +101,12 @@ the release it was, never on neither.
 
 `data/` is never touched by an update.
 
+**Being on the newest release is not the same as being settled on it.** An update interrupted between
+replacing the files and settling — a machine that slept, a terminal that closed — leaves an install
+whose code is current and whose configuration and migrations belong to the release before it. So
+`rundesk update` settles the install even when it reports `UP TO DATE`; everything it does is
+idempotent, and running it again is how you finish an update that stopped halfway.
+
 ## uninstall
 
 `--confirm` is required. Without it, the command says exactly what it would take and what it would
