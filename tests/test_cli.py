@@ -5239,6 +5239,24 @@ class HandingWorkToAnotherAgent(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("cannot be handed on", said)
 
+    def test_asking_a_role_by_name_says_it_is_a_role(self):
+        """Both are install-wide, so a name typed at `ask` is as likely to be a role as an
+        agent — and "nothing of that name has been made" points at making one nobody
+        wanted. A role stands in a project, which is why this names the command."""
+        stands = self.where / ".roles" / "archaeology"
+        stands.mkdir(parents=True)
+        (stands / "AGENTS.md").write_text("# Archaeology\n", encoding="utf-8")
+        (stands / "role.json").write_text(
+            '{"description": "Trace one behaviour.", "skills": ["python-patterns"],'
+            ' "posture": "read"}', encoding="utf-8")
+        os.environ["RUNDESK_AGENT"] = "elena"
+        self.addCleanup(os.environ.pop, "RUNDESK_AGENT", None)
+        code, said = drive(["ask", "archaeology", self.TASK],
+                           agents=FakeAgents(made=["elena", "cole"]))
+        self.assertEqual(1, code)
+        self.assertIn("A ROLE, NOT AN AGENT", said)
+        self.assertIn("rundesk roles elena run archaeology --target", said)
+
     def test_a_delegation_needs_a_turn_of_this_agents_own(self):
         os.environ.pop("RUNDESK_RUN", None)
         with feeding(self.TASK):

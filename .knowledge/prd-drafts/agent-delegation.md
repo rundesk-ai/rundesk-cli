@@ -45,6 +45,7 @@ conversation for review. The asking agent reviews it and answers the person who 
 | ✅ | R-DEL-23 | Guiding a delegation and carrying one on are each shown where the person asked, without repeating what was said | `a steer is shown as its own message and never as subtext`, `a steer is shown as its own message`, `a steer never repeats what was said`, `a delegation carried on says so rather than looking like a new one`, `a delegation carried on says so`, `neither a steer nor a resume carries an elapsed clause`, `a steer and a carrying on are each shown where the person asked`, `a word said into an ask is shown once each where the work was asked for`, `an ask carried on is shown as carried on rather than handed over`, `what is waiting to be said and a stop asked for are both shown` |
 | ✅ | R-DEL-24 | One named agent asking another from inside a turn is admitted as a delegation, whichever verb was typed | `one agent asking another is admitted as a delegation`, `a role execution cannot ask a named agent either`, `an agent reached by delegation cannot ask another one`, `an agent asking itself is the turn it is already in`, `a person at a terminal asking an agent is never a delegation` |
 | ✅ | R-DEL-25 | A turn is told which agent it belongs to, so a command run from it can tell whose work it is doing | `a turn is told whose turn it is`, `a turn nobody named an agent for is told no agent` |
+| ✅ | R-DEL-26 | Asking a role by name says it is a role and names the command that hands it work | `asking a role by name says it is a role` |
 
 ## Open questions
 

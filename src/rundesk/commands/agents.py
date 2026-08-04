@@ -308,6 +308,20 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
         print('        for example: rundesk ask ava "what changed today?"', file=sys.stderr)
         return 1
     if not agents.exists(name):
+        # **A role is the other thing work is handed to, and it is not asked.** Both are
+        # install-wide, so a name typed here is as likely to be one as the other — and
+        # "nothing of that name has been made" is true, unhelpful, and points at making an
+        # agent nobody wanted. A role run stands in a project directory, which is why this
+        # names the command rather than doing it.
+        from rundesk import role as roles
+
+        if name in roles.known():
+            asking = os.environ.get("RUNDESK_AGENT") or "<agent>"
+            print(f"{name}: A ROLE, NOT AN AGENT — a role is put on, never asked",
+                  file=sys.stderr)
+            print(f"        hand it work: rundesk roles {asking} run {name} "
+                  "--target <project>", file=sys.stderr)
+            return 1
         print(f"{name}: NO SUCH AGENT — nothing of that name has been made", file=sys.stderr)
         print(f"        make it: rundesk add {name} --provider <provider>", file=sys.stderr)
         return 1
