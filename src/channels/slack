@@ -1550,19 +1550,28 @@ class Agent:
         us but the word (R-CAD-16). A place we cannot find falls back to the conversation
         rather than failing, because a report in the wrong room beats a report nowhere; it
         is said out loud so nobody has to wonder which happened.
+
+        **And a fallback is announced only where it is actually taken (R-CH-12).** The place
+        is resolved first and the conversation second, so what is said about the refusal is
+        written once both answers are in. Saying "saying it in the conversation instead"
+        before asking whether there *is* one told an owner their report had gone somewhere
+        else while it went nowhere: a schedule reporting into a place nobody has spoken in
+        carries no conversation at all, which is exactly the delivery this line is read on.
         """
         place = it.get("place")
+        refused = None
         if place:
             found, why = await self._room_named(str(place))
             if found is not None:
                 return found, None
-            note(why or f"could not find '{place}' on this surface — "
-                        f"saying it in the conversation instead")
+            refused = why or f"could not find '{place}' on this surface"
         at = it.get("conversation")
-        if at is None:
-            return None, None
-        channel, thread = where_of(at)
-        return (channel or None), thread
+        channel, thread = where_of(at) if at is not None else (None, None)
+        channel = channel or None
+        if refused:
+            note(f"{refused} — saying it in the conversation instead" if channel is not None
+                 else f"{refused}, and there is no conversation to say it in instead")
+        return channel, thread
 
     async def _room_named(self, said: str):
         """One room, by the word an owner wrote for it: an id, or a name with or without
@@ -1576,18 +1585,18 @@ class Agent:
         message a stranger.
 
         Answers with the room and, when there is none, why — so the one caller can tell a
-        word it could not find from a person it declined to message.
+        word it could not find from a person it declined to message. The reason alone, and
+        never what happens next: only the caller knows whether there is a conversation to
+        fall back on.
         """
         digits = said.strip().lstrip("#")
         if digits.startswith(("C", "D", "G")) and " " not in digits:
             return digits, None
         if digits.startswith("U"):
             if not getattr(self.chose, "dm", False):
-                return None, (f"'{said}' is a person, and this channel writes in rooms — "
-                              f"saying it in the conversation instead")
+                return None, f"'{said}' is a person, and this channel writes in rooms"
             if digits not in {str(one) for one in (self.chose.allow or ())}:
-                return None, (f"'{said}' is not on this channel's allowed list — "
-                              f"saying it in the conversation instead")
+                return None, f"'{said}' is not on this channel's allowed list"
             opened = await self.call("conversations_open", users=digits)
             found = _channel_id(opened)
             return (found or None), None

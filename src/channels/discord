@@ -1350,14 +1350,33 @@ class Agent(discord.Client):
         **A refusal is not a typo, and must not read like one.** "Could not find" points an
         owner at a wrong-id hunt; when the id was found and declined, saying so is the
         difference between a one-line fix and the misdiagnosis this path exists to end.
+
+        **And a fallback is announced only where it is actually taken (R-CH-12).** The place
+        is resolved first and the conversation second, so what is said about the refusal is
+        written once both answers are in. Saying "saying it in the conversation instead"
+        before asking whether there *is* one told an owner their report had gone somewhere
+        else while it went nowhere: a schedule reporting into a place nobody has spoken in
+        carries no conversation at all, which is exactly the delivery this line is read on.
         """
         place = it.get("place")
+        refused = None
         if place:
             found, why = await self._room_named(str(place))
             if found is not None:
                 return found
-            note(why or f"could not find '{place}' on this surface — "
-                        f"saying it in the conversation instead")
+            refused = why or f"could not find '{place}' on this surface"
+        channel = await self._the_conversation(it)
+        if refused:
+            note(f"{refused} — saying it in the conversation instead" if channel is not None
+                 else f"{refused}, and there is no conversation to say it in instead")
+        return channel
+
+    async def _the_conversation(self, it: dict):
+        """The room this record came from, or `None` where there is no reaching one.
+
+        Apart from `_where_to_write` so that a refused place can be told whether a fallback
+        exists before it announces one; it decides nothing about places and never notes.
+        """
         at = it.get("conversation")
         if at is None:
             return None
@@ -1397,7 +1416,9 @@ class Agent(discord.Client):
         nowhere. On a DM channel, try channel first (already-known DM), then authorized user.
 
         Answers with the room and, when there is none, why — so the one caller can tell a
-        word it could not find from a person it declined to message.
+        word it could not find from a person it declined to message. The reason alone, and
+        never what happens next: only the caller knows whether there is a conversation to
+        fall back on.
         """
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(self.wait_until_ready(), READY_SECONDS)
@@ -1413,8 +1434,7 @@ class Agent(discord.Client):
             if getattr(self.chose, "dm", False):
                 allowed = {str(one) for one in (self.chose.allow or ())}
                 if digits not in allowed:
-                    return None, (f"'{said}' is not on this channel's allowed list — "
-                                  f"saying it in the conversation instead")
+                    return None, f"'{said}' is not on this channel's allowed list"
                 with contextlib.suppress(Exception):
                     person = await self.fetch_user(int(digits))
                     return await person.create_dm(), None

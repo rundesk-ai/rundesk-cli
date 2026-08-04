@@ -1354,6 +1354,34 @@ class NoticesAndSchedules(unittest.TestCase):
         found, _why = asyncio.run(client._room_named("U1"))
         self.assertEqual("D1", found)
 
+    def test_a_refused_place_with_no_conversation_does_not_claim_a_fallback(self):
+        """R-CH-12 — reported (#313): the note announcing the fallback was written before
+        anything asked whether there was one, so a schedule reporting into a place nobody
+        has spoken in produced `saying it in the conversation instead` and then
+        `nowhere to write`. The first line is the one that reads like an outcome, and it
+        said the report had gone somewhere else while it went nowhere.
+        """
+        client = an_agent(FakeSlack(), dm=True, allow="U1")
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            where, thread = asyncio.run(
+                client._where_to_write({"place": "USTRANGER"}))
+        self.assertIsNone(where)
+        self.assertIsNone(thread)
+        self.assertIn("allowed list", said.getvalue())
+        self.assertIn("no conversation to say it in", said.getvalue())
+        self.assertNotIn("saying it in the conversation instead", said.getvalue())
+
+    def test_a_refused_place_with_a_conversation_still_says_where_it_went(self):
+        """The other half, and what the fix must not cost: where the fallback really is
+        taken the owner is still told which room the report actually reached."""
+        client = an_agent(FakeSlack(), dm=True, allow="U1")
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            where, _thread = asyncio.run(
+                client._where_to_write({"place": "USTRANGER", "conversation": "C1"}))
+        self.assertEqual("C1", where)
+        self.assertIn("saying it in the conversation instead", said.getvalue())
+        self.assertNotIn("no conversation", said.getvalue())
+
 
 # -- files going out ---------------------------------------------------------------------
 

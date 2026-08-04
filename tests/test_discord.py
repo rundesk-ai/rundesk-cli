@@ -2535,6 +2535,10 @@ class _Surface:
         """The real one, so driving `_where_to_write` still tests the resolution itself."""
         return await discord.Agent._room_named(self, said)
 
+    async def _the_conversation(self, it):
+        """The real one too — what a refused place is told it may fall back on."""
+        return await discord.Agent._the_conversation(self, it)
+
     async def fetch_channel(self, where):
         self.channels_asked.append(where)
         if self.channel is None:
@@ -2669,6 +2673,34 @@ class WhichRoomAWordMeans(unittest.TestCase):
         self.assertEqual("the-conversation", where)
         self.assertIn("could not find '#no-such-room'", said.getvalue())
         self.assertNotIn("allowed list", said.getvalue())
+
+    def test_a_refused_place_with_no_conversation_does_not_claim_a_fallback(self):
+        """R-CH-12 — reported (#313): the note announcing the fallback was written before
+        anything asked whether there was one, so a schedule reporting into a place nobody
+        has spoken in produced `saying it in the conversation instead` and then
+        `nowhere to write`. The first line is the one that reads like an outcome, and it
+        said the report had gone somewhere else while it went nowhere: the loss stood for
+        three days on this install because the log said it had not happened.
+        """
+        surface = _Surface(dm=True, allow=["111"])
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            where = asyncio.run(discord.Agent._where_to_write(
+                surface, {"place": "279024636254224384"}))
+        self.assertIsNone(where)
+        self.assertIn("is not on this channel's allowed list", said.getvalue())
+        self.assertIn("no conversation to say it in", said.getvalue())
+        self.assertNotIn("saying it in the conversation instead", said.getvalue())
+
+    def test_a_refused_place_with_a_conversation_still_says_where_it_went(self):
+        """The other half, and what the fix must not cost: where the fallback really is
+        taken the owner is still told which room the report actually reached."""
+        surface = _Surface(dm=True, allow=["111"])
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            where = asyncio.run(discord.Agent._where_to_write(
+                surface, {"place": "279024636254224384", "conversation": "77"}))
+        self.assertEqual("the-conversation", where)
+        self.assertIn("saying it in the conversation instead", said.getvalue())
+        self.assertNotIn("no conversation", said.getvalue())
 
     def test_a_conversation_that_is_no_snowflake_is_nowhere_rather_than_a_crash(self):
         """R-CH-12, R-CAD-20 — every record carries the platform's own identifier, so one
