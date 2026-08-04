@@ -16,7 +16,6 @@ Run: python3 tests/test_transcript.py
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import sys
@@ -234,86 +233,16 @@ class WhatTheBrainItselfSaid(WithAnAgentThatHasRun):
 
 
 class WhatAnAgentPrintedIsBounded(WithAnAgentThatHasRun):
-    """R-RUN-22, R-RUN-23 — reported (#101): nothing swept these and nothing bounded them.
+    """R-RUN-22 — reported (#101): nothing swept these at all.
 
     Measured on a two-day-old agent: 807 MB across 384 files against 7.7 MB of records,
-    largest single transcript 51.9 MB, because a brain replays the whole prior thread when
-    it attaches and every run writes those same bytes to disk again.
+    because a brain replays the whole prior thread when it attaches and every run writes
+    those same bytes to disk again. What bounds it is the kept window, not one run's size:
+    a run's stream is kept whole for as long as it is kept at all.
     """
 
-    def a_long_one(self, run: str, ceiling: int) -> Path:
-        """A transcript over the ceiling, whose every line says where in the file it is."""
-        at = transcript.printed(self.logs(), run)
-        at.parent.mkdir(parents=True, exist_ok=True)
-        with open(at, "wb") as writing:
-            line = 0
-            while writing.tell() <= ceiling * 2:
-                writing.write(b'{"type":"text","line":%d,"pad":"%s"}\n'
-                              % (line, b"x" * 200))
-                line += 1
-        self.lines = line
-        return at
-
-    def test_what_a_brain_printed_is_cut_down_to_the_ceiling(self):
-        """R-RUN-22 — a run whose transcript is tens of megabytes is not diagnosable by a
-        person or a grep either way, and it is the same historical bytes every time."""
-        run = self.a_run(self.kept())
-        at = self.a_long_one(run, 64 * 1024)
-        was = at.stat().st_size
-
-        elided = transcript.trim(self.logs(), run, ceiling=64 * 1024)
-        self.assertTrue(elided, "nothing was elided from a transcript over the ceiling")
-        self.assertLessEqual(at.stat().st_size, 64 * 1024 + 512,
-                             "the transcript is still over the ceiling")
-        self.assertLess(at.stat().st_size, was)
-
-    def test_the_end_of_a_run_is_what_is_kept_and_the_replay_is_what_goes(self):
-        """The beginning is the handshake and the prior thread replayed back — already on
-        disk under the runs it belongs to. The end is this turn, and its only copy."""
-        run = self.a_run(self.kept())
-        self.a_long_one(run, 64 * 1024)
-
-        transcript.trim(self.logs(), run, ceiling=64 * 1024)
-        lines = transcript.read(self.logs(), run).splitlines()
-        self.assertEqual(self.lines - 1, json.loads(lines[-1])["line"],
-                         "the end of the run did not survive")
-        self.assertEqual(0, sum(1 for one in lines if b'"line":0' in one),
-                         "the beginning was kept instead of the end")
-
-    def test_what_was_cut_away_says_so_where_the_transcript_is_read(self):
-        """Never a silent truncation. A file that simply begins mid-conversation is one a
-        reader takes at face value, and this one deliberately does not hold everything."""
-        run = self.a_run(self.kept())
-        transcript.trim(self.logs(), self.a_long_one(run, 64 * 1024) and run,
-                        ceiling=64 * 1024)
-        first = json.loads(transcript.read(self.logs(), run).splitlines()[0])
-        self.assertEqual("elided", first["type"])
-        self.assertGreater(first["bytes"], 0)
-
-    def test_every_line_left_is_still_a_whole_record(self):
-        """Cutting at a byte offset lands mid-record, and a `.jsonl` whose first line is
-        half a record is one nothing can read."""
-        run = self.a_run(self.kept())
-        self.a_long_one(run, 64 * 1024)
-        transcript.trim(self.logs(), run, ceiling=64 * 1024)
-        for line in transcript.read(self.logs(), run).splitlines():
-            json.loads(line)
-
-    def test_a_transcript_under_the_ceiling_is_left_exactly_as_it_is(self):
-        """Doing nothing is the ordinary outcome, and rewriting a small file every turn
-        would cost more than the ceiling saves."""
-        run = self.a_run(self.kept())
-        at = self.printed(run, b'{"type":"text"}\n')
-        transcript.trim(self.logs(), run, ceiling=64 * 1024)
-        self.assertEqual(b'{"type":"text"}\n', at.read_bytes())
-
-    def test_a_transcript_that_is_not_there_is_not_an_error(self):
-        """An adapter that keeps nothing is a perfectly good adapter, and reclaiming space
-        is never allowed to be the reason a turn fails."""
-        self.assertEqual(0, transcript.trim(self.logs(), "1-none"))
-
     def test_what_a_brain_printed_longer_ago_than_the_window_is_swept(self):
-        """R-RUN-23 — the broom this module has always said it is swept by. These are
+        """R-RUN-22 — the broom this module has always said it is swept by. These are
         diagnostics and may be destroyed to reclaim space without costing the account
         anything (R-STO-5); nothing swept them at all."""
         kept = self.kept()

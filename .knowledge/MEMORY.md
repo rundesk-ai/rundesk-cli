@@ -259,18 +259,15 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   raw event" is false for text.** `store.RECORD_KINDS` has no `text` member and
   `turn._Account.add` returns before writing one — including its `raw` — because what was
   said is a message and only what *happened* is a record. So the only place a brain's
-  individual thoughts survive is `logs/runs/<run>.jsonl`, which R-STO-5 and R-RUN-23
-  explicitly allow to be destroyed and swept — **and which R-RUN-22's `transcript.trim`
-  bounds on every single turn, in `carry`'s own `finally`, keeping the tail and discarding
-  the head.** That is the near one, not the seven-day sweep: measured runs on this machine
-  reach 3.7 MB against a 4 MB `CEILING_BYTES`, and a scheduled turn is `fresh=True`
-  (R-SCH-29), so those are that turn's own records. Anything narrowing what the message row
-  holds is narrowing the durable account, whatever the record table appears to promise —
-  and the early thoughts it drops are the ones the trim takes the minute the turn ends,
-  not in a week. Check with
+  individual thoughts survive is `logs/runs/<run>.jsonl`, which R-STO-5 and R-RUN-22
+  explicitly allow to be destroyed and swept once it is older than the kept window. One
+  run's stream is kept whole for as long as it is kept at all, so a scheduled turn's own
+  early thoughts are readable for that window and for no longer. Anything narrowing what
+  the message row holds is narrowing the durable account, whatever the record table appears
+  to promise. Check with
   `sqlite3 <agent>/state.db "select kind, count(*) from record where run_id=? group by kind"`
-  on a real run before believing otherwise — a 3.7 MB transcript beside a run with no text
-  record in it is what this looks like.
+  on a real run before believing otherwise — a multi-megabyte transcript beside a run with
+  no text record in it is what this looks like.
 - **`getattr(vendor_object, "name", default)` is a silent feature-killer, and a stand-in
   carrying an attribute the real class does not have will agree with you for ever.**
   `_post`'s anchor guard asked a `discord.Message` for `channel_id`, which discord.py has

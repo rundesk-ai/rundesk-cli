@@ -481,7 +481,7 @@ class Answering:
 
         The prompt stands on its own — it is the whole report — so the review turn is asked
         again on a fresh session where a stale one hands it straight back. A handoff lost to
-        a session that never read it is a role run nobody ever reads (R-RUN-24).
+        a session that never read it is a role run nobody ever reads (R-RUN-23).
         """
         if not self.connected:
             raise RuntimeError(f"channel '{self.channel}' is not connected")
@@ -956,7 +956,7 @@ class Answering:
         """Carry one turn, and say how it stands at each point rundesk decides it.
 
         `stands_alone` is passed straight through to the turn: whether this prompt carries
-        everything a fresh session would need to answer it (R-RUN-24). Every caller but the
+        everything a fresh session would need to answer it (R-RUN-23). Every caller but the
         handoff review leaves it alone, so a recovery and a post-update continuation behave
         exactly as they did.
 

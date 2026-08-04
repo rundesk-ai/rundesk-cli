@@ -89,7 +89,7 @@ NOTHING_SAID = "the turn ended without an answer"
 #: What is written into the account when a resumed session was handed the turn and gave it
 #: straight back. A record of rundesk's own, kept exactly as `recovery` beside it is: this is
 #: lifecycle bookkeeping about an execution and not a new shape of owner data, so it is stored
-#: as a record nobody's schema knows rather than as a column (R-RUN-24).
+#: as a record nobody's schema knows rather than as a column (R-RUN-23).
 RETRY = "retry"
 NEVER_RAN = "the resumed session ended without running the turn"
 
@@ -280,7 +280,7 @@ async def carry(
 
     `stands_alone` says this prompt carries everything it needs, so a fresh session can
     answer it — which is the whole of what decides whether a turn a stale session handed
-    straight back is worth asking again (R-RUN-24). A person's question always does. What
+    straight back is worth asking again (R-RUN-23). A person's question always does. What
     rundesk writes usually does not, because most of it continues work a particular session
     was in the middle of; the caller that writes a self-contained one says so here rather
     than being guessed at from who is recorded as asking.
@@ -306,7 +306,7 @@ async def carry(
     # Swept here rather than on a schedule of its own, for the reason `backups add` prunes
     # where it does: this is the moment a new one arrives, so it is the moment the question
     # has a new answer, and an agent nothing runs stops accumulating anything to sweep
-    # (R-RUN-23). The gateway would be the wrong place — it knows nothing of agents, and
+    # (R-RUN-22). The gateway would be the wrong place — it knows nothing of agents, and
     # these belong to one.
     transcript.sweep(whose["logs"])
 
@@ -475,11 +475,6 @@ async def carry(
                 )
             finally:
                 activity.ended(whose["run"], run)
-                # The adapter has finished with the file by now, so this is the one moment
-                # the ceiling can be applied to a stream rundesk itself never writes. In the
-                # `finally`, because a turn that was interrupted printed just as much as one
-                # that was not (R-RUN-22).
-                transcript.trim(whose["logs"], run)
 
         result = await attempt(resume, steering)
         # **Only a prompt that stands on its own is worth asking again.** *Most* of what
@@ -502,7 +497,7 @@ async def carry(
         # to a caller remembering not to claim both.
         worth_asking_again = (prompt_author == "user" or stands_alone) and not resume_required
         if worth_asking_again and _never_ran(said, result, resumed=bool(resume)):
-            # **The question is still worth asking, so it is asked** (R-RUN-24). A resumed
+            # **The question is still worth asking, so it is asked** (R-RUN-23). A resumed
             # session that hands the turn straight back never read the prompt, and rundesk
             # is the only layer that knows both that nothing was said and what the person
             # originally wanted. Discarding it consumed two real questions on a live
@@ -936,13 +931,11 @@ def _close(said: list) -> str:
     cut a sentence in half.
 
     The turn is not lost with it: every record the brain reported is in the run's own
-    transcript, exactly as it arrived (R-PRV-5). It is not in the run's account, which keeps
-    what a turn *did* and never what it said — and that transcript is bounded to its own
-    tail on every turn (R-RUN-22) and may be destroyed entirely to reclaim space (R-STO-5,
-    R-RUN-23). The trim is the near one: it keeps the end and discards the head, which is
-    exactly the early narration dropped here, and it runs the minute the turn ends rather
-    than in seven days. So what is dropped here is dropped for good as soon as a run is long
-    enough, and runs this long are what motivated the change.
+    transcript, exactly as it arrived (R-PRV-5), whole — nothing bounds one run's stream.
+    It is not in the run's account, which keeps what a turn *did* and never what it said,
+    and the transcript may be destroyed entirely to reclaim space once it is older than the
+    kept window (R-STO-5, R-RUN-22). So the early narration dropped here is readable for
+    that window and no longer.
     """
     thoughts = _thoughts(said)
     return thoughts[-1] if thoughts else ""

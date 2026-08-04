@@ -2541,7 +2541,7 @@ class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
         await self.settled(held)
 
     async def test_a_handoff_review_is_asked_as_a_prompt_that_stands_on_its_own(self):
-        """R-RUN-24, R-ROL-15 — issue #282. The review prompt is the whole report and asks
+        """R-RUN-23, R-ROL-15 — issue #282. The review prompt is the whole report and asks
         for it to be checked, so a fresh session answers it exactly as well as a resumed
         one — and a resumed session that hands it straight back is a role run nobody ever
         reads. Every other thing rundesk writes into a turn is a continuation and is left

@@ -663,7 +663,7 @@ class CarryingAConversationOn(WithAnAgentToRunTurnsFor):
 
 
 class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
-    """R-RUN-24 — measured on a live gateway twice in 82 minutes: a resumed session's
+    """R-RUN-23 — measured on a live gateway twice in 82 minutes: a resumed session's
     first record was a notification left over from the session before, and it ended the
     turn 14 ms later with `ok`, four zeros of usage and nothing said at all. The prompt
     was never read. Rundesk is the only layer that knows both that the turn said nothing
@@ -677,7 +677,7 @@ class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
         return [one for one in self.account(run) if one["type"] == turn.RETRY]
 
     async def test_a_resumed_turn_that_never_ran_is_asked_again_on_a_fresh_session(self):
-        """R-RUN-24 — the person who asked gets their answer instead of an activity mark
+        """R-RUN-23 — the person who asked gets their answer instead of an activity mark
         and silence, and the question is not consumed."""
         first = await self.ask("stale")
         self.assertEqual("a-session", self.handle_for("stale"),
@@ -694,7 +694,7 @@ class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
         self.assertNotEqual(first.run, again.run)
 
     async def test_the_conversation_carries_on_from_the_fresh_session_not_the_stale_one(self):
-        """R-RUN-11, R-RUN-24 — a retried turn reports two sessions and only one of them
+        """R-RUN-11, R-RUN-23 — a retried turn reports two sessions and only one of them
         exists. Keep the one that was handed back and every later turn resumes a session
         that is already dead: handed straight back, retried, answered on a new session, and
         pinned to the dead one again — two brain starts a turn, for ever, with each turn
@@ -707,7 +707,7 @@ class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
                          "the conversation was pinned to the stale session")
 
     async def test_being_asked_again_is_in_the_runs_own_account(self):
-        """R-RUN-24 — a brain started twice for one turn with nothing written down is a
+        """R-RUN-23 — a brain started twice for one turn with nothing written down is a
         turn nobody can explain the cost or the duration of afterwards."""
         await self.ask("stale")
         again = await self.ask("stale")
@@ -720,7 +720,7 @@ class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
         self.assertEqual(3, again.tokens["output"])
 
     async def test_a_second_silence_is_the_answer_and_nothing_is_asked_a_third_time(self):
-        """R-RUN-24 — asked again once. A brain that says nothing whatever session it is
+        """R-RUN-23 — asked again once. A brain that says nothing whatever session it is
         given must not be asked round a loop, and the turn settles as the failure it is
         (R-RUN-21)."""
         await self.ask("mute")
@@ -731,7 +731,7 @@ class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
         self.assertEqual(2, self.attempts(again.run), "a turn was asked a third time")
 
     async def test_a_turn_rundesk_asked_for_itself_is_not_asked_again(self):
-        """R-RUN-24, R-GW-22 — what rundesk writes into a turn itself is always a
+        """R-RUN-23, R-GW-22 — what rundesk writes into a turn itself is always a
         continuation, and a continuation means nothing on a session that was not there for
         what it continues. Asked again on a fresh one it answers about nothing, the turn is
         recorded as finished, and the person is told interrupted work was picked up when it
@@ -761,7 +761,7 @@ class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
                             "the conversation was moved onto a session started from nothing")
 
     async def test_a_prompt_that_stands_on_its_own_is_asked_again_whoever_wrote_it(self):
-        """R-RUN-24, R-ROL-15 — the handoff review is rundesk's own prompt and carries a
+        """R-RUN-23, R-ROL-15 — the handoff review is rundesk's own prompt and carries a
         worker's whole report, so a fresh session answers it exactly as well as a resumed
         one. Deciding this on who was recorded as asking consumed the report instead: the
         run was carried out, the provider was paid for it, and nobody read a word of it."""
@@ -775,7 +775,7 @@ class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
                          "the brain was run twice and the account says once")
 
     async def test_the_real_handoff_review_survives_a_session_that_never_read_it(self):
-        """R-ROL-15, R-RUN-24 — issue #282, built out of the wording the gateway actually
+        """R-ROL-15, R-RUN-23 — issue #282, built out of the wording the gateway actually
         sends rather than a prompt written for this case. A worker's report reaching a
         stale session was consumed in silence: one brain start, nothing said, the run
         recorded `failed`, and the report readable by nobody."""
@@ -808,7 +808,7 @@ class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
         self.assertEqual([], self.asked_again(recovered.run))
 
     async def test_a_turn_that_was_not_resumed_is_not_asked_again(self):
-        """R-RUN-24 — nothing was handed back, so there is nothing a fresh session would
+        """R-RUN-23 — nothing was handed back, so there is nothing a fresh session would
         do differently. A brain asked to repeat work it has already refused to do costs
         an owner twice for the same silence."""
         first = await self.ask("mute")
@@ -819,7 +819,7 @@ class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
 
 
 class WhenAResumedTurnIsWorthAskingAgain(unittest.TestCase):
-    """R-RUN-24 — narrow on purpose, because the cost of being wrong is a brain asked to
+    """R-RUN-23 — narrow on purpose, because the cost of being wrong is a brain asked to
     do the same work twice. `_never_ran` is the whole decision and is asked directly."""
 
     NOTHING = [{"type": "usage", "input": 0, "output": 0, "cached": 0, "written": 0},
