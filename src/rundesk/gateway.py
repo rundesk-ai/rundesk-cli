@@ -942,6 +942,10 @@ class Gateway:
         #: `running` for the same reason `_role_tasks` is: a turn's brain is not a program
         #: this gateway started.
         self._delegation_tasks: dict = {}
+        #: Which state of each ask this agent handed over has already been said in its
+        #: room, by ask. Held here rather than in the record because two gateways write
+        #: that file and only one of them ever shows anything.
+        self._delegation_told: dict = {}
         #: Which conversation each in-flight ask is keyed on. **Two asks from one turn are
         #: two brains on one session**, so the guard against starting one twice is keyed on
         #: the conversation rather than on the ask.
@@ -1815,25 +1819,59 @@ class Gateway:
                 self.log.warning("could not show a word said to role run %s: %s",
                                  run_id, why)
 
-    def _show_what_was_said_to_delegations(self) -> None:
-        """The mirror for an ask another agent is answering (R-DEL-23)."""
-        for ask_id in list(self._delegation_tasks):
+    def _show_my_delegations(self) -> None:
+        """Show every ask this agent handed over, where it was handed over (R-DEL-16).
+
+        **Driven off the record and off what this gateway has already said, never off what
+        it is carrying.** The asks in `_delegation_tasks` are the ones addressed *to* this
+        agent, which is the other side of the delegation entirely — showing from there
+        looked up a room this process has no connection to, found none, and said nothing at
+        all. Every line in a room is a line this side now.
+
+        One state announced once. What was already said is held in this process, exactly as
+        a role run's check-in is: a gateway that restarts says a line twice, and a line said
+        twice is a far smaller cost than the machinery to make it durable.
+        """
+        from rundesk import delegation
+
+        for one in self.delegations.mine():
+            ask_id = one["delegation"]
             try:
-                where = self.delegations.seen(ask_id)
-                shown = self._delegation_guided.get(ask_id, 0)
-                said = int((where or {}).get("said") or 0)
-                answering = self._reached.get((where or {}).get("channel"))
-                if (where is None or said <= shown or answering is None
-                        or not answering.connected or not where.get("conversation")):
-                    continue
-                self._delegation_guided[ask_id] = said
-                for _ in range(said - shown):
-                    answering.told_delegation_guided(
-                        where["conversation"], ask_id, where["label"],
-                        where.get("to", ""))
+                state = one.get("state") or ""
+                if state in delegation.UNFINISHED:
+                    row = one.get("row") or {}
+                    marker = "resumed" if int(row.get("resumes") or 0) else "handed"
+                    if self._delegation_told.get(ask_id) != marker:
+                        self._delegation_told[ask_id] = marker
+                        self._show_delegation(ask_id, working=True)
+                        continue
+                    self._show_what_was_said_to(ask_id)
+                    self._check_in_on_delegation(ask_id)
+                elif self._delegation_told.get(ask_id) != "settled":
+                    self._delegation_told[ask_id] = "settled"
+                    self._show_delegation(ask_id, working=False)
             except Exception as why:  # noqa: BLE001 — showing is never worth the work
-                self.log.warning("could not show a word said to delegation %s: %s",
-                                 ask_id, why)
+                self.log.warning("could not show delegation %s: %s", ask_id, why)
+
+    def _show_what_was_said_to(self, ask_id: str) -> None:
+        """The mirror for an ask another agent is answering (R-DEL-23).
+
+        One ask rather than a sweep, because the caller is already walking every ask this
+        agent handed over and knows which are still unfinished.
+        """
+        where = self.delegations.seen(ask_id)
+        shown = self._delegation_guided.get(ask_id, 0)
+        said = int((where or {}).get("said") or 0)
+        answering = self._reached.get((where or {}).get("channel"))
+        if (where is None or said <= shown or answering is None
+                or not answering.connected or not where.get("conversation")):
+            return
+        # Written before the record is queued, for the reason the check-in is: a surface
+        # that throws costs one skipped line rather than a line every beat.
+        self._delegation_guided[ask_id] = said
+        for _ in range(said - shown):
+            answering.told_delegation_guided(
+                where["conversation"], ask_id, where["label"], where.get("to", ""))
 
     def _check_in_on_roles(self) -> None:
         """Say that a run still working is still working (R-ROL-36).
@@ -1981,8 +2019,10 @@ class Gateway:
                 try:
                     self._start_asked_delegations()
                     self._end_the_delegations_somebody_stopped()
-                    self._show_what_was_said_to_delegations()
-                    self._check_in_on_delegations()
+                    # **Shown from the asking side, carried from the answering one.** Two
+                    # different gateways, and only this one holds the room the work was
+                    # asked in (R-DEL-16).
+                    self._show_my_delegations()
                 except asyncio.CancelledError:
                     raise
                 except BaseException as why:  # noqa: BLE001 — this loop must not die
@@ -2039,7 +2079,6 @@ class Gateway:
         ask.
         """
         outcome = None
-        self._show_delegation(ask_id, working=True)
         try:
             outcome = await self.delegations.carry(ask_id)
         except asyncio.CancelledError:
@@ -2051,10 +2090,10 @@ class Gateway:
             self._delegation_rooms.pop(ask_id, None)
             self._delegation_checked.pop(ask_id, None)
             self._delegation_guided.pop(ask_id, None)
-            # Said however it went, including the ways it can go wrong: work handed over
-            # and never heard of again reads as work still running for ever. Said before
-            # the answer is delivered for review, and never instead of it.
-            self._show_delegation(ask_id, working=False, outcome=outcome)
+            # **Nothing is shown from here.** However it went is said by the gateway of the
+            # agent that asked, off the settled record — this process holds no connection
+            # to the room the work was asked in, and a line posted from here went nowhere
+            # at all (R-DEL-16).
 
     def _show_delegation(self, ask_id: str, working: bool, outcome=None) -> None:
         """Show the work where the person who asked for it is waiting (R-DEL-16).
@@ -2088,31 +2127,6 @@ class Gateway:
             )
         except Exception as why:  # noqa: BLE001 — showing is never worth the work
             self.log.warning("could not show delegation %s: %s", ask_id, why)
-
-    def _check_in_on_delegations(self) -> None:
-        """Say that an ask still being answered is still being answered (R-DEL-16).
-
-        Driven off the asks this gateway is carrying, so a check-in cannot outlive the work
-        it describes.
-        """
-        for ask_id in list(self._delegation_tasks):
-            try:
-                where = self.delegations.checking_in(
-                    ask_id, self._delegation_checked.get(ask_id, 0))
-                if where is None:
-                    continue
-                answering = self._reached.get(where.get("channel"))
-                if (answering is None or not answering.connected
-                        or not where.get("conversation")):
-                    continue
-                # Written before the record is queued: a surface that throws costs one
-                # skipped line rather than a line every five seconds for ever.
-                self._delegation_checked[ask_id] = where["due"]
-                answering.told_delegation_checking_in(
-                    where["conversation"], ask_id, where["label"],
-                    where.get("to", ""), where.get("elapsed", 0))
-            except Exception as why:  # noqa: BLE001 — showing is never worth the work
-                self.log.warning("could not check in on delegation %s: %s", ask_id, why)
 
     async def _deliver_one_delegated_answer(self) -> None:
         """Wake this agent for the oldest answer it is still owed, if it can be woken.
@@ -2154,6 +2168,27 @@ class Gateway:
                 delivered=lambda at=owed["delegation"]: self._delegated_answer_collected(at),
             )
             return
+
+    def _check_in_on_delegation(self, ask_id: str) -> None:
+        """Say that an ask still being answered is still being answered (R-DEL-16).
+
+        One ask rather than a sweep, and asked of the record rather than of anything this
+        gateway is carrying — the gateway showing the work is not the one doing it.
+        """
+        where = self.delegations.checking_in(
+            ask_id, self._delegation_checked.get(ask_id, 0))
+        if where is None:
+            return
+        answering = self._reached.get(where.get("channel"))
+        if (answering is None or not answering.connected
+                or not where.get("conversation")):
+            return
+        # Written before the record is queued: a surface that throws costs one skipped
+        # line rather than a line every five seconds for ever.
+        self._delegation_checked[ask_id] = where["due"]
+        answering.told_delegation_checking_in(
+            where["conversation"], ask_id, where["label"],
+            where.get("to", ""), where.get("elapsed", 0))
 
     def _delegated_answer_collected(self, ask_id: str) -> None:
         """One answer, reviewed by the agent that asked for it and settled for good."""

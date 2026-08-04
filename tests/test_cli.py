@@ -1170,7 +1170,8 @@ class FakeAgents:
         return real_agent.Delegated(
             waiting=lambda: [], carry=None, seen=lambda _ask: None,
             checking_in=lambda _ask, _told=0: None,
-            stopping=lambda: [], stopped=lambda _ask: None, owed=lambda: [],
+            stopping=lambda: [], stopped=lambda _ask: None, mine=lambda: [],
+            owed=lambda: [],
             claiming=lambda _ask: None, collected=lambda _ask: None,
             giving_up=lambda _ask: None, sweep=lambda: {"settled": [], "removed": []},
         )
@@ -5185,6 +5186,58 @@ class HandingWorkToAnotherAgent(unittest.TestCase):
         self.assertIn("del-1-", said)
         self.assertIn("handed to cole", said)
         self.assertIn("you are told when it answers", said)
+
+    def one_agent_asking_another(self, *argv, **given):
+        """`rundesk ask <somebody else>` from inside a turn, with whose turn it is said."""
+        os.environ["RUNDESK_AGENT"] = given.pop("agent", "elena")
+        self.addCleanup(os.environ.pop, "RUNDESK_AGENT", None)
+        os.environ["RUNDESK_RUN"] = given.pop("run", self.parent)
+        self.addCleanup(os.environ.pop, "RUNDESK_RUN", None)
+        return drive(list(argv), agents=FakeAgents(made=["elena", "cole"]))
+
+    def test_one_agent_asking_another_is_admitted_as_a_delegation(self):
+        """**The regression this exists for.** `rundesk ask cole "…"` from inside elena's
+        turn ran a whole turn on cole with no record, no chain guard, no review owed and
+        cole told a person had asked — every rule of R-DEL one command away from being
+        bypassed. `ask` is the verb an agent reaches for, so it is the front door."""
+        code, said = self.one_agent_asking_another("ask", "cole", self.TASK)
+
+        self.assertEqual(0, code, said)
+        self.assertIn("del-1-", said)
+        self.assertIn("handed to cole as a delegation", said)
+        self.assertIn("no answer comes back in this turn", said)
+
+    def test_an_agent_asking_itself_is_the_turn_it_is_already_in(self):
+        """Not a delegation and not refused: an agent is already running when it types
+        this, and `to == name` is what the record refuses anyway."""
+        code, said = self.one_agent_asking_another("ask", "elena", self.TASK)
+        self.assertNotIn("as a delegation", said)
+
+    def test_a_person_at_a_terminal_asking_an_agent_is_never_a_delegation(self):
+        """Nothing is running a turn, so there is nobody to owe a review to and nobody
+        waiting in a later one — a person asked for an answer now."""
+        for said in ("RUNDESK_RUN", "RUNDESK_AGENT"):
+            os.environ.pop(said, None)
+        code, said = drive(["ask", "cole", self.TASK],
+                           agents=FakeAgents(made=["elena", "cole"]))
+        self.assertNotIn("as a delegation", said)
+
+    def test_a_role_execution_cannot_ask_a_named_agent_either(self):
+        """The same refusal the `delegations` route gives, because it is the same rule and
+        two ways in must never disagree about it."""
+        os.environ["RUNDESK_ROLE_RUN"] = "rol-1-aaaa"
+        self.addCleanup(os.environ.pop, "RUNDESK_ROLE_RUN", None)
+        code, said = self.one_agent_asking_another("ask", "cole", self.TASK)
+        self.assertEqual(1, code)
+        self.assertIn("a role execution cannot hand work to a named agent", said)
+
+    def test_an_agent_reached_by_delegation_cannot_ask_another_one(self):
+        """R-DEL-8 — depth one holds on this route too."""
+        os.environ["RUNDESK_DELEGATION"] = "del-9-zzzz"
+        self.addCleanup(os.environ.pop, "RUNDESK_DELEGATION", None)
+        code, said = self.one_agent_asking_another("ask", "cole", self.TASK)
+        self.assertEqual(1, code)
+        self.assertIn("cannot be handed on", said)
 
     def test_a_delegation_needs_a_turn_of_this_agents_own(self):
         os.environ.pop("RUNDESK_RUN", None)

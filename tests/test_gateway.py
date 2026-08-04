@@ -5394,7 +5394,8 @@ class HandingOn:
     for the **roles** collaborator and keeps its name.
     """
 
-    def __init__(self, waiting=(), owed=(), settled_as="", ok=False, stopped_by=""):
+    def __init__(self, waiting=(), owed=(), settled_as="", ok=False, stopped_by="",
+                 mine=()):
         self._waiting = list(waiting)
         self._owed = list(owed)
         self._settled_as = settled_as
@@ -5412,6 +5413,8 @@ class HandingOn:
         self.to_remove: list = []
         #: Where each ask this stand-in knows about is shown, and how long it has been.
         self.check_ins: dict = {}
+        #: Every ask the agent this gateway serves handed over, as `mine` answers them.
+        self._mine: list = list(mine)
 
     def waiting(self):
         return list(self._waiting)
@@ -5451,6 +5454,15 @@ class HandingOn:
 
     def owed(self):
         return list(self._owed)
+
+    def mine(self):
+        """Every ask this agent handed over, whatever state it is in — the showing half.
+
+        Exactly what `agent.delegated.mine` answers: the asks are read from the record and
+        never from what this gateway happens to be carrying, because the gateway that shows
+        an ask is the asking agent's and the one carrying it is somebody else's.
+        """
+        return list(self._mine)
 
     def claiming(self, ask_id):
         self.claimed.append(ask_id)
@@ -5706,9 +5718,36 @@ class AnsweringWhatAnotherAgentAsked(WithARunDirectory):
 
         self.assertEqual(1, doing.swept)
 
+    def asked(self, state="asked", **also):
+        """One ask this agent handed over, as `agent.delegated.mine` answers it."""
+        return [{"delegation": "del-1-aaaa", "state": state,
+                 "row": {"id": "del-1-aaaa", "from": "elena", "state": state, **also}}]
+
     async def test_handing_work_to_an_agent_is_shown_where_the_person_asked(self):
         """R-DEL-16 — an ask that was handed over and never heard of again reads as work
         still running for ever."""
+        doing = HandingOn(mine=self.asked(), settled_as="answered", ok=True)
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+
+        gw._show_my_delegations()
+
+        self.assertEqual([("one", "del-1-aaaa", "the quote flow", "cole", 0)],
+                         surface.handed_over, "nothing said the work had been handed on")
+
+        doing._mine = self.asked(state="answered")
+        gw._show_my_delegations()
+
+        self.assertEqual([("one", "del-1-aaaa", True, "the quote flow", "cole", 0,
+                           "answered", "")], surface.answered_back,
+                         "nothing said what came of it")
+
+    async def test_the_gateway_answering_an_ask_shows_nothing_in_its_own_room(self):
+        """**The regression this exists for.** Every line was shown by whichever gateway
+        was *carrying* the work — the answering agent's — which holds no connection to the
+        room the work was asked in. So the room was told nothing at all, and the surface
+        code was proved only by calling it directly (R-DEL-16)."""
         doing = HandingOn(waiting=[{"id": "del-1-aaaa", "from": "elena",
                                     "parent_run": "1-aaaa"}], settled_as="answered",
                           ok=True)
@@ -5719,67 +5758,73 @@ class AnsweringWhatAnotherAgentAsked(WithARunDirectory):
         gw._start_asked_delegations()
         await asyncio.gather(*tuple(gw._delegation_tasks.values()))
 
-        self.assertEqual([("one", "del-1-aaaa", "the quote flow", "cole", 0)],
-                         surface.handed_over, "nothing said the work had been handed on")
-        self.assertEqual([("one", "del-1-aaaa", True, "the quote flow", "cole", 0,
-                           "answered", "")], surface.answered_back,
-                         "nothing said what came of it")
+        self.assertEqual([], surface.handed_over,
+                         "the gateway answering an ask posted into a room of its own")
+        self.assertEqual([], surface.answered_back)
+        self.assertEqual(["del-1-aaaa"], doing.carried, "the work was not carried")
 
-    async def test_a_delegation_that_could_not_be_carried_still_says_how_it_went(self):
-        doing = HandingOn(waiting=[{"id": "del-1-aaaa", "from": "elena",
-                                    "parent_run": "1-aaaa"}])
-
-        async def carrying(ask_id):
-            raise RuntimeError("the brain has gone")
-
-        doing.carry = carrying
+    async def test_one_state_is_shown_once_however_often_the_beat_comes_round(self):
+        doing = HandingOn(mine=self.asked())
         gw = self.one(doing)
         surface = Shown()
         gw._reached["ops"] = surface
 
-        gw._start_asked_delegations()
-        await asyncio.gather(*tuple(gw._delegation_tasks.values()))
+        for _ in range(4):
+            gw._show_my_delegations()
+
+        self.assertEqual(1, len(surface.handed_over), "a room was told the same thing twice")
+
+    async def test_a_delegation_that_could_not_be_carried_still_says_how_it_went(self):
+        """However an ask ends, the room that asked for it is told — a failure included."""
+        doing = HandingOn(mine=self.asked(state="failed"), settled_as="failed")
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+
+        gw._show_my_delegations()
 
         self.assertEqual(1, len(surface.answered_back))
         self.assertFalse(surface.answered_back[0][2])
 
     async def test_an_ask_still_being_answered_says_so_once_per_window(self):
-        doing = HandingOn()
+        doing = HandingOn(mine=self.asked())
         gw = self.one(doing)
         surface = Shown()
         gw._reached["ops"] = surface
-        gw._delegation_tasks["del-1-aaaa"] = None
         doing.check_ins = {"del-1-aaaa": {
             "channel": "ops", "conversation": "one", "label": "the quote flow",
             "to": "cole", "elapsed": 1300}}
 
-        gw._check_in_on_delegations()
-        gw._check_in_on_delegations()   # the same window, a second look
+        gw._show_my_delegations()          # says it was handed over
+        gw._show_my_delegations()          # the window's first check-in
+        gw._show_my_delegations()          # the same window, a second look
 
         self.assertEqual([("one", "del-1-aaaa", "the quote flow", "cole", 1300)],
                          surface.asked_after,
                          "an ask still being answered was said twice, or never")
         self.assertEqual({"del-1-aaaa": 1}, gw._delegation_checked)
 
-    async def test_an_ask_this_gateway_is_not_carrying_is_never_checked_in_on(self):
-        """A check-in that outlived the work it describes is a room being told an ask is
-        going by the one process that would know it is not."""
-        doing = HandingOn()
+    async def test_an_ask_this_agent_did_not_hand_over_is_never_shown_here(self):
+        """A room is told about the work its own agent asked for and no other. What another
+        agent handed to somebody else is that agent's room's news."""
+        doing = HandingOn(mine=[])
         gw = self.one(doing)
         surface = Shown()
         gw._reached["ops"] = surface
-        doing.check_ins = {"del-1-aaaa": {
-            "channel": "ops", "conversation": "one", "label": "the quote flow",
+        doing.check_ins = {"del-9-zzzz": {
+            "channel": "ops", "conversation": "one", "label": "somebody else's",
             "to": "cole", "elapsed": 1300}}
 
-        gw._check_in_on_delegations()
+        gw._show_my_delegations()
 
         self.assertEqual([], surface.asked_after)
+        self.assertEqual([], surface.handed_over)
 
     async def test_a_surface_that_cannot_be_told_never_holds_up_the_work(self):
         """Showing is never worth an ask: a platform that cannot be told is a platform
         that shows less, and the work carries on either way."""
-        doing = HandingOn(waiting=[{"id": "del-1-aaaa", "from": "elena",
+        doing = HandingOn(mine=self.asked(),
+                          waiting=[{"id": "del-1-aaaa", "from": "elena",
                                     "parent_run": "1-aaaa"}])
         gw = self.one(doing)
 
@@ -5789,6 +5834,7 @@ class AnsweringWhatAnotherAgentAsked(WithARunDirectory):
 
         gw._reached["ops"] = Refuses()
 
+        gw._show_my_delegations()
         gw._start_asked_delegations()
         await asyncio.gather(*tuple(gw._delegation_tasks.values()))
 
@@ -5803,39 +5849,34 @@ class AnsweringWhatAnotherAgentAsked(WithARunDirectory):
 
     async def test_a_word_said_into_an_ask_is_shown_once_each_where_the_work_was_asked_for(self):
         """R-DEL-23 — the mirror of a role run's, and invisible for the same reason."""
-        doing = HandingOn(waiting=[{"id": "del-1-aaaa", "from": "elena",
-                                    "parent_run": "1-aaaa"}])
+        doing = HandingOn(mine=self.asked())
         gw = self.one(doing)
         surface = Shown()
         gw._reached["ops"] = surface
-        gw._start_asked_delegations()
 
-        gw._show_what_was_said_to_delegations()
+        gw._show_my_delegations()          # says it was handed over
+        gw._show_my_delegations()
         self.assertEqual([], surface.guided, "an ask nobody has said anything to said so")
 
         doing.said = 2
-        gw._show_what_was_said_to_delegations()
-        gw._show_what_was_said_to_delegations()
+        gw._show_my_delegations()
+        gw._show_my_delegations()
 
         self.assertEqual([("one", "del-1-aaaa", "the quote flow", "cole")] * 2,
                          surface.guided, "two words said were not two lines shown once")
-        await asyncio.gather(*tuple(gw._delegation_tasks.values()), return_exceptions=True)
 
     async def test_an_ask_carried_on_is_shown_as_carried_on_rather_than_handed_over(self):
         """R-DEL-23 — a resumed ask read as a second ask of the same work."""
-        doing = HandingOn(waiting=[{"id": "del-1-aaaa", "from": "elena",
-                                    "parent_run": "1-aaaa"}])
+        doing = HandingOn(mine=self.asked(resumes=1))
         doing.carried_on = True
         gw = self.one(doing)
         surface = Shown()
         gw._reached["ops"] = surface
 
-        gw._start_asked_delegations()
-        await asyncio.gather(*tuple(gw._delegation_tasks.values()))
+        gw._show_my_delegations()
 
         self.assertEqual([("one", "del-1-aaaa", "the quote flow", "cole")], surface.resumed)
         self.assertEqual([], surface.handed_over, "a carrying-on read as a handing-over")
-
 
 
 if __name__ == "__main__":

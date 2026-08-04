@@ -19,6 +19,7 @@ from rundesk import ROOT as REPO_ROOT
 from rundesk import __version__
 from rundesk import agent as _agent
 from rundesk import config
+from rundesk import delegation as delegations
 from rundesk import gateway as _gateway
 from rundesk import migration
 from rundesk import provider
@@ -250,6 +251,44 @@ def _given(pairs) -> dict:
     return given
 
 
+def _delegated_instead(asking: str, to: str, prompt: str) -> int:
+    """`rundesk ask <another agent>`, from inside a turn, admitted as a delegation.
+
+    The same record `rundesk delegations <agent> ask <to>` writes, and refused in exactly
+    the same places — a role execution may not, work already handed over may not, and the
+    durable record settles the rest. Two ways in, one thing admitted, so a rule can never
+    hold on one route and not the other.
+
+    **What it says back is the whole difference from an ordinary ask**, and it says it
+    plainly: no answer arrives in this turn, one arrives later to be reviewed.
+    """
+    if os.environ.get("RUNDESK_ROLE_RUN"):
+        print(f"{asking}: NOT ASKED — a role execution cannot hand work to a named agent; "
+              "the agent that put the role on does that itself", file=sys.stderr)
+        return 1
+    if os.environ.get("RUNDESK_DELEGATION"):
+        print(f"{asking}: NOT ASKED — work another agent handed over cannot be handed on; "
+              "use this brain's own subagents instead", file=sys.stderr)
+        return 1
+    try:
+        record = delegations.ask(
+            asking, to, prompt, os.environ.get("RUNDESK_RUN") or "",
+            posture=os.environ.get("RUNDESK_POSTURE") or None,
+        )
+    except delegations.NotDelegable as why:
+        print(f"{asking}: NOT ASKED — {why}", file=sys.stderr)
+        return 1
+    except (delegations.Unreadable, store.Unreadable, store.TooNew, store.Behind,
+            migration.Failed) as why:
+        print(f"{asking}: RECORDS UNREADABLE — {why}", file=sys.stderr)
+        return 1
+    print(record["id"])
+    print(f"        {record['label']} — handed to {record['to']} as a delegation")
+    print("        no answer comes back in this turn; you are woken to review one later")
+    print(f"        steer or stop it:  rundesk delegations {asking} say|stop {record['id']}")
+    return 0
+
+
 def cmd_ask(args: argparse.Namespace, agents) -> int:
     """One turn for this agent, streamed to this terminal.
 
@@ -272,6 +311,18 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
         print(f"{name}: NO SUCH AGENT — nothing of that name has been made", file=sys.stderr)
         print(f"        make it: rundesk add {name} --provider <provider>", file=sys.stderr)
         return 1
+    # **One agent asking another is a delegation, whichever verb was typed** (R-DEL-3).
+    # Left alone, this ran a whole turn on somebody else's agent from inside a turn: no
+    # record, no chain guard, no review owed, and the answering agent told a person had
+    # asked. Every rule the feature is made of was one command away from being bypassed —
+    # and `ask` is the command an agent reaches for, which is why this is the front door
+    # rather than a refusal pointing at another one.
+    #
+    # Only from inside a turn, and only at somebody else: a person at a terminal is asking
+    # for an answer now, and an agent asking itself is already in its own turn.
+    asking = os.environ.get("RUNDESK_AGENT") or ""
+    if os.environ.get("RUNDESK_RUN") and asking and asking != name:
+        return _delegated_instead(asking, name, prompt)
     reaches = agents.chosen(name)
     named = args.provider or reaches.get("provider")
     if not named:

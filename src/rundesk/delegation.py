@@ -280,6 +280,19 @@ def owed(by: str) -> list:
             if one.get("from") == by and one.get("state") in SETTLED]
 
 
+def mine(by: str) -> list:
+    """Every ask this agent handed over, whatever state it is in (R-DEL-16).
+
+    **What the asking agent's own gateway shows a room from.** Progress used to be shown by
+    whichever gateway was *carrying* the work — which is the answering agent's, and it holds
+    no connection to the room the person asked in, so every line was looked up, found
+    missing and dropped in silence. A role run never had the fault because one gateway is
+    both sides of it; a delegation is the first thing here where the two are different
+    processes.
+    """
+    return [one for one in every() if one.get("from") == by]
+
+
 def shown(row: dict, now=None) -> dict:
     """One delegation as a person is shown it — never a local path, never the brief.
 

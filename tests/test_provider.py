@@ -889,6 +889,24 @@ class WhatARoleExecutionIsTold(unittest.TestCase):
         self.assertEqual("/project", said["RUNDESK_CWD"])
         self.assertEqual("/runs/rol-1-aaaa/skills", said["RUNDESK_SKILLS"])
 
+    def test_a_turn_is_told_whose_turn_it_is(self):
+        """R-DEL-3 — a run id is unique inside one agent's account and names nobody
+        outside it, so `rundesk ask <somebody else>` could tell it was inside a turn and
+        not which agent's, and could not decide whether it was a delegation."""
+        said = provider.environment(
+            home=Path("/run"), cwd=Path("/home"), provider_home=Path("/brain"),
+            skills=Path("/skills"), run="1-aaaa", agent="elena",
+        )
+        self.assertEqual("elena", said["RUNDESK_AGENT"])
+
+    def test_a_turn_nobody_named_an_agent_for_is_told_no_agent(self):
+        """Absent rather than empty, so nothing reads a blank as somebody's name."""
+        said = provider.environment(
+            home=Path("/run"), cwd=Path("/home"), provider_home=Path("/brain"),
+            skills=Path("/skills"), run="1-aaaa",
+        )
+        self.assertNotIn("RUNDESK_AGENT", said)
+
     def test_an_ordinary_turn_is_told_nothing_about_a_delegation(self):
         said = provider.environment(
             home=Path("/run"), cwd=Path("/home"), provider_home=Path("/brain"),

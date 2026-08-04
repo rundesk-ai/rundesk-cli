@@ -256,6 +256,7 @@ def environment(
     preface: str | None = None,
     role_run: str | None = None,
     delegation: str | None = None,
+    agent: str | None = None,
     secrets: dict | None = None,
 ) -> dict[str, str]:
     """Everything an adapter is told, and the whole of it (R-PRV-3).
@@ -298,6 +299,13 @@ def environment(
     said["RUNDESK_PROVIDER_HOME"] = str(provider_home)
     said["RUNDESK_RUN"] = run
     said["RUNDESK_POSTURE"] = posture
+    # **Whose turn this is, which nothing else in here says.** A run id is unique inside one
+    # agent's account and names nobody outside it, so a command run from a turn could tell
+    # that it was in one and not which agent's — and `rundesk ask <somebody else>` has to
+    # know both before it can decide whether it is a delegation (R-DEL-3). Absent rather
+    # than empty where a caller did not say, so nothing reads a blank as an agent's name.
+    if agent:
+        said["RUNDESK_AGENT"] = agent
     if model:
         said["RUNDESK_MODEL"] = model
     if resume:

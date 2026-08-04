@@ -341,7 +341,7 @@ async def carry(
     can = await provider.capabilities(at, provider.environment(
         home=whose["run"], cwd=running.cwd, provider_home=home, skills=running.skills,
         run="capabilities", posture=posture, path=None, secrets=keeping.values,
-        delegation=running.delegating,
+        delegation=running.delegating, agent=name,
     ))
     kept = agents.records(name, where)
     where_it_is = kept.opened(store.conversation_id(on, conversation), on, kind,
@@ -460,7 +460,7 @@ async def carry(
                     model=model, resume=carrying, posture=posture, settings=settings,
                     raw=transcript.printed(whose["logs"], run), preface=preface,
                     role_run=running.role_run, delegation=running.delegating,
-                    secrets=keeping.values,
+                    agent=name, secrets=keeping.values,
                 ),
                 # **The agent's home, not its workspace.** A brain loads the rules it is to
                 # follow because they *stand in the directory it stands in* — that is the

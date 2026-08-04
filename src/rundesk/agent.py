@@ -1593,6 +1593,7 @@ class Delegated:
     checking_in: object
     stopping: object
     stopped: object
+    mine: object
     owed: object
     claiming: object
     collected: object
@@ -1733,6 +1734,20 @@ def delegated(name: str, where: Path | None = None, carry=None) -> Delegated:
             })
         return found
 
+    def mine() -> list:
+        """Every ask this agent handed over, with where each is shown (R-DEL-16).
+
+        The showing half, and it belongs here rather than beside the carrying half: the
+        gateway that *answers* an ask has no connection to the room the work was asked in,
+        so a line looked up there is a line dropped. Read off the record on every beat, so
+        a gateway that was down while an ask ran still shows how it ended.
+        """
+        found = []
+        for row in delegations.mine(name):
+            found.append({"delegation": row["id"], "state": row.get("state") or "",
+                          "row": row})
+        return found
+
     def claiming(ask_id: str) -> None:
         """This review is being attempted now — counted where trying is what happened."""
         delegations.claim_review(ask_id)
@@ -1752,7 +1767,7 @@ def delegated(name: str, where: Path | None = None, carry=None) -> Delegated:
         return delegations.sweep()
 
     return Delegated(waiting=waiting, carry=carrying, seen=seen, checking_in=checking_in,
-                     stopping=stopping, stopped=stopped,
+                     stopping=stopping, stopped=stopped, mine=mine,
                      owed=owed, claiming=claiming, collected=collected,
                      giving_up=giving_up, sweep=sweep)
 
