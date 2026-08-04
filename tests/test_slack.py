@@ -1963,6 +1963,24 @@ class WhatADelegationLooksLikeHere(unittest.TestCase):
                 self.assertNotIn("1h", line)
                 self.assertNotIn("—", line)
 
+    def test_a_stopped_delegation_reads_as_a_decision_and_never_names_a_reaction(self):
+        """R-DEL-18 — a stop is somebody's decision, so it carries the stopped mark rather
+        than the warning beside it.
+
+        **And the mark is a glyph.** This platform's `MARKS` holds reaction *names*, so a
+        mark put into a line rather than onto a message posts the literal word
+        `raised_hand` — which is what this line did before the case existed."""
+        for asker, reads in (("agent", "🤝 Stopped *cole* on the *quote-flow* task."),
+                             ("terminal",
+                              "🤝 *cole* on the *quote-flow* task was stopped from a terminal."),
+                             ("", "🤝 *cole* on the *quote-flow* task was stopped.")):
+            with self.subTest(stopped_by=asker or "nobody"):
+                line = slack.delegation_line(self.handed(
+                    state="settled", ok=False, became="stopped", stopped_by=asker))
+                self.assertEqual(f"{slack.STOPPED_MARK} {reads}", line)
+                self.assertNotIn(slack.MARKS["stopped"], line)
+                self.assertNotIn("⚠️", line, "a decision was shown as a fault")
+
 
 @needs_slack
 class WhenARecordCannotBeActedOn(unittest.IsolatedAsyncioTestCase):

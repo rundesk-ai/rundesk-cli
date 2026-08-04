@@ -2274,6 +2274,20 @@ class WhatADelegationLooksLikeHere(unittest.TestCase):
                 self.assertNotIn("1h", line)
                 self.assertNotIn("\u2014", line)
 
+    def test_a_stopped_delegation_reads_as_a_decision_rather_than_a_fault(self):
+        """R-DEL-18 — told apart by `ok` alone a stop and a failure were one ⚠️ line saying
+        work did not finish, which reads as a fault about something somebody chose."""
+        for asker, reads in (("agent", "Stopped **cole** on the **quote-flow** task."),
+                             ("terminal",
+                              "**cole** on the **quote-flow** task was stopped from a terminal."),
+                             ("", "**cole** on the **quote-flow** task was stopped.")):
+            with self.subTest(stopped_by=asker or "nobody"):
+                line = discord.delegation_line(self.handed(
+                    state="settled", ok=False, became="stopped", stopped_by=asker))
+                self.assertEqual(
+                    f"{discord.MARKS['stopped']} \U0001f91d {reads}", line)
+                self.assertNotIn("⚠️", line, "a decision was shown as a fault")
+
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class HowADelegationReachesTheRoom(unittest.IsolatedAsyncioTestCase):

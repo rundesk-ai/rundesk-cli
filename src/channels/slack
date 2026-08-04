@@ -2022,8 +2022,10 @@ def delegation_line(it: dict) -> str:
     if state == SETTLED:
         # **Three endings, and only one of them is a fault.** A stop is somebody's
         # decision — the asking agent's own, or an owner's at a terminal — so it carries
-        # `MARKS["stopped"]` rather than the warning beside it, and says who decided where
-        # anybody wrote that down (R-DEL-18). Read off `became`, with `ok` left as the
+        # the stopped mark rather than the warning beside it, and says who decided where
+        # anybody wrote that down (R-DEL-18). **`STOPPED_MARK`, never `MARKS`**: this
+        # platform's `MARKS` holds reaction *names*, so one put into a line posts the
+        # literal word `raised_hand`. Read off `became`, with `ok` left as the
         # fall-through: a record from a rundesk that never sent one, and an ask nothing has
         # settled yet, both still render the two endings there have always been.
         elapsed = _after(it.get("elapsed"))
@@ -2031,10 +2033,10 @@ def delegation_line(it: dict) -> str:
             asker = it.get("stopped_by")
             if asker == "agent":
                 # The agent stopping work it handed over is not news about somebody else.
-                return (f"{MARKS['stopped']} {DELEGATION_MARK} Stopped *{who}* on the "
+                return (f"{STOPPED_MARK} {DELEGATION_MARK} Stopped *{who}* on the "
                         f"*{label}* task{elapsed}.")
             said = STOPPED_BY.get(asker, STOPPED_BY_NOBODY_NAMED)
-            return (f"{MARKS['stopped']} {DELEGATION_MARK} *{who}* on the *{label}* task "
+            return (f"{STOPPED_MARK} {DELEGATION_MARK} *{who}* on the *{label}* task "
                     f"{said}{elapsed}.")
         if it.get("became") == "succeeded" or (
                 it.get("became") != "failed" and it.get("ok") is True):
