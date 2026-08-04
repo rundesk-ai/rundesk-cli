@@ -384,7 +384,7 @@ provider. One file per contract, named for it:
 | `test_instructions.py` | 38 | the four named layers, what each is true of, the shared agent fragment, and a captured preface per turn kind proving nothing else moved |
 | `test_role.py` | 87 | `agent-role` — what a role is, what makes one usable, what its revision is computed from, how the install's roles are offered, and what writing or editing one refuses, against a scratch library |
 | `test_role_run.py` | 144 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
-| `test_delegation.py` | 58 | `agent-delegation` — **takes the turn as an argument** too, so what an answering agent is told and given is asserted with no brain near it, against a scratch data root with no gateway near it either. Guiding, ending and carrying an ask on are driven through the same seam |
+| `test_delegation.py` | 59 | `agent-delegation` — **takes the turn as an argument** too, so what an answering agent is told and given is asserted with no brain near it, against a scratch data root with no gateway near it either. Guiding, ending and carrying an ask on are driven through the same seam |
 | `test_secret.py` | 39 | `platform-secrets` — what an install keeps for every program it starts: the refusals that are the boundary, the three answers a fetching command can give, and a scratch root that proves nothing reaches the owner's own |
 | `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 

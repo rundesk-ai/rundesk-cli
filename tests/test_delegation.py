@@ -746,6 +746,25 @@ class StoppingAndCarryingOnAnAsk(WithTwoAgentsOnOneInstall):
         with self.assertRaises(delegation.NotDelegable):
             delegation.resume("elena", record["id"], "x" * (delegation.BRIEF_LIMIT + 1))
 
+    def test_a_record_written_before_deadlines_existed_is_given_the_one_it_would_have_had(self):
+        """R-DEL-21 — the one place absent and computed are not different answers here.
+
+        An ask admitted by a build that kept no deadline of its own would otherwise never be
+        swept and never refuse a resume, which is a record that outlives its own window. It
+        is given a fortnight from the last thing that happened to it."""
+        record = self.ask(now=at("2026-08-01T09:00:00Z"))
+        row = delegation.read(record["id"])
+        row.pop("retained_until")
+        delegation.path(record["id"]).write_text(
+            json.dumps(row, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        self.assertEqual("2026-08-15T09:00:00Z",
+                         delegation.shown(delegation.read(record["id"]))["retained_until"])
+        with self.assertRaises(delegation.NotDelegable) as refused:
+            delegation.say("elena", record["id"], "more",
+                           now=at("2026-09-01T09:00:00Z"))
+        self.assertIn("past its retention window", str(refused.exception))
+
     def test_every_change_moves_the_deadline_and_a_listing_says_what_it_is(self):
         """R-DEL-21 — counted from latest activity rather than from settling, so an ask
         somebody is still carrying on at day thirteen is work in progress."""
