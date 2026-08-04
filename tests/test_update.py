@@ -147,6 +147,25 @@ class AnUpdateThatLands(Updating):
         self.assertFalse(settled["backup_enabled"])
         self.assertIn("update_time", settled)
 
+    def test_it_records_when_the_new_version_arrived(self):
+        self.update(archive=self.an_archive())
+        self.assertRegex(config.read(paths.data())["last_updated_at"],
+                         r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+    def test_an_update_that_found_nothing_newer_does_not_touch_it(self):
+        # Otherwise the answer drifts to "just now" every time somebody merely checks for an update.
+        #
+        # Put back to a date nothing here could produce, rather than comparing two live readings:
+        # both runs land inside the same second, so a case that ran it twice and compared would pass
+        # even with the rule removed. It did.
+        self.update(archive=self.an_archive())
+        config.stated("last_updated_at", "1999-12-31T23:59:59Z", paths.data())
+
+        self.update(published=f"v{__version__}")
+
+        self.assertEqual("1999-12-31T23:59:59Z", config.read(paths.data())["last_updated_at"],
+                         "an update that moved nothing rewrote when a version last arrived")
+
     def test_it_leaves_no_staging_entries_behind(self):
         self.update(archive=self.an_archive())
         leftovers = [at.name for at in paths.app().iterdir()

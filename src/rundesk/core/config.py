@@ -20,6 +20,7 @@ nothing already stated** — a release that starts offering a setting must reach
 it, and an owner who turned something off must find it still off afterwards.
 """
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -44,10 +45,16 @@ INITIAL = {
     # be anywhere, so an uninstall that only knew the usual places would leave a dangling link
     # behind and report an ordinary success.
     "command_link": None,
+
+    # When a version last actually arrived on this install — the moment it was installed, or the
+    # moment an update moved it. Which version that was is `rundesk version`, so it is not repeated
+    # here. Written only by the two paths that really place a program, never by a run of `update`
+    # that found nothing newer: otherwise the answer drifts to "just now" every time anybody checks.
+    "last_updated_at": None,
 }
 
 #: The values nobody states, so `fill_in` can leave the owner's alone and still manage these.
-MANAGED = ("migration", "command_link")
+MANAGED = ("migration", "command_link", "last_updated_at")
 
 #: What each stated value has to look like, in the words somebody would use to correct it.
 WANTED = {
@@ -59,6 +66,21 @@ WANTED = {
 
 _YES = ("yes", "true", "on", "1")
 _NO = ("no", "false", "off", "0")
+
+
+def moved(when=None, data: Optional[Path] = None) -> str:
+    """Record that a version has just arrived on this install. Returns the moment recorded.
+
+    Called only by the two paths that really place a program — an install, and an update that
+    actually moved. A run of `update` that found nothing newer must never call it, or the answer
+    drifts to "just now" every time anybody checks for an update.
+
+    `when` is the clock, passed in rather than read here, so what is recorded is the caller's
+    decision and a test can assert an exact value rather than a range.
+    """
+    stamped = (when or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stated("last_updated_at", stamped, data)
+    return stamped
 
 
 def settable():

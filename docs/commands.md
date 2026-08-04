@@ -31,10 +31,17 @@ projects          /Users/you/.rundesk/projects
 fit to run        yes
 backup_enabled    yes
 backup_retention  7
+command_link      /Users/you/.local/bin/rundesk
+last_updated_at   2026-08-04T20:48:04Z
 migration         nothing to carry — this release ships no migration steps
 update_enabled    yes
 update_time       03:00
 ```
+
+`last_updated_at` is when a version last actually arrived — the install, or an update that really
+moved. A run of `update` that finds nothing newer does not touch it, so the answer does not drift to
+"just now" every time you check. Which version that was is `rundesk version`, so it is not repeated
+here.
 
 `program` says which copy of the code answered and whether it is this root's own install or a
 checkout — running a checkout against an install's data is an ordinary thing to do by accident, and

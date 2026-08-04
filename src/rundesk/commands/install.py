@@ -67,6 +67,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     # knew the usual places would leave the link dangling and report an ordinary success.
     try:
         config.stated("command_link", str(at), paths.data())
+        config.moved(data=paths.data())
     except (config.Unreadable, config.Refused) as why:
         return _failed(f"the command was linked and could not be recorded: {why}")
 

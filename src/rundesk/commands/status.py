@@ -70,6 +70,8 @@ def _readably(key: str, value) -> str:
         if value is None:
             return f"not carried yet (this release ships up to {ships})"
         return str(value) if value == ships else f"{value} (this release ships up to {ships})"
+    if value is None:
+        return "not yet"
     if isinstance(value, bool):
         return "yes" if value else "no"
     return str(value)

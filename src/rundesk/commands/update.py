@@ -113,6 +113,15 @@ def cmd_update(_args: argparse.Namespace, asking=None, fetching=None) -> int:
         print("        running it again will carry on from where this stopped", file=sys.stderr)
         return FAILED
 
+    # Recorded here, and only here, because this is the path where a version really arrived. The
+    # settling above runs on every update including one that found nothing newer, so stamping in
+    # there would move the answer forward every time anybody merely checked.
+    try:
+        config.moved(data=paths.data())
+    except (config.Unreadable, config.Refused) as why:
+        print(f"update: {published} is installed and when it arrived was not recorded — {why}",
+              file=sys.stderr)
+
     where = release.release_url(published.lstrip("v"))
     print(f"rundesk updated to {published}")
     if where:

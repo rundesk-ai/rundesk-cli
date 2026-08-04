@@ -88,6 +88,18 @@ class AFreshInstall(Installing):
         self.install()
         self.assertEqual(migration.newest(), config.read(paths.data())["migration"])
 
+    def test_it_records_when_the_version_arrived(self):
+        self.install()
+        self.assertRegex(config.read(paths.data())["last_updated_at"],
+                         r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+    def test_installing_again_records_the_new_arrival(self):
+        # An install really does place a program, so it really is a moment a version arrived.
+        self.install()
+        config.stated("last_updated_at", "1999-12-31T23:59:59Z", paths.data())
+        self.install()
+        self.assertNotEqual("1999-12-31T23:59:59Z", config.read(paths.data())["last_updated_at"])
+
     def test_a_program_that_will_not_run_is_never_reported_as_installed(self):
         # An installer that reports success without checking has told somebody their machine is
         # ready when it is not, and they find out later and somewhere else.

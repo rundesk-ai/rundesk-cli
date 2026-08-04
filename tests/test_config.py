@@ -4,6 +4,7 @@ Run directly: `python3 tests/test_config.py`
 """
 
 import json
+from datetime import datetime, timezone
 import unittest
 
 import support
@@ -77,6 +78,54 @@ class AskingHowItIsConfigured(support.Isolated):
     def test_a_value_rundesk_is_not_configured_with_is_refused(self):
         with self.assertRaises(config.Refused):
             config.stated("whatever_this_is", True, self.home / "data")
+
+
+class WhenAVersionLastArrived(support.Isolated):
+    """`last_updated_at` is written only by the paths that really place a program."""
+
+    def setUp(self):
+        super().setUp()
+        self.data = self.home / "data"
+        config.write_fresh(self.data)
+
+    def at(self, day: int) -> datetime:
+        return datetime(2026, 8, day, 14, 30, 5, tzinfo=timezone.utc)
+
+    def test_a_fresh_configuration_has_nothing_recorded_yet(self):
+        self.assertIsNone(config.read(self.data)["last_updated_at"])
+
+    def test_recording_a_move_writes_the_moment_it_was_given(self):
+        self.assertEqual("2026-08-04T14:30:05Z", config.moved(self.at(4), self.data))
+        self.assertEqual("2026-08-04T14:30:05Z", config.read(self.data)["last_updated_at"])
+
+    def test_a_later_move_replaces_the_earlier_one(self):
+        config.moved(self.at(4), self.data)
+        config.moved(self.at(9), self.data)
+        self.assertEqual("2026-08-09T14:30:05Z", config.read(self.data)["last_updated_at"])
+
+    def test_the_clock_is_passed_in_rather_than_read(self):
+        # A moment nothing could arrive at by reading the machine's own clock, so this fails if the
+        # time is taken internally rather than from the caller.
+        config.moved(datetime(1999, 12, 31, 23, 59, 59, tzinfo=timezone.utc), self.data)
+        self.assertEqual("1999-12-31T23:59:59Z", config.read(self.data)["last_updated_at"])
+
+    def test_with_no_clock_given_it_uses_now(self):
+        before = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        config.moved(data=self.data)
+        self.assertGreaterEqual(config.read(self.data)["last_updated_at"], before)
+
+    def test_it_is_recorded_as_a_readable_moment_in_utc(self):
+        config.moved(self.at(4), self.data)
+        self.assertRegex(config.read(self.data)["last_updated_at"],
+                         r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+    def test_it_leaves_everything_else_alone(self):
+        config.stated("backup_retention", 30, self.data)
+        config.moved(self.at(4), self.data)
+        self.assertEqual(30, config.read(self.data)["backup_retention"])
+
+    def test_nobody_may_set_it_by_hand(self):
+        self.assertNotIn("last_updated_at", config.settable())
 
 
 class WritingASmallFileSafely(support.Isolated):
