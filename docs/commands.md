@@ -1,63 +1,148 @@
 # The command surface
 
-`rundesk` with no operation names everything it offers. Ask it rather than this page when the two
-disagree — the command is generated from nothing and describes itself.
-
-## Built
+Six operations, and every one of them works. There is no "coming soon" list: a verb rundesk cannot
+perform is a verb rundesk does not have.
 
 ```sh
-rundesk status              # how rundesk itself is on this machine
-rundesk version             # what version this install is
+rundesk status                            # the version, where the install is, and every configured value
+rundesk version                           # the version, and whether it is out of date
+rundesk configure [--<setting> <value>]   # change what this install is configured with
+rundesk update                            # move to the newest release, or say it is up to date
+rundesk uninstall --confirm [--purge]     # remove rundesk; --purge also takes the data
+rundesk install [--source <dir>] [--bin-dir <dir>]   # what install.sh runs
 ```
 
-`status` answers *how rundesk is*: its version, which root answered, where the program stands, and
-whether it can run here. What agents there are and what they are doing is `agents` — two questions,
-two commands, and one command answering both is a command nobody can predict the output of.
+Ask `rundesk --help` rather than this page when the two disagree — the command is generated from
+nothing and describes itself.
 
-`version` reports the installed version and reaches nothing outside the machine.
+## status
 
-## Registered, not built yet
-
-```sh
-rundesk version --check     # whether a newer release has been published
-rundesk update [--check]    # move to the newest published release
-rundesk uninstall [--purge] # remove rundesk from this machine
-
-rundesk agents ...          # the named identities work is run for
-rundesk messages ...        # what an agent has been asked, and what it answered
-rundesk schedules ...       # work an agent starts because the time came
-rundesk skills ...          # the skill library, and who is granted what
-rundesk channels ...        # the surfaces an agent is reached on
-rundesk backups ...         # copies of everything you keep
-rundesk env ...             # the values every program rundesk starts is given
-rundesk gateways ...        # the long-lived process an agent works inside
-```
-
-## What an unbuilt operation does
-
-The product is rebuilt one part at a time, which leaves a question the command has to answer well:
-what should `rundesk agents list` do on a day agents have not been rebuilt?
-
-Three answers are wrong. Saying nothing and exiting `0` tells a script the work happened. Failing as
-though it was attempted tells a person their machine is broken. Answering with argparse's usage error
-makes "not built yet" and "you typed it wrongly" the same reply.
-
-So every operation the finished product will offer is **listed from the outset**, and one that is not
-built yet:
-
-- **accepts the arguments it will take once built.** `rundesk skills install some/repo --confirm`
-  is understood today; the option does not become a usage error just because the verb is not written.
-- **names which part of itself is missing** — `skills grant`, not `skills`.
-- **points at something that works.**
-- **exits `69`.**
+Answers *how rundesk is*. Takes no flags.
 
 ```console
-$ rundesk agents list
-agents list: NOT AVAILABLE — planned, not built yet
-        what this rundesk can do:  rundesk --help
-$ echo $?
-69
+$ rundesk status
+WHAT              IS
+version           0.37.0
+home              /Users/you/.rundesk
+program           /Users/you/.rundesk/app (installed)
+data              /Users/you/.rundesk/data
+backups           /Users/you/.rundesk/backups
+projects          /Users/you/.rundesk/projects
+fit to run        yes
+backup_enabled    yes
+backup_retention  7
+migration         nothing to carry — this release ships no migration steps
+update_enabled    yes
+update_time       03:00
 ```
+
+`program` says which copy of the code answered and whether it is this root's own install or a
+checkout — running a checkout against an install's data is an ordinary thing to do by accident, and
+this is where you see it. Exits non-zero when rundesk cannot run here.
+
+## version
+
+Reports the version and checks whether a newer one has been published. The check is not optional:
+the reason anybody asks a program its version is to find out whether it is the one they should be
+running.
+
+```console
+$ rundesk version
+rundesk 0.37.0
+        0.37.0: UP TO DATE
+```
+
+**Being unable to ask is never reported as being up to date.** If GitHub cannot be reached the line
+says `UNKNOWN` and goes to stderr, so it cannot be mistaken for the answer. The command still exits
+`0`, because the question asked — what version is this — was answered from the machine itself.
+
+## configure
+
+Shows what the install is configured with, or changes it.
+
+```console
+$ rundesk configure
+SETTING           IS     SET IT WITH
+backup_enabled    yes    rundesk configure --backup-enabled <value>
+backup_retention  7      rundesk configure --backup-retention <value>
+update_enabled    yes    rundesk configure --update-enabled <value>
+update_time       03:00  rundesk configure --update-time <value>
+
+$ rundesk configure --backup-retention 30 --update-time 04:30
+backup_retention is now 30
+update_time is now 04:30
+```
+
+The flags are generated from the configuration, so a setting a release starts offering is settable
+the day it lands. Yes-or-no values accept `yes/no`, `true/false`, `on/off` and `1/0`.
+
+**Naming two settings and getting one wrong changes neither.** Half-applied configuration leaves an
+install in a state nobody typed.
+
+How far the install has been carried (`migration`) is shown by `status` but is not settable: setting
+it by hand would make rundesk skip or repeat a migration step.
+
+## update
+
+Moves this install to the newest published release, or says it is already on it.
+
+```console
+$ rundesk update
+0.37.0: OUT OF DATE — v0.38.0 is available, run: rundesk update
+        installing v0.38.0
+rundesk updated to v0.38.0
+        what changed: https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.38.0
+```
+
+Takes no flags. The order is chosen so the failure that cannot damage anything happens first: ask,
+then fetch to a temporary directory, then swap. The swap stages every entry and renames them into
+place, putting back what was there if any part fails — so an interrupted update leaves the install on
+the release it was, never on neither.
+
+`data/` is never touched by an update.
+
+## uninstall
+
+`--confirm` is required. Without it, the command says exactly what it would take and what it would
+keep, and removes nothing.
+
+```console
+$ rundesk uninstall
+uninstall: this would remove rundesk from /Users/you/.rundesk
+        take   the command, and /Users/you/.rundesk/app
+        keep   /Users/you/.rundesk/data
+        keep   /Users/you/.rundesk/backups
+        nothing was removed. To go ahead:
+        rundesk uninstall --confirm
+```
+
+Confirmation is a flag rather than a typed answer at a prompt, because this has to behave the same
+when nobody is watching: a prompt in a script is a command that hangs, and one that assumes "yes"
+with no terminal is worse than no prompt at all.
+
+What it takes, one named thing at a time, never a sweep:
+
+- the PATH link — **only where it points into this install's own `app/`**, so a second install on the
+  machine keeps its command
+- `app/`, whole, unless it looks like somebody's checkout
+- `data/`, **only with `--purge`**
+- `backups/` — **never.** Not "not by default": there is no argument to this command that reaches
+  them, and the code that removes things does not name the directory at all.
+
+A removal that did not happen is reported as a failure. That is the whole point of the command.
+
+## install
+
+What `install.sh` runs after it has fetched a copy. Usable by hand from a checkout:
+
+```sh
+./rundesk install --bin-dir ~/.local/bin
+```
+
+It places the program, lays down the directories and their notes, writes or fills in the
+configuration, carries the migrations, links the command, and then **proves the installed command
+answers** — an installer that reports success without checking has told somebody their machine is
+ready when it is not.
 
 ## Exit codes
 
@@ -65,9 +150,4 @@ $ echo $?
 |---|---|
 | `0` | it was done |
 | `1` | it was attempted and did not work |
-| `2` | the command line itself was wrong — a typo, an unknown verb |
-| `69` | the operation is real, registered, and not built yet |
-
-`69` is `EX_UNAVAILABLE` from the BSD conventions, and it exists so that `2` can keep meaning only
-one thing. If an unbuilt verb answered `2`, a script could not tell an operation arriving in a later
-release from one that will never exist.
+| `2` | the command line itself was wrong — a typo, an unknown verb, a bad flag |

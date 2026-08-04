@@ -28,7 +28,7 @@ from pathlib import Path
 
 from rundesk import __version__
 from rundesk.commands import update
-from rundesk.core import paths
+from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.lifecycle import tree
 
@@ -62,6 +62,13 @@ def cmd_install(args: argparse.Namespace) -> int:
         at = tree.link(app, args.bin_dir)
     except (tree.Refused, OSError) as why:
         return _failed(str(why))
+
+    # Written down because the directory is chosen here and can be anywhere. An uninstall that only
+    # knew the usual places would leave the link dangling and report an ordinary success.
+    try:
+        config.stated("command_link", str(at), paths.data())
+    except (config.Unreadable, config.Refused) as why:
+        return _failed(f"the command was linked and could not be recorded: {why}")
 
     answered = _answers(at)
     if answered:

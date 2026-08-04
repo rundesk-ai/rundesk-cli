@@ -190,26 +190,21 @@ class PuttingTheCommandOnAPath(Installing):
 
 class Uninstalling(Installing):
 
-    def _bins(self):
-        return [str(self.bin)]
-
     def uninstall(self, *argv):
-        # `tree.BIN_DIRS` is where uninstall looks for links to remove. Redirected at the scratch
-        # directory for the whole case, so no run of this suite can reach a real one.
-        was = tree.BIN_DIRS
-        tree.BIN_DIRS = tuple(self._bins())
-        try:
-            return support.run(["uninstall", "--confirm", *argv])
-        finally:
-            tree.BIN_DIRS = was
+        """Removal driven exactly as a person runs it — **nothing is redirected**.
+
+        This deliberately does not point `tree.BIN_DIRS` at the scratch directory. Doing so was
+        hiding a real defect: the install links into whatever `--bin-dir` names, uninstall only knew
+        the two usual places, and a real removal left a dangling link behind while reporting an
+        ordinary success. Patching the search path made every case here agree with the bug.
+
+        It is safe to leave alone because `tree.unlink` only removes a link that resolves into
+        *this* install's own `app/`, and this install is under a temporary root.
+        """
+        return support.run(["uninstall", "--confirm", *argv])
 
     def unconfirmed(self, *argv):
-        was = tree.BIN_DIRS
-        tree.BIN_DIRS = tuple(self._bins())
-        try:
-            return support.run(["uninstall", *argv])
-        finally:
-            tree.BIN_DIRS = was
+        return support.run(["uninstall", *argv])
 
     def test_without_confirming_nothing_is_removed(self):
         self.install()
@@ -287,18 +282,33 @@ class Uninstalling(Installing):
     def test_it_leaves_another_installs_link_alone(self):
         self.install()
         other = self.home / "other-app"
-        (other).mkdir()
+        other.mkdir()
         (other / "rundesk").write_text("#!/bin/sh\n")
         second = self.home / "bin2"
         second.mkdir()
         (second / "rundesk").symlink_to(other / "rundesk")
         was = tree.BIN_DIRS
-        tree.BIN_DIRS = (str(self.bin), str(second))
+        tree.BIN_DIRS = (str(second),)
         try:
             support.run(["uninstall", "--confirm"])
         finally:
             tree.BIN_DIRS = was
         self.assertTrue((second / "rundesk").is_symlink(), "another install's command was removed")
+
+    def test_it_removes_the_link_wherever_the_install_put_it(self):
+        # The defect this catches: the install links into whatever --bin-dir names, and a removal
+        # that only knew the usual places left the link dangling and said it had removed everything.
+        self.install()
+        at = self.bin / "rundesk"
+        self.assertTrue(at.is_symlink())
+        self.uninstall()
+        self.assertFalse(at.is_symlink(), f"{at} was left behind, dangling")
+        self.assertFalse(at.exists())
+
+    def test_where_the_command_went_is_written_down_by_the_install(self):
+        self.install()
+        self.assertEqual(str(self.bin / "rundesk"),
+                         config.read(paths.data())["command_link"])
 
     def test_removing_something_never_installed_says_so_rather_than_failing(self):
         code, out, _ = self.uninstall()

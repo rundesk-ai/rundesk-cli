@@ -38,10 +38,16 @@ INITIAL = {
 
     # How far this install has been carried. Written by the migration runner, never by hand.
     "migration": None,
+
+    # Where the install put the `rundesk` command on a PATH. Written by the installer so that
+    # removal takes back exactly what was placed: the directory is chosen at install time and can
+    # be anywhere, so an uninstall that only knew the usual places would leave a dangling link
+    # behind and report an ordinary success.
+    "command_link": None,
 }
 
-#: The one value nobody states, so `fill_in` can leave the owner's alone and still manage this.
-MANAGED = ("migration",)
+#: The values nobody states, so `fill_in` can leave the owner's alone and still manage these.
+MANAGED = ("migration", "command_link")
 
 #: What each stated value has to look like, in the words somebody would use to correct it.
 WANTED = {

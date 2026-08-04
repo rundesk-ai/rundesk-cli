@@ -23,7 +23,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from rundesk.core import paths
+from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.lifecycle import tree
 
@@ -47,7 +47,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     taken, kept = [], []
 
     try:
-        for at in tree.unlink(app):
+        for at in tree.unlink(app, _where_the_command_went()):
             taken.append(str(at))
     except OSError as why:
         return _failed(f"the command could not be unlinked: {why}")
@@ -79,6 +79,27 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     for one in kept:
         print(f"        kept   {one}")
     return OK
+
+
+def _where_the_command_went():
+    """Every directory that might hold this install's command, the recorded one first.
+
+    The install writes down where it put the link, because that directory is chosen at install time
+    and can be anywhere. Without it a removal only knows the usual places, so an install linked
+    somewhere else leaves a dangling link and says it removed everything.
+
+    The usual places are still searched afterwards, so an install made before this was recorded is
+    removed properly too. Every candidate is checked to be *this* install's before it is touched.
+    """
+    where = []
+    try:
+        recorded = config.read(paths.data()).get("command_link")
+    except config.Unreadable:
+        recorded = None
+    if recorded:
+        where.append(str(Path(recorded).parent))
+    where.extend(one for one in tree.BIN_DIRS if one not in where)
+    return where
 
 
 def _needs_confirming(root: Path, purging: bool) -> int:
