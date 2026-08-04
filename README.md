@@ -77,7 +77,7 @@ rundesk start ava
 ```
 
 The next terminal `ask` resumes the same conversation. To reach the agent away from
-your terminal, **[set up the Discord bot](docs/discord.md)**.
+your terminal, **set up the Discord bot** (guide returns with the channel).
 
 ## 🧠 Provider adapters
 
@@ -134,7 +134,7 @@ Rundesk. It can be a Python program, compiled binary, or shell script. Custom pr
 receive the same agent homes, schedules, channels, records, usage reporting, and
 lifecycle as shipped adapters.
 
-→ **[Write a provider adapter](docs/extending/provider-adapters/references/the-contract.md)**
+→ **Writing a provider adapter** — the contract returns with the provider seam
 
 ## 💬 Channel adapters
 
@@ -168,7 +168,7 @@ rundesk channels ava instructions discord-rooms \
   "You are {agent} in {where.channel}. Others can read this, so keep it concise."
 ```
 
-→ **[Set up the Discord bot](docs/discord.md)**
+→ **Setting up the Discord bot** — the guide returns with the channel
 
 ### Slack
 
@@ -195,7 +195,7 @@ Slack has no typing indicator a bot may raise without forcing a thread-only conv
 on every exchange, so the eyes reaction and the running commentary are what say a turn is
 alive. Everything else is what Discord does.
 
-→ **[Set up the Slack bot](docs/slack.md)**
+→ **Setting up the Slack bot** — the guide returns with the channel
 
 ### Custom channels are first-class
 
@@ -203,7 +203,7 @@ Like a provider adapter, a channel adapter is an executable rather than code Run
 loads. It owns the vocabulary of its platform while Rundesk owns access control, turn
 state, history, and delivery.
 
-→ **[Write a channel adapter](docs/extending/channel-adapters/references/the-contract.md)**
+→ **Writing a channel adapter** — the contract returns with the channel seam
 
 <details>
 <summary><strong>The full feature list</strong></summary>
@@ -261,7 +261,7 @@ rundesk skills install https://github.com/rundesk-ai/rundesk-skills --confirm
 rundesk skills grant ava python-patterns
 ```
 
-Catalog repositories use one [`manifest.json` contract](docs/extending/skill-catalogs/README.md)
+Catalog repositories use one `manifest.json` contract
 whether they publish one skill or a collection.
 
 First-party optional integrations use the same contract:
@@ -342,25 +342,27 @@ others from being checked or rolling back an otherwise healthy CLI update.
 
 ## 📖 Documentation
 
-- **[CLI reference](CLI.md)** — every command and argument, generated from the parser
-- **[Discord setup](docs/discord.md)** — create, authorize, connect, and test an agent's bot
-- **[Install-wide configuration](docs/configuration.md)** — update time, backups, required skills, and the values every program is given
-- **[Provider adapter contract](docs/extending/provider-adapters/references/the-contract.md)** — put another coding CLI behind an agent
-- **[Channel adapter contract](docs/extending/channel-adapters/references/the-contract.md)** — reach an agent from another platform
-- **[Integration CLI guide](docs/extending/integration-clis/README.md)** — give every agent a custom command
-- **[Tested contracts](.knowledge/prd/README.md)** — every guarantee and the test that proves it
-- **[Architecture](.knowledge/CODEMAP.md)** — how the system is organized
+- **[Commands](docs/commands.md)** — every operation, what it guarantees, and what each exit code means
+- **[Where an install keeps things](docs/layout.md)** — one root, and everything derived from it
+- **[Working on a checkout](docs/development.md)** — running and testing without installing
+
+> **This branch is a rebuild in progress.** The command's own lifecycle — install, status, version,
+> configure, update, uninstall — is rebuilt and covered by tests. Agents, gateways, channels,
+> schedules and skills are being brought back one part at a time, and the sections describing them
+> above document the published release rather than what is in this tree. `rundesk --help` is always
+> the truth about what this copy can do.
 
 ## 🤝 Contributing
 
 Issues and pull requests are welcome.
 
 ```sh
-python3 .knowledge/scripts/gate
+python3 scripts/suites
 ```
 
-The gate discovers every offline suite, checks documentation evidence, validates the
-shell surface, and performs a real install and uninstall.
+It discovers every suite rather than listing them, runs them offline, and fails when it finds none.
+Read [`docs/development.md`](docs/development.md) before running anything against a checkout: every
+location resolves under your home by default, and `./dev` is what points a run somewhere safe.
 
 ## 📄 License
 
