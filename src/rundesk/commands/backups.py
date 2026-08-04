@@ -24,7 +24,7 @@ from rundesk.commands import Subcommands, failed
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.lifecycle import backups
-from rundesk.utils.table import as_table
+from rundesk.utils.terminal import as_table
 
 
 def register(sub: Subcommands) -> None:

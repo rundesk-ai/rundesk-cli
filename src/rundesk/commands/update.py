@@ -29,7 +29,6 @@ rather than an operation anybody performs, and the command surface stays exactly
 
 import argparse
 import shutil
-import subprocess
 import sys
 import tarfile
 import tempfile
@@ -43,6 +42,7 @@ from rundesk.commands import failed
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.lifecycle import home, migration, release, tree
+from rundesk.utils import programs
 
 #: How a release archive is brought down: given where it is and where to put it, it puts it there.
 #: The second of the two things in this product that leave the machine, and like the first it is a
@@ -189,18 +189,13 @@ def settled_by_the_new_release(app: Path) -> str:
     resolves to depends on the PATH of whoever started the command, so the two can differ on one
     machine. The update runs on the interpreter that is already running it.
     """
-    try:
-        ended = subprocess.run([sys.executable, "-c", _SETTLE, str(app / "src")], text=True,
-                               stdin=subprocess.DEVNULL, capture_output=True,
-                               timeout=SETTLE_SECONDS)
-    except OSError as why:
-        return f"the installed release could not be run: {why}"
-    except subprocess.TimeoutExpired:
-        return f"the installed release did not finish within {SETTLE_SECONDS} seconds"
-    if ended.stdout:
-        sys.stdout.write(ended.stdout)
-    if ended.returncode != 0:
-        return (ended.stderr or f"it ended {ended.returncode}").strip()
+    ended = programs.run([sys.executable, "-c", _SETTLE, str(app / "src")], SETTLE_SECONDS)
+    if ended.out:
+        sys.stdout.write(ended.out)
+    if ended.trouble:
+        return f"the installed release {ended.trouble}"
+    if ended.code != 0:
+        return (ended.err or f"it ended {ended.code}").strip()
     return ""
 
 

@@ -49,8 +49,7 @@ from typing import Callable, List, NamedTuple, Optional
 
 from rundesk.core import config, paths
 from rundesk.lifecycle import migration
-from rundesk.utils import exclusive, jsonfile
-from rundesk.utils.staging import INCOMING, OUTGOING, discard, stage_copy, staged
+from rundesk.utils import files, locking
 
 #: What a copy is called: the moment it was made, to the second, in UTC.
 #:
@@ -113,7 +112,7 @@ def _one_at_a_time():
     configuration, which takes it again. `flock` is held per open file description, so a second
     `open` in the same process conflicts with the first exactly as another process would.
     """
-    return exclusive.only_one(paths.lock(), "this install")
+    return locking.only_one(paths.lock(), "this install")
 
 
 def location(backups: Optional[Path] = None) -> Path:
@@ -139,7 +138,7 @@ def kept(backups: Optional[Path] = None) -> List[str]:
     _reachable(at)
     try:
         there = [one.name for one in at.iterdir()
-                 if not staged(one.name) and NAMED.match(one.name) and one.is_dir()]
+                 if not files.staged(one.name) and NAMED.match(one.name) and one.is_dir()]
     except FileNotFoundError:
         return []
     except OSError as why:
@@ -215,13 +214,13 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
         # The name and the staging under it are one decision: worked out separately, two callers
         # land on the same second, stage into the same directory, and discard each other's work.
         name = named(when, at)
-        pending = at / INCOMING.format(name=name)
-        discard(pending)
+        pending = at / files.INCOMING.format(name=name)
+        files.discard(pending)
         try:
             shutil.copytree(from_where, pending, symlinks=True)
             os.rename(pending, at / name)
         except Exception:
-            discard(pending)
+            files.discard(pending)
             raise
     return name
 
@@ -373,7 +372,7 @@ def _moved_now(to: Path, at: Path, said: Callable[[str], None]) -> Path:
     for one in _could_not_remove(now_at, moved) if now_at != at else []:
         said(f"{one} is still at {now_at} and could not be removed")
     if now_at == at:
-        discard(at.parent / OUTGOING.format(name=at.name))
+        files.discard(at.parent / files.OUTGOING.format(name=at.name))
     return to
 
 
@@ -390,9 +389,9 @@ def _copy_across(now_at: Path, to: Path, said: Callable[[str], None]) -> List[st
     landed: List[str] = []
     try:
         for entry in sorted(now_at.iterdir()) if now_at.is_dir() else []:
-            if staged(entry.name):
+            if files.staged(entry.name):
                 continue
-            os.rename(stage_copy(entry, to), to / entry.name)
+            os.rename(files.stage_copy(entry, to), to / entry.name)
             landed.append(entry.name)
             said(f"moved {entry.name}")
     except Exception:
@@ -433,8 +432,8 @@ def _point_at(at: Path, to: Path) -> None:
             raise
         return
 
-    aside = at.parent / OUTGOING.format(name=at.name)
-    discard(aside)
+    aside = at.parent / files.OUTGOING.format(name=at.name)
+    files.discard(aside)
     if at.exists():
         os.rename(at, aside)
     at.parent.mkdir(parents=True, exist_ok=True)
@@ -497,8 +496,8 @@ def _has_the_mark(where: Path) -> bool:
     A copy that could not be put back therefore sat at the top of the list, counted towards the
     number the owner asked to keep, and pushed a real one out. See `restorable`.
     """
-    how, said = jsonfile.read(where / THE_MARK)
-    return how == jsonfile.READ and isinstance(said, dict)
+    how, said = files.read_json(where / THE_MARK)
+    return how == files.READ and isinstance(said, dict)
 
 
 def _swap(a_copy: Path, into: Path) -> None:
@@ -508,16 +507,16 @@ def _swap(a_copy: Path, into: Path) -> None:
     replaces and only renamed over it once all of it is there, so an interruption leaves `data/` as
     it was rather than as neither.
     """
-    pending = into.parent / INCOMING.format(name=into.name)
-    aside = into.parent / OUTGOING.format(name=into.name)
+    pending = into.parent / files.INCOMING.format(name=into.name)
+    aside = into.parent / files.OUTGOING.format(name=into.name)
     into.parent.mkdir(parents=True, exist_ok=True)
-    discard(pending)
-    discard(aside)
+    files.discard(pending)
+    files.discard(aside)
 
     try:
         shutil.copytree(a_copy, pending, symlinks=True)
     except Exception:
-        discard(pending)
+        files.discard(pending)
         raise
 
     swapped = False
@@ -527,17 +526,17 @@ def _swap(a_copy: Path, into: Path) -> None:
             swapped = True
         os.rename(pending, into)
     except Exception:
-        discard(pending)
+        files.discard(pending)
         if swapped:
             _put_back(aside, into)
         raise
-    discard(aside)
+    files.discard(aside)
 
 
 def _put_back(aside: Path, into: Path) -> None:
     """Undo a half-finished swap, or say that it could not be undone."""
     try:
-        discard(into)
+        files.discard(into)
         os.rename(aside, into)
     except OSError as why:
         raise HalfRestored(

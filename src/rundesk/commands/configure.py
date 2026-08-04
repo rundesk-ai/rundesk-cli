@@ -13,7 +13,7 @@ import argparse
 from rundesk.commands import Subcommands, as_written, failed
 from rundesk.core import config, paths
 from rundesk.exits import OK
-from rundesk.utils.table import as_table
+from rundesk.utils.terminal import as_table
 
 
 def as_flag(key: str) -> str:

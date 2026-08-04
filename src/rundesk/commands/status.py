@@ -15,7 +15,7 @@ from rundesk.commands import as_written, failed
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.lifecycle import backups, migration
-from rundesk.utils.table import as_table
+from rundesk.utils.terminal import as_table
 
 #: The oldest Python a fresh macOS ships, which is the floor everything here is written against.
 PYTHON_FLOOR = (3, 9)

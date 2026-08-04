@@ -70,6 +70,16 @@ may import anything higher, and `tests/test_layers.py` checks that rather than t
 | `src/rundesk/utils/` | common functionality with no opinion about rundesk: a small file kept safely, a replacement staged, a table lined up | the standard library, **and nothing of rundesk's** |
 | `install.sh` | fetching a copy and handing over | nothing — it holds no product behavior |
 
+**`utils/` is few and concrete, not many and abstract.** A module there is named for the thing you
+would go looking for, and the test is whether somebody hunting *"can this agent name be a
+directory?"* would guess the file. Nobody guesses `naming.py`; everybody guesses `files.py`. Things
+that fail together belong together — a name with a separator lands a file somewhere else and a write
+that is not staged lands it half-written, so both live in `files`. Never take a name the standard
+library has (`logging`, `types`, `select`, `signal`): anything inside the package imports yours
+instead of the real one. Keep it flat until there are eight or ten, then group by what a module
+touches — never into a drawer called `misc`. The module table in `utils/__init__.py` is checked
+against the directory by `tests/test_layers.py`, because it had already gone stale once.
+
 **`utils/` is the strict one, and the rule is a membership rule rather than a preference.** Nothing
 in it may be domain knowledge or product logic: everything there is functionality any project could
 have, and the mechanical test is that it imports the standard library and nothing of this product's —

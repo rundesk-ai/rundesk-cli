@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from rundesk.core import paths
-from rundesk.utils import exclusive, jsonfile
+from rundesk.utils import files, locking
 
 #: What a fresh install is written with, and the whole list of what an install may be configured with.
 #: A key added here reaches existing installs through `fill_in`, which never touches a stated value.
@@ -85,7 +85,7 @@ class Unreadable(Exception):
 #: Something else is changing the configuration and did not finish. The same answer `jsonfile` gives,
 #: named here as well because this file is the one every command changes, so every command that
 #: writes has to be able to say it — and none of them should have to know which module it came from.
-Stuck = jsonfile.Stuck
+Stuck = files.Stuck
 
 
 def moved(when: Optional[datetime] = None, data: Optional[Path] = None) -> str:
@@ -166,11 +166,11 @@ def read(data: Optional[Path] = None) -> dict:
     added a setting answers for it immediately; the file catches up the next time something changes
     it, or at the next update.
     """
-    how, said = jsonfile.read(where(data))
-    if how == jsonfile.UNREADABLE:
+    how, said = files.read_json(where(data))
+    if how == files.UNREADABLE:
         raise Unreadable(f"{where(data)} is there and cannot be read")
     settled = dict(INITIAL)
-    if how == jsonfile.READ and isinstance(said, dict):
+    if how == files.READ and isinstance(said, dict):
         settled.update(said)
     return settled
 
@@ -184,7 +184,7 @@ def write_fresh(data: Optional[Path] = None) -> dict:
     at = where(data)
     if at.exists():
         return fill_in(data)
-    jsonfile.write(at, dict(INITIAL))
+    files.write_json(at, dict(INITIAL))
     return dict(INITIAL)
 
 
@@ -199,7 +199,7 @@ def fill_in(data: Optional[Path] = None) -> dict:
     # Held at the install level as well as at the file level. `jsonfile`'s lock guards this file
     # against another writer of this file; it cannot guard it against `data/` being renamed out from
     # under it by a restore, which is the race that lost a stated value entirely.
-    with exclusive.only_one(paths.lock(), "this install"), jsonfile.changing(at, empty={}) as held:
+    with locking.only_one(paths.lock(), "this install"), files.changing_json(at, empty={}) as held:
         settled = dict(held[0]) if isinstance(held[0], dict) else {}
         for key, value in INITIAL.items():
             settled.setdefault(key, value)
@@ -226,8 +226,8 @@ def stated_all(values: Dict[str, Any], data: Optional[Path] = None) -> None:
     unknown = [key for key in sorted(values) if key not in INITIAL]
     if unknown:
         raise Refused(f"{unknown[0]} is not a value rundesk is configured with")
-    with exclusive.only_one(paths.lock(), "this install"), \
-            jsonfile.changing(where(data), empty=dict(INITIAL)) as held:
+    with locking.only_one(paths.lock(), "this install"), \
+            files.changing_json(where(data), empty=dict(INITIAL)) as held:
         settled = dict(held[0]) if isinstance(held[0], dict) else dict(INITIAL)
         settled.update(values)
         held[0] = settled

@@ -19,6 +19,7 @@ Run directly: `python3 tests/test_layers.py`
 """
 
 import ast
+import re
 import unittest
 from pathlib import Path
 
@@ -38,6 +39,15 @@ MAY_IMPORT = {
 UNDERNEATH = ("rundesk", "rundesk.exits")
 
 WHERE = support.CHECKOUT / "src" / "rundesk"
+
+#: Standard library names a module in `utils/` might plausibly be given. Not the whole library —
+#: nobody is going to write `utils/xml.py` — just the ones that describe what a shared module here
+#: does, which is exactly why they are the dangerous ones.
+TEMPTING = {
+    "logging", "types", "typing", "select", "signal", "platform", "io", "os", "time", "json",
+    "copy", "string", "secrets", "queue", "socket", "shutil", "subprocess", "tempfile", "uuid",
+    "hashlib", "random", "operator", "stat", "pathlib", "textwrap", "locale", "code", "token",
+}
 
 
 def imports(module: Path):
@@ -95,6 +105,28 @@ class TheTreePointsOneWay(support.Isolated):
                 self.assertEqual(set(), beyond,
                                  f"{module.name} reaches outside utils — the bottom layer is the "
                                  "standard library and its own siblings, and nothing else")
+
+    def test_every_module_in_utils_is_named_in_its_table(self):
+        # The table in `utils/__init__.py` is what a reader trusts to know what is down there, and
+        # it is the first thing that goes stale: it had already fallen a module behind by the time
+        # anybody noticed. Checked rather than remembered, and it fails on an empty walk too.
+        table = (WHERE / "utils" / "__init__.py").read_text(encoding="utf-8")
+        named = set(re.findall(r"^\| `(\w+)` \|", table, re.M))
+        self.assertTrue(named, "the table in utils/__init__.py names nothing at all")
+        there = {one.stem for one in modules_of("utils") if one.stem != "__init__"}
+        self.assertEqual(there, named,
+                         "the table in utils/__init__.py and the directory disagree")
+
+    def test_nothing_in_utils_takes_a_name_the_standard_library_has(self):
+        # ruff catches a shadowed builtin and cannot catch a shadowed module. A `utils/logging.py`
+        # is imported in preference to the real one by anything inside this package, and the failure
+        # is baffling because the name is right.
+        #
+        # Written out rather than asked of `sys.stdlib_module_names`, which arrived in 3.10 and this
+        # runs on 3.9 — the floor caught that on the first run of this very case. These are the names
+        # a module down here might plausibly be given, which is the whole risk worth checking.
+        taken = {one.stem for one in modules_of("utils")} & TEMPTING
+        self.assertEqual(set(), taken, f"{taken} shadows a standard library module")
 
     def test_nothing_below_commands_knows_what_argparse_is(self):
         # The command line is one layer's business. A lifecycle module taking a `Namespace` would be

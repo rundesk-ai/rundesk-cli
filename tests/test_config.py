@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import support
 from rundesk.core import config
-from rundesk.utils import exclusive, jsonfile
+from rundesk.utils import files, locking
 
 
 class WhatAFreshInstallIsWrittenWith(support.Isolated):
@@ -42,20 +42,20 @@ class WhatAnUpdateMayChange(support.Isolated):
 
     def test_it_adds_a_value_a_newer_release_introduced(self):
         data = self.home / "data"
-        jsonfile.write(config.where(data), {"backup_enabled": False})
+        files.write_json(config.where(data), {"backup_enabled": False})
         settled = config.fill_in(data)
         self.assertIn("update_time", settled)
         self.assertEqual(config.INITIAL["update_time"], settled["update_time"])
 
     def test_it_changes_nothing_already_stated(self):
         data = self.home / "data"
-        jsonfile.write(config.where(data), {"backup_retention": 30})
+        files.write_json(config.where(data), {"backup_retention": 30})
         self.assertEqual(30, config.fill_in(data)["backup_retention"])
 
     def test_a_stated_false_is_an_answer_and_not_an_absent_one(self):
         # The one that looks like a default nobody set, and is not.
         data = self.home / "data"
-        jsonfile.write(config.where(data), {"update_enabled": False})
+        files.write_json(config.where(data), {"update_enabled": False})
         self.assertFalse(config.fill_in(data)["update_enabled"])
         self.assertFalse(config.read(data)["update_enabled"])
 
@@ -64,7 +64,7 @@ class AskingHowItIsConfigured(support.Isolated):
 
     def test_reading_answers_for_a_value_this_release_added_without_writing_one(self):
         data = self.home / "data"
-        jsonfile.write(config.where(data), {"backup_enabled": True})
+        files.write_json(config.where(data), {"backup_enabled": True})
         self.assertEqual(config.INITIAL["update_time"], config.read(data)["update_time"])
         on_disk = json.loads(config.where(data).read_text())
         self.assertNotIn("update_time", on_disk, "asking how it is configured wrote to the file")
@@ -143,8 +143,8 @@ class WhenSomethingElseIsChangingTheConfiguration(support.Isolated):
 
     def test_a_command_says_it_rather_than_ending_in_a_traceback(self):
         config.write_fresh(self.home / "data")
-        self.addCleanup(setattr, exclusive, "WAITING_SECONDS", exclusive.WAITING_SECONDS)
-        exclusive.WAITING_SECONDS = 0.1
+        self.addCleanup(setattr, locking, "WAITING_SECONDS", locking.WAITING_SECONDS)
+        locking.WAITING_SECONDS = 0.1
         lock = config.where(self.home / "data")
         holding = os.open(lock.with_name(f".{lock.name}.lock"), os.O_CREAT | os.O_RDWR, 0o600)
         self.addCleanup(os.close, holding)
@@ -186,14 +186,14 @@ class SettingSeveralValuesAtOnce(support.Isolated):
         # time, three settings are three chances to be interrupted, and what is left behind is a
         # configuration nobody typed — two of the answers somebody gave and no sign of the third.
         writes = []
-        real = jsonfile.write
+        real = files.write_json
 
         def counted(where, value):
             writes.append(where)
             return real(where, value)
 
-        self.addCleanup(setattr, jsonfile, "write", real)
-        jsonfile.write = counted
+        self.addCleanup(setattr, files, "write_json", real)
+        files.write_json = counted
         config.stated_all({"backup_retention": 30, "update_time": "04:30",
                            "update_enabled": False}, self.data)
         self.assertEqual(1, len(writes), f"three settings were written {len(writes)} times")

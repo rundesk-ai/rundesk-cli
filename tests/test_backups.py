@@ -24,7 +24,7 @@ import support
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.lifecycle import backups
-from rundesk.utils import jsonfile
+from rundesk.utils import files
 
 A_STEP = '''
 from pathlib import Path
@@ -76,7 +76,7 @@ class Copies(support.Isolated):
         (self.data / "marker.txt").write_text(marker)
         held = dict(config.INITIAL)
         held.update(settled)
-        jsonfile.write(self.data / "config.json", held)
+        files.write_json(self.data / "config.json", held)
         return self.data
 
     def given_copy(self, name: str, marker: str = "", **settled) -> Path:
@@ -90,7 +90,7 @@ class Copies(support.Isolated):
         where.mkdir(parents=True, exist_ok=True)
         held = dict(config.INITIAL)
         held.update(settled)
-        jsonfile.write(where / "config.json", held)
+        files.write_json(where / "config.json", held)
         (where / "marker.txt").write_text(marker or name)
         return where
 
@@ -616,15 +616,15 @@ class SettlingWhatCameBack(Copies):
         self.steps.mkdir(parents=True, exist_ok=True)
 
     def test_it_fills_in_a_setting_the_copy_predates(self):
-        jsonfile.write(self.data / "config.json", {"backup_enabled": False})
+        files.write_json(self.data / "config.json", {"backup_enabled": False})
         self.assertIsNone(backups._settle(self.data, self.steps, lambda _line: None))
-        settled = jsonfile.read(self.data / "config.json")[1]
+        settled = files.read_json(self.data / "config.json")[1]
         self.assertIn("update_time", settled)
 
     def test_it_leaves_a_value_the_owner_stated_exactly_as_it_was(self):
-        jsonfile.write(self.data / "config.json", {"backup_enabled": False})
+        files.write_json(self.data / "config.json", {"backup_enabled": False})
         backups._settle(self.data, self.steps, lambda _line: None)
-        self.assertIs(False, jsonfile.read(self.data / "config.json")[1]["backup_enabled"])
+        self.assertIs(False, files.read_json(self.data / "config.json")[1]["backup_enabled"])
 
     def test_it_carries_the_steps_the_copy_never_ran(self):
         (self.steps / "0001_first.py").write_text(A_STEP.format(name="0001_first"))
@@ -977,7 +977,7 @@ class TheCommand(Copies):
     def test_save_reports_the_copy_even_when_the_retention_cannot_be_read(self):
         # The operation asked for was a copy, and the copy is there. Reporting a failure it did not
         # have costs the same trust as reporting a success it did not earn.
-        jsonfile.write(self.data / "config.json", dict(config.INITIAL, backup_retention="seven"))
+        files.write_json(self.data / "config.json", dict(config.INITIAL, backup_retention="seven"))
         code, out, err = self.rundesk("backups", "save")
         self.assertEqual(OK, code)
         self.assertIn("saved", out)

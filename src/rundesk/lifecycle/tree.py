@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Set
 
 from rundesk.core import paths
-from rundesk.utils.staging import OUTGOING, discard, stage_copy
+from rundesk.utils import files
 
 #: What the command is called wherever it is put on a PATH.
 COMMAND = "rundesk"
@@ -68,24 +68,24 @@ def replace(from_where: Path, app: Path) -> Path:
         for entry in sorted(from_where.iterdir()):
             if _never_copied(str(entry.parent), [entry.name]):
                 continue
-            staged.append(stage_copy(entry, app, ignore=_never_copied))
+            staged.append(files.stage_copy(entry, app, ignore=_never_copied))
 
         for pending in staged:
             target = app / pending.name[1:-len(".incoming")]
             if target.exists() or target.is_symlink():
-                aside = app / OUTGOING.format(name=target.name)
-                discard(aside)
+                aside = app / files.OUTGOING.format(name=target.name)
+                files.discard(aside)
                 os.rename(target, aside)
                 swapped.append(target)
             os.rename(pending, target)
     except Exception:
         _put_back(app, swapped)
         for pending in staged:
-            discard(pending)
+            files.discard(pending)
         raise
 
     for target in swapped:
-        discard(app / OUTGOING.format(name=target.name))
+        files.discard(app / files.OUTGOING.format(name=target.name))
     return app
 
 
@@ -179,9 +179,9 @@ def _never_copied(_where: str, names: Iterable[str]) -> Set[str]:
 def _put_back(app: Path, swapped: List[Path]) -> None:
     """Undo a half-finished swap, newest first."""
     for target in reversed(swapped):
-        aside = app / OUTGOING.format(name=target.name)
+        aside = app / files.OUTGOING.format(name=target.name)
         try:
-            discard(target)
+            files.discard(target)
             os.rename(aside, target)
         except OSError as why:
             raise HalfReplaced(

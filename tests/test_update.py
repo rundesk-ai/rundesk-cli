@@ -162,8 +162,8 @@ class AnUpdateThatLands(Updating):
         self.assertFalse(config.read(paths.data())["update_enabled"])
 
     def test_it_adds_a_configuration_value_the_newer_release_introduced(self):
-        from rundesk.utils import jsonfile
-        jsonfile.write(config.where(paths.data()), {"backup_enabled": False})
+        from rundesk.utils import files
+        files.write_json(config.where(paths.data()), {"backup_enabled": False})
         self.update(archive=self.an_archive())
         settled = config.read(paths.data())
         self.assertFalse(settled["backup_enabled"])

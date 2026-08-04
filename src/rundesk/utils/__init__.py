@@ -22,7 +22,25 @@ gradually.
 
 | Module | Answers |
 |---|---|
-| `jsonfile` | reading and writing a small JSON file safely |
-| `staging` | building something beside what it replaces, and renaming it into place |
-| `table` | printing a table whose columns line up |
+| `files` | putting bytes on disk without leaving a reader something half-written |
+| `locking` | letting one process at a time change something, with a ceiling on the waiting |
+| `programs` | running another program, whether it answers in a moment or runs for hours |
+| `terminal` | what a person sees: weight, colour, and columns that line up |
+
+`tests/test_layers.py` checks this table against the directory rather than trusting it to be kept —
+it had already fallen a module behind by the time anybody noticed, and it is what a reader trusts to
+know what is here.
+
+**Few and concrete, rather than many and abstract.** A module here is named for the thing you would
+go looking for, and the test is whether somebody hunting "can this agent name be a directory?" would
+guess the file. Nobody guesses `naming.py`; everybody guesses `files.py`. That is why these are four
+modules rather than the seven thinner ones they started as — `jsonfile`, `staging` and a filename
+check are one concern, because they fail together: a name with a separator lands the file somewhere
+else, and a write that is not staged lands it half-written.
+
+Never take a name the standard library already has — `logging`, `types`, `select`, `signal`,
+`platform`. Anything inside this package would import yours in preference to the real one, and ruff
+catches a shadowed builtin but not a shadowed module, so that one is checked in `test_layers.py`
+too. Keep this flat until there are eight or ten, and then group by what a module touches rather
+than into a drawer called `misc`.
 """

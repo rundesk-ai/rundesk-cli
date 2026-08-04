@@ -23,7 +23,6 @@ somebody their machine is ready when it is not, and they find out later and some
 
 import argparse
 import os
-import subprocess
 from pathlib import Path
 
 from rundesk import __version__
@@ -31,6 +30,7 @@ from rundesk.commands import failed, update
 from rundesk.core import config, paths
 from rundesk.exits import OK
 from rundesk.lifecycle import tree
+from rundesk.utils import programs
 
 #: How long the installed command is given to answer before the install is called a failure.
 ANSWER_SECONDS = 30
@@ -96,15 +96,11 @@ def _answers(at: Path) -> str:
     answers more: it is the one verb that refuses when the interpreter behind the link is too old,
     which is exactly the install that looks finished and cannot run.
     """
-    try:
-        ended = subprocess.run([str(at), "status"], capture_output=True, text=True,
-                               stdin=subprocess.DEVNULL, timeout=ANSWER_SECONDS)
-    except OSError as why:
-        return str(why)
-    except subprocess.TimeoutExpired:
-        return f"it did not answer within {ANSWER_SECONDS} seconds"
-    if ended.returncode != 0:
-        return (ended.stderr or ended.stdout or f"it ended {ended.returncode}").strip()
+    ended = programs.run([str(at), "status"], ANSWER_SECONDS)
+    if ended.trouble:
+        return ended.trouble
+    if ended.code != 0:
+        return (ended.err or ended.out or f"it ended {ended.code}").strip()
     return ""
 
 

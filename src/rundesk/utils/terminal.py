@@ -1,31 +1,24 @@
-"""Weight and color on a line of terminal output, and the decision of whether to use any.
+"""What a person sees: weight, colour, and columns that line up.
 
-A command line is read by two audiences with opposite needs. A person at a terminal reads faster when
-what failed is red and what a column is called stands out from what is in it. A script reading the
-same output wants the characters and nothing else — and an escape sequence in a captured value is not
-decoration, it is corruption: `$(rundesk backups save)` holding `\\x1b[1m2026-…` is a name that
-matches nothing.
+Everything about presenting a line of output to somebody watching, and nothing about deciding what
+that line says.
 
-So **nothing here emits anything unless somebody is watching**, and the four ways to say so are
-honoured in the order somebody would expect:
+**Nothing is emitted unless somebody is watching.** A person at a terminal reads faster when what
+failed is red; a script reading the same output wants the characters and nothing else, because an
+escape sequence in a captured value is not decoration but corruption — `$(rundesk backups save)`
+holding `\x1b[1m2026-…` is a name that matches nothing. `NO_COLOR` set to anything at all means no,
+`FORCE_COLOR` means yes even down a pipe, `TERM=dumb` means a terminal that cannot, and otherwise it
+depends on whether the stream really is one.
 
-- `NO_COLOR` set to anything at all, including empty, means no. It is the established convention and
-  the whole point of it is that a person sets it once and every program obeys.
-- `FORCE_COLOR` means yes even down a pipe, which is what a build log that renders escapes wants.
-- `TERM=dumb` means a terminal that cannot do this.
-- Otherwise: colour only when the stream really is a terminal.
+**Decided on every call, never at import.** A module working out `ENABLED = isatty()` once, when it
+was first imported, is a module nothing can drive afterwards — the value is fixed before a test sets
+a variable and before a caller chooses where its output is going. The same mistake as a network call
+bound in a signature, in a different costume.
 
-**Decided on every call and never at import.** A module that worked out `ENABLED = isatty()` once,
-when it was first imported, is a module nothing can drive afterwards: the value is fixed before a
-test sets an environment variable and before a command chooses where its output is going. It is the
-same mistake as a network call bound in a signature, in a different costume.
-
-## Why measuring belongs here too
-
-Once a cell can carry escape sequences, `len()` stops answering how wide it looks — it counts the
-bytes that draw nothing. A table padding with `len()` lines its columns up correctly for plain text
-and raggedly for anything styled, which is the sort of defect that only appears on somebody's real
-terminal and never in a captured test. `width` is what a person sees; `plain` is what a machine gets.
+**A column is padded by what a cell looks like, not by how long it is.** Once a cell can carry
+escape sequences `len()` counts characters that draw nothing, so a column padded by it is right for
+plain text and ragged for anything styled — and ragged only on somebody's real terminal, never in a
+captured test. That is why measuring and styling live in one module: they are the same fact.
 
 Knows nothing about rundesk.
 """
@@ -33,7 +26,7 @@ Knows nothing about rundesk.
 import os
 import re
 import sys
-from typing import Optional, TextIO
+from typing import Optional, Sequence, TextIO
 
 #: The sequences, by the name a person uses for them. Deliberately few: this is for telling a
 #: failure from a heading from an ordinary line, not for drawing.
@@ -128,3 +121,23 @@ def width(text: str) -> int:
     terminal, never in a captured test.
     """
     return len(plain(text))
+
+
+
+
+
+def as_table(head: Sequence[str], rows: Sequence[Sequence[str]]) -> None:
+    """Print a table, columns aligned to their widest cell, two spaces between, heading in bold.
+
+    Nothing at all when there are no rows, headings included: a heading standing over an empty table
+    reads as a listing that found nothing *and told you the shape of what it did not find*, which is
+    a sentence, not a table. Whoever called this says the sentence.
+    """
+    if not rows:
+        return
+    every = [list(head)] + [list(row) for row in rows]
+    widths = [max(width(row[i]) for row in every) for i in range(len(head))]
+    for at, row in enumerate(every):
+        cells = [cell + " " * (wide - width(cell)) for cell, wide in zip(row, widths)]
+        line = "  ".join(cells).rstrip()
+        print(bold(line) if at == 0 else line)
