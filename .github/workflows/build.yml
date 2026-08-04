@@ -34,9 +34,48 @@ jobs:
         # then breaks one rule at a time, so a linter that has stopped checking is caught here.
         run: python3 .knowledge/scripts/test_doc_lint.py
 
+  tests:
+    name: the suites (${{ matrix.os }}, python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest Python a fresh macOS ships is the floor everything is written against, and a
+        # current one catches what only a newer interpreter minds. Both systems, because an install
+        # is a thing that happens to a machine.
+        os: [ubuntu-latest, macos-latest]
+        python: ['3.9', '3.13']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Everything parses
+        run: |
+          python3 - <<'PARSE'
+          import ast, glob, sys
+          found = glob.glob('src/**/*.py', recursive=True) + glob.glob('tests/*.py')
+          if not found:
+              print('::error::the parse check found no python at all')
+              sys.exit(1)
+          for path in found:
+              ast.parse(open(path).read(), path)
+          print(f'parse OK ({len(found)} files)')
+          PARSE
+
+      - name: The shell scripts parse
+        run: bash -n dev
+
+      - name: Every suite
+        # The same script a developer runs. It finds the suites rather than listing them, and fails
+        # when it finds none.
+        run: python3 .knowledge/scripts/suites
+
   required-pr-gate:
     name: required
     runs-on: ubuntu-latest
-    needs: [knowledge]
+    needs: [knowledge, tests]
     steps:
       - run: echo "every required job passed"

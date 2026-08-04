@@ -1,0 +1,21 @@
+#!/usr/bin/env -S python3 -B
+"""The executable an install puts on a PATH. It finds itself, and hands off.
+
+This file owns no logic at all, which is what makes everything below it importable and testable
+without it: it resolves where it is, puts `src/` on the path, and calls `cli.main`. `.resolve()`
+follows the symlink an install places on a PATH back to the tree it points at, so a checkout and an
+installed copy share one layout and one code path.
+"""
+
+import sys
+from pathlib import Path
+
+# Nothing here writes bytecode. `-B` above covers the interpreter this starts; this covers a caller
+# that reached the file some other way.
+sys.dont_write_bytecode = True
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+
+from rundesk.cli import main  # noqa: E402  — the path insert above is what makes this importable
+
+raise SystemExit(main(sys.argv[1:]))
