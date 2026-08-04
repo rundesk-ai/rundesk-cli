@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 import support
-from rundesk import paths
+from rundesk.core import paths
 
 
 class OneRootDecidesEverything(support.Isolated):
@@ -33,17 +33,29 @@ class OneRootDecidesEverything(support.Isolated):
         self.assertEqual(self.home / "backups", paths.backups())
         self.assertEqual(self.home / "projects", paths.projects())
 
-    def test_the_program_and_the_data_are_different_questions(self):
-        # A checkout install has the program in a source tree while the data belongs under the
-        # owner's home, so deriving the second from the first is right until somebody runs the
-        # command from a checkout — which is what a developer does every time.
-        self.assertNotIn(str(paths.program()), str(paths.data()))
-        self.assertEqual(support.CHECKOUT, paths.program())
-
     def test_an_unset_root_falls_back_to_the_owners_install(self):
         # Named out loud because it is the dangerous default and every guard here exists for it.
         del os.environ[paths.HOME_IS]
         self.assertEqual(Path.home() / ".rundesk", paths.home())
+
+
+class WhereTheProgramIs(support.Isolated):
+    """A different question from where the data is, and answered differently."""
+
+    def test_the_program_is_the_tree_holding_the_launcher(self):
+        self.assertEqual(support.CHECKOUT, paths.program())
+        self.assertTrue((paths.program() / "rundesk").is_file())
+
+    def test_it_is_found_rather_than_counted_from_this_module(self):
+        # Counting parent directories is right until a module moves one level deeper, and then it is
+        # quietly wrong — `paths` moving into `core/` made a count report `src/` as the program and
+        # nothing failed.
+        self.assertNotEqual(paths.program().name, "src")
+        self.assertTrue((paths.program() / "src" / "rundesk" / "__init__.py").is_file())
+
+    def test_the_program_and_the_data_are_different_questions(self):
+        # A checkout has the program in a source tree while the data belongs under the owner's home.
+        self.assertNotIn(str(paths.program()), str(paths.data()))
 
 
 class ARootThatMustNotBeUsed(support.Isolated):
@@ -62,7 +74,6 @@ class ARootThatMustNotBeUsed(support.Isolated):
         self.assertIn("set and empty", self._refused("   "))
 
     def test_a_relative_root_is_refused(self):
-        # It would resolve against whatever directory the command happened to be run from.
         self.assertIn("absolute", self._refused("rundesk-somewhere"))
 
     def test_the_filesystem_root_is_refused(self):

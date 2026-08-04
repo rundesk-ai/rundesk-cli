@@ -29,7 +29,37 @@ CHECKOUT = Path(__file__).resolve().parent.parent
 if str(CHECKOUT / "src") not in sys.path:
     sys.path.insert(0, str(CHECKOUT / "src"))
 
-from rundesk import cli, paths  # noqa: E402  — the insert above is what makes these importable
+from rundesk import cli  # noqa: E402  — the insert above is what makes these importable
+from rundesk.core import paths  # noqa: E402
+
+
+#: A migration step that cannot finish, for proving a failure is reported rather than passed over.
+#: Here rather than in each suite: two of them needed it and copied it, which is the small form of
+#: exactly what this module exists to stop.
+A_STEP_THAT_FAILS = """
+def carry(data):
+    raise RuntimeError("this step could not finish")
+"""
+
+
+def a_real_tree(at: Path, marker: str = "a tree") -> Path:
+    """A working copy of this checkout's program, for a case that needs one that really runs.
+
+    Install and update both hand off to the program they just placed — that is the whole point of
+    the handoff, since the process doing the placing is running the release being replaced. So a stub
+    launcher cannot be used: it would make every case that touches settling pass without the handoff
+    ever happening.
+
+    Only the launcher and `src/` are copied, because that is the whole program.
+    """
+    at.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(CHECKOUT / "rundesk", at / "rundesk")
+    (at / "rundesk").chmod(0o755)
+    if (at / "src").exists():
+        shutil.rmtree(at / "src")
+    shutil.copytree(CHECKOUT / "src", at / "src", ignore=shutil.ignore_patterns("__pycache__"))
+    (at / "README.md").write_text(marker)
+    return at
 
 
 def scrub_and_point(where: Path) -> Callable[[], None]:
@@ -58,20 +88,30 @@ def scrub_and_point(where: Path) -> Callable[[], None]:
     return restore
 
 
-def run(argv: List[str]) -> Tuple[int, str, str]:
+def run_with(argv: List[str], **collaborators) -> Tuple[int, str, str]:
     """Drive the command as somebody typing it would, and hand back what happened.
 
     Returns `(exit code, stdout, stderr)`. A `SystemExit` — which is how argparse refuses a command
     line — is caught and reported as its code, so a suite can assert that a typo exits differently
-    from an operation that is registered and not built.
+    from a command that ran and failed.
+
+    `collaborators` are handed to `cli.main`: `asking=` replaces the lookup of what version is
+    published, `fetching=` replaces the download. Nothing here reaches the network, and a case that
+    forgets to pass one gets the real thing rather than a silent stub — which is the right way round,
+    because a test that accidentally reaches GitHub fails loudly on somebody's laptop.
     """
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            code = cli.main(argv)
+            code = cli.main(argv, **collaborators)
         except SystemExit as ended:
             code = 0 if ended.code is None else int(ended.code)
     return code, out.getvalue(), err.getvalue()
+
+
+def run(argv: List[str]) -> Tuple[int, str, str]:
+    """Drive the command with nothing replaced."""
+    return run_with(argv)
 
 
 class Isolated(unittest.TestCase):

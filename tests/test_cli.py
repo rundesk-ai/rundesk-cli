@@ -1,4 +1,4 @@
-"""The command surface: what it offers, what it answers, and how an unbuilt operation behaves.
+"""The command surface, and the two verbs that answer without touching the install.
 
 Every verb is walked **off the parser** rather than off a list written here, so an operation added to
 the command is covered the day it lands rather than the day somebody remembers to add it twice.
@@ -10,8 +10,9 @@ import unittest
 
 import support
 from rundesk import __version__, cli
-from rundesk.exits import FAILED, NOT_AVAILABLE, OK, USAGE
-from rundesk.planned import PLANNED
+from rundesk.core import paths
+from rundesk.exits import FAILED, OK, USAGE
+from rundesk.lifecycle import release
 
 
 def verbs():
@@ -22,20 +23,20 @@ def verbs():
     return offered
 
 
-class EveryOperationIsAnswered(support.Isolated):
+class EveryOperationIsBuilt(support.Isolated):
     """A verb on the parser that no module answers is the failure this walk exists to catch."""
 
     def test_the_parser_offers_something(self):
-        # A check that discovers what to run must fail when it discovers nothing: the gate this
-        # replaces globbed a directory that had moved, matched zero files and printed `parse OK`.
+        # A check that discovers what to run must fail when it discovers nothing.
         self.assertTrue(verbs())
 
     def test_every_verb_is_answered_by_something(self):
+        # `install`, `update` and `uninstall` act on the machine, so they are exercised in their own
+        # suites; here every verb is only proved to reach a handler rather than raising.
         for verb in verbs():
             with self.subTest(verb=verb):
-                code, _, _ = self.rundesk(verb)
-                self.assertIn(code, (OK, FAILED, NOT_AVAILABLE),
-                              f"{verb} is registered and answered by nothing")
+                code, _, _ = self.rundesk(verb, "--help")
+                self.assertEqual(OK, code)
 
     def test_every_verb_is_described_where_it_is_listed(self):
         _, out, _ = self.rundesk()
@@ -48,79 +49,62 @@ class EveryOperationIsAnswered(support.Isolated):
         self.assertEqual(OK, code)
         self.assertIn("usage: rundesk", out)
 
-
-class AnOperationThatIsNotBuilt(support.Isolated):
-    """Registered, refusing honestly, and tellable apart from a typo."""
-
-    def test_it_says_so_rather_than_appearing_to_work(self):
-        code, out, err = self.rundesk("agents", "list")
-        self.assertEqual("", out, "a refusal must not reach anything reading this command's output")
-        self.assertIn("NOT AVAILABLE", err)
-        self.assertNotEqual(OK, code)
-
-    def test_it_names_which_part_of_itself_is_missing(self):
-        _, _, err = self.rundesk("skills", "grant", "ava", "some-skill")
-        self.assertIn("skills grant", err)
-
-    def test_it_points_at_a_command_that_does_work(self):
-        _, _, err = self.rundesk("agents", "list")
-        self.assertIn("rundesk --help", err)
-
-    def test_it_ends_differently_from_an_operation_named_wrongly(self):
-        planned, _, _ = self.rundesk("agents", "list")
-        typo, _, _ = self.rundesk("agentz")
-        self.assertEqual(NOT_AVAILABLE, planned)
-        self.assertEqual(USAGE, typo)
-        self.assertNotEqual(planned, typo, "a missing command reads as a typo")
-
-    def test_it_accepts_the_arguments_it_will_take_once_built(self):
-        # Without this an option a future release takes becomes argparse's usage error today, which
-        # is the one code that must stay reserved for a command line that was typed wrongly.
-        for argv in (["skills", "install", "some/repo", "--confirm"],
-                     ["agents", "add", "ava", "--provider", "codex"],
-                     ["schedules", "ava", "add", "nightly", "--when", "0 4 * * *"],
-                     ["channels", "ava", "add", "discord", "--owner", "someone", "--token-stdin"],
-                     ["gateways", "stop", "ava", "--all"],
-                     ["backups", "configure", "--status", "off"],
-                     ["env", "set", "SOME_KEY"],
-                     ["messages", "ava", "--limit", "5"]):
-            with self.subTest(argv=argv):
-                code, _, err = self.rundesk(*argv)
-                self.assertEqual(NOT_AVAILABLE, code, err)
-
-    def test_every_planned_verb_refuses_and_none_of_them_is_built(self):
-        for verb in sorted(PLANNED):
+    def test_nothing_is_offered_that_is_not_built(self):
+        # There is no "coming soon" surface: a verb rundesk cannot perform is a verb it does not
+        # have, so no operation may answer by refusing on the grounds of not being written.
+        for verb in verbs():
             with self.subTest(verb=verb):
-                code, _, _ = self.rundesk(verb)
-                self.assertEqual(NOT_AVAILABLE, code)
+                _, out, err = self.rundesk(verb, "--help")
+                self.assertNotIn("NOT AVAILABLE", out + err)
+                self.assertNotIn("coming soon", out + err)
 
-    def test_a_planned_verb_lists_the_actions_it_will_take(self):
-        code, out, _ = self.rundesk("skills", "--help")
-        self.assertEqual(OK, code)
-        for action in PLANNED["skills"][1]:
-            self.assertIn(action, out)
+    def test_a_verb_named_wrongly_is_a_usage_error(self):
+        code, _, _ = self.rundesk("statuz")
+        self.assertEqual(USAGE, code)
 
 
 class Version(support.Isolated):
-    """What version this copy is, answered without reaching anything outside the machine."""
+    """What version this copy is, and where it stands against what is published."""
 
     def test_it_reports_the_version_it_is(self):
-        code, out, _ = self.rundesk("version")
+        code, out, _ = support.run_with(["version"], asking=lambda: (f"v{__version__}", None))
         self.assertEqual(OK, code)
-        self.assertEqual(f"rundesk {__version__}", out.strip())
+        self.assertIn(f"rundesk {__version__}", out)
 
-    def test_there_is_one_source_of_what_version_this_is(self):
-        # Three separate paths reported it in the build this replaces. Every extra one is a chance
-        # for the product to disagree with itself about what it is.
-        _, out, _ = self.rundesk("version")
+    def test_it_takes_no_flags(self):
+        code, _, _ = self.rundesk("version", "--check")
+        self.assertEqual(USAGE, code, "version grew a flag it is not meant to have")
+
+    def test_it_checks_whether_it_is_out_of_date_without_being_asked(self):
+        _, out, _ = support.run_with(["version"], asking=lambda: ("v99.0.0", None))
+        self.assertIn("OUT OF DATE", out)
+        self.assertIn("rundesk update", out)
+
+    def test_being_current_is_reported_as_such(self):
+        _, out, _ = support.run_with(["version"], asking=lambda: (f"v{__version__}", None))
+        self.assertIn("UP TO DATE", out)
+
+    def test_being_unable_to_ask_is_never_reported_as_being_current(self):
+        # An install that reports UP TO DATE because GitHub timed out has silently stopped updating
+        # itself, and nobody finds out until something else breaks.
+        code, out, err = support.run_with(["version"], asking=lambda: (None, release.UNREACHABLE))
+        self.assertIn("UNKNOWN", err)
+        self.assertNotIn("UP TO DATE", out + err)
+        # The version itself was still answered, from the machine, so the command did its job.
+        self.assertEqual(OK, code)
         self.assertIn(__version__, out)
 
-    def test_asking_which_version_is_published_refuses_rather_than_guessing(self):
-        # Not built yet. Reporting "up to date" because nobody could be asked is how an install
-        # stops updating itself in silence, so this refuses until it can really ask.
-        code, _, err = self.rundesk("version", "--check")
-        self.assertEqual(NOT_AVAILABLE, code)
-        self.assertIn("version --check", err)
+    def test_nothing_published_is_told_apart_from_being_unable_to_ask(self):
+        _, _, unreachable = support.run_with(["version"], asking=lambda: (None, release.UNREACHABLE))
+        _, _, nothing = support.run_with(["version"],
+                                         asking=lambda: (None, release.NOTHING_PUBLISHED))
+        self.assertNotEqual(unreachable, nothing)
+        self.assertIn("NO RELEASES", nothing)
+
+    def test_a_published_version_that_cannot_be_read_is_never_newer(self):
+        code, out, _ = support.run_with(["version"], asking=lambda: ("not-a-version", None))
+        self.assertNotIn("OUT OF DATE", out)
+        self.assertEqual(OK, code)
 
 
 class Status(support.Isolated):
@@ -133,16 +117,39 @@ class Status(support.Isolated):
         self.assertIn(str(self.home), out)
 
     def test_it_says_where_the_program_is_as_well_as_where_the_data_is(self):
-        # They are different questions, and a command answering against a root that was never
-        # installed into looks exactly like a working install with nothing in it.
         _, out, _ = self.rundesk("status")
         self.assertIn(str(support.CHECKOUT), out)
-        self.assertIn("not there yet", out)
+
+    def test_it_tells_a_checkout_from_an_install(self):
+        _, out, _ = self.rundesk("status")
+        self.assertIn("a checkout", out)
+
+    def test_it_shows_every_value_this_install_is_configured_with(self):
+        from rundesk.core import config
+        config.write_fresh(paths.data())
+        _, out, _ = self.rundesk("status")
+        for key in config.INITIAL:
+            self.assertIn(key, out, f"status does not show {key}")
+
+    def test_it_shows_a_configured_value_the_owner_changed(self):
+        from rundesk.core import config
+        config.write_fresh(paths.data())
+        config.stated("backup_retention", 42, paths.data())
+        _, out, _ = self.rundesk("status")
+        self.assertIn("42", out)
+
+    def test_it_says_how_far_the_install_has_been_carried(self):
+        _, out, _ = self.rundesk("status")
+        self.assertIn("migration", out)
+
+    def test_it_takes_no_flags(self):
+        code, _, _ = self.rundesk("status", "--verbose")
+        self.assertEqual(USAGE, code, "status grew a flag it is not meant to have")
 
     def test_it_answers_against_the_root_it_was_given_and_no_other(self):
         _, out, _ = self.rundesk("status")
         for line in out.splitlines():
-            if line.startswith(("home", "app", "data")):
+            if line.startswith(("home", "data", "backups")):
                 self.assertIn(str(self.home), line)
 
     def test_a_root_that_must_not_be_used_is_refused_rather_than_worked_on(self):

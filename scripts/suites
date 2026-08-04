@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Run every suite in `tests/`, and fail when there are none.
+
+The suites are **found**, not listed, so a file added to `tests/` is run the day it lands. CI calls
+this same script rather than keeping a list of its own — a list kept in two places is a list that
+disagrees with itself.
+
+**It fails on an empty discovery.** That is not defensiveness. The runner this replaces globbed a
+directory that had since moved, matched zero files, and printed `parse OK`; the project lost its only
+syntax check and nothing anywhere went red. A check that ran nothing has proved nothing, and must say
+so in the one way anybody reads — its exit code.
+
+    python3 scripts/suites          # every suite
+    python3 scripts/suites -q       # only the failures and the summary
+"""
+
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+TESTS = ROOT / "tests"
+
+#: A suite that hangs has failed, whatever it would have printed. Generous, because the ceiling is
+#: there to end a wedged run rather than to measure anything.
+PATIENCE_SECONDS = 300
+
+
+def found():
+    """Every suite, in a settled order. Never a list written here."""
+    return sorted(TESTS.glob("test_*.py"))
+
+
+def main(argv):
+    quiet = "-q" in argv
+    suites = found()
+    if not suites:
+        print(f"suites: FAILED — no suite found in {TESTS}", file=sys.stderr)
+        print("        a run that discovered nothing has proved nothing", file=sys.stderr)
+        return 1
+
+    failed = []
+    for suite in suites:
+        try:
+            # `stdin` is closed on purpose. A command reading standard input because it is "not a
+            # terminal" blocks on an open pipe with nothing in it, which never ends and names
+            # nothing when it happens.
+            ended = subprocess.run(
+                [sys.executable, str(suite)],
+                cwd=str(ROOT), stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=PATIENCE_SECONDS)
+            ok = ended.returncode == 0
+            said = ended.stdout + ended.stderr
+        except subprocess.TimeoutExpired:
+            ok, said = False, f"exceeded {PATIENCE_SECONDS} seconds"
+
+        print(f"{'ok  ' if ok else 'FAIL'} {suite.name}")
+        if not ok:
+            failed.append(suite.name)
+            print(said.rstrip(), file=sys.stderr)
+        elif not quiet:
+            print("     " + _counted(said))
+
+    print(f"\nsuites: {len(suites)} run, {len(failed)} failed")
+    for name in failed:
+        print(f"        FAILED {name}", file=sys.stderr)
+    return 1 if failed else 0
+
+
+def _counted(said: str) -> str:
+    """The `Ran N tests` line, which is the only part of a green run worth showing.
+
+    Read out loud because `OK` and `OK (skipped=65)` are the same word to whoever reads a summary,
+    and a suite that skipped everything is not a suite that passed.
+    """
+    for line in said.splitlines():
+        if line.startswith("Ran ") or line.startswith("OK ("):
+            return line.strip()
+    return "said nothing about how many tests it ran"
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
