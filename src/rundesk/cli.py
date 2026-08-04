@@ -14,6 +14,8 @@ import sys
 from typing import List, Optional
 
 from rundesk.commands import Subcommands
+from rundesk.commands.backups import cmd_backups
+from rundesk.commands.backups import register as register_backups
 from rundesk.commands.configure import cmd_configure
 from rundesk.commands.configure import register as register_configure
 from rundesk.commands.install import cmd_install
@@ -28,6 +30,8 @@ EPILOG = """\
 examples:
   rundesk status                how rundesk is on this machine
   rundesk configure             what this install is configured with
+  rundesk backups               the copies of what rundesk keeps for you
+  rundesk backups save          copy what rundesk keeps, now
   rundesk version               what version this is, and whether it is out of date
   rundesk update                move to the newest published release
   rundesk uninstall --confirm   remove rundesk, keeping what it kept for you
@@ -54,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     _register_status(sub)
     _register_version(sub)
     register_configure(sub)
+    register_backups(sub)
     _register_install(sub)
     _register_update(sub)
     _register_uninstall(sub)
@@ -110,6 +115,8 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
         return cmd_status(args)
     if args.command == "configure":
         return cmd_configure(args)
+    if args.command == "backups":
+        return cmd_backups(args)
     if args.command == "version":
         return cmd_version(args, asking)
     if args.command == "install":

@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import Any, List, Tuple
 
 from rundesk import __version__
-from rundesk.commands import as_table, as_written
+from rundesk.commands import as_written, failed
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
-from rundesk.lifecycle import migration
+from rundesk.lifecycle import backups, migration
+from rundesk.utils.table import as_table
 
 #: The oldest Python a fresh macOS ships, which is the floor everything here is written against.
 PYTHON_FLOOR = (3, 9)
@@ -28,8 +29,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
     try:
         where = paths.home()
     except paths.Refused as why:
-        print(f"status: FAILED — {why}", file=sys.stderr)
-        return FAILED
+        return failed(f"status: FAILED — {why}")
 
     unfit = _unfit()
     rows = [
@@ -37,7 +37,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
         ("home", _shown(where)),
         ("program", _program()),
         ("data", _shown(paths.data())),
-        ("backups", _shown(paths.backups())),
+        ("backups", _backups()),
         ("projects", _shown(paths.projects())),
         ("fit to run", "yes" if not unfit else f"no — {unfit}"),
     ]
@@ -86,6 +86,25 @@ def _program() -> str:
     running = paths.program()
     return (f"{running} (installed)" if running == paths.app().resolve()
             else f"{running} (a checkout — this root has no install)")
+
+
+def _backups() -> str:
+    """Where the copies are kept, and where they really are once they have been moved elsewhere.
+
+    `set-location` leaves a link behind rather than a second location variable, so this row is the
+    only place somebody sees which disk their copies are actually on — and the disk that filled up is
+    the reason they came to look.
+
+    A link pointing at nothing is its own answer and not the same as "not there yet": one is an
+    install nobody has copied anything on, and the other is copies that were somewhere a moment ago.
+    """
+    at = paths.backups()
+    if not at.is_symlink():
+        return _shown(at)
+    real = backups.location(at)
+    if real.is_dir():
+        return f"{at} → {real}"
+    return f"{at} → {real} — that directory is not there"
 
 
 def _shown(where: Path) -> str:
