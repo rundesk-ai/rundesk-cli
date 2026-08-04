@@ -10,7 +10,6 @@ the agent is, and the task is the agent's own words to another agent.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 from rundesk import delegation as delegations
@@ -33,8 +32,6 @@ def cmd_delegations(args: argparse.Namespace, agents) -> int:
         print("        what there is:  rundesk agents", file=sys.stderr)
         return 1
     act = getattr(args, "act", None)
-    if act == "ask":
-        return _hand_to_an_agent(args)
     if act in ("say", "stop", "resume"):
         return _guide_a_delegation(args, act)
     try:
@@ -95,58 +92,6 @@ def _show_delegation(args: argparse.Namespace, found: list) -> int:
     print(f"{args.name}/{args.ask}: NO SUCH DELEGATION", file=sys.stderr)
     print(f"        what there is:  rundesk delegations {args.name}", file=sys.stderr)
     return 1
-
-
-def _hand_to_an_agent(args: argparse.Namespace) -> int:
-    """Hand one bounded task to another named agent, on behalf of the turn asking.
-
-    **Only an agent's own turn may ask** (R-DEL-3). The answer is delivered back into that
-    agent's own conversation, so the run that admits it has to be one of that agent's —
-    which is what `RUNDESK_RUN` names and what the records then prove.
-
-    The task is read from standard input rather than given as an argument: it is often
-    several paragraphs, and an argument would put it in `ps` and in a shell history where
-    the rest of a turn's words never go.
-    """
-    parent = os.environ.get("RUNDESK_RUN") or ""
-    if not parent:
-        print(f"{args.name}: NOT ADMITTED — a delegation is admitted by this agent's own "
-              "turn, and nothing here is running one", file=sys.stderr)
-        return 1
-    if os.environ.get("RUNDESK_ROLE_RUN"):
-        # A role execution has no identity of its own to be asking on behalf of, and the
-        # named agent that put the role on hands work to another agent itself.
-        print(f"{args.name}: NOT ADMITTED — a role execution cannot hand work to a named "
-              "agent", file=sys.stderr)
-        return 1
-    if os.environ.get("RUNDESK_DELEGATION"):
-        # Depth one (R-DEL-8). Said early and cheaply; what actually refuses is the durable
-        # record below, which is why this is allowed to be a variable at all.
-        print(f"{args.name}: NOT ADMITTED — work another agent handed over cannot be "
-              "handed on; use this brain's own subagents instead", file=sys.stderr)
-        return 1
-    # **After every guard, and that order is the whole of it**: a guard that read standard
-    # input first would hang on an empty pipe, which is what a brain's tool shell hands its
-    # children.
-    brief = sys.stdin.read()
-    try:
-        record = delegations.ask(
-            args.name, args.to, brief, parent,
-            label=getattr(args, "label", None),
-            posture=getattr(args, "posture", None),
-        )
-    except delegations.NotDelegable as why:
-        print(f"{args.name}: NOT ADMITTED — {why}", file=sys.stderr)
-        print("        what agents there are:  rundesk agents", file=sys.stderr)
-        return 1
-    except (delegations.Unreadable, store.Unreadable, store.TooNew, store.Behind,
-            migration.Failed) as why:
-        print(f"{args.name}: RECORDS UNREADABLE — {why}", file=sys.stderr)
-        return 1
-    print(record["id"])
-    print(f"        {record['label']} — handed to {record['to']}")
-    print("        it runs in that agent's gateway; you are told when it answers")
-    return 0
 
 
 def _who_asked() -> str:

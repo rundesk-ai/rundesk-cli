@@ -251,13 +251,17 @@ def _given(pairs) -> dict:
     return given
 
 
-def _delegated_instead(asking: str, to: str, prompt: str) -> int:
+def _delegated_instead(asking: str, to: str, prompt: str, label=None, posture=None) -> int:
     """`rundesk ask <another agent>`, from inside a turn, admitted as a delegation.
 
-    The same record `rundesk delegations <agent> ask <to>` writes, and refused in exactly
-    the same places — a role execution may not, work already handed over may not, and the
-    durable record settles the rest. Two ways in, one thing admitted, so a rule can never
-    hold on one route and not the other.
+    **The only way one agent hands work to another**, because two doors into one thing is
+    two places for a rule to be written and one place for them to disagree. A role
+    execution may not, work already handed over may not, and the durable record settles
+    the rest.
+
+    The task is an argument or standard input, and standard input is the one that keeps a
+    long one out of `ps` and out of a shell history — the same reason `roles run` has only
+    ever read a brief that way.
 
     **What it says back is the whole difference from an ordinary ask**, and it says it
     plainly: no answer arrives in this turn, one arrives later to be reviewed.
@@ -273,7 +277,10 @@ def _delegated_instead(asking: str, to: str, prompt: str) -> int:
     try:
         record = delegations.ask(
             asking, to, prompt, os.environ.get("RUNDESK_RUN") or "",
-            posture=os.environ.get("RUNDESK_POSTURE") or None,
+            label=label,
+            # What the caller asked for, or the turn's own — never wider than the turn
+            # either way, which is what the record settles.
+            posture=posture or os.environ.get("RUNDESK_POSTURE") or None,
         )
     except delegations.NotDelegable as why:
         print(f"{asking}: NOT ASKED — {why}", file=sys.stderr)
@@ -303,9 +310,16 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
     credential, and is not this command's to put on somebody's screen.
     """
     name, prompt = args.name, args.prompt
-    if not name or not prompt:
+    # **A task piped in is a task, and it is the only way a long one stays private.** An
+    # argument lands in `ps` and in a shell history; standard input does not, which is why
+    # `roles run` has always read a brief that way and why one agent handing work to another
+    # must be able to as well. A terminal with nobody piping anything still gets the help.
+    if name and not prompt and not sys.stdin.isatty():
+        prompt = sys.stdin.read()
+    if not name or not (prompt or "").strip():
         print("ask: WHO AND WHAT — say which agent, and what to ask it", file=sys.stderr)
         print('        for example: rundesk ask ava "what changed today?"', file=sys.stderr)
+        print("        or pipe it in: printf '…' | rundesk ask ava", file=sys.stderr)
         return 1
     if not agents.exists(name):
         # **A role is the other thing work is handed to, and it is not asked.** Both are
@@ -335,8 +349,17 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
     # Only from inside a turn, and only at somebody else: a person at a terminal is asking
     # for an answer now, and an agent asking itself is already in its own turn.
     asking = os.environ.get("RUNDESK_AGENT") or ""
+    if os.environ.get("RUNDESK_RUN") and asking and asking == name:
+        # **An agent is already running when it types this.** Not a delegation — the record
+        # refuses `to == name` anyway — and not an ordinary ask either: it would start a
+        # second turn of this agent's inside the first, on the same home and the same
+        # memory, with nothing to stop a third.
+        print(f"{name}: NOT ASKED — this agent is already in its own turn", file=sys.stderr)
+        return 1
     if os.environ.get("RUNDESK_RUN") and asking and asking != name:
-        return _delegated_instead(asking, name, prompt)
+        return _delegated_instead(asking, name, prompt,
+                                  label=getattr(args, "label", None),
+                                  posture=getattr(args, "posture", None))
     reaches = agents.chosen(name)
     named = args.provider or reaches.get("provider")
     if not named:

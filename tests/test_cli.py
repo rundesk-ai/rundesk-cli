@@ -5172,20 +5172,28 @@ class HandingWorkToAnotherAgent(unittest.TestCase):
             os.environ.pop(said, None)
 
     def asking(self, *argv, **given):
+        """One agent handing work to another, the one way in there is.
+
+        `rundesk ask <somebody else>` from inside a turn *is* the delegation — there is no
+        second verb for it, because two doors into one thing is two places for a rule to be
+        written and one place for them to disagree.
+        """
         os.environ["RUNDESK_RUN"] = given.pop("run", self.parent)
         self.addCleanup(os.environ.pop, "RUNDESK_RUN", None)
+        os.environ["RUNDESK_AGENT"] = given.pop("agent", "elena")
+        self.addCleanup(os.environ.pop, "RUNDESK_AGENT", None)
         with feeding(given.pop("task", self.TASK)):
             return drive(list(argv), agents=FakeAgents(made=["elena", "cole"]))
 
     def test_a_delegation_is_asked_for_by_this_agents_own_turn(self):
         """R-DEL-3 — the answer is delivered back into that agent's own conversation, so
         the run that admits it has to be one of that agent's."""
-        code, said = self.asking("delegations", "elena", "ask", "cole",
+        code, said = self.asking("ask", "cole",
                                  "--label", "the quote flow")
         self.assertEqual(0, code, said)
         self.assertIn("del-1-", said)
         self.assertIn("handed to cole", said)
-        self.assertIn("you are told when it answers", said)
+        self.assertIn("you are woken to review one later", said)
 
     def one_agent_asking_another(self, *argv, **given):
         """`rundesk ask <somebody else>` from inside a turn, with whose turn it is said."""
@@ -5207,10 +5215,12 @@ class HandingWorkToAnotherAgent(unittest.TestCase):
         self.assertIn("handed to cole as a delegation", said)
         self.assertIn("no answer comes back in this turn", said)
 
-    def test_an_agent_asking_itself_is_the_turn_it_is_already_in(self):
-        """Not a delegation and not refused: an agent is already running when it types
-        this, and `to == name` is what the record refuses anyway."""
+    def test_an_agent_asking_itself_is_refused(self):
+        """Not a delegation, and not an ordinary ask either: it would start a second turn
+        of this agent's inside the first, on the same home and the same memory."""
         code, said = self.one_agent_asking_another("ask", "elena", self.TASK)
+        self.assertEqual(1, code)
+        self.assertIn("already in its own turn", said)
         self.assertNotIn("as a delegation", said)
 
     def test_a_person_at_a_terminal_asking_an_agent_is_never_a_delegation(self):
@@ -5258,19 +5268,22 @@ class HandingWorkToAnotherAgent(unittest.TestCase):
         self.assertIn("rundesk roles elena run archaeology --target", said)
 
     def test_a_delegation_needs_a_turn_of_this_agents_own(self):
-        os.environ.pop("RUNDESK_RUN", None)
+        """R-DEL-3 — with no turn behind it this is a person at a terminal asking for an
+        answer now, which is what `ask` has always been. The delegation route is not
+        reached at all, and the refusal that follows is an ordinary one about the agent."""
+        for said in ("RUNDESK_RUN", "RUNDESK_AGENT"):
+            os.environ.pop(said, None)
         with feeding(self.TASK):
-            code, said = drive(["delegations", "elena", "ask", "cole"],
+            code, said = drive(["ask", "cole"],
                                agents=FakeAgents(made=["elena", "cole"]))
-        self.assertEqual(1, code)
-        self.assertIn("own turn", said)
+        self.assertNotIn("as a delegation", said)
 
     def test_a_role_execution_cannot_hand_work_to_a_named_agent(self):
         """The named agent that put the role on hands work to another agent itself; an
         execution has no identity of its own to be asking on behalf of."""
         os.environ["RUNDESK_ROLE_RUN"] = "rol-1-aaaa"
         self.addCleanup(os.environ.pop, "RUNDESK_ROLE_RUN", None)
-        code, said = self.asking("delegations", "elena", "ask", "cole")
+        code, said = self.asking("ask", "cole")
         self.assertEqual(1, code)
         self.assertIn("a role execution cannot hand work to a named agent", said)
 
@@ -5279,28 +5292,28 @@ class HandingWorkToAnotherAgent(unittest.TestCase):
         refuses."""
         os.environ["RUNDESK_DELEGATION"] = "del-9-zzzz"
         self.addCleanup(os.environ.pop, "RUNDESK_DELEGATION", None)
-        code, said = self.asking("delegations", "elena", "ask", "cole")
+        code, said = self.asking("ask", "cole")
         self.assertEqual(1, code)
         self.assertIn("cannot be handed on", said)
 
     def test_every_refusal_reaches_the_exit_status(self):
         """A command that refused and exited zero is one a script carries on past."""
         for argv, why in (
-            (["delegations", "nobody", "ask", "cole"], "NO SUCH AGENT"),
-            (["delegations", "elena", "ask", "elena"], "cannot hand work to itself"),
+            (["ask", "nobody"], "NO SUCH AGENT"),
+            (["ask", "elena"], "already in its own turn"),
         ):
             with self.subTest(argv=argv):
                 code, said = self.asking(*argv)
                 self.assertEqual(1, code)
                 self.assertIn(why, said)
-        code, said = self.asking("delegations", "elena", "ask", "cole", task="  \n")
+        code, said = self.asking("ask", "cole", task="  \n")
         self.assertEqual(1, code)
-        self.assertIn("needs a task", said)
+        self.assertIn("WHO AND WHAT", said)
 
     def test_a_listing_shows_no_local_path_and_no_task(self):
         """R-DEL-15 — a listing is read wherever the agent is, and the task is this
         agent's own words to another agent."""
-        code, _ = self.asking("delegations", "elena", "ask", "cole",
+        code, _ = self.asking("ask", "cole",
                               "--label", "/Users/somebody/private/quotes")
         self.assertEqual(0, code)
         code, said = drive(["delegations", "elena"],
@@ -5331,7 +5344,7 @@ class HandingWorkToAnotherAgent(unittest.TestCase):
             return drive(list(argv), agents=FakeAgents(made=["elena", "cole"]))
 
     def handed_over(self) -> str:
-        code, said = self.asking("delegations", "elena", "ask", "cole",
+        code, said = self.asking("ask", "cole",
                                  "--label", "the quote flow")
         self.assertEqual(0, code, said)
         return said.split("\n")[0].strip()

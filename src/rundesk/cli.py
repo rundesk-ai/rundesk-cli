@@ -204,13 +204,13 @@ EXAMPLES: list[tuple[str, list[tuple[str, str]]]] = [
     ("a delegation", [
         ("rundesk delegations ava",
          "the work ava has handed to other agents on this install, and what came of each"),
-        ('rundesk delegations ava ask cole --label "the quote flow"',
-         "one bounded task for cole to answer as itself, the task read from standard input"),
-        ("", "an agent hands work over from inside its own turn — cole answers once, with "
-             "its own home, memory, skills and brain, and ava reviews that answer before "
-             "anybody else hears about it"),
-        ("rundesk delegations ava ask cole --posture read",
-         "narrower than the turn handing it over; it can never be wider"),
+        ('rundesk ask cole "…" --label "the quote flow"',
+         "from inside ava's own turn this is a delegation, not a turn in this terminal"),
+        ("", "cole answers once, with its own home, memory, skills and brain, and ava "
+             "reviews that answer before anybody else hears about it"),
+        ("rundesk ask cole --posture read",
+         "narrower than the turn handing it over; it can never be wider — and with no task "
+         "argument it is read from standard input, which keeps a long one out of `ps`"),
         ("rundesk delegations ava show del-3-vfs3",
          "one delegation: which agent, what state it is in, and whether ava has reviewed it"),
     ]),
@@ -364,6 +364,16 @@ def build_parser() -> argparse.ArgumentParser:
                        help="let this turn look at the machine without changing it")
     asked.add_argument("--steer", action="store_true",
                        help="keep saying more to it while it works — a line at a time, until you stop")
+    # **The two that only mean anything when one agent asks another.** Said so in the help
+    # rather than hidden: a flag that is silently ignored is worse than one that says when
+    # it applies, and this is the one command that means two things depending on who typed
+    # it. Not `choices=` on the posture, for the reason `roles add --posture` gives.
+    asked.add_argument("--label", metavar="<text>",
+                       help="only when one agent asks another: a short safe name for the "
+                            "task, shown where other people can read it")
+    asked.add_argument("--posture", metavar="read|work",
+                       help="only when one agent asks another: how far the answering agent "
+                            "may reach — never wider than the turn handing the work over")
     # How a schedule gives a turn standing instructions. A schedule names a command and
     # rundesk carries it without reading it (R-SCH-3), so a schedule that carried its own
     # instructions would have to be read on the way past — and the seam that keeps every
@@ -826,22 +836,6 @@ def build_parser() -> argparse.ArgumentParser:
     handed_over.add_argument("name", metavar="<agent>",
                              help="whose asks — the agent that handed the work over")
     asking = handed_over.add_subparsers(dest="act", metavar="<action>")
-    asked = asking.add_parser(
-        "ask", help="hand one bounded task to another agent — read from standard input")
-    # Named `<to>` rather than `<agent>`: both words in `delegations <agent> ask <agent>`
-    # are agents, and a reference printing the same bracket twice says which is which to
-    # nobody.
-    asked.add_argument("to", metavar="<to>",
-                       help="which agent answers it — one this install has, and never "
-                            "this one")
-    asked.add_argument("--label", metavar="<text>",
-                       help="a short safe name for the task, shown where other people can "
-                            "read it — never a path and never the task itself")
-    # Not `choices=`: what a posture may be is decided at the provider seam, for the same
-    # reason `roles add --posture` says nothing about what one may be.
-    asked.add_argument("--posture", metavar="read|work",
-                       help="how far the answering agent may reach — never wider than the "
-                            "turn handing the work over already had")
     # The same three verbs a role run has, with the same meanings, because guiding somebody
     # else's agent and guiding a specialist are the same three things to want: say something
     # into work happening now, end it early, or carry a settled one on. Three rather than
