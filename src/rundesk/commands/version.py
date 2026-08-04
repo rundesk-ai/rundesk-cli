@@ -7,13 +7,14 @@ the one they should be running.
 
 import argparse
 import sys
+from typing import Optional
 
 from rundesk import __version__
 from rundesk.exits import OK
 from rundesk.lifecycle import release
 
 
-def cmd_version(_args: argparse.Namespace, asking=None) -> int:
+def cmd_version(_args: argparse.Namespace, asking: Optional[release.Asking] = None) -> int:
     """Print the installed version, then where it stands against what is published.
 
     `asking` is how the published version is looked up, so a test drives every state of this with no

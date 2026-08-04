@@ -22,7 +22,7 @@ it, and an owner who turned something off must find it still off afterwards.
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 from rundesk.core import jsonfile, paths
 
@@ -68,7 +68,26 @@ _YES = ("yes", "true", "on", "1")
 _NO = ("no", "false", "off", "0")
 
 
-def moved(when=None, data: Optional[Path] = None) -> str:
+class Refused(Exception):
+    """A value that may not be set, or may not be set to that."""
+
+
+class Unreadable(Exception):
+    """The configuration is there and cannot be understood.
+
+    Raised rather than defaulted. Treating an unreadable file as an unwritten one would answer every
+    question with the factory setting — so an owner who turned automatic updates off would find them
+    on again, and nothing would have said so.
+    """
+
+
+#: Something else is changing the configuration and did not finish. The same answer `jsonfile` gives,
+#: named here as well because this file is the one every command changes, so every command that
+#: writes has to be able to say it — and none of them should have to know which module it came from.
+Stuck = jsonfile.Stuck
+
+
+def moved(when: Optional[datetime] = None, data: Optional[Path] = None) -> str:
     """Record that a version has just arrived on this install. Returns the moment recorded.
 
     Called only by the two paths that really place a program — an install, and an update that
@@ -83,7 +102,7 @@ def moved(when=None, data: Optional[Path] = None) -> str:
     return stamped
 
 
-def settable():
+def settable() -> List[str]:
     """Every value somebody may state, in a settled order.
 
     Walked off `INITIAL` rather than listed, so a value a release starts offering is configurable the
@@ -93,7 +112,7 @@ def settable():
     return [key for key in sorted(INITIAL) if key not in MANAGED]
 
 
-def understood(key: str, said: str):
+def understood(key: str, said: str) -> Any:
     """What a typed value means, or `Refused` saying what was wanted instead.
 
     Checked here rather than where it was typed, because the answer belongs to whoever owns the
@@ -132,10 +151,6 @@ def _a_time_of_day(said: str) -> bool:
     if not (hours.isdigit() and minutes.isdigit()) or len(minutes) != 2 or len(hours) > 2:
         return False
     return 0 <= int(hours) <= 23 and 0 <= int(minutes) <= 59
-
-
-class Refused(Exception):
-    """A value that may not be set, or may not be set to that."""
 
 
 def where(data: Optional[Path] = None) -> Path:
@@ -190,18 +205,24 @@ def fill_in(data: Optional[Path] = None) -> dict:
 
 def stated(key: str, value: Any, data: Optional[Path] = None) -> None:
     """Set one value, leaving every other exactly as it was."""
-    if key not in INITIAL:
-        raise Refused(f"{key} is not a value rundesk is configured with")
+    stated_all({key: value}, data)
+
+
+def stated_all(values: Dict[str, Any], data: Optional[Path] = None) -> None:
+    """Set several values at once, leaving every other exactly as it was.
+
+    **One write, not one per value.** Setting three settings as three separate changes is three
+    chances to be interrupted between them, and what is left behind is a configuration nobody typed:
+    two of the three answers somebody gave, and no record that the third was ever asked for. Half of
+    what was meant is not a smaller change — it is a different one.
+
+    Every name is checked before anything is written, for the same reason: a mapping naming one value
+    rundesk does not have changes none of them.
+    """
+    unknown = [key for key in sorted(values) if key not in INITIAL]
+    if unknown:
+        raise Refused(f"{unknown[0]} is not a value rundesk is configured with")
     with jsonfile.changing(where(data), empty=dict(INITIAL)) as held:
         settled = dict(held[0]) if isinstance(held[0], dict) else dict(INITIAL)
-        settled[key] = value
+        settled.update(values)
         held[0] = settled
-
-
-class Unreadable(Exception):
-    """The configuration is there and cannot be understood.
-
-    Raised rather than defaulted. Treating an unreadable file as an unwritten one would answer every
-    question with the factory setting — so an owner who turned automatic updates off would find them
-    on again, and nothing would have said so.
-    """

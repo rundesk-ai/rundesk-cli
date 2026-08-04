@@ -22,6 +22,7 @@ somebody their machine is ready when it is not, and they find out later and some
 """
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -68,7 +69,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     try:
         config.stated("command_link", str(at), paths.data())
         config.moved(data=paths.data())
-    except (config.Unreadable, config.Refused) as why:
+    except (config.Unreadable, config.Refused, config.Stuck) as why:
         return _failed(f"the command was linked and could not be recorded: {why}")
 
     answered = _answers(at)
@@ -88,9 +89,16 @@ def _answers(at: Path) -> str:
 
     Run as a real subprocess, because what is being checked is exactly the thing importing the module
     would skip: that the link resolves, the interpreter is found, and the tree that landed is whole.
+
+    **`status` rather than `version`, because this question must be answerable with the machine
+    offline.** `version` asks GitHub what is published — so an installer that proved itself with it
+    reported a failure it had not earned whenever GitHub was slow or unreachable, and dragged the
+    network into every case in `tests/test_install.py`. `status` answers from this machine, and
+    answers more: it is the one verb that refuses when the interpreter behind the link is too old,
+    which is exactly the install that looks finished and cannot run.
     """
     try:
-        ended = subprocess.run([str(at), "version"], capture_output=True, text=True,
+        ended = subprocess.run([str(at), "status"], capture_output=True, text=True,
                                stdin=subprocess.DEVNULL, timeout=ANSWER_SECONDS)
     except OSError as why:
         return str(why)
@@ -107,7 +115,6 @@ def _say_if_unreachable(at: Path) -> None:
     Where somebody's PATH is set is theirs. An installer that edits a shell profile has changed
     something it was not asked to change, in a file it does not own.
     """
-    import os
     on_path = [Path(part).expanduser() for part in os.environ.get("PATH", "").split(os.pathsep) if part]
     if at.parent not in on_path:
         print(f"        note      {at.parent} is not on your PATH — add it to use `rundesk`")

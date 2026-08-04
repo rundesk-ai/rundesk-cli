@@ -13,13 +13,16 @@ import argparse
 import sys
 from typing import List, Optional
 
-from rundesk.commands.configure import cmd_configure, register as register_configure
+from rundesk.commands import Subcommands
+from rundesk.commands.configure import cmd_configure
+from rundesk.commands.configure import register as register_configure
 from rundesk.commands.install import cmd_install
 from rundesk.commands.status import cmd_status
 from rundesk.commands.uninstall import cmd_uninstall
-from rundesk.commands.update import cmd_update
+from rundesk.commands.update import Fetching, cmd_update
 from rundesk.commands.version import cmd_version
 from rundesk.exits import OK
+from rundesk.lifecycle import release
 
 EPILOG = """\
 examples:
@@ -57,15 +60,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _register_status(sub) -> None:
+def _register_status(sub: Subcommands) -> None:
     sub.add_parser("status", help="how rundesk itself is on this machine")
 
 
-def _register_version(sub) -> None:
+def _register_version(sub: Subcommands) -> None:
     sub.add_parser("version", help="what version this install is, and whether it is out of date")
 
 
-def _register_install(sub) -> None:
+def _register_install(sub: Subcommands) -> None:
     put = sub.add_parser("install", help="install rundesk into RUNDESK_HOME")
     put.add_argument("--source", metavar="<dir>", default=None,
                      help="the tree to install from (default: the one this command is running from)")
@@ -73,11 +76,11 @@ def _register_install(sub) -> None:
                      help="where to put the rundesk command on your PATH")
 
 
-def _register_update(sub) -> None:
+def _register_update(sub: Subcommands) -> None:
     sub.add_parser("update", help="move to the newest published release, or say it is up to date")
 
 
-def _register_uninstall(sub) -> None:
+def _register_uninstall(sub: Subcommands) -> None:
     gone = sub.add_parser("uninstall", help="remove rundesk from this machine")
     gone.add_argument("--confirm", action="store_true",
                       help="required — removal does nothing without it")
@@ -85,7 +88,8 @@ def _register_uninstall(sub) -> None:
                       help="also take the data rundesk kept — never the backups")
 
 
-def main(argv: Optional[List[str]] = None, asking=None, fetching=None) -> int:
+def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = None,
+         fetching: Optional[Fetching] = None) -> int:
     """Parse what was typed and hand it to the one module that answers it.
 
     Bare `rundesk` describes what it can do and exits `0`: somebody who typed the command with no
@@ -125,9 +129,14 @@ def offered(parser: argparse.ArgumentParser) -> List[str]:
 
     The one way anything — a test, a reference generator — learns what the command surface is, so a
     verb is covered the day it lands rather than the day somebody remembers to add it to a list.
+
+    Read off argparse's own private shape, which is the only place the answer exists. Returning
+    nothing is not treated as "no verbs" by anybody: `tests/test_cli.py` refuses an empty walk, so a
+    Python that renamed this out from under us fails the suite rather than passing it with nothing
+    checked.
     """
     for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
+        if isinstance(action, Subcommands):
             return sorted(action.choices)
     return []
 

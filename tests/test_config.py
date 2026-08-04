@@ -3,9 +3,12 @@
 Run directly: `python3 tests/test_config.py`
 """
 
+import fcntl
 import json
-from datetime import datetime, timezone
+import os
+import time
 import unittest
+from datetime import datetime, timezone
 
 import support
 from rundesk.core import config, jsonfile
@@ -152,6 +155,112 @@ class WritingASmallFileSafely(support.Isolated):
         self.assertEqual((jsonfile.READ, {"a": 1}), jsonfile.read(at))
         leftovers = [one.name for one in at.parent.iterdir() if one.name.endswith(".incoming")]
         self.assertEqual([], leftovers)
+
+
+class WhenSomethingElseIsChangingTheSameFile(support.Isolated):
+    """A wait with an end, and a name for the thing that was waited for."""
+
+    def setUp(self):
+        super().setUp()
+        self.at = self.home / "somewhere.json"
+        self.at.parent.mkdir(parents=True, exist_ok=True)
+        # Shortened so the ceiling can be met in milliseconds. Read inside `_taken` on every call
+        # rather than bound at import, which is what makes this reachable at all.
+        self.addCleanup(setattr, jsonfile, "WAITING_SECONDS", jsonfile.WAITING_SECONDS)
+        jsonfile.WAITING_SECONDS = 0.1
+
+    def held_by_something_else(self):
+        """Take the lock through a second descriptor, which flock treats as another holder."""
+        lock = self.at.with_name(f".{self.at.name}.lock")
+        holding = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, holding)
+        fcntl.flock(holding, fcntl.LOCK_EX)
+        return holding
+
+    def test_it_gives_up_and_says_so_rather_than_waiting_for_ever(self):
+        # A blocking wait cannot be interrupted and names nothing while it waits, so the command
+        # somebody typed simply never returns. Without the ceiling this case does not fail — it
+        # hangs, which is the failure being prevented.
+        self.held_by_something_else()
+        began = time.monotonic()
+        with self.assertRaises(jsonfile.Stuck) as refused:
+            with jsonfile.changing(self.at, empty={}):
+                pass
+        self.assertLess(time.monotonic() - began, 5, "it waited far past its own ceiling")
+        self.assertIn(str(self.at), str(refused.exception))
+
+    def test_it_writes_nothing_when_it_could_not_have_the_file(self):
+        jsonfile.write(self.at, {"a": 1})
+        self.held_by_something_else()
+        with self.assertRaises(jsonfile.Stuck):
+            with jsonfile.changing(self.at, empty={}) as held:
+                held[0] = {"a": 2}
+        self.assertEqual((jsonfile.READ, {"a": 1}), jsonfile.read(self.at))
+
+    def test_a_lock_that_comes_free_is_simply_taken(self):
+        # The ordinary case, so the ceiling cannot be mistaken for a refusal to share.
+        holding = self.held_by_something_else()
+        fcntl.flock(holding, fcntl.LOCK_UN)
+        with jsonfile.changing(self.at, empty={}) as held:
+            held[0] = {"a": 3}
+        self.assertEqual((jsonfile.READ, {"a": 3}), jsonfile.read(self.at))
+
+    def test_a_command_says_it_rather_than_ending_in_a_traceback(self):
+        config.write_fresh(self.home / "data")
+        self.addCleanup(setattr, jsonfile, "WAITING_SECONDS", jsonfile.WAITING_SECONDS)
+        jsonfile.WAITING_SECONDS = 0.1
+        lock = config.where(self.home / "data")
+        holding = os.open(lock.with_name(f".{lock.name}.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, holding)
+        fcntl.flock(holding, fcntl.LOCK_EX)
+
+        code, _, err = self.rundesk("configure", "--backup-retention", "30")
+        self.assertNotEqual(0, code)
+        self.assertIn("configure: FAILED", err)
+        self.assertIn("nothing was changed", err)
+
+
+class SettingSeveralValuesAtOnce(support.Isolated):
+    """Several settings are one change, because half of what was meant is a different change."""
+
+    def setUp(self):
+        super().setUp()
+        self.data = self.home / "data"
+        config.write_fresh(self.data)
+
+    def test_every_value_named_is_set(self):
+        config.stated_all({"backup_retention": 30, "update_time": "04:30"}, self.data)
+        settled = config.read(self.data)
+        self.assertEqual(30, settled["backup_retention"])
+        self.assertEqual("04:30", settled["update_time"])
+
+    def test_it_leaves_every_other_value_exactly_as_it_was(self):
+        config.stated("update_enabled", False, self.data)
+        config.stated_all({"backup_retention": 30}, self.data)
+        self.assertFalse(config.read(self.data)["update_enabled"])
+
+    def test_naming_a_value_rundesk_does_not_have_changes_none_of_them(self):
+        with self.assertRaises(config.Refused):
+            config.stated_all({"backup_retention": 30, "whatever_this_is": True}, self.data)
+        self.assertEqual(7, config.read(self.data)["backup_retention"],
+                         "a refused change was half applied")
+
+    def test_they_are_written_as_one_change_and_not_one_each(self):
+        # The guarantee, and the only way to see it from outside: count the writes. Set one at a
+        # time, three settings are three chances to be interrupted, and what is left behind is a
+        # configuration nobody typed — two of the answers somebody gave and no sign of the third.
+        writes = []
+        real = jsonfile.write
+
+        def counted(where, value):
+            writes.append(where)
+            return real(where, value)
+
+        self.addCleanup(setattr, jsonfile, "write", real)
+        jsonfile.write = counted
+        config.stated_all({"backup_retention": 30, "update_time": "04:30",
+                           "update_enabled": False}, self.data)
+        self.assertEqual(1, len(writes), f"three settings were written {len(writes)} times")
 
 
 if __name__ == "__main__":

@@ -112,12 +112,29 @@ class AFreshInstall(Installing):
     def test_the_command_it_put_on_the_path_really_answers(self):
         # The link is the last thing that can be wrong and the first thing a person uses: a bad
         # target or a missing executable bit shows up here and nowhere earlier.
+        #
+        # `status` rather than `version`, for the same reason the installer proves itself with it:
+        # `version` asks GitHub, and nothing in this file may leave the machine.
         self.install()
-        ended = subprocess.run([str(self.bin / "rundesk"), "version"],
+        ended = subprocess.run([str(self.bin / "rundesk"), "status"],
                                capture_output=True, text=True, stdin=subprocess.DEVNULL,
                                timeout=30)
         self.assertEqual(0, ended.returncode, ended.stderr)
-        self.assertIn("rundesk", ended.stdout)
+        self.assertIn(str(self.root), ended.stdout)
+
+    def test_proving_the_install_never_asks_what_is_published(self):
+        # The installer proves the command it placed really answers. Which verb it proves with is
+        # not a detail: `version` asks GitHub, so an installer proved with it turns every install —
+        # and every case in this file — into a network call, and stalls on a network that is slow.
+        #
+        # The tree being installed from is booby-trapped rather than the check being inspected: if
+        # the installed command consults what is published, it raises, and the install fails.
+        asked = self.source / "src" / "rundesk" / "lifecycle" / "release.py"
+        asked.write_text(asked.read_text() + (
+            "\n\ndef latest_published():\n"
+            "    raise AssertionError('proving the install asked what is published')\n"))
+        code, _, err = self.install()
+        self.assertEqual(OK, code, err)
 
     def test_it_refuses_a_root_that_must_not_be_one_before_writing_anything(self):
         os.environ["RUNDESK_HOME"] = str(Path.home())

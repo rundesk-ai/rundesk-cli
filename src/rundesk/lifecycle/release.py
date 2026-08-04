@@ -43,6 +43,14 @@ NOTHING_PUBLISHED = "nothing-published"
 
 _VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 
+#: How the newest published tag is looked up: `(tag, None)`, or `(None, why)` where `why` tells
+#: nothing-published from unreachable.
+#:
+#: Named because it is the shape every caller of `standing` has to honour, and because it is the one
+#: thing in this product that leaves the machine — every command that could reach GitHub takes one of
+#: these instead, so the network is a value that can be replaced rather than an import that cannot.
+Asking = Callable[[], Tuple[Optional[str], Optional[str]]]
+
 
 def parsed(value: Optional[str]) -> Optional[Tuple[int, int, int]]:
     """A version as three numbers, or `None` when it is not shaped like one."""
@@ -128,7 +136,7 @@ def described(installed: str, published: Optional[str], why: Optional[str] = Non
 
 
 def standing(installed: str,
-             asking: Optional[Callable[[], Tuple[Optional[str], Optional[str]]]] = None):
+             asking: Optional[Asking] = None) -> Tuple[str, Optional[str], bool]:
     """Where this install stands: `(line, published tag or None, could_ask)`.
 
     `asking` is resolved here rather than in the signature, so a test replaces it and the network is

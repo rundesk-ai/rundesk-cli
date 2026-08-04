@@ -7,9 +7,11 @@ is a different question and will be a different command.
 
 import argparse
 import sys
+from pathlib import Path
+from typing import Any, List, Tuple
 
 from rundesk import __version__
-from rundesk.commands import as_table
+from rundesk.commands import as_table, as_written
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.lifecycle import migration
@@ -44,7 +46,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
     return FAILED if unfit else OK
 
 
-def _configured():
+def _configured() -> List[Tuple[str, str]]:
     """Every value this install is configured with, read from its own configuration.
 
     Walked off `config.read` rather than named here, so a value a release starts offering is shown
@@ -57,11 +59,11 @@ def _configured():
     return [(key, _readably(key, settled[key])) for key in sorted(settled)]
 
 
-def _readably(key: str, value) -> str:
+def _readably(key: str, value: Any) -> str:
     """One configured value as a person reads it.
 
     `migration` is the one nobody states, so it says what it means rather than printing a bare id or
-    an unexplained `None`.
+    an unexplained `None`. Everything else reads the way it reads everywhere else in the product.
     """
     if key == "migration":
         ships = migration.newest()
@@ -70,11 +72,7 @@ def _readably(key: str, value) -> str:
         if value is None:
             return f"not carried yet (this release ships up to {ships})"
         return str(value) if value == ships else f"{value} (this release ships up to {ships})"
-    if value is None:
-        return "not yet"
-    if isinstance(value, bool):
-        return "yes" if value else "no"
-    return str(value)
+    return as_written(value)
 
 
 def _program() -> str:
@@ -90,7 +88,7 @@ def _program() -> str:
             else f"{running} (a checkout — this root has no install)")
 
 
-def _shown(where) -> str:
+def _shown(where: Path) -> str:
     """A path, and whether anything stands there.
 
     An empty root reads identically to a populated one when only the path is printed, and that is

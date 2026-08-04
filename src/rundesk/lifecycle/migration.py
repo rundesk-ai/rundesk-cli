@@ -39,7 +39,7 @@ import importlib.util
 import re
 import sys
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, NamedTuple, Optional
 
 from rundesk.core import config
 
@@ -49,13 +49,17 @@ NAMED = re.compile(r"^(\d{4})_([a-z0-9_]+)\.py$")
 STEPS = Path(__file__).resolve().parent / "steps"
 
 
-class Step:
-    """One migration step: its id, the order it runs in, and the change it makes."""
+class Step(NamedTuple):
+    """One migration step: where it is, the order it runs in, its id, and the change it makes.
 
-    def __init__(self, at: Path, order: int, id: str):
-        self.at = at
-        self.order = order
-        self.id = id
+    A record rather than an object with a life of its own, and immutable on purpose: a step's id is
+    how every install on every machine knows whether it has already run, so nothing should be able
+    to change one after it has been found.
+    """
+
+    at: Path
+    order: int
+    id: str
 
     def __repr__(self) -> str:
         return f"<step {self.id}>"

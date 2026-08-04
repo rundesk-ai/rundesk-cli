@@ -22,6 +22,7 @@ import argparse
 import shutil
 import sys
 from pathlib import Path
+from typing import List
 
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
@@ -59,12 +60,14 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     except (tree.Refused, OSError) as why:
         return _failed(str(why))
 
-    if args.purge:
-        gone_wrong = _purge(paths.data(), taken)
-        if gone_wrong:
-            return _failed(gone_wrong)
-    elif paths.data().exists():
-        kept.append(str(paths.data()))
+    if paths.data().exists():
+        if args.purge:
+            gone_wrong = _purge(paths.data())
+            if gone_wrong:
+                return _failed(gone_wrong)
+            taken.append(str(paths.data()))
+        else:
+            kept.append(str(paths.data()))
 
     if paths.backups().exists():
         kept.append(f"{paths.backups()} (copies always survive removal)")
@@ -81,7 +84,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     return OK
 
 
-def _where_the_command_went():
+def _where_the_command_went() -> List[str]:
     """Every directory that might hold this install's command, the recorded one first.
 
     The install writes down where it put the link, because that directory is chosen at install time
@@ -121,15 +124,16 @@ def _needs_confirming(root: Path, purging: bool) -> int:
     return FAILED
 
 
-def _purge(data: Path, taken: list) -> str:
-    """Take what the owner accumulated. Only ever the data directory, never a level above it."""
-    if not data.exists():
-        return ""
+def _purge(data: Path) -> str:
+    """Take what the owner accumulated, and say why not when it could not be taken. `""` when it was.
+
+    Only ever the data directory, never a level above it. What was taken is recorded by the caller
+    that asked, so this has one answer to give rather than one to give and one to append.
+    """
     try:
         shutil.rmtree(data)
     except OSError as why:
         return f"{data} could not be removed: {why}"
-    taken.append(str(data))
     return ""
 
 

@@ -1,10 +1,12 @@
 name: build
 
-# One run per pull request. The product is being rebuilt part by part, so this file grows a job as
-# each part lands rather than describing a build that is not there yet: today the knowledge system
-# is what exists and what is checked. The suite job arrives with the first suite, and it fails on an
-# empty discovery — the workflow this replaces globbed a directory that had moved, matched nothing
-# and reported success.
+# One run per pull request. The product is being rebuilt part by part, so this file describes what is
+# actually here rather than what is planned: the suites, on both interpreters and both systems.
+#
+# It checked a `.knowledge/` documentation system until that system was removed in the rebuild, and
+# went on calling three scripts that no longer existed — so every run was red for a reason that had
+# nothing to do with the change being reviewed, and a red gate nobody can act on is a gate nobody
+# reads. What runs here is what a developer runs: `python3 scripts/suites`.
 on:
   push:
     branches: [main]
@@ -16,24 +18,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  knowledge:
-    name: the knowledge system
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.13'
-
-      - name: The docs meet the standard
-        run: python3 .knowledge/scripts/doc-lint .knowledge
-
-      - name: The linter still has its teeth
-        # doc-lint passing proves nothing on its own — this drives a valid project through it and
-        # then breaks one rule at a time, so a linter that has stopped checking is caught here.
-        run: python3 .knowledge/scripts/test_doc_lint.py
-
   tests:
     name: the suites (${{ matrix.os }}, python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
@@ -53,10 +37,14 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Everything parses
+        # `scripts/suites` and `rundesk` are named rather than globbed: they are Python without a
+        # `.py` on them, so a pattern that only knows the extension would skip the two files every
+        # other check here goes through.
         run: |
           python3 - <<'PARSE'
           import ast, glob, sys
-          found = glob.glob('src/**/*.py', recursive=True) + glob.glob('tests/*.py')
+          found = (glob.glob('src/**/*.py', recursive=True) + glob.glob('tests/*.py')
+                   + ['scripts/suites', 'rundesk'])
           if not found:
               print('::error::the parse check found no python at all')
               sys.exit(1)
@@ -66,16 +54,40 @@ jobs:
           PARSE
 
       - name: The shell scripts parse
-        run: bash -n dev
+        run: |
+          bash -n dev
+          bash -n install.sh
 
       - name: Every suite
         # The same script a developer runs. It finds the suites rather than listing them, and fails
         # when it finds none.
-        run: python3 .knowledge/scripts/suites
+        run: python3 scripts/suites
+
+  style:
+    name: how the code is written
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: The conventions in ruff.toml are kept
+        # Pinned, not floating. A linter that upgrades itself turns this red on a morning nobody
+        # changed anything, and a gate that goes red for reasons unrelated to the change under
+        # review is a gate people learn to scroll past — which is how the job this replaces came to
+        # be pointed at a directory that had not existed for four commits.
+        #
+        # rundesk itself still declares no dependencies: this is fetched here, in CI, and nothing a
+        # person installs ever sees it. `requirements.txt` stays empty on purpose.
+        run: |
+          pip install ruff==0.16.1
+          ruff check src tests scripts/suites rundesk
 
   required-pr-gate:
     name: required
     runs-on: ubuntu-latest
-    needs: [knowledge, tests]
+    needs: [tests, style]
     steps:
       - run: echo "every required job passed"

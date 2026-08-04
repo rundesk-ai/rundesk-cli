@@ -32,6 +32,20 @@ if str(CHECKOUT / "src") not in sys.path:
 from rundesk import cli  # noqa: E402  — the insert above is what makes these importable
 from rundesk.core import paths  # noqa: E402
 
+#: Where anything a suite starts is sent instead of the internet: port 9 is discard, and nothing is
+#: listening on this machine's own. A refused connection rather than a black hole, so a case that
+#: reaches for the network fails in milliseconds instead of hanging until somebody's timeout.
+NOWHERE = {
+    "http_proxy": "http://127.0.0.1:9",
+    "https_proxy": "http://127.0.0.1:9",
+    "HTTP_PROXY": "http://127.0.0.1:9",
+    "HTTPS_PROXY": "http://127.0.0.1:9",
+    "ALL_PROXY": "http://127.0.0.1:9",
+}
+
+#: Taken out of the environment before `NOWHERE` goes in, so a machine that exempts GitHub from its
+#: own proxy does not exempt it from this one.
+_CLOSED_OFF = (*NOWHERE, "no_proxy", "NO_PROXY")
 
 #: A migration step that cannot finish, for proving a failure is reported rather than passed over.
 #: Here rather than in each suite: two of them needed it and copied it, which is the small form of
@@ -73,16 +87,27 @@ def scrub_and_point(where: Path) -> Callable[[], None]:
     any shell may carry one, an agent's does, and anything deriving a config directory from it would
     quietly follow it out of the scratch root.
 
+    The network is closed off in the same breath, and for the same reason: **no suite here may leave
+    the machine.** A case can drive the product with `asking=` and `fetching=` and still reach GitHub
+    through a subprocess it spawned — an install proves the command it placed by running it, and that
+    command is a whole rundesk with its own opinion about what to look up. That is not hypothetical:
+    it is how `tests/test_install.py` came to spend half its wall clock on GitHub round-trips while
+    every case passed. Pointing the proxy variables at a closed port shuts the door for anything a
+    case starts, however deep, on a rule that is meant to be absolute.
+
     Hands back what puts the environment as it was found.
     """
     taken = {name: os.environ[name] for name in list(os.environ)
-             if name.startswith("RUNDESK_") or name == "XDG_CONFIG_HOME"}
+             if name.startswith("RUNDESK_") or name in _CLOSED_OFF or name == "XDG_CONFIG_HOME"}
     for name in taken:
         del os.environ[name]
     os.environ[paths.HOME_IS] = str(where)
+    os.environ.update(NOWHERE)
 
     def restore() -> None:
         os.environ.pop(paths.HOME_IS, None)
+        for name in NOWHERE:
+            os.environ.pop(name, None)
         os.environ.update(taken)
 
     return restore

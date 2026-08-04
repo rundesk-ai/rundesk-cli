@@ -69,6 +69,18 @@ going red.
 Read the `Ran N tests` line rather than the word `OK`. `OK` and `OK (skipped=65)` are the same word
 to whoever reads a summary, and a suite that skipped everything is not a suite that passed.
 
+### The network is closed off, not merely avoided
+
+Every case runs with the proxy variables pointed at a closed port, so **nothing a suite starts can
+leave the machine** — not the command under test, and not a subprocess three levels below it.
+
+That last part is why it is done in the harness rather than left to each case. A case can drive the
+product with `asking=` and `fetching=` replaced and still reach GitHub, because `install` proves the
+command it placed by *running* it, and what it runs is a whole rundesk with its own opinion about
+what to look up. That is not hypothetical: `tests/test_install.py` spent half its wall clock on
+GitHub round-trips while every case passed, and the only visible symptom was that running two
+interpreters at once turned four suites red for reasons nobody could attribute to anything.
+
 ### Isolation is asserted, not assumed
 
 Every case inherits `Isolated` from `tests/support.py`, which gives it a temporary root and then
@@ -118,6 +130,36 @@ python3 scripts/suites              # whatever your shell finds
 ```
 
 rundesk declares no dependencies. There is no virtualenv to build and nothing to install first.
+
+## How the code is written
+
+The conventions are ordinary and the code already keeps them; [`ruff.toml`](../ruff.toml) is where a
+machine can check that, and CI does on every pull request. It is **not** a dependency of the product
+— it is fetched in CI and nothing a person installs ever sees it, so `requirements.txt` stays empty
+and no install builds a virtualenv.
+
+You do not need it to work here. If you want it:
+
+```sh
+python3 -m venv /tmp/lint && /tmp/lint/bin/pip install ruff==0.16.1
+/tmp/lint/bin/ruff check src tests scripts/suites rundesk
+```
+
+What it enforces is the part that catches a mistake — an unused import, an import block in a
+different order from every other file, a bare `except Exception` that nobody marked as deliberate, a
+name that shadows a builtin. What it deliberately does not enforce is line width: this code is
+written to a hundred columns and a handful of lines run over, all of them sentences in a docstring,
+and having a linter rewrap somebody's prose costs more than the ragged edge does.
+
+Two things it cannot check, and they matter more than anything it can:
+
+- **Everything is annotated.** Every function in `src/` says what it takes and what it gives back.
+  The ones worth being careful about are the collaborators — `release.Asking` and `update.Fetching`
+  are the two things in this product that leave the machine, and they are named types so that
+  "pass the network in" is a contract rather than a convention somebody has to be told about.
+- **A docstring says why, not what.** The reasoning is the part that cannot be recovered from the
+  code, and most of these modules exist because a previous version of them got something wrong. Say
+  which thing.
 
 ## Never touch the live install
 

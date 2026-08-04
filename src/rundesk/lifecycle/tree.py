@@ -20,7 +20,7 @@ somebody was working in, has done something it cannot undo.
 import os
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterable, List, Optional, Sequence, Set
 
 from rundesk.core import paths
 
@@ -118,7 +118,7 @@ def link(app: Path, bin_dir: Optional[Path] = None) -> Path:
     return at
 
 
-def unlink(app: Path, bin_dirs=None) -> List[Path]:
+def unlink(app: Path, bin_dirs: Optional[Sequence[str]] = None) -> List[Path]:
     """Remove every PATH link that points into this install. Returns what was removed.
 
     Checked rather than assumed, one link at a time. Two installs on one machine is an ordinary
@@ -165,7 +165,7 @@ def _check(from_where: Path) -> None:
         raise Refused(f"{from_where} does not look like rundesk — it has no {COMMAND} and src/rundesk")
 
 
-def _never_copied(_where: str, names):
+def _never_copied(_where: str, names: Iterable[str]) -> Set[str]:
     """What is never part of an install, whatever is in the tree it was built from."""
     unwanted = {".git", "__pycache__", ".scratch", "node_modules", ".venv",
                 "src_old", "tests_old", "docs_old", ".knowledge_old", "old", "ui", "site"}

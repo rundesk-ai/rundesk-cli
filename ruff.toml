@@ -1,0 +1,38 @@
+# How this code is written, in the one place a machine can check it.
+#
+# Its own file rather than a `pyproject.toml`, deliberately: rundesk has no build step and nothing to
+# package, and a `pyproject.toml` in the root is the first thing a tool reads as "this is installable".
+# Nothing here is a dependency of the product — `requirements.txt` stays empty, which is what keeps an
+# install from building a virtualenv at all. This is checked in CI, where a linter may be fetched, and
+# never by anything a person installs.
+#
+# The rules chosen are the ones that catch a mistake or settle an argument. Formatting opinions that
+# do neither are left out: this file is not here to relitigate the style, which is already consistent.
+
+line-length = 100
+target-version = "py39"
+
+[lint]
+select = [
+    "E",    # pycodestyle — the layout this code already keeps
+    "W",    # pycodestyle warnings — trailing whitespace, a missing final newline
+    "F",    # pyflakes — an unused import, a name that is not defined, an unused variable
+    "I",    # isort — standard library, then this product; one order, not one per file
+    "B",    # bugbear — the mutable default argument, and the loop variable captured by a closure
+    "A",    # a name that shadows a builtin, which is how `id` came to be a parameter here once
+    "C4",   # a comprehension written the long way round
+    "BLE",  # a bare `except Exception`, which is deliberate exactly once here and marked where it is
+    "RUF",  # ruff's own, including a `noqa` for a rule that is no longer switched on
+]
+
+ignore = [
+    # Width is the one convention here with a soft edge: the code is written to a hundred columns and
+    # a handful of lines run to a hundred and four, all of them sentences in a docstring. Nearly
+    # everything this module explains is explained in prose somebody wrote and wrapped by hand, and
+    # having a linter rewrap it would cost more than the ragged edge does. Everything below this line
+    # catches a mistake; this one only settles a preference, and the preference is already settled.
+    "E501",
+]
+
+[lint.isort]
+known-first-party = ["rundesk", "support"]

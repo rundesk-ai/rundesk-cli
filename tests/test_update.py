@@ -8,7 +8,6 @@ Run directly: `python3 tests/test_update.py`
 """
 
 import io
-import shutil
 import os
 import tarfile
 import unittest
@@ -120,7 +119,7 @@ class WhereThisInstallStands(Updating):
 class AnUpdateThatLands(Updating):
 
     def test_it_replaces_the_program(self):
-        code, out, err = self.update(archive=self.an_archive())
+        code, _, err = self.update(archive=self.an_archive())
         self.assertEqual(OK, code, err)
         self.assertEqual("after", (paths.app() / "README.md").read_text())
 
@@ -212,7 +211,7 @@ class CarryingTheInstallForward(Updating):
     """The migration half — the reason an update is two tiers rather than a file copy."""
 
     def test_the_steps_the_new_release_ships_are_run(self):
-        code, out, err = self.update(archive=self.an_archive(steps={"0001_first": A_STEP}))
+        code, _, err = self.update(archive=self.an_archive(steps={"0001_first": A_STEP}))
         self.assertEqual(OK, code, err)
         self.assertTrue((paths.data() / "carried").exists(), "the release's step did not run")
 

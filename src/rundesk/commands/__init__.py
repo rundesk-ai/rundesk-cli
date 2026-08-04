@@ -6,7 +6,31 @@ nothing else; it never builds a parser for another group, and it never calls a g
 May depend on `lifecycle` and `core`. Nothing in either may depend on this.
 """
 
-from typing import Sequence
+import argparse
+from typing import Any, Sequence
+
+#: What `add_subparsers()` hands back, and what a verb is given to register itself on.
+#:
+#: argparse offers no public name for it, so the private one is named **here, once**, rather than
+#: spelled out at each verb — and `cli.offered` reads the same private shape to walk the surface. If
+#: a future Python renames it, this import fails loudly at start-up, which is the failure worth
+#: having: the alternative is a walk that quietly finds no verbs and a suite that proves nothing.
+Subcommands = argparse._SubParsersAction
+
+
+def as_written(value: Any) -> str:
+    """One configured value as a person reads it, and as they would type it back.
+
+    The one place that decision is made, so `status` and `configure` cannot come to disagree about
+    how the same install reads — which is the kind of difference nobody notices and everybody
+    distrusts once they do. A value nothing has set yet says so rather than printing `None`, which
+    is Python's word for it and not anybody else's.
+    """
+    if value is None:
+        return "not yet"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return str(value)
 
 
 def as_table(head: Sequence[str], rows: Sequence[Sequence[str]]) -> None:

@@ -157,6 +157,12 @@ configuration, carries the migrations, links the command, and then **proves the 
 answers** — an installer that reports success without checking has told somebody their machine is
 ready when it is not.
 
+It proves it with `status` rather than `version`, so the proof is answerable from the machine alone.
+`version` asks GitHub, and an install that fails because GitHub is slow has reported a failure it did
+not earn — the mirror of the mistake this whole command is built to avoid. `status` also refuses when
+the interpreter behind the link is too old, which is exactly the install that looks finished and
+cannot run.
+
 ## Exit codes
 
 | Code | Means |

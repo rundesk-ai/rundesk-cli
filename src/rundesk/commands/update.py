@@ -36,11 +36,17 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Callable, Optional
 
 from rundesk import __version__
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.lifecycle import home, migration, release, tree
+
+#: How a release archive is brought down: given where it is and where to put it, it puts it there.
+#: The second of the two things in this product that leave the machine, and like the first it is a
+#: value a caller hands in rather than an import a test cannot reach past.
+Fetching = Callable[[str, Path], None]
 
 FETCH_SECONDS = 60
 
@@ -49,7 +55,8 @@ FETCH_SECONDS = 60
 SETTLE_SECONDS = 300
 
 
-def cmd_update(_args: argparse.Namespace, asking=None, fetching=None) -> int:
+def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = None,
+               fetching: Optional[Fetching] = None) -> int:
     """Move to the newest published release, or say it is already up to date.
 
     Takes no flags. `asking` looks up what is published and `fetching` downloads it; both are
@@ -118,7 +125,7 @@ def cmd_update(_args: argparse.Namespace, asking=None, fetching=None) -> int:
     # there would move the answer forward every time anybody merely checked.
     try:
         config.moved(data=paths.data())
-    except (config.Unreadable, config.Refused) as why:
+    except (config.Unreadable, config.Refused, config.Stuck) as why:
         print(f"update: {published} is installed and when it arrived was not recorded — {why}",
               file=sys.stderr)
 
@@ -143,20 +150,19 @@ def settle() -> int:
     try:
         if fresh:
             config.write_fresh(paths.data())
+            # Nothing to carry: the directories were made correctly a moment ago, and the steps
+            # describe changes from releases this install never had.
+            migration.stamp_without_running(paths.data())
         else:
             config.fill_in(paths.data())
-    except config.Unreadable as why:
+            gone_wrong = migration.carry(paths.data(), saying=_out_loud)
+            if gone_wrong:
+                return _failed(gone_wrong)
+    except (config.Unreadable, config.Stuck) as why:
+        # Every write below `settle` goes through the configuration, including the stamp each
+        # migration step lands with, so both answers are caught in one place rather than at each
+        # of the four calls that can give them.
         return _failed(str(why))
-
-    if fresh:
-        # Nothing to carry: the directories were made correctly a moment ago, and the steps describe
-        # changes from releases this install never had.
-        migration.stamp_without_running(paths.data())
-        return OK
-
-    gone_wrong = migration.carry(paths.data(), saying=_out_loud)
-    if gone_wrong:
-        return _failed(gone_wrong)
     return OK
 
 
@@ -197,7 +203,7 @@ def settled_by_the_new_release(app: Path) -> str:
     return ""
 
 
-def _brought_down(tag: str, into: Path, fetching=None) -> Path:
+def _brought_down(tag: str, into: Path, fetching: Optional[Fetching] = None) -> Path:
     """Fetch and unpack a release, and hand back the tree inside it.
 
     Members that would escape the directory are refused. The standard library only started refusing

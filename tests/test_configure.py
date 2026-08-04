@@ -96,7 +96,7 @@ class AValueThatIsNotAllowed(Configuring):
         self.assertEqual(config.INITIAL["backup_retention"], self.settled("backup_retention"))
 
     def test_a_retention_that_is_not_a_number_is_refused(self):
-        code, _, err = self.rundesk("configure", "--backup-retention", "lots")
+        code, _, _ = self.rundesk("configure", "--backup-retention", "lots")
         self.assertEqual(FAILED, code)
         self.assertEqual(config.INITIAL["backup_retention"], self.settled("backup_retention"))
 
