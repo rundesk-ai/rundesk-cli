@@ -30,9 +30,14 @@ eventually spell it differently. A backup interrupted halfway and nevertheless c
 ## A name becomes a directory, a lock and a log
 
 What a name may be and where the writing lands are the same decision. The build this replaces
-recorded it exactly: *a name containing a separator would put all three somewhere else entirely.* So
-a name is checked when it is accepted, not at each of the places it later turns into a path — those
-are the places that cannot see what happened.
+recorded it exactly: *a name containing a separator would put all three somewhere else entirely.* A
+name should be checked where it is accepted rather than at each of the places it later turns into a
+path, because those are the places that cannot see what happened.
+
+`name_trouble` is the check. **Nothing calls it yet** — there is no verb that takes a name — so this
+is a rule the tree does not enforce anywhere today, and saying otherwise here would be this file
+claiming a guarantee it does not make. It is written and proven now because the first verb that
+takes a name is the one that would otherwise invent its own rules for one.
 
 Beyond `locking`, which is how the read-decide-write is held together, this imports the standard
 library and nothing else.
@@ -95,6 +100,11 @@ def write_json(where: Path, value: Any) -> None:
     """
     where.parent.mkdir(parents=True, exist_ok=True)
     beside = where.with_name(INCOMING.format(name=where.name))
+    # Cleared first, the way `stage_copy` does. A write that raised partway — an unserialisable
+    # value, a full disk during `fsync` — leaves this file behind, and while the next write would
+    # truncate it anyway, "the next write tidies it" is a thing to have decided rather than to have
+    # happened to be true.
+    discard(beside)
     with open(beside, "w", encoding="utf-8") as writing:
         json.dump(value, writing, indent=2, sort_keys=True)
         writing.write("\n")
@@ -114,6 +124,11 @@ def changing_json(where: Path, empty: Any) -> Iterator[list]:
 
     Two processes changing the same file is not hypothetical here: an update and a command a person
     typed can reach one at the same moment.
+
+    **Take the install's own lock before this one, never after.** Some callers hold both — a restore
+    swaps `data/` and then settles the configuration inside it — and two locks taken in two orders by
+    two processes is the one deadlock this product can build for itself. The order is stated here
+    because it is the invariant a caller cannot see from its own end.
     """
     where.parent.mkdir(parents=True, exist_ok=True)
     with locking.only_one(_the_lock_for(where), str(where)):
@@ -207,6 +222,8 @@ def name_trouble(said: str) -> str:
 
     A sentence rather than a `False`, because every caller has to tell somebody what to type
     instead, and a caller left to invent that wording is a caller that invents a different one.
+    There was a `usable_name` boolean beside this for a while and it was deleted unused: a caller
+    that had it still had to ask again for the words, so it saved nobody anything.
     """
     if not said or not said.strip():
         return "a name cannot be empty"
@@ -223,8 +240,3 @@ def name_trouble(said: str) -> str:
     if len(said.encode("utf-8")) > LONGEST:
         return f"a name cannot be longer than {LONGEST} bytes"
     return ""
-
-
-def usable_name(said: str) -> bool:
-    """Whether `said` may be one segment of a path. `name_trouble` says why when it may not."""
-    return not name_trouble(said)

@@ -49,17 +49,18 @@ class Ran(NamedTuple):
     `trouble` is the field to read first. While it is `None` the program ran and `code` is its
     answer; once it is set there is no exit code at all, and a caller treating `code` as `0`-or-not
     would be reading a number nothing produced.
+
+    **There is deliberately no `worked` shortcut.** One existed and was removed: it answered `False`
+    both for a program that ran and disagreed and for one that was never on the machine, which is
+    the single distinction this whole type exists to keep. Both real callers had already routed
+    around it and asked `trouble` then `code` themselves — when the people who must get it right
+    avoid the convenience, the convenience is a trap for whoever does not know to.
     """
 
     code: Optional[int]
     out: str
     err: str
     trouble: Optional[str]
-
-    @property
-    def worked(self) -> bool:
-        """Whether it ran and said so. Never true for a program that did not run."""
-        return self.trouble is None and self.code == 0
 
     def __repr__(self) -> str:
         return f"<ran {self.trouble or self.code}>"

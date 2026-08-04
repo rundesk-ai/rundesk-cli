@@ -17,6 +17,7 @@ import fcntl
 import io
 import os
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -289,6 +290,75 @@ class WhenSomethingElseIsChangingTheSameFile(support.Isolated):
             self.assertEqual({"after": True}, held[0])
 
 
+class WhetherANameMayBecomeAPath(support.Isolated):
+    """`files.name_trouble` — a name becomes a directory, the lock beside it, and the log under it.
+
+    Checked when a name is accepted rather than at each of the places it later turns into a path,
+    because those are the places that cannot see what happened. The build this replaces recorded the
+    failure exactly: a name containing a separator would put all three somewhere else entirely.
+    """
+
+    def test_an_ordinary_name_is_fine(self):
+        for said in ("alan", "my-agent", "agent_1", "Alan", "a"):
+            with self.subTest(said=said):
+                self.assertEqual("", files.name_trouble(said))
+
+    def test_nothing_is_not_a_name(self):
+        for said in ("", "   ", "\t", "\n"):
+            with self.subTest(said=repr(said)):
+                self.assertNotEqual("", files.name_trouble(said))
+
+    def test_a_separator_is_refused_because_it_moves_the_directory(self):
+        for said in ("a/b", "/a", "a/", "a\\b", "a\x00b"):
+            with self.subTest(said=repr(said)):
+                why = files.name_trouble(said)
+                self.assertNotEqual("", why, f"{said!r} would land somewhere else entirely")
+
+    def test_the_directory_and_its_parent_are_not_names(self):
+        # Anything written "under" these is written over something else.
+        self.assertIn("directory", files.name_trouble("."))
+        self.assertIn("directory", files.name_trouble(".."))
+
+    def test_a_leading_dot_is_refused(self):
+        # Staging entries and lock files are dotfiles, so a name starting with one could collide
+        # with the machinery keeping it — and every walk in this layer skips them.
+        for said in (".hidden", ".a.lock", ".incoming"):
+            with self.subTest(said=said):
+                self.assertIn("dot", files.name_trouble(said))
+
+    def test_a_control_character_is_refused(self):
+        # It cannot be typed back, cannot be read in a listing, and a terminal escape in a name is
+        # a way to make output claim something it is not.
+        for said in ("a\nb", "a\tb", "a\x1b[31mb", "a\x7fb"):
+            with self.subTest(said=repr(said)):
+                self.assertIn("control character", files.name_trouble(said))
+
+    def test_a_name_the_filesystem_would_refuse_is_refused_with_a_sentence(self):
+        self.assertEqual("", files.name_trouble("a" * files.LONGEST))
+        self.assertIn("longer than", files.name_trouble("a" * (files.LONGEST + 1)))
+
+    def test_length_is_counted_in_bytes_because_that_is_what_the_limit_counts(self):
+        # One accented letter is two bytes, so a name well under the limit in characters can be
+        # over it on disk — and finding that out as an errno three directories deep is no use.
+        said = "é" * (files.LONGEST // 2 + 1)
+        self.assertLess(len(said), files.LONGEST)
+        self.assertIn("longer than", files.name_trouble(said))
+
+    def test_what_a_person_may_reasonably_want_is_not_refused(self):
+        # This module has an opinion about paths, not about names. Spaces and other languages work
+        # on a filesystem and somebody may reasonably want them.
+        for said in ("my agent", "Ada Lovelace", "agente", "エージェント", "café"):
+            with self.subTest(said=said):
+                self.assertEqual("", files.name_trouble(said))
+
+    def test_it_answers_with_a_sentence_rather_than_a_code(self):
+        # Every caller has to tell somebody what to type instead, and one left to invent the
+        # wording is one that invents a different wording from everybody else.
+        why = files.name_trouble("a/b")
+        self.assertIn("name", why)
+        self.assertGreater(len(why.split()), 4, "that is not a sentence anybody can act on")
+
+
 class TakingTurns(support.Isolated):
     """`locking.only_one` — one at a time, with a ceiling, and re-entrant within one process."""
 
@@ -347,13 +417,57 @@ class TakingTurns(support.Isolated):
                 with locking.only_one(self.at):
                     pass
 
-    def test_the_outermost_holder_is_the_one_that_lets_go(self):
+    def still_held(self) -> bool:
+        """Whether anything holds the lock, asked through a descriptor of its own.
+
+        Behaviour rather than bookkeeping: reaching into the counter would pin the shape of a
+        private dict, and that shape has already changed once.
+        """
+        holding = os.open(self.at, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(holding, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(holding, fcntl.LOCK_UN)
+            return False
+        except OSError:
+            return True
+        finally:
+            os.close(holding)
+
+    def test_an_inner_block_ending_does_not_let_go_for_the_outer_one(self):
         with locking.only_one(self.at):
             with locking.only_one(self.at):
                 pass
-            # still held here: an inner block ending must not release it for the outer one
-            self.assertEqual(1, locking._HELD[str(self.at)])
-        self.assertNotIn(str(self.at), locking._HELD)
+            self.assertTrue(self.still_held(), "an inner block released the outer one's lock")
+        self.assertFalse(self.still_held())
+
+    def test_another_thread_does_not_walk_into_a_lock_this_one_holds(self):
+        # Counted per file alone, a second thread would find a count already there, take the fast
+        # path, and never touch `flock` — two callers inside a section built to hold one. Nesting
+        # is about a call stack, and a call stack belongs to a thread.
+        what_happened = []
+
+        def somebody_else():
+            try:
+                with locking.only_one(self.at):
+                    what_happened.append("walked straight in")
+            except locking.Stuck:
+                what_happened.append("waited its turn")
+
+        with locking.only_one(self.at):
+            other = threading.Thread(target=somebody_else)
+            other.start()
+            other.join(5)
+        self.assertEqual(["waited its turn"], what_happened)
+
+    def test_the_same_lock_reached_by_another_name_is_the_same_lock(self):
+        # Two spellings of one file are one file. Counted by the spelling, a symlinked root would
+        # miss its own count, take a real `flock` on a descriptor this thread already holds, and
+        # wait out the whole ceiling for itself.
+        through = self.home / "by-another-name"
+        through.symlink_to(self.home)
+        with locking.only_one(self.at):
+            with locking.only_one(through / self.at.name):
+                pass
 
     def test_it_makes_the_directory_the_lock_stands_in(self):
         deep = self.home / "not" / "yet" / ".a.lock"
@@ -704,7 +818,6 @@ class RunningAProgramThatAnswers(support.Isolated):
 
     def test_a_program_that_ran_says_what_it_said(self):
         ended = programs.run([sys.executable, "-c", "print('hello')"], 10)
-        self.assertTrue(ended.worked)
         self.assertEqual(0, ended.code)
         self.assertEqual("hello\n", ended.out)
         self.assertIsNone(ended.trouble)
@@ -713,7 +826,7 @@ class RunningAProgramThatAnswers(support.Isolated):
         ended = programs.run([sys.executable, "-c", "import sys; sys.exit(3)"], 10)
         self.assertEqual(3, ended.code)
         self.assertIsNone(ended.trouble, "a program that ran and disagreed has no trouble")
-        self.assertFalse(ended.worked)
+        self.assertNotEqual(0, ended.code)
 
     def test_a_program_that_was_never_there_has_no_exit_code(self):
         # Reported as an exit code, this says the program ran and disagreed — a different fact
@@ -721,7 +834,6 @@ class RunningAProgramThatAnswers(support.Isolated):
         ended = programs.run([str(self.home / "never-installed")], 10)
         self.assertIsNone(ended.code)
         self.assertIn(programs.DID_NOT_START, ended.trouble)
-        self.assertFalse(ended.worked)
 
     def test_a_program_that_would_not_finish_is_its_own_answer(self):
         ended = programs.run([sys.executable, "-c", "import time; time.sleep(30)"], 0.3)
@@ -731,7 +843,9 @@ class RunningAProgramThatAnswers(support.Isolated):
     def test_what_it_managed_to_say_before_it_hung_comes_back(self):
         ended = programs.run(
             [sys.executable, "-c", "import sys,time; print('said'); sys.stdout.flush(); time.sleep(30)"],
-            0.5)
+            # Generous on purpose: the sleep is never reached either way, so a wide ceiling costs
+            # nothing, and a narrow one asks a loaded machine to start an interpreter in 500ms.
+            3.0)
         self.assertIn("said", ended.out)
 
     def test_standard_input_is_never_inherited(self):
@@ -839,6 +953,31 @@ class AProgramThatKeepsRunning(support.Isolated):
         self.assertTrue(self.waited_until(lambda: not programs.alive(child)),
                         "the child outlived the stop, and nothing is left holding its id")
 
+    def test_it_asks_before_it_insists(self):
+        # A program that stops either way cannot tell the two apart, so this one proves which
+        # signal arrived: it handles SIGTERM by tidying up and leaving. Killed outright, the note
+        # is never written — and a gateway would lose whatever it was midway through.
+        #
+        # It says when its handler is installed, and this waits for that rather than for the
+        # process to exist. A pid is alive from the instant of the fork, long before the
+        # interpreter behind it has reached `signal.signal` — waiting on the wrong one sends the
+        # signal into the gap and the default action takes the process with the handler unused.
+        ready = self.home / "the-handler-is-installed"
+        goodbye = self.home / "it-shut-down-tidily"
+        pid = self.given_running(
+            "import signal, sys, time, pathlib\n"
+            "def leaving(*_):\n"
+            f"    pathlib.Path({str(goodbye)!r}).write_text('tidied up')\n"
+            "    sys.exit(0)\n"
+            "signal.signal(signal.SIGTERM, leaving)\n"
+            f"pathlib.Path({str(ready)!r}).write_text('ready')\n"
+            "time.sleep(60)\n")
+        self.assertTrue(self.waited_until(ready.exists), "the handler was never installed")
+
+        self.assertEqual("", programs.stop(pid, 3.0, 2.0))
+
+        self.assertTrue(goodbye.exists(), "it was killed outright rather than asked first")
+
     def test_a_program_that_ignores_being_asked_is_told(self):
         pid = self.given_running(
             "import signal, time;"
@@ -848,18 +987,22 @@ class AProgramThatKeepsRunning(support.Isolated):
         self.assertEqual("", programs.stop(pid, 0.3, 3.0))
         self.assertFalse(programs.alive(pid))
 
-    def test_a_program_that_has_already_gone_is_not_a_failure(self):
-        # It is the state that was asked for.
-        pid = self.given_running("pass")
-        self.assertTrue(self.waited_until(lambda: not programs.alive(pid) or True))
-        self.assertEqual("", programs.stop(pid, 1.0, 1.0))
-
     def test_a_child_that_exited_is_reaped_rather_than_left_a_zombie(self):
-        # A zombie answers signal 0, so a stop that only watched would wait out its whole ceiling
-        # and then report a program still running that had already exited.
+        # The surprising half is asserted first, because it is the reason `stop` reaps at all: a
+        # child that has already exited is *still there* until somebody collects it, and a zombie
+        # answers signal 0 exactly like a running process. A stop that only watched would wait out
+        # its whole ceiling and then report a program still running that had exited immediately.
+        #
+        # This case caught its own predecessor: written as "wait until it is not alive", it could
+        # never come true, and it had been passing only because the condition was mistyped into one
+        # that was always true.
         pid = self.given_running("pass")
-        self.assertEqual("", programs.stop(pid, 2.0, 1.0))
-        self.assertFalse(programs.alive(pid))
+        self.assertTrue(programs.alive(pid))
+
+        self.assertEqual("", programs.stop(pid, 2.0, 1.0),
+                         "a program that has already gone is the state that was asked for")
+
+        self.assertFalse(programs.alive(pid), "it was left in the table")
 
     def test_stopping_this_command_s_own_group_is_refused(self):
         # `killpg` on our own group signals this very process and everything beside it. Reachable

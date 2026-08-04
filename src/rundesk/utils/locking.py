@@ -13,7 +13,7 @@ the answer is to say so.
 or create what it guards, and the kernel drops it when the process dies, however it dies — no stale
 lock survives a crash.
 
-**Re-entrant within one process, and it has to be.** `flock` is held per open file description, so
+**Re-entrant within one thread, and it has to be.** `flock` is held per open file description, so
 a second `open` of the same lock file in the *same* process conflicts with the first exactly as
 another process would — which is how a test can drive `Stuck` at all. That also means an operation
 holding this lock and calling another operation that takes it would wait for itself until the
@@ -27,9 +27,10 @@ import contextlib
 import errno
 import fcntl
 import os
+import threading
 import time
 from pathlib import Path
-from typing import Dict, Iterator, Optional
+from typing import Dict, Iterator, Optional, Tuple
 
 #: How long to wait for something else to finish before saying so. Read at the moment of asking
 #: rather than bound in a signature, so a test can shorten the ceiling and drive this in
@@ -39,8 +40,17 @@ WAITING_SECONDS = 10.0
 #: How often the wait looks again. Short enough that an ordinary hold is never noticed.
 LOOKING_AGAIN = 0.02
 
-#: How deep this process is inside each lock it holds. See the module docstring on re-entrancy.
-_HELD: Dict[str, int] = {}
+#: How deep each *thread* is inside each lock it holds. See the module docstring on re-entrancy.
+#:
+#: Keyed by thread as well as by file, and that is the whole correctness of it. Keyed by file alone,
+#: a second thread asking for a lock the first one holds would find a count already there, take the
+#: fast path, and never touch `flock` — two callers inside a section that exists to hold one. Nesting
+#: is about a call stack, and a call stack belongs to a thread.
+#:
+#: Keyed by the *resolved* path, because two spellings of one file are one file. A symlinked root
+#: reaching the same lock by another name would miss its own count, take a real `flock` on a
+#: descriptor this thread already holds, and wait out the whole ceiling for itself.
+_HELD: Dict[Tuple[int, str], int] = {}
 
 
 class Stuck(Exception):
@@ -55,7 +65,7 @@ def only_one(at: Path, guarding: Optional[str] = None) -> Iterator[None]:
     it cannot be had names the thing a person cares about rather than a dotfile they have never
     seen.
     """
-    key = str(at)
+    key = (threading.get_ident(), os.path.realpath(str(at)))
     if _HELD.get(key):
         _HELD[key] += 1
         try:
