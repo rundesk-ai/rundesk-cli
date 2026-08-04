@@ -21,7 +21,6 @@ def carry(data):
 '''
 
 
-
 class Steps(support.Isolated):
     """A scratch step directory, so the suite is about the runner and not about any one release."""
 

@@ -143,7 +143,6 @@ def _settle(directory: Path) -> None:
         os.close(held)
 
 
-
 #: What a thing being built is called until all of it is there.
 INCOMING = ".{name}.incoming"
 
@@ -194,7 +193,6 @@ def stage_copy(entry: Path, into: Path, ignore: Optional[Callable] = None) -> Pa
     else:
         shutil.copy2(entry, pending, follow_symlinks=False)
     return pending
-
 
 
 #: The longest a single path segment may be on the filesystems this runs on, in bytes rather than

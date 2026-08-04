@@ -123,9 +123,6 @@ def width(text: str) -> int:
     return len(plain(text))
 
 
-
-
-
 def as_table(head: Sequence[str], rows: Sequence[Sequence[str]]) -> None:
     """Print a table, columns aligned to their widest cell, two spaces between, heading in bold.
 

@@ -13,6 +13,13 @@ line-length = 100
 target-version = "py39"
 
 [lint]
+# The blank-line rules are still preview in ruff, and `explicit-preview-rules` is what lets this
+# take those five without also taking every other unfinished rule along with them. They are worth
+# having: merging three modules into one left three- and four-line gaps that nothing complained
+# about, because plain `E` does not include them.
+preview = true
+explicit-preview-rules = true
+
 select = [
     "E",    # pycodestyle — the layout this code already keeps
     "W",    # pycodestyle warnings — trailing whitespace, a missing final newline
@@ -22,6 +29,7 @@ select = [
     "A",    # a name that shadows a builtin, which is how `id` came to be a parameter here once
     "C4",   # a comprehension written the long way round
     "BLE",  # a bare `except Exception`, which is deliberate exactly once here and marked where it is
+    "E301", "E302", "E303", "E305", "E306",  # blank lines around a definition
     "RUF",  # ruff's own, including a `noqa` for a rule that is no longer switched on
 ]
 

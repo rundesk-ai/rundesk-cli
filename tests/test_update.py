@@ -28,7 +28,6 @@ def carry(data):
 '''
 
 
-
 class Updating(support.Isolated):
     """An install already on disk, and an archive to move it to."""
 
