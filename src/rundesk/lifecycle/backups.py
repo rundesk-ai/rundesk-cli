@@ -49,7 +49,7 @@ from typing import Callable, List, NamedTuple, Optional
 
 from rundesk.core import config, paths
 from rundesk.lifecycle import migration
-from rundesk.utils import jsonfile
+from rundesk.utils import exclusive, jsonfile
 from rundesk.utils.staging import INCOMING, OUTGOING, discard, stage_copy, staged
 
 #: What a copy is called: the moment it was made, to the second, in UTC.
@@ -94,6 +94,26 @@ class Restored(NamedTuple):
     name: str
     safety: Optional[str]
     settled: Optional[str]
+
+
+def _one_at_a_time():
+    """Hold the install while this operation moves directories about.
+
+    **Every operation here renames or removes a whole directory, and none of them was serialised
+    against anything.** `jsonfile` locks one file at a time, which is the wrong shape for this:
+    `_swap` renames `data/` aside and back, and in the moment between those two renames the
+    directory does not exist — so a `configure` landing there calls `mkdir(parents=True)` on the way
+    to writing `config.json`, recreates `data/` from nothing, reports an ordinary success, and is
+    then deleted by the restore's own rollback. A command that earned its success, silently taken
+    back by a different command. Two concurrent `save` calls were no better: both computed the same
+    name, both staged into it, and each discarded the other's half-written copy, so the pair of them
+    produced nothing at all.
+
+    Re-entrant, and it must be: `restore` holds this and then settles the install, which writes the
+    configuration, which takes it again. `flock` is held per open file description, so a second
+    `open` in the same process conflicts with the first exactly as another process would.
+    """
+    return exclusive.only_one(paths.lock(), "this install")
 
 
 def location(backups: Optional[Path] = None) -> Path:
@@ -191,15 +211,18 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
     _reachable(at)
 
     at.mkdir(parents=True, exist_ok=True)
-    name = named(when, at)
-    pending = at / INCOMING.format(name=name)
-    discard(pending)
-    try:
-        shutil.copytree(from_where, pending, symlinks=True)
-        os.rename(pending, at / name)
-    except Exception:
+    with _one_at_a_time():
+        # The name and the staging under it are one decision: worked out separately, two callers
+        # land on the same second, stage into the same directory, and discard each other's work.
+        name = named(when, at)
+        pending = at / INCOMING.format(name=name)
         discard(pending)
-        raise
+        try:
+            shutil.copytree(from_where, pending, symlinks=True)
+            os.rename(pending, at / name)
+        except Exception:
+            discard(pending)
+            raise
     return name
 
 
@@ -234,12 +257,13 @@ def prune(keeping: int, backups: Optional[Path] = None,
     # say what is in them, and quietly deleting a directory because a file inside it would not parse
     # is not a decision this command is entitled to make. `save` says when it has made one.
     stuck = []
-    for name in [one for one in kept(at) if restorable(at, one)][keeping:]:
-        try:
-            shutil.rmtree(at / name)
-            said(f"let go of {name}")
-        except OSError:
-            stuck.append(name)
+    with _one_at_a_time():
+        for name in [one for one in kept(at) if restorable(at, one)][keeping:]:
+            try:
+                shutil.rmtree(at / name)
+                said(f"let go of {name}")
+            except OSError:
+                stuck.append(name)
     return stuck
 
 
@@ -276,6 +300,12 @@ def restore(name: str, data: Optional[Path] = None, backups: Optional[Path] = No
     into = data or paths.data()
     said = saying or (lambda _line: None)
 
+    with _one_at_a_time():
+        return _put_back_now(name, at, into, when, steps, said)
+
+
+def _put_back_now(name, at, into, when, steps, said) -> Restored:
+    """The restore itself, with the install already held. See `restore`."""
     a_copy = _a_copy(at, name)
     safety = save(into, at, when) if into.is_dir() else None
     if safety:
@@ -310,6 +340,12 @@ def relocate(to: Path, backups: Optional[Path] = None,
     """
     at = backups or paths.backups()
     said = saying or (lambda _line: None)
+    with _one_at_a_time():
+        return _moved_now(to, at, said)
+
+
+def _moved_now(to: Path, at: Path, said: Callable[[str], None]) -> Path:
+    """The move itself, with the install already held. See `relocate`."""
     now_at = location(at)
     # Nothing to copy and nothing reachable to copy are different: the second would move no copies,
     # re-point the link, and leave every one of them orphaned on the old disk reporting success.

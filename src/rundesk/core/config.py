@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from rundesk.core import paths
-from rundesk.utils import jsonfile
+from rundesk.utils import exclusive, jsonfile
 
 #: What a fresh install is written with, and the whole list of what an install may be configured with.
 #: A key added here reaches existing installs through `fill_in`, which never touches a stated value.
@@ -196,7 +196,10 @@ def fill_in(data: Optional[Path] = None) -> dict:
     looks exactly like a default nobody set.
     """
     at = where(data)
-    with jsonfile.changing(at, empty={}) as held:
+    # Held at the install level as well as at the file level. `jsonfile`'s lock guards this file
+    # against another writer of this file; it cannot guard it against `data/` being renamed out from
+    # under it by a restore, which is the race that lost a stated value entirely.
+    with exclusive.only_one(paths.lock(), "this install"), jsonfile.changing(at, empty={}) as held:
         settled = dict(held[0]) if isinstance(held[0], dict) else {}
         for key, value in INITIAL.items():
             settled.setdefault(key, value)
@@ -223,7 +226,8 @@ def stated_all(values: Dict[str, Any], data: Optional[Path] = None) -> None:
     unknown = [key for key in sorted(values) if key not in INITIAL]
     if unknown:
         raise Refused(f"{unknown[0]} is not a value rundesk is configured with")
-    with jsonfile.changing(where(data), empty=dict(INITIAL)) as held:
+    with exclusive.only_one(paths.lock(), "this install"), \
+            jsonfile.changing(where(data), empty=dict(INITIAL)) as held:
         settled = dict(held[0]) if isinstance(held[0], dict) else dict(INITIAL)
         settled.update(values)
         held[0] = settled

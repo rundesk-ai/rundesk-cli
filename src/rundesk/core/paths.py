@@ -90,6 +90,20 @@ def projects() -> Path:
     return home() / "projects"
 
 
+def lock() -> Path:
+    """The file one process at a time holds while it changes this install.
+
+    Below the root and beside the directories rather than inside `data/`, because the operations it
+    serialises *move `data/` itself* — a lock inside the thing being renamed away is a lock two
+    processes can end up holding different copies of.
+
+    One lock for the whole install rather than one per directory. The races worth stopping are
+    between different commands touching different things — a restore swapping `data/` while a
+    configure writes into it — and a lock per directory is a lock that lets exactly those through.
+    """
+    return home() / ".rundesk.lock"
+
+
 def program() -> Path:
     """Where *this* copy of the program is running from, resolved rather than assumed.
 

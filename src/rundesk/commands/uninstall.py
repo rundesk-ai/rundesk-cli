@@ -75,6 +75,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     if paths.projects().exists():
         kept.append(str(paths.projects()))
 
+    _let_go_of_the_lock()
     _tidy(root)
 
     print("rundesk removed")
@@ -136,6 +137,21 @@ def _purge(data: Path) -> str:
     except OSError as why:
         return f"{data} could not be removed: {why}"
     return ""
+
+
+def _let_go_of_the_lock() -> None:
+    """Take rundesk's own lock file, which is bookkeeping rather than anything the owner put there.
+
+    Named here like everything else this command takes, and taken last: it is the file one process
+    at a time holds while it changes the install, so nothing that might still want it is running by
+    the time this happens. Not announced in what was taken — the owner never put it there and has
+    no reason to have heard of it — but removed all the same, because a root left standing over one
+    dotfile is a removal that visibly did not finish.
+    """
+    try:
+        paths.lock().unlink()
+    except OSError:
+        pass
 
 
 def _tidy(root: Path) -> None:

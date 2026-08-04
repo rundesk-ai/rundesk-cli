@@ -22,7 +22,7 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from rundesk.utils import jsonfile, style
+from rundesk.utils import exclusive, jsonfile, style
 from rundesk.utils.staging import INCOMING, OUTGOING, discard, stage_copy, staged
 from rundesk.utils.table import as_table
 
@@ -234,8 +234,8 @@ class WhenSomethingElseIsChangingTheSameFile(support.Isolated):
         self.at.parent.mkdir(parents=True, exist_ok=True)
         # Shortened so the ceiling can be met in milliseconds. Read inside `_taken` on every call
         # rather than bound at import, which is what makes this reachable at all.
-        self.addCleanup(setattr, jsonfile, "WAITING_SECONDS", jsonfile.WAITING_SECONDS)
-        jsonfile.WAITING_SECONDS = 0.1
+        self.addCleanup(setattr, exclusive, "WAITING_SECONDS", exclusive.WAITING_SECONDS)
+        exclusive.WAITING_SECONDS = 0.1
 
     def held_by_something_else(self):
         """Take the lock through a second descriptor, which flock treats as another holder."""
@@ -287,6 +287,79 @@ class WhenSomethingElseIsChangingTheSameFile(support.Isolated):
                 raise RuntimeError("no")
         with jsonfile.changing(self.at, empty={"after": True}) as held:
             self.assertEqual({"after": True}, held[0])
+
+
+class TakingTurns(support.Isolated):
+    """`exclusive.only_one` — one at a time, with a ceiling, and re-entrant within one process."""
+
+    def setUp(self):
+        super().setUp()
+        self.at = self.home / ".a.lock"
+        self.addCleanup(setattr, exclusive, "WAITING_SECONDS", exclusive.WAITING_SECONDS)
+        exclusive.WAITING_SECONDS = 0.1
+
+    def held_by_something_else(self):
+        holding = os.open(self.at, os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, holding)
+        fcntl.flock(holding, fcntl.LOCK_EX)
+        return holding
+
+    def test_one_holder_at_a_time(self):
+        self.held_by_something_else()
+        with self.assertRaises(exclusive.Stuck) as refused:
+            with exclusive.only_one(self.at, "the thing"):
+                pass
+        self.assertIn("the thing", str(refused.exception))
+
+    def test_it_gives_up_rather_than_waiting_for_ever(self):
+        self.held_by_something_else()
+        began = time.monotonic()
+        with self.assertRaises(exclusive.Stuck):
+            with exclusive.only_one(self.at):
+                pass
+        self.assertLess(time.monotonic() - began, 5)
+
+    def test_a_lock_that_comes_free_is_simply_taken(self):
+        holding = self.held_by_something_else()
+        fcntl.flock(holding, fcntl.LOCK_UN)
+        with exclusive.only_one(self.at):
+            pass
+
+    def test_it_is_let_go_of_afterwards(self):
+        with exclusive.only_one(self.at):
+            pass
+        with exclusive.only_one(self.at):
+            pass
+
+    def test_it_is_let_go_of_even_when_the_block_raised(self):
+        with self.assertRaises(RuntimeError):
+            with exclusive.only_one(self.at):
+                raise RuntimeError("no")
+        with exclusive.only_one(self.at):
+            pass
+
+    def test_holding_it_twice_in_one_process_does_not_wait_for_itself(self):
+        # `flock` is held per open file description, so a second `open` in the same process
+        # conflicts with the first exactly as another process would. An operation that holds this
+        # and calls another that takes it would otherwise wait for itself until the ceiling.
+        with exclusive.only_one(self.at):
+            with exclusive.only_one(self.at):
+                with exclusive.only_one(self.at):
+                    pass
+
+    def test_the_outermost_holder_is_the_one_that_lets_go(self):
+        with exclusive.only_one(self.at):
+            with exclusive.only_one(self.at):
+                pass
+            # still held here: an inner block ending must not release it for the outer one
+            self.assertEqual(1, exclusive._HELD[str(self.at)])
+        self.assertNotIn(str(self.at), exclusive._HELD)
+
+    def test_it_makes_the_directory_the_lock_stands_in(self):
+        deep = self.home / "not" / "yet" / ".a.lock"
+        with exclusive.only_one(deep):
+            pass
+        self.assertTrue(deep.exists())
 
 
 class SettlingTheDirectory(support.Isolated):

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import support
 from rundesk.core import config
-from rundesk.utils import jsonfile
+from rundesk.utils import exclusive, jsonfile
 
 
 class WhatAFreshInstallIsWrittenWith(support.Isolated):
@@ -143,8 +143,8 @@ class WhenSomethingElseIsChangingTheConfiguration(support.Isolated):
 
     def test_a_command_says_it_rather_than_ending_in_a_traceback(self):
         config.write_fresh(self.home / "data")
-        self.addCleanup(setattr, jsonfile, "WAITING_SECONDS", jsonfile.WAITING_SECONDS)
-        jsonfile.WAITING_SECONDS = 0.1
+        self.addCleanup(setattr, exclusive, "WAITING_SECONDS", exclusive.WAITING_SECONDS)
+        exclusive.WAITING_SECONDS = 0.1
         lock = config.where(self.home / "data")
         holding = os.open(lock.with_name(f".{lock.name}.lock"), os.O_CREAT | os.O_RDWR, 0o600)
         self.addCleanup(os.close, holding)

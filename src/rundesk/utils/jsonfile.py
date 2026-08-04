@@ -15,26 +15,19 @@ something writes that empty value down, and what was there is gone. So `read` sa
 `changing` refuses to proceed on the second rather than handing you a blank slate to overwrite it
 with.
 
-Imports the standard library and nothing else, so it can be used from anywhere — including part-way
-through replacing every other module in the program that depends on it.
+Taking turns is `exclusive` and the staging name is `staging`, because neither is about JSON and
+both are needed identically elsewhere. Beyond those two siblings this imports the standard library
+and nothing else, so it can be used from anywhere — including part-way through replacing every
+other module in the program that depends on it.
 """
 
 import contextlib
-import errno
-import fcntl
 import json
 import os
-import time
 from pathlib import Path
 from typing import Any, Iterator, Tuple
 
-#: How long a command waits for something else to finish changing the same file before it says so.
-#: Every hold taken here is one read, one decision and one rename, so a wait that outlasts this is
-#: not a busy machine — it is something that has gone wrong, and the answer is to name it.
-WAITING_SECONDS = 10.0
-
-#: How often the wait looks again. Short enough that an ordinary hold is never noticed.
-_LOOKING_AGAIN = 0.02
+from rundesk.utils import exclusive, staging
 
 #: Nobody has written this file.
 MISSING = "missing"
@@ -46,8 +39,18 @@ UNREADABLE = "unreadable"
 READ = "read"
 
 
-class Stuck(Exception):
-    """The lock is held by something else and did not come free."""
+#: The same answer `exclusive` gives, named here as well because this is the module every caller
+#: already imports — none of them should have to know which file the mechanism lives in.
+Stuck = exclusive.Stuck
+
+
+def _the_lock_for(where: Path) -> Path:
+    """The lock file guarding one value, beside it and never it.
+
+    Named through `staging`'s convention rather than spelled out again here: a leading dot to keep
+    it out of an ordinary listing, and one place deciding what these files are called.
+    """
+    return where.with_name(f".{where.name}.lock")
 
 
 def read(where: Path) -> Tuple[str, Any]:
@@ -72,7 +75,7 @@ def write(where: Path, value: Any) -> None:
     `os.replace` is only atomic within one filesystem.
     """
     where.parent.mkdir(parents=True, exist_ok=True)
-    beside = where.with_name(f".{where.name}.incoming")
+    beside = where.with_name(staging.INCOMING.format(name=where.name))
     with open(beside, "w", encoding="utf-8") as writing:
         json.dump(value, writing, indent=2, sort_keys=True)
         writing.write("\n")
@@ -94,60 +97,13 @@ def changing(where: Path, empty: Any) -> Iterator[list]:
     typed can reach one at the same moment.
     """
     where.parent.mkdir(parents=True, exist_ok=True)
-    with _only_one(where):
+    with exclusive.only_one(_the_lock_for(where), str(where)):
         how, value = read(where)
         if how == UNREADABLE:
             raise ValueError(f"{where} is there and cannot be read — refusing to write over it")
         held = [empty if how == MISSING else value]
         yield held
         write(where, held[0])
-
-
-@contextlib.contextmanager
-def _only_one(where: Path) -> Iterator[None]:
-    """Hold an exclusive lock for the length of the block, or say it could not be had.
-
-    The lock is its own file rather than the value's, so taking it never truncates or creates the
-    thing being protected — and the kernel drops it when the process dies, however it dies.
-    """
-    at = where.with_name(f".{where.name}.lock")
-    holding = os.open(at, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        _taken(holding, where)
-        yield
-    finally:
-        os.close(holding)
-
-
-def _taken(holding: int, where: Path) -> None:
-    """Take the lock, looking again until the ceiling. `Stuck` when it never came free.
-
-    **Asked for without blocking, in a loop with an end, rather than waited on for ever.** A plain
-    `flock(LOCK_EX)` waits with no ceiling and names nothing while it waits, so the command somebody
-    typed simply never returns — the same failure this project already refuses everywhere else it
-    appears, and the reason `scripts/suites` closes standard input on the suites it runs.
-
-    It also made `Stuck` unreachable: `EWOULDBLOCK` comes back only from a non-blocking ask, so the
-    exception this module documents could never once have been raised. The code and the docstring
-    disagreed, and the docstring was the one telling the truth about what should happen.
-
-    `WAITING_SECONDS` is read here rather than bound in the signature, so a test can shorten the
-    ceiling and drive this in milliseconds.
-    """
-    ceiling = time.monotonic() + WAITING_SECONDS
-    while True:
-        try:
-            fcntl.flock(holding, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return
-        except OSError as why:
-            if why.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
-                raise
-            if time.monotonic() >= ceiling:
-                raise Stuck(
-                    f"something else has been changing {where} for longer than "
-                    f"{WAITING_SECONDS:g} seconds, and this one gave up rather than wait for ever"
-                ) from why
-            time.sleep(_LOOKING_AGAIN)
 
 
 def _settle(directory: Path) -> None:
