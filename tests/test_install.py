@@ -389,5 +389,36 @@ class Uninstalling(Installing):
         self.assertTrue(paths.data().exists())
 
 
+class WhatLooksLikeARundeskTree(support.Isolated):
+    """`tree.is_rundesk` — the one definition behind both questions that ask it.
+
+    An install asks it of the directory it is copying *from*; an update asks it of what came out of a
+    downloaded archive. One definition because if the marker ever changes, the call site nobody
+    remembers is the one that goes on trusting a directory it should not.
+    """
+
+    def test_a_real_tree_is_one(self):
+        self.assertTrue(tree.is_rundesk(support.a_real_tree(self.home / "a-tree")))
+
+    def test_a_tree_with_no_launcher_is_not(self):
+        at = support.a_real_tree(self.home / "a-tree")
+        (at / "rundesk").unlink()
+        self.assertFalse(tree.is_rundesk(at))
+
+    def test_a_tree_with_no_source_is_not(self):
+        at = support.a_real_tree(self.home / "a-tree")
+        shutil.rmtree(at / "src")
+        self.assertFalse(tree.is_rundesk(at))
+
+    def test_a_launcher_that_is_a_directory_is_not_a_launcher(self):
+        at = support.a_real_tree(self.home / "a-tree")
+        (at / "rundesk").unlink()
+        (at / "rundesk").mkdir()
+        self.assertFalse(tree.is_rundesk(at))
+
+    def test_somewhere_that_is_not_there_at_all_is_not(self):
+        self.assertFalse(tree.is_rundesk(self.home / "never-made"))
+
+
 if __name__ == "__main__":
     unittest.main()

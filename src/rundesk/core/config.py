@@ -24,7 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from rundesk.core import jsonfile, paths
+from rundesk.core import paths
+from rundesk.utils import jsonfile
 
 #: What a fresh install is written with, and the whole list of what an install may be configured with.
 #: A key added here reaches existing installs through `fill_in`, which never touches a stated value.

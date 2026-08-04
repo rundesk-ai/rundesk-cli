@@ -9,11 +9,11 @@ usually has just before they change something.
 """
 
 import argparse
-import sys
 
-from rundesk.commands import Subcommands, as_table, as_written
+from rundesk.commands import Subcommands, as_written, failed
 from rundesk.core import config, paths
-from rundesk.exits import FAILED, OK
+from rundesk.exits import OK
+from rundesk.utils.table import as_table
 
 
 def as_flag(key: str) -> str:
@@ -77,6 +77,4 @@ def _shown() -> int:
 
 
 def _failed(why: str) -> int:
-    print(f"configure: FAILED — {why}", file=sys.stderr)
-    print("        nothing was changed", file=sys.stderr)
-    return FAILED
+    return failed(f"configure: FAILED — {why}", "nothing was changed")

@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 from typing import List
 
+from rundesk.commands import failed
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.lifecycle import tree
@@ -150,6 +151,4 @@ def _tidy(root: Path) -> None:
 
 
 def _failed(why: str) -> int:
-    print(f"uninstall: FAILED — {why}", file=sys.stderr)
-    print("        nothing further was removed", file=sys.stderr)
-    return FAILED
+    return failed(f"uninstall: FAILED — {why}", "nothing further was removed")

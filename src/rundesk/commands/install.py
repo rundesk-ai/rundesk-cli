@@ -24,13 +24,12 @@ somebody their machine is ready when it is not, and they find out later and some
 import argparse
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 from rundesk import __version__
-from rundesk.commands import update
+from rundesk.commands import failed, update
 from rundesk.core import config, paths
-from rundesk.exits import FAILED, OK
+from rundesk.exits import OK
 from rundesk.lifecycle import tree
 
 #: How long the installed command is given to answer before the install is called a failure.
@@ -121,5 +120,4 @@ def _say_if_unreachable(at: Path) -> None:
 
 
 def _failed(why: str) -> int:
-    print(f"install: FAILED — {why}", file=sys.stderr)
-    return FAILED
+    return failed(f"install: FAILED — {why}")

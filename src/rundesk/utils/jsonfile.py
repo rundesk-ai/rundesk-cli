@@ -3,8 +3,7 @@
 Three functions: `read` one, `write` one, and `changing` one — which holds the read, the decision and
 the write together so nothing else can get in between.
 
-Everything rundesk keeps outside a database goes through here. Two guarantees, and both matter more
-than they look:
+Two guarantees, and both matter more than they look:
 
 **A value is renamed into place, never written in pieces.** A reader opening the file mid-write would
 otherwise see half of one — and half a JSON document is not a smaller record, it is an unreadable
@@ -16,8 +15,8 @@ something writes that empty value down, and what was there is gone. So `read` sa
 `changing` refuses to proceed on the second rather than handing you a blank slate to overwrite it
 with.
 
-Imports nothing of rundesk's, so it can be used from anywhere including part-way through replacing
-every other module.
+Imports the standard library and nothing else, so it can be used from anywhere — including part-way
+through replacing every other module in the program that depends on it.
 """
 
 import contextlib

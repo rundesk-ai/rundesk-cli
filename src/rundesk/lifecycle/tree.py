@@ -23,15 +23,13 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Set
 
 from rundesk.core import paths
+from rundesk.utils.staging import OUTGOING, discard, stage_copy
 
 #: What the command is called wherever it is put on a PATH.
 COMMAND = "rundesk"
 
 #: Where the link goes when nobody says otherwise, in the order they are tried.
 BIN_DIRS = ("/usr/local/bin", "~/.local/bin")
-
-_INCOMING = ".{name}.incoming"
-_OUTGOING = ".{name}.outgoing"
 
 
 class Refused(Exception):
@@ -70,30 +68,24 @@ def replace(from_where: Path, app: Path) -> Path:
         for entry in sorted(from_where.iterdir()):
             if _never_copied(str(entry.parent), [entry.name]):
                 continue
-            pending = app / _INCOMING.format(name=entry.name)
-            _discard(pending)
-            if entry.is_dir() and not entry.is_symlink():
-                shutil.copytree(entry, pending, symlinks=True, ignore=_never_copied)
-            else:
-                shutil.copy2(entry, pending, follow_symlinks=False)
-            staged.append(pending)
+            staged.append(stage_copy(entry, app, ignore=_never_copied))
 
         for pending in staged:
             target = app / pending.name[1:-len(".incoming")]
             if target.exists() or target.is_symlink():
-                aside = app / _OUTGOING.format(name=target.name)
-                _discard(aside)
+                aside = app / OUTGOING.format(name=target.name)
+                discard(aside)
                 os.rename(target, aside)
                 swapped.append(target)
             os.rename(pending, target)
     except Exception:
         _put_back(app, swapped)
         for pending in staged:
-            _discard(pending)
+            discard(pending)
         raise
 
     for target in swapped:
-        _discard(app / _OUTGOING.format(name=target.name))
+        discard(app / OUTGOING.format(name=target.name))
     return app
 
 
@@ -159,9 +151,21 @@ def _a_bin_dir() -> Path:
     return Path(BIN_DIRS[-1]).expanduser()
 
 
+def is_rundesk(where: Path) -> bool:
+    """Whether a directory looks like a rundesk tree: the launcher, and `src/rundesk` beside it.
+
+    One definition, because there are two questions that need it and they must not drift apart —
+    what an install may be made *from*, and what a downloaded archive has to contain to be a release.
+    If the marker ever changes, the call site nobody remembers is the one that goes on trusting a
+    directory it should not. That is not hypothetical in this tree: `paths.program()` carries a
+    docstring about a check that moved one directory deeper and went quietly wrong.
+    """
+    return (where / COMMAND).is_file() and (where / "src" / "rundesk").is_dir()
+
+
 def _check(from_where: Path) -> None:
     """Refuse a source that is not a rundesk tree, before anything is copied anywhere."""
-    if not (from_where / COMMAND).is_file() or not (from_where / "src" / "rundesk").is_dir():
+    if not is_rundesk(from_where):
         raise Refused(f"{from_where} does not look like rundesk — it has no {COMMAND} and src/rundesk")
 
 
@@ -175,22 +179,12 @@ def _never_copied(_where: str, names: Iterable[str]) -> Set[str]:
 def _put_back(app: Path, swapped: List[Path]) -> None:
     """Undo a half-finished swap, newest first."""
     for target in reversed(swapped):
-        aside = app / _OUTGOING.format(name=target.name)
+        aside = app / OUTGOING.format(name=target.name)
         try:
-            _discard(target)
+            discard(target)
             os.rename(aside, target)
         except OSError as why:
             raise HalfReplaced(
                 f"{target} could not be put back ({why}) — this install is part-replaced "
                 "and must be installed again") from why
 
-
-def _discard(where: Path) -> None:
-    """Remove a staging entry, whatever kind it is. Never used on anything an owner keeps."""
-    if where.is_dir() and not where.is_symlink():
-        shutil.rmtree(where, ignore_errors=True)
-    elif where.exists() or where.is_symlink():
-        try:
-            where.unlink()
-        except OSError:
-            pass

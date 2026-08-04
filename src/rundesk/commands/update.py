@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from rundesk import __version__
+from rundesk.commands import failed
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.lifecycle import home, migration, release, tree
@@ -227,7 +228,7 @@ def _brought_down(tag: str, into: Path, fetching: Optional[Fetching] = None) -> 
 
     inside = [at for at in into.iterdir() if at.is_dir()]
     for at in inside:
-        if (at / "rundesk").is_file() and (at / "src" / "rundesk").is_dir():
+        if tree.is_rundesk(at):
             return at
     raise ValueError("the archive does not contain a rundesk tree")
 
@@ -244,5 +245,6 @@ def _out_loud(said: str) -> None:
 
 
 def _failed(why: str) -> int:
-    print(f"update: NOT APPLIED — {why}", file=sys.stderr)
-    return FAILED
+    """`NOT APPLIED` rather than `FAILED`, and the difference is the point: an update that declined
+    to move — nothing newer published, nothing reachable to ask — is not a command that broke."""
+    return failed(f"update: NOT APPLIED — {why}")

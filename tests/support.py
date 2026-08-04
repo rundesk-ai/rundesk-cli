@@ -47,6 +47,16 @@ NOWHERE = {
 #: own proxy does not exempt it from this one.
 _CLOSED_OFF = (*NOWHERE, "no_proxy", "NO_PROXY")
 
+#: Variables that are not rundesk's, which is exactly what makes them dangerous: any shell may carry
+#: one and an agent's usually does, so a suite that left them alone would pass or fail on whose
+#: terminal it ran in.
+#:
+#: `XDG_CONFIG_HOME` because anything deriving a directory from it would quietly follow it out of the
+#: scratch root. `NO_COLOR` and `FORCE_COLOR` because they decide whether output carries escape
+#: sequences — a developer who exports `FORCE_COLOR` would otherwise turn every case that asserts on
+#: what was printed red, on their machine only.
+_NOT_OURS = ("XDG_CONFIG_HOME", "NO_COLOR", "FORCE_COLOR")
+
 #: A migration step that cannot finish, for proving a failure is reported rather than passed over.
 #: Here rather than in each suite: two of them needed it and copied it, which is the small form of
 #: exactly what this module exists to stop.
@@ -83,9 +93,11 @@ def scrub_and_point(where: Path) -> Callable[[], None]:
     shape `RUNDESK_HOME=/tmp/x env -u RUNDESK_HOME ...` — sets it and then takes it away, so the
     default under the owner's home wins while the command reports an ordinary success.
 
-    `XDG_CONFIG_HOME` goes too. It is not rundesk's variable, which is exactly why it is dangerous:
-    any shell may carry one, an agent's does, and anything deriving a config directory from it would
-    quietly follow it out of the scratch root.
+    `_NOT_OURS` goes too — variables belonging to nobody in particular, which is exactly what makes
+    them dangerous: any shell may carry one and an agent's usually does. Anything deriving a config
+    directory from `XDG_CONFIG_HOME` would quietly follow it out of the scratch root, and a developer
+    who exports `FORCE_COLOR` would put escape sequences into every line a case asserts on, on their
+    machine and nobody else's.
 
     The network is closed off in the same breath, and for the same reason: **no suite here may leave
     the machine.** A case can drive the product with `asking=` and `fetching=` and still reach GitHub
@@ -98,7 +110,7 @@ def scrub_and_point(where: Path) -> Callable[[], None]:
     Hands back what puts the environment as it was found.
     """
     taken = {name: os.environ[name] for name in list(os.environ)
-             if name.startswith("RUNDESK_") or name in _CLOSED_OFF or name == "XDG_CONFIG_HOME"}
+             if name.startswith("RUNDESK_") or name in _CLOSED_OFF or name in _NOT_OURS}
     for name in taken:
         del os.environ[name]
     os.environ[paths.HOME_IS] = str(where)

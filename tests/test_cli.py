@@ -6,10 +6,12 @@ the command is covered the day it lands rather than the day somebody remembers t
 Run directly: `python3 tests/test_cli.py`
 """
 
+import contextlib
+import io
 import unittest
 
 import support
-from rundesk import __version__, cli
+from rundesk import __version__, cli, commands
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.lifecycle import release
@@ -159,6 +161,69 @@ class Status(support.Isolated):
         self.assertEqual(FAILED, code)
         self.assertEqual("", out)
         self.assertIn("root of the filesystem", err)
+
+
+class WhatEveryCommandShares(support.Isolated):
+    """`failed` and `as_written` — the two things every verb in the product prints through.
+
+    Driven directly rather than only through the verbs that use them. A helper proved only by its
+    callers stops being proved the day somebody adds a caller that gets it subtly wrong, and these
+    two are the reason `status` and `configure` cannot come to describe the same install differently.
+    """
+
+    def said(self, *argv):
+        """What `failed` puts on each stream, and what it hands back."""
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = commands.failed(*argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_a_failure_is_reported_as_one(self):
+        self.assertEqual(FAILED, self.said("backups: FAILED — no")[0])
+
+    def test_it_goes_to_the_error_stream_and_never_to_the_output(self):
+        # A failure on stdout is a failure a script reads as the answer.
+        _, out, err = self.said("backups: FAILED — no", "nothing was changed")
+        self.assertEqual("", out)
+        self.assertIn("backups: FAILED — no", err)
+
+    def test_what_it_leaves_is_indented_under_what_went_wrong(self):
+        _, _, err = self.said("backups: FAILED — no", "nothing was restored")
+        self.assertEqual(["backups: FAILED — no", "        nothing was restored"],
+                         err.splitlines())
+
+    def test_it_says_every_line_it_was_given(self):
+        _, _, err = self.said("x: FAILED — no", "one", "two")
+        self.assertEqual(3, len(err.splitlines()))
+
+    def test_a_failure_with_nothing_further_to_say_says_nothing_further(self):
+        _, _, err = self.said("x: FAILED — no")
+        self.assertEqual(["x: FAILED — no"], err.splitlines())
+
+    def test_the_first_line_is_the_callers_own_words(self):
+        # `update` says NOT APPLIED where the others say FAILED, and the difference is deliberate:
+        # an update that declined to move is not a command that broke. A helper that forced the word
+        # would be changing what a command means rather than how it prints.
+        _, _, err = self.said("update: NOT APPLIED — nothing newer is published")
+        self.assertIn("NOT APPLIED", err)
+        self.assertNotIn("FAILED", err)
+
+    def test_a_value_nothing_has_set_says_so_rather_than_printing_pythons_word(self):
+        self.assertEqual("not yet", commands.as_written(None))
+
+    def test_yes_and_no_are_how_this_product_writes_a_boolean(self):
+        self.assertEqual("yes", commands.as_written(True))
+        self.assertEqual("no", commands.as_written(False))
+
+    def test_everything_else_is_written_as_it_reads(self):
+        for value, wanted in ((7, "7"), ("03:00", "03:00"), (0, "0")):
+            with self.subTest(value=value):
+                self.assertEqual(wanted, commands.as_written(value))
+
+    def test_a_zero_is_not_mistaken_for_a_no(self):
+        # `0` is falsey and is not `False`; a check written with `if not value` would print "no" for
+        # a retention of zero, which is a different setting entirely.
+        self.assertEqual("0", commands.as_written(0))
 
 
 if __name__ == "__main__":

@@ -54,10 +54,10 @@ def home() -> Path:
     """
     said = os.environ.get(HOME_IS)
     if said is None:
-        return _allowed(Path(DEFAULT_HOME).expanduser())
+        return allowed(Path(DEFAULT_HOME).expanduser(), HOME_IS)
     if not said.strip():
         raise Refused(f"{HOME_IS} is set and empty, which is not the same as unset")
-    return _allowed(Path(said).expanduser())
+    return allowed(Path(said).expanduser(), HOME_IS)
 
 
 def app() -> Path:
@@ -109,18 +109,26 @@ def program() -> Path:
     raise Refused(f"could not find the rundesk tree above {here}")
 
 
-def _allowed(root: Path) -> Path:
-    """The root, or `Refused` saying why it may not be one.
+def allowed(where: Path, called: str) -> Path:
+    """A directory rundesk may keep things below, or `Refused` saying why it may not be one.
 
-    Everything below is a directory an uninstall may delete, so a root that is too broad is not a
-    misconfiguration to work around — it is one command away from taking somebody's home with it.
+    Everything below such a directory is something rundesk may replace or delete, so one that is too
+    broad is not a misconfiguration to work around — it is one command away from taking somebody's
+    home with it. The installer this replaces recorded that pointing an install at a home directory
+    once emptied it, and then reported success.
+
+    **Shared rather than written once per caller**, because the reasoning does not change with the
+    subject. The root is one such directory; so is anywhere else the owner points rundesk at, and the
+    command that moves the copies somewhere would otherwise be the second command written to empty a
+    home. `called` is what the caller knows the directory as, so the refusal names the thing somebody
+    actually set rather than a variable they have never heard of.
     """
-    if not root.is_absolute():
-        raise Refused(f"{HOME_IS} must be an absolute path, and is {root}")
-    if root == Path(root.anchor):
-        raise Refused(f"{HOME_IS} must not be the root of the filesystem, and is {root}")
-    if root == Path.home():
-        raise Refused(f"{HOME_IS} must not be the home directory itself, and is {root}")
-    if root.parent == root:
-        raise Refused(f"{HOME_IS} has no parent, and is {root}")
-    return root
+    if not where.is_absolute():
+        raise Refused(f"{called} must be an absolute path, and is {where}")
+    if where == Path(where.anchor):
+        raise Refused(f"{called} must not be the root of the filesystem, and is {where}")
+    if where == Path.home():
+        raise Refused(f"{called} must not be the home directory itself, and is {where}")
+    if where.parent == where:
+        raise Refused(f"{called} has no parent, and is {where}")
+    return where
