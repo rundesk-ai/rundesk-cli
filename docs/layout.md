@@ -17,13 +17,35 @@ $RUNDESK_HOME/
 |---|---|
 | `app/` | an update replaces it whole; an uninstall takes it whole |
 | `data/` | never touched by an update; kept by an uninstall unless a purge asks for it |
-| `backups/` | survives removal, including a purge |
+| `backups/` | survives removal, including a purge; may be a link to another disk |
 | `projects/` | yours, never rundesk's to tidy |
 
 Set the root and every one of those moves with it:
 
 ```sh
 RUNDESK_HOME=/tmp/somewhere rundesk status
+```
+
+## The copies may live elsewhere, and that is still one variable
+
+`rundesk backups set-location /Volumes/Big/rundesk-backups` moves the copies to another disk and
+leaves `backups/` as a **link** to it.
+
+A link and not a setting, and that is the whole point. `RUNDESK_HOME` stays the only location rundesk
+reads, `backups/` is still `$RUNDESK_HOME/backups`, and nothing anywhere gained a second place to
+look — the filesystem holds the indirection rather than the configuration. Redirect the root and
+everything still moves with it.
+
+`rundesk status` shows both, because they are two different questions:
+
+```
+backups  /Users/you/.rundesk/backups → /Volumes/Big/rundesk-backups
+```
+
+And when that disk is not plugged in, it says so rather than reading as an install with no copies:
+
+```
+backups  /Users/you/.rundesk/backups → /Volumes/Big/rundesk-backups — that directory is not there
 ```
 
 ## Why one variable and not twelve

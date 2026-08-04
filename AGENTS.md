@@ -57,17 +57,29 @@ lifecycle of the command itself. Everything else is coming, and until it is here
 
 ## Architecture — the rule that matters
 
-**Three layers, and they point one way.** `commands` → `lifecycle` → `core`. Nothing lower may
-import anything higher.
+**Four layers, and they point one way.** `commands` → `lifecycle` → `core` → `utils`. Nothing lower
+may import anything higher, and `tests/test_layers.py` checks that rather than trusting it.
 
 | Layer | Owns | May depend on |
 |---|---|---|
 | `rundesk` | finding itself and handing off | `src/rundesk/cli.py` — it holds no logic at all |
 | `src/rundesk/cli.py` | the parser and the dispatch, and nothing else | the command modules |
-| `src/rundesk/commands/` | one verb each: a `Namespace` in, an exit code out. The only layer that may know argparse | `lifecycle`, `core` |
-| `src/rundesk/lifecycle/` | this copy of rundesk on a machine: releases, the program tree, migrations | `core` |
-| `src/rundesk/core/` | where things are, how a small file is kept, how the install is configured | the standard library |
+| `src/rundesk/commands/` | one verb each: a `Namespace` in, an exit code out. The only layer that may know argparse | `lifecycle`, `core`, `utils` |
+| `src/rundesk/lifecycle/` | this copy of rundesk on a machine: releases, the program tree, the copies, migrations | `core`, `utils` |
+| `src/rundesk/core/` | where things are, and how the install is configured | `utils` |
+| `src/rundesk/utils/` | common functionality with no opinion about rundesk: a small file kept safely, a replacement staged, a table lined up | the standard library, **and nothing of rundesk's** |
 | `install.sh` | fetching a copy and handing over | nothing — it holds no product behavior |
+
+**`utils/` is the strict one, and the rule is a membership rule rather than a preference.** Nothing
+in it may be domain knowledge or product logic: everything there is functionality any project could
+have, and the mechanical test is that it imports the standard library and nothing of this product's —
+not `paths`, not `config`, not even `exits`. If a function had to be told what an install, a release,
+an agent or a copy is in order to be written, it belongs a layer up.
+
+The line is finer than it looks, so here is where it was drawn: `as_table` lays out columns and lives
+in `utils`; `as_written` renders an unset value as the words "not yet" and lives in `commands`,
+because choosing the words a product speaks is not common functionality. Do not put something in
+`utils` merely because two layers happen to use it today.
 
 A verb's parser is built beside the verb, in a small function. The build this replaces had one
 `build_parser()` of about 680 lines, which is where a surface goes to stop being readable.
@@ -129,25 +141,41 @@ per file, found rather than listed. **Agent migrations** are a separate level an
 
 ## Build, test & run
 
+**There is no build step.** No packaging, no compile, no virtualenv — `requirements.txt` is empty and
+an empty one means no environment is built at all. Running the checkout *is* the build.
+
 ```sh
 ./dev status                       # the command, against a scratch root
 python3 scripts/suites             # every suite, found rather than listed
 python3 tests/test_update.py       # one of them
 /usr/bin/python3 scripts/suites    # the 3.9 floor
+ruff check src tests scripts/suites rundesk    # what CI enforces on every pull request
 ```
 
 Read the `Ran N tests` line, not the word `OK`: a suite that skipped everything is not a suite that
 passed.
 
+**`ruff` is not a dependency of the product.** It is configured in [`ruff.toml`](ruff.toml), fetched
+in CI, and nothing a person installs ever sees it — which is what keeps `requirements.txt` empty. You
+do not need it to work here, but the gate is not met until it is clean, so it is cheaper to have it:
+`docs/development.md` has the two lines that put it in a scratch virtualenv outside the tree.
+
 ## Definition of done
 
-1. `python3 scripts/suites` passes, on the 3.9 floor as well as on a current Python.
-2. **Every new guarantee is proven by a test you have watched fail.** Break the code, run the suite,
+These are a gate, not a checklist to sample from. Work that has not been through all of them is not
+finished, however complete it looks.
+
+1. `python3 scripts/suites` passes, on the 3.9 floor as well as on a current Python. There is no
+   build to run: an empty `requirements.txt` is the whole environment.
+2. **`ruff check src tests scripts/suites rundesk` is clean.** CI enforces it on every pull request,
+   so a branch that skipped it is a branch that fails there instead of here.
+3. **Every new guarantee is proven by a test you have watched fail.** Break the code, run the suite,
    see red, put the code back — restoring from a `cp` copy and never from git, because the file you
    would be restoring holds everything you have not committed. A test that stays green with the
    feature removed is worse than none, because it is counted.
-3. Anything that touches install, update or removal is also run **for real**, against a scratch
-   `RUNDESK_HOME` and a scratch `--bin-dir`. Both defects found in this rebuild so far were found
-   that way and neither was visible from the suite.
-4. `~/.rundesk` is exactly as you found it.
-5. The docs in `docs/` are true in the same task that changed reality.
+4. Anything that touches install, update, removal or the copies is also run **for real**, against a
+   scratch `RUNDESK_HOME` and a scratch `--bin-dir`. The first defects found in this rebuild were
+   found that way and none of them was visible from a green suite.
+5. `~/.rundesk` is exactly as you found it. Check it before and after, not only after.
+6. The docs in `docs/` are true in the same task that changed reality — including the list of
+   operations in `commands.md`, which is the page that claims to be complete.

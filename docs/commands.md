@@ -1,12 +1,16 @@
 # The command surface
 
-Six operations, and every one of them works. There is no "coming soon" list: a verb rundesk cannot
+Seven operations, and every one of them works. There is no "coming soon" list: a verb rundesk cannot
 perform is a verb rundesk does not have.
 
 ```sh
 rundesk status                            # the version, where the install is, and every configured value
 rundesk version                           # the version, and whether it is out of date
 rundesk configure [--<setting> <value>]   # change what this install is configured with
+rundesk backups                           # the copies of what rundesk keeps for you
+rundesk backups save                      # copy what rundesk keeps, now
+rundesk backups restore <backup> --confirm        # put a copy back
+rundesk backups set-location <path>       # keep the copies in another directory
 rundesk update                            # move to the newest release, or say it is up to date
 rundesk uninstall --confirm [--purge]     # remove rundesk; --purge also takes the data
 rundesk install [--source <dir>] [--bin-dir <dir>]   # what install.sh runs
@@ -88,6 +92,91 @@ install in a state nobody typed.
 
 How far the install has been carried (`migration`) is shown by `status` but is not settable: setting
 it by hand would make rundesk skip or repeat a migration step.
+
+## backups
+
+The copies of `data/`. With no sub-verb it lists them, newest first, because listing is what somebody
+wants nine times in ten.
+
+```console
+$ rundesk backups
+copies in /Users/you/.rundesk/backups
+BACKUP
+2026-08-04T03-00-00Z
+2026-07-28T03-00-00Z
+```
+
+Where they are kept is printed even when there are none. "No copies" and "no copies *here*" are
+different things to learn.
+
+**Nothing there, and not being able to look, are different answers.** An install nobody has copied
+anything on says so. A `backups/` that cannot be read — or that points at a disk nobody has plugged
+in — is a failure, because answering "none yet" would tell somebody their copies are gone at the
+moment they are merely unplugged, and what that person does next is act on it.
+
+### backups save
+
+Copies `data/` whole, under a name that says when it was made, and says what it is called.
+
+```console
+$ rundesk backups save
+saved 2026-08-04T03-00-00Z
+        from   /Users/you/.rundesk/data
+        in     /Users/you/.rundesk/backups
+        let go of 2026-07-21T03-00-00Z
+```
+
+The copy is built under a name no finished copy wears and renamed into place only once all of it is
+there, so an interruption leaves litter rather than a copy that is not one.
+
+It then lets go of the oldest past `backup_retention`. **This is the only thing in rundesk that
+removes a copy**, it considers only names that are copies, and a copy it could not remove is said out
+loud — but neither changes the exit code, because the operation asked for was a copy and the copy is
+there.
+
+### backups restore
+
+`--confirm` is required, and a copy of what is there now is taken **before** anything is replaced —
+so restoring the wrong name costs a command rather than everything you had. Without `--confirm` it
+says exactly what it would do and does none of it.
+
+```console
+$ rundesk backups restore 2026-07-28T03-00-00Z --confirm
+        kept 2026-08-04T03-00-00Z — a copy of /Users/you/.rundesk/data as it was
+restored 2026-07-28T03-00-00Z
+        into   /Users/you/.rundesk/data
+```
+
+The copy that was kept is named before the swap starts rather than in a summary afterwards, because
+every failure from that point on is one where knowing the name is the way back.
+
+A directory with no readable `config.json` is refused: it is not a copy of an install's data whatever
+it is named, and putting it back would leave rundesk unable to tell how far it had been carried.
+
+**A copy older than this release is carried forward once it lands.** The copy holds the migration mark
+it had when it was taken, so the steps that run are exactly the ones it missed — and never the ones it
+already had. **Being back is not the same as being settled**: if a step cannot finish, the command
+says so and exits non-zero, because the data really is the copy that was asked for and really has not
+been carried onto this release. `rundesk update` settles an install and is safe to run again.
+
+### backups set-location
+
+Moves the copies to another directory and links `backups/` at it.
+
+```console
+$ rundesk backups set-location /Volumes/Big/rundesk-backups
+        moved 2026-08-04T03-00-00Z
+rundesk keeps its copies in /Volumes/Big/rundesk-backups
+        linked /Users/you/.rundesk/backups → /Volumes/Big/rundesk-backups
+```
+
+A link rather than a setting, on purpose: `RUNDESK_HOME` stays the only location rundesk reads, so
+the copies can live anywhere without there being a second place to look.
+
+Everything is copied to the new place **first**, and taken from the old one only once every copy is
+confirmed to be there — so a move that dies partway is a tidying job and never a loss. Everything is
+carried, not only the copies: a move that left your own files behind in a directory it then replaced
+with a link would be a move it did not make.
 
 ## update
 
