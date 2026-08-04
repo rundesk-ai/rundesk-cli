@@ -864,6 +864,29 @@ class RunningAProgramThatAnswers(support.Isolated):
                              where=self.home)
         self.assertEqual(str(self.home), ended.out.strip())
 
+    def test_a_child_holding_the_pipe_does_not_hold_the_answer(self):
+        # The classic one: the program starts something of its own and exits immediately, and the
+        # child inherits the capture pipe. Reading until the pipe closes waits for the child, not
+        # the program — so a program that finished at once is reported as one that would not
+        # finish, and the child is left running with nobody holding its id.
+        began = time.monotonic()
+        ended = programs.run(
+            [sys.executable, "-c",
+             "import subprocess, sys, warnings;"
+             "warnings.simplefilter('ignore', ResourceWarning);"
+             "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])"], 5.0)
+        self.assertLess(time.monotonic() - began, 4.0,
+                        "it waited on the child rather than on the program")
+        self.assertIsNone(ended.trouble)
+        self.assertEqual(0, ended.code)
+
+    def test_a_program_that_could_not_be_started_is_said_rather_than_raised(self):
+        for argv in ([str(self.home / "never-installed")], [], [str(self.home)]):
+            with self.subTest(argv=argv):
+                ended = programs.run(argv, 5.0)
+                self.assertIsNone(ended.code)
+                self.assertIn(programs.DID_NOT_START, ended.trouble)
+
     def test_nothing_the_program_does_comes_back_as_an_exception(self):
         # The whole point: "it was not there" is an answer to report, not a traceback to catch
         # again at every call site.
@@ -898,6 +921,20 @@ class AProgramThatKeepsRunning(support.Isolated):
                 return True
             time.sleep(0.02)
         return False
+
+    def test_a_long_lived_program_that_could_not_start_says_so_once(self):
+        # Five different exceptions from the standard library for the same thing a caller has the
+        # same response to. `run` says it in the answer it returns; a start has two outcomes rather
+        # than three, so it says it by raising exactly one named thing.
+        for argv, log in (
+            ([str(self.home / "never-installed")], self.log),
+            ([sys.executable, "-c", "pass"], self.home),          # the log path is a directory
+            ([], self.log),
+            ([str(self.home)], self.log),                          # not executable
+        ):
+            with self.subTest(argv=argv, log=str(log)):
+                with self.assertRaises(programs.CouldNotStart):
+                    programs.start(argv, log)
 
     def test_it_starts_and_is_alive(self):
         pid = self.given_running("import time; time.sleep(30)")
@@ -1003,6 +1040,37 @@ class AProgramThatKeepsRunning(support.Isolated):
                          "a program that has already gone is the state that was asked for")
 
         self.assertFalse(programs.alive(pid), "it was left in the table")
+
+    def test_a_survivor_in_the_group_is_not_a_clean_stop(self):
+        # The one that reported success while abandoning things. The leader dies to the first
+        # signal; a sibling ignores it. Watching only the recorded pid, this returns "" in
+        # milliseconds — and the sibling is then unreachable for ever, because the only id anybody
+        # wrote down is the one that is now gone.
+        stubborn = self.home / "the-stubborn-one-is-up"
+        pid = self.given_running(
+            "import os, signal, subprocess, sys, time, pathlib, warnings\n"
+            "warnings.simplefilter('ignore', ResourceWarning)\n"
+            "child = subprocess.Popen([sys.executable, '-c',\n"
+            "  \"import signal, time, sys, pathlib;\"\n"
+            "  \"signal.signal(signal.SIGTERM, signal.SIG_IGN);\"\n"
+            f"  \"pathlib.Path({str(stubborn)!r}).write_text('up');\"\n"
+            "  \"time.sleep(60)\"])\n"
+            "time.sleep(60)\n")
+        self.assertTrue(self.waited_until(stubborn.exists), "the stubborn child never started")
+
+        self.assertEqual("", programs.stop(pid, 0.5, 3.0))
+
+        # Nothing may be left in the group once this has said it stopped.
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(pid, 0)
+
+    def test_a_child_that_exited_on_its_own_stops_reading_as_alive(self):
+        # Without collecting it, `alive` answers True for ever: a zombie answers signal 0 exactly
+        # like a running program. A supervisor shaped `while alive(pid)` would spin on a program
+        # that finished in a millisecond, and every short-lived child would hold a table slot.
+        pid = self.given_running("pass")
+        self.assertTrue(self.waited_until(lambda: not programs.alive(pid)),
+                        "it read as alive long after it had exited")
 
     def test_stopping_this_command_s_own_group_is_refused(self):
         # `killpg` on our own group signals this very process and everything beside it. Reachable

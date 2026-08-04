@@ -78,23 +78,43 @@ def run(argv: Sequence[str], waiting: float, where: Optional[Path] = None,
     there" is an answer to be reported, not a traceback to be caught again at every call site.
     """
     try:
-        ended = subprocess.run(
+        started = subprocess.Popen(
             [str(one) for one in argv],
             stdin=subprocess.DEVNULL,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=waiting,
+            # Its own session here too, and not only in `start`. Without it a timeout can reach
+            # only the program itself, and a program that started something of its own and then
+            # exited leaves that child holding the capture pipe — so this waits out the whole
+            # ceiling for a program that finished immediately, reports it would not finish, and
+            # leaves the real one running with nobody holding its id.
+            start_new_session=True,
             cwd=str(where) if where else None,
             env=env,
         )
-    except subprocess.TimeoutExpired as why:
-        # What it managed to say before it stopped answering is the only evidence there is, so it
-        # comes back rather than being dropped with the exception.
-        return Ran(None, _said(why.stdout), _said(why.stderr),
-                   f"{WOULD_NOT_FINISH} within {waiting:g} seconds")
-    except (OSError, ValueError) as why:
+    except (OSError, ValueError, IndexError) as why:
         return Ran(None, "", "", f"{DID_NOT_START}: {why}")
-    return Ran(ended.returncode, ended.stdout, ended.stderr, None)
+
+    group = _group_of(started.pid)
+    with started:
+        # **Waited on, and only then read.** Reading until the pipe closes is not the same question
+        # as waiting for the program: a program that starts something of its own and exits leaves
+        # that child holding the pipe, so reading first waits for the *child* — and reports a
+        # program that finished instantly as one that would not finish, while leaving the real one
+        # running with nobody holding its id.
+        trouble = None
+        try:
+            started.wait(timeout=waiting)
+        except subprocess.TimeoutExpired:
+            trouble = f"{WOULD_NOT_FINISH} within {waiting:g} seconds"
+
+        # Either way, whatever is still in the group is not part of the answer. `run` is for a
+        # program that answers and stops; anything it left behind holding the output is taken away
+        # rather than waited on, and `start` is the way to launch something meant to outlive this.
+        _signalled(group, FIRMLY)
+        out, err = started.communicate()
+    return Ran(None if trouble else started.returncode, _said(out), _said(err), trouble)
 
 
 def _said(maybe) -> str:
@@ -142,6 +162,18 @@ FIRMLY = signal.SIGKILL
 LOOKING_AGAIN = 0.05
 
 
+class CouldNotStart(Exception):
+    """A long-lived program that never began, named with why.
+
+    One exception rather than the five different things the standard library raises for this — a
+    log path that is a directory, a directory that cannot be written, a program that is not there,
+    one that is not executable, an empty argv. A caller supervising gateways has the same thing to
+    do about all of them, and this module's whole point is that "it was not there" is an answer to
+    report rather than a traceback to catch again at every call site. `run` says it in the `Ran` it
+    returns; there is no equivalent here, because a start has two outcomes and not three.
+    """
+
+
 def start(argv: Sequence[str], log: Path, where: Optional[Path] = None,
           env: Optional[Dict[str, str]] = None) -> int:
     """Start a long-lived program in a session of its own and hand back its process id.
@@ -152,6 +184,15 @@ def start(argv: Sequence[str], log: Path, where: Optional[Path] = None,
     The file is opened for appending on purpose: a restart adds to the history rather than replacing
     it, and history is most of what a log is for.
     """
+    try:
+        return _started(argv, log, where, env)
+    except (OSError, ValueError, IndexError) as why:
+        raise CouldNotStart(f"{DID_NOT_START}: {why}") from why
+
+
+def _started(argv: Sequence[str], log: Path, where: Optional[Path],
+             env: Optional[Dict[str, str]]) -> int:
+    """The start itself. See `start`, which turns everything this raises into one answer."""
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "a", encoding="utf-8") as writing:
         # A list, never a string through a shell: nothing here is ever word-split or expanded.
@@ -177,6 +218,14 @@ def alive(pid: int) -> bool:
     """
     if pid <= 1:
         return False
+    # **Collected first, or a child that exited on its own answers "alive" for ever.** A process
+    # this one started stays in the table as a zombie until somebody takes its status, and a zombie
+    # answers signal `0` exactly like a running program — so the natural supervisor shape,
+    # `while alive(pid): ...`, would spin on a program that finished in a millisecond, and every
+    # short-lived child would hold a table slot until the machine ran out. `ECHILD` means it was
+    # never ours to collect, which is ordinary: it may be from an earlier run of the command.
+    with contextlib.suppress(ChildProcessError, OSError):
+        os.waitpid(pid, os.WNOHANG)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -213,9 +262,9 @@ def stop(pid: int, gently_for: float, firmly_for: float = 5.0) -> str:
         trouble = _signalled(group, how)
         if trouble:
             return trouble
-        if _gone_within(pid, patience):
+        if _gone_within(group, pid, patience):
             return ""
-    return f"{pid} was still running after being asked and then told to stop"
+    return f"{pid} and what it started were still running after being asked and then told to stop"
 
 
 def _signalled(group: int, how: int) -> str:
@@ -229,21 +278,35 @@ def _signalled(group: int, how: int) -> str:
     return ""
 
 
-def _gone_within(pid: int, patience: float) -> bool:
-    """Wait for a process to disappear, reaping it if it happens to be ours.
+def _group_of(pid: int) -> int:
+    """The process group a pid leads or belongs to, or the pid itself when it has already gone."""
+    try:
+        return os.getpgid(pid)
+    except OSError:
+        return pid
 
-    **Reaped, or it never disappears.** A child this process started stays in the table as a zombie
-    until somebody collects it, and a zombie answers signal `0` — so a stop that only watched would
-    wait out its whole ceiling and then report a program still running that had already exited.
-    `ECHILD` means it was not our child, which is ordinary: it may have been started by an earlier
-    run of the command entirely.
+
+def _gone_within(group: int, pid: int, patience: float) -> bool:
+    """Wait for the whole group to disappear, collecting the one process that was ours.
+
+    **The group, not the pid.** Waiting on the recorded process alone is the difference between a
+    tree that stopped and a tree whose leader stopped: a program that dies to the first signal
+    while something it started ignores it would have this return `True` in milliseconds, report a
+    clean stop, and leave the sibling running — un-escalated, and unreachable for ever after,
+    because the only id anybody wrote down is the one that is now gone.
+
+    `killpg` with signal `0` sends nothing and asks whether anyone is still in the group.
     """
     ceiling = time.monotonic() + patience
     while True:
-        with contextlib.suppress(ChildProcessError):
-            os.waitpid(pid, os.WNOHANG)
-        if not alive(pid):
+        alive(pid)                       # collects it if it was ours, so a zombie is not counted
+        try:
+            os.killpg(group, 0)
+        except ProcessLookupError:
             return True
+        except PermissionError:
+            # Somebody is there and is not ours to ask about. Not gone.
+            pass
         if time.monotonic() >= ceiling:
             return False
         time.sleep(LOOKING_AGAIN)
