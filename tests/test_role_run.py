@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from rundesk import agent, config, instructions, role, store, turn  # noqa: E402
+from rundesk import handoff as handoffs  # noqa: E402
 from rundesk import role_run as role_runs  # noqa: E402
 from rundesk.commands import roles  # noqa: E402
 
@@ -441,10 +442,12 @@ class WhatARoleExecutionIsToldAndGiven(WithAnAgentThatCanDelegate):
         # it is that the whole of it arrives first, filled with the agent this is on behalf
         # of — a worker told `{parent_agent}` has no one to be answerable to.
         floor = instructions.render(
-            instructions.ROLE_EXECUTION_INSTRUCTIONS,
+            instructions.AGENT_TO_ROLE,
             {"role": role.label("development"), "parent_agent": "elena"},
         ).strip()
-        self.assertTrue(told.startswith(floor))
+        self.assertTrue(told.startswith(
+            f"{instructions.CORE_INSTRUCTIONS}\n\n{floor}"),
+            "the floor did not arrive whole, directly after what holds of every execution")
         self.assertIn("elena", floor)
         for variable in instructions.ROLE_VARIABLES:
             self.assertNotIn("{" + variable + "}", floor)
@@ -880,9 +883,9 @@ class WhenCarryingGoesWrong(WithAnAgentThatCanDelegate):
 
         self.assertEqual([], agent.playing("elena", self.where).waiting())
         row = self.kept.role_run(admitted.id)
-        self.assertFalse(role_runs.ready_to_carry(row))
-        self.assertTrue(role_runs.ready_to_carry(
-            row, now=lambda: time.time() + role_runs.backoff_seconds(1) + 1))
+        self.assertFalse(handoffs.ready_to_carry(row))
+        self.assertTrue(handoffs.ready_to_carry(
+            row, now=lambda: time.time() + handoffs.backoff_seconds(1) + 1))
 
     def test_the_ceiling_settles_it_and_says_this_is_rundesk_and_not_the_worker(self):
         """R-ROL-29, R-ROL-16 — a run that could not be carried reported nothing, so the
@@ -1228,6 +1231,21 @@ class SayingSomethingToWorkInFlight(WithAnAgentThatCanDelegate):
         self.kept.words_for_role(admitted.id, AT)
         self.assertEqual(0, self.kept.words_waiting(admitted.id))
 
+    def test_how_much_has_ever_been_said_to_a_role_is_told_apart_from_what_is_waiting(self):
+        """R-ROL-44 — the difference is the whole of what makes a steer showable. What is
+        *waiting* drops to nothing the moment the run reads it, so a surface driven off that
+        count would show a steer only if it happened to look in the seconds between."""
+        admitted = self.admit()
+        self.kept.role_working(admitted.id, AT, role_runs.retained_until())
+        self.assertEqual(0, self.kept.words_said(admitted.id))
+        role_runs.say("elena", admitted.id, "one thing")
+        role_runs.say("elena", admitted.id, "and another")
+        self.assertEqual(2, self.kept.words_said(admitted.id))
+        self.kept.words_for_role(admitted.id, AT)
+        self.assertEqual(0, self.kept.words_waiting(admitted.id))
+        self.assertEqual(2, self.kept.words_said(admitted.id),
+                         "reading them made them never have been said")
+
 
 class EndingOneBeforeItFinishes(WithAnAgentThatCanDelegate):
     """R-ROL-24 — a person asked for this to end, which is not a gateway going down."""
@@ -1476,10 +1494,10 @@ class WhatAPersonIsShown(WithAnAgentThatCanDelegate):
 
     def test_a_label_is_short_safe_and_never_the_brief(self):
         self.assertEqual("Applicant export",
-                         role_runs.safe_label("Applicant export", "Development"))
-        self.assertEqual("Development", role_runs.safe_label("", "Development"))
-        self.assertNotIn("`", role_runs.safe_label("`rm -rf /`", "Development"))
-        self.assertLessEqual(len(role_runs.safe_label("x " * 200, "Development")), 60)
+                         handoffs.safe_label("Applicant export", "Development"))
+        self.assertEqual("Development", handoffs.safe_label("", "Development"))
+        self.assertNotIn("`", handoffs.safe_label("`rm -rf /`", "Development"))
+        self.assertLessEqual(len(handoffs.safe_label("x " * 200, "Development")), 60)
 
     def test_a_listing_says_whether_a_review_is_still_owed_and_how_often_it_was_tried(self):
         admitted = self.admit()
@@ -1526,22 +1544,22 @@ class HowOftenARunSaysItIsStillWorking(unittest.TestCase):
     says it once per window and a gateway that restarted mid-run does not say it at once."""
 
     def test_a_run_inside_its_first_window_owes_nothing(self):
-        self.assertEqual(0, role_runs.check_in_due(0))
-        self.assertEqual(0, role_runs.check_in_due(role_runs.CHECK_IN_SECONDS - 1))
+        self.assertEqual(0, handoffs.check_in_due(0))
+        self.assertEqual(0, handoffs.check_in_due(handoffs.CHECK_IN_SECONDS - 1))
 
     def test_a_run_past_the_window_owes_that_check_in(self):
-        self.assertEqual(1, role_runs.check_in_due(role_runs.CHECK_IN_SECONDS))
+        self.assertEqual(1, handoffs.check_in_due(handoffs.CHECK_IN_SECONDS))
 
     def test_a_second_look_inside_the_same_window_owes_nothing_more(self):
-        self.assertEqual(0, role_runs.check_in_due(role_runs.CHECK_IN_SECONDS, 1))
+        self.assertEqual(0, handoffs.check_in_due(handoffs.CHECK_IN_SECONDS, 1))
 
     def test_a_gateway_that_restarted_mid_run_resumes_where_the_clock_is(self):
         """Not one line per window it missed: what is owed is the window it is in now."""
-        self.assertEqual(3, role_runs.check_in_due(3 * role_runs.CHECK_IN_SECONDS + 100, 1))
+        self.assertEqual(3, handoffs.check_in_due(3 * handoffs.CHECK_IN_SECONDS + 100, 1))
 
     def test_an_elapsed_that_could_not_be_answers_nothing_rather_than_raising(self):
         """Showing is never worth a run, so the arithmetic behind it refuses nothing."""
-        self.assertEqual(0, role_runs.check_in_due(-90))
+        self.assertEqual(0, handoffs.check_in_due(-90))
 
 
 class WhatAnOwnerIsToldAboutAHandoffNobodyReviewed(unittest.TestCase):

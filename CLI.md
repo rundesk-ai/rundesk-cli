@@ -54,7 +54,10 @@ rundesk roles <agent> say <run>                                                 
 rundesk roles <agent> show <run>                                                                                                                                                                                        one role run in full
 rundesk roles <agent> stop <run>                                                                                                                                                                                        end a role run before it finishes
 rundesk delegations <agent> ask [--label <text>] [--posture read|work] <to>                                                                                                                                             hand one bounded task to another agent — read from standard input
+rundesk delegations <agent> resume <id>                                                                                                                                                                                 carry a settled delegation on — read from standard input
+rundesk delegations <agent> say <id>                                                                                                                                                                                    say something to an ask being answered — read from standard input
 rundesk delegations <agent> show <id>                                                                                                                                                                                   one delegation in full
+rundesk delegations <agent> stop <id>                                                                                                                                                                                   end a delegation before it finishes
 
 # rundesk itself
 rundesk status                                                                                                                                                                                                          how rundesk itself is on this machine

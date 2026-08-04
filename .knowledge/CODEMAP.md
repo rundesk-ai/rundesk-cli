@@ -48,7 +48,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 37 modules)
+## Backend / Services (src/rundesk/ — 38 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -78,8 +78,15 @@ file with it.
   holds. A new agent's home is copied from `src/templates/agent/` — stubs an owner reads and edits, kept beside the package rather than inside it, and what a home holds is read off that
   directory rather than listed in code. What a name may be is stricter here than for a gateway: one path
   component, standing where agents are kept, and never a word a gateway writes beside some other name.
-- `src/rundesk/instructions.py` — Rundesk's core and trigger instructions, their communication-agnostic
-  variables, and the builder that composes them with adapter and owner additions.
+- `src/rundesk/instructions.py` — everything a brain is told before it reads a word of the task,
+  and the one composer that assembles it. **Named, nested layers**: `CORE_INSTRUCTIONS` for every
+  execution, then exactly one of `USER_TO_AGENT` (with its private, public and onboarding
+  variants), `AGENT_TO_AGENT`, `SCHEDULE_TO_AGENT` or `AGENT_TO_ROLE`. What a *named agent* is is
+  written once as `AGENT_IDENTITY` and composed into the three that are one; the role layer never
+  includes it, and structurally rather than by a condition. The core carries **no identity at
+  all**, which is the rule the whole shape rests on and what makes one composer safe for a role
+  execution as well (R-ROL-5). The standard is
+  [`guides/instruction-layers.md`](guides/instruction-layers.md).
 - `src/rundesk/provider.py` — the seam a brain is reached through, and nothing about any
   particular brain. Resolves a provider — a shipped adapter, or a path to a program somebody wrote — into
   something runnable, builds the environment it is told everything through, asks what it can do, and reads
@@ -197,6 +204,14 @@ file with it.
   delivers the rows that came from it, so neither process ever opens the other's store. Knows
   nothing of gateways, channels or turns beyond what it is handed: what carries an ask and what
   tells the agent that asked are `agent.delegated`'s.
+- `src/rundesk/handoff.py` — what is the same about handing work off, whichever kind it is.
+  Two things hand a bounded task to somebody else and hear back in a later turn — a role run
+  and a delegation — and four decisions in them are not about which of the two it is: when a
+  failed attempt may be tried again, how often work in flight says so, and what a task may be
+  called where other people are reading. They were written twice and had already drifted by a
+  word apiece. **Nothing here can read anything about a role or about an agent**, which is
+  what makes them belong here rather than in either; imported as `handoffs`, because
+  `role_run` has a `handoff()` of its own and the import would shadow it.
 - `src/rundesk/catalog.py` — repository manifests, catalog provenance, and atomic installation,
   update, adoption, and removal below `data/catalogs/`. Exposes complete packages through links in
   the existing skill library; never imports or executes catalog content.
@@ -333,16 +348,16 @@ file with it.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 36 files, ~2900 cases)
+## Tests (tests/ — 36 files, ~3000 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
 
 | File | Cases | Covers |
 |---|---|---|
-| `test_gateway.py` | 295 | `platform-gateway` — real processes, real signals, waits turned down |
+| `test_gateway.py` | 299 | `platform-gateway` — real processes, real signals, waits turned down |
 | `test_agent.py` | 149 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
-| `test_cli.py` | 352 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
+| `test_cli.py` | 358 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
 | `test_catalog.py` | 27 | `lifecycle-skill-catalog` — manifests, provenance, default seeding, inert integration packages, lifecycle refresh, ownership, atomic updates, drift replacement, removal, and unsafe archives, all offline |
 | `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 81 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
@@ -361,13 +376,13 @@ provider. One file per contract, named for it:
 | `test_transcript.py` | 28 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
 | `test_store.py` | 139 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
 | `test_channel.py` | 77 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
-| `test_answering.py` | 163 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
-| `test_slack.py` | 174 | `channel-slack` — the same policy on a platform with fewer registers: one slash command because a name is unique per workspace, a thread rooted at the message that named it, and ordinary Markdown translated into Slack's own dialect |
-| `test_discord.py` | 234 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
-| `test_instructions.py` | 30 | Rundesk's core and trigger prompts, standard variables, the additive builder, the roles layer, and the separate role floor |
+| `test_answering.py` | 164 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
+| `test_slack.py` | 182 | `channel-slack` — the same policy on a platform with fewer registers: one slash command because a name is unique per workspace, a thread rooted at the message that named it, and ordinary Markdown translated into Slack's own dialect |
+| `test_discord.py` | 242 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
+| `test_instructions.py` | 38 | the four named layers, what each is true of, the shared agent fragment, and a captured preface per turn kind proving nothing else moved |
 | `test_role.py` | 87 | `agent-role` — what a role is, what makes one usable, what its revision is computed from, how the install's roles are offered, and what writing or editing one refuses, against a scratch library |
-| `test_role_run.py` | 138 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
-| `test_delegation.py` | 34 | `agent-delegation` — **takes the turn as an argument** too, so what an answering agent is told and given is asserted with no brain near it, against a scratch data root with no gateway near it either |
+| `test_role_run.py` | 139 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
+| `test_delegation.py` | 58 | `agent-delegation` — **takes the turn as an argument** too, so what an answering agent is told and given is asserted with no brain near it, against a scratch data root with no gateway near it either. Guiding, ending and carrying an ask on are driven through the same seam |
 | `test_secret.py` | 39 | `platform-secrets` — what an install keeps for every program it starts: the refusals that are the boundary, the three answers a fetching command can give, and a scratch root that proves nothing reaches the owner's own |
 | `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 

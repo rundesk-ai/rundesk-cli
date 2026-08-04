@@ -1930,6 +1930,41 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
             "role", discord._activity_line({"type": "tool", "id": "1", "did": "delegate"},
                                            {}))
 
+    def test_a_steer_into_a_role_run_is_shown_as_its_own_message(self):
+        """R-ROL-44 — the regression this exists for. Five steering messages reached a run
+        in one conversation and the room the work was asked in showed none of them, so an
+        owner watching saw a task that had apparently sat unchanged for an hour."""
+        line = discord.role_line(self.handed(state="guided"))
+        self.assertEqual("\U0001f4cb Updated the **applicant-export** development task.",
+                         line)
+        self.assertFalse(line.startswith("-#"), "a steer was shown as grey subtext")
+
+    def test_a_steer_into_a_role_run_never_repeats_what_was_said(self):
+        """R-ROL-44 — `roles <agent> show <run>` refuses to print the brief for the same
+        reason, and this is that same text arriving by another route (R-ROL-17)."""
+        for privately in ("/Users/somebody/secret", "the api key is"):
+            with self.subTest(privately=privately):
+                line = discord.role_line(self.handed(state="guided", text=privately,
+                                                     said=privately))
+                self.assertNotIn(privately, line)
+
+    def test_a_role_run_carried_on_says_so_and_drops_the_role_word_when_there_is_none(self):
+        """R-ROL-44 — and the no-role fallback drops exactly that word, as every other
+        form here does."""
+        self.assertEqual("\U0001f4cb Resumed the **applicant-export** development task.",
+                         discord.role_line(self.handed(state="resumed")))
+        self.assertEqual("\U0001f4cb Resumed the **applicant-export** task.",
+                         discord.role_line(self.handed(state="resumed", role="")))
+        self.assertEqual("\U0001f4cb Updated the **applicant-export** task.",
+                         discord.role_line(self.handed(state="guided", role="")))
+
+    def test_neither_a_steer_nor_a_resume_into_a_role_run_carries_an_elapsed_clause(self):
+        for state in ("guided", "resumed"):
+            with self.subTest(state=state):
+                line = discord.role_line(self.handed(state=state, elapsed=4000))
+                self.assertNotIn("1h", line)
+                self.assertNotIn("\u2014", line)
+
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class HowARoleRunReachesTheRoom(unittest.IsolatedAsyncioTestCase):
@@ -2202,6 +2237,42 @@ class WhatADelegationLooksLikeHere(unittest.TestCase):
         # The subagent mark keeps every other caller it had.
         self.assertIn(discord.DID["delegate"], discord.DELEGATED)
         self.assertIn(discord.DID["delegate"], discord.FINISHED_HELPER)
+
+    def test_a_steer_is_shown_as_its_own_message_and_never_as_subtext(self):
+        """R-DEL-23 — a steer is a discrete event somebody asked to be able to see. The
+        check-in is subtext because it repeats and says nothing new; this says something new
+        every time, so it is a full message and the check-in stops being edited after it."""
+        line = discord.delegation_line(self.handed(state="guided"))
+        self.assertEqual("\U0001f91d Updated **cole** on the **quote-flow** task.", line)
+        self.assertFalse(line.startswith("-#"), "a steer was shown as grey subtext")
+
+    def test_a_steer_never_repeats_what_was_said(self):
+        """R-DEL-23 — steering text runs long and may carry a local path or something
+        private, which is why a listing refuses to show the task at all. The record carries
+        no text to leak, and the line would not print one if it did."""
+        said = self.handed(state="guided")
+        self.assertNotIn("text", said)
+        self.assertNotIn("said", said)
+        for privately in ("/Users/somebody/secret", "the api key is"):
+            with self.subTest(privately=privately):
+                line = discord.delegation_line({**said, "text": privately,
+                                                "said": privately})
+                self.assertNotIn(privately, line)
+
+    def test_a_delegation_carried_on_says_so_rather_than_looking_like_a_new_one(self):
+        """R-DEL-23 — somebody who resumed an ask an hour ago would otherwise read the
+        line that hands work over and take it for a second ask of the same work."""
+        self.assertEqual("\U0001f91d Resumed **cole** on the **quote-flow** task.",
+                         discord.delegation_line(self.handed(state="resumed")))
+
+    def test_neither_a_steer_nor_a_resume_carries_an_elapsed_clause(self):
+        """They are events rather than durations, matching the line that hands work over.
+        How long it has been going is what the check-in says."""
+        for state in ("guided", "resumed"):
+            with self.subTest(state=state):
+                line = discord.delegation_line(self.handed(state=state, elapsed=4000))
+                self.assertNotIn("1h", line)
+                self.assertNotIn("\u2014", line)
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")

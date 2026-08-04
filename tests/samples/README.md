@@ -19,6 +19,12 @@ drove all three CLIs on 2026-07-24. What each fact is true *of* is the whole poi
 | `grok-stream.jsonl` | 79 lines, and only three kinds — `thought`, `text`, `end`. **No tool events at all**, which is the finding rather than a gap in the capture. |
 | `antigravity-stream.jsonl` | 9 sanitized lines from a real 1.1.8 turn: `init`, streamed reply fragments, paired tool steps, per-step usage, and terminal `result`. Paths, ids and tool output were replaced while event structure and numeric relationships were retained. |
 
+## What rundesk itself said, captured once
+
+| | |
+|---|---|
+| `instructions-before-the-layers-were-named.json` | Every preface `instructions.py` built at commit `3ddaa59`, the last one before `CORE`/`AGENT`/`USER_TO_AGENT`/`AGENT_TO_AGENT` existed — a direct message, a public room, a scheduled run, an onboarding turn, a terminal turn with no trigger, and a role execution. Not a brain's words but ours, and here for the same reason everything else is: **it cannot be re-derived by reading the code it guards.** A test that rebuilt its own expectation would agree with any change at all, and what this proves is that a turn nobody asked to change reads the same bytes it always did. Re-capture it only when the owner has decided one of those six should move. |
+
 ## The mapping decisions
 
 `claude-events.json`, `grok-events.json` and `codex-events.json` record, line kind by line kind,

@@ -1995,6 +1995,21 @@ class Store:
             )
         return [row["said"] for row in rows]
 
+    def words_said(self, role_run_id: str) -> int:
+        """How much has ever been said to this role, taken or not (R-ROL-44).
+
+        Told apart from `words_waiting` because they answer different questions and the
+        difference is the whole of what makes a steer showable: what is *waiting* drops to
+        nothing the moment the run reads it, so a surface driven off that count would show a
+        steer only if it happened to look in the seconds between the two.
+        """
+        with self._reading() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS said FROM role_word WHERE role_run = ?",
+                (role_run_id,),
+            ).fetchone()
+        return int(row["said"] or 0)
+
     def words_waiting(self, role_run_id: str) -> int:
         """How much has been said to this role that nothing has taken yet."""
         with self._reading() as conn:

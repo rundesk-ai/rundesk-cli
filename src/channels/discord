@@ -271,6 +271,13 @@ FINISHED_HELPER = f"{DID['delegate']} subagent finished"
 ROLE_RECORD = "role"
 HANDED, WORKING, SETTLED = "handed", "working", "settled"
 
+#: The two states that are an *event* rather than progress: something was said into work
+#: already running, and settled work was carried on. Each is its own message and none is
+#: edited in place — a check-in repeats and says nothing new, and these say something new
+#: every time. **Neither ever repeats what was said**: steering text runs long and may carry
+#: a local path, which is the same reason a listing refuses to show the task at all.
+GUIDED, RESUMED = "guided", "resumed"
+
 #: What a delegation is called on the wire — one named agent's ask of another. A second
 #: record type beside the role one and rendered exactly the same way, for the same reason:
 #: an ask lasts hours, this program does not necessarily, and everything the line needs is
@@ -1871,6 +1878,13 @@ def role_line(it: dict) -> str:
         # The one line that is not news, so it keeps the subtext register and keeps being
         # edited in place. Only its wording joins the family.
         return f"-# {ROLE_MARK} Still on the {task}{_after(it.get('elapsed'))}."
+    # **Verb first, and no elapsed clause.** These are events rather than durations, and the
+    # agent is the one acting — the same shape as handing the work over, and deliberately
+    # not the shape of the progress and ending lines, where the work is the subject.
+    if state == GUIDED:
+        return f"{ROLE_MARK} Updated the {task}."
+    if state == RESUMED:
+        return f"{ROLE_MARK} Resumed the {task}."
     if state == SETTLED:
         # **Three endings, and only one of them is a fault.** A stop is somebody's
         # decision — the agent's own, or an owner's at a terminal — so it carries
@@ -1908,11 +1922,31 @@ def delegation_line(it: dict) -> str:
     if state == WORKING:
         return (f"-# {DELEGATION_MARK} **{who}** is still on the **{label}** task"
                 f"{_after(it.get('elapsed'))}.")
+    # **Verb first with the agent as the object**, matching the line that hands the work
+    # over: both are the asking agent acting. The progress and ending lines below keep the
+    # agent as the *subject*, because there it is the one doing something. That split is
+    # deliberate.
+    if state == GUIDED:
+        return f"{DELEGATION_MARK} Updated **{who}** on the **{label}** task."
+    if state == RESUMED:
+        return f"{DELEGATION_MARK} Resumed **{who}** on the **{label}** task."
     if state == SETTLED:
-        # Two endings rather than three: nothing stops a delegation, so `became` is
-        # `succeeded` or `failed` and `ok` is the fall-through for a rundesk that sent
-        # neither.
+        # **Three endings, and only one of them is a fault.** A stop is somebody's
+        # decision — the asking agent's own, or an owner's at a terminal — so it carries
+        # `MARKS["stopped"]` rather than the warning beside it, and says who decided where
+        # anybody wrote that down (R-DEL-18). Read off `became`, with `ok` left as the
+        # fall-through: a record from a rundesk that never sent one, and an ask nothing has
+        # settled yet, both still render the two endings there have always been.
         elapsed = _after(it.get("elapsed"))
+        if it.get("became") == ROLE_STOPPED:
+            asker = it.get("stopped_by")
+            if asker == "agent":
+                # The agent stopping work it handed over is not news about somebody else.
+                return (f"{MARKS['stopped']} {DELEGATION_MARK} Stopped **{who}** on the "
+                        f"**{label}** task{elapsed}.")
+            said = STOPPED_BY.get(asker, STOPPED_BY_NOBODY_NAMED)
+            return (f"{MARKS['stopped']} {DELEGATION_MARK} **{who}** on the **{label}** "
+                    f"task {said}{elapsed}.")
         if it.get("became") == "succeeded" or (
                 it.get("became") != "failed" and it.get("ok") is True):
             return (f"✅ {DELEGATION_MARK} **{who}** answered the **{label}** task"

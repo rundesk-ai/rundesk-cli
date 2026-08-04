@@ -2785,22 +2785,59 @@ class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("succeeded", shown[-1]["became"])
         self.assertTrue(shown[-1]["ok"])
 
-    async def test_nothing_stops_a_delegation_so_no_record_ever_says_one_was(self):
-        """Two endings rather than three: there is no verb for stopping an ask and no
-        record of one, so a word invented for it must not reach a surface."""
+    async def test_a_stopped_delegation_says_who_ended_it_and_a_failed_one_names_nobody(self):
+        """R-DEL-18 — three endings, and only one of them is a fault. An ask somebody
+        deliberately ended is not one that failed, and told apart by `ok` alone the two
+        would be a single line saying work did not finish — which reads as a fault about a
+        decision. `stopped_by` rides along on a stop and on nothing else, and an ending
+        nothing settled is still no ending at all."""
         brain, surface = Brain(), Surface()
         held = self.a_parent_conversation("rundesk-delegation-endings-", brain, surface)
 
         held.told_delegation_settled("one", "del-1-aaaa", False, "the quote flow",
-                                     "cole", 60, "stopped")
+                                     "cole", 60, "stopped", "agent")
         held.told_delegation_settled("one", "del-2-bbbb", False, "the quote flow",
                                      "cole", 60, "failed")
+        held.told_delegation_settled("one", "del-3-cccc", False, "the quote flow",
+                                     "cole", 60, "half-way")
         await self.settled(held)
 
         shown = surface.of("delegation")
-        self.assertNotIn("became", shown[0], "a word nothing settles reached a surface")
-        self.assertNotIn("stopped_by", shown[0])
+        self.assertEqual("stopped", shown[0]["became"])
+        self.assertEqual("agent", shown[0]["stopped_by"])
         self.assertEqual("failed", shown[1]["became"])
+        self.assertNotIn("stopped_by", shown[1], "nobody stopped the one that failed")
+        self.assertNotIn("became", shown[2], "a word nothing settles reached a surface")
+        self.assertNotIn("stopped_by", shown[2])
+
+    async def test_a_steer_and_a_carrying_on_are_each_shown_where_the_person_asked(self):
+        """R-ROL-44, R-DEL-23 — both were invisible. Five steering messages reached a role
+        run in one conversation and the room the work was asked in showed none of them, so
+        somebody watching saw a task that had apparently sat unchanged for an hour.
+
+        Neither carries what was said and neither carries an elapsed clause: steering text
+        runs long and may hold a local path, and these are events rather than durations."""
+        brain, surface = Brain(), Surface()
+        held = self.a_parent_conversation("rundesk-guided-", brain, surface)
+
+        held.told_role_guided("one", "rol-1-aaaa", "the quote flow", "development")
+        held.told_role_resumed("one", "rol-1-aaaa", "the quote flow", "development")
+        held.told_delegation_guided("one", "del-1-aaaa", "the quote flow", "cole")
+        held.told_delegation_resumed("one", "del-1-aaaa", "the quote flow", "cole")
+        await self.settled(held)
+
+        roles = surface.of("role")
+        asks = surface.of("delegation")
+        self.assertEqual(["guided", "resumed"], [one["state"] for one in roles])
+        self.assertEqual(["guided", "resumed"], [one["state"] for one in asks])
+        for one in roles + asks:
+            with self.subTest(state=one["state"], type=one["type"]):
+                self.assertEqual("the quote flow", one["label"])
+                self.assertNotIn("elapsed", one, "an event was given a duration")
+                self.assertNotIn("ok", one)
+                self.assertNotIn("became", one)
+        self.assertEqual(["development", "development"], [one["role"] for one in roles])
+        self.assertEqual(["cole", "cole"], [one["to"] for one in asks])
 
     async def test_a_delegation_record_carries_no_task_and_no_answer(self):
         """R-DEL-15 — what a surface is shown is what Rundesk knows about the delegation
@@ -2979,7 +3016,7 @@ class IntroducingTheAgentToSomebodyNewlyAllowed(unittest.IsolatedAsyncioTestCase
             instructions.render(instructions.ONBOARDING_INSTRUCTIONS,
                                 {"agent": "ava"}).strip(),
             preface)
-        self.assertIn(instructions.RUNDESK_INSTRUCTIONS.splitlines()[0], preface,
+        self.assertIn(instructions.AGENT_IDENTITY.splitlines()[0], preface,
                       "rundesk's own rules were displaced by the onboarding layer")
 
     async def test_what_the_agent_wrote_reaches_the_person_it_is_for(self):

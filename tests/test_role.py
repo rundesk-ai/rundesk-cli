@@ -707,7 +707,7 @@ class WritingARole(WithSomewhereToKeepRoles):
         # either is reworded. Lines carrying a placeholder cannot be compared literally,
         # and a short one is not evidence of a copy.
         checked = 0
-        for line in instructions.ROLE_EXECUTION_INSTRUCTIONS.splitlines():
+        for line in instructions.AGENT_TO_ROLE.splitlines():
             said = line.strip().removeprefix("- ").strip()
             if len(said) < 30 or "{" in said:
                 continue

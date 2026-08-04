@@ -930,6 +930,10 @@ class Gateway:
         #: number rather than a moment, so a gateway looking every five seconds says a
         #: run is still working once per window rather than once per look (R-ROL-36).
         self._role_checked: dict = {}
+        #: How many words said to each run this gateway has already shown. In memory for
+        #: the reason the check-in bucket is: what is durable is that somebody said
+        #: something, and re-showing one line after a restart is cheaper than a schema.
+        self._role_guided: dict = {}
         #: Both halves of handing work to another named agent, handed over already made by
         #: whoever knows what an agent is, the way `roles` is; `None` is a gateway with no
         #: agent behind it, which neither answers an ask nor is owed one (R-DEL-1).
@@ -945,6 +949,10 @@ class Gateway:
         #: Which check-in each ask in flight has already been told about, by ask. A number
         #: rather than a moment, for the reason the role one is (R-DEL-16).
         self._delegation_checked: dict = {}
+        #: How many words said to each ask this gateway has already shown. In memory for
+        #: the reason the check-in bucket is: what is durable is that somebody said
+        #: something, and re-showing one line after a restart is cheaper than a schema.
+        self._delegation_guided: dict = {}
         #: Backend update turns this gateway owns. They remain pending durably until one
         #: returns, and shutdown cancels and awaits every task here.
         self._update_turn_tasks: dict[int, asyncio.Task] = {}
@@ -1672,6 +1680,7 @@ class Gateway:
                 try:
                     self._end_the_roles_asked_to_stop()
                     self._start_admitted_roles()
+                    self._show_what_was_said_to_roles()
                     self._check_in_on_roles()
                 except asyncio.CancelledError:
                     raise
@@ -1730,6 +1739,7 @@ class Gateway:
         finally:
             self._role_tasks.pop(run_id, None)
             self._role_checked.pop(run_id, None)
+            self._role_guided.pop(run_id, None)
             # Said however it went, including the ways it can go wrong: work handed over
             # and never heard of again reads as work still running for ever.
             self._show_role(run_id, working=False, outcome=outcome)
@@ -1748,6 +1758,14 @@ class Gateway:
             if where is None or answering is None or not answering.connected:
                 return
             if working:
+                if where.get("carried_on"):
+                    # **A carrying-on is not a handing-over** (R-ROL-44). Somebody watching
+                    # a run they resumed an hour ago would otherwise read "Working on the …
+                    # task" and take it for a second run of the same work.
+                    answering.told_role_resumed(
+                        where["conversation"], run_id, where["label"],
+                        where.get("role", ""))
+                    return
                 answering.told_role_working(
                     where["conversation"], run_id, where["label"],
                     where.get("role", ""), where.get("elapsed", 0))
@@ -1763,6 +1781,59 @@ class Gateway:
             )
         except Exception as why:  # noqa: BLE001 — showing is never worth a run
             self.log.warning("could not show role run %s: %s", run_id, why)
+
+    def _show_what_was_said_to_roles(self) -> None:
+        """Say that somebody guided a run, once per thing they said (R-ROL-44).
+
+        **Driven off a durable count and a count this gateway has shown.** The verb is
+        served in a command process that holds no channel connection and cannot post
+        anything, so the only thing able to say a steer happened is whatever is already
+        watching the run — here. What makes it an event rather than a poll is that the
+        record moved: nothing is said until somebody has said something.
+
+        A gateway that came up after the steer shows it once on its first look, which is the
+        same behaviour a check-in already has and is the right way round: a line that arrives
+        late is better than a room that never says the work changed course.
+        """
+        for run_id in list(self._role_tasks):
+            try:
+                where = self.roles.seen(run_id)
+                shown = self._role_guided.get(run_id, 0)
+                said = int((where or {}).get("said") or 0)
+                answering = self._reached.get((where or {}).get("channel"))
+                if (where is None or said <= shown or answering is None
+                        or not answering.connected or not where.get("conversation")):
+                    continue
+                # Written before the record is queued, for the reason the check-in is: a
+                # surface that throws costs one skipped line rather than a line every beat.
+                self._role_guided[run_id] = said
+                for _ in range(said - shown):
+                    answering.told_role_guided(
+                        where["conversation"], run_id, where["label"],
+                        where.get("role", ""))
+            except Exception as why:  # noqa: BLE001 — showing is never worth a run
+                self.log.warning("could not show a word said to role run %s: %s",
+                                 run_id, why)
+
+    def _show_what_was_said_to_delegations(self) -> None:
+        """The mirror for an ask another agent is answering (R-DEL-23)."""
+        for ask_id in list(self._delegation_tasks):
+            try:
+                where = self.delegations.seen(ask_id)
+                shown = self._delegation_guided.get(ask_id, 0)
+                said = int((where or {}).get("said") or 0)
+                answering = self._reached.get((where or {}).get("channel"))
+                if (where is None or said <= shown or answering is None
+                        or not answering.connected or not where.get("conversation")):
+                    continue
+                self._delegation_guided[ask_id] = said
+                for _ in range(said - shown):
+                    answering.told_delegation_guided(
+                        where["conversation"], ask_id, where["label"],
+                        where.get("to", ""))
+            except Exception as why:  # noqa: BLE001 — showing is never worth the work
+                self.log.warning("could not show a word said to delegation %s: %s",
+                                 ask_id, why)
 
     def _check_in_on_roles(self) -> None:
         """Say that a run still working is still working (R-ROL-36).
@@ -1909,6 +1980,8 @@ class Gateway:
             if self.delegations is not None:
                 try:
                     self._start_asked_delegations()
+                    self._end_the_delegations_somebody_stopped()
+                    self._show_what_was_said_to_delegations()
                     self._check_in_on_delegations()
                 except asyncio.CancelledError:
                     raise
@@ -1942,6 +2015,22 @@ class Gateway:
                 self._answer_one(ask_id))
             self.log.info("answering delegation %s from %s", ask_id, row.get("from"))
 
+    def _end_the_delegations_somebody_stopped(self) -> None:
+        """End every ask the agent that handed it over has asked to end (R-DEL-18).
+
+        Cancelling is all this does. What the ask is *settled* as belongs where every other
+        way it can end is settled, so a stop and a failure cannot come to disagree about
+        what a stopped ask looks like — and one nothing here is carrying is settled there
+        too, without a brain ever being started for it.
+        """
+        for row in self.delegations.stopping():
+            task = self._delegation_tasks.get(row["id"])
+            if task is not None and not task.done():
+                task.cancel()
+            else:
+                self.delegations.stopped(row["id"])
+            self.log.info("ending delegation %s because it was asked to stop", row["id"])
+
     async def _answer_one(self, ask_id: str) -> None:
         """One ask, from here to its settled state and no further.
 
@@ -1961,6 +2050,7 @@ class Gateway:
             self._delegation_tasks.pop(ask_id, None)
             self._delegation_rooms.pop(ask_id, None)
             self._delegation_checked.pop(ask_id, None)
+            self._delegation_guided.pop(ask_id, None)
             # Said however it went, including the ways it can go wrong: work handed over
             # and never heard of again reads as work still running for ever. Said before
             # the answer is delivered for review, and never instead of it.
@@ -1979,6 +2069,11 @@ class Gateway:
             if where is None or answering is None or not answering.connected:
                 return
             if working:
+                if where.get("carried_on"):
+                    answering.told_delegation_resumed(
+                        where["conversation"], ask_id, where["label"],
+                        where.get("to", ""))
+                    return
                 answering.told_delegation_working(
                     where["conversation"], ask_id, where["label"],
                     where.get("to", ""), where.get("elapsed", 0))
@@ -1986,9 +2081,10 @@ class Gateway:
             answering.told_delegation_settled(
                 where["conversation"], ask_id, bool(where.get("ok")),
                 where["label"], where.get("to", ""), where.get("elapsed", 0),
-                # How it ended is the record's answer and never this gateway's: the ask is
-                # settled in the record before anything is told about it.
-                where.get("became", ""),
+                # How it ended and who ended it are the record's answer and never this
+                # gateway's: a stop is a decision somebody made and a failure is not, and
+                # the ask is settled in the record before anything is told about it.
+                where.get("became", ""), where.get("stopped_by", ""),
             )
         except Exception as why:  # noqa: BLE001 — showing is never worth the work
             self.log.warning("could not show delegation %s: %s", ask_id, why)

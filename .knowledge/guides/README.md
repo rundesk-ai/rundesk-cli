@@ -23,6 +23,7 @@ Add a row when you add a guide; `doc-lint` fails the build if one is missing.
 | Guide | How to |
 |---|---|
 | [the-command-surface.md](./the-command-surface.md) | Read the command's shape, and check a new verb against it |
+| [instruction-layers.md](./instruction-layers.md) | Assemble a system prompt — the four layers, what may go in each, and what must never leak between them |
 | [moving-onto-the-store.md](./moving-onto-the-store.md) | Move a reader or writer off the old layout and onto what an agent keeps |
 | [testing-against-a-station.md](./testing-against-a-station.md) | Run a checkout against a disposable install, so testing never reaches the live one |
 | [cutting-a-release.md](./cutting-a-release.md) | Answer what `publishing-github-releases` asks of this repository — the version literal, the release branch, the gate, who merges, and what has gone wrong before |

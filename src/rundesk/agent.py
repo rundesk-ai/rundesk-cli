@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rundesk import data_home, gateway, instructions, migration, skill, store
+from rundesk import handoff as handoffs
 from rundesk import config
 
 #: What a new agent's home is copied from. Ordinary Markdown files rather than text built
@@ -924,7 +925,9 @@ def chosen(name: str, where: Path | None = None) -> dict:
     return reading(name, where).agent()
 
 
-#: What rundesk itself tells every turn, before anything anybody else says (R-AGT-17).
+#: What rundesk tells every turn of *this agent's*, before anything anybody else says
+#: (R-AGT-17). `instructions.CORE_INSTRUCTIONS` stands in front of it and is stabler still —
+#: the same bytes for every execution on the machine, a role's included.
 #:
 #: **Stable for one agent.** It is the front of what a brain is given, which is the part
 #: prompt caching keys on — anything that varies per turn belongs after it, never inside it,
@@ -938,7 +941,7 @@ def chosen(name: str, where: Path | None = None) -> dict:
 #: Said here rather than left to the home an agent loads, because a home is the owner's to edit
 #: and this is the one thing that must be true whatever they wrote — an agent that has been
 #: given no rules at all still knows what it is running inside and how to find out what it did.
-STANDING = instructions.RUNDESK_INSTRUCTIONS
+STANDING = instructions.AGENT_IDENTITY
 
 
 def instruction_variables(name: str, where: Path | None = None) -> dict[str, str]:
@@ -1397,7 +1400,7 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
         seconds, so a fault that raises every time would be three attempts inside fifteen
         seconds and a ceiling that bounded nothing worth bounding (R-ROL-29).
         """
-        return [one for one in _unfinished() if role_runs.ready_to_carry(one)]
+        return [one for one in _unfinished() if handoffs.ready_to_carry(one)]
 
     def seen(run_id: str):
         """Where a run's activity is shown, and what to call it there.
@@ -1427,6 +1430,12 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
         return {"channel": room.get("channel"), "conversation": room.get("space"),
                 "label": row["label"] or row["role"], "role": row["role"],
                 "elapsed": role_runs.shown(row)["elapsed"],
+                # **Whether this is the first time or a carrying-on** (R-ROL-44). Read off
+                # the outcome, which is written when a run settles and never cleared — so a
+                # resumption carries one and a first execution does not, including a first
+                # execution whose gateway died part-way. Nothing new is stored to know it.
+                "carried_on": bool(row.get("outcome")),
+                "said": records(name, where).words_said(run_id),
                 # Off the row rather than through the listing, which is where how long it
                 # has been is worked out and this needs no working out at all.
                 "became": row["state"] if row["state"] in store.FINISHED_ROLES else "",
@@ -1443,7 +1452,7 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
         where_it_shows = seen(run_id)
         if where_it_shows is None:
             return None
-        due = role_runs.check_in_due(where_it_shows["elapsed"], told)
+        due = handoffs.check_in_due(where_it_shows["elapsed"], told)
         return None if not due else {**where_it_shows, "due": due}
 
     def stopping() -> list:
@@ -1586,6 +1595,8 @@ class Delegated:
     carry: object
     seen: object
     checking_in: object
+    stopping: object
+    stopped: object
     owed: object
     claiming: object
     collected: object
@@ -1613,7 +1624,7 @@ def delegated(name: str, where: Path | None = None, carry=None) -> Delegated:
         attempts inside fifteen seconds and a ceiling that bounded nothing worth bounding.
         """
         return [one for one in delegations.waiting(name)
-                if delegations.ready_to_carry(one)]
+                if handoffs.ready_to_carry(one)]
 
     async def carrying(ask_id: str):
         """Answer one ask, and leave it settled however that goes.
@@ -1626,10 +1637,15 @@ def delegated(name: str, where: Path | None = None, carry=None) -> Delegated:
         try:
             return await delegations.carry(name, ask_id, where=where, carrying=carry)
         except asyncio.CancelledError:
-            # A gateway standing down leaves the ask unfinished on purpose: the next
-            # gateway to claim this name carries it on. Nothing stops a delegation, so
-            # unlike a role run there is no second reading of this to make.
-            raise
+            # **A stop and a shutdown look identical here, and are not the same news.**
+            # A gateway standing down leaves the ask unfinished on purpose: its provider
+            # session belongs to the conversation, so the next gateway to claim this name
+            # carries it on. An agent that asked for the work to end wants it ended — and
+            # left unfinished it would simply start again on the way back up (R-DEL-18).
+            if not (delegations.read(ask_id) or {}).get("stop_asked_at"):
+                raise
+            delegations.stopped(ask_id)
+            return None
         except BaseException as why:  # noqa: BLE001 — a boundary, and see below
             # Every other way this can fail ends the work truthfully — after a ceiling. A
             # blip and a fault raise identically here, so the attempt is counted and the
@@ -1658,7 +1674,16 @@ def delegated(name: str, where: Path | None = None, carry=None) -> Delegated:
         return {"channel": room.get("channel"), "conversation": room.get("space"),
                 "delegation": row["id"], "label": it["label"], "to": it["to"],
                 "elapsed": it["elapsed"],
+                # The mirror of what a role run's `seen` answers, off the record's own
+                # counters rather than off anything this gateway remembers (R-DEL-23).
+                "carried_on": bool(int(row.get("resumes") or 0)),
+                "said": int(row.get("said_count") or 0),
                 "became": row["state"] if row["state"] in delegations.SETTLED else "",
+                # Who ended it, off the row rather than worked out again. Only ever set on
+                # an ask somebody stopped, and absent where nobody wrote an asker down —
+                # which is what an ask stopped before there was anywhere to record it
+                # already looks like (R-DEL-18).
+                "stopped_by": row.get("stop_asked_by") or "",
                 "ok": row["state"] == delegations.ANSWERED}
 
     def checking_in(ask_id: str, told: int = 0):
@@ -1672,8 +1697,20 @@ def delegated(name: str, where: Path | None = None, carry=None) -> Delegated:
         where_it_shows = seen(ask_id)
         if where_it_shows is None:
             return None
-        due = delegations.check_in_due(where_it_shows["elapsed"], told)
+        due = handoffs.check_in_due(where_it_shows["elapsed"], told)
         return None if not due else {**where_it_shows, "due": due}
+
+    def stopping() -> list:
+        """Every unfinished ask addressed to this agent that somebody has asked to end."""
+        return delegations.stopping(name)
+
+    def stopped(ask_id: str) -> None:
+        """Settle an ask that was asked to end and that nothing here was carrying.
+
+        The same settlement a cancelled one reaches, so a stop looks like a stop however far
+        the work had got — including not having started at all (R-DEL-18).
+        """
+        delegations.stopped(ask_id)
 
     def owed() -> list:
         """Every answer this agent is still owed a review of, oldest first.
@@ -1719,6 +1756,7 @@ def delegated(name: str, where: Path | None = None, carry=None) -> Delegated:
         return delegations.sweep()
 
     return Delegated(waiting=waiting, carry=carrying, seen=seen, checking_in=checking_in,
+                     stopping=stopping, stopped=stopped,
                      owed=owed, claiming=claiming, collected=collected,
                      giving_up=giving_up, sweep=sweep)
 

@@ -33,7 +33,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import activity, config, delegation, gateway, process, recovery, schedule, store  # noqa: E402
+from rundesk import activity, config, delegation, gateway, process  # noqa: E402
+from rundesk import handoff as handoffs  # noqa: E402
+from rundesk import recovery, schedule, store  # noqa: E402
 from rundesk import role_run as role_runs  # noqa: E402
 
 PY = sys.executable
@@ -4281,6 +4283,10 @@ class Delegating:
         self.reviewed_runs: list = []
         self.given_up: list = []
         self.swept = 0
+        #: Whether this run has settled before, and how much has ever been said into it —
+        #: the two the real `seen` answers with, off a row and a store read (R-ROL-44).
+        self.carried_on = False
+        self.said = 0
         #: Where each run this stand-in knows about is shown, and how long it has been.
         self.check_ins: dict = {}
 
@@ -4290,7 +4296,10 @@ class Delegating:
     def seen(self, run_id):
         return {"channel": "ops", "conversation": "one", "label": "a task",
                 "role": "development", "elapsed": 0,
-                "became": self._settled_as, "stopped_by": self._stopped_by}
+                "became": self._settled_as, "stopped_by": self._stopped_by,
+                # Exactly the two fields the real `agent.playing.seen` answers with, so a
+                # stand-in cannot be surer than the thing it stands for.
+                "carried_on": self.carried_on, "said": self.said}
 
     def checking_in(self, run_id, told=0):
         """Exactly what `agent.playing` answers, off the same arithmetic — a stand-in
@@ -4298,7 +4307,7 @@ class Delegating:
         where = self.check_ins.get(run_id)
         if where is None:
             return None
-        due = role_runs.check_in_due(where["elapsed"], told)
+        due = handoffs.check_in_due(where["elapsed"], told)
         return None if not due else {**where, "due": due}
 
     def stopping(self):
@@ -4404,6 +4413,8 @@ class Shown(Reached):
         self.handed_over: list = []
         self.asked_after: list = []
         self.answered_back: list = []
+        self.guided: list = []
+        self.resumed: list = []
 
     def told_role_working(self, conversation, run, label, role="", elapsed=0):
         self.working.append((conversation, run, label, role, elapsed))
@@ -4424,9 +4435,22 @@ class Shown(Reached):
     def told_delegation_checking_in(self, conversation, ask, label, to="", elapsed=0):
         self.asked_after.append((conversation, ask, label, to, elapsed))
 
+    def told_role_guided(self, conversation, run, label, role=""):
+        self.guided.append((conversation, run, label, role))
+
+    def told_role_resumed(self, conversation, run, label, role=""):
+        self.resumed.append((conversation, run, label, role))
+
+    def told_delegation_guided(self, conversation, ask, label, to=""):
+        self.guided.append((conversation, ask, label, to))
+
+    def told_delegation_resumed(self, conversation, ask, label, to=""):
+        self.resumed.append((conversation, ask, label, to))
+
     def told_delegation_settled(self, conversation, ask, ok, summary, to="", elapsed=0,
-                                became=""):
-        self.answered_back.append((conversation, ask, ok, summary, to, elapsed, became))
+                                became="", stopped_by=""):
+        self.answered_back.append(
+            (conversation, ask, ok, summary, to, elapsed, became, stopped_by))
 
 
 class CarryingWhatAnAgentHandedOn(WithARunDirectory):
@@ -4935,6 +4959,47 @@ class CarryingWhatAnAgentHandedOn(WithARunDirectory):
         self.addCleanup(gw.release)
         gw._sweep_roles()   # nothing to sweep, and nothing to raise
         self.assertEqual({}, gw._role_tasks)
+
+    async def test_a_word_said_into_a_run_is_shown_once_each_where_the_work_was_asked_for(self):
+        """R-ROL-44 — the regression this exists for. A steer reached the work and the room
+        showed nothing, so somebody watching saw a task that had sat unchanged for an hour.
+
+        Driven off the durable count moving rather than off a timer: the verb is served in a
+        command process holding no channel connection, so the only thing able to say a steer
+        happened is whatever is already watching the run. Nothing is said until something
+        was said, and each thing said is shown exactly once."""
+        doing = Delegating(waiting=[{"id": "rol-1-aaaa"}])
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+        gw._start_admitted_roles()
+
+        gw._show_what_was_said_to_roles()
+        self.assertEqual([], surface.guided, "a run nobody has said anything to said so")
+
+        doing.said = 2
+        gw._show_what_was_said_to_roles()
+        gw._show_what_was_said_to_roles()
+
+        self.assertEqual([("one", "rol-1-aaaa", "a task", "development")] * 2,
+                         surface.guided, "two words said were not two lines shown once")
+        await asyncio.gather(*tuple(gw._role_tasks.values()), return_exceptions=True)
+
+    async def test_a_run_carried_on_is_shown_as_carried_on_rather_than_handed_over(self):
+        """R-ROL-44 — somebody who resumed a run an hour ago would otherwise read the line
+        that hands work over and take it for a second run of the same work."""
+        doing = Delegating(waiting=[{"id": "rol-1-aaaa"}])
+        doing.carried_on = True
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+
+        gw._start_admitted_roles()
+        await asyncio.gather(*tuple(gw._role_tasks.values()), return_exceptions=True)
+
+        self.assertEqual([("one", "rol-1-aaaa", "a task", "development")], surface.resumed)
+        self.assertEqual([], surface.handed_over, "a carrying-on read as a handing-over")
+
 class TellsTheOwnerWhatItsAgentMayDo(WithARunDirectory):
     """R-CH-32 — an agent gaining or losing a skill reaches its owner."""
 
@@ -5329,16 +5394,20 @@ class HandingOn:
     for the **roles** collaborator and keeps its name.
     """
 
-    def __init__(self, waiting=(), owed=(), settled_as="", ok=False):
+    def __init__(self, waiting=(), owed=(), settled_as="", ok=False, stopped_by=""):
         self._waiting = list(waiting)
         self._owed = list(owed)
         self._settled_as = settled_as
+        self._stopped_by = stopped_by
         self._ok = ok
         self.carried: list = []
         self.claimed: list = []
         self.collected_asks: list = []
         self.given_up: list = []
         self.swept = 0
+        self.carried_on = False
+        self.said = 0
+        self.settled_stopped: list = []
         self.to_settle: list = []
         self.to_remove: list = []
         #: Where each ask this stand-in knows about is shown, and how long it has been.
@@ -5350,7 +5419,11 @@ class HandingOn:
     def seen(self, ask_id):
         return {"channel": "ops", "conversation": "one", "delegation": ask_id,
                 "label": "the quote flow", "to": "cole", "elapsed": 0,
-                "became": self._settled_as, "ok": self._ok}
+                "became": self._settled_as, "stopped_by": self._stopped_by,
+                # Exactly the two fields the real `agent.delegated.seen` answers with, so
+                # a stand-in cannot be surer than the thing it stands for.
+                "carried_on": self.carried_on, "said": self.said,
+                "ok": self._ok}
 
     def checking_in(self, ask_id, told=0):
         """Exactly what `agent.delegated` answers, off the same arithmetic — a stand-in
@@ -5358,13 +5431,23 @@ class HandingOn:
         where = self.check_ins.get(ask_id)
         if where is None:
             return None
-        due = delegation.check_in_due(where["elapsed"], told)
+        due = handoffs.check_in_due(where["elapsed"], told)
         return None if not due else {**where, "due": due}
 
     async def carry(self, ask_id):
         self.carried.append(ask_id)
         self._waiting = [one for one in self._waiting if one["id"] != ask_id]
         return None
+
+    def stopping(self):
+        """Every unfinished ask somebody has asked to end — exactly what `agent.delegated`
+        answers, off the same field, so a stand-in cannot be surer than the real one."""
+        return [one for one in self._waiting if one.get("stop_asked_at")]
+
+    def stopped(self, ask_id):
+        """Settle an ask nothing here was carrying, the way the real collaborator does."""
+        self.settled_stopped.append(ask_id)
+        self._waiting = [one for one in self._waiting if one["id"] != ask_id]
 
     def owed(self):
         return list(self._owed)
@@ -5639,7 +5722,7 @@ class AnsweringWhatAnotherAgentAsked(WithARunDirectory):
         self.assertEqual([("one", "del-1-aaaa", "the quote flow", "cole", 0)],
                          surface.handed_over, "nothing said the work had been handed on")
         self.assertEqual([("one", "del-1-aaaa", True, "the quote flow", "cole", 0,
-                           "answered")], surface.answered_back,
+                           "answered", "")], surface.answered_back,
                          "nothing said what came of it")
 
     async def test_a_delegation_that_could_not_be_carried_still_says_how_it_went(self):
@@ -5717,6 +5800,42 @@ class AnsweringWhatAnotherAgentAsked(WithARunDirectory):
         gw = gateway.Gateway("nobody", where=self.where, logs=self.logs, root=self.root)
         self.addCleanup(gw.release)
         gw._sweep_delegations()      # raises nothing, does nothing
+
+    async def test_a_word_said_into_an_ask_is_shown_once_each_where_the_work_was_asked_for(self):
+        """R-DEL-23 — the mirror of a role run's, and invisible for the same reason."""
+        doing = HandingOn(waiting=[{"id": "del-1-aaaa", "from": "elena",
+                                    "parent_run": "1-aaaa"}])
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+        gw._start_asked_delegations()
+
+        gw._show_what_was_said_to_delegations()
+        self.assertEqual([], surface.guided, "an ask nobody has said anything to said so")
+
+        doing.said = 2
+        gw._show_what_was_said_to_delegations()
+        gw._show_what_was_said_to_delegations()
+
+        self.assertEqual([("one", "del-1-aaaa", "the quote flow", "cole")] * 2,
+                         surface.guided, "two words said were not two lines shown once")
+        await asyncio.gather(*tuple(gw._delegation_tasks.values()), return_exceptions=True)
+
+    async def test_an_ask_carried_on_is_shown_as_carried_on_rather_than_handed_over(self):
+        """R-DEL-23 — a resumed ask read as a second ask of the same work."""
+        doing = HandingOn(waiting=[{"id": "del-1-aaaa", "from": "elena",
+                                    "parent_run": "1-aaaa"}])
+        doing.carried_on = True
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+
+        gw._start_asked_delegations()
+        await asyncio.gather(*tuple(gw._delegation_tasks.values()))
+
+        self.assertEqual([("one", "del-1-aaaa", "the quote flow", "cole")], surface.resumed)
+        self.assertEqual([], surface.handed_over, "a carrying-on read as a handing-over")
+
 
 
 if __name__ == "__main__":

@@ -49,6 +49,9 @@ from datetime import timedelta
 from pathlib import Path
 
 from rundesk import agent as agents
+# Aliased for the reason `agent as agents` is: this module already has a `handoff()` of
+# its own — the report a parent is owed — and an import bound to that name shadows it.
+from rundesk import handoff as handoffs
 from rundesk import instructions, role, provider, skill, store, turn
 
 #: Where one agent's role runs stand. Inside the agent's own directory, so a bundle is
@@ -213,18 +216,6 @@ def brain(asked: str | None, asked_model: str | None, wanted, parent: dict,
     return named, model
 
 
-def safe_label(said: str | None, fallback: str) -> str:
-    """A short task label safe to show where other people are reading (R-ROL-17).
-
-    Never a local path and never a person's words verbatim: this is written into a thread
-    title and into a listing, and a label carrying a private directory has published one.
-    """
-    text = " ".join(str(said or "").split())
-    kept = "".join(ch for ch in text if ch.isalnum() or ch in " -_.,'()")
-    kept = " ".join(kept.split())[:60].strip()
-    return kept or fallback
-
-
 def admit(name: str, slug: str, brief: str, parent_run: str,
           target: str | None = None, label: str | None = None,
           where: Path | None = None, library: dict | None = None,
@@ -265,7 +256,7 @@ def admit(name: str, slug: str, brief: str, parent_run: str,
     _has_a_brain(name, on, runnable)
     at = store.stamped(now)
     until = retained_until(now)
-    named_label = safe_label(label, wanted.label)
+    named_label = handoffs.safe_label(label, wanted.label)
     try:
         run_id = kept.admit_role(
             wanted.slug, wanted.revision, list(wanted.skills),
@@ -821,25 +812,6 @@ CARRY_ON = (
 STEER_SECONDS = 3.0
 
 
-#: How often a run that is still working says so where the work was asked for. Twenty
-#: minutes: long enough that an hour's job is four lines rather than forty, short enough
-#: that somebody who came back to the room can tell a run that is going from one that is
-#: gone. Counted from admission, which is what `shown` already reports as `elapsed`, so
-#: the line and the listing can never disagree about how long it has been.
-CHECK_IN_SECONDS = 1200.0
-
-
-def check_in_due(elapsed: float, told: int = 0) -> int:
-    """Which check-in this run has reached, or 0 when it owes none.
-
-    A bucket number rather than a timestamp, so a gateway that restarted mid-run resumes
-    the cadence from where the clock is rather than immediately saying something — and so
-    two looks a second apart cannot produce two lines.
-    """
-    reached = int(max(0.0, float(elapsed)) // CHECK_IN_SECONDS)
-    return reached if reached > max(0, int(told)) else 0
-
-
 #: How deep into a target project a presented skill may have been placed. Every adapter
 #: measured puts them one or two components down — `.agents/skills/<name>`,
 #: `.claude/skills/<name>`, `.grok/skills/<name>` — so three is the shape plus room, and a
@@ -930,12 +902,6 @@ def settle(name: str, run_id: str, outcome: turn.Outcome, where: Path | None = N
 #: a real turn costs three of them and stops.
 CARRY_CEILING = 3
 
-#: How long after a throw the same run is left alone. Doubled per attempt, so three
-#: attempts are spread over minutes rather than over the fifteen seconds a five-second
-#: look would otherwise take — a ceiling on attempts is only a ceiling on cost if
-#: something puts time between them.
-CARRY_BACKOFF_SECONDS = 60.0
-
 #: How many times a parent may be woken for one handoff before it is settled undelivered
 #: (R-ROL-37). Three, matching what carrying a run is allowed: the faults this bounds are
 #: the ones that happen every time — a session that hands every turn back, a brain that
@@ -990,25 +956,6 @@ EXPIRED_UNSETTLED = (
     "without ever finishing, and this is Rundesk reporting on the run rather than the "
     "role reporting on the work. Nothing was checked and the worker never reported."
 )
-
-
-def backoff_seconds(attempts: int) -> float:
-    """How long to leave a run alone after this many failed attempts at carrying it."""
-    return CARRY_BACKOFF_SECONDS * (2 ** max(0, int(attempts) - 1))
-
-
-def ready_to_carry(row: dict, now=None) -> bool:
-    """Whether enough time has passed since this run's latest failed carry.
-
-    Wall time on both sides, and deliberately: the gateway deciding this is usually not
-    the gateway that failed, so there is no monotonic clock the two share — the same
-    reason a retention window is a durable stamp rather than an elapsed count.
-    """
-    failed = store.moment(row.get("carry_failed_at"))
-    if failed is None:
-        return True
-    waited = backoff_seconds(row.get("carry_attempts") or 0)
-    return (now or time.time)() - failed.timestamp() >= waited
 
 
 def carry_failed(name: str, run_id: str, why: str, where: Path | None = None,

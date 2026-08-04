@@ -33,6 +33,7 @@ from rundesk import __version__  # noqa: E402
 from rundesk import cli  # noqa: E402
 from rundesk import catalog as real_catalog  # noqa: E402
 from rundesk import config  # noqa: E402
+from rundesk import delegation as real_delegation  # noqa: E402
 from rundesk import restart_request  # noqa: E402
 from rundesk import role  # noqa: E402
 from rundesk import standing  # noqa: E402
@@ -1168,7 +1169,8 @@ class FakeAgents:
         self.handed_over.append(name)
         return real_agent.Delegated(
             waiting=lambda: [], carry=None, seen=lambda _ask: None,
-            checking_in=lambda _ask, _told=0: None, owed=lambda: [],
+            checking_in=lambda _ask, _told=0: None,
+            stopping=lambda: [], stopped=lambda _ask: None, owed=lambda: [],
             claiming=lambda _ask: None, collected=lambda _ask: None,
             giving_up=lambda _ask: None, sweep=lambda: {"settled": [], "removed": []},
         )
@@ -5249,6 +5251,104 @@ class HandingWorkToAnotherAgent(unittest.TestCase):
                            agents=FakeAgents(made=["elena", "cole"]))
         self.assertEqual(1, code)
         self.assertIn("NO SUCH DELEGATION", said)
+
+    def guiding(self, *argv, **given):
+        """One of the three guiding verbs, typed the way an agent's own turn types it."""
+        os.environ["RUNDESK_RUN"] = given.pop("run", self.parent)
+        self.addCleanup(os.environ.pop, "RUNDESK_RUN", None)
+        with feeding(given.pop("said", "and read the migration too")):
+            return drive(list(argv), agents=FakeAgents(made=["elena", "cole"]))
+
+    def handed_over(self) -> str:
+        code, said = self.asking("delegations", "elena", "ask", "cole",
+                                 "--label", "the quote flow")
+        self.assertEqual(0, code, said)
+        return said.split("\n")[0].strip()
+
+    def test_what_is_said_to_an_ask_in_flight_is_taken_and_says_where_it_lands(self):
+        """R-DEL-22 — where a word goes is a fact about the ask at the moment it is read,
+        said plainly rather than guessed at."""
+        ask = self.handed_over()
+        code, said = self.guiding("delegations", "elena", "say", ask)
+        self.assertEqual(0, code, said)
+        self.assertIn(f"said to {ask}", said)
+        self.assertIn("what this ask is asked when it starts", said)
+
+    def test_an_ask_can_be_ended_early_and_still_answers_back(self):
+        """R-DEL-18 — a stop is a decision, and however a delegation ends the agent that
+        handed the work over is told exactly once."""
+        ask = self.handed_over()
+        code, said = self.guiding("delegations", "elena", "stop", ask)
+        self.assertEqual(0, code, said)
+        self.assertIn(f"{ask} was asked to stop", said)
+        self.assertIn("it still answers back", said)
+        # Asking twice is not a refusal — the ask stands and the gateway acts on it once —
+        # but a settled one has nothing left to end, which is the refusal that exists.
+        code, _ = self.guiding("delegations", "elena", "stop", ask)
+        self.assertEqual(0, code)
+        real_delegation.stopped(ask)
+        code, said = self.guiding("delegations", "elena", "stop", ask)
+        self.assertEqual(1, code)
+        self.assertIn("ALREADY OVER", said)
+
+    def test_a_settled_ask_is_carried_on_in_the_conversation_it_already_had(self):
+        """R-DEL-20 — the point of the verb: the answering agent keeps what it knew."""
+        ask = self.handed_over()
+        real_delegation.answered(ask, "It is the second query.")
+        code, said = self.guiding("delegations", "elena", "resume", ask,
+                                  said="now check the index too")
+        self.assertEqual(0, code, said)
+        self.assertIn(f"{ask} was carried on", said)
+        self.assertIn("in the conversation it already had", said)
+        self.assertEqual(1, real_delegation.read(ask)["resumes"])
+
+    def test_who_asked_for_a_stop_is_read_off_the_one_variable_env_already_keeps(self):
+        """R-ROL-43 — `RUNDESK_RUN` is in every program a gateway starts and in nothing a
+        person types, so an agent ending work it handed over and an owner ending it are
+        told apart here and nowhere else."""
+        ask = self.handed_over()
+        self.guiding("delegations", "elena", "stop", ask)
+        self.assertEqual(store.ASKED_BY_AGENT,
+                         real_delegation.read(ask)["stop_asked_by"])
+
+        second = self.handed_over()
+        os.environ.pop("RUNDESK_RUN", None)
+        with feeding(""):
+            code, _ = drive(["delegations", "elena", "stop", second],
+                            agents=FakeAgents(made=["elena", "cole"]))
+        self.assertEqual(0, code)
+        self.assertEqual(store.ASKED_BY_TERMINAL,
+                         real_delegation.read(second)["stop_asked_by"])
+
+    def test_every_refusal_a_guiding_verb_has_reaches_the_exit_status(self):
+        """R-DEL-22 — each names the verb that was wanted, so an agent that reached for
+        the wrong one is told which one it meant."""
+        ask = self.handed_over()
+        for argv, why in (
+            (["delegations", "elena", "say", "del-9-zzzz"], "no delegation called"),
+            (["delegations", "elena", "resume", "del-9-zzzz"], "no delegation called"),
+            (["delegations", "elena", "stop", "del-9-zzzz"], "no delegation called"),
+            (["delegations", "cole", "say", ask], "is not a delegation 'cole' handed over"),
+            (["delegations", "elena", "resume", ask], "to guide the work it is doing now"),
+        ):
+            with self.subTest(argv=argv):
+                code, said = self.guiding(*argv)
+                self.assertEqual(1, code, said)
+                self.assertIn(why, said)
+                self.assertIn("where it stands:", said)
+
+    def test_what_is_waiting_to_be_said_and_a_stop_asked_for_are_both_shown(self):
+        """R-DEL-15 — how many words are waiting, never a word of what they say."""
+        ask = self.handed_over()
+        self.guiding("delegations", "elena", "say", ask, said="a private /Users/somebody path")
+        self.guiding("delegations", "elena", "stop", ask)
+        code, said = drive(["delegations", "elena", "show", ask],
+                           agents=FakeAgents(made=["elena", "cole"]))
+        self.assertEqual(0, code, said)
+        self.assertIn("waiting to say  1", said.replace("    ", "  "))
+        self.assertIn("stop asked", said)
+        self.assertIn("retained_until", said)
+        self.assertNotIn("/Users/somebody", said)
 
     def test_asking_after_the_delegations_of_an_agent_there_is_none_of_says_so(self):
         code, said = drive(["delegations", "nobody"],

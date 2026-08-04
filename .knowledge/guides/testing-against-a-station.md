@@ -28,9 +28,20 @@ env -u RUNDESK_HOME -u RUNDESK_AGENTS_DIR -u RUNDESK_SCRIPTS -u RUNDESK_SKILL_LI
     RUNDESK_BACKUP_DIR="$station/backups" \
     RUNDESK_BIN_DIR="$station/bin" \
     RUNDESK_JOBS_DIR="$station/jobs" \
+    RUNDESK_SECRETS_DIR="$station/secrets" \
     RUNDESK_JOB_PREFIX=ai.rundesk-station \
     ./rundesk agents
 ```
+
+**`RUNDESK_SECRETS_DIR` is the one that does not live under the install at all**, and
+leaving it out is the most expensive mistake on this page. `secret.home()` falls back to
+`${XDG_CONFIG_HOME:-$HOME/.config}/rundesk/secrets` — the *live* one — so a station that
+redirected everything else still writes there, and a station `--uninstall --purge` **deletes
+it**, taking the key, the registry and every held value with it. `backup.py` copies
+`data_home()` and nothing else, on purpose (R-SEC-26), so there is no restore. Measured on
+2026-08-03: an uninstall with nine other paths redirected printed
+`removed /Users/somebody/.config/rundesk` in the middle of an otherwise ordinary success.
+Check `ls ~/.config/rundesk` before and after anything that uninstalls.
 
 Unset every inherited `RUNDESK_*` rather than only the ones that look dangerous — one kept "because it
 seemed harmless" is the whole failure this avoids.
@@ -75,6 +86,7 @@ env -u RUNDESK_HOME -u RUNDESK_AGENTS_DIR -u RUNDESK_SCRIPTS -u RUNDESK_SKILL_LI
     RUNDESK_BACKUP_DIR="$station/backups" \
     RUNDESK_BIN_DIR="$station/bin" \
     RUNDESK_JOBS_DIR="$station/jobs" \
+    RUNDESK_SECRETS_DIR="$station/secrets" \
     RUNDESK_JOB_PREFIX=ai.rundesk-station \
     ./install.sh --uninstall
 

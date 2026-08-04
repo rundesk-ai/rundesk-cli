@@ -18,6 +18,48 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   agent hangs its own turn. If a suite that passed suddenly never ends, run it with
   `< /dev/null` before looking at anything else — finishing then is the whole diagnosis.
 
+- **A station `./install.sh --uninstall --purge` deletes the owner's live
+  `~/.config/rundesk` unless `RUNDESK_SECRETS_DIR` is set, and every other path being
+  redirected does not save you.** Measured here on 2026-08-03: a station uninstall with
+  install, data, backup, bin, jobs, agents, run, log, skill-library and job-prefix all
+  pointed at `/tmp` reported an ordinary success and printed `removed
+  /Users/marois/.config/rundesk` in the middle of it. The whole of the owner's kept
+  secrets — the key, the registry naming which values exist and any fetching commands, and
+  every held value — went with it, and **`backup.py` deliberately does not copy them**
+  (R-SEC-26), so there is no restore. The entry below has the same cause and is about
+  `env set`; this is the destructive half and it is worse, because `--purge` means "take
+  what the owner kept" and the secrets directory answers to the *live* one.
+  **`RUNDESK_SECRETS_DIR` is not a `RUNDESK_*_DIR` the station guide lists — add it to
+  every station command by hand**, and check `ls ~/.config/rundesk` before and after
+  anything that uninstalls. The scrub-then-set ordering trap applies here too: put the
+  override *after* the `env -u` prefix, or the scrubber takes it away again.
+
+- **`from rundesk import handoff` inside `role_run.py` silently shadows that module's own
+  `handoff()` function, and the failure names neither.** `role_run.handoff(name, run_id)` is
+  the report a parent is owed; the import binds the same name at module level, so every
+  `handoff.safe_label(...)` in the file resolves against the *function* and dies with
+  `AttributeError: 'function' object has no attribute 'safe_label'` — 117 errors in
+  `test_role_run`, none of them near the import. Nothing fails at import and the module
+  still parses. **Before importing a module into another, grep that file for `def <name>`**;
+  this codebase's answer is the alias it already uses elsewhere (`from rundesk import agent
+  as agents`), so `handoff as handoffs` is the spelling everything now uses.
+
+- **`provider.label()` on a brain that ships answers the brain's own name, so asserting the
+  raw name is *absent* from a refusal proves nothing and fails.** The guard exists because a
+  brain may be the path of a program somebody wrote; for `claude` the label is `claude`. A
+  case written as `assertNotIn("claude", why)` reads like a privacy check and is testing that
+  the product does not work. Assert the label was *used* —
+  `assertIn(f"{provider.label('claude')}, the brain answering for …", why)` — or configure a
+  path-shaped brain, which admission refuses first.
+
+- **Every class in `tests/test_slack.py` carries a `@needs_slack` decorator, so anchoring a
+  new class on the next `class` line lands it between the decorator and its class.** The file
+  then dies with `IndentationError: unexpected indent` pointing at the first method of the
+  block you inserted, which reads like a paste that went wrong rather than like an anchor that
+  did. `test_discord.py` uses a bare `@unittest.skipIf` and has the same shape. Anchor on the
+  **decorator** line where one is present, and re-read `grep -n "^class \|^@" <file>` before
+  believing an insertion landed. Same family as the `__main__` guard trap below.
+
 - **`doc-lint` fails a ratified `prd/` contract that cites a `prd-drafts/` id, so a new
   contract has to be ratified *before* the rows that cite it land.** Adding
   `(R-SEC-26)` to `lifecycle-removal.md` while `platform-secrets.md` was still a draft

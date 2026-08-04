@@ -25,6 +25,7 @@ this module.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import fcntl
 import json
@@ -37,6 +38,7 @@ from pathlib import Path
 from rundesk import data_home
 from rundesk import agent as agents
 from rundesk import durable, instructions, provider, store, turn
+from rundesk import handoff as handoffs
 
 #: Where every delegation on this install stands. One directory rather than one per agent,
 #: because an ask belongs to two agents and neither of them owns it.
@@ -57,27 +59,29 @@ ANSWER_KEPT = 20_000
 #: worse than the wedged provider this exists for.
 UNANSWERED_HOURS = 6
 
-#: How long a settled ask stays readable before it is taken away. A fortnight, matching what
-#: a role run keeps, so an owner reading last week's work back finds it in both places.
+#: How long after its latest activity a settled ask stays readable and resumable. A
+#: fortnight, matching what a role run keeps, so an owner reading last week's work back
+#: finds it in both places. Measured from activity rather than from settling, for the reason
+#: a role run's window is: an ask somebody is still carrying on at day thirteen is work in
+#: progress, and a window counted from the first answer would sweep it (R-ROL-11).
 RETAINED_DAYS = 14
+
+#: How many unread words may wait for one ask before another is refused. The record is read
+#: whole into memory by two gateways and a command, so an unbounded queue is the same
+#: unbounded file `ANSWER_KEPT` exists to prevent — and twenty corrections nobody has read
+#: is not steering, it is a conversation that needed a second ask.
+SAID_WAITING = 20
+
+#: How often a delegation turn looks for something the agent that asked has said to it.
+#: The same beat a role execution keeps, and for the same reason: an agent that has just
+#: corrected the work is waiting to see it land, and a word arriving after the work it was
+#: meant to change arrived too late.
+STEER_SECONDS = 3.0
 
 #: How many times carrying one ask may throw before it is settled rather than tried again.
 #: Three, because the fault this bounds is the one that happens every time: a brain that has
 #: gone, an agent somebody removed, a record nobody can vouch for.
 CARRY_CEILING = 3
-
-#: How long after a throw the same ask is left alone. Doubled per attempt, so three attempts
-#: are spread over minutes rather than over the fifteen seconds a five-second look would
-#: otherwise take — a ceiling on attempts is only a ceiling on cost if something puts time
-#: between them.
-CARRY_BACKOFF_SECONDS = 60.0
-
-#: How often an ask that is still being answered says so where the work was asked for.
-#: Twenty minutes, matching what a role run says: long enough that an hour's job is three
-#: lines rather than forty, short enough that somebody who came back to the room can tell
-#: work that is going from work that is gone. Counted from the ask, which is what `shown`
-#: already reports as `elapsed`, so the line and the listing cannot disagree.
-CHECK_IN_SECONDS = 1200.0
 
 #: How many times the asking agent may be woken to review one answer before it is written
 #: off and the owner told instead. Three, matching what carrying an ask is allowed.
@@ -87,18 +91,36 @@ REVIEW_CEILING = 3
 #: about it. Closed for the reason `store.SOURCES` is: this is the only word saying where an
 #: ask has got to, and one nobody can read back is work whose state is lost.
 #:
-#: `answered`, `failed` and `undeliverable` are the three ways an ask settles, and every one
-#: of them owes the asking agent exactly one review (R-DEL-11). `collected` is what a
-#: delivered review leaves behind — and what giving up on an undeliverable one leaves too,
-#: told apart by `given_up_at` rather than by inference.
+#: `answered`, `failed`, `stopped` and `undeliverable` are the four ways an ask settles, and
+#: every one of them owes the asking agent exactly one review (R-DEL-11). `collected` is
+#: what a delivered review leaves behind — and what giving up on an undeliverable one leaves
+#: too, told apart by `given_up_at` rather than by inference.
+#:
+#: **`stopped` is a decision and not a fault** (R-DEL-18). An agent that ended work it had
+#: handed over still owes itself the one review, exactly as R-ROL-43 holds for a role run —
+#: what came back before it was ended is what there is, and a third word is the only way a
+#: listing and a room can say so without calling a decision a failure.
 ASKED = "asked"
 WORKING = "working"
 ANSWERED = "answered"
 FAILED = "failed"
+STOPPED = "stopped"
 UNDELIVERABLE = "undeliverable"
 COLLECTED = "collected"
 UNFINISHED = (ASKED, WORKING)
-SETTLED = (ANSWERED, FAILED, UNDELIVERABLE)
+SETTLED = (ANSWERED, FAILED, STOPPED, UNDELIVERABLE)
+
+#: What is written down for an ask that was ended before it finished and had said nothing
+#: worth keeping. Rundesk reporting on the delegation, as every other fixed wording here is.
+STOPPED_EARLY = "this delegation was stopped before it finished"
+
+#: What a carried-on ask is asked when the agent that resumed it said nothing more. Prose
+#: rather than an empty prompt, for the reason a role's is: a brain handed nothing answers
+#: about nothing, and the session it is carrying on already holds the work.
+CARRY_ON = (
+    "Carry on from where you stopped. Finish the task you were handed, and report as your "
+    "rules require."
+)
 
 #: What Rundesk tells a parent when it could not carry an ask at all.
 #:
@@ -179,17 +201,15 @@ def _checked(ask_id: str) -> str:
     return str(ask_id)
 
 
-def safe_label(said: str | None, fallback: str) -> str:
-    """A short task label safe to show where other people are reading (R-DEL-15).
+def retained_until(now=None, days: int = RETAINED_DAYS) -> str:
+    """When this ask stops being readable and resumable, from its latest activity.
 
-    Never a local path and never a person's words verbatim: this is written into a listing
-    and into a line in the room the work was asked for in, and a label carrying a private
-    directory has published one.
+    Written on to the record at every change, so an ask somebody is still carrying on keeps
+    moving its own deadline — the same arithmetic a role run's window uses, and for the same
+    reason (R-ROL-11).
     """
-    text = " ".join(str(said or "").split())
-    kept = "".join(ch for ch in text if ch.isalnum() or ch in " -_.,'()")
-    kept = " ".join(kept.split())[:60].strip()
-    return kept or fallback
+    at = store.moment(store.stamped(now))
+    return store.stamped(lambda: (at + timedelta(days=days)).timestamp())
 
 
 # ── reading ───────────────────────────────────────────────────────────────────────────────
@@ -232,9 +252,26 @@ def waiting(to: str) -> list:
     **Including one already `working`**, and deliberately: a gateway standing down leaves an
     ask unfinished on purpose, and the next gateway to claim that name is what carries it
     on. Whatever is already in flight is held off by the thing carrying it, not by this.
+
+    **Never one somebody has asked to end.** A gateway that started it would spend a brain
+    on work that is about to be cancelled, and one that came up after the stop was asked
+    would start it for the first time (R-DEL-18).
     """
     return [one for one in every()
-            if one.get("to") == to and one.get("state") in UNFINISHED]
+            if one.get("to") == to and one.get("state") in UNFINISHED
+            and not one.get("stop_asked_at")]
+
+
+def stopping(to: str) -> list:
+    """Every unfinished ask addressed to this agent that somebody has asked to end.
+
+    Asked of every unfinished ask rather than of the ones ready to be carried: an agent that
+    asked for work to end wants it ended now, and one waiting out a backoff is exactly the
+    one nobody should have to wait for (R-DEL-18).
+    """
+    return [one for one in every()
+            if one.get("to") == to and one.get("state") in UNFINISHED
+            and one.get("stop_asked_at")]
 
 
 def owed(by: str) -> list:
@@ -261,8 +298,38 @@ def shown(row: dict, now=None) -> dict:
         "chain": list(row.get("chain") or []),
         "reviewed": bool(row.get("collected_at")) and not row.get("given_up_at"),
         "settled_at": row.get("settled_at") or "",
+        # How long it stays resumable, said out loud rather than left to be worked out from
+        # a fortnight and a date: an agent deciding whether to carry work on needs the
+        # deadline, and one that computed it would be a second place it could be computed
+        # differently (R-DEL-21).
+        "retained_until": _retention(row),
+        "stopped_by": row.get("stop_asked_by") or "",
         "elapsed": int(max(0, (now or time.time)() - began.timestamp())) if began else 0,
     }
+
+
+def _retention(row: dict) -> str:
+    """When this ask stops being readable, for a record written before it said so.
+
+    An ask admitted by a build that kept no deadline of its own is given the one it would
+    have had: a fortnight from the last thing that happened to it. Absent and computed are
+    different answers everywhere else here — this is the one place they are not, because a
+    record with no deadline at all would never be swept and never refuse a resume.
+    """
+    said = row.get("retained_until") or ""
+    if said:
+        return said
+    latest = row.get("latest_at") or row.get("asked_at") or ""
+    return retained_until(_clock_at(latest)) if latest else ""
+
+
+def _clock_at(said: str):
+    """That written moment, as the clock this module's arithmetic is handed.
+
+    Named for what it is rather than `at`, which is the local this file already uses a
+    dozen times over for the moment a change is being made.
+    """
+    return lambda: store.moment(said).timestamp()
 
 
 # ── admission ─────────────────────────────────────────────────────────────────────────────
@@ -344,13 +411,14 @@ def ask(name: str, to: str, brief: str, parent_run: str, label: str | None = Non
         # Everyone this work has passed through, the answering agent last. Written down
         # rather than counted, so a refusal can name them.
         "chain": [*chain, name],
-        "label": safe_label(label, to),
+        "label": handoffs.safe_label(label, to),
         "brief": brief,
         "posture": provider.narrowed(row.get("posture"), posture or provider.WORK),
         "parent_run": parent_run,
         "parent_conversation": where_it_is,
         "asked_at": at,
         "latest_at": at,
+        "retained_until": retained_until(now),
         "settled_at": "",
         "state": ASKED,
         "carry_attempts": 0,
@@ -360,6 +428,23 @@ def ask(name: str, to: str, brief: str, parent_run: str, label: str | None = Non
         "review_attempts": 0,
         "review_claimed_at": "",
         "collected_at": "",
+        # What the asking agent has said to this ask and nothing has read yet. **Here and
+        # not in either agent's store**: the process saying it is the asking agent's and the
+        # process reading it is the answering agent's, and neither opens the other's
+        # database (R-DEL-19).
+        "said": [],
+        "said_count": 0,
+        "stop_asked_at": "",
+        "stop_asked_by": "",
+        # How many times this ask has been carried *on* — never how many turns it has had.
+        # A first carry whose gateway died part-way is still a first carry and is asked the
+        # task again; only `resume` moves this, which is what makes `_prompt` unable to hand
+        # a brain a correction where it meant to hand it the work (R-DEL-20).
+        "resumes": 0,
+        # Whether the brain answering this reads anything after the prompt, written down by
+        # the turn that actually started rather than resolved twice. Absent until one has
+        # (R-PRV-15).
+        "can_steer": None,
     }
     with _allocating():
         record["id"] = f"del-{_next_number()}-{store._marked(pick)}"
@@ -396,35 +481,264 @@ def _has_a_brain(to: str, where: Path | None, runnable=None) -> None:
         ) from None
 
 
+# ── steering, stopping and carrying on ────────────────────────────────────────────────────
+
+
+def held(name: str, ask_id: str, now=None) -> dict:
+    """The ask a verb is about, refused where it is not this agent's to guide.
+
+    **Whose it is, and whether there is still time**, asked once for all three verbs so
+    they cannot come to disagree. The agent named is the agent that *asked* — an ask is
+    guided by the one that handed the work over and by nobody else, including the one
+    answering it, whose own turn is the thing being guided.
+    """
+    row = read(ask_id)
+    if row is None:
+        raise NotDelegable(f"there is no delegation called '{ask_id}'")
+    if row.get("from") != name:
+        # Named without saying who it *is* handed over by: a listing in one agent's room
+        # naming another agent's work is the leak `shown` exists to prevent (R-DEL-15).
+        raise NotDelegable(f"'{ask_id}' is not a delegation '{name}' handed over")
+    deadline = _retention(row)
+    if deadline and store.stamped(now) > deadline:
+        raise NotDelegable(
+            f"'{ask_id}' is past its retention window and can no longer be carried on"
+        )
+    return row
+
+
+def say(name: str, ask_id: str, said: str, where: Path | None = None, now=None) -> str:
+    """Say something to an ask being answered now, and answer where it will land.
+
+    One queue, because a word said to another agent's turn is one kind of thing. Where it
+    goes is a fact about the ask at the moment it is read: one in flight is steered, and one
+    that has settled and is still retained is carried on by `resume`. Said plainly rather
+    than guessed at, so an agent that reached for the wrong verb is told which one it wanted
+    (R-DEL-22).
+    """
+    row = held(name, ask_id, now)
+    if not str(said or "").strip():
+        raise NotDelegable("nothing was said")
+    if len(said) > BRIEF_LIMIT:
+        raise NotDelegable(
+            f"more than {BRIEF_LIMIT} characters — a word said to work in flight is "
+            "guidance, and a task that large is a delegation of its own"
+        )
+    if row.get("state") not in UNFINISHED:
+        raise NotDelegable(
+            f"'{ask_id}' is not being answered — to carry it on with more work, resume it"
+        )
+    if row.get("state") == WORKING and row.get("can_steer") is False:
+        # **Said rather than queued behind a brain that will never read it.** Not every
+        # brain can be sent to mid-turn, and a word accepted for one that cannot is a word
+        # that sits unread while the command that took it reported success. Stopping it, or
+        # waiting and resuming it, are the two things that do work.
+        #
+        # Read off what the answering turn recorded it could do, written into this record
+        # when that turn started — never by opening the answering agent's own store, which
+        # this side of a delegation never does, and never by asking an adapter a second
+        # time, which could disagree with the turn already running (R-PRV-15, R-DEL-19).
+        raise NotDelegable(
+            f"{_which_brain(row, where)} cannot be sent to while it works — stop it, or "
+            "wait for it and resume it with what you wanted to say"
+        )
+    _say(ask_id, said, now)
+    if row.get("state") == WORKING:
+        return "it reaches the work in flight; nothing is answered back here"
+    return "it is added to what this ask is asked when it starts"
+
+
+def _which_brain(row: dict, where: Path | None) -> str:
+    """The brain answering this ask, as a refusal names it.
+
+    Never the raw name (R-DEL-15): a brain may be a path to a program somebody wrote, and
+    this sentence is read wherever the agent that asked is reached.
+    """
+    named = agents.chosen(row.get("to") or "", where).get("provider") or ""
+    to = row.get("to") or "the agent it was handed to"
+    return f"{provider.label(named)}, the brain answering for '{to}'," if named else (
+        f"the brain answering for '{to}'")
+
+
+def stop(name: str, ask_id: str, now=None, asked_by: str = "") -> bool:
+    """Ask this delegation to end, and say whether there was one to end.
+
+    The ask is durable and the acting is the answering agent's gateway's: what has to be
+    ended is a turn that gateway owns, and the agent asking for it has not got it in hand.
+
+    **It still answers back** (R-DEL-18). A stopped delegation settles like any other and
+    owes the agent that asked exactly one review, because what came back before it was
+    ended is what there is — and an ask that simply went quiet is the one outcome this
+    whole module exists to make impossible.
+
+    **Who asked arrives rather than being read here**, exactly as it does for a role run
+    (R-ROL-43): whether this is an agent ending work it handed over or a person ending it
+    from a terminal is a fact about the environment the ask was typed in, and this module
+    never reads one.
+    """
+    row = held(name, ask_id, now)
+    if row.get("state") not in UNFINISHED:
+        return False
+    at = store.stamped(now)
+    with _changing(ask_id) as changing:
+        if changing.get("state") not in UNFINISHED:
+            return False
+        changing.update({"latest_at": at, "retained_until": retained_until(now)})
+        # **A second ask never rewrites whose decision the first one was**, exactly as
+        # `store.ask_role_stop` holds it: the notice that says a stop was a decision names
+        # who decided, so the two facts move together (R-ROL-43, R-DEL-18).
+        if not changing.get("stop_asked_at"):
+            changing["stop_asked_at"] = at
+            changing["stop_asked_by"] = str(asked_by or "")
+        return True
+
+
+def resume(name: str, ask_id: str, more: str, now=None) -> str:
+    """Carry a settled ask on, in the provider session it already has.
+
+    **The conversation is the same conversation**, which is the whole of how the session is
+    kept: the answering turn is opened on the caller and the run that asked, so a resumption
+    a week later reaches the brain with everything it already knew rather than starting cold
+    (R-DEL-20).
+
+    Reopening re-owes the review. The agent that asked is never told twice about one answer
+    — the settled one stops being owed the moment this reopens it — and is always told once
+    about the latest, because the carried-on ask settles like any other (R-DEL-11).
+    """
+    row = held(name, ask_id, now)
+    if not str(more or "").strip():
+        raise NotDelegable("a resumed delegation needs something more to do, and none was given")
+    if len(more) > BRIEF_LIMIT:
+        raise NotDelegable(
+            f"the continuation is longer than {BRIEF_LIMIT} characters — an agent is "
+            "handed a bounded task, never a conversation"
+        )
+    if row.get("state") in UNFINISHED:
+        raise NotDelegable(
+            f"'{ask_id}' is still being answered — to guide the work it is doing now, say it"
+        )
+    at = store.stamped(now)
+    with _changing(ask_id) as changing:
+        if changing.get("state") in UNFINISHED:
+            raise NotDelegable(f"'{ask_id}' is still being answered")
+        changing["said"] = [*(changing.get("said") or []), {"at": at, "text": str(more)}]
+        changing.update({
+            "state": ASKED, "resumes": int(changing.get("resumes") or 0) + 1,
+            "latest_at": at, "retained_until": retained_until(now),
+            # Everything the settled ask owed and everything it came to. Cleared together,
+            # because a record half reopened is one a listing reads as two different asks.
+            "settled_at": "", "answer": "", "why": "",
+            "review_attempts": 0, "review_claimed_at": "", "collected_at": "",
+            "given_up_at": "", "stop_asked_at": "", "stop_asked_by": "",
+            # The next turn resolves this for itself; the last one's answer is about a
+            # brain that may since have been reconfigured.
+            "can_steer": None,
+        })
+    return ask_id
+
+
+def _say(ask_id: str, said: str, now=None) -> None:
+    """Put one word on this ask's queue, under the hold every change here is made under."""
+    with _changing(ask_id) as row:
+        waiting = list(row.get("said") or [])
+        if len(waiting) >= SAID_WAITING:
+            raise NotDelegable(
+                f"{len(waiting)} words are already waiting to be read — nothing here is "
+                "reading them, and this one would wait behind them"
+            )
+        waiting.append({"at": store.stamped(now), "text": str(said)})
+        row["said"] = waiting
+        # Counted as well as queued, and never decremented: the queue empties the moment
+        # the turn reads it, so a surface driven off *waiting* would show a steer only if
+        # it happened to look in the seconds between (R-DEL-23).
+        row["said_count"] = int(row.get("said_count") or 0) + 1
+        row["latest_at"] = store.stamped(now)
+
+
+def claim_said(ask_id: str, now=None) -> list:
+    """Take everything waiting for this ask, and leave nothing behind.
+
+    Claimed rather than read, so a word cannot reach one turn twice — and under the same
+    hold every other change here is made under, so a word said while this is running is
+    read by the next claim rather than lost between the read and the write.
+    """
+    with _changing(ask_id) as row:
+        waiting = list(row.get("said") or [])
+        if not waiting:
+            return []
+        row["said"] = []
+        row["latest_at"] = store.stamped(now)
+        return [str(one.get("text") or "") for one in waiting]
+
+
+def words_waiting(ask_id: str) -> int:
+    """How many words nothing has read yet — what a listing shows and nothing else."""
+    row = read(ask_id)
+    return len(list((row or {}).get("said") or []))
+
+
+async def steering(ask_id: str, every=None, now=None):
+    """Everything the asking agent says to this turn while it is still running.
+
+    **Never ends of its own accord**, exactly as a role execution's steering does not: what
+    ends it is the turn ending, and `turn.carry` cancels this the moment the brain stops. A
+    generator that ended early would close the input of a brain that is still working.
+
+    Claimed from the durable record rather than handed over in memory, because the thing
+    saying something is a different agent's process entirely and may be talking to a gateway
+    that did not exist when this ask was admitted (R-DEL-19).
+    """
+    waited = STEER_SECONDS if every is None else every
+    while True:
+        for said in claim_said(ask_id, now):
+            if said.strip():
+                yield turn.Said(said, None)
+        await asyncio.sleep(waited)
+
+
 # ── carrying ──────────────────────────────────────────────────────────────────────────────
 
 
 def preface(name: str, row: dict, where: Path | None = None) -> str:
     """Everything the answering agent is told before it reads a word of the task.
 
-    **`build`, never `for_role`** (R-DEL-2). This agent is itself, so it receives
-    `RUNDESK_INSTRUCTIONS` in full — its home, its memory, how to read its own history back
-    — and then the delegation layer, and then its owner's own additions.
+    **The `agent_to_agent` layer, never `agent_to_role`** (R-DEL-2). This agent is itself,
+    so it is given the whole of what a named agent is — its home, its memory, its voice —
+    and then the layer saying another agent asked, and then its owner's own additions.
 
-    **Without `roles`**, and that is not an omission: `build` emits the roles layer only
-    where there is something to list, and the delegation layer forbids putting a role on
-    one paragraph later. An agent offered a capability the same preface refuses it spends a
-    turn finding out (R-DEL-9).
+    **The roles listing is left out by the composer and not by this**, which is the whole
+    point of the layer being named: the layer forbids putting a role on one paragraph later,
+    and an agent offered a capability the same preface refuses it spends a turn finding out
+    (R-DEL-9). Nothing here has to remember to strip a variable.
     """
-    variables = {
-        what: value
-        for what, value in agents.instruction_variables(name, where).items()
-        if what != "roles"
-    }
     return instructions.build(
-        variables={**variables, "caller_agent": row["from"]},
+        variables={**agents.instruction_variables(name, where),
+                   "caller_agent": row["from"]},
         trigger=instructions.DELEGATION,
         append=(agents.added_instructions(name, where),),
     )
 
 
+def _prompt(row: dict, said: list) -> str:
+    """What this turn is asked: the task the first time, and what was said after that.
+
+    **"Has this ask ever been carried on" is the question, and `resumes` is the only thing
+    that answers it.** A first carry whose gateway died part-way is still a first carry and
+    must be asked the task again rather than a correction somebody steered it with — which
+    is why this counts resumptions and never turns (R-DEL-20).
+
+    Anything said before it ever started is folded into what it is being asked, rather than
+    left for the steering seam: a brain that cannot be sent to mid-turn would never read it
+    there and the words would simply be lost.
+    """
+    kept = [one for one in said if one.strip()]
+    if not int(row.get("resumes") or 0):
+        return "\n\n".join([row["brief"], *kept])
+    return "\n\n".join(kept) or CARRY_ON
+
+
 async def carry(name: str, ask_id: str, where: Path | None = None, carrying=None,
-                now=None, watching=None) -> turn.Outcome:
+                now=None, watching=None, guiding=None) -> turn.Outcome:
     """Answer one ask as a turn of this agent's own, and settle what became of it.
 
     Far smaller than carrying a role run, because there is nothing to verify: no bundle, no
@@ -433,41 +747,57 @@ async def carry(name: str, ask_id: str, where: Path | None = None, carrying=None
     judgement rather than a worker's (R-DEL-2).
 
     The conversation is keyed by the agent that asked and the run it asked from, so the
-    answer is never in a conversation a person is typing into (R-DEL-5), and two asks from
-    one turn carry on from each other.
+    answer is never in a conversation a person is typing into (R-DEL-5), two asks from one
+    turn carry on from each other, and **a resumption reaches the brain with the session it
+    already had** rather than starting cold (R-DEL-20).
     """
     row = read(ask_id)
     if row is None:
         raise NotDelegable(f"there is no delegation called '{ask_id}'")
     if row.get("to") != name:
         raise NotDelegable(f"'{ask_id}' was not handed to '{name}'")
-    held = claim_work(ask_id, now)
-    if held is None:
+    taken = claim_work(ask_id, now)
+    if taken is None:
         raise NotDelegable(f"'{ask_id}' has already been settled")
     whose = agents.paths(name, where)
     chose = agents.chosen(name, where)
     named = chose.get("provider") or ""
     if not named:
         raise NotDelegable(f"'{name}' has no brain to answer '{ask_id}' with")
+    carried_on = bool(int(taken.get("resumes") or 0))
     outcome = await (carrying or turn.carry)(
-        name, held["brief"], named,
+        name, _prompt(taken, claim_said(ask_id, now)), named,
         where=where,
         model=chose.get("model") or None,
         settings=chose.get("settings"),
-        posture=held["posture"],
-        conversation=f'{held["from"]}/{held["parent_run"]}',
+        posture=taken["posture"],
+        conversation=f'{taken["from"]}/{taken["parent_run"]}',
         on=turn.AGENT,
         kind=turn.AGENT,
         source=turn.AGENT,
-        preface=preface(name, held, where),
+        preface=preface(name, taken, where),
         prompt_author="rundesk",
-        # The task carries everything it needs, so a stale session that handed the turn
-        # straight back is worth asking again on a fresh one (R-RUN-24). A whole ask is
-        # exactly the kind of prompt that survives being asked twice.
-        stands_alone=True,
+        # **The whole task stands alone; a continuation never does** (R-RUN-24). A stale
+        # session that hands a fresh ask straight back read nothing, and the ask survives
+        # being put again. A resumption is the opposite: it means nothing without the
+        # session it carries on, and asked again on a fresh one the brain answers about
+        # nothing while the work itself goes.
+        stands_alone=not carried_on,
         context=turn.Execution(cwd=whose["home"], skills=whose["skills"],
                                delegating=ask_id),
         watching=watching,
+        # What the agent that asked says to this turn while it runs. The same seam a role
+        # execution is steered through, so a word said to another agent travels the path a
+        # word typed at a terminal does — into the account first, and then to the brain.
+        steering=(guiding if guiding is not None else steering(ask_id, now=now)),
+        # Written down the moment there is a turn, because the agent that asked has to know
+        # whether this brain reads anything after the prompt *before* it tries to say
+        # something — and it may not open this agent's store to find out (R-DEL-19).
+        admitted=lambda run, can: _turn_started(ask_id, can, now),
+        # An agent asked for this to end, rather than a gateway going down under it. The
+        # difference is the whole of what a room can say afterwards about work that stopped
+        # (R-DEL-18).
+        stopped_by_owner=lambda: bool((read(ask_id) or {}).get("stop_asked_at")),
         now=now,
     )
     # **Only the last complete thing it said is returned** (R-DEL-10). The delegation
@@ -480,12 +810,36 @@ async def carry(name: str, ask_id: str, where: Path | None = None, carrying=None
     # that — it makes such a turn `ok=False` with `NOTHING_SAID` — so nothing here judges
     # it a second time, and Rundesk reads nothing out of what was said either way
     # (R-DEL-14).
+    #
+    # **Three endings, and a stop is not a failure** (R-DEL-18). A turn that ended with
+    # nothing to show while an agent was asking it to stop is a decision somebody made, and
+    # settled by `ok` alone it would read in the room as a fault. An ask that *answered*
+    # answered, whatever was being asked of it at the time — the stop lost the race, and
+    # calling a real answer a stop would throw the work away in the record.
+    #
+    # The ordinary way a stop lands is not here at all: the gateway cancels the task, and
+    # `agent.delegated` settles it on the way past. This is the narrower case where the
+    # brain went down under the ask before the cancel reached it.
     said = outcome.close
     if outcome.ok and said.strip():
         answered(ask_id, said, now)
+    elif (read(ask_id) or {}).get("stop_asked_at"):
+        stopped(ask_id, said, now)
     else:
         failed(ask_id, outcome.why or turn.NOTHING_SAID, now)
     return outcome
+
+
+def _turn_started(ask_id: str, can: dict, now=None) -> None:
+    """Write down what the brain answering this ask can do, the moment it is known.
+
+    Only what the agent on the other side has to be able to read: whether this brain can be
+    sent to mid-turn. Not a copy of the turn's own account, which is the answering agent's
+    and stays there — this record is the one thing both sides may open (R-DEL-19).
+    """
+    with contextlib.suppress(NotDelegable, Unreadable, OSError):
+        with _changing(ask_id) as row:
+            row["can_steer"] = bool((can or {}).get("steer"))
 
 
 # ── changing ──────────────────────────────────────────────────────────────────────────────
@@ -548,6 +902,7 @@ def claim_work(ask_id: str, now=None) -> dict | None:
             return None
         row["state"] = WORKING
         row["latest_at"] = store.stamped(now)
+        row["retained_until"] = retained_until(now)
         return dict(row)
 
 
@@ -557,6 +912,7 @@ def working(ask_id: str, now=None) -> bool:
         if row.get("state") not in UNFINISHED:
             return False
         row["latest_at"] = store.stamped(now)
+        row["retained_until"] = retained_until(now)
         return True
 
 
@@ -573,7 +929,32 @@ def answered(ask_id: str, answer: str, now=None) -> bool:
         if row.get("state") not in UNFINISHED:
             return False
         row.update({"state": ANSWERED, "answer": str(answer or "")[-ANSWER_KEPT:],
-                    "why": "", "latest_at": at, "settled_at": at})
+                    "why": "", "latest_at": at, "settled_at": at,
+                    "retained_until": retained_until(now)})
+        return True
+
+
+def stopped(ask_id: str, said: str = "", now=None) -> bool:
+    """Settle an ask that was ended before it finished, and owe the review anyway.
+
+    **A decision, not a fault** (R-DEL-18). The third ending exists because told apart by
+    `ok` alone a stop and a failure are one line in a room saying work did not finish, which
+    reads as a fault about something somebody chose. Whatever the answering agent had said
+    by then is kept and reviewed: work stopped half done is exactly the case where what came
+    back so far is worth reading.
+
+    Reached both ways an ask can be ended — a turn the gateway cancelled outright, and one
+    whose brain took the interruption and stopped on its own — so the settlement is the same
+    settlement however far it had got.
+    """
+    at = store.stamped(now)
+    with _changing(ask_id) as row:
+        if row.get("state") not in UNFINISHED:
+            return False
+        row.update({"state": STOPPED, "answer": str(said or "")[-ANSWER_KEPT:],
+                    "why": "" if str(said or "").strip() else STOPPED_EARLY,
+                    "latest_at": at, "settled_at": at,
+                    "retained_until": retained_until(now)})
         return True
 
 
@@ -589,38 +970,9 @@ def failed(ask_id: str, why: str, now=None) -> bool:
         if row.get("state") not in UNFINISHED:
             return False
         row.update({"state": FAILED, "answer": "", "why": str(why or ""),
-                    "latest_at": at, "settled_at": at})
+                    "latest_at": at, "settled_at": at,
+                    "retained_until": retained_until(now)})
         return True
-
-
-def check_in_due(elapsed: float, told: int = 0) -> int:
-    """Which check-in this ask has reached, or 0 when it owes none.
-
-    A bucket number rather than a timestamp, so a gateway that restarted mid-ask resumes
-    the cadence from where the clock is rather than immediately saying something — and so
-    two looks a second apart cannot produce two lines.
-    """
-    reached = int(max(0.0, float(elapsed)) // CHECK_IN_SECONDS)
-    return reached if reached > max(0, int(told)) else 0
-
-
-def backoff_seconds(attempts: int) -> float:
-    """How long to leave an ask alone after this many failed attempts at carrying it."""
-    return CARRY_BACKOFF_SECONDS * (2 ** max(0, int(attempts) - 1))
-
-
-def ready_to_carry(row: dict, now=None) -> bool:
-    """Whether enough time has passed since this ask's latest failed carry.
-
-    Wall time on both sides, and deliberately: the gateway deciding this is usually not the
-    gateway that failed, so there is no monotonic clock the two share — the same reason a
-    retention window is a durable stamp rather than an elapsed count.
-    """
-    stumbled = store.moment(row.get("carry_failed_at"))
-    if stumbled is None:
-        return True
-    waited = backoff_seconds(row.get("carry_attempts") or 0)
-    return (now or time.time)() - stumbled.timestamp() >= waited
 
 
 def carry_failed(ask_id: str, why: str, now=None) -> dict:
@@ -640,6 +992,7 @@ def carry_failed(ask_id: str, why: str, now=None) -> dict:
             return {"attempts": attempts, "settled": False}
         row.update({
             "state": FAILED, "answer": "", "latest_at": at, "settled_at": at,
+            "retained_until": retained_until(now),
             "why": COULD_NOT_CARRY.format(
                 to=row.get("to") or "the agent it was handed to", attempts=attempts,
                 why=why or "it gave no reason"),
@@ -693,9 +1046,9 @@ def sweep(now=None) -> dict:
     sits `working` until its retention window closes a fortnight later, and the agent that
     handed the work over is told nothing for the whole of it (R-DEL-13).
     """
-    at = store.moment(store.stamped(now))
+    now_at = store.stamped(now)
+    at = store.moment(now_at)
     quiet_before = store.stamped(lambda: (at - timedelta(hours=UNANSWERED_HOURS)).timestamp())
-    gone_before = store.stamped(lambda: (at - timedelta(days=RETAINED_DAYS)).timestamp())
     settled, removed = [], []
     for row in every():
         state = row.get("state")
@@ -704,7 +1057,10 @@ def sweep(now=None) -> dict:
             if seen and seen <= quiet_before and _went_unanswered(row["id"], seen, now):
                 settled.append(row["id"])
             continue
-        if (row.get("settled_at") or "") and row["settled_at"] <= gone_before:
+        # Off the deadline the record keeps rather than off its settling, because an ask
+        # somebody carried on last week is work in progress and settled a fortnight ago
+        # (R-DEL-21).
+        if _retention(row) and _retention(row) <= now_at:
             with contextlib.suppress(OSError):
                 path(row["id"]).unlink()
             with contextlib.suppress(OSError):
@@ -721,6 +1077,7 @@ def _went_unanswered(ask_id: str, seen: str, now=None) -> bool:
             return False
         row.update({
             "state": UNDELIVERABLE, "answer": "", "latest_at": at, "settled_at": at,
+            "retained_until": retained_until(now),
             "why": WENT_UNANSWERED.format(
                 to=row.get("to") or "the agent it was handed to", seen=seen,
                 hours=UNANSWERED_HOURS),

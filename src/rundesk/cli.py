@@ -842,6 +842,22 @@ def build_parser() -> argparse.ArgumentParser:
     asked.add_argument("--posture", metavar="read|work",
                        help="how far the answering agent may reach — never wider than the "
                             "turn handing the work over already had")
+    # The same three verbs a role run has, with the same meanings, because guiding somebody
+    # else's agent and guiding a specialist are the same three things to want: say something
+    # into work happening now, end it early, or carry a settled one on. Three rather than
+    # one that guessed from the state — a verb that said something into work in flight when
+    # an agent meant to start it again spends a turn's money doing it (R-DEL-22).
+    guided = asking.add_parser(
+        "say", help="say something to an ask being answered — read from standard input")
+    guided.add_argument("ask", metavar="<id>",
+                        help="which delegation — the id `delegations` lists")
+    ended = asking.add_parser("stop", help="end a delegation before it finishes")
+    ended.add_argument("ask", metavar="<id>",
+                       help="which delegation — the id `delegations` lists")
+    again = asking.add_parser(
+        "resume", help="carry a settled delegation on — read from standard input")
+    again.add_argument("ask", metavar="<id>",
+                       help="which delegation — the id `delegations` lists")
     shown = asking.add_parser("show", help="one delegation in full")
     shown.add_argument("ask", metavar="<id>",
                        help="which delegation — the id `delegations` lists")

@@ -691,6 +691,16 @@ class Answering:
     ROLE = "role"
     HANDED, WORKING, SETTLED = "handed", "working", "settled"
 
+    #: The two states that are *events* rather than progress: something was said into work
+    #: already running, and settled work was carried on.
+    #:
+    #: **Both were invisible, and that was a real cost.** Five steering messages reached a
+    #: role run in one conversation and the room the work was asked in showed none of them,
+    #: so an owner watching saw a task that had apparently sat unchanged for an hour. A
+    #: check-in is subtext because it repeats and says nothing new; these say something new
+    #: every time, so each is its own message and none is edited in place.
+    GUIDED, RESUMED = "guided", "resumed"
+
     #: The three ways a settled run can have ended, as a surface is told them (R-ROL-43).
     #: Spelled here rather than borrowed from `store`, exactly as the three states above
     #: are: what an adapter nobody here wrote is promised is a vocabulary of this seam's,
@@ -733,6 +743,31 @@ class Answering:
         self._tell(type=self.ROLE, conversation=conversation, role_run=run,
                    state=self.WORKING, role=role, label=label, elapsed=int(elapsed))
 
+    def told_role_guided(self, conversation: str, run: str, label: str,
+                         role: str = "") -> None:
+        """Say that something was said into a run that is working (R-ROL-44).
+
+        **That it happened, and never a word of what was said.** Steering text runs long and
+        may carry a local path or something private — `rundesk roles <agent> show <run>`
+        refuses to print the brief for exactly that reason, and this is the same text
+        arriving by a different route. No excerpt, no length, nothing but the fact.
+
+        **No elapsed clause**, matching the line that hands work over: this is an event and
+        not a duration, and how long the run has been going is what the check-in says.
+        """
+        self._tell(type=self.ROLE, conversation=conversation, role_run=run,
+                   state=self.GUIDED, role=role, label=label)
+
+    def told_role_resumed(self, conversation: str, run: str, label: str,
+                          role: str = "") -> None:
+        """Say that a settled run was carried on (R-ROL-44).
+
+        The same record and the same silence about what was said: a continuation is a task
+        in its own right and just as private as the brief was.
+        """
+        self._tell(type=self.ROLE, conversation=conversation, role_run=run,
+                   state=self.RESUMED, role=role, label=label)
+
     def told_role_settled(self, conversation: str, run: str, ok: bool,
                           summary: str, role: str = "", elapsed: int = 0,
                           became: str = "", stopped_by: str = "") -> None:
@@ -771,8 +806,9 @@ class Answering:
     #:
     #: **A second type rather than a state on the first**, because they are different news:
     #: a role run is this agent working in a mode, and a delegation is a *different named
-    #: agent* answering. One vocabulary though: `HANDED`/`WORKING`/`SETTLED` and
-    #: `SUCCEEDED`/`FAILED` are reused unchanged rather than spelled twice.
+    #: agent* answering. One vocabulary though: `HANDED`/`WORKING`/`SETTLED`,
+    #: `SUCCEEDED`/`STOPPED`/`FAILED` and `BY_AGENT`/`BY_TERMINAL` are reused unchanged
+    #: rather than spelled twice.
     DELEGATION = "delegation"
 
     def told_delegation_working(self, conversation: str, ask: str, label: str,
@@ -802,23 +838,49 @@ class Answering:
         self._tell(type=self.DELEGATION, conversation=conversation, delegation=ask,
                    state=self.WORKING, to=to, label=label, elapsed=int(elapsed))
 
+    def told_delegation_guided(self, conversation: str, ask: str, label: str,
+                               to: str = "") -> None:
+        """Say that something was said into an ask being answered now (R-DEL-23).
+
+        The mirror of `told_role_guided`, and silent about the words for the same reason: a
+        listing refuses to show the task, and this is that same text arriving by another
+        route. No elapsed clause — an event, not a duration.
+        """
+        self._tell(type=self.DELEGATION, conversation=conversation, delegation=ask,
+                   state=self.GUIDED, to=to, label=label)
+
+    def told_delegation_resumed(self, conversation: str, ask: str, label: str,
+                                to: str = "") -> None:
+        """Say that a settled ask was carried on (R-DEL-23)."""
+        self._tell(type=self.DELEGATION, conversation=conversation, delegation=ask,
+                   state=self.RESUMED, to=to, label=label)
+
     def told_delegation_settled(self, conversation: str, ask: str, ok: bool,
                                 summary: str, to: str = "", elapsed: int = 0,
-                                became: str = "") -> None:
-        """Say how the work went, wherever it was handed over (R-DEL-16).
+                                became: str = "", stopped_by: str = "") -> None:
+        """Say how the work went, wherever it was handed over (R-DEL-16, R-DEL-18).
 
         Complete in itself for the reason handing it over is: a surface that never saw the
         ask start still shows what came back.
 
-        **Two endings rather than three.** Nothing stops a delegation — there is no verb
-        for it and no record of one — so `became` takes `succeeded` or `failed` only, and
-        `stopped_by` has no meaning here and is not carried.
+        **Three endings, and `ok` is kept** — the same shape a role run settles with, and
+        for the same reason. An ask somebody deliberately ended is not one that failed, and
+        told apart by `ok` alone the two were a single ⚠️ line saying work did not finish,
+        which reads as a fault about a decision. So `became` says which of the three it was
+        and `stopped_by` says who asked, while `ok` goes on meaning exactly what it meant.
+
+        An ending nothing settled is no ending. A carry that threw and will be tried again
+        reaches this with `became` empty rather than with a word invented for it.
         """
         it = dict(type=self.DELEGATION, conversation=conversation, delegation=ask,
                   state=self.SETTLED, to=to, label=summary, ok=bool(ok),
                   elapsed=int(elapsed))
-        if became in (self.SUCCEEDED, self.FAILED):
+        if became in (self.SUCCEEDED, self.STOPPED, self.FAILED):
             it["became"] = became
+        # Only ever beside a stop, and only where somebody wrote it down: on any other
+        # ending it would be the answer to a question nobody asked.
+        if it.get("became") == self.STOPPED and stopped_by in self.STOP_ASKERS:
+            it["stopped_by"] = stopped_by
         self._tell(**it)
 
     async def told_restart_finished(self, conversation: str, text: str) -> None:

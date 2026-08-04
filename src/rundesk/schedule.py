@@ -484,7 +484,7 @@ def by_default(named: str) -> str:
     if not isinstance(named, str) or not named.strip():
         raise ValueError("a schedule name is required for its trigger instructions")
     return instructions.render(
-        instructions.SCHEDULE_INSTRUCTIONS,
+        instructions.SCHEDULE_TO_AGENT,
         {"schedule": named.strip()},
     )
 

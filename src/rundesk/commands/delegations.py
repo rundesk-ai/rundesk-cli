@@ -16,6 +16,9 @@ import sys
 from rundesk import delegation as delegations
 from rundesk import migration
 from rundesk import store
+# One way, never a cycle: `env` knows nothing of delegations. Imported rather than restated,
+# because a discriminator spelled twice is one that eventually disagrees with itself.
+from rundesk.commands.env import in_a_turn
 
 
 #: How many of an agent's delegations a listing shows. Enough to cover what is in flight
@@ -32,6 +35,8 @@ def cmd_delegations(args: argparse.Namespace, agents) -> int:
     act = getattr(args, "act", None)
     if act == "ask":
         return _hand_to_an_agent(args)
+    if act in ("say", "stop", "resume"):
+        return _guide_a_delegation(args, act)
     try:
         found = delegations.every()
     except delegations.Unreadable as why:
@@ -70,11 +75,16 @@ def _show_delegation(args: argparse.Namespace, found: list) -> int:
             continue
         it = delegations.shown(row)
         for what in ("id", "from", "to", "label", "posture", "state", "parent_run",
-                     "settled_at"):
+                     "settled_at", "retained_until"):
             print(f"{what:16}{it[what]}")
         print(f"{'chain':16}{' then '.join(it['chain'])}")
         print(f"{'elapsed':16}{it['elapsed']}s")
         print(f"{'reviewed':16}{'yes' if it['reviewed'] else 'no'}")
+        waiting = delegations.words_waiting(row["id"])
+        if waiting:
+            print(f"{'waiting to say':16}{waiting}")
+        if row.get("stop_asked_at"):
+            print(f"{'stop asked':16}{row['stop_asked_at']}")
         if row.get("given_up_at"):
             # Said plainly rather than left to be inferred from the attempt count: "nobody
             # has read this" is exactly the fact somebody reads a listing to find out.
@@ -137,3 +147,57 @@ def _hand_to_an_agent(args: argparse.Namespace) -> int:
     print(f"        {record['label']} — handed to {record['to']}")
     print("        it runs in that agent's gateway; you are told when it answers")
     return 0
+
+
+def _who_asked() -> str:
+    """Whether this stop is an agent's own decision or somebody's at a terminal.
+
+    **The same discriminator `env` already keeps, rather than a second one** (R-ROL-43).
+    `RUNDESK_RUN` is in every program a gateway starts and in nothing a person types, so an
+    agent ending work it handed over and an owner ending it are told apart here and nowhere
+    else — and a second reading of the same variable is a second reading that could
+    disagree.
+    """
+    return store.ASKED_BY_AGENT if in_a_turn() else store.ASKED_BY_TERMINAL
+
+
+def _guide_a_delegation(args: argparse.Namespace, act: str) -> int:
+    """Say something to an ask being answered, end one, or carry a settled one on.
+
+    **Three verbs because there are three things to mean** (R-DEL-22), and each refusal
+    names the one that was wanted. A single verb that guessed from the ask's state would say
+    something into work in flight when an agent meant to start it again, and spend a turn's
+    money doing it.
+    """
+    said = sys.stdin.read() if act in ("say", "resume") else ""
+    try:
+        if act == "stop":
+            if not delegations.stop(args.name, args.ask, asked_by=_who_asked()):
+                print(f"{args.name}/{args.ask}: ALREADY OVER — nothing was running to end",
+                      file=sys.stderr)
+                return 1
+            print(f"{args.ask} was asked to stop")
+            print("        it ends as soon as that agent's gateway reaches it, and it "
+                  "still answers back")
+            return 0
+        if act == "say":
+            # Said *after* it was taken, never before: a line printed on the way in is a
+            # line a refusal cannot take back.
+            lands = delegations.say(args.name, args.ask, said)
+            print(f"said to {args.ask}")
+            print(f"        {lands}")
+            return 0
+        delegations.resume(args.name, args.ask, said)
+        print(f"{args.ask} was carried on")
+        print("        it starts again in the conversation it already had, so that agent "
+              "keeps what it knew")
+        return 0
+    except delegations.NotDelegable as why:
+        print(f"{args.name}/{args.ask}: NOT DONE — {why}", file=sys.stderr)
+        print(f"        where it stands:  rundesk delegations {args.name} show {args.ask}",
+              file=sys.stderr)
+        return 1
+    except (delegations.Unreadable, store.Unreadable, store.TooNew, store.Behind,
+            migration.Failed) as why:
+        print(f"{args.name}: RECORDS UNREADABLE — {why}", file=sys.stderr)
+        return 1

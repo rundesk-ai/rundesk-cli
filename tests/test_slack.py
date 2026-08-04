@@ -1830,6 +1830,32 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
         self.assertIn("exporter", line)
         self.assertIn("development", line)
 
+    def test_a_steer_into_a_role_run_is_shown_as_its_own_message(self):
+        """R-ROL-44 — a steer reached the work and the room showed nothing at all."""
+        self.assertEqual("📋 Updated the *applicant-export* development task.",
+                         slack.role_line(self.handed(state="guided")))
+
+    def test_a_steer_into_a_role_run_never_repeats_what_was_said(self):
+        """R-ROL-44, R-ROL-17 — the brief is refused for the same reason."""
+        for privately in ("/Users/somebody/secret", "the api key is"):
+            with self.subTest(privately=privately):
+                line = slack.role_line(self.handed(state="guided", text=privately,
+                                                   said=privately))
+                self.assertNotIn(privately, line)
+
+    def test_a_role_run_carried_on_says_so_and_drops_the_role_word_when_there_is_none(self):
+        self.assertEqual("📋 Resumed the *applicant-export* development task.",
+                         slack.role_line(self.handed(state="resumed")))
+        self.assertEqual("📋 Resumed the *applicant-export* task.",
+                         slack.role_line(self.handed(state="resumed", role="")))
+
+    def test_neither_a_steer_nor_a_resume_into_a_role_run_carries_an_elapsed_clause(self):
+        for state in ("guided", "resumed"):
+            with self.subTest(state=state):
+                line = slack.role_line(self.handed(state=state, elapsed=4000))
+                self.assertNotIn("1h", line)
+                self.assertNotIn("—", line)
+
 
 @needs_slack
 class WhatADelegationLooksLikeHere(unittest.TestCase):
@@ -1908,6 +1934,34 @@ class WhatADelegationLooksLikeHere(unittest.TestCase):
         self.assertNotIn(slack.DID["delegate"], handed)
         self.assertNotIn(slack.DELEGATION_MARK, role)
         self.assertNotIn(slack.ROLE_MARK, handed)
+
+
+
+    def test_a_steer_is_shown_as_its_own_message(self):
+        """R-DEL-23 — a discrete event somebody asked to be able to see, so a full message
+        rather than the quieter register a check-in keeps."""
+        line = slack.delegation_line(self.handed(state="guided"))
+        self.assertEqual("🤝 Updated *cole* on the *quote-flow* task.", line)
+
+    def test_a_steer_never_repeats_what_was_said(self):
+        """R-DEL-23 — steering text may carry a local path, which is why a listing refuses
+        to show the task at all."""
+        for privately in ("/Users/somebody/secret", "the api key is"):
+            with self.subTest(privately=privately):
+                line = slack.delegation_line(self.handed(state="guided", text=privately,
+                                                         said=privately))
+                self.assertNotIn(privately, line)
+
+    def test_a_delegation_carried_on_says_so(self):
+        self.assertEqual("🤝 Resumed *cole* on the *quote-flow* task.",
+                         slack.delegation_line(self.handed(state="resumed")))
+
+    def test_neither_a_steer_nor_a_resume_carries_an_elapsed_clause(self):
+        for state in ("guided", "resumed"):
+            with self.subTest(state=state):
+                line = slack.delegation_line(self.handed(state=state, elapsed=4000))
+                self.assertNotIn("1h", line)
+                self.assertNotIn("—", line)
 
 
 @needs_slack

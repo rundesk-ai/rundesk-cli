@@ -24,7 +24,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import agent, config, delegation, provider, role, store, turn  # noqa: E402
+from rundesk import agent, config, delegation  # noqa: E402
+from rundesk import handoff as handoffs  # noqa: E402
+from rundesk import instructions  # noqa: E402
+from rundesk import provider, role, store, turn  # noqa: E402
 
 TASK = "Look at the quote flow and say what is slow about it.\nRead only; change nothing.\n"
 AT = "2026-08-01T09:00:00Z"
@@ -36,17 +39,40 @@ def at(said: str):
 
 
 class Carried:
-    """The turn, as a stand-in — it records what it was handed and answers well."""
+    """The turn, as a stand-in — it records what it was handed and answers well.
+
+    **Exactly the surface `turn.carry` has at the seams this module uses**, and no more: it
+    calls `admitted` with what the brain can do the way a real turn does, and reads whatever
+    is on the steering generator when a case asks it to. A stand-in more generous than the
+    real thing hides whole features, and one less generous never exercises them.
+    """
 
     def __init__(self, ok: bool = True, said: str = "It is the second query. Here is why.",
-                 narrating: str = ""):
+                 narrating: str = "", steer: bool = True, listening: int = 0,
+                 while_working=None):
         self.given: dict = {}
+        self.heard: list = []
         self._ok = ok
         self._said = said
         self._narrating = narrating
+        self._steer = steer
+        self._listening = listening
+        #: Called once the turn is admitted and still running — which is the only moment
+        #: the record is `working` and knows what this brain can do.
+        self._while_working = while_working
 
     async def __call__(self, name, prompt, named, **given):
         self.given = {"name": name, "prompt": prompt, "provider": named, **given}
+        if given.get("admitted") is not None:
+            given["admitted"]("7-abcd", {"steer": self._steer, "resume": True})
+        if self._while_working is not None:
+            self._while_working()
+        guiding = given.get("steering")
+        if guiding is not None and self._listening:
+            async for word in guiding:
+                self.heard.append(word.text)
+                if len(self.heard) >= self._listening:
+                    break
         # Working narration, then a tool call, then the report — the shape a real turn
         # has, so what is handed on can be told from what was merely said on the way.
         spoke: list = []
@@ -244,10 +270,10 @@ class TheRecordOfOneAsk(WithTwoAgentsOnOneInstall):
         self.assertEqual({"attempts": 1, "settled": False}, said)
         back = delegation.read(record["id"])
         self.assertEqual(delegation.ASKED, back["state"])
-        self.assertFalse(delegation.ready_to_carry(back, now=at("2026-08-01T09:00:30Z")))
-        self.assertTrue(delegation.ready_to_carry(back, now=at("2026-08-01T09:02:00Z")))
-        self.assertEqual(delegation.CARRY_BACKOFF_SECONDS * 2,
-                         delegation.backoff_seconds(2))
+        self.assertFalse(handoffs.ready_to_carry(back, now=at("2026-08-01T09:00:30Z")))
+        self.assertTrue(handoffs.ready_to_carry(back, now=at("2026-08-01T09:02:00Z")))
+        self.assertEqual(handoffs.CARRY_BACKOFF_SECONDS * 2,
+                         handoffs.backoff_seconds(2))
 
     def test_the_ceiling_settles_it_with_the_reason(self):
         """R-DEL-11 — however a delegation ends, the agent that asked is told once. A
@@ -270,9 +296,9 @@ class TheRecordOfOneAsk(WithTwoAgentsOnOneInstall):
         what survives is one plain word, never a path anything would follow."""
         record = self.ask(label="/Users/somebody/private/exporter")
         self.assertNotIn("/", record["label"])
-        self.assertEqual("cole", delegation.safe_label("", "cole"))
-        self.assertNotIn("`", delegation.safe_label("`rm -rf /`", "cole"))
-        self.assertLessEqual(len(delegation.safe_label("x " * 200, "cole")), 60)
+        self.assertEqual("cole", handoffs.safe_label("", "cole"))
+        self.assertNotIn("`", handoffs.safe_label("`rm -rf /`", "cole"))
+        self.assertLessEqual(len(handoffs.safe_label("x " * 200, "cole")), 60)
 
     def test_an_answer_longer_than_the_ceiling_keeps_its_tail(self):
         """The report is at the end. A ceiling that kept the head would keep the working
@@ -418,10 +444,11 @@ class CarryingOneAsk(WithTwoAgentsOnOneInstall):
         record = self.ask()
         carry, _ = self.carried(record["id"])
         preface = carry.given["preface"]
-        self.assertTrue(preface.startswith("# Rundesk agent operating rules"))
+        self.assertTrue(preface.startswith(instructions.CORE_INSTRUCTIONS))
+        self.assertIn("# Rundesk agent operating rules", preface)
         self.assertIn("You are cole, an agent running inside rundesk.", preface)
-        self.assertIn("## Work handed to you by another agent", preface)
-        self.assertIn("The named agent elena handed you this task.", preface)
+        self.assertIn("## Answering another agent", preface)
+        self.assertIn("elena, an agent on your team, handed you this task.", preface)
         self.assertIn(str(agent.home("cole", self.where)), preface)
         self.assertNotIn("{caller_agent}", preface)
 
@@ -488,6 +515,332 @@ class CarryingOneAsk(WithTwoAgentsOnOneInstall):
         with self.assertRaises(delegation.NotDelegable):
             asyncio.run(delegation.carry("elena", record["id"], where=self.where,
                                          carrying=Carried()))
+
+
+class GuidingAnAskThatIsBeingAnswered(WithTwoAgentsOnOneInstall):
+    """R-DEL-22 — the three verbs a role run has, with the same meanings and the same
+    refusals. Three rather than one that guessed from the state: a verb that said something
+    into work in flight when an agent meant to start it again spends a turn's money."""
+
+    def test_a_word_said_to_an_ask_in_flight_reaches_the_turn_carrying_it(self):
+        """The steering seam is the same one a role execution is steered through, so a word
+        said to another agent travels the path a word typed at a terminal does."""
+        record = self.ask()
+        delegation.claim_work(record["id"])
+        self.assertEqual("it reaches the work in flight; nothing is answered back here",
+                         delegation.say("elena", record["id"], "read the migration too"))
+        self.assertEqual(["read the migration too"],
+                         delegation.claim_said(record["id"]))
+        self.assertEqual([], delegation.claim_said(record["id"]),
+                         "one word said reached two turns")
+
+    def test_words_said_before_it_starts_are_folded_into_what_it_is_asked(self):
+        """A brain that cannot be sent to mid-turn would never read them at the steering
+        seam, and the words would simply be lost."""
+        record = self.ask()
+        delegation.say("elena", record["id"], "read the migration too")
+        carry, _ = self.carried(record["id"])
+        self.assertEqual(f"{TASK}\n\nread the migration too", carry.given["prompt"])
+
+    def test_a_word_said_to_a_brain_that_cannot_be_sent_to_is_refused_by_name(self):
+        """R-DEL-22 — said rather than queued behind a brain that will never read it. The
+        answer comes off what the answering turn recorded it could do, written into the
+        record when that turn started: this side of a delegation never opens the other
+        agent's store, so there is nowhere else it could come from."""
+        record = self.ask()
+        refused: list = []
+
+        def while_working():
+            try:
+                delegation.say("elena", record["id"], "and read the migration")
+            except delegation.NotDelegable as why:
+                refused.append(str(why))
+
+        self.carried(record["id"], steer=False, while_working=while_working)
+        self.assertEqual(1, len(refused), "a word was taken for a brain that cannot read it")
+        self.assertIn("cannot be sent to while it works", refused[0])
+        self.assertIn("cole", refused[0])
+        # Through `provider.label`, never the configured word: a brain may be the path of a
+        # program somebody wrote, and this sentence is read wherever the asking agent is
+        # reached (R-DEL-15). For one that ships the label is its name, which is why this
+        # asserts the guard was used rather than that the name is absent.
+        self.assertIn(f"{provider.label('claude')}, the brain answering for 'cole',",
+                      refused[0])
+
+    def test_a_word_said_to_a_settled_ask_says_which_verb_was_wanted(self):
+        record = self.ask()
+        self.carried(record["id"])
+        with self.assertRaises(delegation.NotDelegable) as refused:
+            delegation.say("elena", record["id"], "and the migration")
+        self.assertIn("to carry it on with more work, resume it", str(refused.exception))
+
+    def test_carrying_on_an_ask_still_being_answered_says_which_verb_was_wanted(self):
+        record = self.ask()
+        delegation.claim_work(record["id"])
+        with self.assertRaises(delegation.NotDelegable) as refused:
+            delegation.resume("elena", record["id"], "and the migration")
+        self.assertIn("to guide the work it is doing now, say it", str(refused.exception))
+
+    def test_an_ask_another_agent_handed_over_is_not_this_agents_to_guide(self):
+        """An ask is guided by the agent that handed the work over and by nobody else,
+        including the one answering it — whose own turn is the thing being guided."""
+        record = self.ask()
+        for verb, given in ((delegation.say, ("more",)), (delegation.stop, ()),
+                            (delegation.resume, ("more",))):
+            with self.subTest(verb=verb.__name__):
+                with self.assertRaises(delegation.NotDelegable) as refused:
+                    verb("cole", record["id"], *given)
+                self.assertIn("is not a delegation 'cole' handed over",
+                              str(refused.exception))
+
+    def test_no_such_ask_is_refused_by_every_verb(self):
+        for verb, given in ((delegation.say, ("more",)), (delegation.stop, ()),
+                            (delegation.resume, ("more",))):
+            with self.subTest(verb=verb.__name__):
+                with self.assertRaises(delegation.NotDelegable) as refused:
+                    verb("elena", "del-9-zzzz", *given)
+                self.assertIn("there is no delegation called", str(refused.exception))
+
+    def test_an_ask_past_its_retention_window_can_no_longer_be_carried_on(self):
+        """R-DEL-21 — the record is swept an hour later at most, and in between a resume
+        would start work whose deadline has already gone."""
+        record = self.ask()
+        self.carried(record["id"])
+        after = at("2026-09-01T09:00:00Z")
+        for verb, given in ((delegation.say, ("more",)), (delegation.stop, ()),
+                            (delegation.resume, ("more",))):
+            with self.subTest(verb=verb.__name__):
+                with self.assertRaises(delegation.NotDelegable) as refused:
+                    verb("elena", record["id"], *given, now=after)
+                self.assertIn("past its retention window", str(refused.exception))
+
+    def test_nothing_said_and_too_much_said_are_both_refused(self):
+        record = self.ask()
+        delegation.claim_work(record["id"])
+        for empty in ("", "   "):
+            with self.subTest(said=repr(empty)):
+                with self.assertRaises(delegation.NotDelegable):
+                    delegation.say("elena", record["id"], empty)
+        with self.assertRaises(delegation.NotDelegable) as refused:
+            delegation.say("elena", record["id"], "x" * (delegation.BRIEF_LIMIT + 1))
+        self.assertIn("guidance", str(refused.exception))
+
+    def test_more_words_than_anything_is_reading_are_refused_rather_than_queued(self):
+        """The record is read whole into memory by two gateways and a command, so an
+        unbounded queue is the unbounded file `ANSWER_KEPT` exists to prevent."""
+        record = self.ask()
+        delegation.claim_work(record["id"])
+        for n in range(delegation.SAID_WAITING):
+            delegation.say("elena", record["id"], f"word {n}")
+        with self.assertRaises(delegation.NotDelegable) as refused:
+            delegation.say("elena", record["id"], "one too many")
+        self.assertIn("already waiting to be read", str(refused.exception))
+        self.assertEqual(delegation.SAID_WAITING,
+                         delegation.words_waiting(record["id"]))
+
+
+class StoppingAndCarryingOnAnAsk(WithTwoAgentsOnOneInstall):
+    """R-DEL-18, R-DEL-20 — the third ending, and a resumption that keeps its session."""
+
+    def test_a_stopped_ask_is_a_decision_and_still_owes_one_review(self):
+        """R-DEL-18 — settled by `ok` alone a stop would read in the room as a fault about
+        something somebody chose, and however a delegation ends the agent that handed the
+        work over is told exactly once."""
+        record = self.ask()
+        self.assertTrue(delegation.stop("elena", record["id"], asked_by="agent"))
+        back = delegation.read(record["id"])
+        self.assertTrue(back["stop_asked_at"])
+        self.assertEqual("agent", back["stop_asked_by"])
+        self.assertEqual([], delegation.waiting("cole"),
+                         "a gateway would have spent a brain on work about to be ended")
+        self.assertEqual([back], delegation.stopping("cole"))
+
+        self.assertTrue(delegation.stopped(record["id"]))
+        back = delegation.read(record["id"])
+        self.assertEqual(delegation.STOPPED, back["state"])
+        self.assertEqual(delegation.STOPPED_EARLY, back["why"])
+        self.assertEqual([back], delegation.owed("elena"))
+
+    def test_what_an_ask_had_said_by_the_time_it_was_stopped_is_kept(self):
+        """Work stopped half done is exactly the case where what came back so far is worth
+        reading, so the third ending keeps it rather than clearing it like a failure."""
+        record = self.ask()
+        delegation.claim_work(record["id"])
+        delegation.stopped(record["id"], "I read two of the three queries.")
+        back = delegation.read(record["id"])
+        self.assertEqual("I read two of the three queries.", back["answer"])
+        self.assertEqual("", back["why"])
+
+    def test_an_ask_already_settled_is_not_one_there_was_anything_to_stop(self):
+        record = self.ask()
+        self.carried(record["id"])
+        self.assertFalse(delegation.stop("elena", record["id"], asked_by="terminal"))
+
+    def test_a_resumed_ask_carries_on_in_the_conversation_it_already_had(self):
+        """R-DEL-20 — the whole point. The answering turn is opened on the caller and the
+        run that asked, so a resumption reaches the brain with everything it already knew
+        rather than starting cold; a resume that lost the session is not a resume."""
+        record = self.ask()
+        first, _ = self.carried(record["id"])
+        delegation.resume("elena", record["id"], "now check the index too")
+        again, _ = self.carried(record["id"])
+        self.assertEqual(first.given["conversation"], again.given["conversation"])
+        self.assertEqual(f"elena/{self.parent}", again.given["conversation"])
+        self.assertEqual(turn.AGENT, again.given["on"])
+
+    def test_a_resumed_ask_is_asked_what_was_said_rather_than_the_task_again(self):
+        """R-DEL-20 — and a first carry whose gateway died part-way is still a first carry.
+        Counted on resumptions rather than on turns, which is what makes it impossible to
+        hand a brain a correction where the whole task was meant."""
+        record = self.ask()
+        delegation.claim_work(record["id"])
+        again, _ = self.carried(record["id"])
+        self.assertEqual(TASK, again.given["prompt"], "a second look re-read the task")
+        self.assertTrue(again.given["stands_alone"])
+
+        delegation.resume("elena", record["id"], "now check the index too")
+        carried, _ = self.carried(record["id"])
+        self.assertEqual("now check the index too", carried.given["prompt"])
+        self.assertFalse(carried.given["stands_alone"],
+                         "a continuation was offered to a fresh session")
+
+    def test_a_resumption_with_nothing_more_to_do_is_asked_to_carry_on(self):
+        """A brain handed nothing answers about nothing, and the session it is carrying on
+        already holds the work."""
+        record = self.ask()
+        self.carried(record["id"])
+        delegation.resume("elena", record["id"], "carry on")
+        delegation.claim_said(record["id"])
+        carried, _ = self.carried(record["id"])
+        self.assertEqual(delegation.CARRY_ON, carried.given["prompt"])
+
+    def test_resuming_reopens_the_record_and_owes_the_review_again(self):
+        """R-DEL-11 — the agent that asked is never told twice about one answer, and is
+        always told once about the latest."""
+        record = self.ask()
+        self.carried(record["id"], said="A first answer.")
+        self.assertEqual(1, len(delegation.owed("elena")))
+
+        delegation.resume("elena", record["id"], "now check the index too")
+        back = delegation.read(record["id"])
+        self.assertEqual(delegation.ASKED, back["state"])
+        self.assertEqual([], delegation.owed("elena"),
+                         "the settled answer was still owed after being carried on")
+        self.assertEqual("", back["answer"])
+        self.assertEqual("", back["settled_at"])
+        self.assertEqual(0, back["review_attempts"])
+        self.assertEqual(1, back["resumes"])
+        self.assertEqual([back], delegation.waiting("cole"))
+
+        self.carried(record["id"], said="A second answer.")
+        owed = delegation.owed("elena")
+        self.assertEqual(1, len(owed), "the carried-on ask owes exactly one review")
+        self.assertEqual("A second answer.", owed[0]["answer"])
+
+    def test_carrying_on_needs_something_more_to_do(self):
+        record = self.ask()
+        self.carried(record["id"])
+        with self.assertRaises(delegation.NotDelegable) as refused:
+            delegation.resume("elena", record["id"], "   ")
+        self.assertIn("needs something more to do", str(refused.exception))
+        with self.assertRaises(delegation.NotDelegable):
+            delegation.resume("elena", record["id"], "x" * (delegation.BRIEF_LIMIT + 1))
+
+    def test_every_change_moves_the_deadline_and_a_listing_says_what_it_is(self):
+        """R-DEL-21 — counted from latest activity rather than from settling, so an ask
+        somebody is still carrying on at day thirteen is work in progress."""
+        record = self.ask(now=at("2026-08-01T09:00:00Z"))
+        self.assertEqual("2026-08-15T09:00:00Z", record["retained_until"])
+        self.carried(record["id"])
+        delegation.resume("elena", record["id"], "more", now=at("2026-08-10T09:00:00Z"))
+        it = delegation.shown(delegation.read(record["id"]))
+        self.assertEqual("2026-08-24T09:00:00Z", it["retained_until"])
+
+
+class WhatAResumedAskStillCannotDo(WithTwoAgentsOnOneInstall):
+    """R-DEL-8, R-DEL-4 — adding a way to carry an ask on must not open a hole in any of
+    the three refusals that close the cycle.
+
+    **Proved durably rather than through the environment marker.** `RUNDESK_DELEGATION` is
+    a convenience a command refuses early on and never the authority — a brain that cleared
+    it would still meet the record. So every case here calls `delegation.ask` directly, with
+    no environment anywhere near it, from a turn shaped exactly as a resumed delegation
+    turn's is: on the pseudo-surface `agent`, in a conversation keyed by the agent that
+    asked and the run it asked from.
+    """
+
+    def a_delegation_turn(self) -> tuple:
+        """One ask, carried and then carried on, and the answering agent's own turn of it.
+
+        The run is written into `cole`'s records the way `turn.carry` writes one: source
+        `agent`, on the `agent` surface, in the conversation `delegation.carry` opens.
+        """
+        record = self.ask()
+        self.carried(record["id"])
+        delegation.resume("elena", record["id"], "now check the index too")
+        held = delegation.read(record["id"])
+        self.assertEqual(1, held["resumes"], "the ask was not carried on")
+        theirs = agent.records("cole", self.where)
+        where_it_is = theirs.opened(
+            store.conversation_id(turn.AGENT, f'elena/{self.parent}'),
+            turn.AGENT, turn.AGENT, f'elena/{self.parent}', AT)["id"]
+        return held, theirs.began(turn.AGENT, "claude", "work", AT,
+                                  conversation_id=where_it_is)
+
+    def test_a_resumed_delegation_turn_cannot_hand_work_back_to_the_agent_that_asked(self):
+        held, run = self.a_delegation_turn()
+        with self.assertRaises(delegation.NotDelegable) as refused:
+            delegation.ask("cole", "elena", "have another look", run,
+                           chain=held["chain"], where=self.where)
+        self.assertIn("already in this chain of work", str(refused.exception))
+        self.assertIn("elena", str(refused.exception))
+
+    def test_a_resumed_delegation_turn_cannot_hand_work_to_itself(self):
+        held, run = self.a_delegation_turn()
+        with self.assertRaises(delegation.NotDelegable) as refused:
+            delegation.ask("cole", "cole", "have another look", run,
+                           chain=held["chain"], where=self.where)
+        self.assertIn("cannot hand work to itself", str(refused.exception))
+
+    def test_a_resumed_delegation_turn_cannot_hand_work_on_at_all(self):
+        """Depth one. An agent reached by delegation is answering somebody else's bounded
+        task with nobody present, and letting it hand that on is a tree of work nobody is
+        left owning — every branch of which owes a review to an agent that has answered."""
+        agent.add("dana", self.where)
+        agent.remember("dana", self.where, provider="claude")
+        held, run = self.a_delegation_turn()
+        with self.assertRaises(delegation.NotDelegable) as refused:
+            delegation.ask("cole", "dana", "have another look", run,
+                           chain=held["chain"], where=self.where)
+        self.assertIn("cannot be handed on", str(refused.exception))
+        self.assertIn("elena", str(refused.exception))
+
+    def test_a_resumed_delegation_turn_is_refused_even_carrying_no_chain_at_all(self):
+        """**The backstop, and the reason there is one.** The three refusals above all read
+        the chain the caller passed. This one reads nothing the caller said: a delegation
+        turn stands on a surface that joins no channel, so there is nowhere to report work
+        back to and admission refuses it whatever chain it claims to be carrying (R-DEL-4).
+        """
+        agent.add("dana", self.where)
+        agent.remember("dana", self.where, provider="claude")
+        _, run = self.a_delegation_turn()
+        with self.assertRaises(delegation.NotDelegable) as refused:
+            delegation.ask("cole", "dana", "have another look", run, where=self.where)
+        self.assertIn("not happening on a surface the agent can be reached on",
+                      str(refused.exception))
+
+    def test_the_agent_that_asked_may_still_hand_work_on_from_its_own_turn(self):
+        """The guards close a cycle, not the feature: a resumption changes nothing about
+        what the agent that asked may do from a turn of its own."""
+        agent.add("dana", self.where)
+        agent.remember("dana", self.where, provider="claude")
+        record = self.ask()
+        self.carried(record["id"])
+        delegation.resume("elena", record["id"], "now check the index too")
+        second = delegation.ask("elena", "dana", "and look at the report",
+                                self.parent, where=self.where)
+        self.assertEqual(["elena"], second["chain"])
+        self.assertEqual(delegation.ASKED, second["state"])
 
 
 class WhatAPersonIsShown(WithTwoAgentsOnOneInstall):
