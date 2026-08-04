@@ -141,6 +141,22 @@ def trim(logs, run: str, ceiling: int = CEILING_BYTES) -> int:
         return 0
 
 
+def _when(logs, run: str):
+    """How old this run's files are — the stream, or what went wrong where there is none.
+
+    The stream first, because that is what the window has always been measured on and a run
+    that printed is the ordinary one. The `.err` answers only for the run that printed
+    nothing at all, which otherwise has no age and so is never old enough to go. `None`
+    where neither file can be read, which is nothing to sweep rather than an error.
+    """
+    for one in (printed(logs, run), beside(logs, run)):
+        try:
+            return one.stat().st_mtime
+        except OSError:
+            continue
+    return None
+
+
 def sweep(logs, keep_days: int = KEEP_DAYS, now=None) -> list:
     """Take away what brains printed longer ago than this, and say whose runs they were.
 
@@ -153,17 +169,20 @@ def sweep(logs, keep_days: int = KEEP_DAYS, now=None) -> list:
     Both files of a run go together or neither does, so a run is never left with half of
     what it printed. A directory that cannot be read is nothing to sweep, not an error:
     reclaiming space is never worth failing a gateway over.
+
+    **Runs are found through `every()` rather than `known()`.** A run whose adapter failed
+    before it printed anything has an `.err` and no `.jsonl` at all — and it is exactly the
+    run whose `.err` is the only diagnostic there is. Discovering runs by the stream alone
+    left those files standing for ever, because nothing else here removes one (R-RUN-23).
     """
     at = home(logs)
     if keep_days <= 0 or not at.is_dir():
         return []
     oldest = (time.time() if now is None else now) - keep_days * 86400
     swept = []
-    for run in known(logs):
-        try:
-            if printed(logs, run).stat().st_mtime >= oldest:
-                continue
-        except OSError:
+    for run in every(logs):
+        when = _when(logs, run)
+        if when is None or when >= oldest:
             continue
         for one in kept(logs, run):
             try:
@@ -185,3 +204,21 @@ def known(logs) -> list:
     if not at.is_dir():
         return []
     return sorted(one.name[: -len(PRINTED)] for one in at.glob("*" + PRINTED))
+
+
+def every(logs) -> list:
+    """Every run either of these two files is still on disk for.
+
+    A different question from `known()`, and the one a sweep has to ask: a run whose adapter
+    died before it wrote anything to `RUNDESK_RAW` printed nothing and still said what went
+    wrong, so it has an `.err` and no `.jsonl`. `known()` answers what a *brain printed* and
+    is right to leave that run out; anything deciding what is left on disk would leave its
+    `.err` there for ever (R-RUN-23).
+    """
+    at = home(logs)
+    if not at.is_dir():
+        return []
+    names = set()
+    for which in (PRINTED, ERRORS):
+        names.update(one.name[: -len(which)] for one in at.glob("*" + which))
+    return sorted(names)

@@ -330,6 +330,41 @@ class WhatAnAgentPrintedIsBounded(WithAnAgentThatHasRun):
                          "half of a run's files were left behind")
         self.assertTrue(transcript.beside(self.logs(), new).exists())
 
+    def test_a_run_that_printed_nothing_still_has_what_went_wrong_swept(self):
+        """R-RUN-23 — reported (#314): the sweep found runs by the stream alone, so a run
+        with an `.err` and no `.jsonl` was never a run at all to it and its file stood for
+        ever. That is the run whose `.err` is the only diagnostic there is — an adapter
+        that failed before it wrote a byte to `RUNDESK_RAW` — and nothing else removes one.
+        """
+        kept = self.kept()
+        said_only = self.a_run(kept)
+        at = transcript.beside(self.logs(), said_only)
+        at.parent.mkdir(parents=True, exist_ok=True)
+        at.write_bytes(b"Traceback (most recent call last):\n")
+        long_ago = time.time() - 30 * 86400
+        os.utime(at, (long_ago, long_ago))
+
+        self.assertEqual([said_only], transcript.sweep(self.logs(), keep_days=7))
+        self.assertFalse(at.exists(),
+                         "a run that printed nothing kept what it said went wrong")
+        self.assertEqual([], transcript.every(self.logs()))
+
+    def test_a_run_that_printed_nothing_recently_is_still_inside_the_window(self):
+        """The other half: the `.err` is what that run's age is read from, so one written
+        this morning is a run somebody may still be asking about. Without this the fix
+        could sweep every `.err`-only run there has ever been and still pass."""
+        kept = self.kept()
+        run = self.a_run(kept)
+        at = transcript.beside(self.logs(), run)
+        at.parent.mkdir(parents=True, exist_ok=True)
+        at.write_bytes(b"Traceback (most recent call last):\n")
+
+        self.assertEqual([], transcript.sweep(self.logs(), keep_days=7))
+        self.assertTrue(at.exists())
+        self.assertEqual([run], transcript.every(self.logs()))
+        self.assertEqual([], transcript.known(self.logs()),
+                         "a run that printed nothing is not a run that printed")
+
     def test_sweeping_what_a_brain_printed_leaves_every_account_readable(self):
         """R-STO-5 — the whole reason these are separable from the records. Sweeping is
         reclaiming space, and it must cost an owner nothing they need."""

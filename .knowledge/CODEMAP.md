@@ -349,7 +349,7 @@ provider. One file per contract, named for it:
 | `test_antigravity.py` | 18 | `provider-adapter` — piped prompt privacy, stream mapping, cumulative-resume usage, posture, skills and native-keyring environment, all offline |
 | `test_turn.py` | 113 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_activity.py` | 3 | live-turn concurrency, safe persisted fields, and update visibility |
-| `test_transcript.py` | 28 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
+| `test_transcript.py` | 30 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
 | `test_store.py` | 136 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
 | `test_channel.py` | 77 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
 | `test_answering.py` | 146 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
