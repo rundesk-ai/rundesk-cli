@@ -45,7 +45,7 @@ import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, List, NamedTuple, Optional
+from typing import Callable, ContextManager, List, NamedTuple, Optional
 
 from rundesk.core import config, paths
 from rundesk.lifecycle import migration
@@ -95,7 +95,7 @@ class Restored(NamedTuple):
     settled: Optional[str]
 
 
-def _one_at_a_time():
+def _one_at_a_time() -> ContextManager[None]:
     """Hold the install while this operation moves directories about.
 
     **Every operation here renames or removes a whole directory, and none of them was serialised
@@ -303,7 +303,8 @@ def restore(name: str, data: Optional[Path] = None, backups: Optional[Path] = No
         return _put_back_now(name, at, into, when, steps, said)
 
 
-def _put_back_now(name, at, into, when, steps, said) -> Restored:
+def _put_back_now(name: str, at: Path, into: Path, when: Optional[datetime],
+                  steps: Optional[Path], said: Callable[[str], None]) -> Restored:
     """The restore itself, with the install already held. See `restore`."""
     a_copy = _a_copy(at, name)
     safety = save(into, at, when) if into.is_dir() else None

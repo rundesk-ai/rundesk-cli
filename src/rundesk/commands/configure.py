@@ -23,9 +23,9 @@ def as_flag(key: str) -> str:
 
 def register(sub: Subcommands) -> None:
     """Put `configure` on the parser, with one flag per value that may be stated."""
-    said = sub.add_parser("configure", help="change what this install is configured with")
+    shown = sub.add_parser("configure", help="change what this install is configured with")
     for key in config.settable():
-        said.add_argument(as_flag(key), dest=key, metavar="<value>", default=None,
+        shown.add_argument(as_flag(key), dest=key, metavar="<value>", default=None,
                           help=f"{config.WANTED.get(key, 'a value')} (now: {config.INITIAL[key]})")
 
 

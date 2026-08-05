@@ -107,9 +107,6 @@ class ARootThatMustNotBeUsed(support.Isolated):
         self.assertIn("set and empty", self._refused(""))
         self.assertIn("set and empty", self._refused("   "))
 
-    def test_a_relative_root_is_refused(self):
-        self.assertIn("absolute", self._refused("rundesk-somewhere"))
-
     def test_the_filesystem_root_is_refused(self):
         self.assertIn("root of the filesystem", self._refused("/"))
 

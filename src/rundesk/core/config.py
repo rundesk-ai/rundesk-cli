@@ -159,7 +159,7 @@ def where(data: Optional[Path] = None) -> Path:
     return (data or paths.data()) / "config.json"
 
 
-def read(data: Optional[Path] = None) -> dict:
+def read(data: Optional[Path] = None) -> Dict[str, Any]:
     """Every effective value, with anything a newer release added filled in from `INITIAL`.
 
     Filled in **for the read only** — asking how rundesk is configured never writes. A release that
@@ -175,7 +175,7 @@ def read(data: Optional[Path] = None) -> dict:
     return settled
 
 
-def write_fresh(data: Optional[Path] = None) -> dict:
+def write_fresh(data: Optional[Path] = None) -> Dict[str, Any]:
     """Write the configuration a new install starts with, and refuse to flatten one already there.
 
     Installing over an existing install must not reset what its owner stated, so this writes only
@@ -188,7 +188,7 @@ def write_fresh(data: Optional[Path] = None) -> dict:
     return dict(INITIAL)
 
 
-def fill_in(data: Optional[Path] = None) -> dict:
+def fill_in(data: Optional[Path] = None) -> Dict[str, Any]:
     """Add values this release knows about and the file does not. Change nothing already stated.
 
     What an update calls. The asymmetry is the whole point: a missing key is this release offering

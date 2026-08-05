@@ -29,8 +29,8 @@ from rundesk.utils.terminal import as_table
 
 def register(sub: Subcommands) -> None:
     """Put `backups` on the parser, with one sub-verb for each thing that happens to a copy."""
-    said = sub.add_parser("backups", help="the copies of what rundesk keeps for you")
-    what = said.add_subparsers(dest="what", metavar="<what>")
+    kept = sub.add_parser("backups", help="the copies of what rundesk keeps for you")
+    what = kept.add_subparsers(dest="what", metavar="<what>")
 
     what.add_parser("save", help="copy what rundesk keeps, now")
 

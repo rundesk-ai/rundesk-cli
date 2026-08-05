@@ -49,7 +49,7 @@ import os
 import shutil
 import unicodedata
 from pathlib import Path
-from typing import Any, Callable, Iterator, Optional, Tuple
+from typing import Any, Callable, Iterable, Iterator, List, Optional, Tuple
 
 from rundesk.utils import locking
 
@@ -190,7 +190,8 @@ def discard(where: Path) -> None:
             pass
 
 
-def stage_copy(entry: Path, into: Path, ignore: Optional[Callable] = None) -> Path:
+def stage_copy(entry: Path, into: Path,
+               ignore: Optional[Callable[[str, List[str]], Iterable[str]]] = None) -> Path:
     """Copy `entry` into `into` under its staged name, and hand back where it landed.
 
     The caller decides when — or whether — to rename the result into place, because that is the part

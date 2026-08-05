@@ -36,7 +36,7 @@ import signal
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, NamedTuple, Optional, Sequence
+from typing import Dict, NamedTuple, Optional, Sequence, Union
 
 #: What a program that never started, or would not finish, has instead of an exit code.
 DID_NOT_START = "did not start"
@@ -117,7 +117,7 @@ def run(argv: Sequence[str], waiting: float, where: Optional[Path] = None,
     return Ran(None if trouble else started.returncode, _said(out), _said(err), trouble)
 
 
-def _said(maybe) -> str:
+def _said(maybe: Optional[Union[str, bytes]]) -> str:
     """What a timed-out program had written, whichever way this Python hands it over.
 
     `TimeoutExpired` carries `bytes` on some versions and `str` on others depending on how the run
