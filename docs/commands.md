@@ -195,7 +195,7 @@ DISCORD_TOKEN is set — MTIxxxxxxxxken
 
 $ rundesk env list
 values in /Users/you/.rundesk/secrets
-NAME             IS
+NAME             VALUE
 DISCORD_TOKEN    MTIxxxxxxxxken
 SLACK_BOT_TOKEN  not set
 ```

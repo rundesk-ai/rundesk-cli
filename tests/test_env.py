@@ -283,6 +283,54 @@ class WhatACopyCannotContain(Values):
                          "a restore reached into the secrets")
 
 
+class WhenRundeskIsRemoved(Values):
+    """A credential must not be left on a machine rundesk has been taken off — nor taken by an
+    ordinary removal, which is not what somebody asked for."""
+
+    def setUp(self):
+        super().setUp()
+        paths.data().mkdir(parents=True, exist_ok=True)
+        files.write_json(paths.data() / "config.json", {"backup_enabled": True})
+        self.given(DISCORD_TOKEN=A_TOKEN)
+
+    def test_an_ordinary_removal_keeps_them(self):
+        # They are the owner's. Taking a token away because somebody uninstalled a program is not
+        # what they asked for, and it is not recoverable from a backup either — see the placement.
+        code, out, _ = self.rundesk("uninstall", "--confirm")
+        self.assertEqual(OK, code)
+        self.assertTrue(paths.secrets().is_dir())
+        self.assertEqual(A_TOKEN, secrets.value("DISCORD_TOKEN"))
+        self.assertIn(str(paths.secrets()), out)
+
+    def test_a_purge_takes_them(self):
+        # A purge takes what the owner accumulated, and a credential left lying on a machine
+        # rundesk is no longer on is the worst thing here to leave behind.
+        code, out, _ = self.rundesk("uninstall", "--confirm", "--purge")
+        self.assertEqual(OK, code)
+        self.assertFalse(paths.secrets().exists())
+        self.assertIn(str(paths.secrets()), out)
+
+    def test_a_purge_takes_the_key_with_them(self):
+        # A key left behind is not harmless: it is half of what somebody needs if they also have
+        # an old copy of the sealed file from somewhere else.
+        self.rundesk("uninstall", "--confirm", "--purge")
+        self.assertFalse(secrets.key_at().exists())
+
+    def test_what_it_would_do_matches_what_it_does(self):
+        # The dry run is the only thing somebody reads before agreeing to it.
+        _, _, would = self.rundesk("uninstall", "--purge")
+        self.assertIn(str(paths.secrets()), would)
+        self.assertIn("take", would)
+        _, _, would_keep = self.rundesk("uninstall")
+        self.assertIn("keep", would_keep)
+
+    def test_no_removal_ever_prints_a_value(self):
+        for argv in (("uninstall",), ("uninstall", "--confirm", "--purge")):
+            with self.subTest(argv=argv):
+                _, out, err = self.rundesk(*argv)
+                self.assertNotIn(A_TOKEN, out + err)
+
+
 class TheCommand(Values):
     """`rundesk env`, driven the way somebody types it."""
 
@@ -299,6 +347,7 @@ class TheCommand(Values):
         self.given(ZED_TOKEN=A_TOKEN, ALPHA_TOKEN=A_TOKEN)
         code, out, _ = self.rundesk("env", "list")
         self.assertEqual(OK, code)
+        self.assertIn("VALUE", out)
         self.assertLess(out.index("ALPHA_TOKEN"), out.index("ZED_TOKEN"))
         self.assertIn(secrets.hinted(secrets.Held(A_TOKEN, None)), out)
         self.assertNotIn(A_TOKEN, out)
@@ -365,6 +414,41 @@ class TheCommand(Values):
             with self.subTest(argv=argv):
                 _, out, err = self.rundesk(*argv)
                 self.assertNotIn(A_TOKEN, out + err)
+
+    def test_a_root_that_must_not_be_used_is_refused_before_anything_is_read(self):
+        os.environ["RUNDESK_HOME"] = "/"
+        code, out, err = self.rundesk("env", "list")
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("root of the filesystem", err)
+
+    def test_a_store_that_cannot_be_read_is_said_rather_than_shown_as_empty(self):
+        secrets.where().parent.mkdir(parents=True, exist_ok=True)
+        secrets.where().write_text("{ not json")
+        code, out, err = self.rundesk("env", "list")
+        self.assertEqual(FAILED, code)
+        self.assertNotIn("no values kept", out)
+        self.assertIn("nothing was listed", err)
+
+    def test_a_store_that_cannot_be_read_fails_check_too(self):
+        secrets.where().parent.mkdir(parents=True, exist_ok=True)
+        secrets.where().write_text("{ not json")
+        code, _, err = self.rundesk("env", "check", "DISCORD_TOKEN")
+        self.assertEqual(FAILED, code)
+        self.assertIn("cannot be read", err)
+
+    def test_a_value_that_cannot_be_kept_says_so_and_keeps_nothing(self):
+        with mock.patch.object(secrets, "stated", side_effect=OSError("the disk filled")):
+            with self.typing(A_TOKEN):
+                code, _, err = self.rundesk("env", "set", "DISCORD_TOKEN")
+        self.assertEqual(FAILED, code)
+        self.assertIn("nothing was kept", err)
+
+    def test_a_name_that_cannot_be_emptied_says_so(self):
+        with mock.patch.object(secrets, "cleared", side_effect=OSError("the disk filled")):
+            code, _, err = self.rundesk("env", "unset", "DISCORD_TOKEN")
+        self.assertEqual(FAILED, code)
+        self.assertIn("nothing was changed", err)
 
     def test_a_sub_verb_that_is_not_one_is_a_usage_error(self):
         code, _, _ = self.rundesk("env", "dump-everything")

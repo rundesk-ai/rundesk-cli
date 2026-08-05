@@ -9,6 +9,7 @@ Run directly: `python3 tests/test_cli.py`
 import contextlib
 import io
 import unittest
+from unittest import mock
 
 import support
 from rundesk import __version__, cli, commands
@@ -153,6 +154,28 @@ class Status(support.Isolated):
         for line in out.splitlines():
             if line.startswith(("home", "data", "backups")):
                 self.assertIn(str(self.home), line)
+
+    def test_it_still_answers_when_the_configuration_cannot_be_read(self):
+        # `status` is the one command that must answer whatever is wrong — it is what somebody runs
+        # *because* something is wrong. It degrades to saying so rather than failing.
+        paths.data().mkdir(parents=True, exist_ok=True)
+        (paths.data() / "config.json").write_text("{ not json")
+
+        code, out, _ = self.rundesk("status")
+
+        self.assertEqual(OK, code)
+        self.assertIn("cannot be read", out)
+        self.assertIn(__version__, out, "it stopped answering the question it was asked")
+
+    def test_it_refuses_when_the_interpreter_is_too_old_to_run_here(self):
+        # The one thing that makes an install look finished and be unrunnable, and the reason
+        # `install` proves itself with `status` rather than with `version`.
+        from rundesk.commands import status as the_status
+        with mock.patch.object(the_status, "PYTHON_FLOOR", (99, 0)):
+            code, out, _ = self.rundesk("status")
+        self.assertEqual(FAILED, code)
+        self.assertIn("python99.0 or newer", out)
+        self.assertIn("fit to run", out)
 
     def test_a_root_that_must_not_be_used_is_refused_rather_than_worked_on(self):
         import os

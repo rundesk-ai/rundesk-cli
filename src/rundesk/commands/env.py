@@ -79,7 +79,7 @@ def _listed() -> int:
         return OK
 
     print(f"values in {paths.secrets()}")
-    as_table(("NAME", "IS"),
+    as_table(("NAME", "VALUE"),
              [(key, secrets.hinted(held[key])) for key in sorted(held)])
     return OK
 

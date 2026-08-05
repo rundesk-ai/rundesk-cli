@@ -27,7 +27,7 @@ import support
 from rundesk import __version__
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
-from rundesk.lifecycle import migration, release, tree
+from rundesk.lifecycle import backups, migration, release, tree
 
 A_STEP = '''
 from pathlib import Path
@@ -267,6 +267,53 @@ class AnUpdateThatDoesNotLand(Updating):
             with self.subTest(body=body):
                 with answering(body):
                     self.assertEqual((None, release.UNREACHABLE), release._asked_of_the_api())
+
+    def test_a_copy_is_taken_before_any_step_touches_the_data(self):
+        # The way back from a step that does not finish, and the reason there are no down-steps.
+        config.stated("backup_enabled", True, paths.data())
+        code, out, _ = self.update(archive=self.an_archive(steps={"0001_first": A_STEP}))
+        self.assertEqual(OK, code)
+        self.assertIn("kept", out)
+        self.assertEqual(1, len(backups.kept(paths.backups())),
+                         "no copy was taken before carrying")
+
+    def test_no_copy_is_taken_when_the_owner_keeps_none(self):
+        # An owner who turned copies off should not be surprised by one appearing.
+        config.stated("backup_enabled", False, paths.data())
+        self.update(archive=self.an_archive(steps={"0001_first": A_STEP}))
+        self.assertEqual([], backups.kept(paths.backups()))
+
+    def test_no_copy_is_taken_when_there_is_nothing_to_carry(self):
+        # An ordinary update that changes no data leaves no copy behind every time.
+        config.stated("backup_enabled", True, paths.data())
+        self.update(archive=self.an_archive())
+        self.assertEqual([], backups.kept(paths.backups()))
+
+    def test_a_copy_that_could_not_be_taken_does_not_stop_the_carrying(self):
+        # An install left un-migrated is its own kind of broken, so this is said and carried on.
+        #
+        # Driven against the helper rather than through `update`: an install settles in an
+        # interpreter of its own by design, so a replacement made in *this* one would never reach
+        # it — the first version of this case passed for that reason rather than for a good one.
+        from rundesk.commands import update as the_update
+        config.stated("backup_enabled", True, paths.data())
+        steps = self.home / "steps"
+        steps.mkdir(parents=True, exist_ok=True)
+        (steps / "0001_first.py").write_text(A_STEP)
+
+        with mock.patch.object(migration, "STEPS", steps):
+            with mock.patch.object(the_update.backups, "save",
+                                   side_effect=OSError("the disk filled")):
+                said = the_update._kept_before_carrying()
+
+        self.assertEqual("", said, "a copy that could not be taken must not stop the carrying")
+
+    def test_the_copy_is_named_when_a_step_does_not_finish(self):
+        config.stated("backup_enabled", True, paths.data())
+        code, _, err = self.update(
+            archive=self.an_archive(steps={"0001_first": support.A_STEP_THAT_FAILS}))
+        self.assertEqual(FAILED, code)
+        self.assertIn("as it was before this is the copy", err)
 
     def test_a_download_that_fails_leaves_the_install_as_it_was(self):
         def refuses(_url, _into):
