@@ -17,6 +17,7 @@ import datetime
 import fcntl
 import io
 import os
+import select
 import sys
 import threading
 import time
@@ -1157,6 +1158,165 @@ class AProgramThatKeepsRunning(support.Isolated):
         pid = self.given_running("import time; time.sleep(30)")
         self.assertTrue(programs.alive(pid))
         self.assertFalse(programs.alive(2 ** 22))
+
+
+class AProgramThisOneTalksTo(support.Isolated):
+    """`talking` — a program that keeps running *and* is spoken to, which `start` deliberately is not.
+
+    The third shape in the module. `run` waits for an answer and `start` detaches to a file; this
+    keeps both ends of a conversation open for the life of a gateway, which is the one thing the
+    block comment above `start` refuses to hand out by accident — because a pipe nobody drains fills
+    and the program writing into it blocks for ever.
+
+    So the last two cases here are a pair, and the second is the reason the first matters.
+    """
+
+    PATIENCE = 5.0
+
+    def setUp(self):
+        super().setUp()
+        self.errors = self.home / "channels" / "discord" / "stderr.log"
+        self.talking = []
+        self.addCleanup(self.stop_everything)
+
+    def stop_everything(self):
+        for one in self.talking:
+            for end in (one.stdout, one.stdin):
+                with contextlib.suppress(OSError):
+                    end.close()
+            programs.stop(one.pid, 0.5, 1.0)
+
+    def given_talking(self, body: str) -> programs.Talking:
+        one = programs.talking([sys.executable, "-u", "-c", body], self.errors)
+        self.talking.append(one)
+        return one
+
+    def a_line_from(self, stream, patience: float = 0.0) -> str:
+        """One line, or a failure — and never a wait with no end.
+
+        `readline()` on a pipe blocks for ever when the answer never comes, so a case written
+        against a thing that stops answering does not fail, it **hangs**, and takes the whole run
+        with it while saying nothing about why. Measured the first time these were broken on
+        purpose: with line buffering removed, the run had to be killed at two minutes.
+
+        `select` says only that a byte is there rather than that a whole line is, which is enough
+        for children that print one short line at a time and is written down so nobody later reads
+        it as more than it is.
+        """
+        ready, _, _ = select.select([stream], [], [], patience or self.PATIENCE)
+        self.assertTrue(ready, "nothing was said within the time this case waits")
+        return stream.readline()
+
+    def test_a_program_that_could_not_start_says_so_the_way_start_does(self):
+        for argv, errors in (
+            ([str(self.home / "never-installed")], self.errors),
+            ([sys.executable, "-c", "pass"], self.home),           # the error path is a directory
+            ([], self.errors),
+        ):
+            with self.subTest(argv=argv):
+                with self.assertRaises(programs.CouldNotStart):
+                    programs.talking(argv, errors)
+
+    def test_what_the_program_says_arrives_a_line_at_a_time(self):
+        one = self.given_talking("print('{\"say\": \"ready\"}')")
+        self.assertEqual('{"say": "ready"}\n', self.a_line_from(one.stdout))
+
+    def test_what_is_written_to_it_is_heard(self):
+        # The half `start` will not do at all: its stdin is DEVNULL, so a caller needing to send
+        # something had nowhere to send it.
+        one = self.given_talking(
+            "import sys\n"
+            "for line in sys.stdin:\n"
+            "    print('heard', line.strip(), flush=True)\n")
+        one.stdin.write("post this\n")
+        one.stdin.flush()
+        self.assertEqual("heard post this\n", self.a_line_from(one.stdout))
+
+    def test_a_line_leaves_this_process_when_it_is_written(self):
+        # Line buffered on purpose. Block buffered, the answer to one message waits behind the
+        # answer to the next, which in a chat surface reads as the agent ignoring somebody.
+        one = self.given_talking(
+            "import sys\n"
+            "for line in sys.stdin:\n"
+            "    print('heard', line.strip(), flush=True)\n")
+        for said in ("first", "second", "third"):
+            # **Deliberately not flushed.** Under line buffering the newline is what sends it; block
+            # buffered, this line would sit here until enough had piled up behind it, and a case
+            # that flushed by hand would pass either way and prove nothing.
+            one.stdin.write(f"{said}\n")
+            self.assertEqual(f"heard {said}\n", self.a_line_from(one.stdout))
+
+    def test_what_it_writes_to_the_error_stream_goes_to_the_file_and_not_the_stream(self):
+        # They carry different things: stdout is a protocol nothing may interrupt, and one traceback
+        # written across it is a line no reader can parse in the middle of a stream it is parsing.
+        one = self.given_talking(
+            "import sys\n"
+            "sys.stderr.write('a traceback nobody can parse\\n')\n"
+            "sys.stderr.flush()\n"
+            "print('{\"say\": \"ready\"}')\n")
+        self.assertEqual('{"say": "ready"}\n', self.a_line_from(one.stdout))
+        self.assertTrue(support.waited_until(
+            lambda: self.errors.exists() and "a traceback" in self.errors.read_text(),
+            self.PATIENCE))
+
+    def test_the_error_file_is_appended_to_rather_than_replaced(self):
+        self.given_talking("import sys; sys.stderr.write('first\\n'); sys.stderr.flush()")
+        self.assertTrue(support.waited_until(
+            lambda: self.errors.exists() and "first" in self.errors.read_text(), self.PATIENCE))
+        self.given_talking("import sys; sys.stderr.write('second\\n'); sys.stderr.flush()")
+        self.assertTrue(support.waited_until(
+            lambda: "second" in self.errors.read_text(), self.PATIENCE))
+        self.assertIn("first", self.errors.read_text(), "the file was replaced, not appended to")
+
+    def test_it_is_started_in_a_session_of_its_own(self):
+        one = self.given_talking("import time; time.sleep(30)")
+        self.assertEqual(one.pid, os.getpgid(one.pid), "it is not the leader of its own group")
+        self.assertNotEqual(os.getpgrp(), os.getpgid(one.pid))
+
+    def test_a_claim_handed_to_it_is_held_for_as_long_as_it_runs(self):
+        # The same arrangement a firing uses: a flock belongs to the open file description, so one
+        # taken here and passed down outlives this process and the kernel drops it however the child
+        # ends — which a written-down pid can never do, because numbers are reused.
+        def shut(descriptor):
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+
+        claim = self.home / "channel.lock"
+        held = os.open(str(claim), os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(shut, held)                        # in case the case fails before closing
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        one = programs.talking([sys.executable, "-c", "import time; time.sleep(30)"],
+                               self.errors, holding=(held,))
+        self.talking.append(one)
+        os.close(held)                                     # this side lets go; the child still has it
+        asking = os.open(str(claim), os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, asking)
+        with self.assertRaises(OSError, msg="the claim was not held by the child"):
+            fcntl.flock(asking, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_a_program_that_says_far_more_than_a_pipe_holds_is_read_in_full(self):
+        # A pipe holds 64KB. This says about four times that and then one last line, so the last
+        # line can only arrive if everything before it was drained rather than buffered somewhere.
+        one = self.given_talking(
+            "for n in range(4000):\n"
+            "    print('x' * 64)\n"
+            "print('the end')\n")
+        last = ""
+        for _ in range(4001):
+            last = one.stdout.readline()
+        self.assertEqual("the end\n", last)
+
+    def test_a_program_nobody_reads_stops_where_it_stands(self):
+        # The hazard the case above is written against, stated rather than implied: this is what
+        # happens when the draining does not happen, and it is why whatever calls `talking` puts the
+        # reading somewhere that cannot fall behind rather than on a loop that also sleeps.
+        one = self.given_talking(
+            "for n in range(4000):\n"
+            "    print('x' * 64)\n"
+            "print('the end')\n")
+        self.assertFalse(support.waited_until(
+            lambda: not programs.alive(one.pid), 0.5),
+            "a program writing into a pipe nobody drains reached the end of it")
 
 
 class ADirectoryOfNumberedScripts(support.Isolated):

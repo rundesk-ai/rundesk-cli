@@ -36,7 +36,7 @@ import signal
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, NamedTuple, Optional, Sequence, Union
+from typing import IO, Any, Dict, NamedTuple, Optional, Sequence, Union
 
 #: What a program that never started, or would not finish, has instead of an exit code.
 DID_NOT_START = "did not start"
@@ -253,6 +253,91 @@ def _started(argv: Sequence[str], log: Path, where: Optional[Path],
         )
     _STARTED[started.pid] = started
     return started.pid
+
+
+class Talking(NamedTuple):
+    """A long-lived program this process exchanges lines with, and the two ends of that.
+
+    The fields are named for the child's own descriptors rather than for what this side does with
+    them, because every other name is ambiguous about which way round it is: `stdout` is what the
+    program says and `stdin` is what it hears, exactly as the program itself sees them.
+
+    **Both are this process's to close**, and leaving them open is not tidy-untidy — it is a
+    descriptor per channel per restart, in a process that runs for months.
+    """
+
+    pid: int
+    stdout: IO[str]
+    stdin: IO[str]
+
+
+def talking(argv: Sequence[str], errors: Path, where: Optional[Path] = None,
+            env: Optional[Dict[str, str]] = None,
+            holding: Sequence[int] = ()) -> Talking:
+    """Start a long-lived program and keep both ends of a conversation with it.
+
+    The third shape in this module, and the one the other two were written to avoid. `run` waits for
+    an answer; `start` detaches and writes to a file; this keeps a program that will be here in six
+    months **and talks to it**, which needs the one thing the block comment above `start` refuses to
+    give anybody by accident.
+
+    **Standard output is a pipe, and that is the whole risk.** The comment above `start` says why it
+    would not hand one out: *a pipe nobody is draining fills, and a program writing into a full pipe
+    blocks for ever — a deadlock that looks exactly like a hang, and appears only once the thing has
+    been running long enough to say 64KB.* That has not stopped being true; it has become the
+    caller's to answer. **Whatever calls this must drain `stdout` continuously**, on something that
+    cannot fall behind — not on a loop that also sleeps, because the sleep is how the pipe fills.
+
+    **Standard error is a file, and deliberately not merged into standard output.** They carry
+    different things here: `stdout` is a protocol nothing may interrupt, and one traceback written
+    across it would be a line no reader can parse in the middle of a stream it is parsing. The file
+    is opened here rather than left to the caller for the same reason `start` opens its log — so no
+    version of this ends up handing the program a second pipe nobody drains.
+
+    **Standard input is a pipe and is writable**, which is the other thing `start` will not do. Its
+    docstring promises that a caller needing to send something *sends it deliberately*, and until
+    now there was no deliberate path; this is it.
+
+    Line buffered, so a line written here leaves this process when it is written rather than when
+    some block fills — the answer to a message must not be waiting behind the answer to the next.
+
+    `holding` are descriptors the child keeps open, for the reason `start` gives: a `flock` belongs
+    to the open file description, so one taken here and passed down is held for exactly as long as
+    the child and everything it starts, and the kernel drops it however they end. The caller closes
+    its own copy afterwards, and must.
+    """
+    try:
+        return _talking(argv, errors, where, env, holding)
+    except (OSError, ValueError, IndexError) as why:
+        raise CouldNotStart(f"{DID_NOT_START}: {why}") from why
+
+
+def _talking(argv: Sequence[str], errors: Path, where: Optional[Path],
+             env: Optional[Dict[str, str]], holding: Sequence[int]) -> Talking:
+    """The start itself. See `talking`, which turns everything this raises into one answer."""
+    errors.parent.mkdir(parents=True, exist_ok=True)
+    with open(errors, "a", encoding="utf-8") as complaining:
+        started = subprocess.Popen(
+            [str(one) for one in argv],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=complaining,
+            text=True,
+            # Line buffered, which `text=True` is what makes meaningful. Without it a line written
+            # to a program sits in this process until a block's worth has piled up behind it.
+            bufsize=1,
+            # Its own session, exactly as `start` does it: this program starts programs of its own,
+            # and signalling the group is what reaches them.
+            start_new_session=True,
+            cwd=str(where) if where else None,
+            env=env,
+            pass_fds=tuple(holding),
+            preexec_fn=a_clean_slate,          # see `a_clean_slate`
+        )
+    # Held for the same reason `start` holds one: `collected` takes the status through `poll()`,
+    # which is what actually settles the child rather than leaving a zombie.
+    _STARTED[started.pid] = started
+    return Talking(started.pid, started.stdout, started.stdin)
 
 
 class Collected(NamedTuple):
