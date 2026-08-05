@@ -7,7 +7,10 @@ directory is empty.
 Run directly: `python3 tests/test_migration.py`
 """
 
+import ast
 import unittest
+from pathlib import Path
+from typing import List, Set
 from unittest import mock
 
 import support
@@ -20,6 +23,24 @@ from pathlib import Path
 
 def carry(data):
     (Path(data) / "{name}").write_text("{name}")
+'''
+
+#: A step that reaches for the tool a file-moving step most wants. The rule it breaks is the one
+#: with no runtime symptom until years later, on a machine nobody has in front of them.
+A_STEP_THAT_REACHES_FOR_RUNDESK = '''
+from rundesk.utils import files
+
+def carry(data):
+    files.discard(data / "gone")
+'''
+
+#: The same rule broken the other way round — `import` rather than `from`, which is the branch of
+#: the walk a checker written against one of them only would miss.
+A_STEP_THAT_REACHES_FOR_IT_AS_A_MODULE = '''
+import rundesk.utils.files
+
+def carry(data):
+    rundesk.utils.files.discard(data / "gone")
 '''
 
 
@@ -228,6 +249,46 @@ class GoingBackwards(Steps):
         self.assertIn("deleted or renamed", gone_wrong)
         self.assertFalse((self.data / "0002_second").exists(), "a step ran anyway")
 
+    def test_it_is_ahead_rather_than_broken(self):
+        # `Broken` is a script that cannot be run at all — a checkout somebody has to fix. This is
+        # the opposite kind of answer: every step here is fine and the install is the thing that is
+        # further forward than this release goes. Both raised one type and only the sentence told
+        # them apart, which is a distinction nothing but a reader could act on.
+        self.given("0001_first")
+        with self.assertRaises(migration.Ahead) as refused:
+            migration.outstanding("0009_from_the_future", self.steps)
+        self.assertIn("newer release", str(refused.exception))
+
+    def test_a_checkout_that_cannot_be_ordered_is_broken_and_not_ahead(self):
+        # The other side of the same pin. Without it, `Ahead` could be raised for everything and
+        # every case above would still pass.
+        self.given("0001_alpha")
+        self.given("0001_beta")
+        with self.assertRaises(migration.Broken) as refused:
+            migration.found(self.steps)
+        self.assertNotIsInstance(refused.exception, migration.Ahead)
+
+    def test_being_ahead_is_still_a_broken_so_nothing_stops_catching_it(self):
+        # Deliberate, and the one place this differs from `agents.migration.Ahead`. Everything that
+        # already answers "this install cannot be carried" names `Broken` — `carry`, and
+        # `commands.update` at both of the places it asks what is outstanding — and `settle` runs in
+        # a subprocess whose stderr is folded whole into what a person reads, so an answer that
+        # escaped those would arrive as a traceback. Narrowing the answer must not stop anybody
+        # hearing it: whoever makes this a plain `Exception` names it at those callers first.
+        self.assertTrue(issubclass(migration.Ahead, migration.Broken))
+
+    def test_settling_an_install_a_newer_release_carried_says_it_rather_than_raising(self):
+        # What the case above is protecting, driven end to end. `settle` asks what is outstanding
+        # twice — once to decide whether to keep a copy first, and once to carry — and only the
+        # second of those answers with a sentence. A named refusal that escaped the first would
+        # come out of the subprocess an install settles in as a raw traceback, folded whole into a
+        # message somebody was meant to read.
+        self.given("0001_first")
+        config.stated("migration", "0009_from_the_future", self.data)
+        with mock.patch.object(migration, "STEPS", self.steps):
+            self.assertNotEqual(0, update.settle())
+        self.assertFalse((self.data / "0001_first").exists(), "a step ran anyway")
+
 
 class WhenTheConfigurationCannotBeRead(Steps):
     """`carry` answers with a sentence or with `None`, and never by raising past both."""
@@ -269,6 +330,44 @@ class AFreshInstall(Steps):
         self.assertIsNone(migration.carry(self.data, self.steps))
 
 
+class NoStepReachesForRundesk(Steps):
+    """Rule 1 in `steps/__init__.py`, checked rather than remembered.
+
+    A step is loaded from a file years after it was written, by code that has moved on, so anything
+    of this product's it reaches for is a name that has to still exist and still mean the same thing
+    then. The failure has no symptom until that day and on a machine nobody has in front of them,
+    which is exactly the kind of rule that has to be read off the source now. The agent level checks
+    its own steps the same way; the walks are siblings and so are these cases.
+
+    Read with `ast` rather than run: importing a step to look at it would run it.
+    """
+
+    def test_a_step_that_reaches_for_rundesk_is_named(self):
+        self.given("0001_reaching", A_STEP_THAT_REACHES_FOR_RUNDESK)
+        self.assertEqual(["0001_reaching"], _reaching_for_rundesk(migration.found(self.steps)))
+
+    def test_a_step_that_reaches_for_it_as_a_module_is_named_too(self):
+        # `import rundesk.utils.files` and `from rundesk.utils import files` are two different nodes,
+        # and a walk that knows only one of them passes the step that used the other.
+        self.given("0001_reaching", A_STEP_THAT_REACHES_FOR_IT_AS_A_MODULE)
+        self.assertEqual(["0001_reaching"], _reaching_for_rundesk(migration.found(self.steps)))
+
+    def test_a_step_that_keeps_to_the_standard_library_is_fine(self):
+        # The rule is about this product, not about imports. A step carries what it needs itself,
+        # and what it needs is the standard library.
+        self.given("0001_first")
+        self.assertEqual([], _reaching_for_rundesk(migration.found(self.steps)))
+
+    def test_no_step_this_release_ships_reaches_for_rundesk(self):
+        # Every step in `lifecycle/steps/`, and one written here beside them so the walk is never
+        # empty: that directory holds none today, and a check that read nothing would pass without
+        # having proved a thing. When the first real step lands it is read by this same case.
+        self.given("0001_first")
+        reading = migration.found() + migration.found(self.steps)
+        self.assertTrue(reading, "this walk read no steps at all, so it checked nothing")
+        self.assertEqual([], _reaching_for_rundesk(reading))
+
+
 class WhatTheReleaseShips(support.Isolated):
     """The real `lifecycle/steps/` directory, whatever is in it."""
 
@@ -280,6 +379,23 @@ class WhatTheReleaseShips(support.Isolated):
     def test_no_two_shipped_steps_share_a_number(self):
         orders = [step.order for step in migration.found()]
         self.assertEqual(len(orders), len(set(orders)))
+
+
+def _reaching_for_rundesk(steps: List[migration.Step]) -> List[str]:
+    """The id of every step that imports something of this product's, in the order they run."""
+    return [step.id for step in steps
+            if "rundesk" in {name.split(".")[0] for name in _imports(step.at)}]
+
+
+def _imports(module: Path) -> Set[str]:
+    """Every name this file imports, read off the source rather than by running it."""
+    found: Set[str] = set()
+    for node in ast.walk(ast.parse(module.read_text(encoding="utf-8"), str(module))):
+        if isinstance(node, ast.Import):
+            found.update(one.name for one in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            found.add(node.module)
+    return found
 
 
 if __name__ == "__main__":

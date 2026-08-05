@@ -33,6 +33,10 @@ directory that was created correctly a second ago is at best wasted work and at 
 A step is handed the install's `data/` directory and nothing else. It may find the thing it was
 written to change already gone — because an owner tidied it, or because a half-finished run got that
 far — so **every step is written to be safe to run against an install that does not need it**.
+
+It may also not import anything of rundesk's, because it is loaded from a file years after it was
+written by code that has moved on. `steps/__init__.py` holds that rule and the rest of them, and
+`tests/test_migration.py` reads every shipped step and refuses one that breaks it.
 """
 
 from pathlib import Path
@@ -42,6 +46,11 @@ from rundesk.core import config
 from rundesk.utils import scripts
 
 STEPS = Path(__file__).resolve().parent / "steps"
+
+#: What a step's module is called while it is loaded. Its own prefix, so an install step and an agent
+#: step that share a number cannot collide with each other in `sys.modules` — the two levels number
+#: their steps independently, so `0001` existing at both is the ordinary case rather than a mistake.
+LOADED_AS = "rundesk_step"
 
 #: One step: where it is, the order it runs in, and its id.
 #:
@@ -55,6 +64,34 @@ Step = scripts.Script
 #: named here too so a caller of this module never has to know which file the mechanism lives in —
 #: the same courtesy `config` does for `files.Unreadable`.
 Broken = scripts.Broken
+
+
+class Ahead(Broken):
+    """This install is stamped with a step this release does not ship, so it may not be carried here.
+
+    **Its own name, because `Broken` is the wrong word for it.** `Broken` is a script that cannot be
+    run at all — a checkout somebody has to fix — and this is the opposite kind of answer: every step
+    here is fine, and it is the install that is further forward than this copy of rundesk knows how
+    to go. Told apart by anything that wants to say the difference out loud, rather than left as two
+    situations sharing one type and distinguishable only by reading the sentence.
+
+    **Two things look identical from here and the sentence names both**, because the second is by far
+    the likelier one for a developer to have caused: either a newer rundesk carried this install
+    forward — in which case the install is fine and this copy of the product is the one that is
+    behind — or a step that had already shipped was deleted or renamed in this checkout, which the
+    rules forbid and nothing prevents. Refused either way, because running this release's steps over
+    a layout that was carried past them is how data gets damaged.
+
+    `agents.migration.Ahead` is the same answer at the other level, for the same two reasons.
+
+    **A `Broken` as well, which is the one place this differs from that sibling, and it is deliberate.**
+    Everything that already answers "this install cannot be carried" catches `Broken` — `carry` below,
+    and `commands.update` at both of the places it asks what is outstanding — and `settle` runs in a
+    subprocess whose stderr is folded whole into the message a person reads, so an answer that escaped
+    those arrives as a traceback rather than as a sentence. Narrowing the answer must not stop anybody
+    hearing it. The agent level could afford a plain `Exception` because its callers were written
+    naming `Ahead` from the start.
+    """
 
 
 def found(where: Optional[Path] = None) -> List[Step]:
@@ -77,12 +114,14 @@ def newest(where: Optional[Path] = None) -> Optional[str]:
 def outstanding(applied: Optional[str], where: Optional[Path] = None) -> List[Step]:
     """The steps that have not run yet, given how far the install has been carried.
 
-    An install stamped with a step this release does not ship is refused, and **the sentence names
-    both ways that happens** rather than only the first. Either a newer rundesk carried this install
-    and going backwards is not supported, or a step that had already shipped was deleted or renamed
-    in this copy — which the rules forbid and nothing prevents, and which is much the likelier of
-    the two for a developer to have just done. Refused either way: running these steps over a layout
-    that was carried past them is how data gets damaged.
+    `Ahead` when the install is stamped with a step this release does not ship, and **the sentence
+    names both ways that happens** rather than only the first. Either a newer rundesk carried this
+    install and going backwards is not supported, or a step that had already shipped was deleted or
+    renamed in this copy — which the rules forbid and nothing prevents, and which is much the
+    likelier of the two for a developer to have just done. Refused either way: running these steps
+    over a layout that was carried past them is how data gets damaged. It is an operational fact
+    about a machine rather than a checkout that cannot be run, which is why it has a name of its own
+    rather than being the same `Broken` two steps sharing a number give.
 
     **Which steps have run is decided by their number, not by their position in this list**, and
     that is the whole of the append-only rule: everything numbered at or below the recorded id has
@@ -107,7 +146,7 @@ def outstanding(applied: Optional[str], where: Optional[Path] = None) -> List[St
         return steps
     ids = [step.id for step in steps]
     if applied not in ids:
-        raise Broken(
+        raise Ahead(
             f"this install was carried to {applied}, which this rundesk does not ship — either it "
             "has been moved forward by a newer release, or a step that had already shipped was "
             "deleted or renamed in this copy of rundesk; going backwards is not supported")
@@ -135,7 +174,9 @@ def carry(data: Path, where: Optional[Path] = None,
     try:
         settled = config.read(data)
         waiting = outstanding(settled.get("migration"), where)
-    except (Broken, config.Unreadable) as why:
+    # `Ahead` is a `Broken` and would be caught by it alone; named anyway, because the two are
+    # different answers and this has to go on catching both if that ever stops being true.
+    except (Ahead, Broken, config.Unreadable) as why:
         return str(why)
 
     if not waiting:
@@ -144,7 +185,7 @@ def carry(data: Path, where: Optional[Path] = None,
     for step in waiting:
         said(f"carrying {step.id}")
         try:
-            scripts.carrying(step, "rundesk_step")(data)
+            scripts.carrying(step, LOADED_AS)(data)
         except Exception as why:                      # noqa: BLE001 — a step is arbitrary code
             return f"{step.id} did not finish: {why}"
         config.stated("migration", step.id, data)
