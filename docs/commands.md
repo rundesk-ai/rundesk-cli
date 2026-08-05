@@ -1,6 +1,6 @@
 # The command surface
 
-Ten operations, and every one of them works. There is no "coming soon" list: a verb rundesk cannot
+Eleven operations, and every one of them works. There is no "coming soon" list: a verb rundesk cannot
 perform is a verb rundesk does not have.
 
 ```sh
@@ -25,6 +25,18 @@ rundesk env list                          # every value rundesk keeps, shown onl
 rundesk env check <key>                   # whether one is set
 rundesk env set <key>                     # keep one — typed, never passed as an argument
 rundesk env unset <key>                   # empty one, leaving the name
+rundesk skills                            # every skill this install has, and who holds which
+rundesk skills list [<agent>]             # with an agent: what it holds, and what that needs
+rundesk skills catalogs                   # every catalog, its version and where it came from
+rundesk skills install <repository> [--confirm]   # install a catalog of skills
+rundesk skills update <catalog> [--confirm]       # check one against where it came from
+rundesk skills remove <catalog> [--confirm]       # take one away, and every skill in it
+rundesk skills grant <agent> <catalog>/<skill> [--as <name>]   # give an agent a skill
+rundesk skills revoke <agent> <skill>     # take one away from an agent
+rundesk skills profiles <catalog>/<skill>         # every account one skill is configured for
+rundesk skills configure <catalog>/<skill> [--profile <name>]  # set what it needs, guided
+rundesk skills forget <catalog>/<skill> [--profile <name>] --confirm   # empty one account
+rundesk skills doctor [<agent>]           # what cannot be used, and exactly why
 rundesk update                            # move to the newest release, or say it is up to date
 rundesk uninstall --confirm [--purge]     # remove rundesk; --purge also takes the data
 rundesk install [--source <dir>] [--bin-dir <dir>]   # what install.sh runs

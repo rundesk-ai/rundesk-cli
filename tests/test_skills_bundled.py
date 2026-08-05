@@ -171,5 +171,46 @@ class WhatAShippedSkillMayClaim(Bundled):
         self.assertEqual([], verbs_named("Nothing else here is rundesk itself, whatever it says"))
 
 
+class WhatTheDocumentationClaims(support.Isolated):
+    """`docs/commands.md` says it is the complete list of what rundesk can do.
+
+    That page is checked by people, and people are exactly who a stale verb misleads: `AGENTS.md`
+    forbids offering an operation that is not built, and a documented verb that does not exist is the
+    same promise broken one step further from the code. The shipped skills are already held to this;
+    there is no reason the page a person reads should be the one thing that is not.
+    """
+
+    def test_every_skills_sub_verb_the_docs_name_is_one_that_exists(self):
+        said = (support.CHECKOUT / "docs" / "commands.md").read_text(encoding="utf-8")
+        there = _sub_verbs_of("skills")
+        self.assertTrue(there, "the parser answered no sub-verbs for skills")
+        named = set(re.findall(r"rundesk skills ([a-z][a-z-]*)", said))
+        self.assertTrue(named, "the page names no skills sub-verb at all")
+        for verb in sorted(named - {"list"}):
+            with self.subTest(verb=verb):
+                self.assertIn(verb, there,
+                              f"docs/commands.md tells somebody to type `rundesk skills {verb}`, "
+                              "and this build has no such sub-verb")
+
+    def test_every_sub_verb_that_exists_is_named_by_the_docs(self):
+        # The other direction, because the page claims to be *complete*. A verb that shipped without
+        # reaching the page is the shape that goes unnoticed for a release.
+        said = (support.CHECKOUT / "docs" / "commands.md").read_text(encoding="utf-8")
+        for verb in sorted(_sub_verbs_of("skills")):
+            with self.subTest(verb=verb):
+                self.assertIn(f"rundesk skills {verb}", said,
+                              f"`rundesk skills {verb}` exists and docs/commands.md never names it")
+
+
+def _sub_verbs_of(group: str):
+    """Every sub-verb one group really has, read off the parser rather than listed here."""
+    for action in cli.build_parser()._actions:
+        if isinstance(action, cli.Subcommands) and group in action.choices:
+            for one in action.choices[group]._actions:
+                if isinstance(one, cli.Subcommands):
+                    return set(one.choices)
+    return set()
+
+
 if __name__ == "__main__":
     unittest.main()
