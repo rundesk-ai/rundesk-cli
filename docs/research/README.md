@@ -37,6 +37,12 @@ Two rules for a page here:
 | [`open-questions.md`](open-questions.md) | what the previous build wrote down and never settled |
 | [`working-practice.md`](working-practice.md) | how that build wrote things down, named things, and moved readers onto a new store |
 | [`2026-08-05-what-a-skills-commands-are-handed.md`](2026-08-05-what-a-skills-commands-are-handed.md) | the environment a skill's own commands will be given, decided while building skills and not yet implemented |
+| [`2026-08-05-the-old-builds-channel-system.md`](2026-08-05-the-old-builds-channel-system.md) | what the previous build's two channel adapters and their seam actually did |
+| [`2026-08-05-how-other-gateways-do-channels.md`](2026-08-05-how-other-gateways-do-channels.md) | seven comparable products on plugin boundary, capabilities, identity, authorization and setup |
+| [`2026-08-05-designing-the-channel-system.md`](2026-08-05-designing-the-channel-system.md) | what is settled about channels, what is open, and the options — a proposal, not a description |
+| [`2026-08-05-the-old-builds-provider-system.md`](2026-08-05-the-old-builds-provider-system.md) | the previous build's six provider modules end to end, and every incident each one cost |
+| [`2026-08-05-how-other-gateways-run-a-provider.md`](2026-08-05-how-other-gateways-run-a-provider.md) | OpenClaw and Hermes on supervising a provider process, and the two shapes to refuse |
+| [`2026-08-05-designing-the-provider-system.md`](2026-08-05-designing-the-provider-system.md) | what is settled about providers, the terms-of-service position, and the nine-phase route — a proposal, not a description |
 
 ## Carried over intact
 
