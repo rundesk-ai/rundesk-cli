@@ -13,7 +13,7 @@ import argparse
 import contextlib
 import signal
 import sys
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from rundesk.commands import Subcommands
 from rundesk.commands.agents import cmd_agents
@@ -39,6 +39,11 @@ from rundesk.exits import OK
 from rundesk.gateways import job
 from rundesk.lifecycle import release
 from rundesk.skills.catalogs import Fetching as Refreshing
+from rundesk.utils.programs import Ran
+
+#: What builds the packages a release asked for — `utils.programs.run`, handed in so no
+#: suite reaches a network by forgetting it.
+Building = Callable[..., Ran]
 
 EPILOG = """\
 examples:
@@ -126,7 +131,8 @@ def _register_uninstall(sub: Subcommands) -> None:
 def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = None,
          fetching: Optional[Fetching] = None,
          supervising: Optional[job.Supervising] = None,
-         refreshing: Optional[Refreshing] = None) -> int:
+         refreshing: Optional[Refreshing] = None,
+         building: Optional[Building] = None) -> int:
     """Parse what was typed and hand it to the one module that answers it.
 
     Bare `rundesk` describes what it can do and exits `0`: somebody who typed the command with no
@@ -180,9 +186,9 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
     if args.command == "version":
         return cmd_version(args, asking)
     if args.command == "install":
-        return cmd_install(args, refreshing)
+        return cmd_install(args, refreshing, building)
     if args.command == "update":
-        return cmd_update(args, asking, fetching, refreshing)
+        return cmd_update(args, asking, fetching, refreshing, building)
     if args.command == "uninstall":
         return cmd_uninstall(args, supervising)
 

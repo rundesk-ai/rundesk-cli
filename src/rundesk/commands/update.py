@@ -45,7 +45,7 @@ from rundesk.commands.gateways import Cycled
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job, standing
-from rundesk.lifecycle import backups, home, migration, release, tree
+from rundesk.lifecycle import backups, home, migration, packages, release, tree
 from rundesk.skills.catalogs import Fetching as Refreshing
 from rundesk.utils import archives, programs
 
@@ -98,7 +98,8 @@ class Gateways(Protocol):
 
 def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = None,
                fetching: Optional[Fetching] = None,
-               refreshing: Optional[Refreshing] = None) -> int:
+               refreshing: Optional[Refreshing] = None,
+               building: Optional[Callable[..., programs.Ran]] = None) -> int:
     """Move to the newest published release, or say it is already up to date.
 
     Takes no flags. `asking` looks up what is published, `fetching` downloads it and `refreshing`
@@ -162,6 +163,16 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
             return _failed(f"{why} — this install is unchanged")
     finally:
         shutil.rmtree(holding, ignore_errors=True)
+
+    # **Built from the tree that just landed, not the one that was here.** A release brings its own
+    # `requirements.txt`, and an environment left by the previous one holds that one's packages —
+    # so what is installed would stop being what any release asked for. Reported and never fatal:
+    # rundesk runs on the standard library, so a machine that could not fetch has a working install
+    # and no channels, which is true and is not a broken update.
+    could_not = packages.built(paths.app(), building)
+    if could_not:
+        print(f"        packages   {could_not}", file=sys.stderr)
+        print("        channels cannot be started until this works", file=sys.stderr)
 
     gone_wrong = settled_by_the_new_release(paths.code())
     if gone_wrong:

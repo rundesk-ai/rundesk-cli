@@ -25,13 +25,13 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Callable, List, Optional
 
 from rundesk import __version__
 from rundesk.commands import failed, skills, the_reason, update
 from rundesk.core import config, paths
 from rundesk.exits import OK
-from rundesk.lifecycle import tree
+from rundesk.lifecycle import packages, tree
 from rundesk.skills import catalogs
 from rundesk.utils import programs
 
@@ -40,11 +40,13 @@ ANSWER_SECONDS = 30
 
 
 def cmd_install(args: argparse.Namespace,
-                refreshing: Optional[catalogs.Fetching] = None) -> int:
+                refreshing: Optional[catalogs.Fetching] = None,
+                building: Optional[Callable[..., programs.Ran]] = None) -> int:
     """Install rundesk, and refuse to report success it did not earn.
 
-    `refreshing` brings down a catalog of skills, and like every other collaborator in this product it
-    arrives as an argument so the whole command runs with no network near it.
+    `refreshing` brings down a catalog of skills and `building` fetches the packages the release
+    asked for. Like every other collaborator in this product both arrive as arguments, so the whole
+    command runs with no network near it.
     """
     from_where = Path(args.source).expanduser().resolve() if args.source else paths.program()
 
@@ -91,14 +93,38 @@ def cmd_install(args: argparse.Namespace,
     print(f"        data      {paths.data()}")
     print(f"        command   {at}")
     _say_if_unreachable(at)
+    trouble = _the_packages(app, building)
 
     # **After the install has already earned its success, and it does not take that away.** The
     # catalog rundesk ships is placed out of the release, so this needs no network to give a fresh
     # machine working skills; checking the published repository is the part that can fail, and a
     # repository somebody deleted is not a reason to tell `install.sh` the machine is broken.
-    for line in skills.refreshed(refreshing):
+    for line in trouble + list(skills.refreshed(refreshing)):
         print(f"        {line}", file=sys.stderr)
     return OK
+
+
+def _the_packages(app: Path, building: Optional[Callable[..., programs.Ran]]) -> List[str]:
+    """Build what the release asked for, and say what that left. Never fails the install.
+
+    **rundesk itself runs on the standard library**, so a machine with no network has a working
+    install and no channels — which is a true thing to say and a false reason to report that the
+    install broke. What it may never be is silent: the pin was carried for a release with nothing
+    building from it, so a channel could be configured and could never start, and the failure
+    arrived later, somewhere else, wearing an `ImportError`.
+
+    Placed after the install has already earned its success, exactly as the skills refresh is, and
+    for the same reason.
+    """
+    needs = packages.wanted(app)
+    if not needs:
+        return []
+    gone_wrong = packages.built(app, building)
+    if not gone_wrong:
+        print(f"        packages  {', '.join(needs)}")
+        return []
+    return [f"packages  {gone_wrong}",
+            "          channels cannot be started until this works — try: rundesk update"]
 
 
 def _answers(at: Path) -> str:
