@@ -67,6 +67,12 @@ GATEWAY_RECORD = "gateway.json"
 #: and no list anywhere has to say so.
 SCHEDULES = "schedules"
 
+#: What each configured channel keeps: the lock its adapter holds, what started it, what it wrote to
+#: standard error, and the files that arrived through it. A directory of its own for the reason
+#: `SCHEDULES` gives — a channel's name is the owner's, so `dm.lock` at the top of the agent's
+#: directory would make every fixed name a name no channel may have.
+CHANNELS = "channels"
+
 #: The note the install writes into `data/agents/`, and therefore a name no agent may have.
 NOTE = "README.md"
 
@@ -145,6 +151,15 @@ def schedules(name: str) -> Path:
     name no schedule may have.
     """
     return where(name) / SCHEDULES
+
+
+def channels(name: str) -> Path:
+    """Where this agent's channels keep their locks, their records and what arrived through them.
+
+    Made by whatever first writes into it rather than when the agent is made, because an agent with
+    no channels configured should not carry an empty directory saying it might have.
+    """
+    return where(name) / CHANNELS
 
 
 def gateway_lock(name: str) -> Path:
@@ -374,6 +389,7 @@ def _forgotten(name: str) -> List[Path]:
     gone.extend(_removed(home(name)))
     gone.extend(_removed(logs(name)))
     gone.extend(_removed(schedules(name)))
+    gone.extend(_removed(channels(name)))
     gone.extend(_removed(gateway_record(name)))
     gone.extend(_removed(gateway_lock(name)))
     try:

@@ -102,6 +102,11 @@ STEPS = Path(__file__).resolve().parent / "steps"
 #: exactly the agents somebody uses most. It also holds the lock a *running* firing is holding, and
 #: putting a lock file back underneath a live child is putting back a claim that has moved on.
 #:
+#: `channels/` is here on both counts at once. It holds the lock each running adapter is holding —
+#: and an adapter outlives a carry, because a carry is a command and the gateway hosting that adapter
+#: is a different process that knows nothing about it. It also holds every file that has ever
+#: arrived through a channel, which is unbounded in exactly the way `schedules/` is.
+#:
 #: The principle for everything after it is the same. `sessions/` and `providers/` are coming, one
 #: directory per session kept for the life of the agent; neither exists yet, so neither is named
 #: here — whoever adds the first one adds it to this tuple in the same change, and reads the rule in
@@ -110,7 +115,7 @@ STEPS = Path(__file__).resolve().parent / "steps"
 #: Today the rest of an agent is `state.db` and `home/`, and `home/` is a few kilobytes of markdown,
 #: so copying it aside costs nothing and makes the promise true. That is the trade now; this tuple
 #: is what keeps it true later.
-NOT_PUT_BACK = (directory.LOGS, directory.SCHEDULES)
+NOT_PUT_BACK = (directory.LOGS, directory.SCHEDULES, directory.CHANNELS)
 
 #: What the copy of an agent's things is called while that agent is being carried. `utils.files`'
 #: staging convention, so every walk over a directory already skips it, and **inside the agent's own

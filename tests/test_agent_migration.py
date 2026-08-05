@@ -61,6 +61,17 @@ def carry(conn, where):
     raise RuntimeError("this step could not finish")
 '''
 
+#: A step that writes into `channels/`, which a rollback does not cover. It makes the directory
+#: itself, because an agent with no channels configured does not carry an empty one.
+A_STEP_THAT_WRITES_INTO_CHANNELS = '''
+from pathlib import Path
+
+def carry(conn, where):
+    at = Path(where) / "channels"
+    at.mkdir(parents=True, exist_ok=True)
+    (at / "dm.lock").write_text("")
+'''
+
 #: A step that takes long enough for somebody else to reach the same agent while it is running.
 #: Used only where the case is about two callers meeting, and short enough to cost a run nothing.
 A_SLOW_STEP = '''
@@ -635,6 +646,18 @@ class WhatARollbackCovers(Steps):
         migration.carry_one("cole", self.steps)
         self.assertTrue((directory.logs("cole") / "what_went_wrong.log").is_file(),
                         "the record of the failure was rolled back along with the failure")
+
+    def test_what_a_channel_keeps_is_left_alone_too(self):
+        # Named in `migration.NOT_PUT_BACK` on two counts. A running adapter is holding a lock in
+        # here and outlives a carry — a carry is a command, and the gateway hosting that adapter is
+        # a different process that knows nothing about it, so putting the lock file back underneath
+        # a live child puts back a claim that has moved on. It is also unbounded, holding every file
+        # that has ever arrived through a channel.
+        self.given("0003_channelling", A_STEP_THAT_WRITES_INTO_CHANNELS)
+        self.given("0004_broken", A_STEP_THAT_FAILS)
+        migration.carry_one("cole", self.steps)
+        self.assertTrue((directory.channels("cole") / "dm.lock").is_file(),
+                        "what a channel keeps was rolled back along with the step that failed")
 
     def test_the_records_go_back_before_the_files_do(self):
         # Nothing is atomic across several renames, so the order decides what an interruption
