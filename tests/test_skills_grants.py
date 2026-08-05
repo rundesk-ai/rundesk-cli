@@ -9,6 +9,7 @@ Run directly: `python3 tests/test_skills_grants.py`
 
 import contextlib
 import os
+import pathlib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -17,7 +18,9 @@ from fixtures_skills import a_published_catalog
 
 import support
 from rundesk.agents import directory
+from rundesk.core import paths
 from rundesk.skills import catalogs, grants, library
+from rundesk.utils import locking
 
 
 @contextlib.contextmanager
@@ -454,6 +457,40 @@ class WhenRemakingACopyFails(Grants):
                 grants.refreshed()
         left = sorted(one.name for one in grants.where("alan").iterdir())
         self.assertEqual(["other-plans", "writing-plans"], left)
+
+
+class HowTheLockIsHeld(Grants):
+    """The nesting the new locking depends on, proven rather than assumed.
+
+    `granted` takes the install lock and then calls `_copied`, which takes it again on the same
+    thread. `locking.only_one` counts nesting per `(thread, realpath)` and yields without touching
+    the `flock` the second time — so this works by construction. It is worth a case anyway, because
+    it is the one thing that would deadlock rather than fail, and a deadlock in a verb somebody typed
+    is the worst shape of failure this product has.
+    """
+
+    def test_an_alias_grant_takes_the_install_lock_twice_on_one_thread(self):
+        self.a_catalog("other", skills=("writing-plans",))
+        self.grant("alan", "acme/writing-plans")
+        held = self.grant("alan", "other/writing-plans", alias="other-plans")
+        self.assertTrue(held.copied)
+
+    def test_a_grant_still_works_while_this_thread_already_holds_the_lock(self):
+        # The shape a caller a layer up produces: `commands` takes the lock for a wider operation and
+        # something below it takes the same lock again.
+        with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+            held = self.grant("alan", "acme/writing-plans")
+        self.assertEqual("acme", held.catalog)
+
+    def test_nothing_here_writes_through_a_lock_that_takes_a_second_one(self):
+        # `AGENTS.md`: take the install lock before any per-file lock, never after. The only durable
+        # write inside a locked region here is `files.write_json`, which takes no lock of its own —
+        # `files.changing_json` is the one that does. Asked of the text, because the failure it
+        # prevents is a deadlock between two processes taking two locks in two orders, and that is
+        # not something a single-process suite can produce.
+        said = pathlib.Path(support.CHECKOUT / "src" / "rundesk" / "skills" / "grants.py").read_text(
+            encoding="utf-8")
+        self.assertNotIn("changing_json", said)
 
 
 class WhatAVendorRootAlreadyHolds(Grants):

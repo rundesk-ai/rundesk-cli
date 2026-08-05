@@ -247,15 +247,21 @@ def presented(agent: str) -> List[Path]:
     no skills should not have four vendors' directories in its home to explain to itself.
     """
     home = directory.home(agent)
-    wanted = {one.name for one in held(agent)}
     touched: List[Path] = []
-    for root in VENDOR_ROOTS:
-        at = home / root
-        if not wanted and not at.is_dir():
-            continue
-        at.mkdir(parents=True, exist_ok=True)
-        touched.extend(_linked(at, where(agent), wanted))
-        touched.extend(_pruned(at, where(agent), wanted))
+    # **Locked here rather than at each caller.** This is the last mutating function in the module,
+    # and it reads what is granted and then writes links derived from it — two steps that must not
+    # have somebody else's grant land between them. Putting the lock inside means every caller is
+    # covered wherever it is called from, and the lock being re-entrant per thread makes it free for
+    # the callers that already hold it.
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        wanted = {one.name for one in held(agent)}
+        for root in VENDOR_ROOTS:
+            at = home / root
+            if not wanted and not at.is_dir():
+                continue
+            at.mkdir(parents=True, exist_ok=True)
+            touched.extend(_linked(at, where(agent), wanted))
+            touched.extend(_pruned(at, where(agent), wanted))
     return touched
 
 
