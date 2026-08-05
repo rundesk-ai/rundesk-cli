@@ -11,6 +11,7 @@ are called.
     PARTIAL     at least one profile is usable and at least one is not
     BLOCKED     no profile is usable: a required value is missing everywhere
     UNRUNNABLE  the credentials are fine and a command it ships is not executable
+    UNSEEN      the grant is there and no provider can find it — it was never linked
     STALE       a copied grant is behind the catalog it came from
     DANGLING    the grant no longer resolves — its skill left its catalog, or the catalog went
     BROKEN      the skill itself will not load, or what it declares cannot be read
@@ -55,6 +56,11 @@ BLOCKED = "BLOCKED"
 #: A copied grant is behind the catalog it came from. Repaired by `rundesk update`.
 STALE = "STALE"
 
+#: The grant is there and no provider can find it — it was never linked into their roots. Its own
+#: verdict because a listing cannot tell: the grant looks perfectly correct, and the thing that reads
+#: it is a vendor's directory rather than the agent's own.
+UNSEEN = "UNSEEN"
+
 #: The grant points at nothing. Its skill left its catalog, or the catalog was removed.
 DANGLING = "DANGLING"
 
@@ -69,7 +75,7 @@ BROKEN = "BROKEN"
 #: Which verdicts mean somebody has something to do. `PARTIAL` is among them deliberately: a
 #: half-configured account is a thing to fix, and a check that exited zero on one is a check
 #: nobody can gate on.
-TROUBLE = (PARTIAL, BLOCKED, UNRUNNABLE, STALE, DANGLING, BROKEN)
+TROUBLE = (PARTIAL, BLOCKED, UNRUNNABLE, UNSEEN, STALE, DANGLING, BROKEN)
 
 
 class Finding(NamedTuple):
@@ -167,6 +173,17 @@ def _verdict(grant: grants.Grant) -> Finding:
                         f"the copy is behind {grant.catalog} and has not been made again",
                         fix="rundesk update")
 
+    # Asked here, with the other faults about whether the skill is *there for this agent at all*,
+    # rather than down with the credentials. A skill no provider can find cannot be used whatever its
+    # credentials say, and the two have different fixes.
+    #
+    # This verdict exists because a refusal elsewhere sends people here: a grant whose linking was
+    # refused on its own tells them to check `doctor`, and `doctor` used to answer READY — the
+    # diagnosis making the unearned claim, at the moment somebody followed the product's own advice.
+    missing = grants.unseen(grant)
+    if missing:
+        return _finding(grant, UNSEEN, _cannot_find(missing), fix="rundesk update")
+
     declared = needs.declared(grant.at)
     # Walked once. `needs.started` and `needs.usable` each call `needs.every` themselves, so asking
     # all three meant three passes over the same profile set — and every pass asks the credential
@@ -232,6 +249,21 @@ def _said_of(usable: List[needs.Profile], grant: grants.Grant) -> str:
     return (f"{len(named)} profile{'s' if len(named) > 1 else ''}: " + ", ".join(named))
 
 
+def _cannot_find(missing: List[str]) -> str:
+    """Why an unseen grant is unseen, said so it reads as a sentence however many roots are missing.
+
+    Both endings really happen: a refused presentation leaves every root without a link, and a home
+    somebody tidied by hand leaves one. Worth the three branches because the one-sentence form built by
+    joining is wrong for both — "…, .grok/skills has no link to it" is a true sentence about four
+    things in the grammar of one, and the reader has to count the commas to notice.
+    """
+    if len(missing) == len(grants.VENDOR_ROOTS):
+        return "no provider can find it — nothing links to it"
+    if len(missing) == 1:
+        return f"{missing[0]} has no link to it"
+    return ", ".join(missing) + " have no link to it"
+
+
 def readable(finding: Finding) -> List[str]:
     """A finding as the lines a person or an agent reads under it, without the heading.
 
@@ -239,10 +271,11 @@ def readable(finding: Finding) -> List[str]:
     which profile, which value, and what that value is for, in that order, because that is the
     order somebody needs them to act. `commands` decides the words around it and the columns.
     """
-    if finding.verdict in (DANGLING, STALE, BROKEN, UNRUNNABLE):
-        # Nothing. The whole story of these four *is* the summary sentence, and a caller prints that
+    if finding.verdict in (DANGLING, STALE, BROKEN, UNRUNNABLE, UNSEEN):
+        # Nothing. The whole story of each of these *is* the summary sentence, and a caller prints it
         # already — returning it again put it out twice, once as the row and once indented beneath
-        # itself. Only the verdicts with a per-profile breakdown have detail worth adding.
+        # itself. Only the verdicts with a per-profile breakdown have detail worth adding. Counted in
+        # words here once and then wrong the moment a verdict was added, so it says "each of these".
         return []
 
     # The profiles somebody has begun, and — when nobody has begun any — the default, so a skill

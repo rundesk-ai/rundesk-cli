@@ -52,7 +52,6 @@ two disagreeing would index it under a name nothing granted. A copy goes stale, 
 makes it again whenever the source has moved.
 """
 
-import hashlib
 import os
 import shutil
 from pathlib import Path
@@ -270,8 +269,8 @@ def _presented_after(agent: str, name: str) -> None:
         presented(agent)
     except (Refused, locking.Stuck, OSError) as why:
         raise NotPresented(
-            f"{name} was granted to {agent} and could not be linked into every provider's own "
-            f"root — {why}") from why
+            f"{agent}'s grants were changed and could not be stood where every provider looks "
+            f"({name}) — {why}") from why
 
 
 def presented(agent: str) -> List[Path]:
@@ -334,6 +333,25 @@ def retired(catalog: str, gone: List[str]) -> Dict[str, List[str]]:
     return went
 
 
+def unseen(grant: Grant) -> List[str]:
+    """Which provider roots hold no link to this grant. Empty when every one of them does.
+
+    A grant is the entry in the agent's own directory, but a *brain* reads a vendor's root — so a
+    grant that landed and was never linked is one no provider can discover, however correct it looks
+    in a listing. That state is reachable: presenting is a second lock acquisition taken after the
+    write, so it can be refused on its own (see `NotPresented`).
+
+    Read-only, and deliberately not `presented`: something has to be able to *ask* without also
+    changing the answer, or a diagnosis becomes a repair and can no longer report what it found.
+    """
+    if not grant.resolves:
+        # Nothing should be linked to a grant pointing at nothing, and `doctor` says `DANGLING` about
+        # it first anyway. Answering "unseen" here as well would be two verdicts for one fault.
+        return []
+    home = directory.home(grant.agent)
+    return [root for root in VENDOR_ROOTS if not (home / root / grant.name).is_symlink()]
+
+
 def stale(grant: Grant) -> bool:
     """Whether a copied grant no longer matches the skill it was copied from.
 
@@ -358,16 +376,23 @@ def stale(grant: Grant) -> bool:
     kept = said.get("digest") if how == files.READ and isinstance(said, dict) else None
     # A record with no digest in it — one written by a release before this one — compares unequal
     # to anything and the copy is simply made again, which is the cheap and correct answer.
-    return kept != _digest(source)
+    return kept != library.digest(source)
 
 
 def refreshed(saying: Optional[Callable[[str], None]] = None) -> List[str]:
-    """Make every copied grant again where its source has moved. Returns the ones remade.
+    """Make every copied grant again where its source has moved, and present every agent's. Returns
+    the copies remade.
 
     Run after a catalog changes and on every `rundesk update`. A copy is the one thing in this
     package that can silently drift, so the thing that made it also has to be what keeps it, and it
     has to be called from somewhere that always runs rather than from wherever a copy happens to be
     made.
+
+    **The presenting is here rather than at the callers**, and that is what makes `doctor`'s `UNSEEN`
+    fix line true. Presenting is a second lock acquisition taken after a grant is written, so it can
+    be refused on its own and leave a grant no provider can find. Repairing that belongs to the sweep
+    that already runs on every update — put at each caller instead, `rundesk update` would repair it
+    and `rundesk skills update` would not, while `doctor` named only the first.
     """
     said = saying or (lambda _line: None)
     remade = []
@@ -382,6 +407,16 @@ def refreshed(saying: Optional[Callable[[str], None]] = None) -> List[str]:
                 _copied(library.read_skill(one.catalog, source), one.at)
                 remade.append(f"{agent}/{one.name}")
                 said(f"made {one.name} again for {agent}, from {one.catalog}")
+
+    # **Outside the lock, like every other caller of `presented`** — it takes its own, and the
+    # invariant that nothing reaches it holding one is worth keeping true rather than merely safe.
+    #
+    # Counted rather than described: `presented` makes and prunes links and does not say which, so
+    # "put back 4 links" would be a wrong sentence on the update that retired a grant.
+    for agent in directory.known():
+        brought = presented(agent)
+        if brought:
+            said(f"brought {len(brought)} provider link(s) into line for {agent}")
     return remade
 
 
@@ -496,7 +531,7 @@ def _copied(skill: library.Skill, to: Path) -> None:
             (building / library.DECLARED).write_text(_renamed(said, to.name), encoding="utf-8")
             files.write_json(building / RECORD, {
                 "catalog": skill.catalog, "skill": skill.name, "as": to.name,
-                "digest": _digest(skill.at), "copied_at": library.stamped()})
+                "digest": library.digest(skill.at), "copied_at": library.stamped()})
             trouble = library.trouble_with(building, to.name)
             if trouble:
                 raise Refused(f"{skill.address} could not be copied as {to.name}: {trouble}")
@@ -542,24 +577,6 @@ def _renamed(said: str, to: str) -> str:
             lines[at] = f"name: {to}\n"
             break
     return "".join(lines)
-
-
-def _digest(at: Path) -> str:
-    """What a skill directory currently is, as one value that changes when any of it does.
-
-    Every file's path and every file's bytes, in a fixed order. The path is in there as well as the
-    contents because a file being renamed, added or removed is a change to the skill and hashing
-    only contents would miss all three.
-    """
-    running = hashlib.sha256()
-    for one in sorted(at.rglob("*")):
-        if one.is_dir() or one.is_symlink():
-            continue
-        running.update(str(one.relative_to(at)).encode("utf-8"))
-        running.update(b"\0")
-        running.update(one.read_bytes())
-        running.update(b"\0")
-    return running.hexdigest()
 
 
 def _linked(root: Path, grants: Path, wanted: Set[str]) -> List[Path]:

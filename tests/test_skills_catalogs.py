@@ -11,6 +11,7 @@ Run directly: `python3 tests/test_skills_catalogs.py`
 import contextlib
 import io
 import os
+import stat
 import tarfile
 import unittest
 import urllib.error
@@ -22,7 +23,7 @@ from unittest import mock
 from fixtures_skills import a_published_catalog, a_skill, a_tarball
 
 import support
-from rundesk.skills import catalogs, library
+from rundesk.skills import catalogs, library, needs
 from rundesk.utils import archives
 
 
@@ -535,6 +536,51 @@ class WhatTheRealFetchDoes(Catalogs):
                 catalogs._brought_down("https://github.com/a/b", "", self.home / "w")
         refused.exception.close()
 
+    def test_a_scripts_executable_bit_survives_a_real_fetch(self):
+        # **The reason the extraction filter is named explicitly.** The standard library's default
+        # became `data` in 3.14, and `data` rewrites file modes — so a fetched catalog's commands would
+        # have arrived non-executable, which `doctor` now reports as `UNRUNNABLE`. Every other test of
+        # that verdict chmods a file placed straight onto disk, so none of them goes through an archive
+        # and none could catch it. This one does: a real tarball, the real fetch, then the verdict.
+        source = self.a_source()
+        a_skill(source / library.INSIDE / "jira", scripts=("search.py",))
+        archive = a_tarball(source, self.home / "acme.tar.gz", wrapper="rundesk-ai-acme-abc123")
+
+        def fetching(_source, _etag, into):
+            return catalogs.Brought(archives.unpacked(archive, into / "unpacked"), "")
+
+        with catalogs.brought("https://github.com/rundesk-ai/acme", "", fetching) as coming:
+            catalogs.installed(coming)
+        landed = library.tree("acme") / library.INSIDE / "jira" / library.SCRIPTS / "search.py"
+        self.assertTrue(landed.is_file())
+        self.assertTrue(landed.stat().st_mode & stat.S_IXUSR,
+                        "the executable bit did not survive the extraction")
+        found = needs.ships(library.tree("acme") / library.INSIDE / "jira")
+        self.assertEqual(1, len(found))
+        self.assertTrue(found[0].runnable, "doctor would report this as UNRUNNABLE")
+
+    def test_an_archive_member_that_escapes_is_refused_by_the_install_verb(self):
+        # `archives.Refused` is in the command layer's caught set and was raised through no verb by
+        # any test — only against `archives.unpacked` directly. This is the wiring between the two.
+        held = self.home / "escaping.tar.gz"
+        with tarfile.open(held, "w:gz") as writing:
+            member = tarfile.TarInfo("deep/inside")
+            member.type = tarfile.SYMTYPE
+            # Two levels, not one. A symlink resolves against its *own* directory, so
+            # `deep/inside -> ../escaped` genuinely lands inside and is correctly allowed — which the
+            # guard told me when this case first used it. A hard link is the one that escapes on a
+            # single `..`, because `tarfile` resolves those against the extraction root instead.
+            member.linkname = "../../escaped"
+            writing.addfile(member)
+
+        def fetching(_source, _etag, into):
+            return catalogs.Brought(archives.unpacked(held, into / "unpacked"), "")
+
+        with self.assertRaises(archives.Refused):
+            with catalogs.brought("https://github.com/rundesk-ai/acme", "", fetching):
+                pass
+        self.assertEqual([], library.known())
+
     def test_a_directory_is_copied_rather_than_fetched_and_has_no_etag(self):
         # A directory being edited is one whose whole point is that the last read is stale.
         working = self.home / "working"
@@ -609,6 +655,79 @@ class WhatAnArchiveIsNotAllowedToDo(Catalogs):
         archive = a_tarball(source, self.home / "acme.tar.gz")
         into = archives.unpacked(archive, self.home / "unpacking")
         self.assertTrue((into / library.MANIFEST).is_file())
+
+
+class WhatCountsAsAChange(Catalogs):
+    """`fresh`, and the predicate both the doing and the preview ask.
+
+    Version cannot answer this and was never meant to: content decides in this module, and an author
+    editing a skill without bumping a number is ordinary rather than exceptional. Read off the
+    versions, `rundesk skills update` replaced an entire tree and reported "up to date, and nothing
+    was fetched".
+    """
+
+    def test_the_far_end_saying_nothing_changed_is_not_fresh(self):
+        self.install(self.a_source())
+        self.assertFalse(catalogs.update("acme", Answering([None])).fresh)
+
+    def test_content_that_moved_under_an_unchanged_version_is_fresh(self):
+        self.install(self.a_source())
+        moved = self.a_source(name="acme", version="1.0.0",
+                              skills=("writing-plans", "filing-issues"))
+        did = catalogs.update("acme", Answering([moved]))
+        self.assertTrue(did.fresh)
+        self.assertEqual(("1.0.0", "1.0.0"), (did.before, did.after))
+        self.assertEqual(["filing-issues", "writing-plans"],
+                         [one.name for one in library.held("acme")])
+
+    def test_a_whole_tree_that_is_the_one_already_standing_is_not_fresh(self):
+        # The ordinary answer for a local directory: it has no `ETag` to be conditional with, so it
+        # hands back everything it has every single time.
+        source = self.a_source()
+        self.install(source)
+        self.assertFalse(catalogs.update("acme", Answering([source])).fresh)
+
+    def test_an_identical_tree_is_left_where_it_stands_rather_than_swapped(self):
+        # Told apart from "swapped for a copy of itself", which no report would distinguish. A swap
+        # stages and renames, so what is standing afterwards is a different file.
+        source = self.a_source()
+        self.install(source)
+        standing = library.tree("acme") / library.INSIDE / "writing-plans" / library.DECLARED
+        was = standing.stat().st_ino
+        catalogs.update("acme", Answering([source]))
+        self.assertEqual(was, standing.stat().st_ino)
+
+    def test_the_etag_of_an_identical_tree_is_still_written_down(self):
+        # So the next check is one conditional request rather than another whole download of
+        # something this install already has. Safe only because the trees are the same bytes — the
+        # `ETag` being recorded does describe what is on disk.
+        source = self.a_source()
+        self.install(source)
+        catalogs.update("acme", Answering([source], ['W/"same-content"']))
+        self.assertEqual('W/"same-content"', library.read("acme").provenance.etag)
+
+    def test_a_local_edit_makes_an_identical_source_a_change_again(self):
+        # What repairs drift. The tree that came back is not the tree on disk, because the tree on
+        # disk was edited — so this is a change, and the edit goes.
+        source = self.a_source()
+        self.install(source)
+        drifted = library.tree("acme") / library.INSIDE / "writing-plans" / library.DECLARED
+        drifted.write_text("---\nname: writing-plans\ndescription: edited.\n---\n",
+                           encoding="utf-8")
+        self.assertTrue(catalogs.update("acme", Answering([source])).fresh)
+
+    def test_installing_a_catalog_is_always_a_tree_that_arrived(self):
+        source = self.a_source()
+        with catalogs.brought(str(source)) as coming:
+            self.assertTrue(catalogs.installed(coming).fresh)
+
+    def test_the_predicate_says_no_of_a_far_end_that_handed_back_nothing(self):
+        # Asked by the preview with whatever `brought` yielded, including the empty answer — so it has
+        # to hold for a `Coming` carrying no tree at all rather than assume a caller checked first.
+        self.install(self.a_source())
+        at = library.where() / "acme"
+        self.assertFalse(catalogs.brings_a_change(at, catalogs.Coming("s", False, "", None, None,
+                                                                     [])))
 
 
 if __name__ == "__main__":

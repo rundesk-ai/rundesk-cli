@@ -155,6 +155,17 @@ So the far end is asked, cheaply: the `ETag` from the last fetch goes back out a
 a catalog nobody has touched answers `304` with no body at all. When something has changed, the whole
 tree is replaced.
 
+**A tree that comes back identical to the one already installed is not a change**, and this is what
+makes a local directory usable as a source while you are writing a catalog. A directory has no `ETag`
+to be conditional with, so it hands back everything it has every time you check it — and treating that
+as a change would mean every check reported replacing a tree, having replaced it with a copy of itself.
+What is compared is the content of the whole tree, so this is the same rule as everywhere else here:
+content decides. The `ETag` is still written down, so the next check over HTTP is one conditional
+request rather than another whole download of something you already have.
+
+`rundesk skills update <catalog>` without `--confirm` previews using that same comparison, so what it
+says would happen is what `--confirm` does.
+
 **A local edit inside a catalog is discarded, and that is the feature.** The repository is the source
 of truth, so replacing the tree also repairs a skill somebody edited in place — which is what keeps
 every machine running the same thing. To change a catalog skill, change it where it is published, or

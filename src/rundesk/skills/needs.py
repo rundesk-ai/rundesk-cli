@@ -261,15 +261,6 @@ def usable(needs: List[Need], at: Optional[Path] = None) -> List[Profile]:
     return [one for one in every(needs, at) if one.exists and one.whole]
 
 
-def started(needs: List[Need], at: Optional[Path] = None) -> List[Profile]:
-    """The profiles somebody has begun, whole or not.
-
-    Told apart from `every` because a profile nobody has touched is not a problem and a profile
-    somebody half-configured is. Only the second is worth a sentence at three in the morning.
-    """
-    return [one for one in every(needs, at) if one.exists]
-
-
 class Script(NamedTuple):
     """One command a skill ships, and whether the machine would run it.
 

@@ -1946,5 +1946,46 @@ class RotatingAFileSomebodyElseWrote(WithSomewhereToWrite):
         self.assertTrue(self.aside.is_file(), "a sweep counted in days took a capture with it")
 
 
+class WhetherANameStaysWhereItsThingsAreKept(support.Isolated):
+    """`files.escapes` — the guard two callers use to refuse a name that reaches somewhere else.
+
+    Tested here as well as through its callers, because it is the one function whose failure
+    reintroduces a measured incident: a directory replaced by a symbolic link, where every individual
+    removal below correctly refused to follow a link and the operation still reached somewhere that
+    had nothing to do with rundesk.
+    """
+
+    def test_a_name_nothing_stands_under_yet_does_not_escape(self):
+        # Which is what lets a thing be *made*: the check runs before the directory exists.
+        self.assertFalse(files.escapes(self.home / "not-there-yet", self.home))
+
+    def test_an_ordinary_child_does_not_escape(self):
+        (self.home / "there").mkdir()
+        self.assertFalse(files.escapes(self.home / "there", self.home))
+
+    def test_a_parent_reached_through_a_link_does_not_escape_its_own_children(self):
+        # Resolved on both sides. `/tmp` is `/private/tmp` on this platform, so comparing what was
+        # typed would refuse an ordinary install.
+        real = self.home / "real"
+        real.mkdir()
+        (real / "inside").mkdir()
+        through = self.home / "through"
+        through.symlink_to(real)
+        self.assertFalse(files.escapes(through / "inside", through))
+
+    def test_a_child_replaced_by_a_link_elsewhere_escapes(self):
+        elsewhere = self.home / "elsewhere"
+        elsewhere.mkdir()
+        parent = self.home / "parent"
+        parent.mkdir()
+        (parent / "cole").symlink_to(elsewhere)
+        self.assertTrue(files.escapes(parent / "cole", parent))
+
+    def test_a_name_reaching_upward_escapes(self):
+        parent = self.home / "parent"
+        parent.mkdir()
+        self.assertTrue(files.escapes(parent / ".." / "elsewhere", parent))
+
+
 if __name__ == "__main__":
     unittest.main()

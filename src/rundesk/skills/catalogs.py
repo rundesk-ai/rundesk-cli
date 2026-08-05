@@ -117,6 +117,13 @@ class Installed(NamedTuple):
     `before` is `""` when the catalog was not there. `retired` are the skills it used to hold and
     does not any more — named rather than counted, because each one is a grant somewhere that has to
     be taken away and somebody has to be told which.
+
+    **`fresh` says whether a tree actually came back, and it is the only thing a caller may read to
+    find that out.** `before == after` does not answer it: a catalog author who edits a skill without
+    bumping the version is ordinary, and this whole module is built on content deciding rather than a
+    version number — the version is metadata shown to a person. Reading it off the versions had
+    `rundesk skills update` report "up to date, and nothing was fetched" immediately after replacing
+    the entire tree.
     """
 
     name: str
@@ -124,6 +131,7 @@ class Installed(NamedTuple):
     after: str
     skills: List[str]
     retired: List[str]
+    fresh: bool
 
 
 class Refreshed(NamedTuple):
@@ -294,15 +302,34 @@ def installed(coming: Coming, saying: Optional[Callable[[str], None]] = None) ->
             files.discard(building)
             raise
     said(f"{name} {coming.manifest.version}: installed")
-    return Installed(name, "", coming.manifest.version, coming.skills, [])
+    return Installed(name, "", coming.manifest.version, coming.skills, [], True)
+
+
+def brings_a_change(at: Path, coming: Coming) -> bool:
+    """Whether what came back is a change to the catalog standing at `at`.
+
+    **The one place this is decided**, asked by `update` before it swaps and by the preview before it
+    describes a swap. Two implementations of it would let a preview promise a replacement that
+    `--confirm` then declines to make — which is what happened while the answer was read off the
+    version numbers: the preview said "would replace acme's tree" and the confirm said "up to date".
+
+    Three ways to be no change, and none of them is a version comparison: the far end said so and
+    handed back no tree, or it handed back one whose content is the content already standing. The
+    second is the ordinary answer for a local directory, which has no `ETag` to be conditional with
+    and so always answers with everything it has.
+    """
+    if not coming.fresh or coming.at is None or coming.manifest is None:
+        return False
+    return library.digest(coming.at) != library.digest(at / library.TREE)
 
 
 def update(name: str, fetching: Optional[Fetching] = None,
            saying: Optional[Callable[[str], None]] = None) -> Installed:
     """Check a catalog against where it came from, and replace its tree when it has changed.
 
-    Returns what happened. `before == after` and an empty `retired` is the ordinary answer and means
-    nothing was fetched at all — the far end said so, and this cost one conditional request.
+    Returns what happened. `fresh` false is the ordinary answer and means nothing changed: either the
+    far end said so and this cost one conditional request, or what came back is the tree already
+    standing. Read `fresh` and never the versions — see `Installed`.
     """
     settled = library.read(name)
     if not may_be_fetched(name):
@@ -318,17 +345,30 @@ def update(name: str, fetching: Optional[Fetching] = None,
     with brought(settled.provenance.source, settled.provenance.etag, fetching) as coming:
         if not coming.fresh or coming.at is None or coming.manifest is None:
             said(f"{name} {was.version}: up to date")
-            return Installed(name, was.version, was.version, holding, [])
+            return Installed(name, was.version, was.version, holding, [], False)
         if coming.manifest.name != name:
             raise Refused(f"{settled.provenance.source} now calls itself {coming.manifest.name} "
                           f"and this install has it as {name} — install it under its new name and "
                           f"remove {name}")
+        if not brings_a_change(settled.at, coming):
+            # A tree identical to the one standing is not a change, whatever the far end said.
+            # Swapping it in replaces a tree with a copy of itself and reports a change nobody made.
+            # The `ETag` is still written down, which is what `_noted` is for.
+            _noted(settled.at, coming)
+            said(f"{name} {was.version}: up to date")
+            return Installed(name, was.version, was.version, holding, [], False)
         retired = [one for one in holding if one not in coming.skills]
         _swapped(settled.at, coming)
-    said(f"{name} {was.version} -> {coming.manifest.version}")
+    # Names a version movement only when there is one, the way the preview does. A tree that was
+    # genuinely replaced at an unbumped version is a true thing to say and `1.0.0 -> 1.0.0` is not.
+    if was.version != coming.manifest.version:
+        said(f"{name} {was.version} -> {coming.manifest.version}")
+    else:
+        said(f"{name} {was.version}: replaced, at the same version")
     for one in retired:
         said(f"{one} is no longer in {name}")
-    return Installed(name, was.version, coming.manifest.version, coming.skills, retired)
+    return Installed(name, was.version, coming.manifest.version, coming.skills, retired,
+                     True)
 
 
 def remove(name: str) -> List[str]:
@@ -532,6 +572,26 @@ def _swapped(at: Path, coming: Coming) -> None:
             at, library.Provenance(coming.source, coming.etag, coming.manifest.version,
                                    library.stamped()))
         files.discard(aside)
+
+
+def _noted(at: Path, coming: Coming) -> None:
+    """Write down what the far end said about a tree, leaving the tree alone.
+
+    Only ever for a fetch whose tree is identical to the one standing, and that is what makes it safe.
+    `_swapped` records the provenance last and explains why: an `ETag` written beside a tree that is
+    still the old one answers `304` for ever, freezing a catalog at a version nothing can see is
+    wrong. **That danger is precisely absent here** — the two trees are the same bytes, so the `ETag`
+    being written does describe what is on disk.
+
+    Worth doing rather than skipping: it is what turns the next check into one conditional request
+    instead of another whole download of something this install already has.
+    """
+    if coming.manifest is None:
+        raise Refused("nothing was fetched, so there is nothing to write down")
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        library.stated_provenance(
+            at, library.Provenance(coming.source, coming.etag, coming.manifest.version,
+                                   library.stamped()))
 
 
 def _checked(tree: Path, name: str) -> List[str]:

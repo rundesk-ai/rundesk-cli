@@ -50,6 +50,7 @@ it silently is how that goes unnoticed until an agent reaches for something.
 """
 
 import datetime
+import hashlib
 import re
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
@@ -387,6 +388,29 @@ def trouble_with(at: Path, called: str = "") -> str:
         return f"{said} has a description of {len(described)} characters and the limit is " \
                f"{DESCRIBED_LIMIT}"
     return ""
+
+
+def digest(at: Path) -> str:
+    """What a tree currently is, as one value that changes when any of it does.
+
+    Every file's path and every file's bytes, in a fixed order. The path is in there as well as the
+    contents because a file being renamed, added or removed is a change to the tree and hashing only
+    contents would miss all three. Symlinks and directories are skipped: neither carries content of
+    its own, and following a link would digest something outside the tree.
+
+    Here rather than in either caller because both `grants` (has a copy drifted from its source?) and
+    `catalogs` (is what came back the tree we already have?) ask the same question of a directory, and
+    two implementations of one fingerprint is two things to keep in step.
+    """
+    running = hashlib.sha256()
+    for one in sorted(at.rglob("*")):
+        if one.is_dir() or one.is_symlink():
+            continue
+        running.update(str(one.relative_to(at)).encode("utf-8"))
+        running.update(b"\0")
+        running.update(one.read_bytes())
+        running.update(b"\0")
+    return running.hexdigest()
 
 
 def read_skill(catalog: str, at: Path) -> Skill:

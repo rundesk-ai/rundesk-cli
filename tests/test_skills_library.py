@@ -292,5 +292,65 @@ class LookingASkillUp(Library):
                     library.look_up(said)
 
 
+class WhatATreeComesTo(Library):
+    """`digest` — one value that changes when any of a tree does.
+
+    Two callers ask it: has a copied grant drifted from its source, and is what came back off a
+    repository the tree this install already has. Both are "did anything change", and neither can use
+    a version number to answer it.
+    """
+
+    def a_tree(self, name: str = "one", **files: str) -> Path:
+        at = self.home / name
+        for where, said in files.items():
+            one = at / where.replace("__", "/")
+            one.parent.mkdir(parents=True, exist_ok=True)
+            one.write_text(said, encoding="utf-8")
+        return at
+
+    def test_the_same_contents_come_to_the_same_value(self):
+        first = self.a_tree("first", a="one", b__c="two")
+        second = self.a_tree("second", a="one", b__c="two")
+        self.assertEqual(library.digest(first), library.digest(second))
+
+    def test_changing_a_byte_changes_it(self):
+        was = library.digest(self.a_tree("first", a="one"))
+        self.assertNotEqual(was, library.digest(self.a_tree("second", a="ONE")))
+
+    def test_renaming_a_file_changes_it_though_every_byte_is_the_same(self):
+        # Why the path is hashed as well as the contents. Renamed, added and removed are all changes
+        # to a tree, and hashing only contents misses the first of the three entirely.
+        was = library.digest(self.a_tree("first", a="one"))
+        self.assertNotEqual(was, library.digest(self.a_tree("second", b="one")))
+
+    def test_adding_a_file_changes_it(self):
+        was = library.digest(self.a_tree("first", a="one"))
+        self.assertNotEqual(was, library.digest(self.a_tree("second", a="one", b="")))
+
+    def test_moving_a_file_between_directories_changes_it(self):
+        was = library.digest(self.a_tree("first", a__b="one"))
+        self.assertNotEqual(was, library.digest(self.a_tree("second", c__b="one")))
+
+    def test_a_link_pointing_outside_the_tree_does_not_get_read(self):
+        # Followed, a link would digest something that is not part of the tree — so a file elsewhere
+        # on the machine changing would read as this tree having changed.
+        at = self.a_tree("first", a="one")
+        outside = self.home / "elsewhere"
+        outside.write_text("first", encoding="utf-8")
+        (at / "link").symlink_to(outside)
+        was = library.digest(at)
+        outside.write_text("second", encoding="utf-8")
+        self.assertEqual(was, library.digest(at))
+
+    def test_an_empty_directory_has_an_answer_and_it_is_not_the_answer_for_a_full_one(self):
+        # Reached: a catalog whose tree is momentarily empty is asked about like any other. Compared
+        # against a tree holding something rather than against another empty one, so this cannot pass
+        # by everything digesting to the same value.
+        empty = self.home / "empty"
+        empty.mkdir()
+        self.assertEqual(64, len(library.digest(empty)))
+        self.assertNotEqual(library.digest(empty), library.digest(self.a_tree("full", a="one")))
+
+
 if __name__ == "__main__":
     unittest.main()

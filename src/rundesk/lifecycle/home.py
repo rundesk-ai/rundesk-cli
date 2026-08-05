@@ -86,6 +86,9 @@ change it where it is published, or copy it into `local/` under a new name.
 
 Granting a skill to an agent does not copy it: a link stands in that agent's own directory, so editing
 a skill here changes it for everybody holding it, with nothing to re-run.
+
+**The exception is `--as`**, which stands a skill under another name so one agent can hold two of one
+name. That grant is a copy, and an edit here does not reach it until the next `rundesk update`.
 """
 
 #: Which note stands in which directory. The one list, read by both the making and the checking.

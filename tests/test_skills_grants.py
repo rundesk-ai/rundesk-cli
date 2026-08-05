@@ -10,6 +10,7 @@ Run directly: `python3 tests/test_skills_grants.py`
 import contextlib
 import os
 import pathlib
+import shutil
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -308,6 +309,16 @@ class WhenASkillLeavesItsCatalog(Grants):
         self.assertEqual({"alan": ["writing-plans"]}, grants.retired("acme", ["writing-plans"]))
         self.assertEqual([], grants.held("alan"))
 
+    def test_the_link_a_provider_would_read_is_pruned_too(self):
+        # A brain reads the vendor root, not `held()`. A regression that stopped `retired` calling
+        # `presented` would leave a dangling link a provider could still discover, and every case here
+        # asserted only on the source of truth.
+        self.grant("alan", "acme/writing-plans")
+        at = directory.home("alan") / grants.VENDOR_ROOTS[0] / "writing-plans"
+        self.assertTrue(at.is_symlink())
+        grants.retired("acme", ["writing-plans"])
+        self.assertFalse(at.is_symlink(), "a provider would still find this")
+
     def test_a_grant_of_the_same_name_from_another_catalog_is_kept(self):
         # Matched on where the grant points rather than on its name. The name is the same and the
         # skill is not, and a match on the name would revoke the wrong one.
@@ -536,6 +547,90 @@ class WhatAVendorRootAlreadyHolds(Grants):
         grants.presented("alan")
         self.assertEqual(grants.where("alan") / "writing-plans",
                          Path(os.path.normpath(ours.parent / os.readlink(ours))))
+
+
+class WhetherAProviderCanFindIt(Grants):
+    """`unseen` — a grant that landed while the linking after it did not.
+
+    Reachable, and not hypothetically: presenting is a second lock acquisition taken after the grant
+    is written, so it can be refused on its own. What it leaves behind is a skill that is correct in
+    every listing and invisible to every brain, which is the worst shape a fault can have.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.held = self.grant("alan", "acme/writing-plans")
+
+    def unlink(self, *roots: str) -> None:
+        for root in roots:
+            self.vendor("alan", root, "writing-plans").unlink()
+
+    def test_a_presented_grant_is_missing_from_no_root(self):
+        self.assertEqual([], grants.unseen(self.held))
+
+    def test_a_grant_nothing_links_names_every_root(self):
+        self.unlink(*grants.VENDOR_ROOTS)
+        self.assertEqual(list(grants.VENDOR_ROOTS), grants.unseen(self.held))
+
+    def test_one_root_tidied_by_hand_names_only_that_one(self):
+        self.unlink(".grok/skills")
+        self.assertEqual([".grok/skills"], grants.unseen(self.held))
+
+    def test_a_directory_standing_where_the_link_belongs_does_not_count_as_a_link(self):
+        # A brain reads a link rundesk made. Something else standing under that name is not that,
+        # and `is_symlink` is what tells them apart — `exists` would have called this presented.
+        at = self.vendor("alan", ".claude/skills", "writing-plans")
+        at.unlink()
+        at.mkdir()
+        self.assertIn(".claude/skills", grants.unseen(self.held))
+
+    def test_a_grant_pointing_at_nothing_is_not_also_reported_as_unseen(self):
+        # One fault, one answer. A dangling grant is already `DANGLING`, and nothing should be linked
+        # to it — reporting it as unseen as well would send somebody to repair the linking of a skill
+        # that has left its catalog, where nothing they type can help.
+        self.unlink(*grants.VENDOR_ROOTS)
+        shutil.rmtree(library.tree("acme") / library.INSIDE / "writing-plans")
+        held = grants.holding("alan", "writing-plans")
+        self.assertFalse(held.resolves)
+        self.assertEqual([], grants.unseen(held))
+
+    def test_an_alias_copy_is_asked_about_by_the_name_it_stands_under(self):
+        # A copy is granted under a name of its own, and the link a provider needs carries that name
+        # rather than the skill's. Asked by the wrong one, every alias would read as unseen for ever.
+        copied = self.grant("alan", "acme/filing-issues", "acme-issues")
+        self.assertEqual([], grants.unseen(copied))
+        self.vendor("alan", ".codex/skills", "acme-issues").unlink()
+        self.assertEqual([".codex/skills"], grants.unseen(copied))
+
+
+class BringingProviderLinksBackIntoLine(Grants):
+    """The sweep is what makes `doctor`'s `UNSEEN` fix line true, so it has to really repair it."""
+
+    def test_refreshing_puts_back_the_links_a_refused_presentation_never_made(self):
+        held = self.grant("alan", "acme/writing-plans")
+        for root in grants.VENDOR_ROOTS:
+            self.vendor("alan", root, "writing-plans").unlink()
+        said = []
+        grants.refreshed(said.append)
+        self.assertEqual([], grants.unseen(held))
+        self.assertIn("brought 4 provider link(s) into line for alan", said)
+
+    def test_refreshing_says_nothing_about_links_that_were_already_right(self):
+        # It runs on every `rundesk update`. A line per agent per update saying nothing happened is
+        # noise that teaches people to stop reading the output.
+        self.grant("alan", "acme/writing-plans")
+        said = []
+        grants.refreshed(said.append)
+        self.assertEqual([], [one for one in said if "into line" in one])
+
+    def test_refreshing_presents_every_agent_and_not_only_the_first(self):
+        directory.made("ben", "codex")
+        held = [self.grant("alan", "acme/writing-plans"), self.grant("ben", "acme/writing-plans")]
+        for one in held:
+            for root in grants.VENDOR_ROOTS:
+                (directory.home(one.agent) / root / "writing-plans").unlink()
+        grants.refreshed()
+        self.assertEqual([[], []], [grants.unseen(one) for one in held])
 
 
 if __name__ == "__main__":

@@ -125,21 +125,40 @@ class CheckingACatalog(Skills):
         super().setUp()
         self.install()
 
-    def test_without_confirm_it_says_what_would_change_and_exits_non_zero(self):
-        # Non-zero even when little would change, because the answer to `--confirm` being absent is
-        # always "this did not happen", and a script reading zero would take it for done.
+    def test_without_confirm_on_a_source_holding_the_same_tree_it_says_nothing_would_change(self):
+        # Non-zero even so, because the answer to `--confirm` being absent is always "this did not
+        # happen", and a script reading zero would take it for done.
         #
-        # A directory source has no `ETag`, so nothing *knows* it is unchanged and the tree really
-        # would be replaced — which is also what repairs a local edit. Saying "up to date" here would
-        # be describing something that is not what would happen.
+        # **The preview has to promise what the confirm will do.** A directory source has no `ETag`
+        # and so always hands back a whole tree, which had this reading "would replace acme's tree"
+        # while `--confirm` on the very same source answered "up to date" — a preview describing
+        # something that does not happen.
         code, out, err = self.rundesk("skills", "update", "acme")
         self.assertEqual(1, code)
         self.assertEqual("", out)
-        self.assertIn("would replace acme's tree", err)
-        self.assertIn("discard any local edit", err)
+        self.assertIn("is up to date", err)
+        self.assertIn("nothing would change", err)
         self.assertIn("--confirm", err)
         self.assertNotIn("1.0.0 to 1.0.0", err,
                          "a version movement is named only when there is one")
+
+    def test_the_preview_and_the_confirm_say_the_same_thing_about_the_same_source(self):
+        # The two are one decision — `catalogs.brings_a_change` — and this is what holds them to it.
+        _code, _out, preview = self.rundesk("skills", "update", "acme")
+        _code, said, _err = self.rundesk("skills", "update", "acme", "--confirm")
+        self.assertEqual("nothing would change" in preview, "nothing changed" in said)
+
+    def test_without_confirm_a_local_edit_inside_the_catalog_is_still_named_as_drift(self):
+        # The one case where an identical source really does mean a replacement: what is standing
+        # drifted, so the tree that came back is not the tree on disk. This is how drift is repaired,
+        # and the preview has to say the edit will go.
+        drifted = library.tree("acme") / library.INSIDE / "writing-plans" / library.DECLARED
+        drifted.write_text("---\nname: writing-plans\ndescription: edited by hand.\n---\n",
+                           encoding="utf-8")
+        code, _out, err = self.rundesk("skills", "update", "acme")
+        self.assertEqual(1, code)
+        self.assertIn("would replace acme's tree", err)
+        self.assertIn("discard any local edit", err)
 
     def test_a_far_end_that_says_nothing_changed_is_told_apart_from_that(self):
         # The cheap answer the whole `ETag` round trip exists to get. Different words, because it is
@@ -160,10 +179,40 @@ class CheckingACatalog(Skills):
         self.assertIn("1.0.0 to 1.1.0", err)
         self.assertIn("take    jira", err)
 
-    def test_with_confirm_and_nothing_changed_it_says_nothing_was_fetched(self):
+    def test_with_confirm_and_nothing_changed_it_says_so_once(self):
         code, out, _err = self.rundesk("skills", "update", "acme", "--confirm")
         self.assertEqual(0, code)
         self.assertIn("up to date", out)
+        # **Once.** `catalogs.update` says the outcome through its `saying` seam for the sweep that
+        # has no other voice, and this verb renders it out of what came back — handed both, one
+        # `rundesk skills update` printed the outcome twice, once indented and once not.
+        self.assertEqual(1, out.count("up to date"))
+
+    def test_with_confirm_it_never_claims_nothing_was_fetched_of_a_tree_that_arrived(self):
+        # A local directory hands back a whole tree every time. Saying "nothing was fetched" of that
+        # is false; saying "nothing changed" is true of it and of a `304` alike.
+        code, out, _err = self.rundesk("skills", "update", "acme", "--confirm")
+        self.assertEqual(0, code)
+        self.assertNotIn("nothing was fetched", out)
+
+    def test_with_confirm_on_content_that_moved_under_one_version_it_says_the_tree_was_replaced(self):
+        # The defect this pair of tests exists for: reading the answer off the versions, this
+        # replaced the entire tree and reported "up to date, and nothing was fetched".
+        self.a_source(version="1.0.0", skills=("writing-plans", "jira", "filing-issues"))
+        code, out, _err = self.rundesk("skills", "update", "acme", "--confirm")
+        self.assertEqual(0, code)
+        self.assertIn("its tree was replaced, at the same version", out)
+        self.assertNotIn("up to date", out)
+        self.assertNotIn("1.0.0 -> 1.0.0", out, "a version movement is named only when there is one")
+        self.assertIn("filing-issues", [one.name for one in library.held("acme")],
+                      "the tree it reported replacing really was replaced")
+
+    def test_with_confirm_on_a_real_version_move_it_names_the_move_once(self):
+        self.a_source(version="1.1.0", skills=("writing-plans",))
+        code, out, _err = self.rundesk("skills", "update", "acme", "--confirm")
+        self.assertEqual(0, code)
+        self.assertEqual(1, out.count("1.0.0 -> 1.1.0"))
+        self.assertIn("jira is no longer in this catalog", out)
 
     def test_a_copy_of_a_skill_in_it_is_made_again(self):
         # `skills update` has to keep alias copies current too, not only `rundesk update`. A copy is
@@ -384,6 +433,20 @@ class ListingWhatAnAgentHolds(Skills):
         code, out, _err = self.rundesk("skills")
         self.assertEqual(0, code)
         self.assertIn("alan", out)
+
+    def test_an_agent_holding_it_under_an_alias_is_still_listed_against_it(self):
+        # `_agents_holding` matches on where a grant points, not on the name it stands under — which
+        # is what makes an aliased holder appear in the AGENTS column and in a removal's preview.
+        # Every other listing case grants under the skill's own name, so none of them proved it.
+        directory.made("ben", "grok")
+        self.rundesk("skills", "grant", "alan", "acme/writing-plans")
+        self.rundesk("skills", "grant", "ben", "acme/writing-plans", "--as", "wp")
+        _code, out, _err = self.rundesk("skills")
+        row = next(one for one in out.splitlines() if "writing-plans" in one and "acme" in one)
+        self.assertIn("alan", row)
+        self.assertIn("ben", row)
+        _code, _out, err = self.rundesk("skills", "remove", "acme")
+        self.assertIn("held by alan, ben", err)
 
     def test_an_agent_that_is_not_there_is_refused(self):
         code, _out, err = self.rundesk("skills", "list", "nobody")
@@ -775,6 +838,24 @@ class WhenSomethingElseHoldsTheInstallLock(Skills):
                 self.assertEqual("", out)
                 self.assertIn("skills: FAILED", err)
 
+    def test_every_verb_that_changes_a_grant_answers_a_linking_failure(self):
+        # `NotPresented` is deliberately outside `TROUBLE`, so a verb that does not name it does not
+        # catch it *at all*. `revoke` did not, and an ordinary revoke under lock contention came out
+        # of `cli.main` as a traceback. Both verbs reach the raiser, so both are checked here — and
+        # the wording has to fit each: after a grant the skill is held, after a revoke it is gone.
+        self.rundesk("skills", "grant", "alan", "acme/writing-plans")
+        for argv, landed in ((("skills", "grant", "alan", "acme/jira"), "does hold it"),
+                             (("skills", "revoke", "alan", "writing-plans"), "no longer holds it")):
+            with self.subTest(argv=argv):
+                with mock.patch("rundesk.skills.grants.presented",
+                                side_effect=locking.Stuck("something else has the lock")):
+                    code, out, err = self.rundesk(*argv)
+                self.assertEqual(1, code)
+                self.assertEqual("", out)
+                self.assertIn("skills: FAILED", err)
+                self.assertIn(landed, err)
+                self.assertIn("rundesk skills doctor", err)
+
     def test_a_grant_that_landed_but_could_not_be_linked_says_which_it_was(self):
         # The write and the linking are two lock acquisitions, so the second can be refused for
         # contention alone while the grant itself is on disk and correct. Told this had failed, an
@@ -797,6 +878,54 @@ class WhenSomethingElseHoldsTheInstallLock(Skills):
             code, _out, err = self.rundesk("skills", "grant", "alan", "acme/writing-plans")
         self.assertEqual(1, code)
         self.assertIn("skills: FAILED", err)
+
+
+class WhenASkillsDeclarationCannotBeRead(Skills):
+    """A catalog author ships a broken `rundesk.json`, which is an ordinary field scenario.
+
+    Four verbs read it, each wording its own refusal, and none of them was ever driven with one that
+    will not parse — so nothing proved they refuse gracefully rather than crashing.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.install()
+        directory.made("alan", "claude")
+        (library.tree("acme") / library.INSIDE / "jira" / needs.WANTS).write_text(
+            "{not json", encoding="utf-8")
+
+    def test_every_verb_that_reads_it_refuses_rather_than_raising(self):
+        for argv in (("skills", "profiles", "acme/jira"),
+                     ("skills", "configure", "acme/jira"),
+                     ("skills", "forget", "acme/jira", "--confirm")):
+            with self.subTest(argv=argv):
+                code, out, err = self.rundesk(*argv)
+                self.assertEqual(1, code)
+                self.assertEqual("", out)
+                self.assertIn("skills: FAILED", err)
+
+    def test_a_grant_still_lands_and_says_the_declaration_cannot_be_read(self):
+        # The one verb that must *not* refuse: the link is on disk by the time the declaration is
+        # read, so failing here would report nothing about work that had already succeeded — and
+        # crashing, which is what it did, reports less than nothing.
+        code, out, _err = self.rundesk("skills", "grant", "alan", "acme/jira")
+        self.assertEqual(0, code)
+        self.assertIn("alan holds jira", out)
+        self.assertIn("cannot be read", out)
+        self.assertIsNotNone(grants.holding("alan", "jira"))
+
+    def test_a_listing_still_answers_about_everything_else(self):
+        # A listing that refused to say anything about a healthy catalog on account of one broken
+        # declaration would be worse than one that shows what it can.
+        code, out, _err = self.rundesk("skills")
+        self.assertEqual(0, code)
+        self.assertIn("writing-plans", out)
+
+    def test_doctor_reports_it_broken_rather_than_ready(self):
+        self.rundesk("skills", "grant", "alan", "acme/writing-plans")
+        code, out, _err = self.rundesk("skills", "doctor")
+        self.assertEqual(0, code, "the granted skill is fine; the broken one is not granted")
+        self.assertIn("writing-plans", out)
 
 
 class WhatIsOfferedAtAll(Skills):

@@ -170,6 +170,28 @@ class TheTreePointsOneWay(support.Isolated):
                     f"{module.name} reads a credential's value — ask `secrets.placed` whether it "
                     "is set instead")
 
+    def test_every_kind_the_skills_layer_raises_is_caught_by_the_command_layer(self):
+        # `grants.NotPresented` is deliberately outside `TROUBLE`, so that a caller can answer it
+        # separately. The cost of that choice is that a verb which does not name it does not catch it
+        # *at all* — and one did not, so an ordinary `rundesk skills revoke` under lock contention
+        # reached a person as a traceback rather than a refusal.
+        #
+        # So the rule is not "kept apart" but "caught somehow": named in `TROUBLE`, or given an
+        # `except` of its own. Checked mechanically because the failure is silent — nothing goes red,
+        # the verb simply crashes in a state nothing tests for, and "did I check every caller of what
+        # raises this" is a grep a person forgets.
+        said = (WHERE / "commands" / "skills.py").read_text(encoding="utf-8")
+        raises = (WHERE / "skills" / "grants.py").read_text(encoding="utf-8")
+        trouble = said.split("TROUBLE = (")[1].split(")")[0]
+        for name in ("NotPresented", "HalfCopied", "Occupied"):
+            with self.subTest(kind=name):
+                self.assertIn(f"class {name}(", raises, f"grants.{name} has gone")
+                caught = (f"grants.{name}" in trouble) or (f"except grants.{name}" in said)
+                self.assertTrue(caught,
+                                f"nothing in commands/skills.py catches grants.{name} — it is "
+                                "neither in TROUBLE nor given an `except` of its own, so any verb "
+                                "reaching it crashes instead of refusing")
+
     def test_every_package_table_names_what_is_in_its_directory(self):
         # `utils` was checked and `core` was not, so `core`'s table went on listing a module that
         # had moved a whole layer down and nothing said a word. A table a reader trusts is a table

@@ -7,6 +7,7 @@ A diagnosis proved by a stubbed-out fact is a diagnosis that agrees with itself.
 Run directly: `python3 tests/test_skills_doctor.py`
 """
 
+import shutil
 import unittest
 
 from fixtures_skills import a_published_catalog, a_skill
@@ -163,7 +164,6 @@ class WhenAGrantPointsAtNothing(Doctor):
 
     def test_a_skill_that_left_its_catalog_is_dangling(self):
         self.grant("acme/writing-plans")
-        import shutil
         shutil.rmtree(library.tree("acme") / library.INSIDE / "writing-plans")
         self.assertEqual(doctor.DANGLING, self.verdict("writing-plans").verdict)
 
@@ -335,6 +335,62 @@ class LookingOverTheWholeInstall(Doctor):
     def test_setting_the_value_clears_it_for_both(self):
         self.a_site()
         self.assertEqual([], doctor.counted(doctor.looked_over()))
+
+
+class ASkillNoProviderCanFind(Doctor):
+    """`UNSEEN` — and it exists because a refusal elsewhere sends people to this command.
+
+    A grant whose linking was refused on its own tells the operator to run `rundesk skills doctor`.
+    Before this verdict, doctor answered `READY` about it and exited zero: the diagnostic making the
+    unearned claim, at the moment somebody followed the product's own advice.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.grant("acme/writing-plans")
+
+    def unlink(self, *roots: str) -> None:
+        for root in roots:
+            (directory.home("alan") / root / "writing-plans").unlink()
+
+    def test_a_grant_no_provider_links_is_unseen_rather_than_ready(self):
+        self.unlink(*grants.VENDOR_ROOTS)
+        found = self.verdict("writing-plans")
+        self.assertEqual(doctor.UNSEEN, found.verdict)
+        self.assertTrue(found.trouble)
+
+    def test_it_is_counted_among_the_things_that_cannot_be_used(self):
+        self.unlink(*grants.VENDOR_ROOTS)
+        self.assertEqual(["writing-plans"],
+                         [one.skill for one in doctor.counted(doctor.looked_over())])
+
+    def test_the_fix_is_the_command_that_really_repairs_it(self):
+        # Named rather than described, and checked against `grants.refreshed` really doing it over in
+        # the grants suite. A fix line pointing at a command that does not repair the fault is the
+        # same defect as a verdict that cannot see it.
+        self.unlink(*grants.VENDOR_ROOTS)
+        self.assertEqual(["rundesk update"], doctor.fixes(doctor.counted(doctor.looked_over())))
+
+    def test_every_root_missing_reads_as_one_sentence_about_all_of_them(self):
+        self.unlink(*grants.VENDOR_ROOTS)
+        self.assertEqual("no provider can find it — nothing links to it",
+                         self.verdict("writing-plans").said)
+
+    def test_one_root_missing_is_named_in_the_singular(self):
+        # Built by joining, this read "…, .grok/skills has no link to it" — a true sentence about four
+        # things in the grammar of one, where the reader has to count commas to notice.
+        self.unlink(".grok/skills")
+        self.assertEqual(".grok/skills has no link to it", self.verdict("writing-plans").said)
+
+    def test_two_roots_missing_are_named_in_the_plural(self):
+        self.unlink(".grok/skills", ".codex/skills")
+        self.assertEqual(".codex/skills, .grok/skills have no link to it",
+                         self.verdict("writing-plans").said)
+
+    def test_a_healthy_grant_is_still_ready(self):
+        # The guard against a verdict that fires on everything: a check nobody can trust to be quiet
+        # is a check people stop running.
+        self.assertEqual(doctor.READY, self.verdict("writing-plans").verdict)
 
 
 if __name__ == "__main__":

@@ -641,11 +641,11 @@ one skill and nothing removes one, because a catalog is what somebody publishes 
 ```console
 $ rundesk skills
 skills in /Users/you/.rundesk/data/skills
-CATALOG         SKILL              AGENTS
-rundesk         managing-rundesk   alan, ben
-rundesk         writing-skills     —
-rundesk-skills  writing-plans      alan
-local           my-thing           —
+CATALOG         SKILL             AGENTS
+rundesk         managing-rundesk  alan, ben
+rundesk         writing-skills    —
+rundesk-skills  writing-plans     alan
+local           my-thing          —
 
 $ rundesk skills grant alan rundesk-skills/writing-plans
 alan holds writing-plans
@@ -740,6 +740,7 @@ what it summarises when both are merged into one pipe.
 | `PARTIAL` | at least one profile is usable and at least one is not |
 | `BLOCKED` | no profile is usable — a required value is missing everywhere |
 | `UNRUNNABLE` | every credential is in place and a command it ships is not executable |
+| `UNSEEN` | the grant is there and no provider can find it; `rundesk update` links it |
 | `STALE` | a copied grant is behind the catalog it came from; `rundesk update` remakes it |
 | `DANGLING` | the grant no longer resolves — its skill left its catalog, or the catalog went |
 | `BROKEN` | the skill itself will not load, or what it declares cannot be read |
@@ -747,6 +748,12 @@ what it summarises when both are merged into one pipe.
 `PARTIAL` exists because two working Jira sites and one half-configured is neither a healthy
 integration nor a broken one, and collapsing it either way would cry wolf on a working setup or hide
 the site that fails at three in the morning.
+
+`UNSEEN` exists because a grant and its linking are two separate writes. The link into each provider's
+own root is made after the grant, under a lock of its own, so it can be refused on its own — and what
+that leaves is a skill that is correct in every listing and invisible to every brain. `grant` and
+`revoke` both send anybody who meets that refusal here, so this is the command that has to be able to
+answer it.
 
 Writing a skill or publishing a catalog is [`catalogs.md`](catalogs.md).
 

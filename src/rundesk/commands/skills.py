@@ -310,16 +310,29 @@ def _updated(name: str, confirm: bool, fetching: Optional[catalogs.Fetching]) ->
     if not confirm:
         return _would_update(name, fetching)
     try:
-        did = catalogs.update(name, fetching, _out_loud)
+        # **Deliberately not handed `_out_loud`.** This function renders every fact out of what comes
+        # back, and `catalogs.update` says those same facts through `saying` for the sweep in
+        # `refreshed`, which has no other voice. Handed both, one `rundesk skills update` said the
+        # outcome twice — once indented and once not.
+        did = catalogs.update(name, fetching)
         went = grants.retired(name, did.retired)
         grants.refreshed(_out_loud)
     except TROUBLE as why:
         return _failed(str(why))
 
-    if did.before == did.after and not did.retired:
-        print(f"{name} {did.after} — up to date, and nothing was fetched")
+    # **Decided by `did.fresh`, never by the versions matching** — see `catalogs.Installed`.
+    if not did.fresh:
+        # "nothing changed" rather than "nothing was fetched", because both answers arrive here:
+        # a `304` fetched nothing at all, and a local directory hands back a whole tree that turns out
+        # to be the one already standing. The second had this line claiming no fetch had happened.
+        print(f"{name} {did.after} — up to date, nothing changed")
         return OK
-    print(f"{name} {did.before} -> {did.after}")
+    if did.before != did.after:
+        print(f"{name} {did.before} -> {did.after} — its tree was replaced")
+    else:
+        print(f"{name} {did.after} — its tree was replaced, at the same version")
+    for one in did.retired:
+        print(f"        {one} is no longer in this catalog")
     for agent in sorted(went):
         print(f"        {agent} no longer holds {', '.join(went[agent])}")
     return OK
@@ -338,10 +351,15 @@ def _would_update(name: str, fetching: Optional[catalogs.Fetching]) -> int:
         holding = library.found(settled.at / library.TREE)
         with catalogs.brought(settled.provenance.source, settled.provenance.etag,
                               fetching) as coming:
-            if not coming.fresh or coming.manifest is None:
+            # **Asked of `catalogs.brings_a_change` rather than worked out here**, so a preview
+            # cannot promise something `--confirm` then declines to do. This used to read
+            # `not coming.fresh`, which is only one of the ways there is nothing to do: a local
+            # directory has no `ETag`, so it always hands back a whole tree and always looked fresh —
+            # and the preview said it would replace a tree that was already identical.
+            if not catalogs.brings_a_change(settled.at, coming):
                 print(f"update: {name} {settled.manifest.version} is up to date — nothing would "
                       "change", file=sys.stderr)
-            else:
+            elif coming.manifest is not None:
                 # **Says the tree would be replaced, and names a version movement only when there
                 # is one.** What is on the far end is authoritative whether its version moved or
                 # not, so a catalog whose author edited a skill without bumping a number is one this
@@ -421,13 +439,7 @@ def _granted(agent: str, address: str, alias: str) -> int:
         skill = library.look_up(address)
         held = grants.granted(agent, skill, alias)
     except grants.NotPresented as why:
-        # **The grant landed and the linking did not**, which is not the same as having failed. Said
-        # apart from an ordinary refusal because the difference decides what somebody does next: told
-        # this had failed, they retry the same command and meet "already holds it", having been given
-        # no reason to think the first one worked.
-        return _failed(str(why),
-                       f"{agent} does hold it — this was the linking into each provider's own root",
-                       "rundesk skills doctor says whether anything is missing")
+        return _not_presented(why, f"{agent} does hold it")
     except grants.Occupied as why:
         # The one refusal with a way out. Told apart by its own kind rather than worked out from the
         # address afterwards — see `grants.Occupied` for the two refusals that trick that.
@@ -441,7 +453,16 @@ def _granted(agent: str, address: str, alias: str) -> int:
     print(f"        from     {held.catalog}/{held.skill}"
           f"{' — a copy, standing under another name' if held.copied else ''}")
     print(f"        stands   {held.at}")
-    wanted = needs.declared(skill.at)
+
+    # **Read after the grant landed, so it may not fail the grant.** A skill whose declaration will
+    # not parse is a real thing to meet — a catalog author ships one — and reading it here used to
+    # crash the verb *after* the link was already on disk, which reported nothing about the work that
+    # had succeeded. The grant is done either way; this is the part that says what is still needed.
+    try:
+        wanted = needs.declared(skill.at)
+    except needs.Refused as why:
+        print(f"        needs    what it needs cannot be read — {why}")
+        return OK
     if wanted:
         print(f"        needs    {', '.join(one.env for one in wanted)}")
         if not needs.usable(wanted):
@@ -450,10 +471,30 @@ def _granted(agent: str, address: str, alias: str) -> int:
     return OK
 
 
+def _not_presented(why: Exception, landed: str) -> int:
+    """Say that the change landed and the linking did not, which is not the same as having failed.
+
+    One function because two verbs reach it and the wording has to hold for both. The difference
+    decides what somebody does next: told a grant had failed they retry and meet "already holds it",
+    and told a revoke had failed they look for a skill that is already gone — in each case having been
+    given no reason to think the first command worked.
+    """
+    return failed(f"skills: FAILED — {why}", landed,
+                  "this was the linking into each provider's own root",
+                  "rundesk skills doctor reports it as UNSEEN, and rundesk update repairs it")
+
+
 def _revoked(agent: str, name: str) -> int:
     """Take a skill away from an agent."""
     try:
         went = grants.revoked(agent, name)
+    except grants.NotPresented as why:
+        # **Every verb that can reach the raiser needs its own answer.** `NotPresented` is
+        # deliberately outside `TROUBLE` — that is the whole point of giving it its own kind — so a
+        # verb that does not name it does not catch it at all, and `revoke` did not: an ordinary
+        # revoke under lock contention came out of `cli.main` as a traceback. Splitting a type out of
+        # a blanket catch is not finished until every caller of what raises it has been checked.
+        return _not_presented(why, f"{agent} no longer holds it")
     except TROUBLE as why:
         return _failed(str(why))
 

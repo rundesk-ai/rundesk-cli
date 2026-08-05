@@ -199,15 +199,24 @@ class ThreeJiraSites(Needs):
     def test_the_two_that_work_are_usable_and_the_third_is_not(self):
         self.assertEqual(["acme", "beta"], [one.shown for one in needs.usable(self.needs)])
 
+    def _begun(self):
+        """The profiles somebody has begun, whole or not — what both readouts filter `every` down to.
+
+        Spelled out here rather than asked of a helper in `needs`, because that helper had no caller
+        but this file: `doctor` and the `profiles` readout each already hold the answer to `every` and
+        filter it, rather than asking the credential store a second time for it.
+        """
+        return [one for one in needs.every(self.needs) if one.exists]
+
     def test_the_half_configured_one_is_named_and_the_working_ones_are_not(self):
-        started = {one.shown: one for one in needs.started(self.needs)}
+        started = {one.shown: one for one in self._begun()}
         self.assertEqual(["acme", "beta", "gamma"], sorted(started))
         self.assertFalse(started["gamma"].whole)
         self.assertEqual(["JIRA_API_TOKEN__GAMMA", "JIRA_EMAIL__GAMMA"],
                          sorted(started["gamma"].missing))
 
     def test_a_site_nobody_started_is_not_reported_at_all(self):
-        self.assertNotIn("delta", [one.shown for one in needs.started(self.needs)])
+        self.assertNotIn("delta", [one.shown for one in self._begun()])
 
     def test_the_unused_default_is_offered_but_never_counted_as_started(self):
         # A skill used entirely through named profiles has no default, and saying so is how
@@ -216,7 +225,7 @@ class ThreeJiraSites(Needs):
         every = {one.shown: one for one in needs.every(self.needs)}
         self.assertIn(needs.DEFAULT_SHOWN, every)
         self.assertFalse(every[needs.DEFAULT_SHOWN].exists)
-        self.assertNotIn(needs.DEFAULT_SHOWN, [one.shown for one in needs.started(self.needs)])
+        self.assertNotIn(needs.DEFAULT_SHOWN, [one.shown for one in self._begun()])
 
     def test_finishing_the_third_makes_it_usable_and_touches_neither_other(self):
         self.given(JIRA_EMAIL__GAMMA="ops@gamma.example",
