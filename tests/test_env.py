@@ -10,6 +10,7 @@ Run directly: `python3 tests/test_env.py`
 import base64
 import io
 import os
+import threading
 import unittest
 from unittest import mock
 
@@ -208,6 +209,101 @@ class HowItIsKeptOnDisk(Values):
         held = secrets.kept()["A_KEY"]
         self.assertIsNone(held.value)
         self.assertIn("v9", held.trouble)
+
+
+class WhatASignatureCovers(Values):
+    """The signature is over the name as well as the bytes, and why that is not decoration."""
+
+    def test_a_value_moved_to_another_name_is_refused(self):
+        # Signed over the bytes alone, a tag says only "this install sealed these bytes" — not
+        # "…and they belong to this name". Anybody able to edit the file could then swap two
+        # sealed values between names, with no key and no decryption, and both would open cleanly:
+        # a program asking for its Discord token was handed the Slack one, and would go on to send
+        # it to Slack.
+        self.given(DISCORD_TOKEN="discord-secret-AAAAAAAA",
+                   SLACK_BOT_TOKEN="slack-secret-BBBBBBBBB")
+        written = files.read_json(secrets.where())[1]
+        written["DISCORD_TOKEN"], written["SLACK_BOT_TOKEN"] = (
+            written["SLACK_BOT_TOKEN"], written["DISCORD_TOKEN"])
+        files.write_json(secrets.where(), written, private=True)
+
+        held = secrets.kept()
+
+        for key in ("DISCORD_TOKEN", "SLACK_BOT_TOKEN"):
+            with self.subTest(key=key):
+                self.assertIsNone(held[key].value, "a value opened under somebody else's name")
+                self.assertIn("cannot be read", held[key].trouble)
+
+    def test_a_value_copied_to_a_new_name_is_refused(self):
+        self.given(DISCORD_TOKEN=A_TOKEN)
+        written = files.read_json(secrets.where())[1]
+        written["A_COPY"] = written["DISCORD_TOKEN"]
+        files.write_json(secrets.where(), written, private=True)
+        self.assertIsNone(secrets.kept()["A_COPY"].value)
+        self.assertEqual(A_TOKEN, secrets.value("DISCORD_TOKEN"), "the original stopped working")
+
+
+class WhereTheBytesMayLand(Values):
+    """A symlink decides where bytes go, and here that defeats the placement outright."""
+
+    def test_the_key_is_not_written_through_a_link(self):
+        # A dangling `key` pointing into `data/` sends the one thing that opens every sealed value
+        # into the directory a backup copies — so an ordinary unattended copy carries it away.
+        paths.secrets().mkdir(parents=True, exist_ok=True)
+        aimed = paths.data() / "cache" / "somewhere-a-copy-reaches"
+        aimed.parent.mkdir(parents=True, exist_ok=True)
+        secrets.key_at().symlink_to(aimed)
+
+        with self.assertRaises(secrets.Refused) as refused:
+            secrets.stated("DISCORD_TOKEN", A_TOKEN)
+
+        self.assertIn("is a link", str(refused.exception))
+        self.assertFalse(aimed.exists(), "the key was written inside data/")
+
+    def test_the_directory_is_not_written_through_a_link(self):
+        elsewhere = self.home / "elsewhere"
+        elsewhere.mkdir()
+        paths.secrets().symlink_to(elsewhere)
+        with self.assertRaises(secrets.Refused):
+            secrets.stated("DISCORD_TOKEN", A_TOKEN)
+        self.assertEqual([], sorted(one.name for one in elsewhere.iterdir()))
+
+
+class WhenTwoAreKeepingAValueAtOnce(Values):
+    """The key is made once, under the lock, or one of them is sealed with a key nothing keeps."""
+
+    def test_two_first_writers_do_not_each_make_a_key(self):
+        # Made outside the lock, both saw no key, both made a different one, and whichever landed
+        # last is the key on disk — so the other value can never be opened again. Nothing else
+        # about this feature is unrecoverable.
+        made = []
+        ready = threading.Barrier(2)
+
+        def keeping(name):
+            ready.wait()
+            secrets.stated(name, A_TOKEN)
+            made.append(name)
+
+        both = [threading.Thread(target=keeping, args=(name,))
+                for name in ("DISCORD_TOKEN", "SLACK_BOT_TOKEN")]
+        for one in both:
+            one.start()
+        for one in both:
+            one.join(15)
+
+        self.assertEqual(2, len(made), "one of them never finished")
+        held = secrets.kept()
+        for name in ("DISCORD_TOKEN", "SLACK_BOT_TOKEN"):
+            with self.subTest(name=name):
+                self.assertEqual(A_TOKEN, held[name].value,
+                                 f"{name} was sealed with a key that no longer exists")
+
+    def test_a_key_written_only_part_way_is_refused_rather_than_used(self):
+        secrets.key_at().parent.mkdir(parents=True, exist_ok=True)
+        secrets.key_at().write_bytes(b"too short")
+        with self.assertRaises(secrets.Refused) as refused:
+            secrets.stated("DISCORD_TOKEN", A_TOKEN)
+        self.assertIn("not a key this release can use", str(refused.exception))
 
 
 class WhoCanReadIt(Values):

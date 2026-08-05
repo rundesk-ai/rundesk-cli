@@ -12,7 +12,7 @@ $RUNDESK_HOME/
   backups/        copies of data/
   projects/       the shared directory work is checked out into
   secrets/        the values you place for what rundesk talks to
-  .rundesk.lock   held while a command changes this install
+  .rundesk.lock   held while one command at a time changes this install
 ```
 
 | Below the root | What may reach it |
@@ -73,11 +73,21 @@ from a copy to `secrets/`, so there is none to get wrong.
 It follows that a restore does not put a credential back either, which is the right way round: a
 value somebody typed once is not state a copy should be able to reinstate.
 
-The directory is `0700` and every file in it `0600`, repaired on each write. Each value is sealed
-with a key kept beside it — so nothing is readable text on the disk — and signed, so a value that
-was tampered with is refused rather than opened into nonsense. **The key sits beside the values
-because a gateway has to start at boot with nobody typing**, which is the honest limit of it:
-this stops a credential being readable text on a disk, not somebody with the owner's account.
+The directory is `0700` and every file in it `0600`, repaired on each write, and neither the
+directory nor the key may be reached through a symlink — a link decides where bytes land, and a
+dangling `key` aimed into `data/` would put the one thing that opens every value into the directory
+a backup copies.
+
+Each value is sealed with a key kept beside it, so nothing is readable text on the disk. Each is
+also signed **over its name as well as its bytes**, so a value that was tampered with *or moved to
+a different name* is refused rather than opened: signing the bytes alone would let anybody able to
+edit the file swap two sealed values between names, with no key at all, and a program asking for
+its Discord token would be handed the Slack one and send it to Slack.
+
+**The key sits beside the values because a gateway has to start at boot with nobody typing**, which
+is the honest limit of the whole thing: this stops a credential being readable text on a disk, in a
+stray copy, or in whatever a filesystem hands back after a delete. It does not stop somebody with
+the owner's account, or root.
 
 ## What a copy does not carry
 

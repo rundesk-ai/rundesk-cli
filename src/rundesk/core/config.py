@@ -199,10 +199,12 @@ def fill_in(data: Optional[Path] = None) -> Dict[str, Any]:
     looks exactly like a default nobody set.
     """
     at = where(data)
+    # The lock of the install this file belongs to, not of whichever one `RUNDESK_HOME` names.
     # Held at the install level as well as at the file level. `files`' own lock guards this file
     # against another writer of this file; it cannot guard it against `data/` being renamed out from
     # under it by a restore, which is the race that lost a stated value entirely.
-    with locking.only_one(paths.lock(), "this install"), files.changing_json(at, empty={}) as held:
+    with locking.only_one(paths.lock(at.parent.parent), "this install"), \
+            files.changing_json(at, empty={}) as held:
         settled = dict(held[0]) if isinstance(held[0], dict) else {}
         for key, value in INITIAL.items():
             settled.setdefault(key, value)
@@ -229,8 +231,9 @@ def stated_all(values: Dict[str, Any], data: Optional[Path] = None) -> None:
     unknown = [key for key in sorted(values) if key not in INITIAL]
     if unknown:
         raise Refused(f"{unknown[0]} is not a value rundesk is configured with")
-    with locking.only_one(paths.lock(), "this install"), \
-            files.changing_json(where(data), empty=dict(INITIAL)) as held:
+    at = where(data)
+    with locking.only_one(paths.lock(at.parent.parent), "this install"), \
+            files.changing_json(at, empty=dict(INITIAL)) as held:
         settled = dict(held[0]) if isinstance(held[0], dict) else dict(INITIAL)
         settled.update(values)
         held[0] = settled

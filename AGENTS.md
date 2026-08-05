@@ -66,7 +66,7 @@ may import anything higher, and `tests/test_layers.py` checks that rather than t
 | `src/rundesk/cli.py` | the parser and the dispatch, and nothing else | the command modules |
 | `src/rundesk/commands/` | one verb each: a `Namespace` in, an exit code out. The only layer that may know argparse | `lifecycle`, `core`, `utils` |
 | `src/rundesk/lifecycle/` | this copy of rundesk on a machine: releases, the program tree, the copies, migrations | `core`, `utils` |
-| `src/rundesk/core/` | where things are, and how the install is configured | `utils` |
+| `src/rundesk/core/` | where things are, how the install is configured, and the values it keeps | `utils` |
 | `src/rundesk/utils/` | common functionality with no opinion about rundesk: a small file kept safely, a replacement staged, a table lined up | the standard library, **and nothing of rundesk's** |
 | `install.sh` | fetching a copy and handing over | nothing — it holds no product behavior |
 
@@ -117,6 +117,13 @@ Binding a location at import is how a suite comes to write into the real install
   defect this rebuild exists to fix.
 - **Unset and set-to-empty are different answers**, and so are "missing" and "unreadable". Anything
   that collapses them loses state — a value nobody could read is never written back as empty.
+
+### A lock belongs to the install it is changing
+
+Anything handed a directory to work on derives its lock from *that* root, never from `RUNDESK_HOME`.
+A function given somewhere to work that reaches outside it to lock is the one-location defect in
+miniature — and it happened: a call passed an explicit directory and left a lock file in a live
+install that nothing else in that run went near.
 
 ### Say which of the three it is
 

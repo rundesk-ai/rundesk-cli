@@ -58,7 +58,7 @@ def cmd_env(args: argparse.Namespace) -> int:
     if what == "check":
         return _checked(args.key)
     if what == "set":
-        return _kept(args.key)
+        return _stated(args.key)
     if what == "unset":
         return _emptied(args.key)
 
@@ -114,7 +114,7 @@ def _checked(key: str) -> int:
     return OK
 
 
-def _kept(key: str) -> int:
+def _stated(key: str) -> int:
     """Read a value from whoever is typing and keep it under this name."""
     trouble = secrets.name_trouble(key)
     if trouble:
@@ -126,7 +126,7 @@ def _kept(key: str) -> int:
 
     try:
         secrets.stated(key, said)
-    except (secrets.Refused, OSError) as why:
+    except (secrets.Refused, secrets.Stuck, OSError) as why:
         return _failed(str(why), "nothing was kept")
 
     print(f"{key} is set — {secrets.hinted(secrets.Held(said, None))}")
@@ -140,7 +140,7 @@ def _emptied(key: str) -> int:
         return _failed(trouble)
     try:
         secrets.cleared(key)
-    except (secrets.Refused, OSError) as why:
+    except (secrets.Refused, secrets.Stuck, OSError) as why:
         return _failed(str(why), "nothing was changed")
     print(f"{key} is set to nothing")
     return OK
@@ -156,9 +156,14 @@ def _typed(asking: str) -> Optional[str]:
 
     Either way it never touches `argv`, and that is the point of reading it here at all.
     """
+    if sys.stdin is None:
+        # Not the same as an empty pipe. With fd 0 closed outright, CPython sets `sys.stdin` to
+        # `None` at start-up, and asking it anything is an `AttributeError` — which is not an
+        # `OSError` and reached the person as a traceback.
+        return None
     try:
         said = getpass.getpass(asking) if sys.stdin.isatty() else sys.stdin.readline()
-    except (EOFError, KeyboardInterrupt, OSError):
+    except (EOFError, KeyboardInterrupt, OSError, AttributeError):
         return None
     said = said.rstrip("\n")
     return said or None

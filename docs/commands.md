@@ -35,6 +35,7 @@ home              /Users/you/.rundesk
 program           /Users/you/.rundesk/app (installed)
 data              /Users/you/.rundesk/data
 backups           /Users/you/.rundesk/backups
+secrets           /Users/you/.rundesk/secrets
 projects          /Users/you/.rundesk/projects
 fit to run        yes
 backup_enabled    yes
@@ -268,6 +269,9 @@ What it takes, one named thing at a time, never a sweep:
   machine keeps its command
 - `app/`, whole, unless it looks like somebody's checkout
 - `data/`, **only with `--purge`**
+- `secrets/`, **only with `--purge`** — a credential left on a machine rundesk has been removed
+  from is the worst thing here to leave lying about, and an ordinary removal keeps them because
+  they are yours and no backup can bring them back
 - `backups/` — **never.** Not "not by default": there is no argument to this command that reaches
   them, and the code that removes things does not name the directory at all.
 

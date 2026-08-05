@@ -43,9 +43,13 @@ The construction, so it can be checked rather than trusted:
 - A fresh 16-byte nonce for every value written, from `secrets.token_bytes`. Nothing is ever sealed
   twice under the same keystream, which is the mistake that breaks this kind of cipher outright.
 - Keystream from keyed `blake2b` over the nonce and a counter, XORed with the value.
-- **Encrypt-then-sign**: an HMAC over the nonce and the sealed bytes, checked with
-  `compare_digest` *before* anything is unsealed. A value that has been tampered with, or that
-  belongs to a different key, is refused rather than opened into nonsense.
+- **Encrypt-then-sign, over the name as well as the bytes**: an HMAC over the name, the nonce and
+  the sealed bytes, checked with `compare_digest` *before* anything is unsealed. A value that has
+  been tampered with, or that belongs to a different key, is refused rather than opened into
+  nonsense — and so is one moved to a different name. Signing only the bytes let anybody who could
+  edit the file swap two sealed values between names with no key at all, and both then opened
+  cleanly: a program asking for its Discord token was handed the Slack one, which it would go on to
+  send to Slack.
 
 There is no fetching from an external keeper (`op read`, `pass show`, `gpg -d`) and no use of the
 system keychain. The build this replaces grew the first; both are stronger than this, because in
@@ -58,7 +62,7 @@ import hmac
 import re
 import secrets as randomness
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from rundesk.core import paths
 from rundesk.utils import files, locking
@@ -70,7 +74,7 @@ KEPT_IN = "env.json"
 KEY_IN = "key"
 
 #: How the sealed form is written down, so a later release can change it and still read this one.
-SEALED = "v1"
+SEALED = "v2"
 
 #: A nonce per value, never reused. Sixteen bytes is far past the point where two collide.
 NONCE = 16
@@ -98,6 +102,11 @@ LONG_ENOUGH = 12
 #: A fixed width, so what is shown says nothing about how long the value is. Length narrows a guess
 #: and identifies which kind of token it is; there is no reason to give it away for a nicer table.
 BETWEEN = "x" * 8
+
+
+#: The same answer `locking` gives, named here as well because this is the module every caller of
+#: these already imports — the family this belongs to re-exports it, and this one had not.
+Stuck = locking.Stuck
 
 
 class Refused(Exception):
@@ -154,7 +163,7 @@ def kept(at: Optional[Path] = None) -> Dict[str, Held]:
         raise Refused(f"{where(at)} is there and cannot be read")
     if how != files.READ or not isinstance(said, dict):
         return {}
-    return {key: _opened(sealed, at) for key, sealed in said.items()}
+    return {key: _opened(key, sealed, at) for key, sealed in said.items()}
 
 
 def names(at: Optional[Path] = None) -> List[str]:
@@ -188,7 +197,7 @@ def stated(key: str, said: str, at: Optional[Path] = None) -> None:
         raise Refused(trouble)
     if not said:
         raise Refused(f"{key} was given nothing to keep — `rundesk env unset {key}` empties a name")
-    _written({key: _sealed(said, at)}, at)
+    _written({key: _sealed(key, said, at)}, at)
 
 
 def cleared(key: str, at: Optional[Path] = None) -> None:
@@ -226,22 +235,47 @@ def _key(at: Optional[Path] = None) -> bytes:
     the module docstring, which says so rather than letting the word "encrypted" imply more.
     """
     made = key_at(at)
-    if made.exists():
-        held = made.read_bytes()
-        if len(held) >= 32:
-            return held
-        raise Refused(f"{made} is not a key this release can use")
+    _not_through_a_link(made.parent, "the directory the values are kept in")
+    _not_through_a_link(made, "the key")
+    there = _read_key(made)
+    if there:
+        return there
+
+    # **Made under the lock, and asked for again once it is held.** Making it outside was a race
+    # with a permanent consequence: two `env set` calls against a fresh install — an installer
+    # piping several, or two terminals — each saw no key, each made a *different* one, and each
+    # sealed its value with the one it had in hand. Whichever landed last is the key on disk, and
+    # the other value can never be opened again. Nothing else about this feature is unrecoverable.
     made.parent.mkdir(parents=True, exist_ok=True)
     made.parent.chmod(ONLY_MINE)
-    fresh = randomness.token_bytes(32)
-    opened = files.os.open(made, files.os.O_CREAT | files.os.O_WRONLY | files.os.O_TRUNC,
-                           files.ONLY_MINE)
-    with files.os.fdopen(opened, "wb") as writing:
-        writing.write(fresh)
+    with locking.only_one(paths.lock(made.parent.parent), "this install"):
+        there = _read_key(made)
+        if there:
+            return there
+        fresh = randomness.token_bytes(32)
+        # Staged and renamed like everything else here rather than written in place: a crash
+        # partway through leaves a key too short to use, which is a locked-out install.
+        staging = made.with_name(files.INCOMING.format(name=made.name))
+        files.discard(staging)
+        opened = files.os.open(staging, files.os.O_CREAT | files.os.O_WRONLY | files.os.O_TRUNC,
+                               files.ONLY_MINE)
+        with files.os.fdopen(opened, "wb") as writing:
+            writing.write(fresh)
+        files.os.replace(staging, made)
     return fresh
 
 
-def _both_keys(master: bytes) -> "tuple":
+def _read_key(made: Path) -> Optional[bytes]:
+    """The key that is there, or `None` when there is not one yet. Too short is not "not there"."""
+    if not made.exists():
+        return None
+    held = made.read_bytes()
+    if len(held) < 32:
+        raise Refused(f"{made} is not a key this release can use")
+    return held
+
+
+def _both_keys(master: bytes) -> Tuple[bytes, bytes]:
     """One key to seal with and another to sign with, so no bytes do two jobs."""
     return (hashlib.blake2b(master, digest_size=32, person=_TO_SEAL).digest(),
             hashlib.blake2b(master, digest_size=32, person=_TO_SIGN).digest())
@@ -262,17 +296,28 @@ def _keystream(sealing: bytes, nonce: bytes, wanted: int) -> bytes:
     return bytes(out[:wanted])
 
 
-def _sealed(said: str, at: Optional[Path] = None) -> str:
-    """One value, sealed and signed, in the form it is written down."""
+def _sealed(key: str, said: str, at: Optional[Path] = None) -> str:
+    """One value, sealed and signed *under its name*, in the form it is written down."""
     sealing, signing = _both_keys(_key(at))
     nonce = randomness.token_bytes(NONCE)
-    body = bytes(a ^ b for a, b in zip(said.encode("utf-8"),
-                                       _keystream(sealing, nonce, len(said.encode("utf-8")))))
-    tag = hmac.new(signing, nonce + body, hashlib.sha256).digest()
-    return ":".join([SEALED, _b64(nonce), _b64(tag), _b64(body)])
+    plain = said.encode("utf-8")
+    body = bytes(a ^ b for a, b in zip(plain, _keystream(sealing, nonce, len(plain))))
+    return ":".join([SEALED, _b64(nonce), _b64(_signature(signing, key, nonce, body)), _b64(body)])
 
 
-def _opened(sealed: object, at: Optional[Path] = None) -> Held:
+def _signature(signing: bytes, key: str, nonce: bytes, body: bytes) -> bytes:
+    """What a sealed value is signed as, which includes the name it is filed under.
+
+    **The name is in here, and that is not decoration.** Signed over the bytes alone, a tag says
+    only "these bytes were sealed by this install" — not "…and they are this one's value". Anybody
+    who could edit the file could then swap two sealed values between names, with no key and no
+    decryption, and both would verify. The separator is a null byte, which cannot occur in a name,
+    so no two different names can produce the same signed input.
+    """
+    return hmac.new(signing, key.encode("utf-8") + b"\0" + nonce + body, hashlib.sha256).digest()
+
+
+def _opened(key: str, sealed: object, at: Optional[Path] = None) -> Held:
     """One value read back, or why it could not be. Never opened before its signature is checked."""
     if sealed is None:
         return Held(None, None)
@@ -288,13 +333,30 @@ def _opened(sealed: object, at: Optional[Path] = None) -> Held:
         return Held(None, "cannot be read with the key this install has")
     # Checked before anything is unsealed, and with `compare_digest` so the check itself says
     # nothing about how nearly it matched.
-    if not hmac.compare_digest(tag, hmac.new(signing, nonce + body, hashlib.sha256).digest()):
+    if not hmac.compare_digest(tag, _signature(signing, key, nonce, body)):
         return Held(None, "cannot be read with the key this install has")
     try:
         return Held(bytes(a ^ b for a, b in zip(body, _keystream(sealing, nonce, len(body))))
                     .decode("utf-8"), None)
     except UnicodeDecodeError:
         return Held(None, "cannot be read — what came back is not text")
+
+
+def _not_through_a_link(one: Path, called: str) -> None:
+    """Refuse to write through a symlink, whatever it points at.
+
+    **A link decides where the bytes land, and here that defeats the placement outright.** A
+    dangling `key` pointing into `data/` sends the master key — the one thing that opens every
+    sealed value — into the directory a backup copies, so an ordinary unattended copy carries it
+    off the machine. `open` with `O_CREAT` follows a symlink and creates at the target, and
+    `mkdir(exist_ok=True)` and `chmod` both follow one too, so nothing here notices on its own.
+
+    Refused rather than resolved: a link where rundesk expects a directory of its own is not a
+    configuration to accommodate, and following it is how a structural guarantee becomes a
+    policy one.
+    """
+    if one.is_symlink():
+        raise Refused(f"{one} is a link, and {called} may not be reached through one")
 
 
 def _b64(raw: bytes) -> str:
@@ -305,9 +367,10 @@ def _b64(raw: bytes) -> str:
 def _written(values: Dict[str, Optional[str]], at: Optional[Path]) -> None:
     """Change what is kept, under the install's lock, privately, repairing the modes as it goes."""
     directory = at or paths.secrets()
+    _not_through_a_link(directory, "the directory the values are kept in")
     directory.mkdir(parents=True, exist_ok=True)
     directory.chmod(ONLY_MINE)
-    with locking.only_one(paths.lock(), "this install"):
+    with locking.only_one(paths.lock(directory.parent), "this install"):
         with files.changing_json(where(at), empty={}, private=True) as held:
             settled = dict(held[0]) if isinstance(held[0], dict) else {}
             settled.update(values)

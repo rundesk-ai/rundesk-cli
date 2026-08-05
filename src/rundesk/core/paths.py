@@ -24,6 +24,7 @@ home, so deriving one from the other is right exactly until somebody runs the co
 
 import os
 from pathlib import Path
+from typing import Optional
 
 #: What the root is called in the environment, and the only location this product reads.
 HOME_IS = "RUNDESK_HOME"
@@ -105,8 +106,16 @@ def projects() -> Path:
     return home() / "projects"
 
 
-def lock() -> Path:
-    """The file one process at a time holds while it changes this install.
+def lock(root: Optional[Path] = None) -> Path:
+    """The file one process at a time holds while it changes an install.
+
+    **`root` is which install, and it is not optional in spirit.** A caller handed an explicit
+    directory to work on must derive the lock from *that* root, not from wherever `RUNDESK_HOME`
+    happens to point — otherwise a function given somewhere to work reaches outside it to take a
+    lock, and the install it touches is the default one. That is the defect this whole rebuild
+    exists to have removed, in its smallest form: everything redirected but one thing, and the one
+    thing resolving to the owner's live install. It really happened here, and left a lock file in
+    a real install that nothing else in that run went near.
 
     Below the root and beside the directories rather than inside `data/`, because the operations it
     serialises *move `data/` itself* — a lock inside the thing being renamed away is a lock two
@@ -116,7 +125,7 @@ def lock() -> Path:
     between different commands touching different things — a restore swapping `data/` while a
     configure writes into it — and a lock per directory is a lock that lets exactly those through.
     """
-    return home() / ".rundesk.lock"
+    return (root or home()) / ".rundesk.lock"
 
 
 def program() -> Path:

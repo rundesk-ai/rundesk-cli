@@ -95,7 +95,7 @@ class Restored(NamedTuple):
     settled: Optional[str]
 
 
-def _one_at_a_time() -> ContextManager[None]:
+def _one_at_a_time(root: Path) -> ContextManager[None]:
     """Hold the install while this operation moves directories about.
 
     **Every operation here renames or removes a whole directory, and none of them was serialised
@@ -108,11 +108,17 @@ def _one_at_a_time() -> ContextManager[None]:
     name, both staged into it, and each discarded the other's half-written copy, so the pair of them
     produced nothing at all.
 
+    **`root` says which install**, and it is derived from the directory the caller was handed rather
+    than from `RUNDESK_HOME`. An operation given somewhere to work that reaches outside it to take a
+    lock is the defect this rebuild exists to have removed, in miniature — and it really happened:
+    a call passed an explicit directory and left a lock file in a live install nothing else in that
+    run went near.
+
     Re-entrant, and it must be: `restore` holds this and then settles the install, which writes the
     configuration, which takes it again. `flock` is held per open file description, so a second
     `open` in the same process conflicts with the first exactly as another process would.
     """
-    return locking.only_one(paths.lock(), "this install")
+    return locking.only_one(paths.lock(root), "this install")
 
 
 def location(backups: Optional[Path] = None) -> Path:
@@ -210,7 +216,7 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
     _reachable(at)
 
     at.mkdir(parents=True, exist_ok=True)
-    with _one_at_a_time():
+    with _one_at_a_time(at.parent):
         # The name and the staging under it are one decision: worked out separately, two callers
         # land on the same second, stage into the same directory, and discard each other's work.
         name = named(when, at)
@@ -258,7 +264,7 @@ def prune(keeping: int, backups: Optional[Path] = None,
     # say what is in them, and quietly deleting a directory because a file inside it would not parse
     # is not a decision this command is entitled to make. `save` says when it has made one.
     stuck = []
-    with _one_at_a_time():
+    with _one_at_a_time(at.parent):
         for name in [one for one in kept(at) if restorable(at, one)][keeping:]:
             try:
                 shutil.rmtree(at / name)
@@ -301,7 +307,7 @@ def restore(name: str, data: Optional[Path] = None, backups: Optional[Path] = No
     into = data or paths.data()
     said = saying or (lambda _line: None)
 
-    with _one_at_a_time():
+    with _one_at_a_time(into.parent):
         return _put_back_now(name, at, into, when, steps, said)
 
 
@@ -342,7 +348,7 @@ def relocate(to: Path, backups: Optional[Path] = None,
     """
     at = backups or paths.backups()
     said = saying or (lambda _line: None)
-    with _one_at_a_time():
+    with _one_at_a_time(at.parent):
         return _moved_now(to, at, said)
 
 
