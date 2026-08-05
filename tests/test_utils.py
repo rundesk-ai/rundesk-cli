@@ -1721,5 +1721,230 @@ class SweepingTheOldDaysAway(WithSomewhereToWrite):
         self.assertEqual([], logs.swept(self.home / "never-written-in", 14))
 
 
+class TheDescriptorSomebodyElseHolds(WithSomewhereToWrite):
+    """What a rotation may and may not do to a file whose descriptor is not ours to close.
+
+    **This is the assumption the whole of `logs.rotated` rests on, and it is measured here rather
+    than believed.** A supervisor asked to capture a program's output opens the path itself,
+    `O_CREAT|O_RDWR|O_APPEND`, and `exec`s the program with that descriptor already in place as its
+    standard output — for launchd that is `xpcproxy`, recorded in `docs/research/launchd-on-macos.md`
+    §8. Nothing here can ask launchd for its descriptor back, so these cases build the same
+    structure: a parent opens the file exactly that way, a child inherits it, and the file is rotated
+    underneath while the child is still holding it.
+
+    Two facts come out of it and both decide the design. A descriptor follows the **inode**, so a
+    file renamed out from under one leaves it writing somewhere nobody will ever look. And `O_APPEND`
+    is what makes truncation safe, because every write under it goes to the current end — without it
+    the next write lands at the offset the holder still has and leaves a hole of NUL bytes as long as
+    everything that was there.
+
+    The holder here is this process, because what is being asked about is the descriptor and not who
+    has it. The other half — a descriptor *inherited* by a child that was `exec`ed with it already in
+    place, which is exactly how a gateway gets its own — is proven against a real gateway process in
+    `tests/test_gateway_host.py`.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.where.mkdir(parents=True, exist_ok=True)
+        self.live = self.where / "gateway.out"
+        self.aside = self.where / "gateway.out.1"
+
+    def a_holder(self, of: Path) -> int:
+        """A descriptor on `of`, opened the way a supervisor opens one and held the way one holds."""
+        holding = os.open(of, os.O_CREAT | os.O_RDWR | os.O_APPEND, 0o644)
+        self.addCleanup(os.close, holding)
+        return holding
+
+    def test_a_rename_leaves_the_holder_writing_where_nobody_will_ever_look(self):
+        # The move `rotated` refuses to make, and the whole reason it refuses. The supervisor puts
+        # the name back on the next start — that is the file everybody opens — and the process that
+        # is running right now goes on writing into the inode that name used to mean.
+        self.live.write_bytes(b"before\n")
+        holding = self.a_holder(self.live)
+
+        os.replace(self.live, self.aside)
+        self.live.write_bytes(b"")                       # what the next spawn would create
+        os.write(holding, b"after\n")
+
+        self.assertEqual(b"", self.live.read_bytes(),
+                         "the holder wrote into the live file, so a rename would have been safe")
+        self.assertEqual(b"before\nafter\n", self.aside.read_bytes())
+
+    def test_a_truncation_leaves_the_holder_writing_into_the_same_file(self):
+        # Same inode, same name, same descriptor — and the line lands at zero rather than after a
+        # hole, because the descriptor was opened `O_APPEND`.
+        self.live.write_bytes(b"before\n")
+        was = self.live.stat().st_ino
+        holding = self.a_holder(self.live)
+
+        os.truncate(self.live, 0)
+        os.write(holding, b"after\n")
+
+        self.assertEqual(b"after\n", self.live.read_bytes())
+        self.assertEqual(was, self.live.stat().st_ino, "the file was replaced rather than emptied")
+
+    def test_without_append_the_same_truncation_would_leave_a_hole_of_nul_bytes(self):
+        # Why `O_APPEND` is stated as the condition it is rather than assumed. A holder that keeps
+        # an offset of its own writes past the end of a truncated file, and what is in between is
+        # NUL bytes: a capture that looks corrupt and is longer than anything anybody wrote.
+        one = self.where / "not-appended"
+        holding = os.open(one, os.O_CREAT | os.O_RDWR, 0o644)
+        self.addCleanup(os.close, holding)
+        os.write(holding, b"before\n")
+
+        os.truncate(one, 0)
+        os.write(holding, b"after\n")
+
+        self.assertEqual(b"\0" * len("before\n") + b"after\n", one.read_bytes())
+
+    def test_rotating_by_content_keeps_the_holder_writing_where_the_path_says(self):
+        # The two facts above, put together as the thing `rotated` actually promises.
+        self.live.write_bytes(b"x" * 200 + b"\n")
+        holding = self.a_holder(self.live)
+
+        self.assertEqual(self.aside, logs.rotated(self.live, 100, 3))
+        os.write(holding, b"after\n")
+
+        self.assertEqual(b"after\n", self.live.read_bytes())
+        self.assertTrue(self.aside.read_bytes().startswith(b"x" * 100))
+
+
+class RotatingAFileSomebodyElseWrote(WithSomewhereToWrite):
+    """`logs.rotated` — the answer for a file this product does not name and does not write.
+
+    Size rather than days, because size is the only thing measurable about content nobody here
+    chose; content rather than name, because the descriptor belongs to somebody else. The module
+    docstring says why neither of those is a preference.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.where.mkdir(parents=True, exist_ok=True)
+        self.live = self.where / "gateway.out"
+        self.aside = self.where / "gateway.out.1"
+
+    def a_capture_of(self, size: int, first: bytes = b"") -> Path:
+        """A capture of about that many bytes, optionally beginning with something recognisable."""
+        line = b"a traceback nobody read\n"
+        self.live.write_bytes(first + line * (max(0, size - len(first)) // len(line) + 1))
+        return self.live
+
+    def test_a_file_that_is_not_big_enough_yet_is_left_exactly_where_it_is(self):
+        # The guarantee that keeps a gateway restarted every thirty seconds from rotating 2,880
+        # times a day and rolling the evidence off the end within minutes.
+        self.live.write_bytes(b"y" * 100)
+
+        self.assertIsNone(logs.rotated(self.live, 100, 3), "it rotated a file the same size as the "
+                                                           "threshold, which is not bigger than it")
+
+        self.assertEqual(b"y" * 100, self.live.read_bytes())
+        self.assertFalse(self.aside.exists())
+
+    def test_the_content_moves_aside_and_the_file_itself_stays(self):
+        one = self.a_capture_of(4096)
+        was = one.stat().st_ino
+
+        self.assertEqual(self.aside, logs.rotated(one, 1024, 3))
+
+        self.assertEqual(0, one.stat().st_size)
+        self.assertEqual(was, one.stat().st_ino, "the file was replaced rather than emptied")
+        self.assertIn(b"a traceback nobody read", self.aside.read_bytes())
+
+    def test_what_it_keeps_is_the_start_of_whatever_went_wrong(self):
+        # The head and not the tail: the crash that started a loop is the one somebody is looking
+        # for, and it is the one at the top of the file.
+        self.a_capture_of(8192, first=b"the first thing that ever went wrong\n")
+
+        logs.rotated(self.live, 1024, 3)
+
+        self.assertTrue(self.aside.read_bytes().startswith(b"the first thing that ever went wrong"))
+
+    def test_a_file_far_bigger_than_the_threshold_costs_the_same_and_says_what_went(self):
+        # A program spilling into its own capture since March would otherwise make coming up cost
+        # gigabytes. What is dropped is said out loud rather than left looking like the end of it.
+        self.a_capture_of(200_000)
+
+        logs.rotated(self.live, 1024, 3)
+
+        kept = self.aside.read_bytes()
+        self.assertLess(len(kept), 2048, "it copied the whole file")
+        self.assertIn(b"the rest is not here", kept)
+        self.assertIn(b"WARNING", kept)
+
+    def test_every_generation_it_keeps_is_the_same_size_whatever_it_rotated(self):
+        # `when_over` is one decision wearing two hats: how big a kept generation is, and therefore
+        # the size at which a file has more in it than one generation holds. What that buys is a
+        # total on disk that can be worked out from the two numbers and nothing else.
+        for size in (2_000, 200_000):
+            with self.subTest(size=size):
+                self.a_capture_of(size)
+                logs.rotated(self.live, 1024, 3)
+                self.assertEqual(1024, len(self.aside.read_bytes().split(b"\n[")[0]))
+
+    def test_what_it_dropped_is_said_with_both_numbers_in_it(self):
+        # "This file was four gigabytes and you have the first quarter of a megabyte of it" is a
+        # different thing to be told than a file that simply stops, which is what a silent cut is.
+        self.a_capture_of(200_000)
+        logs.rotated(self.live, 1024, 3)
+        said = self.aside.read_bytes().decode()
+        self.assertRegex(said, r"this file was 2\d\d,?\d\d\d bytes")
+        self.assertIn("the first 1024", said)
+
+    def test_only_so_many_are_ever_kept_however_many_times_it_rotates(self):
+        for which in range(6):
+            self.live.write_bytes(f"generation {which}\n".encode() + b"q" * 200)
+            logs.rotated(self.live, 100, 2)
+
+        self.assertTrue(self.aside.read_bytes().startswith(b"generation 5"))
+        self.assertTrue((self.where / "gateway.out.2").read_bytes().startswith(b"generation 4"))
+        self.assertFalse((self.where / "gateway.out.3").exists(), "it kept more than it was told to")
+
+    def test_a_retention_that_lost_its_value_moves_nothing_and_empties_nothing(self):
+        # The worst thing this function could do: truncate a file and keep no copy of it. A
+        # `keeping` that arrived as `0` is a value that lost itself somewhere, exactly as in `swept`.
+        for keeping in (0, -1):
+            with self.subTest(keeping=keeping):
+                self.live.write_bytes(b"w" * 500)
+                self.assertIsNone(logs.rotated(self.live, 100, keeping))
+                self.assertEqual(b"w" * 500, self.live.read_bytes())
+
+    def test_a_file_nobody_has_written_is_not_an_error(self):
+        self.assertIsNone(logs.rotated(self.where / "never-captured", 100, 3))
+
+    def test_nothing_is_left_staged_behind_it(self):
+        self.a_capture_of(4096)
+        logs.rotated(self.live, 1024, 3)
+        self.assertEqual([], [one.name for one in self.where.iterdir() if files.staged(one.name)])
+
+    def test_what_it_keeps_is_only_readable_by_whoever_it_belongs_to(self):
+        # A capture holds whatever a program printed, which is not necessarily fit for everybody on
+        # the machine to read — and it is already in the file by the time a mode could be tightened.
+        self.a_capture_of(4096)
+        logs.rotated(self.live, 1024, 3)
+        self.assertEqual(files.ONLY_MINE, self.aside.stat().st_mode & 0o777)
+
+    def test_a_directory_that_cannot_be_written_leaves_the_file_untouched(self):
+        support.not_as_root(self)
+        self.a_capture_of(4096)
+        self.where.chmod(0o500)
+        self.addCleanup(self.where.chmod, 0o700)
+
+        self.assertIsNone(logs.rotated(self.live, 1024, 3))
+
+        self.assertGreater(self.live.stat().st_size, 1024, "it emptied a file it could not copy")
+
+    def test_what_it_leaves_beside_the_days_is_never_read_as_one(self):
+        # The two schemes stand in the same directory and must not reach into each other: a sweep
+        # counted in days would otherwise take a capture, and a tail would read one back as a log.
+        self.a_capture_of(4096)
+        logs.rotated(self.live, 1024, 3)
+        logs.note(self.where, "an ordinary line")
+
+        self.assertEqual([logs.named_for(self.a_day(0))], [one.name for one in logs.kept(self.where)])
+        self.assertEqual([], logs.swept(self.where, 1))
+        self.assertTrue(self.aside.is_file(), "a sweep counted in days took a capture with it")
+
+
 if __name__ == "__main__":
     unittest.main()

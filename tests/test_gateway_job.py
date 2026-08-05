@@ -765,5 +765,90 @@ class TheOwnersLoginItems(unittest.TestCase):
         self.assertEqual([], written, f"a rundesk plist was written into {THEIRS}")
 
 
+class TheCommandsLaunchdIsActuallyGiven(support.Isolated):
+    """`Launchd` itself — the seven one-liners every other case in this file replaces.
+
+    **Everything else here drives a fake, and it has to.** The real supervisor would answer a case
+    perfectly well, in the owner's own login session, booting out jobs that keep real work running.
+    But that leaves the argv these methods *build* proven by nothing: a fake records that `bootout`
+    was asked for, never that it was asked for as `["bootout", "--wait", "gui/501/<label>"]`. A
+    missing `--wait` turns a synchronous take-back into the asynchronous one whose race cost this
+    project a documented incident; `-pk` for `-kp` is a flag that does not exist; `kill -KILL` is
+    `/bin/kill`'s spelling and not `launchctl`'s. Every one of those would pass every other case in
+    this file and surface only against a real machine.
+
+    So this class mocks one layer lower — `utils.programs.run`, the seam `job` already goes through
+    — and asserts the exact list. Nothing here reaches `launchctl` either.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.by = job.Launchd(uid=501)
+        self.asked: List[List[str]] = []
+        self.answer = ran(0)
+        patched = mock.patch.object(
+            programs, "run",
+            side_effect=lambda argv, waiting, **_kw: (self.asked.append(list(argv)), self.answer)[1])
+        patched.start()
+        self.addCleanup(patched.stop)
+
+    def test_the_domain_and_the_target_are_shaped_the_way_launchctl_wants_them(self):
+        self.assertEqual("gui/501", self.by.domain)
+        self.assertEqual("gui/501/ai.rundesk.abcd1234.gateway.cole",
+                         self.by.target("ai.rundesk.abcd1234.gateway.cole"))
+
+    def test_every_verb_builds_exactly_the_command_it_documents(self):
+        plist = self.home / "one.plist"
+        for asked, wanted in (
+                (lambda: self.by.allow("L"), [job.LAUNCHCTL, "enable", "gui/501/L"]),
+                (lambda: self.by.take_back("L"), [job.LAUNCHCTL, "bootout", "--wait", "gui/501/L"]),
+                (lambda: self.by.place(plist), [job.LAUNCHCTL, "bootstrap", "gui/501", str(plist)]),
+                (lambda: self.by.end("L"), [job.LAUNCHCTL, "kill", "SIGKILL", "gui/501/L"]),
+                (lambda: self.by.kick("L"), [job.LAUNCHCTL, "kickstart", "-kp", "gui/501/L"]),
+                (lambda: self.by.asked_about("L"), [job.LAUNCHCTL, "print", "gui/501/L"]),
+                (lambda: self.by.refusals(), [job.LAUNCHCTL, "print-disabled", "gui/501"])):
+            with self.subTest(wanted=wanted[1]):
+                self.asked.clear()
+                asked()
+                self.assertEqual([wanted], self.asked)
+
+    def test_a_kill_is_spelled_the_way_launchctl_spells_it_and_not_the_way_kill_does(self):
+        # `launchctl kill` takes a signal NAME or number; `-KILL` is /bin/kill's shorthand and is
+        # read here as an option that does not exist. Its own man page's example is `SIGKILL`.
+        self.by.end("L")
+        self.assertIn("SIGKILL", self.asked[0])
+        self.assertNotIn("-KILL", self.asked[0])
+
+    def test_taking_a_job_back_always_waits(self):
+        # Without --wait, bootout returns while the label is still registered and the process still
+        # running — measured on a real gateway. A build that read rc 0 as "it is gone" and
+        # bootstrapped next met launchd's I/O error and ended with no job at all.
+        self.by.take_back("L")
+        self.assertIn("--wait", self.asked[0])
+
+    def test_enabling_falls_back_to_the_user_domain_when_the_login_one_refuses_the_verb(self):
+        # enable and disable may only target the system domain or the user and user-login domains,
+        # so a 125 here is the wrong domain for the verb rather than a machine with nobody logged
+        # in — and the same label is reachable under `user/<uid>`.
+        answers = [ran(125), ran(0)]
+        with mock.patch.object(programs, "run",
+                               side_effect=lambda argv, waiting, **_kw:
+                               (self.asked.append(list(argv)), answers.pop(0))[1]):
+            self.by.allow("L")
+        self.assertEqual(["gui/501/L", "user/501/L"], [one[-1] for one in self.asked])
+
+    def test_it_asks_for_the_supervisor_by_absolute_path(self):
+        # A launchd job's PATH is /usr/bin:/bin:/usr/sbin:/sbin and nothing else, and this runs from
+        # commands a person types as well. Neither should depend on where launchctl is found.
+        self.by.asked_about("L")
+        self.assertTrue(self.asked[0][0].startswith("/"), self.asked[0][0])
+
+    def test_nothing_it_runs_is_ever_handed_to_a_shell(self):
+        # A label carries an agent's name, and a name is the owner's to choose. A string through a
+        # shell is a name that can be word-split or expanded.
+        self.by.asked_about("L")
+        self.assertIsInstance(self.asked[0], list)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,26 +16,37 @@ Waits are bounded and asked for rather than slept through: `support.waited_until
 Run directly: `python3 tests/test_gateway_host.py`
 """
 
+import datetime
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import support
 from rundesk import __version__
 from rundesk.agents import directory, records
-from rundesk.gateways import standing
+from rundesk.gateways import host, standing
 from rundesk.utils import logs, programs
 
 #: How a gateway is started here: the same handoff the job's shim performs, so what these cases run
 #: is what launchd runs. Deliberately not `cli.main` — there is no verb for this, and inventing one
 #: in a suite would prove something nothing else does.
+#:
+#: `BEAT_SECONDS` is settable because two of the guarantees below are about what the *loop* does and
+#: not about what one pass through it does — a beat that stops landing, and a warning that is written
+#: once rather than every fifteen seconds. Left at the real fifteen, proving either would cost the
+#: suite a minute of sleeping; the constant is read on every pass, so lowering it changes when the
+#: loop comes round and nothing else. Every case that is not about the loop leaves it alone.
 A_GATEWAY = """
 import sys
 sys.path.insert(0, {src!r})
+from rundesk.gateways import standing
+standing.BEAT_SECONDS = {beat!r}
 from rundesk.gateways.host import run
 raise SystemExit(run({name!r}))
 """
@@ -63,10 +74,17 @@ class WithAnAgent(support.Isolated):
                 child.kill()
                 child.wait(timeout=self.PATIENCE)
 
-    def hosting(self, name: Optional[str] = None, out: Optional[Path] = None) -> subprocess.Popen:
-        """Start a real gateway process, with its output captured the way launchd captures it."""
+    def hosting(self, name: Optional[str] = None, out: Optional[Path] = None,
+                beat: float = standing.BEAT_SECONDS) -> subprocess.Popen:
+        """Start a real gateway process, with its output captured the way launchd captures it.
+
+        **The file is opened here and inherited there**, `O_APPEND`, which is the whole of how a
+        supervisor hands a job its standard output: `xpcproxy` opens the path from the plist and
+        `exec`s the program with the descriptor already in place. So a case that rotates the file
+        underneath a gateway started this way is asking the same question launchd would.
+        """
         where = out or self.said
-        body = A_GATEWAY.format(src=str(support.CHECKOUT / "src"), name=name or self.name)
+        body = A_GATEWAY.format(src=str(support.CHECKOUT / "src"), name=name or self.name, beat=beat)
         with open(where, "ab") as writing:
             child = subprocess.Popen(
                 [sys.executable, "-c", body],
@@ -84,7 +102,7 @@ class WithAnAgent(support.Isolated):
                         f"it never ended. It said: {self.what_it_said(where)}")
         return child.returncode, self.what_it_said(where)
 
-    def a_running_gateway(self) -> subprocess.Popen:
+    def a_running_gateway(self, beat: float = standing.BEAT_SECONDS) -> subprocess.Popen:
         """A real gateway holding this agent's name, proven up before the case goes on.
 
         **Waited for by its recorded pid rather than by `ONLINE`**, and that is not fussiness: the
@@ -93,7 +111,7 @@ class WithAnAgent(support.Isolated):
         right about that — a gateway with no readable record is still online — and a case that
         stopped waiting there reads back `None` for the pid, on a loaded machine only.
         """
-        child = self.hosting()
+        child = self.hosting(beat=beat)
         self.assertTrue(
             support.waited_until(lambda: self.holder() == child.pid, self.PATIENCE),
             f"the gateway never came up. It said: {self.what_it_said()}")
@@ -304,6 +322,264 @@ class TheWindowBetweenTheClaimAndTheRecord(WithAnAgent):
             self.assertFalse((self.at / standing.RECORD).exists())
             standing.write_record(self.at, "one", "9.9.9")
             self.assertEqual(os.getpid(), standing.standing(self.at).pid)
+
+
+class WhatTheSupervisorCaptured(WithAnAgent):
+    """`gateway.out` and `gateway.err` are appended to for ever by something that never rotates them.
+
+    launchd opens both `O_CREAT|O_RDWR|O_APPEND` and never truncates, so in a crash loop every
+    restart adds another traceback and nothing comes to sweep it. They are also the only account of a
+    start that died before the gateway had a log of its own, so the gateway rotates them itself, at
+    startup, by content — see `host`'s docstring for why a rename would be worse than the growth.
+
+    Every case here starts a real gateway with a real descriptor on the real file, because what is
+    being asked is what a process inheriting that descriptor does after the file moves underneath it.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.out, self.err = standing.captured(self.at)
+        self.out.parent.mkdir(parents=True, exist_ok=True)
+        self.aside = self.out.with_name(f"{self.out.name}.1")
+
+    def a_capture_of(self, size: int, into: Optional[Path] = None, first: bytes = b"") -> Path:
+        """A capture of about that many bytes, as a crash loop leaves one."""
+        one = into or self.out
+        line = b"Traceback (most recent call last): nobody read this\n"
+        one.write_bytes(first + line * (max(0, size - len(first)) // len(line) + 1))
+        return one
+
+    def cannot_be_hosted(self) -> None:
+        """Leave the agent in a state this release refuses to host, so a start refuses and exits.
+
+        A refusal is the case that fills these files: a gateway refusing for a permanent reason is
+        one launchd brings back and back, appending another sentence every time. It is also the only
+        way to watch a *whole* start — up, rotate, say, exit — inside a case.
+        """
+        with records.writing(directory.records(self.name)) as conn:
+            conn.execute("DELETE FROM migrations")
+
+    def a_whole_start(self) -> str:
+        """One start of a real gateway onto the real capture file. Hands back what is in it after."""
+        code, said = self.ran(out=self.out)
+        self.assertEqual(0, code, f"the start did not refuse cleanly. It said: {said}")
+        return said
+
+    def captures(self) -> List[str]:
+        """Everything standing beside the live capture, by name."""
+        return sorted(one.name for one in self.out.parent.iterdir()
+                      if one.name.startswith(self.out.name))
+
+    def test_a_capture_that_has_grown_past_the_threshold_is_moved_aside(self):
+        self.a_capture_of(host.CAPTURE_OVER + 1)
+        self.cannot_be_hosted()
+
+        self.a_whole_start()
+
+        self.assertTrue(self.aside.is_file(), "nothing was kept")
+        self.assertIn(b"nobody read this", self.aside.read_bytes())
+        self.assertLess(self.out.stat().st_size, 1024, "the live file was not emptied")
+
+    def test_a_capture_that_is_still_small_is_left_exactly_where_it_is(self):
+        # The guarantee that keeps a gateway `KeepAlive` brings back every thirty seconds from
+        # rotating 2,880 times a day and rolling the evidence off the end within minutes.
+        self.out.write_bytes(b"one earlier start said this\n")
+        self.cannot_be_hosted()
+
+        said = self.a_whole_start()
+
+        self.assertFalse(self.aside.exists(), "it rotated a file that had barely anything in it")
+        self.assertIn("one earlier start said this", said)
+
+    def test_the_first_line_lands_in_the_live_file_even_when_the_rotation_took_it(self):
+        # The whole worth of that line is that it is *in* `gateway.out`: an empty one beside a job
+        # launchd says has run means the failure is upstream of this code. A rotation that carried
+        # it off into `gateway.out.1` and left nothing behind would have destroyed exactly that.
+        self.a_capture_of(host.CAPTURE_OVER + 1)
+        self.cannot_be_hosted()
+
+        said = self.a_whole_start()
+
+        self.assertIn(f"pid {self.started[0].pid}", said.splitlines()[0])
+        self.assertIn(__version__, said.splitlines()[0])
+
+    def test_a_gateway_that_is_still_running_goes_on_writing_into_the_file_it_emptied(self):
+        # The one that would be silently wrong if the rotation renamed instead of truncating: the
+        # gateway holds the descriptor launchd opened, so a rename would have it spend its whole
+        # life writing into `gateway.out.1` while the file everybody opens stayed empty.
+        self.a_capture_of(host.CAPTURE_OVER + 1)
+
+        child = self.hosting(out=self.out)
+        self.assertTrue(support.waited_until(lambda: self.holder() == child.pid, self.PATIENCE),
+                        f"the gateway never came up. It said: {self.what_it_said(self.out)}")
+
+        self.assertIn(f"pid {child.pid}", self.what_it_said(self.out))
+        self.assertLess(self.out.stat().st_size, 1024,
+                        "the live file still holds everything, so nothing was rotated at all")
+        self.assertIn(b"nobody read this", self.aside.read_bytes())
+
+    def test_what_it_kept_holds_the_start_of_what_went_wrong_and_says_what_it_dropped(self):
+        # The head and not the tail: the crash that started a loop is the one somebody is looking
+        # for, and it is the one at the top of the file.
+        self.a_capture_of(host.CAPTURE_OVER * 2, first=b"the first thing that ever went wrong\n")
+        self.cannot_be_hosted()
+
+        self.a_whole_start()
+
+        kept = self.aside.read_bytes()
+        self.assertTrue(kept.startswith(b"the first thing that ever went wrong"))
+        self.assertIn(b"the rest is not here", kept)
+
+    def test_what_went_to_standard_error_is_moved_aside_too(self):
+        self.a_capture_of(host.CAPTURE_OVER + 1, into=self.err)
+        self.cannot_be_hosted()
+
+        self.a_whole_start()
+
+        self.assertIn(b"nobody read this", self.err.with_name(f"{self.err.name}.1").read_bytes())
+        self.assertEqual(0, self.err.stat().st_size)
+
+    def test_a_gateway_restarted_over_and_over_never_leaves_more_than_it_keeps(self):
+        # The months-scale case, run small: a crash loop that fills the file, is brought back, fills
+        # it again, for as long as nobody is watching. What that may ever cost is fixed.
+        self.cannot_be_hosted()
+        for _start in range(host.CAPTURES_KEPT + 3):
+            self.a_capture_of(host.CAPTURE_OVER + 1)
+            self.a_whole_start()
+
+        self.assertEqual([f"{self.out.name}.{which}" for which in range(1, host.CAPTURES_KEPT + 1)],
+                         self.captures()[1:], f"it left {self.captures()}")
+        self.assertLess(sum(one.stat().st_size for one in self.out.parent.iterdir()),
+                        host.CAPTURE_OVER * (host.CAPTURES_KEPT + 2),
+                        "what the captures cost is not bounded by the two numbers that decide it")
+
+    def test_a_capture_it_cannot_move_aside_never_stops_it_refusing_cleanly(self):
+        # Failing to *tidy* a log may never become failing to *exit*: a non-zero exit here is a
+        # request to be restarted, and the condition would be exactly the same on the way back.
+        support.not_as_root(self)
+        self.a_capture_of(host.CAPTURE_OVER + 1)
+        self.cannot_be_hosted()
+        self.out.parent.chmod(0o500)
+        self.addCleanup(self.out.parent.chmod, 0o700)
+
+        code, _said = self.ran(out=self.out)
+
+        self.assertEqual(0, code, "a refusal that could not rotate its capture exited non-zero")
+
+
+class WhatItGoesOnDoingForMonths(WithAnAgent):
+    """The loop, read as though this process has been in it since March.
+
+    Nothing here is about coming up. Everything here is about the things that only appear once
+    nobody has restarted the gateway in a long time: a beat that stops landing, a warning written
+    every fifteen seconds for a week, a directory gaining a file a day for ever.
+    """
+
+    #: Fast enough that a case sees several passes of the loop without sleeping through the real
+    #: fifteen seconds, and slow enough that it is still a loop and not a spin.
+    QUICKLY = 0.2
+
+    def several_more_beats(self) -> None:
+        """Give the loop time to do the wrong thing, which is the only way to prove it does not.
+
+        A guessed wait, and deliberately so: every other wait in this suite is for something to
+        happen, and these two cases are about something that must *not* — a second warning, an exit.
+        There is nothing to ask about, so the wait is a window rather than a question, and it is six
+        passes of a loop the case has already made fast.
+        """
+        time.sleep(self.QUICKLY * 6)
+
+    def a_day_file_from(self, days_ago: int) -> Path:
+        """One of this gateway's own day files, from far enough back that it should be swept."""
+        where = standing.logs_at(self.at)
+        where.mkdir(parents=True, exist_ok=True)
+        when = datetime.datetime.now().astimezone() - datetime.timedelta(days=days_ago)
+        one = where / logs.named_for(when)
+        one.write_text("[an older day] INFO:   gateway up\n", encoding="utf-8")
+        return one
+
+    def test_it_sweeps_the_days_it_no_longer_keeps(self):
+        # A file a day, kept for ever, is the same unbounded growth as a capture nobody truncates —
+        # reached slowly instead of quickly. `utils.logs` has always had the sweep; nothing called it.
+        old = self.a_day_file_from(host.KEPT_DAYS + 1)
+        recent = self.a_day_file_from(1)
+
+        # Made fast, because the sweep is the loop's first pass and not a call before it — which is
+        # what makes this case cover the wiring as well as the sweeping.
+        self.a_running_gateway(beat=self.QUICKLY)
+
+        self.assertTrue(support.waited_until(lambda: not old.exists(), self.PATIENCE),
+                        f"the old day was kept. It said: {self.what_it_said()}")
+        self.assertTrue(recent.exists(), "it swept a day it was told to keep")
+
+    def test_it_sweeps_again_when_the_day_turns_rather_than_only_on_the_way_up(self):
+        # The half of the sweep a running gateway proves nothing about: a gateway that is doing its
+        # job is one nobody restarts, so a process up since March swept once, in March, and has been
+        # gaining a file a day ever since. Driven directly rather than through a child, because the
+        # only thing that would make a real one do this is waiting until midnight.
+        where = standing.logs_at(self.at)
+        old = self.a_day_file_from(host.KEPT_DAYS + 1)
+
+        today = host._kept_the_days(where, "")           # the sweep on the way up
+
+        self.assertFalse(old.exists(), "it did not sweep at all")
+        again = self.a_day_file_from(host.KEPT_DAYS + 1)
+        self.assertEqual(today, host._kept_the_days(where, today))
+        self.assertTrue(again.exists(), "it swept twice in one day, which is a listing per beat")
+
+        host._kept_the_days(where, "a day that has now turned")
+
+        self.assertFalse(again.exists(), "the day turned and it never swept again")
+
+    def test_a_beat_that_cannot_be_written_does_not_take_a_working_gateway_down(self):
+        # A full disk, a volume gone read-only, a record taken away — none of them is a reason to
+        # end a gateway that is hosting its agent, and all of them would be the same on the way back
+        # from a restart. Letting it through would exit non-zero into an endless restart.
+        child = self.a_running_gateway(beat=self.QUICKLY)
+        (self.at / standing.RECORD).unlink()
+
+        self.assertTrue(support.waited_until(lambda: "could not say it is still working"
+                                             in self.its_log(), self.PATIENCE), self.its_log())
+        self.assertIsNone(child.poll(), "a beat that failed took the whole gateway down")
+        self.assertEqual(standing.ONLINE, standing.standing(self.at).how)
+
+    def test_it_says_a_beat_stopped_landing_once_and_not_every_fifteen_seconds(self):
+        # A log that grows with the beat is the growth it was meant to bound, arrived at from the
+        # other side: a line every fifteen seconds for as long as a disk stays full is 5,760 a day.
+        child = self.a_running_gateway(beat=self.QUICKLY)
+        (self.at / standing.RECORD).unlink()
+        self.assertTrue(support.waited_until(lambda: "could not say it is still working"
+                                             in self.its_log(), self.PATIENCE), self.its_log())
+
+        self.several_more_beats()
+        self.assertIsNone(child.poll())
+
+        self.assertEqual(1, self.its_log().count("could not say it is still working"),
+                         f"it said it every time round the loop: {self.its_log()}")
+
+    def test_a_beat_that_starts_landing_again_is_said_out_loud_as_well(self):
+        # A warning nothing ever retracts is one somebody goes on believing.
+        child = self.a_running_gateway(beat=self.QUICKLY)
+        (self.at / standing.RECORD).unlink()
+        self.assertTrue(support.waited_until(lambda: "could not say it is still working"
+                                             in self.its_log(), self.PATIENCE), self.its_log())
+
+        standing.write_record(self.at, self.name, __version__)
+
+        self.assertTrue(support.waited_until(lambda: "still working again" in self.its_log(),
+                                             self.PATIENCE), self.its_log())
+        self.assertIsNone(child.poll())
+
+    def test_a_gateway_whose_agent_was_taken_away_does_not_put_the_directory_back(self):
+        # `_refused` has the same rule for the same reason: a directory invented by whatever is
+        # complaining that it is missing is one that then looks half-made to everything else.
+        child = self.a_running_gateway(beat=self.QUICKLY)
+        shutil.rmtree(self.at)
+
+        self.several_more_beats()
+
+        self.assertIsNone(child.poll(), "it ended when its agent went away, which exits non-zero")
+        self.assertFalse(self.at.exists(), "it made its agent's directory again to complain into")
 
 
 class TheProcessNeverTalksToItsSupervisor(unittest.TestCase):
