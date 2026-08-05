@@ -7,15 +7,33 @@ each of those wrong once, and each cost somebody a file.
 Run directly: `python3 tests/test_skills_grants.py`
 """
 
+import contextlib
 import os
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from fixtures_skills import a_published_catalog
 
 import support
 from rundesk.agents import directory
 from rundesk.skills import catalogs, grants, library
+
+
+@contextlib.contextmanager
+def _replaces_failing_on(*which: int):
+    """Let `os.replace`/`os.rename` work except on the numbered calls, which fail as a full disk would."""
+    real_rename = os.rename
+    counted = []
+
+    def rename(source, target):
+        counted.append(source)
+        if len(counted) in which:
+            raise OSError(f"call {len(counted)} to rename was not allowed to work")
+        return real_rename(source, target)
+
+    with mock.patch("os.rename", rename):
+        yield
 
 
 class Grants(support.Isolated):
@@ -396,6 +414,75 @@ class KeepingACopyUpToDate(Grants):
         grants.refreshed()
         self.assertIn("name: other-plans",
                       (self.held.at / library.DECLARED).read_text(encoding="utf-8"))
+
+
+class WhenRemakingACopyFails(Grants):
+    """The copy is the one grant that can be lost, so it is the one that has to survive failing."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.a_catalog("other", skills=("writing-plans",))
+        self.grant("alan", "acme/writing-plans")
+        self.held = self.grant("alan", "other/writing-plans", alias="other-plans")
+        self.was = (self.held.at / library.DECLARED).read_text(encoding="utf-8")
+        source = library.tree("other") / library.INSIDE / "writing-plans" / library.DECLARED
+        source.write_text("---\nname: writing-plans\ndescription: Moved on. Use when.\n---\n",
+                          encoding="utf-8")
+
+    def test_the_copy_that_was_working_is_still_there(self):
+        # An earlier version deleted the standing copy and *then* renamed the replacement in, so a
+        # rename that failed left the agent with no skill at all where one had been working a moment
+        # before — and nothing to report it, because a grant that is gone cannot be dangling. This
+        # runs on every update for every stale alias, which is the shape of thing that has to survive.
+        with self.assertRaises(OSError):
+            with _replaces_failing_on(2):
+                grants.refreshed()
+        left = grants.holding("alan", "other-plans")
+        self.assertIsNotNone(left)
+        self.assertEqual(self.was, (left.at / library.DECLARED).read_text(encoding="utf-8"))
+        self.assertEqual("", library.trouble_with(left.at))
+
+    def test_a_copy_that_cannot_be_put_back_says_so_in_its_own_words(self):
+        with self.assertRaises(grants.HalfCopied) as broken:
+            with _replaces_failing_on(2, 3):
+                grants.refreshed()
+        self.assertIn("other-plans", str(broken.exception))
+
+    def test_nothing_staged_is_left_behind_either(self):
+        with self.assertRaises(OSError):
+            with _replaces_failing_on(2):
+                grants.refreshed()
+        left = sorted(one.name for one in grants.where("alan").iterdir())
+        self.assertEqual(["other-plans", "writing-plans"], left)
+
+
+class WhatAVendorRootAlreadyHolds(Grants):
+    def test_a_link_of_their_own_under_a_granted_name_is_not_replaced(self):
+        # `_pruned` will not remove a link rundesk did not make, and this is the same rule on the way
+        # in. Replacing on a name collision alone was the one place this module took something it had
+        # not put there, and it contradicted the rule its own docstring states.
+        root = directory.home("alan") / grants.VENDOR_ROOTS[0]
+        root.mkdir(parents=True)
+        elsewhere = self.home / "somewhere-of-mine"
+        elsewhere.mkdir()
+        theirs = root / "writing-plans"
+        theirs.symlink_to(elsewhere)
+
+        self.grant("alan", "acme/writing-plans")
+        self.assertTrue(theirs.is_symlink())
+        self.assertEqual(elsewhere, theirs.resolve())
+
+    def test_our_own_link_is_still_corrected_when_it_points_at_the_wrong_thing(self):
+        # The other half: a link that *does* point into this agent's own grants is ours, and a stale
+        # one is repaired rather than left.
+        self.grant("alan", "acme/writing-plans")
+        root = directory.home("alan") / grants.VENDOR_ROOTS[0]
+        ours = root / "writing-plans"
+        ours.unlink()
+        ours.symlink_to(os.path.relpath(grants.where("alan") / "something-else", root))
+        grants.presented("alan")
+        self.assertEqual(grants.where("alan") / "writing-plans",
+                         Path(os.path.normpath(ours.parent / os.readlink(ours))))
 
 
 if __name__ == "__main__":

@@ -297,6 +297,28 @@ LONGEST = 255
 _SEPARATORS = ("/", "\\", "\0")
 
 
+def escapes(candidate: Path, parent: Path) -> bool:
+    """Whether `candidate` would not stand directly inside `parent`, asked after resolving both.
+
+    The guard behind every "does this name stay where its things are kept" check, and it is one
+    function because it was two: `agents.directory.where` and `skills.library.stands` each carried
+    the same arithmetic and the same paragraph explaining it. It is the fix for a measured incident —
+    a directory replaced by a link, where every individual removal below correctly refused to follow
+    a link and the operation still reached somewhere that had nothing to do with rundesk — so a gap
+    found in one copy would have been fixed in one copy.
+
+    **Resolved on both sides.** The parent may itself be reached through a link (`/tmp` is
+    `/private/tmp` on this platform), so comparing what was typed refuses an ordinary install. A name
+    nothing stands under yet resolves to itself, so making a thing passes and making one over a link
+    does not.
+
+    Answers a `bool` and takes no opinion about what to do. Each caller raises its own refusal in its
+    own words, because "this is not an agent's name" and "this is not a catalog's name" are different
+    sentences and this layer may not know either of those words.
+    """
+    return candidate.resolve().parent != parent.resolve()
+
+
 def name_trouble(said: str) -> str:
     """Why `said` may not be one segment of a path, or `""` when it may.
 

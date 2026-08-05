@@ -271,6 +271,50 @@ class WhatAHealthySkillCanStillBeHiding(Doctor):
         self.assertEqual(doctor.READY, self.verdict("writing-plans").verdict)
 
 
+class WhenTwoThingsAreWrongAtOnce(Doctor):
+    """The order the questions are asked in is the answer to "which of several true things do I say"."""
+
+    def test_a_stale_copy_is_said_before_an_unrunnable_command(self):
+        self.install("other", skills=("jira",))
+        self.grant("acme/jira")
+        held = self.grant("other/jira", alias="other-jira")
+        self.a_site()
+        source = library.tree("other") / library.INSIDE / "jira"
+        (source / library.DECLARED).write_text(
+            "---\nname: jira\ndescription: Moved on. Use when.\n---\n", encoding="utf-8")
+        (held.at / library.SCRIPTS / "search.py").chmod(0o644)
+        self.assertEqual(doctor.STALE, self.verdict("other-jira").verdict)
+
+    def test_a_dangling_grant_is_said_before_anything_else(self):
+        self.grant("acme/jira")
+        catalogs.remove("acme")
+        self.assertEqual(doctor.DANGLING, self.verdict("jira").verdict)
+
+    def test_a_skill_that_declares_nothing_can_still_be_unrunnable(self):
+        # The credential branches are skipped entirely when a skill declares nothing, so the path to
+        # UNRUNNABLE for a skill with no `rundesk.json` is a different one.
+        self.install("plain", skills=("writing-plans",))
+        (library.tree("plain") / library.INSIDE / "writing-plans" / library.SCRIPTS).mkdir()
+        runnable = (library.tree("plain") / library.INSIDE / "writing-plans" / library.SCRIPTS
+                    / "outline.py")
+        runnable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        runnable.chmod(0o644)
+        self.grant("plain/writing-plans")
+        self.assertEqual(doctor.UNRUNNABLE, self.verdict("writing-plans").verdict)
+
+    def test_a_copy_whose_whole_catalog_went_is_still_usable_and_says_which_catalog(self):
+        # A copy carries its own files, so it keeps working when its catalog goes — it is not
+        # dangling and it is not stale, and reporting either would send somebody to a command that
+        # cannot help. What it must not do is forget where it came from.
+        self.install("other", skills=("writing-plans",))
+        held = self.grant("other/writing-plans", alias="other-plans")
+        catalogs.remove("other")
+        found = self.verdict("other-plans")
+        self.assertEqual(doctor.READY, found.verdict)
+        self.assertEqual("other (--as)", doctor.where(found))
+        self.assertTrue((held.at / library.DECLARED).is_file())
+
+
 class LookingOverTheWholeInstall(Doctor):
     def setUp(self) -> None:
         super().setUp()

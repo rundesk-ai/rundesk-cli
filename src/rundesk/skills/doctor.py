@@ -5,7 +5,7 @@ to be read by an agent as much as by an owner — one fact per line, and each sk
 carried through, so a brain understands what the integration is rather than only what its variables
 are called.
 
-## Five verdicts, because there are five different things to do about them
+## A verdict per thing there is to do about it, and no two share one
 
     READY       every profile is complete, and every command it ships would run
     PARTIAL     at least one profile is usable and at least one is not
@@ -13,6 +13,7 @@ are called.
     UNRUNNABLE  the credentials are fine and a command it ships is not executable
     STALE       a copied grant is behind the catalog it came from
     DANGLING    the grant no longer resolves — its skill left its catalog, or the catalog went
+    BROKEN      the skill itself will not load, or what it declares cannot be read
 
 **`PARTIAL` is the verdict multi-profile exists for.** Two working Jira sites and one
 half-configured is neither a broken integration nor a healthy one. A diagnosis that collapsed it
@@ -167,9 +168,12 @@ def _verdict(grant: grants.Grant) -> Finding:
                         fix="rundesk update")
 
     declared = needs.declared(grant.at)
-    started = needs.started(declared)
-    usable = [one for one in started if one.whole]
+    # Walked once. `needs.started` and `needs.usable` each call `needs.every` themselves, so asking
+    # all three meant three passes over the same profile set — and every pass asks the credential
+    # store whether each name is placed.
     every = needs.every(declared)
+    started = [one for one in every if one.exists]
+    usable = [one for one in started if one.whole]
     about = needs.about(declared)
 
     if declared and not usable:
@@ -236,7 +240,10 @@ def readable(finding: Finding) -> List[str]:
     order somebody needs them to act. `commands` decides the words around it and the columns.
     """
     if finding.verdict in (DANGLING, STALE, BROKEN, UNRUNNABLE):
-        return [finding.said]
+        # Nothing. The whole story of these four *is* the summary sentence, and a caller prints that
+        # already — returning it again put it out twice, once as the row and once indented beneath
+        # itself. Only the verdicts with a per-profile breakdown have detail worth adding.
+        return []
 
     # The profiles somebody has begun, and — when nobody has begun any — the default, so a skill
     # nothing has been set up for still says what setting it up would take. `every` puts the default
@@ -259,12 +266,5 @@ def readable(finding: Finding) -> List[str]:
 
 
 def where(finding: Finding) -> str:
-    """Which catalog a finding's skill came from, as a listing shows it.
-
-    An alias says so. A copy behaves differently from a link in exactly the way that matters here —
-    it is the only kind of grant that can be `STALE` — so somebody reading a column of catalog names
-    should be able to see which one that is without asking anything else.
-    """
-    if not finding.catalog:
-        return "—"
-    return f"{finding.catalog} (--as)" if finding.aliased else finding.catalog
+    """Which catalog a finding's skill came from, as a listing shows it."""
+    return grants.source_shown(finding.catalog, finding.aliased)

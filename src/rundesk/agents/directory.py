@@ -104,10 +104,9 @@ def where(name: str) -> Path:
     stand where agents are kept is not that agent's name, whatever it looks like.
     """
     at = paths.agents() / name
-    stands = at.resolve()
-    if stands.parent != paths.agents().resolve():
+    if files.escapes(at, paths.agents()):
         raise Refused(
-            f"{name} does not stand where agents are kept — it reaches {stands}")
+            f"{name} does not stand where agents are kept — it reaches {at.resolve()}")
     return at
 
 

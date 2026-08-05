@@ -47,7 +47,7 @@ from rundesk.exits import FAILED, OK
 from rundesk.gateways import job, standing
 from rundesk.lifecycle import backups, home, migration, release, tree
 from rundesk.skills.catalogs import Fetching as Refreshing
-from rundesk.utils import programs
+from rundesk.utils import archives, programs
 
 #: How a release archive is brought down: given where it is and where to put it, it puts it there.
 #: The second of the two things in this product that leave the machine, and like the first it is a
@@ -485,34 +485,16 @@ def settled_by_the_new_release(app: Path) -> str:
 def _brought_down(tag: str, into: Path, fetching: Optional[Fetching] = None) -> Path:
     """Fetch and unpack a release, and hand back the tree inside it.
 
-    Members that would escape the directory are refused. The standard library only started refusing
-    them in a version far newer than the floor here, so this is checked rather than relied upon: an
-    archive is somebody else's bytes, and an unpacker that trusts them writes wherever they say.
+    **Unpacked through `utils.archives`, which is the one place that guard is written.** It used to be
+    written here as well, and the two copies were the same fix for the same measured bug — including
+    the same reasoning about the two kinds of link resolving their targets against different
+    directories. A gap found in one would have been fixed in one, and nothing would have gone red for
+    the other: two suites proved the same guarantee against two functions.
     """
     fetch = fetching or _downloaded
     archive = into / "release.tar.gz"
     fetch(release.archive_url(tag), archive)
-
-    with tarfile.open(archive, "r:gz") as held:
-        for member in held.getmembers():
-            settled = (into / member.name).resolve()
-            if into.resolve() not in settled.parents and settled != into.resolve():
-                raise ValueError(f"{member.name} would be written outside the download")
-            if member.issym() or member.islnk():
-                # **The two kinds of link do not resolve their target the same way, and checking
-                # them as though they did is a check that passes while the escape happens.** A
-                # symlink's target is resolved by the filesystem against the link's own directory.
-                # A hard link's is resolved by `tarfile` itself against the extraction root —
-                # `os.path.join(path, tarinfo.linkname)`, unchanged in every version from the floor
-                # here upwards. So a hard link one directory deep naming `../something` was measured
-                # against the wrong place, came out looking contained, and was then created pointing
-                # at a real file outside the download. That file's contents are then indistinguishable
-                # from an ordinary member and get copied into `app/` with the rest of the release.
-                against = into if member.islnk() else settled.parent
-                pointed = (against / member.linkname).resolve()
-                if into.resolve() not in pointed.parents:
-                    raise ValueError(f"{member.name} points outside the download")
-        held.extractall(into)
+    archives.unpacked(archive, into)
 
     inside = [at for at in into.iterdir() if at.is_dir()]
     for at in inside:

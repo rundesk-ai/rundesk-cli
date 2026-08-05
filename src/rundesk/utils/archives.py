@@ -23,8 +23,22 @@ leaves a partly-unpacked tree that somebody then has to decide what to do with, 
 always "throw it away" — so this decides first and unpacks second.
 """
 
+import sys
 import tarfile
 from pathlib import Path
+
+#: How the members are written once the names have been checked.
+#:
+#: **Named explicitly so the answer is the same on every interpreter.** The standard library's own
+#: extraction filter defaulted to `fully_trusted` up to 3.11, warned about the default in 3.12 and
+#: 3.13, and switched it to `data` in 3.14 — so the same archive unpacked differently depending on
+#: which Python was running, which is exactly the class of difference a floor exists to remove.
+#:
+#: `fully_trusted` rather than `data`, because the checking is done above and `data` is not merely
+#: stricter: it *rewrites* what it keeps, including file modes. Something else in this product now
+#: reports a script that is present and not executable as a fault, so an extractor that quietly
+#: normalised the executable bit would turn every fetched catalog's commands into that fault.
+_HOWEVER_IT_IS_EXTRACTED = ({"filter": "fully_trusted"} if sys.version_info >= (3, 12) else {})
 
 
 class Refused(ValueError):
@@ -58,5 +72,5 @@ def unpacked(archive: Path, into: Path) -> Path:
             points = (against / member.linkname).resolve()
             if points != settled and settled not in points.parents:
                 raise Refused(f"{member.name} points outside {into}")
-        held.extractall(into)
+        held.extractall(into, **_HOWEVER_IT_IS_EXTRACTED)
     return into

@@ -59,8 +59,9 @@ from pathlib import Path
 from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from rundesk.agents import directory
+from rundesk.core import paths
 from rundesk.skills import library
-from rundesk.utils import files
+from rundesk.utils import files, locking
 
 #: Where an agent's grants stand, inside its own home. The name is not a vendor's and is read by no
 #: brain on its own — it is rundesk's canonical directory, and the vendor roots link into it.
@@ -86,6 +87,15 @@ VENDOR_ROOTS = (
 
 class Refused(Exception):
     """Something that may not be done to a grant, named with why."""
+
+
+class HalfCopied(Refused):
+    """A copy that failed and whose predecessor could not be put back, naming what stands where.
+
+    Its own kind for the reason `catalogs.HalfInstalled` is: every other failure here leaves the
+    agent exactly as it was found, and this one does not. Reported in the same words as the others it
+    would be telling somebody nothing had happened while a skill they were using sat moved aside.
+    """
 
 
 class Occupied(Refused):
@@ -127,6 +137,19 @@ class Grant(NamedTuple):
     def address(self) -> str:
         """How the skill behind this grant is named on a command line. `""` when it cannot be told."""
         return f"{self.catalog}/{self.skill}" if self.catalog and self.skill else ""
+
+
+def source_shown(catalog: str, copied: bool, nothing: str = "—") -> str:
+    """Which catalog a grant came from, as a listing shows it.
+
+    One function because it was two, rendering one fact from the same two fields in two layers — a
+    table and a diagnosis, which is precisely the pair that must not come to disagree about whether a
+    grant is a copy. **An alias says so**, because a copy behaves differently in the way that matters:
+    it is the only kind of grant that can be `STALE`.
+    """
+    if not catalog:
+        return nothing
+    return f"{catalog} (--as)" if copied else catalog
 
 
 def where(agent: str) -> Path:
@@ -171,18 +194,28 @@ def granted(agent: str, skill: library.Skill, alias: str = "") -> Grant:
 
     at = where(agent)
     standing = at / name
-    if standing.is_symlink() or standing.exists():
-        raise Occupied(_already_holding(agent, name))
+    # **Asked and answered inside the lock**, because a check and a write with a gap between them is
+    # two callers both being told the name is free. Every other durable write in this product takes
+    # the same lock for the same reason; this module was the one that did not, and a scheduled
+    # `rundesk update` remaking a copy while somebody granted by hand is an ordinary pairing.
+    # `locking.only_one` is re-entrant per thread, so `_copied` taking it again below is free.
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        if standing.is_symlink() or standing.exists():
+            raise Occupied(_already_holding(agent, name))
+        at.mkdir(parents=True, exist_ok=True)
+        _placed(skill, standing, at, name)
+    presented(agent)
+    return _read(agent, standing)
 
-    at.mkdir(parents=True, exist_ok=True)
+
+def _placed(skill: library.Skill, standing: Path, at: Path, name: str) -> None:
+    """Put the grant on disk: a link, or a copy when it stands under another name."""
     if name == skill.name:
         # Relative, so moving or copying an agent's whole directory does not leave every grant
         # pointing at where some other machine kept its library.
         standing.symlink_to(os.path.relpath(skill.at, at))
     else:
         _copied(skill, standing)
-    presented(agent)
-    return _read(agent, standing)
 
 
 def revoked(agent: str, name: str) -> Grant:
@@ -192,10 +225,12 @@ def revoked(agent: str, name: str) -> Grant:
     fact a person needs to grant it again, and after the removal there is nothing left to ask.
     """
     _agent_must_exist(agent)
-    standing = holding(agent, name)
-    if standing is None:
-        raise Refused(f"{agent} does not hold {name} — rundesk skills list {agent} says what it has")
-    files.remove_one(standing.at)
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        standing = holding(agent, name)
+        if standing is None:
+            raise Refused(
+                f"{agent} does not hold {name} — rundesk skills list {agent} says what it has")
+        files.remove_one(standing.at)
     presented(agent)
     return standing
 
@@ -238,14 +273,15 @@ def retired(catalog: str, gone: List[str]) -> Dict[str, List[str]]:
     if not gone:
         return {}
     went: Dict[str, List[str]] = {}
-    for agent in directory.known():
-        for one in held(agent):
-            if one.catalog != catalog or one.skill not in gone:
-                continue
-            files.remove_one(one.at)
-            went.setdefault(agent, []).append(one.name)
-        if agent in went:
-            presented(agent)
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        for agent in directory.known():
+            for one in held(agent):
+                if one.catalog != catalog or one.skill not in gone:
+                    continue
+                files.remove_one(one.at)
+                went.setdefault(agent, []).append(one.name)
+    for agent in went:
+        presented(agent)
     return went
 
 
@@ -286,14 +322,17 @@ def refreshed(saying: Optional[Callable[[str], None]] = None) -> List[str]:
     """
     said = saying or (lambda _line: None)
     remade = []
-    for agent in directory.known():
-        for one in held(agent):
-            if not stale(one):
-                continue
-            source = library.where() / one.catalog / library.TREE / library.INSIDE / one.skill
-            _copied(library.read_skill(one.catalog, source), one.at)
-            remade.append(f"{agent}/{one.name}")
-            said(f"made {one.name} again for {agent}, from {one.catalog}")
+    # One lock across the whole sweep rather than one per copy. This runs on every update, over every
+    # agent, and a caller holding it for the duration is a caller nothing can interleave with.
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        for agent in directory.known():
+            for one in held(agent):
+                if not stale(one):
+                    continue
+                source = library.where() / one.catalog / library.TREE / library.INSIDE / one.skill
+                _copied(library.read_skill(one.catalog, source), one.at)
+                remade.append(f"{agent}/{one.name}")
+                said(f"made {one.name} again for {agent}, from {one.catalog}")
     return remade
 
 
@@ -338,6 +377,19 @@ def _read(agent: str, at: Path) -> Grant:
     return Grant(agent, at.name, at, "", "", False, (at / library.DECLARED).is_file())
 
 
+def _linked_at(link: Path) -> Path:
+    """Where a symlink points: read one hop, made absolute against the link's own directory, and
+    normalised rather than resolved.
+
+    One place, because three callers need it and each needs the same subtlety. `resolve` would follow
+    the whole chain, which is wrong here for the reasons `_pointed_at` gives.
+    """
+    points = Path(os.readlink(link))
+    if not points.is_absolute():
+        points = link.parent / points
+    return Path(os.path.normpath(str(points)))
+
+
 def _pointed_at(at: Path) -> Tuple[str, str]:
     """The catalog and skill a grant's link names, or two empty strings when it names neither.
 
@@ -348,10 +400,7 @@ def _pointed_at(at: Path) -> Tuple[str, str]:
     straight out of the library and the grant could no longer say where it came from, so nothing
     could group it in a listing or retire it when its catalog went.
     """
-    points = Path(os.readlink(at))
-    if not points.is_absolute():
-        points = at.parent / points
-    settled = Path(os.path.normpath(str(points)))
+    settled = _linked_at(at)
     try:
         inside = settled.relative_to(Path(os.path.normpath(str(library.where()))))
     except ValueError:
@@ -365,28 +414,52 @@ def _pointed_at(at: Path) -> Tuple[str, str]:
 def _copied(skill: library.Skill, to: Path) -> None:
     """Make a copy of a skill standing under a different name, and prove it is still a skill.
 
-    Built under a staged name and renamed into place, so an interruption never leaves a directory
-    that has a `SKILL.md` and is not the skill it claims to be. The rewrite is checked afterwards
-    rather than trusted: a frontmatter this could not rewrite is a copy every brain would index
-    under the source's name, which is the exact collision the alias existed to avoid.
+    Built under a staged name and swapped in, so an interruption never leaves a directory that has a
+    `SKILL.md` and is not the skill it claims to be. The rewrite is checked afterwards rather than
+    trusted: a frontmatter this could not rewrite is a copy every brain would index under the
+    source's name, which is the exact collision the alias existed to avoid.
+
+    **The copy standing there is moved aside rather than deleted, and put back if the swap fails.**
+    An earlier version discarded it and *then* renamed, so a rename that failed — a full disk, a
+    cross-device move — left the agent with no skill where one had been working a moment before. This
+    runs on every `rundesk update` for every stale alias, which is exactly the shape of thing that
+    has to survive failing.
+
+    **Held under the install's own lock**, like every other durable write in this product. Two
+    `grant --as` calls for one name, or a grant racing the `refreshed` that remakes the same alias,
+    would otherwise interleave with nothing serialising them.
     """
     building = files.incoming_of(to)
-    files.discard(building)
-    try:
-        shutil.copytree(skill.at, building, symlinks=False)
-        said = (building / library.DECLARED).read_text(encoding="utf-8")
-        (building / library.DECLARED).write_text(_renamed(said, to.name), encoding="utf-8")
-        files.write_json(building / RECORD, {
-            "catalog": skill.catalog, "skill": skill.name, "as": to.name,
-            "digest": _digest(skill.at), "copied_at": library.stamped()})
-        trouble = library.trouble_with(building, to.name)
-        if trouble:
-            raise Refused(f"{skill.address} could not be copied as {to.name}: {trouble}")
-        files.discard(to)
-        os.replace(building, to)
-    except BaseException:
+    aside = files.outgoing_of(to)
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
         files.discard(building)
-        raise
+        files.discard(aside)
+        moved = False
+        try:
+            shutil.copytree(skill.at, building, symlinks=False)
+            said = (building / library.DECLARED).read_text(encoding="utf-8")
+            (building / library.DECLARED).write_text(_renamed(said, to.name), encoding="utf-8")
+            files.write_json(building / RECORD, {
+                "catalog": skill.catalog, "skill": skill.name, "as": to.name,
+                "digest": _digest(skill.at), "copied_at": library.stamped()})
+            trouble = library.trouble_with(building, to.name)
+            if trouble:
+                raise Refused(f"{skill.address} could not be copied as {to.name}: {trouble}")
+            if to.is_symlink() or to.exists():
+                os.rename(to, aside)
+                moved = True
+            os.rename(building, to)
+        except BaseException:
+            files.discard(building)
+            if moved and not (to.is_symlink() or to.exists()):
+                try:
+                    os.rename(aside, to)
+                except OSError as put_back:
+                    raise HalfCopied(
+                        f"{to.name} could not be made again and what was there could not be put "
+                        f"back — it is at {aside} ({put_back})") from put_back
+            raise
+        files.discard(aside)
 
 
 def _renamed(said: str, to: str) -> str:
@@ -448,6 +521,12 @@ def _linked(root: Path, grants: Path, wanted: Set[str]) -> List[Path]:
         if at.is_symlink():
             if os.readlink(at) == points:
                 continue
+            if _linked_at(at).parent != Path(os.path.normpath(str(grants))):
+                # Somebody else's link, and not ours to replace — the same "ours is decided by where
+                # it points" test `_pruned` uses to decide what it may remove. Replacing on a name
+                # collision alone was the one place this module took something it had not put there,
+                # and it contradicted the rule its own docstring states.
+                continue
             at.unlink()
         elif at.exists():
             # Somebody else's, and not ours to replace. A real directory here is a skill a person
@@ -470,11 +549,7 @@ def _pruned(root: Path, grants: Path, wanted: Set[str]) -> List[Path]:
     for one in sorted(root.iterdir(), key=lambda entry: entry.name):
         if not one.is_symlink() or one.name in wanted:
             continue
-        points = Path(os.readlink(one))
-        if not points.is_absolute():
-            points = one.parent / points
-        settled = Path(os.path.normpath(str(points)))
-        if settled.parent != Path(os.path.normpath(str(grants))):
+        if _linked_at(one).parent != Path(os.path.normpath(str(grants))):
             continue
         one.unlink()
         gone.append(one)

@@ -24,6 +24,7 @@ import support
 from rundesk.agents import directory
 from rundesk.core import secrets
 from rundesk.skills import catalogs, grants, library, needs
+from rundesk.utils import locking
 
 A_JIRA = {
     "JIRA_BASE_URL": "your Jira site, e.g. https://acme.atlassian.net",
@@ -565,6 +566,21 @@ class TheDoctor(Skills):
         self.assertIn("DANGLING", out)
         self.assertIn("rundesk skills revoke alan jira", err)
 
+    def test_a_verdict_whose_whole_story_is_its_own_line_says_it_once(self):
+        # The summary row already carries the sentence. An earlier version had `readable` return it
+        # as a detail line too, so it appeared twice — once as the row and once indented beneath
+        # itself. Counted, because `assertIn` cannot see a duplicate.
+        catalogs.remove("acme")
+        _code, out, _err = self.rundesk("skills", "doctor")
+        self.assertEqual(1, out.count("the grant points at nothing"), out)
+
+    def test_a_verdict_with_a_breakdown_still_gets_its_detail_lines(self):
+        # The other half of that fix: `PARTIAL` and `BLOCKED` detail is genuinely additional, and
+        # suppressing it along with the rest would have been the same bug in reverse.
+        _code, out, _err = self.rundesk("skills", "doctor")
+        self.assertIn("BLOCKED", out)
+        self.assertIn("id.atlassian.com", out)
+
 
 class WhatARemovalOfAnAgentSays(Skills):
     def test_it_names_the_grants_and_says_the_skills_themselves_stay(self):
@@ -638,6 +654,23 @@ class WhatAnInstallAndAnUpdateDoToCatalogs(Skills):
         self.assertIn("acme could not be checked", err)
         self.assertIn("rundesk skills update acme", err)
 
+    def test_a_version_move_is_said_once_and_not_twice(self):
+        # Two code paths rendered one fact: `catalogs.update` says it through the callback it was
+        # handed, and an earlier version said it again from the outcome — so a real update printed
+        # `acme 1.0.0 -> 1.1.0` twice with the retirements between the copies. Counted rather than
+        # `assertIn`, because `assertIn` is exactly what let it through.
+        self.installed(refreshing=self.a_dead_repository())
+        self.install()
+        moved = self.a_source(version="1.1.0", skills=("writing-plans",))
+
+        def refreshing(source: str, _etag: str, _into: Path):
+            if source != str(moved):
+                raise OSError(f"{source} could not be reached")
+            return catalogs.Brought(moved, "")
+
+        _code, out, _err = self.updated(refreshing=refreshing)
+        self.assertEqual(1, out.count("acme 1.0.0 -> 1.1.0"), out)
+
     def test_an_update_that_found_nothing_newer_still_checks_the_catalogs(self):
         # What makes them current daily rather than only when rundesk itself moves: a catalog is
         # somebody else's repository and it changes on its own schedule.
@@ -654,6 +687,35 @@ class WhatAnInstallAndAnUpdateDoToCatalogs(Skills):
         self.assertEqual(0, code)
         self.assertIn("1.0.0 -> 1.1.0", out)
         self.assertEqual("1.1.0", library.read("acme").manifest.version)
+
+    def test_a_failure_remaking_a_grant_does_not_crash_an_update_that_had_succeeded(self):
+        # An ordinary `OSError` while remaking one stale copy ran outside the guard, so it came out
+        # of `rundesk update` as a traceback with no exit code at all — turning a release that had
+        # landed and settled into a hard crash. Sharper than any catalog being unreachable.
+        self.installed(refreshing=self.a_dead_repository())
+        self.install()
+        directory.made("alan", "claude")
+        self.rundesk("skills", "grant", "alan", "acme/writing-plans")
+
+        with mock.patch("rundesk.skills.grants.refreshed",
+                        side_effect=OSError("the disk is full")):
+            code, _out, err = self.updated(refreshing=self.a_dead_repository())
+        self.assertEqual(0, code)
+        self.assertIn("the grants could not all be brought up to date", err)
+        self.assertIn("rundesk skills doctor", err)
+
+    def test_the_catalog_your_own_skills_stand_in_failing_does_not_hide_the_others(self):
+        # It was the one step in the refresh with no guard of its own, so a failure here escaped and
+        # the caller reported one coarse sentence for the whole install — throwing away the
+        # per-catalog granularity every other step preserves.
+        self.installed(refreshing=self.a_dead_repository())
+        self.install()
+        with mock.patch("rundesk.skills.catalogs.place_mine",
+                        side_effect=OSError("the disk is full")):
+            code, _out, err = self.updated(refreshing=self.a_dead_repository())
+        self.assertEqual(0, code)
+        self.assertIn(f"{library.MINE} could not be checked", err)
+        self.assertIn("acme could not be checked", err)
 
     def test_a_copy_left_behind_its_catalog_is_made_again_by_an_update(self):
         self.installed(refreshing=self.a_dead_repository())
@@ -682,6 +744,42 @@ class WhatAnInstallAndAnUpdateDoToCatalogs(Skills):
                            encoding="utf-8")
         self.updated(refreshing=self.a_dead_repository())
         self.assertEqual(was, drifted.read_text(encoding="utf-8"))
+
+
+class WhenSomethingElseHoldsTheInstallLock(Skills):
+    """Lock contention is a refusal, not a traceback.
+
+    `locking.Stuck` is a bare `Exception` rather than an `OSError`, so it has to be named in the
+    caught set explicitly — it was not, and a concurrent `backups save` or a second `skills` command
+    still holding the install lock reached a person as an unhandled traceback. `commands/agents.py`
+    has always named it; this group had not.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.install()
+
+    def held_by_something_else(self):
+        return mock.patch("rundesk.skills.catalogs.locking.only_one",
+                          side_effect=locking.Stuck("something else is changing this install"))
+
+    def test_every_verb_that_writes_refuses_rather_than_raising(self):
+        for argv in (("skills", "install", str(self.a_source("more")), "--confirm"),
+                     ("skills", "update", "acme", "--confirm"),
+                     ("skills", "remove", "acme", "--confirm")):
+            with self.subTest(argv=argv):
+                with self.held_by_something_else():
+                    code, out, err = self.rundesk(*argv)
+                self.assertEqual(1, code)
+                self.assertEqual("", out)
+                self.assertIn("skills: FAILED", err)
+
+    def test_a_grant_refuses_rather_than_raising_too(self):
+        with mock.patch("rundesk.skills.grants.locking.only_one",
+                        side_effect=locking.Stuck("something else is changing this install")):
+            code, _out, err = self.rundesk("skills", "grant", "alan", "acme/writing-plans")
+        self.assertEqual(1, code)
+        self.assertIn("skills: FAILED", err)
 
 
 class WhatIsOfferedAtAll(Skills):

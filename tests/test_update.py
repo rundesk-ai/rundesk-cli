@@ -281,7 +281,11 @@ class AnUpdateThatDoesNotLand(Updating):
     def test_an_archive_whose_symlink_points_outside_the_download_is_refused(self):
         code, _, err = self.update(archive=self.an_archive(escaping_link="symlink"))
         self.assertEqual(FAILED, code)
-        self.assertIn("points outside the download", err)
+        # The guard's own words and the member it caught. Unpacking now goes through
+        # `utils.archives`, which is the one place that check is written, so the sentence names where
+        # it refused rather than the caller's word for it.
+        self.assertIn("points outside", err)
+        self.assertIn("escaped", err)
         self.assertEqual("before", (paths.app() / "README.md").read_text())
 
     def test_an_archive_whose_hard_link_points_outside_the_download_is_refused(self):
@@ -296,7 +300,8 @@ class AnUpdateThatDoesNotLand(Updating):
         # The guard's own words, not merely "it failed": measured the wrong way this member sails
         # through the check and the update dies later for an unrelated reason, which is the same
         # exit code and tells nobody the escape was caught.
-        self.assertIn("points outside the download", err)
+        self.assertIn("points outside", err)
+        self.assertIn("escaped", err)
         self.assertEqual("before", (paths.app() / "README.md").read_text())
 
     def test_an_api_answer_that_is_not_an_object_is_unreachable_rather_than_a_traceback(self):
@@ -633,6 +638,10 @@ class TheGatewaySeam(support.Isolated):
     def test_a_live_gateway_with_nothing_to_stand_it_down_stops_that_agent_being_carried(self):
         # Carrying an agent while its gateway holds the records open is the `database is locked`
         # failure. Named and refused rather than attempted, and never reported as carried.
+        #
+        # **Not what `rundesk update` does any more**: `settle` resolves something that can stand a
+        # gateway down before it calls this, and `tests/test_seam.py` proves what that does. What is
+        # left here is a caller inside this codebase that hands nothing in, which the type allows.
         self.an_agent("alpha")
         self.a_step_waiting()
 

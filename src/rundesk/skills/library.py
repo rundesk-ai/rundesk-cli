@@ -182,10 +182,12 @@ class Catalog(NamedTuple):
 class Skill(NamedTuple):
     """One skill: which catalog holds it, what it is called, where it stands, and what it is for.
 
-    `description` is carried because it is the only part of a skill that is read on every turn
-    whether the skill is used or not, so it is what a listing should show — and reading it means the
-    frontmatter has already been validated, which is why nothing hands back a `Skill` it has not
-    checked.
+    `description` is carried because **reading it is how it was validated** — it cannot be checked
+    for being present, non-empty and within the limit without being parsed, so the value is already
+    in hand and throwing it away would only mean parsing again. Nothing prints it: it can be a
+    thousand characters, which is a paragraph rather than a table cell. It is there because it is the
+    whole of how a provider decides to reach for a skill, so the thing that validates a skill is the
+    thing that has to have read it.
     """
 
     catalog: str
@@ -226,7 +228,7 @@ def stands(name: str) -> Path:
         raise Refused(trouble)
     library = where()
     at = library / name
-    if at.resolve().parent != library.resolve():
+    if files.escapes(at, library):
         raise Refused(f"{name} does not stand where catalogs are kept — it reaches {at.resolve()}")
     return at
 

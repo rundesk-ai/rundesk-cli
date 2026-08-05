@@ -445,8 +445,14 @@ def refresh(fetching: Optional[Fetching] = None,
     fine, and this is what makes that true rather than what hopes it.
     """
     said = saying or (lambda _line: None)
-    place_mine(said)
     outcomes: List[Refreshed] = []
+    try:
+        place_mine(said)
+    except (Refused, library.Refused, OSError) as why:
+        # Guarded like its siblings. Unguarded, a failure here escaped `refresh` altogether and the
+        # caller reported one coarse "the catalogs could not be checked" for the whole install —
+        # throwing away the per-catalog granularity every other step in this function preserves.
+        outcomes.append(Refreshed(library.MINE, "", "", [], str(why)))
     try:
         place_bundled(said)
     except (Refused, library.Refused, archives.Refused, OSError, urllib.error.URLError) as why:

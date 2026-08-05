@@ -35,13 +35,14 @@ from rundesk.commands import Subcommands, env, failed
 from rundesk.core import paths, secrets
 from rundesk.exits import FAILED, OK
 from rundesk.skills import catalogs, doctor, grants, library, needs
-from rundesk.utils import archives
+from rundesk.utils import archives, locking
 from rundesk.utils.terminal import as_table
 
 #: Everything a verb here can be stopped by. One tuple, because six verbs catch the same set and six
 #: copies of it is five chances for one to fall behind.
 TROUBLE = (library.Refused, catalogs.Refused, catalogs.HalfInstalled, grants.Refused,
-           needs.Refused, archives.Refused, directory.Refused, secrets.Refused, OSError)
+           needs.Refused, archives.Refused, directory.Refused, secrets.Refused, locking.Stuck,
+           OSError)
 
 #: What a listing puts in a cell that has no answer.
 NOTHING = "—"
@@ -175,13 +176,30 @@ def refreshed(refreshing: Optional[catalogs.Fetching] = None) -> List[str]:
         return [f"the skill catalogs could not be checked: {why}",
                 "rundesk skills catalogs says what is installed"]
 
+    try:
+        return _retired_and_remade(outcomes, said)
+    except TROUBLE as why:
+        # Inside a guard, like the fetch above it. Remaking the grants ran outside one, so an
+        # ordinary `OSError` while remaking a single stale copy came out of `rundesk update` as a
+        # traceback with no exit code at all — turning a release that had already landed and settled
+        # into a hard crash. That is a sharper break of this function's own contract than any
+        # catalog being unreachable.
+        said.append(f"the grants could not all be brought up to date: {why}")
+        said.append("rundesk skills doctor says which agent is affected")
+        return said
+
+
+def _retired_and_remade(outcomes: List[catalogs.Refreshed], said: List[str]) -> List[str]:
+    """Take away grants of skills that left their catalog, remake stale copies, and report."""
     for one in outcomes:
         if one.why:
             said.append(f"{one.name} could not be checked: {one.why}")
             said.append(f"rundesk skills update {one.name} --confirm tries just that one")
             continue
-        if one.before != one.after:
-            _out_loud(f"{one.name} {one.before or 'installed at'} -> {one.after}")
+        # The version move is *not* announced here. `catalogs.update` was handed this same `saying`
+        # and has already said it, so printing it from the outcome as well put the line out twice on
+        # every real update that found a change — with the retirements sandwiched between the copies.
+        # One fact, one place that renders it.
         went = grants.retired(one.name, one.retired)
         for agent in sorted(went):
             _out_loud(f"{agent} no longer holds {', '.join(went[agent])}")
@@ -451,15 +469,19 @@ def _profiles(address: str) -> int:
         print(f"{skill.address} needs no credentials, so it has no profiles")
         return OK
 
+    # Walked once, for the reason `doctor._verdict` gives: each of `every`, `started` and `usable`
+    # asks the credential store about every declared name, and asking all three walked it three times.
+    every = needs.every(wanted)
+    started = [one for one in every if one.exists]
+
     print(f"profiles for {skill.address}")
     as_table(("PROFILE", "STANDING", "MISSING"),
-             [(one.shown, _whole(one), ", ".join(one.missing) or NOTHING)
-              for one in needs.every(wanted)])
-    unfinished = next((one for one in needs.started(wanted) if not one.whole), None)
+             [(one.shown, _whole(one), ", ".join(one.missing) or NOTHING) for one in every])
+    unfinished = next((one for one in started if not one.whole), None)
     if unfinished is not None:
         print(f"        finish it: rundesk skills configure {skill.address} "
               f"--profile {unfinished.shown}")
-    elif not needs.usable(wanted):
+    elif not any(one.whole for one in started):
         print(f"        set it up: rundesk skills configure {skill.address}")
     return OK
 
@@ -602,13 +624,21 @@ def _by_agent(found: List[doctor.Finding]) -> List[str]:
     Grouped here rather than in `doctor`, because which agent a finding belongs to is a fact and
     putting a heading above it is a decision about words.
     """
+    # Measured rather than guessed. Fixed widths were wrong the first time a real catalog was
+    # installed — `rundesk-skills-apple` is twenty characters and ran straight into the next column,
+    # which is the kind of defect a test asserting `assertIn` never sees.
+    skill = max((len(one.skill) for one in found), default=0) + 2
+    where = max((len(doctor.where(one)) for one in found), default=0) + 2
+    verdict = max(len(one.verdict) for one in found) + 2
+
     lines: List[str] = []
     standing = ""
     for one in found:
         if one.agent != standing:
             standing = one.agent
             lines.append(standing)
-        lines.append(f"  {one.skill:<18}{doctor.where(one):<16}{one.verdict:<10}{one.said}")
+        lines.append(f"  {one.skill:<{skill}}{doctor.where(one):<{where}}"
+                     f"{one.verdict:<{verdict}}{one.said}")
         lines.extend(f"      {said}" for said in doctor.readable(one))
     return lines
 
@@ -626,10 +656,8 @@ def _agents_holding(catalog: str, skill: str) -> List[str]:
 
 
 def _from(grant: grants.Grant) -> str:
-    """Which catalog a grant came from, as a listing shows it."""
-    if not grant.catalog:
-        return NOTHING
-    return f"{grant.catalog} (--as)" if grant.copied else grant.catalog
+    """Which catalog a grant came from, as a listing shows it. The same answer `doctor` gives."""
+    return grants.source_shown(grant.catalog, grant.copied, NOTHING)
 
 
 def _counted(grant: grants.Grant) -> str:
