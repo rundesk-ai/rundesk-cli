@@ -430,10 +430,10 @@ class TakingAnAgentAway(Agents):
         # `channels/` is not made when an agent is, so it is absent for every other case here and
         # has to be stood up before this one can mean anything. Left out of `_forgotten` it would
         # be the one directory that survived a removal, keeping every file a stranger ever sent.
-        arrived = directory.channels("cole") / "in" / "2026-08-05" / "8841"
+        arrived = directory.channels("cole") / "dm" / "in" / "2026-08-05" / "8841"
         arrived.mkdir(parents=True)
         (arrived / "report.csv").write_text("what arrived", encoding="utf-8")
-        (directory.channels("cole") / "dm.lock").write_text("", encoding="utf-8")
+        (directory.channels("cole") / "dm" / "lock").write_text("", encoding="utf-8")
         gone = {one.name for one in directory.forgotten("cole")}
         self.assertIn(directory.CHANNELS, gone)
         self.assertFalse(directory.where("cole").exists())

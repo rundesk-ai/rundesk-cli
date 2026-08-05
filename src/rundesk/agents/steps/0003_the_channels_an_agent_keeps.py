@@ -20,6 +20,16 @@ legitimate answer, so the index covers only the rows that claim it. Two channels
 the state that has no meaning, and this is the only way to make writing it impossible rather than
 merely unusual.
 
+**`place_kind` says how many people are there, and that is deliberately not a chat word.** It holds
+`dm` or `room`, and those are the two answers because they are the two the *core* behaves differently
+about: one person, private, where a reply is flat and needs no mention; or several people, shared,
+where a reply may thread and the asker has to be named. An adapter for something that is not a chat
+platform maps onto the same distinction rather than needing a third word — one email address is `dm`
+and a distribution list is `room`, one phone number is `dm` and a group message is `room`. A thread
+is not a third kind: it is where a reply goes inside a `room`, not something a channel is configured
+against. Written down here because the vocabulary is the part a later adapter author has to fit into,
+and because widening a `CHECK` afterwards means the table rebuild this file's last paragraph is about.
+
 **`conversations` carries `UNIQUE (source, source_id)` and that is the whole point of the table.**
 The build this replaces derived a conversation's identity by hashing what it came from, which is
 what let two exchanges weeks apart, in different processes, land on one conversation without either

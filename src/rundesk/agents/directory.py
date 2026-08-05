@@ -67,10 +67,16 @@ GATEWAY_RECORD = "gateway.json"
 #: and no list anywhere has to say so.
 SCHEDULES = "schedules"
 
-#: What each configured channel keeps: the lock its adapter holds, what started it, what it wrote to
-#: standard error, and the files that arrived through it. A directory of its own for the reason
-#: `SCHEDULES` gives — a channel's name is the owner's, so `dm.lock` at the top of the agent's
-#: directory would make every fixed name a name no channel may have.
+#: What each configured channel keeps, **one directory per channel**: the lock its adapter holds,
+#: what started it, what it wrote to standard error, the files that arrived through it, and a home
+#: the adapter itself may keep things in between restarts.
+#:
+#: A directory of its own for the reason `SCHEDULES` gives — a channel's name is the owner's, so
+#: `dm.lock` at the top of the agent's directory would make every fixed name a name no channel may
+#: have. And a directory *per channel*, rather than the three suffixed names a firing keeps beside
+#: each other, because a channel needs somewhere for what arrives whatever else it needs: with one
+#: directory each, the next thing a channel has to keep is a name inside it instead of another
+#: suffix that no channel may then be called.
 CHANNELS = "channels"
 
 #: The note the install writes into `data/agents/`, and therefore a name no agent may have.
