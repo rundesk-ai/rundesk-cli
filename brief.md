@@ -11,20 +11,28 @@ rundesk schedules <agent> run <schedule>
 rundesk schedules <agent> show <schedule>
 rundesk schedules <agent> remove <schedule>
 
-# managing the skills
-rundesk skills list
-rundesk skills catalogs
-rundesk skills install <repository> [--confirm]
-rundesk skills remove <catalog> [--confirm]
-rundesk skills update <catalog> [--confirm]
-rundesk skills grant <agent> <skill>
-rundesk skills revoke <agent> <skill>
-
 # managing the channels
 rundesk channels <agent> add <adapter> --owner <user> [--allow <user>] [--token-stdin]
 rundesk channels <agent> update <adapter> [--owner <user>] [--allow <user>]
 rundesk channels <agent> show <adapter>
 rundesk channels <agent> remove <adapter>
+
+# MANAGING THE SKILLS
+# --------------------------------------------
+# lists all the skills available (filtering by agent)
+rundesk skills list [<agent>]
+# list all the skill catalogs repos
+rundesk skills catalogs
+# install a skill from a catalog repository
+rundesk skills install <repository> [--confirm]
+# remove a skill catelog repo
+rundesk skills remove <catalog> [--confirm]
+# update a skill catelog repo
+rundesk skills update <catalog> [--confirm]
+# grant an individual skill to an agent
+rundesk skills grant <agent> <skill>
+# revoke an individual skill from an agent
+rundesk skills revoke <agent> <skill>
 
 # MANAGING THE GATEWAYS
 # --------------------------------------------
