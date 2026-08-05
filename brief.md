@@ -30,19 +30,24 @@ rundesk channels <agent> remove <adapter>
 # --------------------------------------------
 # displays a list of all the gateways, their status of online/offline
 rundesk gateways
+rundesk gateways list
 # start a gateway that is offline
 # returns error if gateway is already online
 rundesk gateways start <agent>
 # stop a gateway that is online
 # returns error if gateway is already offline
-rundesk gateways stop <agent> [--all]
+# <agent> or --all, one of the two is required and never both
+# force kills it where it stands instead of waiting for it to finish
+rundesk gateways stop [<agent>] [--all] [--force]
 # restart a gateway that is online or offline
 # returns error if gateway is already offline
 # all does all gateways at once 
 # force restarts the gateway without waiting for it to turn off
-rundesk gateways restart <agent> [--all] [--force]
+rundesk gateways restart [<agent>] [--all] [--force]
 # view the logs of that specific gateway (from newest to oldest)
 rundesk gateways logs <agent> [-n <lines>]
+# be the gateway for this agent here, in this terminal — what the launchd job runs
+rundesk gateways run <agent>
 
 # MANAGING THE AGENTS
 # --------------------------------------------
@@ -53,7 +58,8 @@ rundesk agents add <agent> --provider <provider>
 # configuring an existing agent with the specified provider
 rundesk agents configure <agent> --provider <provider>
 # removing an agent
-rundesk agents remove <agent>
+# confirm is required — without it, it says what it would take and takes none of it
+rundesk agents remove <agent> --confirm
 
 # MANAGING THE ENV
 # --------------------------------------------
@@ -76,7 +82,8 @@ rundesk backups
 rundesk backups save
 # restores the data from a given back up and it must have a hook that runs after
 # the hook later will be used for things like running migrations if the data is older. 
-rundesk backups restore <backup> [--confirm]
+# confirm is required — without it, it says what it would do and does none of it
+rundesk backups restore <backup> --confirm
 # moves the backups to a new location and symlinks it back to the original location
 rundesk backups set-location <path>
 
@@ -89,9 +96,12 @@ rundesk version
 # updates the rundesk install otherwise says up to date with version
 rundesk update
 # uninstalls rundesk (confim is required, and purge deletes all data, otherwise data remains)
-rundesk uninstall [--confirm] [--purge]
+rundesk uninstall --confirm [--purge]
 # configures the rundesk config.json
-rundesk configure [--key <value>]
+# the flags are generated from the configuration, so a new setting is settable the day it lands
+rundesk configure [--backup-enabled <yes|no>] [--backup-retention <n>] [--update-enabled <yes|no>] [--update-time <HH:MM>]
+# what install.sh runs; both are optional and both default under RUNDESK_HOME
+rundesk install [--source <dir>] [--bin-dir <dir>]
 
 ```
 
