@@ -148,6 +148,21 @@ class TheTreePointsOneWay(support.Isolated):
                 self.assertEqual(there, named,
                                  f"the table in {package}/__init__.py and the directory disagree")
 
+    def test_the_two_layers_spell_a_gateway_s_own_files_the_same_way(self):
+        # `agents` may not import `gateways`, and `gateways.standing` deliberately never derives
+        # where an agent lives — so neither can share these constants with the other, and the
+        # duplication is the layer boundary being kept clean rather than something to remove.
+        #
+        # It is not free, though. `directory.forgotten` deletes an agent's lock and record BY NAME,
+        # so a rename on one side and not the other would leave both behind on every removal —
+        # silently, and exactly the class of litter `records.beside` exists to prevent for `-wal`
+        # and `-shm`. Nothing enforced that they match until this case.
+        from rundesk.agents import directory
+        from rundesk.gateways import standing
+        self.assertEqual(standing.LOCK, directory.GATEWAY_LOCK)
+        self.assertEqual(standing.RECORD, directory.GATEWAY_RECORD)
+        self.assertEqual(standing.LOGS, directory.LOGS)
+
     def test_a_step_is_still_held_to_the_layer_rule(self):
         # `named_in` stops at the package's own modules so a step does not have to be listed in a
         # table. `modules_of` must not: a step is arbitrary code shipping in this tree, it runs

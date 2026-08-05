@@ -148,7 +148,11 @@ BTM_ENABLED = 0x1
 #: situations that cannot be told apart from each other.
 PLACED = "placed"
 NOT_PLACED = "not placed"
-CANNOT_TELL = "cannot tell"
+#: `standing`'s own word, aliased rather than re-typed. It means the same thing here that it means
+#: there — nobody could be asked — and two modules with their own spelling of one distinction are
+#: two modules that eventually disagree about it. `PLACED`/`NOT_PLACED` deliberately stay their own
+#: vocabulary: a job registered with launchd is not a process that is running.
+CANNOT_TELL = standing.CANNOT_TELL
 
 #: What runs the gateway. A shim rather than a `#!` line on a Python file, and a handoff rather than
 #: a subcommand: settling and hosting are steps of running rundesk rather than operations anybody
@@ -172,6 +176,30 @@ _SHIM = """\
 # `print` then answers 113, and there is no command of any kind that puts it back.
 exec {python} -c {hosting} {src} {name}
 """
+
+#: **Whether this shim is actually what Background Task Management names is UNVERIFIED**, and it is
+#: the single most load-bearing unknown in this file.
+#:
+#: launchd spawns the shim; the kernel's shebang handling execs `/bin/sh <shim>`; the shell execs
+#: the interpreter. Three images occupy one pid over the job's life, and nothing anybody has read
+#: establishes which of them BTM records the name from. The evidence this design was built on — a
+#: real machine showing `name='sh'` for one agent and `name='python'` for another — is consistent
+#: with two quite different worlds: those jobs may have pointed straight at an interpreter, in which
+#: case it says nothing about a named script; or BTM may record the *final resident image* whatever
+#: the chain was, in which case this shim buys nothing at all and shows up as `sh` regardless.
+#:
+#: Settled by one command, once a scratch label has been bootstrapped:
+#:
+#:     sudo plutil -p /var/db/com.apple.backgroundtaskmanagement/BackgroundItems-v16.btm \
+#:       | grep -B2 -A2 <label>
+#:
+#: `name=rundesk-gateway-<agent>` means this works as intended. `name=sh` or `name=python3` means it
+#: does not, and the fix has to go further — setting `argv[0]` through a shell that supports
+#: `exec -a`, or making the shim something that is itself the final image rather than a script.
+#:
+#: Written down here rather than fixed on a guess: the alternatives cost real complexity, and
+#: choosing between them before knowing which world this is would be building for an imagined need.
+_SHIM_IS_WHAT_BTM_NAMES = "unverified — see the note above"
 
 
 class Refused(Exception):
@@ -587,18 +615,30 @@ def allowed_by_the_owner(label: str, store: Optional[Path] = None) -> Optional[b
         with open(where, "rb") as reading:
             archive = plistlib.load(reading)
         objects = archive["$objects"]
-        for row in objects:
+    except Exception:                     # noqa: BLE001 — see the docstring: an undocumented
+        # archive read out of a system file this product does not own. Every shape it could
+        # have changed into has to answer "cannot tell", and naming the exceptions would be a
+        # list that goes stale the first time Apple renames a key.
+        return None
+
+    for row in objects:
+        # **Guarded per row, not once around the walk.** This store holds one row for every Login
+        # Item on the machine, put there by anything that installs one — so a row shaped in some way
+        # this loop does not expect is somebody else's software, not ours. Guarded around the whole
+        # walk, one such row *earlier in the archive* aborts the scan and answers "cannot tell" for
+        # a label whose own row sits further down and would have parsed perfectly. That is never a
+        # wrong answer, but it silently blinds the only detection this product has for the one
+        # lockout with no command to undo it, for reasons that have nothing to do with the label
+        # being asked about.
+        try:
             if not isinstance(row, dict) or "disposition" not in row:
                 continue
             named = objects[row["identifier"].data]
             if not isinstance(named, str) or named.split(".", 1)[-1] != label:
                 continue
             return bool(int(row["disposition"]) & BTM_ENABLED)
-    except Exception:                     # noqa: BLE001 — see the docstring: an undocumented
-        # archive read out of a system file this product does not own. Every shape it could
-        # have changed into has to answer "cannot tell", and naming the exceptions would be a
-        # list that goes stale the first time Apple renames a key.
-        return None
+        except Exception:                 # noqa: BLE001 — one unexpected row, not the whole file
+            continue
     return None
 
 
@@ -623,11 +663,17 @@ def _laid_down(one: Job) -> None:
     `mkdir`'s mode argument is masked by the umask, so a directory holding what a gateway said —
     every line of its work, and whatever its agent handed it — would land `0755` under an ordinary
     one. Made and then set, rather than trusted to be created right.
+
+    **The agent's own directory is set too, and leaving it out was the gap.** Everything inside it
+    that matters is already hardened against a permissive umask — the plist and the shim are opened
+    `0600` before a byte is written, and `logs/` is set here — but the directory *holding* the lock,
+    the record and the shim was left at whatever the umask gave. Under `umask 0` that is `0777`, and
+    a world-writable directory lets any other local account unlink and replace the shim whatever
+    mode the shim itself carries. A file's mode does not protect it from its directory.
     """
-    one.at.mkdir(parents=True, exist_ok=True)
-    where = standing.logs_at(one.at)
-    where.mkdir(parents=True, exist_ok=True)
-    os.chmod(where, 0o700)
+    for where in (one.at, standing.logs_at(one.at)):
+        where.mkdir(parents=True, exist_ok=True)
+        os.chmod(where, 0o700)
 
 
 def _written(one: Job) -> Path:

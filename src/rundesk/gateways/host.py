@@ -112,7 +112,15 @@ def run(name: str) -> int:
         try:
             held.enter_context(standing.holding(at))
         except standing.Taken:
-            refusal = _who_has_it(at, name)
+            # Guarded like the branch below it, and for the same reason. `_who_has_it` reads the
+            # record to name the pid, and it is safe today only because a *different* module is
+            # careful — `standing` catches every `OSError` it can produce. Nothing here guarantees
+            # that, and the asymmetry with its neighbour was an oversight rather than a decision: a
+            # refusal that raises while working out how to word itself still exits non-zero.
+            try:
+                refusal = _who_has_it(at, name)
+            except BaseException:                      # noqa: BLE001 — same reason as below
+                refusal = f"{name} is already being run by another gateway"
         except BaseException as why:                   # noqa: BLE001 — see the module docstring:
             # this is still the refusal phase, and the one thing it may never do is end in a
             # non-zero exit, which would turn a permanent condition into an endless restart.
@@ -190,10 +198,25 @@ def _refused(at: Optional[Path], name: str, why: str) -> None:
     `gateway.out` will read, and the agent's own day file because that is where everything else this
     gateway ever said is. Written to the log only when there is an agent directory to write into —
     inventing one for an agent that does not exist would make a directory that then looks half-made.
+
+    **Never raises, and that is the whole of this function's contract rather than a nicety.** This
+    runs on the path that must reach exit `0`, and `stdout` here is `gateway.out` — a file launchd
+    opens `O_APPEND` and never truncates. A full disk, a volume remounted read-only, or a mode
+    changed underneath it makes this write fail, the exception leaves `run`, the interpreter exits
+    `1`, and `KeepAlive {SuccessfulExit: false}` reads that as *bring it back*. The permanent
+    condition recurs, the same write fails the same way, and a gateway that correctly refused to run
+    becomes an endless restart escalating into launchd's exponential throttling — which looks like a
+    hang and is the exact failure the module docstring claims is structurally impossible.
+
+    `logs.note` already promises never to raise. The `print` beside it did not, while `_said_first`
+    was guarded for precisely this reason one function up. Failing to *report* a refusal must never
+    become failing to *exit* from one.
     """
-    print(f"gateway: NOT RUNNING — {why}", flush=True)
-    if at is not None and at.is_dir():
-        logs.note(standing.logs_at(at), f"gateway did not start: {why}", logs.WARNING)
+    with contextlib.suppress(Exception):
+        print(f"gateway: NOT RUNNING — {why}", flush=True)
+    with contextlib.suppress(Exception):
+        if at is not None and at.is_dir():
+            logs.note(standing.logs_at(at), f"gateway did not start: {why}", logs.WARNING)
 
 
 def _serving(name: str, at: Path) -> int:
