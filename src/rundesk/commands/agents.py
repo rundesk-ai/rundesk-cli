@@ -8,17 +8,23 @@ This decides only how a person types it and what they are shown. What an agent *
 holding `state.db`, standing under `data/agents/` — belongs to `agents.directory`, and this module
 never reaches past it to the disk.
 
-**A provider is recorded and it is not proven.** Nothing in this release runs one: there is no
-gateway command yet, no credential is checked, and no request is made. So `add` and `configure` say
-so out loud on the line that reports success. An agent added with a provider nobody has ever spelled
-correctly looks exactly like one that works, and letting the wording imply otherwise would be
-claiming a success this release did not earn — which is the one thing this product is written
-against.
+**A provider is recorded and it is not proven.** Nothing in this release runs one: a gateway can be
+started for an agent, and what that gateway hosts is not a provider yet — no credential is checked
+and no request is made. So `add` and `configure` say so out loud on the line that reports success.
+An agent added with a provider nobody has ever spelled correctly looks exactly like one that works,
+and letting the wording imply otherwise would be claiming a success this release did not earn —
+which is the one thing this product is written against.
 
 **`remove` asks for `--confirm`**, and a flag rather than a prompt for the reason `uninstall` gives:
 a prompt in a script is a command that hangs, and one that assumes yes with no terminal is worse
 than no prompt at all. It takes an agent's whole memory, which is the thing here that no backup of
 `data/` taken afterwards can bring back.
+
+**And it refuses while a gateway is running for that agent**, which is a check that can only be
+made here: `agents/` sits below `gateways/` and may not import it, so the layer that removes an
+agent cannot ask, and `directory.forgotten` says as much in its own docstring. Removing one out
+from under a running gateway leaves a program hosting an agent that no longer exists — and launchd
+puts it straight back when it dies, because the job outlives the records.
 """
 
 import argparse
@@ -30,6 +36,7 @@ from rundesk.agents import directory, migration, records
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK
+from rundesk.gateways import standing
 from rundesk.utils import locking
 from rundesk.utils.terminal import as_table
 
@@ -207,15 +214,6 @@ def _configured(name: str, provider: Optional[str]) -> int:
 
 def _forgotten(name: str, confirming: bool) -> int:
     """Take an agent away, or — with nothing confirming it — say exactly what that would take."""
-    # SEAM — whether a gateway is running for this agent is checked *here*, and it cannot be checked
-    # anywhere lower: `agents/` sits below `gateways/` and may not import it, which
-    # `tests/test_layers.py` enforces, and `directory.forgotten`'s own docstring says the caller
-    # must do it. It is not wired yet on purpose rather than by omission — there is no
-    # `rundesk gateways` verb in this release to stop one with, so refusing here would leave
-    # somebody an agent they cannot remove and nothing to type to free it. It goes in when the
-    # gateways command lands, above the removal and below the confirmation, and until then removing
-    # an agent whose gateway is up leaves a running program with no records.
-
     gone_wrong = _not_an_agent(name)
     if gone_wrong:
         # Checked before the confirmation is asked for, so somebody who mistyped the name finds out
@@ -223,6 +221,16 @@ def _forgotten(name: str, confirming: bool) -> int:
         return _failed(gone_wrong, "nothing was removed")
     if not confirming:
         return _needs_confirming(name)
+
+    # Whether a gateway is running is checked *here*, and it cannot be checked anywhere lower:
+    # `agents/` sits below `gateways/` and may not import it, which `tests/test_layers.py`
+    # enforces, and `directory.forgotten`'s own docstring says the caller must do it. Below the
+    # confirmation rather than above it, because a description of a removal describes what would be
+    # taken while this decides whether it may happen at all — and a gateway can come up between the
+    # two commands anyway, so the only moment worth asking in is the moment of acting.
+    running = _its_gateway_is_up(name)
+    if running:
+        return _failed(running, f"stop it with: rundesk gateways stop {name}", "nothing was removed")
 
     at = paths.agents() / name
     try:
@@ -264,6 +272,29 @@ def _needs_confirming(name: str) -> int:
     print("        nothing was removed. To go ahead:", file=sys.stderr)
     print(f"        rundesk agents remove {name} --confirm", file=sys.stderr)
     return FAILED
+
+
+def _its_gateway_is_up(name: str) -> str:
+    """Why this agent may not be taken away yet, or `""` when it may.
+
+    **Removing an agent whose gateway is up leaves a running program with no records**: the process
+    goes on holding the name, writing into a directory that is no longer there, hosting an agent
+    that no longer exists — and launchd puts it back when it dies, because the job outlives the
+    records the removal took.
+
+    Asked of the kernel through `gateways.standing`, and never of the record beside the lock. Its
+    third answer is kept as a third answer here too: an agent nobody can ask about is not an agent
+    that is safe to remove, and reporting it as free is how a second gateway comes to be started
+    beside a first — or, here, how a live one is quietly orphaned.
+    """
+    how = standing.standing(directory.where(name))
+    if how.how == standing.ONLINE:
+        return (f"a gateway is running for {name}"
+                + (f" as pid {how.pid}" if how.pid else "")
+                + " — removing it now would leave a running program with no records")
+    if how.how == standing.CANNOT_TELL:
+        return f"nobody can tell whether a gateway is running for {name} — {how.why}"
+    return ""
 
 
 def _not_an_agent(name: str) -> str:

@@ -24,12 +24,15 @@ from rundesk.commands.configure import cmd_configure
 from rundesk.commands.configure import register as register_configure
 from rundesk.commands.env import cmd_env
 from rundesk.commands.env import register as register_env
+from rundesk.commands.gateways import cmd_gateways
+from rundesk.commands.gateways import register as register_gateways
 from rundesk.commands.install import cmd_install
 from rundesk.commands.status import cmd_status
 from rundesk.commands.uninstall import cmd_uninstall
 from rundesk.commands.update import Fetching, cmd_update
 from rundesk.commands.version import cmd_version
 from rundesk.exits import OK
+from rundesk.gateways import job
 from rundesk.lifecycle import release
 
 EPILOG = """\
@@ -38,6 +41,9 @@ examples:
   rundesk configure             what this install is configured with
   rundesk agents                the agents this install keeps
   rundesk agents add <agent> --provider <provider>
+  rundesk gateways              every agent, and how its gateway stands
+  rundesk gateways start <agent>
+  rundesk gateways logs <agent>
   rundesk backups               the copies of what rundesk keeps for you
   rundesk backups save          copy what rundesk keeps, now
   rundesk env list              the values rundesk hands to what it talks to
@@ -68,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     _register_version(sub)
     register_configure(sub)
     register_agents(sub)
+    register_gateways(sub)
     register_backups(sub)
     register_env(sub)
     _register_install(sub)
@@ -105,16 +112,25 @@ def _register_uninstall(sub: Subcommands) -> None:
 
 
 def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = None,
-         fetching: Optional[Fetching] = None) -> int:
+         fetching: Optional[Fetching] = None,
+         supervising: Optional[job.Supervising] = None) -> int:
     """Parse what was typed and hand it to the one module that answers it.
 
     Bare `rundesk` describes what it can do and exits `0`: somebody who typed the command with no
     operation asked a reasonable question and got an answer.
 
-    `asking` looks up what version is published and `fetching` downloads a release. Both arrive as
-    arguments and default to `None`, which each command resolves to the real thing at the moment it
-    needs it — so every state of `version` and `update` is driven with no network anywhere
-    near the test, and the surface itself knows nothing about GitHub.
+    `asking` looks up what version is published, `fetching` downloads a release, and `supervising`
+    is the machine's supervisor. All three arrive as arguments and default to `None`, which each
+    command resolves to the real thing at the moment it needs it — so every state of `version`,
+    `update` and `gateways` is driven with no network and no `launchctl` anywhere near the test,
+    and the surface itself knows nothing about GitHub or launchd.
+
+    **The third one is the one with no safety net.** A suite that forgot `asking=` fails loudly,
+    because the harness points every proxy variable at a closed port; there is no closed port for
+    launchd, and the real supervisor would answer a test perfectly well against the owner's own
+    login session, booting out jobs that keep real work running. So `tests/support.py` passes a
+    stand-in by default, which is the reverse of what it does for the other two, and that reversal
+    is deliberate.
     """
     _asked_to_stop_politely()
     parser = build_parser()
@@ -129,6 +145,8 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
         return cmd_configure(args)
     if args.command == "agents":
         return cmd_agents(args)
+    if args.command == "gateways":
+        return cmd_gateways(args, supervising)
     if args.command == "backups":
         return cmd_backups(args)
     if args.command == "env":
@@ -140,7 +158,7 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
     if args.command == "update":
         return cmd_update(args, asking, fetching)
     if args.command == "uninstall":
-        return cmd_uninstall(args)
+        return cmd_uninstall(args, supervising)
 
     # Unreachable while every registered verb is dispatched above, and that is the point: a verb
     # added to the parser and wired to nothing fails here loudly rather than exiting 0 in silence.

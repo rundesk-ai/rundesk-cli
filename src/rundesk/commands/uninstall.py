@@ -7,6 +7,9 @@ than swept.
 
 So it names what it takes, one thing at a time, and never globs:
 
+- **every gateway job this root derives a label for, by that full label, one agent at a time** —
+  and **before `app/` goes**, because a job whose program has been removed is a machine that tries
+  to start a command that is not there, at every login, for ever
 - the PATH link, **only where it points into this install's own `app/`** — a second install on the
   machine keeps its command
 - `app/`, whole, unless it looks like somebody's checkout
@@ -16,22 +19,35 @@ So it names what it takes, one thing at a time, and never globs:
   the way to guarantee that is for this file never to name the directory at all.
 - `$RUNDESK_HOME` itself, only once nothing is left in it — so a purge tidies up and a plain removal
   leaves the root standing over the data it kept.
+
+**A label is the one thing `RUNDESK_HOME` cannot isolate**, so the jobs are taken back by the full
+label *this* root derives and never by a prefix, a family name or a sweep. The build this replaces
+called every install's job `ai.rundesk.gateway`, and a second install's uninstall booted out the
+live install's gateway. `gateways.job` refuses a label that does not fingerprint to its own root,
+and this asks it for one label per agent, one at a time.
 """
 
 import argparse
 import shutil
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Tuple
 
+from rundesk.agents import directory
 from rundesk.commands import failed
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
+from rundesk.gateways import job
 from rundesk.lifecycle import tree
 
 
-def cmd_uninstall(args: argparse.Namespace) -> int:
-    """Remove rundesk, and say exactly what was taken and what was kept."""
+def cmd_uninstall(args: argparse.Namespace,
+                  supervising: Optional[job.Supervising] = None) -> int:
+    """Remove rundesk, and say exactly what was taken and what was kept.
+
+    `supervising` is the machine's supervisor and is resolved by `gateways.job` inside its own
+    body — see `cli.main` for why this one seam has no safety net behind it.
+    """
     try:
         root = paths.home()
     except paths.Refused as why:
@@ -47,6 +63,16 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         return _needs_confirming(root, args.purge)
 
     taken, kept = [], []
+
+    # **First, and before `app/` is touched.** A job left behind points at a shim that hands off to
+    # a release that is no longer on the disk, and launchd starts it at every login for ever —
+    # failing, being throttled, and saying so only in the unified log. Nothing else here can be
+    # undone by a later step, so this is the one that has to happen while the program is still
+    # whole enough to be taken back cleanly.
+    gone_wrong, jobs = _the_jobs_taken_back(root, supervising)
+    taken.extend(jobs)
+    if gone_wrong:
+        return _failed(gone_wrong, *(f"took   {one}" for one in jobs))
 
     try:
         for at in tree.unlink(app, _where_the_command_went()):
@@ -97,6 +123,58 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     return OK
 
 
+def _the_jobs_taken_back(root: Path, supervising: Optional[job.Supervising]) -> Tuple[str, List[str]]:
+    """Take back every gateway job this root placed. `("", what went)`, or why it stopped.
+
+    **One named label at a time, and never a sweep.** Every label is derived from the agent's name
+    and *this* root's fingerprint, and `job.remove` refuses one that does not fingerprint back — so
+    an uninstall here cannot reach a job belonging to another install of rundesk on the same
+    machine, which is exactly what the build this replaces did.
+
+    A job that could not be taken back **stops the removal**. Carrying on would take away the
+    program a loaded job points at, and the machine would go on trying to start it at every login
+    with no rundesk anywhere to say why.
+
+    An agent whose name a launchd label cannot carry is passed over rather than reported: no
+    gateway could ever have been placed for it, so there is nothing there to take back.
+    """
+    try:
+        there = directory.known()
+    except OSError as why:
+        return f"the agents could not be listed, so their gateway jobs cannot be taken back: {why}", []
+
+    taken = []
+    for name in there:
+        try:
+            one = job.job(name, directory.where(name), root)
+        except (job.Refused, directory.Refused):
+            continue
+        gone_wrong = job.remove(one, supervising)
+        if gone_wrong:
+            return f"the gateway job for {name} could not be taken back: {gone_wrong}", taken
+        taken.append(f"{one.label} (the gateway job for {name})")
+    return "", taken
+
+
+def _the_jobs(root: Path) -> List[Tuple[str, str]]:
+    """Every agent and the label this root derives for it, for saying what a removal would take.
+
+    Nothing is asked of launchd here — a description of a removal must not change anything, and
+    what somebody needs to see is the name that would be acted on.
+    """
+    try:
+        there = directory.known()
+    except OSError:
+        return []
+    named = []
+    for name in there:
+        try:
+            named.append((name, job.label_for(name, root)))
+        except job.Refused:
+            continue
+    return named
+
+
 def _where_the_command_went() -> List[str]:
     """Every directory that might hold this install's command, the recorded one first.
 
@@ -126,9 +204,14 @@ def _needs_confirming(root: Path, purging: bool) -> int:
     prompt that falls back to "yes" when there is no terminal is worse than no prompt at all.
     """
     print(f"uninstall: this would remove rundesk from {root}", file=sys.stderr)
+    for name, label in _the_jobs(root):
+        # Named one at a time, before the program they point at: a job that outlived its program is
+        # a machine starting a command that is gone, at every login.
+        print(f"        take   {label} — the gateway job for {name}", file=sys.stderr)
     print(f"        take   the command, and {paths.app()}", file=sys.stderr)
     if purging:
-        print(f"        take   {paths.data()} — everything rundesk kept for you", file=sys.stderr)
+        print(f"        take   {paths.data()} — everything rundesk kept for you, the agents "
+              "included", file=sys.stderr)
     else:
         print(f"        keep   {paths.data()}", file=sys.stderr)
     if paths.secrets().exists():
@@ -180,5 +263,5 @@ def _tidy(root: Path) -> None:
         pass
 
 
-def _failed(why: str) -> int:
-    return failed(f"uninstall: FAILED — {why}", "nothing further was removed")
+def _failed(why: str, *and_so: str) -> int:
+    return failed(f"uninstall: FAILED — {why}", *and_so, "nothing further was removed")

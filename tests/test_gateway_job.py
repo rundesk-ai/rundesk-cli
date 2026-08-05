@@ -49,6 +49,11 @@ def as_it_stands() -> Optional[List[Tuple[str, int, int]]]:
 #: How it was found, read once when this module is imported and compared at the end of it.
 AS_FOUND = as_it_stands()
 
+#: The real `job.Launchd`, held before `WithAJob` replaces the module's name for it. One class here
+#: reads the argv it *would* run without running any of it; every other case still cannot reach the
+#: real supervisor even by accident, because the name `job.Launchd` raises for the whole suite.
+_LAUNCHD = job.Launchd
+
 
 def tearDownModule() -> None:
     """Fail the whole module if anything in here touched the owner's login items."""
@@ -91,6 +96,9 @@ class ASupervisor:
 
     def place(self, plist: Path) -> programs.Ran:
         return self._answer("bootstrap", str(plist))
+
+    def end(self, label: str) -> programs.Ran:
+        return self._answer("kill", label)
 
     def kick(self, label: str) -> programs.Ran:
         return self._answer("kickstart", label)
@@ -647,6 +655,73 @@ class WhetherTheOwnerStillAllowsIt(WithAJob):
         self.assertEqual(job.CANNOT_TELL, how.how)
         self.assertFalse(how.allowed)
         self.assertIn("Login Items", how.why)
+
+
+class WhatTheRealSupervisorWouldRun(WithAJob):
+    """The argv the real one builds and the ceiling it gives each call. **Read, never run.**
+
+    `_ran` is replaced, so the arguments are captured and no process starts — nothing in this suite
+    executes `launchctl`. What is pinned here is the two things a stand-in can never show: the exact
+    verb, and how long that verb is allowed to take before it is called wedged. The second of those
+    was one number for every call, and it was a defect rather than a simplification.
+    """
+
+    def asked(self, call: str, label: str = "some.label") -> Tuple[List[str], float]:
+        """What `Launchd.<call>` would run, and with what ceiling. Nothing is executed."""
+        seen: List[Tuple[List[str], float]] = []
+
+        def watched(_self, verb: List[str], waiting: float) -> programs.Ran:
+            # Answered `0`, because `allow` reads what it got back and falls to the user domain on
+            # `125`. A recorder that answered nothing would make this case about that instead.
+            seen.append((verb, waiting))
+            return ran(0)
+
+        real = _LAUNCHD(uid=501)
+        with mock.patch.object(_LAUNCHD, "_ran", watched):
+            getattr(real, call)(label)
+        return seen[0]
+
+    def test_a_kill_is_the_signal_name_the_manual_page_documents(self):
+        # `man launchctl`: *kill signal-name | signal-number service-target*, and `SIGKILL` is that
+        # page's own example. `-KILL` is `/bin/kill`'s shorthand and is not what this verb takes.
+        verb, _waiting = self.asked("end")
+        self.assertEqual(["kill", "SIGKILL", "gui/501/some.label"], verb)
+
+    def test_a_kill_is_a_request_rather_than_a_wait_and_gets_the_ordinary_ceiling(self):
+        # It signals and does not unload: launchctl returns once launchd has sent the signal, and
+        # the death is asynchronous. What waits for the process to really be gone is the
+        # `bootout --wait` behind it, which is why that one has a ceiling of its own.
+        _verb, waiting = self.asked("end")
+        self.assertEqual(job.ASK_SECONDS, waiting)
+
+    def test_taking_a_job_back_is_given_the_whole_window_it_waits_out(self):
+        # `bootout --wait` sends `SIGTERM` and waits for the process to be gone, up to the job's own
+        # `ExitTimeOut` — and `launchctl help bootout` warns in as many words that it may block
+        # indefinitely, which is why there is a ceiling on it at all.
+        verb, waiting = self.asked("take_back")
+        self.assertEqual(["bootout", "--wait", "gui/501/some.label"], verb)
+        self.assertEqual(job.TAKE_BACK_SECONDS, waiting)
+        self.assertGreater(waiting, job.EXIT_TIMEOUT)
+
+    def test_a_kick_is_given_the_throttle_it_blocks_for_and_not_the_ordinary_ceiling(self):
+        # **The measured defect, 2026-08-05.** `kickstart -k` does not get past a
+        # `ThrottleInterval`; it waits the whole of one out — 30 s against a throttle of 30 — with
+        # the caller blocked for every second. Under `ASK_SECONDS` that reported a supervisor which
+        # could not be asked, on a machine where launchd was doing exactly what it documents.
+        verb, waiting = self.asked("kick")
+        self.assertEqual(["kickstart", "-kp", "gui/501/some.label"], verb)
+        self.assertEqual(job.KICK_SECONDS, waiting)
+        self.assertGreater(waiting, job.THROTTLE + job.EXIT_TIMEOUT)
+
+    def test_the_calls_that_wait_for_nothing_are_not_given_the_throttle_as_well(self):
+        # A ceiling raised everywhere is a command that hangs for a minute on a launchd that is
+        # merely wedged. These are requests launchd accepts, or reads it answers out of what it
+        # holds — and a fresh `bootstrap` waits for no throttle at all, measured.
+        for call in ("allow", "place", "asked_about"):
+            with self.subTest(call=call):
+                _verb, waiting = self.asked(call)
+                self.assertEqual(job.ASK_SECONDS, waiting)
+        self.assertLess(job.ASK_SECONDS, job.THROTTLE)
 
 
 class TheSeamItself(WithAJob):

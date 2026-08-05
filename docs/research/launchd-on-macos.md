@@ -1,9 +1,12 @@
 # What `launchctl` really does, and every state a job can get stuck in
 
 Established 2026-08-04 against **macOS 26.5.1 (build 25F80)**, Darwin 25.5.0, arm64, `launchd`
-`Darwin Bootstrapper 7.0.0`, session manager `Aqua`. Read-only throughout: no `bootstrap`, `bootout`,
-`kickstart`, `enable`, `disable`, `load`, `unload`, `kill`, `start` or `stop` was run, and
-`~/.rundesk` was not touched.
+`Darwin Bootstrapper 7.0.0`, session manager `Aqua`. Read-only throughout **except the throttle
+measurement in §5**, taken 2026-08-05: that one deliberately ran `kickstart -k`, `kill -KILL`,
+`bootout --wait` and `bootstrap` against a real rundesk gateway on that machine, because the
+question it settles could not be answered any other way and the page had been carrying a guess.
+Everywhere else: no `bootstrap`, `bootout`, `kickstart`, `enable`, `disable`, `load`, `unload`,
+`kill`, `start` or `stop` was run, and `~/.rundesk` was not touched.
 
 Every claim is marked with how it is known:
 
@@ -35,12 +38,12 @@ thing on this page.
 | `bootstrap <domain> <plist-path…>` | **domain + path**, never a service target | accepts sync, **spawns async** | `[MAN]` |
 | `bootout <service-target>` or `<domain> <path>` | either | **async by default** | `[MAN]` |
 | `bootout --wait <service-target>` | **service target only** | sync | exists on 26.5.1 `[MAN]`, absent from the man page |
-| `kickstart [-kps] <service-target>` | service | request sync, spawn async | `-k` kill-then-restart, `-p` print pid, `-s` start suspended (`-s` is in `help`, not the man page) `[MAN]` |
+| `kickstart [-kps] <service-target>` | service | request sync, **spawn blocks on the throttle** | `-k` kill-then-restart, `-p` print pid, `-s` start suspended (`-s` is in `help`, not the man page) `[MAN]`. `-k` waits out the whole `ThrottleInterval` before respawning — 30 s measured `[RAN]`, §5 |
 | `enable` / `disable <service-target>` | service | sync | writes a **persistent** override — §4 |
 | `print <domain>` \| `<service-target>` | either | sync | `[MAN]`: *"This output is NOT API in any sense at all."* |
 | `print-disabled <domain>` | **domain only** | sync | the only launchctl view of the override store |
 | `list [label]` | **bare label**, no domain | sync | legacy, and misleading — §6 |
-| `kill <sig> <service-target>` | service | sync request, async death | signals only; does not unload |
+| `kill <sig> <service-target>` | service | sync request, async death | signals only; does not unload — so it is never a stop on its own. `kill SIGKILL` then `bootout --wait` is the immediate teardown, and the `--wait` then returns at once `[RAN]`, §5 |
 | `load` / `unload [-wF] <path>` | path | async | `[MAN]`: *"will only return a non-zero exit code due to improper usage. Otherwise, zero is always returned."* **Never use for status.** |
 
 `gui/<uid>` is the login domain: `[RAN]` `gui/501 = { type = login, creator = loginwindow, session = Aqua }`.
@@ -300,12 +303,42 @@ gateway can end up minutes apart and simply look dead.
 (the field is omitted when zero). The full state enum `[BIN]` is `not running | spawn scheduled |
 spawning | running | SIGTERMed | SIGKILLed | languishing | exited`.
 
-**Does `kickstart -k` bypass the throttle?** `[BIN, strong]` yes — launchd's kick-request handler
-carries `unthrottle` in its key table, adjacent to `service spawned with pid: %d`. So
-`launchctl kickstart -kp gui/<uid>/<label>` is the "start it now regardless" command, and it is what
-`start` should run after bootstrapping rather than trusting `RunAtLoad`. *(An earlier draft claimed
-the opposite from a retracted source. Treat this as strong inference, not proof, and do not build
-anything that only works if it is true.)*
+### Does `kickstart -k` bypass the throttle? **No.** It waits it out, and blocks the caller
+
+`[RAN]` 2026-08-05, on this machine, against a real gateway with `ThrottleInterval = 30`:
+
+```
+kickstart -k                                        30 s   (waits out the whole ThrottleInterval)
+kill -KILL  ->  bootout --wait  ->  bootstrap        0 s   (a new pid immediately)
+```
+
+The gateway's own log wrote `up` and `stopping` in the **same second**, so none of those thirty
+seconds is the gateway being slow to go. All of it is launchd holding the respawn, with `launchctl`
+blocked until it lets go.
+
+> **This corrects an earlier entry on this page, and the correction is the point.** That entry
+> answered *yes* from `[BIN]` — launchd's kick-request handler carries `unthrottle` in its key
+> table, adjacent to `service spawned with pid: %d` — and it said in as many words: *strong
+> inference, not proof, and do not build anything that only works if it is true.* Something was
+> built on it anyway. `rundesk gateways restart --force` ran `kickstart -kp` under a ten-second
+> ceiling and **failed on a working machine**, reporting a supervisor that could not be asked. The
+> string is presumably real; what a string cannot say is *when*, and the unthrottling evidently
+> happens at the end of the window rather than instead of it. A `[BIN]` mark is not a `[RAN]` mark,
+> and this is exactly what the difference costs.
+
+**So the fast restart is `bootout` + `bootstrap`, and `kickstart` is the slow one** — the opposite
+of the obvious reading, and the opposite of what this page previously implied. A fresh `bootstrap`
+is not a respawn of the job launchd was throttling; it is the first spawn of a job that has just
+been bootstrapped, and it starts at once.
+
+**The immediate-restart cycle, therefore:** `kill SIGKILL` → `bootout --wait` (which returns at
+once, the process already being gone) → `bootstrap`. The kill is what makes the `--wait` free; the
+bootstrap is what makes it a restart.
+
+What is left for `kickstart -k` is the one state a bootstrap does not answer: a job that is
+**already placed**, is crash-looping behind an exponential backoff, and that somebody wants started
+now without taking its job away. Give it a ceiling that allows for the whole `ThrottleInterval` —
+ten seconds is not one, and that is not a hypothetical.
 
 **The penalty box** is a separate, harder stop `[BIN]`: `attempt to launch while in penalty box`,
 `cannot spawn: service is in penalty box`. What puts a user agent into it, and what gets it out, is
@@ -478,13 +511,13 @@ disappears without a word — coerce everything with `str()`.
 | Already bootstrapped | bootstrap 17 (or 37) | nothing — verify with `print` |
 | **Disabled** | `print-disabled` says `disabled`. **`print` looks normal** | `enable gui/$U/$L` (fall back to `user/$U/$L` on 125), then bootout→bootstrap→kickstart |
 | **Stale override from a prior install** (live on this machine) | 113 + an entry in `print-disabled` | `enable` **before** bootstrapping — unconditionally |
-| Throttled | `state = spawn scheduled`, no pid, `successive crashes = N` | `kickstart -kp` — and fix the crash |
+| Throttled | `state = spawn scheduled`, no pid, `successive crashes = N` | `bootout --wait` → `bootstrap`, which waits for no throttle at all `[RAN]` — or `kickstart -kp`, which waits the whole of it out and blocks for 30 s. And fix the crash |
 | Penalty box | `properties` contains `penalty box` | **unverified.** bootout+bootstrap is the obvious attempt |
 | Bad plist ownership/mode | 122 | `chmod 0644`, `chown`, bootstrap |
 | Quarantined interpreter | 155 | `xattr -dr com.apple.quarantine <root>` |
 | **Spawn failed → launchd removed it** | 113 **with `$P` present**; `log show` shows `spawn failed` | fix the cause, bootstrap again — **only findable in the unified log** |
 | **No GUI session (SSH)** | `print` 112 | none from here. **Report "cannot tell", never "not running"** |
-| Gateway ignores SIGTERM, `--wait` hangs | `state = SIGTERMed` then `languishing` | `kill -KILL`, then bootout — **and handle SIGTERM** |
+| Gateway ignores SIGTERM, `--wait` hangs | `state = SIGTERMed` then `languishing` | `kill SIGKILL`, **then** `bootout --wait` — which then returns at once `[RAN]`. This is the one state a `--force` flag is for, and **not** a gateway that is merely busy — **and handle SIGTERM** |
 | **Disabled in System Settings (BTM)** | 113 + `$P` present + `print-disabled` says `enabled` + the BTM store's enabled bit is clear | 🔴 **NONE.** The owner must re-enable it in System Settings → General → Login Items & Extensions |
 
 ---
@@ -515,6 +548,11 @@ disappears without a word — coerce everything with `str()`.
 - Whether bootstrapping a **disabled** label fails with 119 or succeeds-and-does-not-run. **Test
   this first**; it is the most load-bearing unknown here.
 - Whether `--wait` closes the EIO race or merely narrows it.
+- Whether `kickstart -k`'s 30 s is only the `ThrottleInterval`, or whether the `SIGTERM` window on
+  the instance it is ending **stacks on top of it**. The gateway it was measured against stopped in
+  the same second, so the two could not be told apart. Until they can, a ceiling on that call
+  allows for both — being too generous costs a wedged call a little longer, and being too small is
+  the defect §5 records.
 - What puts a job in the penalty box, and what gets it out.
 - Symlinked plist behaviour.
 - The BTM archive's disposition bits — consistent with all five agents here, which is not proof.

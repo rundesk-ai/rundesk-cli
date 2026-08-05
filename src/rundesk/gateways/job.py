@@ -53,6 +53,24 @@ that rewrote a plist and bootstrapped over it would go on running the old progra
 nothing on the command line saying so. So the cycle is unconditional, `bootout --wait` first, and a
 bootout that did not clearly succeed stops the bootstrap rather than racing it.
 
+## Taking a gateway down is graceful, and `--force` is the exception
+
+`take_back` is `bootout --wait`: `SIGTERM`, and then the whole of the job's `ExitTimeOut` for the
+gateway to finish what it was doing. That is what every stop and every restart above this layer
+does, and it is the default because a gateway is holding somebody's work.
+
+`end` is `kill SIGKILL` and does not ask. It is for a gateway that **will not go** — one ignoring
+`SIGTERM`, so that `bootout --wait` blocks for the whole window — and never for one that is merely
+busy, which is exactly the gateway with something to lose. It is also not a stop on its own: it
+signals without unloading, so a `take_back` always follows it and returns at once, there being
+nothing left to wait for.
+
+**What `--force` is not is a `kickstart`.** Measured 2026-08-05: `kickstart -k` ends the instance
+and then waits out the entire `ThrottleInterval` before respawning — 30 seconds, with the caller
+blocked — while `kill` then `bootout --wait` then `bootstrap` puts a new pid up immediately. The
+verb that reads as the fast one is the slow one, and the ten-second ceiling this build gave it made
+`restart --force` fail on a machine where nothing was wrong.
+
 ## The label is enabled unconditionally, every time
 
 The override store is `/var/db/com.apple.xpc.launchd/disabled.<uid>.plist`, it is keyed by label, it
@@ -98,12 +116,6 @@ LAUNCH_AGENTS = ("Library", "LaunchAgents")
 #: The supervisor itself, by absolute path — nothing here depends on a PATH.
 LAUNCHCTL = "/bin/launchctl"
 
-#: How long each kind of call is given. `take_back` is the long one on purpose: `bootout --wait`
-#: blocks for the whole of `ExitTimeOut` when a gateway is slow to go, and `launchctl help bootout`
-#: warns in as many words that it *may block indefinitely*.
-ASK_SECONDS = 10.0
-TAKE_BACK_SECONDS = 40.0
-
 #: How long launchd waits between `SIGTERM` and `SIGKILL`, and therefore how long a `bootout --wait`
 #: can block. Written into the plist explicitly because both of those follow from it.
 EXIT_TIMEOUT = 25
@@ -112,6 +124,33 @@ EXIT_TIMEOUT = 25
 #: nothing**; a gateway that dies inside ten seconds is broken rather than busy, and the value is
 #: here to keep a crash loop from writing a traceback into `gateway.err` three times a minute.
 THROTTLE = 30
+
+#: How long each call is given, and **every ceiling is derived from what that call really waits
+#: for.** One number for all of them was a defect rather than a simplification: `ASK_SECONDS` was
+#: ten while `kickstart -k` blocks for the whole of `THROTTLE`, so `gateways restart --force`
+#: reported a supervisor that would not answer on a machine where nothing at all was wrong.
+#:
+#: **`ASK_SECONDS`** — `enable`, `bootstrap`, `kill`, `print` and `print-disabled`. Every one of
+#: these is a request launchd accepts, or a question it answers out of what it already holds;
+#: nothing here waits on a process. `bootstrap` in particular waits for **no** throttle — measured
+#: 2026-08-05: `bootout --wait` then `bootstrap` puts a new pid up immediately. So ten seconds is a
+#: ceiling on a wedged launchd rather than a budget for the work.
+#:
+#: **`TAKE_BACK_SECONDS`** — `bootout --wait`, which sends `SIGTERM` and then waits for the process
+#: to actually be gone: the whole of `EXIT_TIMEOUT` when a gateway is slow to go, and
+#: `launchctl help bootout` warns in as many words that it *may block indefinitely*. So it is that
+#: window plus enough for launchd itself to answer.
+#:
+#: **`KICK_SECONDS`** — `kickstart -k`, the slow one, and the reason these are three numbers rather
+#: than two. **Measured 30 s against a `ThrottleInterval` of 30**: it ends the instance and then
+#: waits out the whole throttle window before respawning, with the caller blocked for all of it.
+#: The bound allows for launchd taking the `SIGTERM` window on the instance it is ending *and then*
+#: the throttle, because whether those two stack was not measured — and a ceiling that is too small
+#: is the defect this replaces, while one that is too generous only means a wedged call is given
+#: longer before it is called wedged.
+ASK_SECONDS = 10.0
+TAKE_BACK_SECONDS = EXIT_TIMEOUT + ASK_SECONDS
+KICK_SECONDS = EXIT_TIMEOUT + THROTTLE + ASK_SECONDS
 
 #: The whole of the environment a launchd job inherits is `PATH=/usr/bin:/bin:/usr/sbin:/sbin`
 #: — measured. No `HOME`, no `USER`, no `LANG`, no shell rc file, no Homebrew and no `~/.local/bin`,
@@ -264,7 +303,13 @@ class Stands(NamedTuple):
 
 
 class Supervising(Protocol):
-    """The machine's supervisor, as the operations a job has of it: place, take back, kick, ask.
+    """The machine's supervisor, as the operations a job has of it: place, take back, end, kick, ask.
+
+    **Two of these end a gateway and they are not two spellings of one thing.** `take_back` asks:
+    `bootout --wait` sends `SIGTERM` and gives the gateway the whole of its `ExitTimeOut` to finish
+    what it was doing. `end` does not ask: `kill SIGKILL` takes the work away where it stands. Every
+    verb above this defaults to the first and reaches the second only on `--force`, and the
+    difference is the whole reason both are named here rather than one being a flag on the other.
 
     A `Protocol` rather than a base class, so the real one and a test's stand-in have nothing in
     common but the shape — and so nothing in this module can accidentally reach a method the seam
@@ -284,20 +329,49 @@ class Supervising(Protocol):
         """`enable` — clear any override on this label. Starts nothing."""
 
     def take_back(self, label: str) -> programs.Ran:
-        """`bootout --wait` — unload the job and wait for the process to actually be gone."""
+        """`bootout --wait` — unload the job and wait for the process to actually be gone.
+
+        **This is the graceful one, and it is what every stop and every restart does by default.**
+        `SIGTERM` first, then as long as the job's own `ExitTimeOut` for the gateway to finish what
+        it was doing, and only then does launchd insist. A gateway that is merely busy is served by
+        this and by nothing else.
+        """
 
     def place(self, plist: Path) -> programs.Ran:
         """`bootstrap` — hand this plist to the login domain, which also starts it."""
 
-    def kick(self, label: str) -> programs.Ran:
-        """`kickstart -kp` — start it now, past whatever throttle it is sitting behind.
+    def end(self, label: str) -> programs.Ran:
+        """`kill SIGKILL` — end the process where it stands, without asking it to finish.
 
-        **Nothing in this module calls it yet**, and saying so is better than implying otherwise:
-        placing a job with this plist already starts it, and the state `kick` answers is a gateway
-        that is crash-looping behind an exponential backoff. It is named and implemented now
-        because the first verb that has to start a job already placed is the verb that would
-        otherwise invent its own way of doing it — the same reason `utils.files.name_trouble`
-        shipped before anything called it.
+        **This is what `--force` is, and it is the only call here that takes work away mid-flight.**
+        It is for a gateway that *will not go* — one ignoring `SIGTERM`, so that `take_back` blocks
+        for the whole of `ExitTimeOut` — and never for one that is merely busy, which is exactly
+        the gateway that has something to lose.
+
+        It signals and does not unload, so it is never a stop on its own: a `take_back` follows it
+        and returns at once, because there is no longer a process to wait for.
+        """
+
+    def kick(self, label: str) -> programs.Ran:
+        """`kickstart -kp` — end this job's instance and have launchd start it again.
+
+        **It does not get past the throttle. It waits the throttle out, and blocks the caller for
+        every second of it.** Measured 2026-08-05: 30 s against a `ThrottleInterval` of 30, on a
+        gateway whose own log wrote `up` and `stopping` in the same second — so none of that window
+        is the gateway being slow, all of it is launchd holding the respawn.
+
+        An earlier version of this docstring said it went *past* any throttle. That was strong
+        inference off a string in the binary and it is now measured false; it is written down here
+        rather than quietly deleted, because a confident answer nobody earned is the exact failure
+        this product exists to refuse, and `docs/research/launchd-on-macos.md` §5 carries the same
+        correction for the same reason.
+
+        **The fast way to restart a job is `end` → `take_back` → `place`**, measured to put a new
+        pid up immediately: a fresh bootstrap waits for no throttle at all. So `commands.gateways`
+        does that, and **nothing calls this for a restart**. What is left to it is the one state a
+        bootstrap does not answer — a job that is already placed, is crash-looping behind an
+        exponential backoff, and that somebody wants started *now* — which is what
+        `commands.gateways` asks for after a bootstrap that came up with nothing.
         """
 
     def asked_about(self, label: str) -> programs.Ran:
@@ -352,9 +426,27 @@ class Launchd:
         """`bootstrap`, which takes a domain and a path and never a service target."""
         return self._ran(["bootstrap", self.domain, str(plist)], ASK_SECONDS)
 
+    def end(self, label: str) -> programs.Ran:
+        """`kill SIGKILL`, spelled the way `man launchctl` spells it.
+
+        *"kill signal-name | signal-number service-target … The signal number or name (SIGTERM,
+        SIGKILL, etc.) may be specified."* `SIGKILL` is that manual page's own example; `-KILL` is
+        `/bin/kill`'s shorthand and is not what this verb documents taking.
+
+        `ASK_SECONDS`, because this is a request and not a wait: `launchctl` returns once launchd
+        has sent the signal, and the death itself is asynchronous. What waits for the process to
+        really be gone is the `bootout --wait` that follows.
+        """
+        return self._ran(["kill", "SIGKILL", self.target(label)], ASK_SECONDS)
+
     def kick(self, label: str) -> programs.Ran:
-        """`kickstart -kp` — kill whatever is there and start it now, past any throttle."""
-        return self._ran(["kickstart", "-kp", self.target(label)], ASK_SECONDS)
+        """`kickstart -kp` — end the instance and start it again once the throttle has run out.
+
+        `KICK_SECONDS` rather than `ASK_SECONDS`, and that is the whole of the fix for a measured
+        defect: this blocks for the entire `ThrottleInterval`, so a ten-second ceiling reported a
+        supervisor that could not be asked, on a machine where nothing was wrong.
+        """
+        return self._ran(["kickstart", "-kp", self.target(label)], KICK_SECONDS)
 
     def asked_about(self, label: str) -> programs.Ran:
         return self._ran(["print", self.target(label)], ASK_SECONDS)
@@ -495,6 +587,11 @@ def place(one: Job, supervising: Optional[Supervising] = None) -> Placed:
 
 def remove(one: Job, supervising: Optional[Supervising] = None) -> str:
     """Take this gateway's job away, and the two files behind it. `""` when it is gone.
+
+    **Graceful, always.** `take_back` is `bootout --wait`, so the gateway is asked with `SIGTERM`
+    and given its whole `ExitTimeOut` to finish. Nothing here ever kills: a caller that means to end
+    a gateway where it stands calls `Supervising.end` first and then this, and that ordering is a
+    decision the command surface makes with `--force` rather than one this function makes for it.
 
     **The override is left enabled**, and that is a decision rather than tidying. There is an
     `enable` verb and a `disable` verb and nothing that deletes a record, so an uninstall cannot
