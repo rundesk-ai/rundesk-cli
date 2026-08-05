@@ -39,7 +39,6 @@ the owner's live install.
 """
 
 import os
-import shutil
 from pathlib import Path
 from typing import Any, List
 
@@ -270,7 +269,7 @@ def made(name: str, provider: str) -> Path:
 
 def _built(name: str, provider: str, agents: Path, migration: Any) -> Path:
     """Build the agent under a staged name and rename it into place. Held by `made`'s lock."""
-    building = agents / files.INCOMING.format(name=name)
+    building = files.incoming_of(agents / name)
     files.discard(building)
 
     try:
@@ -336,18 +335,11 @@ def forgotten(name: str) -> List[Path]:
 
 
 def _removed(one: Path) -> List[Path]:
-    """Take one named thing away, and say whether there was one. Raises if it would not go.
+    """Take one named thing away, and say what went. Raises if it would not go.
 
-    A removal that did not happen is never reported as one — that is the rule the whole product is
-    built around — so an `OSError` here reaches the caller rather than being counted as tidy.
-
-    A symlink is removed as a link and never followed: an agent's `home` replaced by a link to
-    somebody's documents would otherwise have the documents deleted.
+    The removal itself is `utils.files.remove_one`, including the part that matters — a symlink goes
+    as a link and is never followed. What is decided here is only what to do when it will not go:
+    the `OSError` reaches the caller rather than being counted as tidy, because a removal that did
+    not happen is never reported as one, and this is the list somebody reads to know what is gone.
     """
-    if one.is_dir() and not one.is_symlink():
-        shutil.rmtree(one)
-    elif one.exists() or one.is_symlink():
-        one.unlink()
-    else:
-        return []
-    return [one]
+    return [one] if files.remove_one(one) else []

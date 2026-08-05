@@ -53,6 +53,12 @@ with standing.holding(agent):
 class WithAnAgentDirectory(support.Isolated):
     """A scratch agent directory, and the means to put a real gateway in it."""
 
+    #: How long these cases wait for a real gateway before calling it a failure. Longer than a case
+    #: waiting on a bare `python3 -c` needs, because this child imports the product before it can
+    #: claim anything, and shorter than the child's own sixty-second ceiling so the suite is what
+    #: gives up first.
+    PATIENCE = 10.0
+
     def setUp(self):
         super().setUp()
         self.agent = self.home / "agents" / "one"
@@ -76,33 +82,18 @@ class WithAnAgentDirectory(support.Isolated):
         pid = programs.start([sys.executable, "-c", body], self.said)
         self.started.append(pid)
         self.assertTrue(
-            self.waited_until(self.ready.exists),
+            support.waited_until(self.ready.exists, self.PATIENCE),
             f"the gateway never came up. It said: {self.what_the_child_said()}")
         return pid
 
     def what_the_child_said(self) -> str:
         return self.said.read_text() if self.said.exists() else "nothing"
 
-    def waited_until(self, wanted, patience=10.0) -> bool:
-        """Wait for a condition, with a ceiling. A case that can hang for ever is worse than a
-        case that fails."""
-        ceiling = time.monotonic() + patience
-        while time.monotonic() < ceiling:
-            if wanted():
-                return True
-            time.sleep(0.02)
-        return False
-
     def record_says(self, **what) -> None:
         """Change the record under a gateway's feet, the way time and corruption do."""
         said = json.loads((self.agent / standing.RECORD).read_text())
         said.update(what)
         (self.agent / standing.RECORD).write_text(json.dumps(said))
-
-    def not_as_root(self) -> None:
-        """A permission a superuser does not meet cannot be tested by a superuser."""
-        if os.geteuid() == 0:
-            self.skipTest("root is refused nothing, so an unreadable directory cannot be made")
 
 
 class HoldingAnAgentsName(WithAnAgentDirectory):
@@ -182,7 +173,7 @@ class WhetherAGatewayIsOnline(WithAnAgentDirectory):
     def test_a_gateway_that_finished_normally_is_offline(self):
         pid = self.a_running_gateway()
         self.go.write_text("let go")
-        self.assertTrue(self.waited_until(lambda: not programs.alive(pid)),
+        self.assertTrue(support.waited_until(lambda: not programs.alive(pid), self.PATIENCE),
                         f"it never exited. It said: {self.what_the_child_said()}")
         self.assertEqual(standing.OFFLINE, standing.standing(self.agent).how)
 
@@ -193,7 +184,7 @@ class WhetherAGatewayIsOnline(WithAnAgentDirectory):
         # is a number that now belongs to something else.
         pid = self.a_running_gateway()
         os.kill(pid, signal.SIGKILL)                     # a pid this case started, never a group
-        self.assertTrue(self.waited_until(lambda: not programs.alive(pid)))
+        self.assertTrue(support.waited_until(lambda: not programs.alive(pid), self.PATIENCE))
 
         self.assertTrue((self.agent / standing.RECORD).is_file(),
                         "the record was cleaned up, so this proves nothing")
@@ -204,7 +195,7 @@ class WhetherAGatewayIsOnline(WithAnAgentDirectory):
     def test_a_lock_that_cannot_be_opened_is_not_an_offline_one(self):
         # Unreadable is not a quiet form of not-running. Reported as offline, this is how a second
         # gateway gets started beside a first one that is working perfectly well.
-        self.not_as_root()
+        support.not_as_root(self)
         self.addCleanup(self.agent.chmod, 0o700)
         self.agent.chmod(0o000)
 
@@ -429,7 +420,7 @@ class TheRecordOutlivesTheGateway(WithAnAgentDirectory):
         self.assertEqual(pid, said_while_up["pid"])
 
         os.kill(pid, signal.SIGKILL)                     # a pid this case started, never a group
-        self.assertTrue(self.waited_until(lambda: not programs.alive(pid)))
+        self.assertTrue(support.waited_until(lambda: not programs.alive(pid), self.PATIENCE))
 
         self.assertEqual(said_while_up,
                          json.loads((self.agent / standing.RECORD).read_text()),
@@ -441,10 +432,10 @@ class TheRecordOutlivesTheGateway(WithAnAgentDirectory):
         # process apart, so the next start has the name immediately.
         pid = self.a_running_gateway()
         os.kill(pid, signal.SIGKILL)
-        self.assertTrue(self.waited_until(lambda: not programs.alive(pid)))
+        self.assertTrue(support.waited_until(lambda: not programs.alive(pid), self.PATIENCE))
 
-        self.assertTrue(self.waited_until(
-            lambda: standing.standing(self.agent).how == standing.OFFLINE))
+        self.assertTrue(support.waited_until(
+            lambda: standing.standing(self.agent).how == standing.OFFLINE, self.PATIENCE))
         with standing.holding(self.agent):
             pass
 

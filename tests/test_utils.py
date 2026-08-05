@@ -946,6 +946,11 @@ class RunningAProgramThatAnswers(support.Isolated):
 class AProgramThatKeepsRunning(support.Isolated):
     """`start`, `alive` and `stop` — a gateway is not a command that answers."""
 
+    #: How long these cases wait for a child before calling it a failure. Short, because every one
+    #: of these children is a `python3 -c` that prints a line or sleeps: if five seconds were not
+    #: enough, the answer is not more seconds.
+    PATIENCE = 5.0
+
     def setUp(self):
         super().setUp()
         self.log = self.home / "logs" / "gateway.log"
@@ -960,15 +965,6 @@ class AProgramThatKeepsRunning(support.Isolated):
         pid = programs.start([sys.executable, "-c", body], self.log)
         self.started.append(pid)
         return pid
-
-    def waited_until(self, wanted, patience=5.0):
-        """Wait for a condition rather than sleeping a guessed amount."""
-        ceiling = time.monotonic() + patience
-        while time.monotonic() < ceiling:
-            if wanted():
-                return True
-            time.sleep(0.02)
-        return False
 
     def test_a_long_lived_program_that_could_not_start_says_so_once(self):
         # Five different exceptions from the standard library for the same thing a caller has the
@@ -990,19 +986,22 @@ class AProgramThatKeepsRunning(support.Isolated):
 
     def test_what_it_says_is_appended_to_the_log(self):
         self.given_running("print('the gateway is up')")
-        self.assertTrue(self.waited_until(
-            lambda: self.log.exists() and "the gateway is up" in self.log.read_text()))
+        self.assertTrue(support.waited_until(
+            lambda: self.log.exists() and "the gateway is up" in self.log.read_text(),
+            self.PATIENCE))
 
     def test_the_error_stream_lands_in_the_same_log(self):
         self.given_running("import sys; sys.stderr.write('went wrong\\n')")
-        self.assertTrue(self.waited_until(
-            lambda: self.log.exists() and "went wrong" in self.log.read_text()))
+        self.assertTrue(support.waited_until(
+            lambda: self.log.exists() and "went wrong" in self.log.read_text(), self.PATIENCE))
 
     def test_a_restart_adds_to_the_history_rather_than_replacing_it(self):
         self.given_running("print('first')")
-        self.assertTrue(self.waited_until(lambda: "first" in self.log.read_text()))
+        self.assertTrue(
+            support.waited_until(lambda: "first" in self.log.read_text(), self.PATIENCE))
         self.given_running("print('second')")
-        self.assertTrue(self.waited_until(lambda: "second" in self.log.read_text()))
+        self.assertTrue(
+            support.waited_until(lambda: "second" in self.log.read_text(), self.PATIENCE))
         self.assertIn("first", self.log.read_text(), "the log was replaced, not appended to")
 
     def test_it_is_started_in_a_session_of_its_own(self):
@@ -1014,8 +1013,8 @@ class AProgramThatKeepsRunning(support.Isolated):
 
     def test_it_does_not_wait_on_a_terminal_nobody_is_watching(self):
         self.given_running("import sys; print('read', len(sys.stdin.read()))")
-        self.assertTrue(self.waited_until(
-            lambda: self.log.exists() and "read 0" in self.log.read_text()))
+        self.assertTrue(support.waited_until(
+            lambda: self.log.exists() and "read 0" in self.log.read_text(), self.PATIENCE))
 
     def test_stopping_it_stops_everything_it_started(self):
         # The reason for the session. Without it the child outlives the stop with nothing left
@@ -1028,14 +1027,15 @@ class AProgramThatKeepsRunning(support.Isolated):
             "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
             f"pathlib.Path({str(marker)!r}).write_text(str(child.pid))\n"
             "time.sleep(60)\n")
-        self.assertTrue(self.waited_until(marker.exists), "the child never started")
+        self.assertTrue(support.waited_until(marker.exists, self.PATIENCE),
+                        "the child never started")
         child = int(marker.read_text())
         self.assertTrue(programs.alive(child))
 
         self.assertEqual("", programs.stop(pid, 2.0, 2.0))
 
-        self.assertTrue(self.waited_until(lambda: not programs.alive(pid)))
-        self.assertTrue(self.waited_until(lambda: not programs.alive(child)),
+        self.assertTrue(support.waited_until(lambda: not programs.alive(pid), self.PATIENCE))
+        self.assertTrue(support.waited_until(lambda: not programs.alive(child), self.PATIENCE),
                         "the child outlived the stop, and nothing is left holding its id")
 
     def test_it_asks_before_it_insists(self):
@@ -1057,7 +1057,8 @@ class AProgramThatKeepsRunning(support.Isolated):
             "signal.signal(signal.SIGTERM, leaving)\n"
             f"pathlib.Path({str(ready)!r}).write_text('ready')\n"
             "time.sleep(60)\n")
-        self.assertTrue(self.waited_until(ready.exists), "the handler was never installed")
+        self.assertTrue(support.waited_until(ready.exists, self.PATIENCE),
+                        "the handler was never installed")
 
         self.assertEqual("", programs.stop(pid, 3.0, 2.0))
 
@@ -1068,7 +1069,7 @@ class AProgramThatKeepsRunning(support.Isolated):
             "import signal, time;"
             "signal.signal(signal.SIGTERM, signal.SIG_IGN);"
             "time.sleep(60)")
-        self.assertTrue(self.waited_until(lambda: programs.alive(pid)))
+        self.assertTrue(support.waited_until(lambda: programs.alive(pid), self.PATIENCE))
         self.assertEqual("", programs.stop(pid, 0.3, 3.0))
         self.assertFalse(programs.alive(pid))
 
@@ -1104,7 +1105,8 @@ class AProgramThatKeepsRunning(support.Isolated):
             f"  \"pathlib.Path({str(stubborn)!r}).write_text('up');\"\n"
             "  \"time.sleep(60)\"])\n"
             "time.sleep(60)\n")
-        self.assertTrue(self.waited_until(stubborn.exists), "the stubborn child never started")
+        self.assertTrue(support.waited_until(stubborn.exists, self.PATIENCE),
+                        "the stubborn child never started")
 
         self.assertEqual("", programs.stop(pid, 0.5, 3.0))
 
@@ -1117,7 +1119,7 @@ class AProgramThatKeepsRunning(support.Isolated):
         # like a running program. A supervisor shaped `while alive(pid)` would spin on a program
         # that finished in a millisecond, and every short-lived child would hold a table slot.
         pid = self.given_running("pass")
-        self.assertTrue(self.waited_until(lambda: not programs.alive(pid)),
+        self.assertTrue(support.waited_until(lambda: not programs.alive(pid), self.PATIENCE),
                         "it read as alive long after it had exited")
 
     def test_a_leader_that_has_already_been_collected_still_stops_its_group(self):
@@ -1127,7 +1129,7 @@ class AProgramThatKeepsRunning(support.Isolated):
         # ask" as "nothing left" said stopped in milliseconds and abandoned the worker.
         pid = programs.start(["sh", "-c", "sleep 60 & exit 0"], self.log)
         self.started.append(pid)
-        self.assertTrue(self.waited_until(lambda: not programs.alive(pid)),
+        self.assertTrue(support.waited_until(lambda: not programs.alive(pid), self.PATIENCE),
                         "the leader never exited")
 
         self.assertEqual("", programs.stop(pid, 2.0, 2.0))
@@ -1275,6 +1277,10 @@ class Counting:
 class WithSomewhereToWrite(support.Isolated):
     """A scratch log directory, and the means to put whole days in it."""
 
+    #: Longer than the other suites wait, because what is waited for here is several processes
+    #: appending to one file at once, and how long that takes is a property of the machine.
+    PATIENCE = 30.0
+
     def setUp(self):
         super().setUp()
         self.where = self.home / "logs"
@@ -1302,21 +1308,6 @@ class WithSomewhereToWrite(support.Isolated):
         where = self.where / logs.named_for(self.a_day(days_ago))
         where.write_text("".join(f"{one}\n" for one in said), encoding="utf-8")
         return where
-
-    def not_as_root(self) -> None:
-        """A permission a superuser does not meet cannot be tested by a superuser."""
-        if os.geteuid() == 0:
-            self.skipTest("root is refused nothing, so an unwritable directory proves nothing")
-
-    def waited_until(self, wanted, patience=30.0) -> bool:
-        """Wait for a condition, with a ceiling. A case that can hang for ever is worse than one
-        that fails."""
-        ceiling = time.monotonic() + patience
-        while time.monotonic() < ceiling:
-            if wanted():
-                return True
-            time.sleep(0.02)
-        return False
 
 
 class ADayOfLines(WithSomewhereToWrite):
@@ -1431,7 +1422,7 @@ class ADayOfLines(WithSomewhereToWrite):
     def test_a_line_that_could_not_be_written_never_fails_what_was_being_done(self):
         # A log is an account of the work, not the work. A backup that could not write its own note
         # is a backup that succeeded, and saying otherwise turns a good run into a reported failure.
-        self.not_as_root()
+        support.not_as_root(self)
         self.where.mkdir(parents=True)
         self.addCleanup(self.where.chmod, 0o700)
         self.where.chmod(0o500)
@@ -1475,7 +1466,8 @@ class WhenSeveralThingsWriteAtOnce(WithSomewhereToWrite):
 
         wanted = self.WRITERS * self.EACH
         self.assertTrue(
-            self.waited_until(lambda: len(logs.tail(self.where, wanted * 2).lines) >= wanted),
+            support.waited_until(lambda: len(logs.tail(self.where, wanted * 2).lines) >= wanted,
+                                 self.PATIENCE),
             "the writers never finished, or lines were lost")
 
         said = logs.tail(self.where, wanted * 2).lines
@@ -1569,7 +1561,7 @@ class ReadingBackTheEndOfALog(WithSomewhereToWrite):
     def test_a_directory_that_cannot_be_read_is_not_an_empty_one(self):
         # Writing is silent about failing, on purpose, so this is where a person finds out. Handed
         # back as "no lines yet", a permission problem reads as a program that has been quiet.
-        self.not_as_root()
+        support.not_as_root(self)
         self.given_a_day(0, "something happened")
         self.addCleanup(self.where.chmod, 0o700)
         self.where.chmod(0o000)
@@ -1581,7 +1573,7 @@ class ReadingBackTheEndOfALog(WithSomewhereToWrite):
 
     def test_one_day_that_cannot_be_read_stops_the_whole_answer(self):
         # Skipping it would hand back a tail with a hole in it, presented as the end of the log.
-        self.not_as_root()
+        support.not_as_root(self)
         older = self.given_a_day(1, "yesterday", "and again")
         self.given_a_day(0, "today")
         self.addCleanup(older.chmod, 0o600)

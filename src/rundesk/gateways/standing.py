@@ -44,15 +44,13 @@ question they are the answer to. Nothing in this product writes them; launchd do
 """
 
 import contextlib
-import datetime
-import errno
 import fcntl
 import os
 import time
 from pathlib import Path
 from typing import Any, Iterator, NamedTuple, Optional, Tuple
 
-from rundesk.utils import files
+from rundesk.utils import files, locking, logs
 
 #: The name the kernel holds while a gateway is up, in the agent's own directory.
 LOCK = "gateway.lock"
@@ -150,7 +148,9 @@ def holding(at: Path) -> Iterator[None]:
     turns; this one refuses at once, because a name that is held is an answer. And that one counts
     re-entry per thread, so a second claim inside one process passes straight through — right for a
     call stack that re-enters its own critical section, and wrong for an identity, where one process
-    hosting two gateways for one agent is exactly what must not be allowed to happen.
+    hosting two gateways for one agent is exactly what must not be allowed to happen. What *is* taken
+    from there is `locking.busy`: reading a refusal apart from a real failure is one question with
+    one answer, however differently the two locks are used.
 
     On the way out the descriptor is closed, which is what releases the lock. **The file itself is
     left alone** — see the module docstring on why unlinking it would let two gateways answer as one.
@@ -161,7 +161,7 @@ def holding(at: Path) -> Iterator[None]:
         try:
             fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as why:
-            if why.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
+            if not locking.busy(why):
                 raise
             raise Taken(f"a gateway is already running for {at}") from why
         yield
@@ -195,7 +195,7 @@ def standing(at: Path) -> Standing:
     try:
         fcntl.flock(asked, fcntl.LOCK_SH | fcntl.LOCK_NB)
     except OSError as why:
-        if why.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+        if locking.busy(why):
             return _what_it_said_about_itself(at)
         return Standing(CANNOT_TELL, None, None, f"{lock} could not be asked about ({why})")
     finally:
@@ -318,14 +318,10 @@ def _when() -> str:
     For a person to read, and nothing decides anything from it: see `_wedged` for why staleness is
     measured from a monotonic reading instead.
 
-    **Local rather than UTC, and it matters because a person compares these two things.** `status`
-    shows what this record says a gateway has been up since, and the next thing anybody does is look
-    at that gateway's log. If one spoke UTC and the other the machine's clock, every comparison would
-    need arithmetic, and the answer would disagree with the menu bar, `ls -la` and `log show` as well.
-
-    The offset is what makes local safe: across a daylight-saving fall-back the same wall-clock time
-    happens twice, and `-07:00` against `-08:00` tells them apart without the reader thinking about
-    it. `astimezone()` with no argument attaches whichever offset is in force, so this is right on
-    both sides of a transition without anything having to know when transitions are.
+    **The same shape because it is the same function**, `utils.logs.stamp`, and not the same literal
+    written a second time. `status` shows what this record says a gateway has been up since, and the
+    next thing anybody does is look at that gateway's log — so these two are read side by side, and
+    two clocks there would mean arithmetic on every comparison. The reasoning for local time and for
+    the offset that makes it safe is kept there, in the one place that decides it.
     """
-    return datetime.datetime.now().astimezone().isoformat(sep=" ", timespec="seconds")
+    return logs.stamp()

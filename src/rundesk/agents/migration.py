@@ -41,6 +41,23 @@ rollback can never reach another's. And if the rollback itself fails, the senten
 an agent left neither carried nor put back is the one state somebody has to be told about, and it
 is the one a summary of "3 failed" hides.
 
+## Two clocks, and which one a moment belongs to
+
+This product keeps time in two shapes and the rule is which reader the moment is for, never which
+module wrote it. **Anything stored for a machine to order or compare is UTC**, to the second, in
+`core.config.MOMENT` — the rows in this table, and the moment an install records a version arriving.
+A database copied off this machine and restored on another must still sort into the order things
+happened, and a local stamp would not: it carries an offset the restoring machine does not have, and
+across a daylight-saving fall-back it repeats an hour, so two rows an hour apart compare as the same
+moment. **Anything a person reads directly is the machine's own clock with its offset**, which is
+`utils.logs.stamp` — the lines in a log, and what a gateway's record says it has been up since,
+because the question anybody asks is *what happened at nine last night, when I noticed?*
+
+Both exist because they answer to different readers, and neither is a better version of the other.
+A moment that is written for a machine and shown to a person is a moment somebody has to convert in
+their head; a moment written for a person and then sorted by a machine is one that sorts wrongly
+twice a year.
+
 Finding steps and loading them is `utils.scripts`, shared with the install level. What is here is
 only what differs: what an agent is handed, and how what has run is written down.
 """
@@ -53,6 +70,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
 from rundesk.agents import directory, records
+from rundesk.core import config
 from rundesk.utils import files, scripts
 
 STEPS = Path(__file__).resolve().parent / "steps"
@@ -265,7 +283,7 @@ def _set_aside(at: Path) -> List[Path]:
     for one in records.beside(at):
         if not one.exists():
             continue
-        copy = one.with_name(files.OUTGOING.format(name=one.name))
+        copy = files.outgoing_of(one)
         files.discard(copy)
         shutil.copy2(one, copy)
         kept.append(one)
@@ -289,7 +307,7 @@ def _put_back(at: Path, kept: List[Path]) -> List[str]:
     # write-ahead log beside a database that has not been put back yet, which the next connection
     # reads as that database's most recent truth.
     for one in reversed(records.beside(at)):
-        copy = one.with_name(files.OUTGOING.format(name=one.name))
+        copy = files.outgoing_of(one)
         try:
             if one in kept:
                 _replaced(copy, one)
@@ -314,7 +332,7 @@ def _replaced(copy: Path, one: Path) -> None:
     into place. `os.replace` is atomic within a filesystem, and both of these are inside the agent's
     own directory, so it always is one.
     """
-    staged = one.with_name(files.INCOMING.format(name=one.name))
+    staged = files.incoming_of(one)
     files.discard(staged)
     shutil.copy2(copy, staged)
     os.replace(staged, one)
@@ -323,9 +341,13 @@ def _replaced(copy: Path, one: Path) -> None:
 def _let_go(kept: List[Path]) -> None:
     """Let go of the copies, now that the move they insured has been made."""
     for one in kept:
-        files.discard(one.with_name(files.OUTGOING.format(name=one.name)))
+        files.discard(files.outgoing_of(one))
 
 
 def _now() -> str:
-    """The moment a step landed, in the same shape the install records its own moments in."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """The moment a step landed, in the same shape the install records its own moments in.
+
+    The same shape because it is the same constant, `core.config.MOMENT`, rather than the same
+    literal typed twice — which is what this said before, in a sentence nothing enforced.
+    """
+    return datetime.now(timezone.utc).strftime(config.MOMENT)

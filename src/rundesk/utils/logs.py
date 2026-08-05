@@ -87,6 +87,34 @@ UNREADABLE = files.UNREADABLE
 BLOCK_BYTES = 8192
 
 
+def stamp(when: Optional[datetime.datetime] = None) -> str:
+    """One moment written the way a person reads it: the machine's own clock, carrying its offset.
+
+    **Local rather than UTC, because the question anybody asks is "what happened at nine last
+    night, when I noticed?"** Every other account of the same machine — the clock in the menu bar,
+    `ls -la`, Console, `log show` — answers in the machine's own time, and a stamp in UTC makes the
+    one reader who exists do arithmetic on every line to spare a reader in another timezone who
+    does not.
+
+    **The offset is what makes local safe rather than merely convenient.** Across a daylight-saving
+    fall-back the same wall-clock time happens twice, and only the offset tells the two apart:
+    `01:30:00-07:00` against `01:30:00-08:00` is plainly an hour with nothing to work out.
+    `astimezone()` with no argument attaches whichever offset is in force at *that* moment, so this
+    is right on both sides of a transition without anything here knowing when transitions fall.
+
+    **One function rather than the same literal wherever a moment is shown**, because these are read
+    side by side: `status` says how long a gateway has been up and the next thing anybody does is
+    open that gateway's log. Two spellings of one shape agree until somebody edits one of them, and
+    a test asserting that two literals still match is a test standing in for a function.
+
+    `when` is resolved in the body rather than bound in the signature — a default decided when this
+    module was defined is one nothing can reach past. Given one without a timezone it is read as the
+    machine's own clock; given one with, it is shown in the machine's own clock.
+    """
+    moment = (when if when is not None else datetime.datetime.now()).astimezone()
+    return moment.isoformat(sep=" ", timespec="seconds")
+
+
 class Tail(NamedTuple):
     """The end of a log, and which of the three answers this was.
 
@@ -121,12 +149,12 @@ def note(into: Path, said: str, level: str = INFO,
     `when` is the moment the line belongs to, resolved in the body rather than bound in the
     signature — a default decided when this module was defined is one nothing can reach past, and a
     case proving that a gateway running through midnight lands in two files should not have to wait
-    until midnight to do it. Given one without a timezone, it is read as the machine's own clock;
-    given one with, it is shown in the machine's own clock. Either way `astimezone()` attaches the
-    offset that is right at *that* moment, so nothing here has to know when a transition falls.
+    until midnight to do it. The shape it is written in is `stamp`'s, which is also the shape a
+    gateway's record carries: the reasoning for local time with an offset is there, in one place,
+    because these two are read side by side.
     """
     moment = (when if when is not None else datetime.datetime.now()).astimezone()
-    line = SAID.format(when=moment.isoformat(sep=" ", timespec="seconds"),
+    line = SAID.format(when=stamp(moment),
                        level=f"{_how_serious(level)}:".ljust(WIDEST),
                        said=said.rstrip("\n"))
     try:

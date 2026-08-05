@@ -256,7 +256,7 @@ def _key(at: Optional[Path] = None) -> bytes:
         fresh = randomness.token_bytes(32)
         # Staged and renamed like everything else here rather than written in place: a crash
         # partway through leaves a key too short to use, which is a locked-out install.
-        staging = made.with_name(files.INCOMING.format(name=made.name))
+        staging = files.incoming_of(made)
         files.discard(staging)
         opened = files.os.open(staging, files.os.O_CREAT | files.os.O_WRONLY | files.os.O_TRUNC,
                                files.ONLY_MINE)

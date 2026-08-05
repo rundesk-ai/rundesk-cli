@@ -91,6 +91,21 @@ Unreadable = files.Unreadable
 Stuck = files.Stuck
 
 
+#: The shape of a moment that is **stored for a machine** — UTC, to the second, with the `Z` that
+#: says so. Anything a program will later order, compare or restore on another machine is written
+#: like this, and that is the whole reason for UTC: a copy of this data taken here and put back
+#: somewhere else must still sort the same way.
+#:
+#: Named rather than spelled at each place that writes one. The agent level records the moment a
+#: step landed in this same shape and used to say so only in a sentence, and an invariant asserted
+#: in prose holds exactly until somebody edits one of the two.
+#:
+#: Not the shape a person reads — that is `utils.logs.stamp`, which is local and carries its offset.
+#: And not `lifecycle.backups.WHEN`, which is deliberately this with dashes, because that one has to
+#: be a filename and a colon is not one everywhere.
+MOMENT = "%Y-%m-%dT%H:%M:%SZ"
+
+
 def moved(when: Optional[datetime] = None, data: Optional[Path] = None) -> str:
     """Record that a version has just arrived on this install. Returns the moment recorded.
 
@@ -101,7 +116,7 @@ def moved(when: Optional[datetime] = None, data: Optional[Path] = None) -> str:
     `when` is the clock, passed in rather than read here, so what is recorded is the caller's
     decision and a test can assert an exact value rather than a range.
     """
-    stamped = (when or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stamped = (when or datetime.now(timezone.utc)).strftime(MOMENT)
     stated("last_updated_at", stamped, data)
     return stamped
 

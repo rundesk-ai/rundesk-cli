@@ -79,7 +79,7 @@ def replace(from_where: Path, app: Path) -> Path:
         for pending in staged:
             target = app / pending.name[1:-len(".incoming")]
             if target.exists() or target.is_symlink():
-                aside = app / files.OUTGOING.format(name=target.name)
+                aside = files.outgoing_of(target)
                 files.discard(aside)
                 os.rename(target, aside)
                 swapped.append(target)
@@ -91,7 +91,7 @@ def replace(from_where: Path, app: Path) -> Path:
         raise
 
     for target in swapped:
-        files.discard(app / files.OUTGOING.format(name=target.name))
+        files.discard(files.outgoing_of(target))
     return app
 
 
@@ -185,7 +185,7 @@ def _never_copied(_where: str, names: Iterable[str]) -> Set[str]:
 def _put_back(app: Path, swapped: List[Path]) -> None:
     """Undo a half-finished swap, newest first."""
     for target in reversed(swapped):
-        aside = app / files.OUTGOING.format(name=target.name)
+        aside = files.outgoing_of(target)
         try:
             files.discard(target)
             os.rename(aside, target)

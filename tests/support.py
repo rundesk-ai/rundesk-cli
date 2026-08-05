@@ -19,6 +19,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Callable, List, Tuple
@@ -123,6 +124,49 @@ def scrub_and_point(where: Path) -> Callable[[], None]:
         os.environ.update(taken)
 
     return restore
+
+
+#: How often a wait looks again. Short enough that an ordinary case never notices the granularity,
+#: long enough that a case waiting out its whole ceiling is not spinning a core while it does.
+LOOKING_AGAIN = 0.02
+
+
+def waited_until(wanted: Callable[[], bool], patience: float) -> bool:
+    """Wait for a condition rather than sleeping a guessed amount. `False` if it never came true.
+
+    **A guessed sleep is wrong in both directions.** Long enough for the slowest machine anybody
+    runs this on is a suite that takes minutes to say nothing; short enough to be quick is a case
+    that goes red on a loaded laptop for a reason that has nothing to do with the code. Asking is
+    both faster and steadier: an ordinary case is through in a couple of hundredths.
+
+    **The ceiling is the caller's**, and it is a real number rather than something to leave out. A
+    case that can hang for ever is worse than one that fails, because a run that never ends is a run
+    nobody reads — and what is being waited for here is a child process, so how long is too long
+    depends entirely on what that child has to do before it can answer.
+
+    Here rather than in each suite: three suites had written this out, with three different
+    ceilings, which is how the number stops being a decision and becomes whatever was copied.
+    """
+    ceiling = time.monotonic() + patience
+    while time.monotonic() < ceiling:
+        if wanted():
+            return True
+        time.sleep(LOOKING_AGAIN)
+    return False
+
+
+def not_as_root(case: unittest.TestCase) -> None:
+    """Skip this case when it is running as root, because root is refused nothing.
+
+    A case that proves a permission is enforced proves nothing at all as a superuser: an unwritable
+    directory is writable, an unreadable one is readable, and the refusal under test never happens.
+    Passing there would be worse than skipping, because it would be counted.
+
+    Skipped rather than failed — running a suite as root is a thing somebody may legitimately do,
+    and the honest report is that this one could not be answered rather than that it went wrong.
+    """
+    if os.geteuid() == 0:
+        case.skipTest("root is refused nothing, so a permission this case rests on cannot be made")
 
 
 def run_with(argv: List[str], **collaborators) -> Tuple[int, str, str]:

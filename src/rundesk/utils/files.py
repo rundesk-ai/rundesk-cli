@@ -121,7 +121,7 @@ def write_json(where: Path, value: Any, private: bool = False) -> None:
     credential can reach passes `private=True`; nothing else needs to think about it.
     """
     where.parent.mkdir(parents=True, exist_ok=True)
-    beside = where.with_name(INCOMING.format(name=where.name))
+    beside = incoming_of(where)
     # Cleared first, the way `stage_copy` does. A write that raised partway — an unserialisable
     # value, a full disk during `fsync` — leaves this file behind, and while the next write would
     # truncate it anyway, "the next write tidies it" is a thing to have decided rather than to have
@@ -189,6 +189,30 @@ INCOMING = ".{name}.incoming"
 OUTGOING = ".{name}.outgoing"
 
 
+def incoming_of(where: Path) -> Path:
+    """Where the replacement for `where` is built, beside it and under the staged name.
+
+    Beside it rather than in a temporary directory, for the reason at the top of this file: across
+    filesystems a rename is a copy, and a copy is what staging exists to avoid.
+
+    A function rather than the format string at each caller, because the format string is exactly
+    what this module's own docstring warns about — and it had already happened. By the time this was
+    written the tree held two spellings of the same convention: one asking the path to rename itself,
+    the other joining the name onto the parent by hand. Two spellings agree until one is edited.
+    """
+    return where.with_name(INCOMING.format(name=where.name))
+
+
+def outgoing_of(where: Path) -> Path:
+    """Where `where` is kept while its replacement lands, so it can be put back.
+
+    The other half of `incoming_of`, and here for the same reason. The pair is the whole swap: what
+    is arriving wears one of these names and what is leaving wears the other, and only the finished
+    thing ever wears the real one.
+    """
+    return where.with_name(OUTGOING.format(name=where.name))
+
+
 def staged(name: str) -> bool:
     """Whether this is a name a swap is using rather than a finished thing.
 
@@ -198,12 +222,37 @@ def staged(name: str) -> bool:
     return name.startswith(".") and name.endswith((".incoming", ".outgoing"))
 
 
+def remove_one(where: Path) -> bool:
+    """Remove `where`, whichever kind of thing it is. `True` when there was something to remove.
+
+    A symlink is removed as a link and never followed — an agent's `home` replaced by a link to
+    somebody's documents would otherwise have the documents deleted rather than the link.
+
+    Raises whatever the removal raises. Deciding what to do about that is the caller's: one swallows
+    it because it is tidying litter, one collects the names that would not go, and one lets it
+    through because a removal that did not happen must never be reported as one.
+    """
+    if where.is_dir() and not where.is_symlink():
+        shutil.rmtree(where)
+    elif where.exists() or where.is_symlink():
+        where.unlink()
+    else:
+        return False
+    return True
+
+
 def discard(where: Path) -> None:
     """Remove a staging entry, whatever kind it is.
 
     **Only ever used on a name the caller chose**, never on something an owner keeps — which is why
     it may be this forgiving about failing. A staging entry left behind is tidied by the next swap;
     raising here would turn a successful operation into a reported failure over litter.
+
+    **Not `remove_one` with a `try` around it**, and the difference is not shape. `ignore_errors`
+    is handed to `rmtree` itself, so it survives a failure met *partway through the walk* — one
+    unreadable file deep inside a staged tree and the rest of the tree still goes. Catching at the
+    top gives up on everything below whatever refused, which for litter is the wrong answer: the
+    point here is to leave as little behind as possible, not to leave it consistently.
     """
     if where.is_dir() and not where.is_symlink():
         shutil.rmtree(where, ignore_errors=True)
@@ -226,7 +275,7 @@ def stage_copy(entry: Path, into: Path,
     pointing at a directory, so a copy that asked only that question would walk through the link and
     duplicate the tree on the other side of it — silently, and only for the owner who had one.
     """
-    pending = into / INCOMING.format(name=entry.name)
+    pending = incoming_of(into / entry.name)
     discard(pending)
     if entry.is_dir() and not entry.is_symlink():
         shutil.copytree(entry, pending, symlinks=True, ignore=ignore)

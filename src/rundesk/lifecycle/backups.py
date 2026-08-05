@@ -221,7 +221,7 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
         # The name and the staging under it are one decision: worked out separately, two callers
         # land on the same second, stage into the same directory, and discard each other's work.
         name = named(when, at)
-        pending = at / files.INCOMING.format(name=name)
+        pending = files.incoming_of(at / name)
         files.discard(pending)
         try:
             shutil.copytree(from_where, pending, symlinks=True)
@@ -386,7 +386,7 @@ def _moved_now(to: Path, at: Path, said: Callable[[str], None]) -> Path:
     for one in _could_not_remove(now_at, moved) if now_at != at else []:
         said(f"{one} is still at {now_at} and could not be removed")
     if now_at == at:
-        files.discard(at.parent / files.OUTGOING.format(name=at.name))
+        files.discard(files.outgoing_of(at))
     return to
 
 
@@ -447,7 +447,7 @@ def _point_at(at: Path, to: Path) -> None:
             raise
         return
 
-    aside = at.parent / files.OUTGOING.format(name=at.name)
+    aside = files.outgoing_of(at)
     files.discard(aside)
     if at.exists():
         os.rename(at, aside)
@@ -466,15 +466,15 @@ def _could_not_remove(where: Path, names: List[str]) -> List[str]:
     Named for what it returns because that is the part a caller has to say out loud. It is only ever
     handed names this operation has just written or has just proved are somewhere else, which is what
     makes removing them something rundesk is entitled to do at all.
+
+    **Every one is tried, never stopping at the first that would not go.** The caller names each of
+    these to whoever is watching, and a list that stopped early would be a list of what was reached
+    rather than of what is still there.
     """
     stuck = []
     for name in names:
-        one = where / name
         try:
-            if one.is_dir() and not one.is_symlink():
-                shutil.rmtree(one)
-            elif one.exists() or one.is_symlink():
-                one.unlink()
+            files.remove_one(where / name)
         except OSError:
             stuck.append(name)
     return stuck
@@ -522,8 +522,8 @@ def _swap(a_copy: Path, into: Path) -> None:
     replaces and only renamed over it once all of it is there, so an interruption leaves `data/` as
     it was rather than as neither.
     """
-    pending = into.parent / files.INCOMING.format(name=into.name)
-    aside = into.parent / files.OUTGOING.format(name=into.name)
+    pending = files.incoming_of(into)
+    aside = files.outgoing_of(into)
     into.parent.mkdir(parents=True, exist_ok=True)
     files.discard(pending)
     files.discard(aside)

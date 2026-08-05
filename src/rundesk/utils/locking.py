@@ -69,6 +69,22 @@ class Stuck(Exception):
     """The lock is held by something else and did not come free."""
 
 
+def busy(why: OSError) -> bool:
+    """Whether this is a non-blocking lock saying somebody else has it, rather than a real failure.
+
+    **Two errnos for one condition, because POSIX allows either and does not say which.** They are
+    the same number on Linux and on macOS and are permitted to differ, so a caller that asked about
+    one of them would, on the platform where they differ, read a held lock as an error it had never
+    heard of — and raise, at the exact moment the right answer was "somebody else is in there".
+
+    Here rather than at each caller because it is the same sentence every one of them has to write:
+    a lock asked for without blocking says "no" by raising, and telling that "no" apart from a
+    genuine one is the whole of it. `gateways` asks it too — that lock is a different mechanism for
+    a different reason, but this question is not different.
+    """
+    return why.errno in (errno.EWOULDBLOCK, errno.EAGAIN)
+
+
 @contextlib.contextmanager
 def only_one(at: Path, guarding: Optional[str] = None,
              waiting: Optional[float] = None) -> Iterator[None]:
@@ -118,7 +134,7 @@ def _taken(holding: int, guarding: str, waiting: Optional[float]) -> None:
             fcntl.flock(holding, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return
         except OSError as why:
-            if why.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
+            if not busy(why):
                 raise
             if time.monotonic() >= ceiling:
                 # It says what was waited for and how long, and does not claim to know why.
