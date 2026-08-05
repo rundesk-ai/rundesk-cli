@@ -84,15 +84,23 @@ def outstanding(applied: Optional[str], where: Optional[Path] = None) -> List[St
     the two for a developer to have just done. Refused either way: running these steps over a layout
     that was carried past them is how data gets damaged.
 
-    **Which steps have run is decided by their number, not by their position in this list**, and the
-    difference is the whole of the append-only rule. An install records one id, so everything
-    numbered at or below it is taken to have run — which is true exactly while no step is ever
-    numbered below one a previous release already shipped. That rule cannot be checked here: an
-    install that ran `0001` and `0010`, and one that ran `0001`, `0005` and `0010`, both record
-    `0010` and are indistinguishable from anything this function is given. The agent level records a
-    row per step and therefore *can* check it — `agents.migration.Backfilled` — and a step
-    back-filled here would simply never run on any install that has already been carried past it.
-    So: a step that needs changing is a new step, numbered above every number any release has used.
+    **Which steps have run is decided by their number, not by their position in this list**, and
+    that is the whole of the append-only rule: everything numbered at or below the recorded id has
+    run.
+
+    **One id is the whole state here, and that is the design rather than a smaller version of the
+    agent level's.** An install is one thing with one history, and it keeps no database — there is
+    nothing to have a table in, and a list would record the same single fact in more words. An agent
+    is one of many, each carried on its own and each able to fail without the others, so each keeps
+    its own log of what ran in the table it already has. Two different shapes because they answer
+    two different questions, not because one of them settled for less.
+
+    What follows from one id is that the numbering rule is a rule rather than a check: a step that
+    needs changing is a new step, numbered above every number any release has used. An install that
+    ran `0001` and `0010` and one that ran `0001`, `0005` and `0010` both record `0010`, so nothing
+    here can tell them apart, and a step back-filled below the mark would never run on an install
+    already carried past it. The agent level *can* check its own equivalent, because a table can be
+    asked which rows are in it — see `agents.migration.Backfilled`.
     """
     steps = found(where)
     if applied is None:
