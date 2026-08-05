@@ -77,9 +77,22 @@ def newest(where: Optional[Path] = None) -> Optional[str]:
 def outstanding(applied: Optional[str], where: Optional[Path] = None) -> List[Step]:
     """The steps that have not run yet, given how far the install has been carried.
 
-    An install stamped with a step this release has never heard of is **going backwards** — it was
-    carried by a newer rundesk than the one now asking. Refused rather than guessed at: running an
-    older release's steps over a newer release's layout is how data gets damaged.
+    An install stamped with a step this release does not ship is refused, and **the sentence names
+    both ways that happens** rather than only the first. Either a newer rundesk carried this install
+    and going backwards is not supported, or a step that had already shipped was deleted or renamed
+    in this copy — which the rules forbid and nothing prevents, and which is much the likelier of
+    the two for a developer to have just done. Refused either way: running these steps over a layout
+    that was carried past them is how data gets damaged.
+
+    **Which steps have run is decided by their number, not by their position in this list**, and the
+    difference is the whole of the append-only rule. An install records one id, so everything
+    numbered at or below it is taken to have run — which is true exactly while no step is ever
+    numbered below one a previous release already shipped. That rule cannot be checked here: an
+    install that ran `0001` and `0010`, and one that ran `0001`, `0005` and `0010`, both record
+    `0010` and are indistinguishable from anything this function is given. The agent level records a
+    row per step and therefore *can* check it — `agents.migration.Backfilled` — and a step
+    back-filled here would simply never run on any install that has already been carried past it.
+    So: a step that needs changing is a new step, numbered above every number any release has used.
     """
     steps = found(where)
     if applied is None:
@@ -87,9 +100,11 @@ def outstanding(applied: Optional[str], where: Optional[Path] = None) -> List[St
     ids = [step.id for step in steps]
     if applied not in ids:
         raise Broken(
-            f"this install was carried to {applied}, which this rundesk does not ship — "
-            "it has been moved forward by a newer release, and going backwards is not supported")
-    return steps[ids.index(applied) + 1:]
+            f"this install was carried to {applied}, which this rundesk does not ship — either it "
+            "has been moved forward by a newer release, or a step that had already shipped was "
+            "deleted or renamed in this copy of rundesk; going backwards is not supported")
+    carried = steps[ids.index(applied)]
+    return [step for step in steps if step.order > carried.order]
 
 
 def carry(data: Path, where: Optional[Path] = None,
@@ -102,12 +117,17 @@ def carry(data: Path, where: Optional[Path] = None,
 
     Stops at the first step that fails and says which — the ones after it are written expecting it
     to have happened, so carrying on would apply them to a shape they were not written for.
+
+    **A sentence, never an exception**, and the read of the configuration is inside the `try` for
+    that reason: it was outside, so a `data/config.json` that is there and cannot be read raised
+    straight past this contract and out of whatever was carrying the install. Its sibling at the
+    agent level already reads what has run inside its own `try`.
     """
     said = saying or (lambda _line: None)
-    settled = config.read(data)
     try:
+        settled = config.read(data)
         waiting = outstanding(settled.get("migration"), where)
-    except Broken as why:
+    except (Broken, config.Unreadable) as why:
         return str(why)
 
     if not waiting:

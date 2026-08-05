@@ -310,10 +310,22 @@ def forgotten(name: str) -> List[Path]:
     be: `agents` sits below `gateways` and may not import it, and a layer that reached upward to
     ask would be the layer that could no longer be tested on its own. Removing an agent while its
     gateway is up leaves a running program with no records, which is the caller's to prevent.
+
+    **Held under the install's own lock, the same one `made` and a carry take.** A removal is a
+    durable write like any other, and the one it collides with is a carry of the same agent: the
+    carry copies the agent aside, the removal takes the agent away, the carry's step then fails and
+    puts everything back — so the removal reports an agent gone that is standing there again. With
+    the lock the two take turns, and whichever is second sees what the first actually did.
     """
     trouble = name_trouble(name)
     if trouble:
         raise Refused(trouble)
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        return _forgotten(name)
+
+
+def _forgotten(name: str) -> List[Path]:
+    """Everything `forgotten` promises, with the lock already held."""
     at = where(name)
     if not at.is_dir():
         raise Refused(f"{name} is not an agent on this install")

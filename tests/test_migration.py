@@ -216,6 +216,35 @@ class GoingBackwards(Steps):
         migration.carry(self.data, self.steps)
         self.assertFalse((self.data / "0001_first").exists())
 
+    def test_the_sentence_names_a_deleted_or_renamed_step_as_well(self):
+        # From here the two look identical, and the second is much the likelier for a developer to
+        # have just caused: a step that had already shipped was renamed or taken out of this
+        # checkout, which the rules forbid and nothing prevents. Naming only the newer release sent
+        # somebody looking for a rundesk that did not exist.
+        self.given("0002_second")
+        config.stated("migration", "0001_first", self.data)      # its file is no longer here
+        gone_wrong = migration.carry(self.data, self.steps)
+        self.assertIn("0001_first", gone_wrong)
+        self.assertIn("deleted or renamed", gone_wrong)
+        self.assertFalse((self.data / "0002_second").exists(), "a step ran anyway")
+
+
+class WhenTheConfigurationCannotBeRead(Steps):
+    """`carry` answers with a sentence or with `None`, and never by raising past both."""
+
+    def test_it_says_so_rather_than_raising_past_its_own_contract(self):
+        # The read was outside the `try`, so a `data/config.json` that is there and cannot be read
+        # came out of `carry` as an exception — through `update.settle`, which is a subprocess, and
+        # out as a traceback folded into a message somebody was meant to read. The agent level has
+        # always read what has run inside its own `try`.
+        self.given("0001_first")
+        config.where(self.data).write_text("{ this is not json", encoding="utf-8")
+        gone_wrong = migration.carry(self.data, self.steps)
+        self.assertIsNotNone(gone_wrong)
+        self.assertIn(str(config.where(self.data)), gone_wrong)
+        self.assertFalse((self.data / "0001_first").exists(),
+                         "a step ran against an install whose configuration could not be read")
+
 
 class AFreshInstall(Steps):
 

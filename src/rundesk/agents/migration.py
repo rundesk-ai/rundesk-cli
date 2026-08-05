@@ -35,11 +35,26 @@ and accepts the window.
 
 ## Rolling back is not optional here
 
-Before an agent is carried, its records are copied aside — the database and any `-wal`/`-shm` — and
-if a step fails they are put back, so the agent is exactly as it was. **Per agent**, so one agent's
-rollback can never reach another's. And if the rollback itself fails, the sentence says that too:
-an agent left neither carried nor put back is the one state somebody has to be told about, and it
-is the one a summary of "3 failed" hides.
+Before an agent is carried, **the agent's directory is copied aside** — not only the database — and
+if a step fails it is all put back, so the agent is as it was apart from what `NOT_PUT_BACK` names.
+A step is handed a connection *and* a directory precisely so it can change tables and files
+together, so a rollback that reached only `state.db` left a step's files standing beside records
+that no longer mention them: the two then disagree about history, and the next step doing "check,
+then act" against one of those files is answered by a shape nothing recorded.
+
+**Per agent**, so one agent's rollback can never reach another's. And if the rollback itself fails,
+the sentence says that too: an agent left neither carried nor put back is the one state somebody has
+to be told about, and it is the one a summary of "3 failed" hides.
+
+## One lock, around the whole of a carry
+
+`BEGIN IMMEDIATE` protects the database *file*, and it is not the safety this level rests on. The
+copy-aside-and-put-back bracket around the steps is plain file copying, and two carries of one agent
+were measured destroying each other through it: the second took its copy before the first had
+committed anything, lost the race for the write lock, concluded it had failed, and put that copy
+back — retracting a step the first had already reported as done, with nothing anywhere saying so.
+So `carry_one` holds the install's own lock around all of it, and `carry_every` holds it once around
+the whole sweep rather than picking it up and putting it down between agents.
 
 ## Two clocks, and which one a moment belongs to
 
@@ -70,10 +85,33 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
 from rundesk.agents import directory, records
-from rundesk.core import config
-from rundesk.utils import files, scripts
+from rundesk.core import config, paths
+from rundesk.utils import files, locking, scripts
 
 STEPS = Path(__file__).resolve().parent / "steps"
+
+#: What a carry never copies aside and therefore never puts back. **Expected to grow, and the
+#: growing is what keeps a rollback affordable.**
+#:
+#: `logs/` is here because rolling back the record of what has just gone wrong is backwards: the
+#: lines explaining the failure are the one thing somebody needs afterwards.
+#:
+#: The principle for everything after it: **an unbounded collection directory does not belong in a
+#: rollback.** `sessions/`, `providers/` and `channels/` are coming, one directory per session kept
+#: for the life of the agent, and copying accumulated history aside would make every future
+#: migration slowest on exactly the agents somebody uses most. None of them exists yet, so none of
+#: them is named here — whoever adds the first one adds it to this tuple in the same change, and
+#: reads the rule in `steps/__init__.py` that says what a step may then do inside it.
+#:
+#: Today an agent is `state.db`, `home/` and `logs/`, and `home/` is a few kilobytes of markdown, so
+#: copying the rest aside costs nothing and makes the promise true. That is the trade now; this
+#: tuple is what keeps it true later.
+NOT_PUT_BACK = (directory.LOGS,)
+
+#: What the copy of an agent's things is called while that agent is being carried. `utils.files`'
+#: staging convention, so every walk over a directory already skips it, and **inside the agent's own
+#: directory**, so one agent's rollback has no shared place to meet another's in.
+ASIDE = "carry"
 
 #: What a step's module is called while it is loaded. Its own prefix, so an agent step and an
 #: install step that share a number cannot collide with each other in `sys.modules`.
@@ -89,12 +127,26 @@ Broken = scripts.Broken
 
 
 class Ahead(Exception):
-    """This agent has been carried further than this release ships, so it may not be carried here.
+    """This agent holds a row for a step this release does not ship, so it may not be carried here.
 
-    The fourth answer asking an agent for its records can give, and the one that is only a failure
-    from an *older* rundesk's point of view: the agent is fine, and this copy of the product is the
-    one that is behind. Refused rather than worked around, because running this release's steps over
-    a layout a newer release made is how an agent's memory gets damaged.
+    The fourth answer asking an agent for its records can give. **Two things look identical from
+    here and the sentence names both**, because the second is by far the likelier one for a
+    developer to have caused: either a newer rundesk moved this agent forward — in which case the
+    agent is fine and this copy of the product is the one that is behind — or a step that had
+    already shipped was deleted or renamed in this checkout, which the rules forbid and nothing
+    prevents. Refused either way, because running this release's steps over a layout that was
+    carried past them is how an agent's memory gets damaged.
+    """
+
+
+class Backfilled(Exception):
+    """A step numbered below one this agent has already run, which nothing may do.
+
+    **A step's number must exceed every number any previously shipped release used.** That rule is
+    what makes "which steps have run" answerable at all, and until this it was asserted in prose in
+    three docstrings and checked nowhere. A step back-filled below an agent's high-water mark runs
+    *after* steps that were written assuming it had already happened — and at the install level,
+    where how far something has got is one id rather than a row set, it never runs at all.
     """
 
 
@@ -128,8 +180,13 @@ def recorded(at: Path) -> List[str]:
 def outstanding(applied: Iterable[str], where: Optional[Path] = None) -> List[Step]:
     """The steps that have not run yet, given which ones are already rows.
 
-    `Ahead` when the table holds a key this release does not ship. That agent was carried by a newer
-    rundesk, and the steps here were written against a layout that no longer describes it.
+    `Ahead` when the table holds a key this release does not ship — a newer rundesk moved this agent
+    forward, or a shipped step was deleted or renamed here.
+
+    `Backfilled` when a step that has *not* run is numbered below one that has. The rows say the
+    highest number this agent has ever seen, so this level can ask the question the install level
+    cannot, and it is refused rather than run out of order: the steps written after it were written
+    expecting it to have happened already.
     """
     # **Never gate a repair on how far something has been carried.** A fix written as `if the agent
     # has not run 0012` never runs on the agents that actually had the bug, and a row-per-step table
@@ -142,8 +199,20 @@ def outstanding(applied: Iterable[str], where: Optional[Path] = None) -> List[St
     if beyond:
         raise Ahead(
             f"this agent has been carried to {beyond[0]}, which this rundesk does not ship — "
-            "it has been moved forward by a newer release, and going backwards is not supported")
-    return [step for step in steps if step.id not in already]
+            "either a newer release moved it forward, or a step that had already shipped was "
+            "deleted or renamed in this copy of rundesk; going backwards is not supported")
+    waiting = [step for step in steps if step.id not in already]
+    # The high-water mark, asked of the rows rather than of the list's shape. Every step at or below
+    # it has run, so one that has not is a step somebody added underneath an agent's own history.
+    highest = max((step.order for step in steps if step.id in already), default=-1)
+    behind = [step for step in waiting if step.order <= highest]
+    if behind:
+        raise Backfilled(
+            f"{behind[0].id} is numbered below {highest:04d}, which this agent has already been "
+            f"carried past — a step that has shipped is never renumbered, renamed or back-filled, "
+            f"so {behind[0].id} either has to go or has to become a new step with a number above "
+            "every number any release has used")
+    return waiting
 
 
 def carry_one(name: str, where: Optional[Path] = None,
@@ -153,47 +222,36 @@ def carry_one(name: str, where: Optional[Path] = None,
     A sentence rather than an exception, because the caller of this is usually `carry_every`, whose
     whole job is to go on to the next agent — and an exception is the shape that stops a loop.
 
-    The records are copied aside first and put back if any step fails, so an agent is either carried
-    or exactly as it was.
+    The agent's directory is copied aside first — everything but `NOT_PUT_BACK` — and put back if
+    any step fails, so the agent is either carried or as it was apart from its logs.
 
     **All the way back, not back to the last step that worked**, and that is the other place this
     differs from the install level. An install stamps each step as it lands and resumes from there,
     because its steps move files and there is nothing to undo them with. An agent's whole memory is
-    one file that can be copied, so the useful state to leave somebody in is the one they had before
-    they asked — one thing to look at rather than a database halfway between two releases. Running
-    again re-runs the steps that worked, which is safe because every step is written to be safe
-    against an agent that does not need it.
+    one directory that can be copied, so the useful state to leave somebody in is the one they had
+    before they asked — one thing to look at rather than an agent halfway between two releases.
+    Running again re-runs the steps that worked, which is safe because every step is written to be
+    safe against an agent that does not need it.
 
-    Nothing here checks whether a gateway is reading this agent: a carry takes the write lock at
-    `BEGIN IMMEDIATE`, so a reader waits and a second writer is refused, and the question of whether
-    an agent should be running at all belongs to whoever is asking for it.
+    **The whole of this is under the install's own lock, and that is the guarantee — not the write
+    lock underneath it.** `BEGIN IMMEDIATE` protects the database *file*; it says nothing about the
+    copy-aside-and-put-back bracket around the steps, which is plain file copying. Two carries of
+    one agent were measured through that gap: the second copied the agent aside before the first had
+    committed anything, lost the race for the write lock, concluded it had failed, and put its copy
+    back — retracting a step the first had already reported as done. **The refusal was never the
+    safety; the loser's own rollback was the danger.**
+
+    `directory.made` holds this same lock and then calls this, which is why `locking.only_one`
+    counts nesting per thread instead of locking twice: the outermost holder owns it and this passes
+    straight through. Neither side of that may be "simplified" into the other — `made` needs it
+    around the staged build it does before ever reaching here, and a carry that is not reached
+    through `made` needs it just as much.
+
+    Nothing here checks whether a gateway is reading this agent. A reader waits on the busy timeout,
+    and the question of whether an agent should be running at all belongs to whoever is asking.
     """
-    said = saying or (lambda _line: None)
-    at = directory.records(name)
-    within = directory.where(name)
-    try:
-        waiting = outstanding(recorded(at), where)
-    except (Ahead, Broken, records.NotThere, records.Unreadable) as why:
-        return f"{name} could not be carried: {why}"
-
-    if not waiting:
-        return None
-
-    try:
-        kept = _set_aside(at)
-    except OSError as why:
-        # Refused rather than carried anyway. A carry with no way back is the one shape of this
-        # that can leave an agent's whole memory in a state nobody chose.
-        return f"{name} could not be carried: its records could not be copied aside first ({why})"
-
-    for step in waiting:
-        said(f"carrying {name} to {step.id}")
-        try:
-            _one(at, within, step)
-        except Exception as why:                      # noqa: BLE001 — a step is arbitrary code
-            return _could_not(name, step, why, at, kept)
-    _let_go(kept)
-    return None
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        return _carried(name, where, saying or (lambda _line: None))
 
 
 def carry_every(names: Iterable[str], where: Optional[Path] = None,
@@ -207,13 +265,49 @@ def carry_every(names: Iterable[str], where: Optional[Path] = None,
     An empty mapping means every one of them is on this release. Being handed no names is not a
     failure either — an install where nobody has added an agent yet has nothing to carry, and
     saying so is the honest answer rather than a discovery that found nothing.
+
+    **The lock is taken once, around the whole sweep**, rather than per agent. Picking it up and
+    putting it down between agents leaves a gap after every one of them for another writer to make
+    an agent, remove one, or start a carry of its own — so a sweep that reported twenty agents
+    carried would be reporting on an install that changed underneath it. `carry_one` takes the same
+    lock and nests through it.
     """
     gone_wrong: Dict[str, str] = {}
-    for name in sorted(names):
-        trouble = carry_one(name, where, saying)
-        if trouble:
-            gone_wrong[name] = trouble
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        for name in sorted(names):
+            trouble = carry_one(name, where, saying)
+            if trouble:
+                gone_wrong[name] = trouble
     return gone_wrong
+
+
+def _carried(name: str, where: Optional[Path], said: Callable[[str], None]) -> Optional[str]:
+    """Everything `carry_one` promises, with the lock already held. Never called from anywhere else."""
+    at = directory.records(name)
+    within = directory.where(name)
+    try:
+        waiting = outstanding(recorded(at), where)
+    except (Ahead, Backfilled, Broken, records.NotThere, records.Unreadable) as why:
+        return f"{name} could not be carried: {why}"
+
+    if not waiting:
+        return None
+
+    try:
+        aside = _set_aside(within)
+    except OSError as why:
+        # Refused rather than carried anyway. A carry with no way back is the one shape of this
+        # that can leave an agent's whole memory in a state nobody chose.
+        return f"{name} could not be carried: it could not be copied aside first ({why})"
+
+    for step in waiting:
+        said(f"carrying {name} to {step.id}")
+        try:
+            _one(at, within, step)
+        except Exception as why:                      # noqa: BLE001 — a step is arbitrary code
+            return _could_not(name, step, why, within, aside)
+    _let_go(aside)
+    return None
 
 
 def stamp_without_running(at: Path, where: Optional[Path] = None) -> None:
@@ -243,83 +337,181 @@ def _one(at: Path, within: Path, step: Step) -> None:
 
     The step is handed the open connection and the agent's own directory, so it can change tables
     and files together.
+
+    **The transaction is checked to be still open before the row is written**, because a step is
+    arbitrary code and `commit()`, `rollback()` and a raw `COMMIT` are all one call away. With
+    `isolation_level=None` any of them ends the transaction this runner opened, and everything after
+    — including the `INSERT` below — then runs in its own autocommit. The step's work would be
+    durably on disk and the row recording it would be a separate write that a crash can land
+    between, which is the one state this level exists not to have. Refused as `Broken` rather than
+    stamped: a row written outside the transaction its work was in records nothing anybody can
+    trust.
     """
     with records.writing(at, making=True) as conn:
         scripts.carrying(step, LOADED_AS)(conn, within)
+        if not conn.in_transaction:
+            raise Broken(
+                f"{step.id} ended the transaction the runner opened around it — a step may not "
+                "call commit() or rollback(), and may not issue BEGIN, COMMIT or END, because the "
+                "row recording a step has to land in the same transaction as the step's work")
         conn.execute("INSERT INTO migrations (key, completed_at) VALUES (?, ?)", (step.id, _now()))
 
 
-def _could_not(name: str, step: Step, why: BaseException, at: Path, kept: List[Path]) -> str:
-    """Put this agent's records back, and say what happened — including if putting them back failed.
+def _could_not(name: str, step: Step, why: BaseException, within: Path,
+               aside: Optional[Path]) -> str:
+    """Put this agent back, and say what happened — including if putting it back failed.
 
     Two different sentences, because they are two different things for somebody to do. The first is
-    an agent that is exactly as it was and a step to fix. The second is an agent that is neither
-    carried nor as it was, which is the one state that has to be told to a person out loud rather
-    than counted in a summary.
+    an agent that is as it was and a step to fix. The second is an agent that is neither carried nor
+    as it was, which is the one state that has to be told to a person out loud rather than counted
+    in a summary.
+
+    **What was put back is named rather than implied.** Saying "the agent is exactly as it was"
+    would be a claim about `NOT_PUT_BACK` as well, and that is not what happened: the logs of the
+    failure are deliberately still there, which is the whole point of leaving them out.
     """
-    stuck = _put_back(at, kept)
+    stuck = _put_back(within, aside)
     if stuck:
-        return (f"{name} could not be carried to {step.id}: {why} — and worse, its records could "
-                f"not be put back as they were: {', '.join(stuck)}")
-    _let_go(kept)
-    return (f"{name} could not be carried to {step.id}: {why} — "
-            "its records were put back as they were")
+        return (f"{name} could not be carried to {step.id}: {why} — and worse, it could "
+                f"not be put back as it was: {', '.join(stuck)}")
+    _let_go(aside)
+    return (f"{name} could not be carried to {step.id}: {why} — its records and its files were "
+            f"put back as they were, apart from {directory.LOGS}/")
 
 
-def _set_aside(at: Path) -> List[Path]:
-    """Copy this agent's records aside, and hand back the copies that were taken.
+def _aside(within: Path) -> Path:
+    """Where this agent's things are kept while it is being carried.
 
-    **This agent's, beside its own records**, so one agent's rollback cannot reach another's — there
-    is no shared directory for two of these to meet in.
-
-    Named through `utils.files`' staging convention, which is what a walk over an agent's directory
-    already knows to skip. `OUTGOING` rather than `INCOMING` because that is exactly what these are:
-    what is being replaced, kept so it can be put back.
-
-    Only what is there is copied. The siblings exist only while a writer is live, and a brand new
-    agent has no database at all — for which the honest rollback is to leave none.
+    Asked through `utils.files` rather than by formatting the staging name here, which is exactly
+    the duplication that module's own docstring warns about.
     """
-    kept = []
-    for one in records.beside(at):
-        if not one.exists():
+    return files.outgoing_of(within / ASIDE)
+
+
+def _set_aside(within: Path) -> Optional[Path]:
+    """Copy this agent aside, apart from `NOT_PUT_BACK`, and say where the copy stands.
+
+    **The directory, not only the records**, and that is the whole of the fix this replaced. A step
+    is handed a connection *and* the agent's directory so it can change tables and files together,
+    so a rollback that reached only `state.db` put the tables back and left the files — after which
+    the records and the directory disagree about what has happened, and a later step that checks a
+    file before acting on it is answered by one nothing recorded.
+
+    **Inside the agent's own directory**, so one agent's rollback has nowhere to meet another's, and
+    under `utils.files`' staging convention, which is what a walk already knows to skip — including
+    the walk below, so the copy can never end up copying itself.
+
+    Nothing is made if there is no directory to copy. Creating one here would mean that carrying an
+    agent nobody has ever made *makes* one, out of a typo.
+    """
+    if not within.is_dir():
+        return None
+    aside = _aside(within)
+    files.discard(aside)
+    aside.mkdir(parents=True)
+    for one in sorted(within.iterdir()):
+        if one.name in NOT_PUT_BACK or files.staged(one.name):
             continue
-        copy = files.outgoing_of(one)
-        files.discard(copy)
-        shutil.copy2(one, copy)
-        kept.append(one)
-    return kept
+        _copied(one, aside / one.name)
+    return aside
 
 
-def _put_back(at: Path, kept: List[Path]) -> List[str]:
-    """Put every copy back, and say which could not be. Every one is tried, never stopping at the first.
+def _put_back(within: Path, aside: Optional[Path]) -> List[str]:
+    """Put everything back as it was, and say what could not be. Every one is tried, never the first only.
 
-    **What was not set aside is taken away rather than left.** A write-ahead log written by the
-    attempt that just failed, standing beside a database that has been put back, is read by the next
-    connection as that database's most recent truth — so restoring the file alone would restore the
-    bytes and none of the meaning. The old build recorded exactly this.
+    **What was not set aside is taken away rather than left**, which is as true of a file a step
+    wrote as it is of a write-ahead log: a log written by the attempt that just failed, standing
+    beside a database that has been put back, is read by the next connection as that database's most
+    recent truth. The old build recorded exactly that.
+
+    Nothing was set aside when there was no directory to copy, and then there is nothing to put
+    back either.
     """
+    if aside is None:
+        return []
     stuck = []
-    # **The records themselves go back last.** Each replacement below is atomic on its own, but
-    # three of them are not atomic together, and the order decides what an interruption between two
-    # of them leaves. Sidecars first means the moment of truth is the single rename of the database:
-    # before it, the copies are all still on disk and the whole restore can simply be run again;
-    # after it, what stands is the database that was set aside. The other order leaves a restored
-    # write-ahead log beside a database that has not been put back yet, which the next connection
-    # reads as that database's most recent truth.
-    for one in reversed(records.beside(at)):
-        copy = files.outgoing_of(one)
+    try:
+        # A step is arbitrary code and may have taken the agent's own directory away with it. There
+        # is something to put back, so somewhere to put it is made again rather than the rollback
+        # giving up — and never when nothing was set aside, which is what keeps carrying an agent
+        # nobody has ever made from making one.
+        within.mkdir(parents=True, exist_ok=True)
+    except OSError as why:
+        return [f"{within.name} ({why})"]
+    for name in _in_the_order_they_go_back(within, aside):
         try:
-            if one in kept:
-                _replaced(copy, one)
-            elif one.exists():
-                one.unlink()
+            _back(aside / name, within / name)
         except OSError as why:
-            stuck.append(f"{one.name} ({why})")
+            stuck.append(f"{name} ({why})")
     return stuck
 
 
+def _in_the_order_they_go_back(within: Path, aside: Path) -> List[str]:
+    """Everything to put back or take away, in the order an interruption can survive.
+
+    **The records go back before anything else, and their sidecars go back before them.** Each
+    replacement is atomic on its own and they are not atomic together, so the order decides what an
+    interruption between two of them leaves.
+
+    Sidecars first, because a restored write-ahead log beside a database that has not been put back
+    yet is read by the next connection as that database's most recent truth.
+
+    Then `state.db`, and **that single rename is the moment this agent's history flips.** Before it,
+    nothing about what this agent has run has changed and every copy is still on disk, so the whole
+    restore can simply be run again. After it, the records say the carried steps never ran — so any
+    file below that has not been put back yet belongs to a step the records no longer claim, and the
+    next carry runs that step again. Every step is required to be safe to run against an agent that
+    does not need it, which is what makes that resolve to the pre-carry state rather than stick
+    between the two. The other order — records last — leaves the opposite and unrecoverable shape:
+    records saying a step ran, standing over files that have been taken back out from under it, and
+    a next carry that skips the very step that would have rebuilt them.
+    """
+    first = [one.name for one in reversed(records.beside(Path(directory.RECORDS)))]
+    rest = {one.name for one in _entries(aside)}
+    rest.update(one.name for one in _entries(within)
+                if one.name not in NOT_PUT_BACK and not files.staged(one.name))
+    return first + sorted(one for one in rest if one not in first)
+
+
+def _entries(where: Path) -> List[Path]:
+    """What is standing in `where`, and nothing at all when it is not there.
+
+    A rollback runs after something has already gone wrong, and what went wrong is arbitrary code:
+    the directory it is reading may have been taken away by the very step that failed. That is a
+    rollback with work to do rather than a reason to raise out of a function whose whole contract
+    is to hand back a sentence.
+    """
+    try:
+        return list(where.iterdir())
+    except OSError:
+        return []
+
+
+def _back(copy: Path, one: Path) -> None:
+    """Put one thing back as it was, or take it away when it was not there before."""
+    if copy.exists() or copy.is_symlink():
+        _replaced(copy, one)
+    elif one.exists() or one.is_symlink():
+        files.remove_one(one)
+
+
+def _copied(one: Path, to: Path) -> None:
+    """Copy one thing, whatever kind of thing it is.
+
+    **A symlink is copied as a link and never followed.** An agent's `home` replaced by a link to
+    somebody's documents would otherwise have the documents copied into the rollback — and then
+    written back over the link, which is the shape `directory.where` exists to refuse on the way in.
+    """
+    if one.is_symlink():
+        os.symlink(os.readlink(str(one)), str(to))
+    elif one.is_dir():
+        shutil.copytree(str(one), str(to), symlinks=True)
+    else:
+        shutil.copy2(str(one), str(to))
+
+
 def _replaced(copy: Path, one: Path) -> None:
-    """Put one file back where it was, without it ever being half there.
+    """Put one thing back where it was, without it ever being half there.
 
     **`shutil.copy2` onto the live file would truncate it before writing a byte of the restore.**
     That is the failure `utils.files` exists to prevent, and this is the worst possible place to
@@ -331,17 +523,25 @@ def _replaced(copy: Path, one: Path) -> None:
     So the copy is staged beside its destination under a name the walks already skip, and renamed
     into place. `os.replace` is atomic within a filesystem, and both of these are inside the agent's
     own directory, so it always is one.
+
+    A directory is the one thing that cannot be a single rename: `os.replace` refuses one that has
+    anything in it, so the live directory is taken away first. The staged copy is finished before
+    that happens and the copy it came from is still there, so the way back is on disk twice over
+    while the gap is open. The records are a file and never take that branch — their rename, which
+    is the moment history flips, stays atomic.
     """
     staged = files.incoming_of(one)
     files.discard(staged)
-    shutil.copy2(copy, staged)
+    _copied(copy, staged)
+    if one.is_dir() and not one.is_symlink():
+        files.remove_one(one)
     os.replace(staged, one)
 
 
-def _let_go(kept: List[Path]) -> None:
-    """Let go of the copies, now that the move they insured has been made."""
-    for one in kept:
-        files.discard(files.outgoing_of(one))
+def _let_go(aside: Optional[Path]) -> None:
+    """Let go of the copy, now that the move it insured has been made."""
+    if aside is not None:
+        files.discard(aside)
 
 
 def _now() -> str:
