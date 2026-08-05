@@ -1,8 +1,14 @@
 """The direction the tree points, checked rather than remembered.
 
-    commands → lifecycle → core → utils
+    commands  →  lifecycle  ─┐
+              →  gateways   ─┤ →  agents  →  core  →  utils
 
-Four layers, and every import crosses that line one way. The rule is written down in `AGENTS.md` and
+Six layers, and every import crosses those lines one way.
+
+`agents` sits below two of them because both reach down to it for different reasons: an install
+migration step may have to carry every agent, and a gateway is always the gateway *of* an agent.
+Neither reaches back up, and an agent knows nothing about the process that hosts it — which is what
+lets one be made, listed and taken away with no gateway anywhere near the case. The rule is written down in `AGENTS.md` and
 in each package's own docstring, and written down is where a rule of this kind stops being true:
 nothing goes red when somebody adds the import that inverts it, and the first symptom is a module
 nobody can test on its own six months later.
@@ -29,9 +35,10 @@ import support
 MAY_IMPORT = {
     "utils": (),
     "core": ("utils",),
-    "gateways": ("core", "utils"),
-    "lifecycle": ("core", "utils"),
-    "commands": ("gateways", "lifecycle", "core", "utils"),
+    "agents": ("core", "utils"),
+    "gateways": ("agents", "core", "utils"),
+    "lifecycle": ("agents", "core", "utils"),
+    "commands": ("gateways", "lifecycle", "agents", "core", "utils"),
 }
 
 #: Below the layers rather than in them: the version this is, and what a command may exit with.
@@ -64,8 +71,27 @@ def imports(module: Path):
 
 
 def modules_of(package: str):
-    """Every module in one package, so a file added to it is checked the day it lands."""
+    """Every module in one package, however deep, so a file added to it is checked the day it lands.
+
+    Deliberately recursive: a migration step is arbitrary code that ships in this tree, and the layer
+    rule applies to it exactly as it does to anything else here.
+    """
     return sorted((WHERE / package).rglob("*.py"))
+
+
+def named_in(package: str):
+    """The modules a package's table is expected to name: its own, and not what is nested below it.
+
+    A `steps/` directory is documented as a directory — one row, with a trailing slash the table
+    checker's own pattern deliberately does not match — because its contents are found rather than
+    listed and naming them would be a second list to keep in step with the first.
+
+    Split out from `modules_of` the moment the first step shipped: the recursive walk counted
+    `steps/0001_….py` as a module the table had failed to mention, which would have forced either a
+    row per step for ever or an exception carved into the checker. Both are worse than saying which
+    question is being asked.
+    """
+    return sorted((WHERE / package).glob("*.py"))
 
 
 class TheTreePointsOneWay(support.Isolated):
@@ -111,16 +137,26 @@ class TheTreePointsOneWay(support.Isolated):
         # `utils` was checked and `core` was not, so `core`'s table went on listing a module that
         # had moved a whole layer down and nothing said a word. A table a reader trusts is a table
         # worth checking — all of them, not the one that happened to get a test first.
-        for package in ("core", "gateways", "lifecycle", "utils"):
+        for package in ("agents", "core", "gateways", "lifecycle", "utils"):
             table = (WHERE / package / "__init__.py").read_text(encoding="utf-8")
             # A trailing slash names a directory rather than a module — `steps/` is
             # documented deliberately and has no `.py` of its own to match.
             named = set(re.findall(r"^\| `(\w+)` \|", table, re.M))
-            there = {one.stem for one in modules_of(package) if one.stem != "__init__"}
+            there = {one.stem for one in named_in(package) if one.stem != "__init__"}
             with self.subTest(package=package):
                 self.assertTrue(named, f"{package}/__init__.py names no modules at all")
                 self.assertEqual(there, named,
                                  f"the table in {package}/__init__.py and the directory disagree")
+
+    def test_a_step_is_still_held_to_the_layer_rule(self):
+        # `named_in` stops at the package's own modules so a step does not have to be listed in a
+        # table. `modules_of` must not: a step is arbitrary code shipping in this tree, it runs
+        # against somebody's real data, and it is the last place to relax a rule. Asserted rather
+        # than assumed, because the two walks now differ and nothing else would notice if the
+        # recursive one quietly stopped recursing.
+        stepped = [one for one in modules_of("agents") if one.parent.name == "steps"]
+        self.assertTrue(stepped, "no agent migration step was found to check")
+        self.assertNotIn(stepped[0], named_in("agents"))
 
     def test_every_module_in_utils_is_named_in_its_table(self):
         # The table in `utils/__init__.py` is what a reader trusts to know what is down there, and
@@ -147,7 +183,7 @@ class TheTreePointsOneWay(support.Isolated):
     def test_nothing_below_commands_knows_what_argparse_is(self):
         # The command line is one layer's business. A lifecycle module taking a `Namespace` would be
         # a module that cannot be driven except by typing at it.
-        for package in ("utils", "core", "gateways", "lifecycle"):
+        for package in ("utils", "core", "agents", "gateways", "lifecycle"):
             for module in modules_of(package):
                 with self.subTest(module=f"{package}/{module.name}"):
                     self.assertNotIn("argparse", module.read_text(encoding="utf-8"))
