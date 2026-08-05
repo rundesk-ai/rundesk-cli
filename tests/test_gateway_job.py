@@ -475,6 +475,35 @@ class TakingAJobAway(WithAJob):
         job.remove(self.one, by)
         self.assertIn("enable", by.verbs())
 
+    def test_an_enable_that_did_not_work_is_said_rather_than_swallowed(self):
+        # The answer to `enable` used to be thrown away here, and `place` is why that looked safe:
+        # there, everything after it goes back to the same launchctl and would report a disabled
+        # label itself. Nothing follows it here — the files come off the disk and the function
+        # returns — so an enable that quietly did not happen leaves exactly the poisoned record this
+        # verb exists to avoid, left by the uninstall itself, while the caller is told it is gone.
+        self.placed()
+        why = job.remove(self.one, ASupervisor(enable=ran(5)))
+        self.assertIn("inert", why)
+        self.assertIn(self.one.label, why)
+        self.assertIn("launchctl enable", why, "it did not say how to finish the job by hand")
+
+    def test_the_files_still_go_when_the_record_could_not_be_made_inert(self):
+        # The job really was taken back and the files really are ours to remove. Refusing to finish
+        # would leave a plist behind for a job that no longer exists, which is worse than a record
+        # somebody has one command to clear.
+        self.placed()
+        job.remove(self.one, ASupervisor(enable=ran(5)))
+        self.assertFalse(job.plist_of(self.one).exists())
+        self.assertFalse(job.shim_of(self.one).exists())
+
+    def test_an_enable_the_supervisor_could_not_even_be_asked_for_is_said_too(self):
+        # `trouble` and a non-zero code are different facts — launchctl never ran, versus launchctl
+        # ran and disagreed — and both leave the record in the same unknown state.
+        self.placed()
+        why = job.remove(self.one, ASupervisor(enable=programs.Ran(None, "", "", "did not start")))
+        self.assertIn("inert", why)
+        self.assertIn("did not start", why)
+
     def test_a_bootout_that_did_not_clearly_work_does_not_report_a_removal(self):
         # Never report a success that was not earned: the files would go and the job would stay.
         self.placed()

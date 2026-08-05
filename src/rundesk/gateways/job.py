@@ -475,6 +475,14 @@ def remove(one: Job, supervising: Optional[Supervising] = None) -> str:
     is a live example on the machine this was researched against.
 
     A bootout answering `3` or `113` is success: it was not there, which is the state asked for.
+
+    **Whether the record was made inert is checked, and `place` is why it looks like it need not be.**
+    There, the same call's answer may be thrown away safely, because everything after it goes back to
+    the same `launchctl` and will itself report `CANNOT_TELL` or a disabled label if it really
+    failed. Here nothing follows it: the plist and the shim come off the disk and the function
+    returns. So an `enable` that quietly did not happen would leave exactly the poisoned record this
+    docstring says the decision exists to avoid — left by the uninstall itself rather than inherited
+    from an older one — and the caller would be told the job was gone.
     """
     by = supervising or Launchd()
     _only_ours(one)
@@ -485,12 +493,25 @@ def remove(one: Job, supervising: Optional[Supervising] = None) -> str:
     if gone.code != 0 and gone.code not in ALREADY_GONE:
         return _why(f"{one.label} could not be taken back", gone)
 
-    by.allow(one.label)
+    inert = by.allow(one.label)
     for one_of_ours in (plist_of(one), shim_of(one)):
         try:
             files.remove_one(one_of_ours)
         except OSError as why:
             return f"{one_of_ours} could not be removed ({why})"
+
+    # Said last, because the files really are gone and the job really was taken back — this is the
+    # one thing left that somebody may have to finish by hand, and naming the command is the whole
+    # of the answer.
+    if inert.trouble is not None:
+        return (f"{one.label} was taken back and its files removed, but the supervisor could not be "
+                f"asked to make the record of it inert ({inert.trouble}) — a record left disabled "
+                f"is one the next install under this name would inherit. Clear it with: "
+                f"launchctl enable gui/$(id -u)/{one.label}")
+    if inert.code != 0:
+        return _why(f"{one.label} was taken back and its files removed, but the record of it could "
+                    f"not be made inert — clear it with "
+                    f"launchctl enable gui/$(id -u)/{one.label}", inert)
     return ""
 
 
