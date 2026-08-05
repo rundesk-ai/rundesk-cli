@@ -177,7 +177,7 @@ def _listed(agent: Optional[str]) -> int:
     would say the agent has none, which is a different and worse thing to be told.
     """
     if agent is not None:
-        gone_wrong = _not_an_agent(agent)
+        gone_wrong = directory.not_an_agent(agent)
         if gone_wrong:
             return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was listed")
         names = [agent]
@@ -249,7 +249,7 @@ def _added(args: argparse.Namespace) -> int:
     if trouble:
         return _failed(trouble, "nothing was added")
 
-    gone_wrong = _not_an_agent(args.agent)
+    gone_wrong = directory.not_an_agent(args.agent)
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was added")
 
@@ -303,7 +303,7 @@ def _changed(args: argparse.Namespace) -> int:
                        f"{args.agent} {args.schedule} --when '<cron>'",
                        "nothing was changed")
 
-    gone_wrong = _not_an_agent(args.agent)
+    gone_wrong = directory.not_an_agent(args.agent)
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was changed")
     if "command" in values:
@@ -326,7 +326,7 @@ def _changed(args: argparse.Namespace) -> int:
 
 def _shown(agent: str, name: str) -> int:
     """Everything one schedule was given, read back whole. Changes nothing."""
-    gone_wrong = _not_an_agent(agent)
+    gone_wrong = directory.not_an_agent(agent)
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was shown")
     try:
@@ -372,7 +372,7 @@ def _ran(agent: str, name: str, waiting: float) -> int:
     the way the program it started answers. A run that could not start is `1` — nothing ran, so
     there is no code to pass on, and reporting one would say the program ran and disagreed.
     """
-    gone_wrong = _not_an_agent(agent)
+    gone_wrong = directory.not_an_agent(agent)
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was run")
     if waiting <= 0:
@@ -430,7 +430,7 @@ def _forgotten(agent: str, name: str) -> int:
     unlinking a held lock is how two firings of one schedule come to run at once, so those files stay
     and the line says so rather than leaving somebody to notice.
     """
-    gone_wrong = _not_an_agent(agent)
+    gone_wrong = directory.not_an_agent(agent)
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was removed")
     try:
@@ -498,21 +498,6 @@ def _found_on_the_machine(program: str) -> str:
     which is the difference between a schedule that runs and one that reports permission denied.
     """
     return shutil.which(program) or ""
-
-
-def _not_an_agent(name: str) -> str:
-    """Why this name is not an agent on this install, or `""` when it is.
-
-    Asked of `directory.known`, which is the one answer to what an agent is — a directory holding
-    `state.db`. A check written against the directory merely existing would accept a half-made one.
-    """
-    try:
-        there = directory.known()
-    except OSError as why:
-        return str(why)
-    if name in there:
-        return ""
-    return f"{name} is not an agent on this install"
 
 
 def _as_local(said: Any) -> str:

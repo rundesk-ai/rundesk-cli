@@ -36,7 +36,7 @@ import signal
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, NamedTuple, Optional, Sequence, Union
+from typing import Any, Dict, NamedTuple, Optional, Sequence, Union
 
 #: What a program that never started, or would not finish, has instead of an exit code.
 DID_NOT_START = "did not start"
@@ -309,6 +309,23 @@ def collected(pid: int) -> Collected:
     if gone == 0:
         return Collected(False, None)
     return Collected(True, os.waitstatus_to_exitcode(status))
+
+
+def a_pid(said: Any) -> Optional[int]:
+    """A recorded process id, or `None` when it is not one anybody may act on.
+
+    **`0` is every process in the caller's own group and `1` is the machine's init**, so a record
+    holding either — corrupted, or written by hand — is a record that would have somebody signal the
+    wrong thing entirely. `True` is an `int` to Python and is not a pid to anybody else.
+
+    Here rather than beside either of the records that need it. `gateways.standing` reads a pid out
+    of a gateway's record and `schedules.firing` reads one out of a firing's, and the question
+    *"is this a number I may signal"* is neither module's domain — it is what this one already owns,
+    beside `alive` and `stop`, which are the two things a caller does with the answer.
+    """
+    if isinstance(said, bool) or not isinstance(said, int) or said <= 1:
+        return None
+    return said
 
 
 def a_clean_slate() -> None:

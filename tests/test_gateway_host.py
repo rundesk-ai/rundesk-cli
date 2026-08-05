@@ -31,6 +31,7 @@ from typing import List, Optional, Tuple
 import support
 from rundesk import __version__
 from rundesk.agents import directory, records
+from rundesk.exits import OK
 from rundesk.gateways import host, job, standing
 from rundesk.schedules import firing, kept
 from rundesk.utils import logs, programs
@@ -675,6 +676,41 @@ class TheScheduleItHosts(WithAnAgent):
             lambda: not firing.still_running(self.name, "tick"), self.PATIENCE),
             "the gateway stopped and left the work it started running with nobody holding it")
         self.assertEqual(kept.STOPPED, kept.one(self.name, "tick")["last_outcome"])
+
+    def test_a_second_stop_arriving_during_the_shutdown_does_not_crash_the_gateway(self):
+        # **The window this work opened.** Before schedules there was nothing on the `ExitStack` to
+        # unwind, so a second signal during shutdown had nothing to interrupt. Now the unwind stops
+        # every child a schedule started and may spend up to `STOPPING_WITHIN` seconds doing it — and
+        # `Stopped` is a `BaseException` precisely so `firing`'s guards cannot swallow it, so a
+        # second `SIGTERM` in that window escaped `run` entirely. Exit non-zero under
+        # `KeepAlive {SuccessfulExit: false}` is *bring it back*, so a clean stop became the endless
+        # restart this module is arranged to make unreachable — and the children not yet reached were
+        # left running with nothing holding them.
+        self.given(command="/bin/sh -c 'trap \"\" TERM; while true; do sleep 0.05; done'")
+        child = self.a_running_gateway(beat=self.A_LONG_BEAT)
+        self.assertTrue(support.waited_until(
+            lambda: "started as pid" in self.its_log(), self.PATIENCE),
+            f"the work never started. It said: {self.its_log()}")
+
+        child.send_signal(signal.SIGTERM)
+        # **Waited for, and the wait is what gives this case teeth.** Sent immediately, the second
+        # signal lands while the gateway is still inside its own `except Stopped` and is caught
+        # exactly as the first was — the case then passes with the guard deleted, which is how it
+        # first read. The line below is written *after* the handlers have been stood down, so seeing
+        # it means the shutdown proper has begun; and the child ignores `SIGTERM`, so the stop that
+        # follows spends seconds asking, waiting, and only then telling. That is the window.
+        self.assertTrue(support.waited_until(
+            lambda: "gateway stopping for" in self.its_log(), self.PATIENCE),
+            f"it never began stopping. It said: {self.its_log()}")
+        for _again in range(3):
+            if child.poll() is None:
+                child.send_signal(signal.SIGTERM)
+
+        self.assertTrue(support.waited_until(lambda: child.poll() is not None, self.PATIENCE),
+                        f"it never ended. It said: {self.its_log()}")
+        self.assertEqual(OK, child.returncode,
+                         "a gateway asked to stop twice exited non-zero, which launchd reads as a "
+                         f"request to be restarted. It said: {self.its_log()}")
 
     def test_a_schedule_that_could_not_run_never_takes_the_gateway_down(self):
         # Under `KeepAlive {SuccessfulExit: false}` a non-zero exit is a request to be restarted, so

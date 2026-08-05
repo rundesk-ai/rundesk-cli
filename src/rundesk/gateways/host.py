@@ -206,6 +206,12 @@ KEPT_DAYS = 14
 #: gateway's own files.
 STOPPING_WITHIN = 20.0
 
+#: The signals a supervisor or a person asks this gateway to stop with — turned into `Stopped` while
+#: it is working, and ignored once a stop is already under way. Named once because two functions have
+#: to agree about the set: one arms them and the other stands them down, and a signal in one list and
+#: not the other is a shutdown that can still be interrupted.
+STOP_ASKED_WITH = (signal.SIGHUP, signal.SIGTERM)
+
 
 class Stopped(BaseException):
     """A supervisor, or a person, asked this gateway to stop.
@@ -462,6 +468,20 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
             landing = _still_working(at, where, landing)
             swept_for = _kept_the_days(where, swept_for)
     except Stopped as why:
+        # **Asked once is enough, and from here on another ask may not interrupt anything.** The
+        # stack `run` unwinds after this now has real work on it — stopping every child a schedule
+        # started, which is allowed up to `STOPPING_WITHIN` seconds of asking, waiting and telling.
+        # A second `SIGTERM` arriving inside that window would raise `Stopped` again, from a handler
+        # that is still armed, in the middle of the shutdown: `firing.stopping` guards itself with
+        # `suppress(Exception)` and `Stopped` is deliberately not one, so it would escape `run`
+        # entirely, exit non-zero, and be read by `KeepAlive {SuccessfulExit: false}` as *bring it
+        # back* — the endless restart this module's docstring claims is unreachable. Worse, the
+        # children it had not reached yet would be left running with nothing holding them.
+        #
+        # So the request is answered once. Ignoring rather than restoring the default, because the
+        # default for `SIGTERM` is to end this process where it stands, which would abandon the same
+        # children by the other road.
+        _stop_asking()
         # The orderly stop, and the only reason this line exists: a gateway that was killed outright
         # writes nothing at all, so the presence of this sentence is how the two are told apart.
         logs.note(where, f"gateway stopping for {name}: {why}")
@@ -559,8 +579,24 @@ def _stop_politely() -> None:
     def leave(asked: int, _frame: object) -> None:
         raise Stopped(f"asked to stop with signal {asked}")
 
-    for asked in (signal.SIGHUP, signal.SIGTERM):
+    for asked in STOP_ASKED_WITH:
         # Only the main thread of the main interpreter may install one, and a platform without a
         # `SIGHUP` is not a reason for a gateway to refuse to run.
         with contextlib.suppress(ValueError, OSError, AttributeError):
             signal.signal(asked, leave)
+
+
+def _stop_asking() -> None:
+    """Stop turning a request to stop into an exception, because one has already been answered.
+
+    Called once the stop is under way, so that the shutdown itself cannot be interrupted by a second
+    `SIGTERM` — see `_serving`, which explains what that used to cost.
+
+    **Ignored rather than put back to the default**, and the difference is the whole point: the
+    default disposition for `SIGTERM` ends this process where it stands, which would abandon exactly
+    the children the shutdown exists to stop. `SIGKILL` still ends it, and nothing here can or should
+    change that — what answers for a gateway killed outright is the lock the kernel drops.
+    """
+    for asked in STOP_ASKED_WITH:
+        with contextlib.suppress(ValueError, OSError, AttributeError):
+            signal.signal(asked, signal.SIG_IGN)

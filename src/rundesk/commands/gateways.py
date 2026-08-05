@@ -558,7 +558,7 @@ def _started(name: str, by: job.Supervising) -> int:
     resolver unconditionally would take down an agent in the middle of its work in order to report
     that it was running. That is the recorded incident, and this is the guard for it.
     """
-    gone_wrong = _not_an_agent(name)
+    gone_wrong = directory.not_an_agent(name)
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was started")
 
@@ -901,7 +901,7 @@ def _said(name: str, lines: int) -> int:
     from, and whichever is genuinely empty says so — because *nothing yet* and *nobody could tell*
     are not the same answer, and neither is *I did not look*.
     """
-    gone_wrong = _not_an_agent(name)
+    gone_wrong = directory.not_an_agent(name)
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was read")
     if lines < 1:
@@ -1017,7 +1017,7 @@ def _which(verb: str, name: Optional[str], every: bool) -> Pointed:
             f"every: rundesk gateways {verb} --all",
             "nothing was changed"), USAGE)
     if name:
-        gone_wrong = _not_an_agent(name)
+        gone_wrong = directory.not_an_agent(name)
         if gone_wrong:
             return Pointed([], (gone_wrong, "see what there is with: rundesk agents",
                                 "nothing was changed"), FAILED)
@@ -1073,22 +1073,6 @@ def _waited_for(at: Path, wanted: str, patience: float) -> bool:
         if time.monotonic() >= ceiling:
             return False
         time.sleep(LOOKING_AGAIN)
-
-
-def _not_an_agent(name: str) -> str:
-    """Why this name is not an agent on this install, or `""` when it is.
-
-    Asked of `directory.known`, which is the one answer to what an agent is — a directory holding
-    `state.db`. A check written against the directory merely existing would accept a half-made one,
-    and a gateway hosting one of those is a gateway with nothing to host.
-    """
-    try:
-        there = directory.known()
-    except OSError as why:
-        return str(why)
-    if name in there:
-        return ""
-    return f"{name} is not an agent on this install"
 
 
 def _as_pid(pid: Optional[int]) -> str:

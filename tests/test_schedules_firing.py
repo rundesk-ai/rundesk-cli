@@ -94,6 +94,33 @@ class Firing(support.Isolated):
         return support.waited_until(landed, PATIENCE)
 
 
+def ended_outright(case, pid: int, how: int) -> None:
+    """Kill a child and everything it started, once it is certainly in a group of its own.
+
+    **Never `killpg(getpgid(pid))` on its own, which is what this exists to stop.** A child started
+    with `start_new_session=True` calls `setsid()` *after* the fork, so there is a real window in
+    which the parent has the pid and the child is still in the *parent's* process group — and asking
+    for its group inside that window answers with this test runner's own, which a signal would then
+    take out along with everything else running in it. This suite's header says it in one line:
+    every signal goes to a pid it started, never to a group it read somewhere. The build this
+    replaces recorded `killpg` at group `0` doing exactly that.
+
+    So the group is only ever signalled once it is the child's own — `getpgid(pid) == pid` is what
+    proves the `setsid` has happened, because a session leader leads a group of its own id.
+    """
+    case.assertTrue(support.waited_until(lambda: _leads_its_own_group(pid), PATIENCE),
+                    f"{pid} never became a session leader, so its group is not safe to signal")
+    os.killpg(pid, how)
+
+
+def _leads_its_own_group(pid: int) -> bool:
+    """Whether this child has its own process group yet, which is what `setsid` gives it."""
+    try:
+        return os.getpgid(pid) == pid
+    except OSError:
+        return False
+
+
 class WhatIsDueIsStarted(Firing):
 
     def test_a_schedule_that_is_due_starts_what_it_names(self):
@@ -341,7 +368,7 @@ class OneAtATime(Firing):
         pid = after.running["slow"].pid
         self.assertTrue(support.waited_until(
             lambda: firing.still_running(self.agent, "slow"), PATIENCE))
-        os.killpg(os.getpgid(pid), signal.SIGKILL)
+        ended_outright(self, pid, signal.SIGKILL)
         self.assertTrue(support.waited_until(
             lambda: not firing.still_running(self.agent, "slow"), PATIENCE),
             "the lock outlived the child tree that was holding it")
@@ -393,7 +420,7 @@ class ComingUpAfterAGatewayThatIsGone(Firing):
         self.assertTrue(support.waited_until(
             lambda: firing.still_running(self.agent, "slow"), PATIENCE))
         watching = firing.settled(self.agent, self.where)
-        os.killpg(os.getpgid(pid), signal.SIGKILL)
+        ended_outright(self, pid, signal.SIGKILL)
         self.assertTrue(support.waited_until(
             lambda: not firing.still_running(self.agent, "slow"), PATIENCE))
         watching = self.look(at=datetime.datetime(2026, 8, 5, 9, 30), watching=watching)
@@ -596,7 +623,7 @@ class WhatCollectingAChildAnswers(support.Isolated):
             signal.pthread_sigmask(signal.SIG_SETMASK, before)
         self.addCleanup(lambda: programs.stop(pid, gently_for=0.2, firmly_for=2.0))
 
-        os.killpg(os.getpgid(pid), signal.SIGTERM)
+        ended_outright(self, pid, signal.SIGTERM)
 
         self.assertTrue(support.waited_until(lambda: not programs.alive(pid), 5.0),
                         "the child inherited a blocked SIGTERM and cannot be stopped politely")

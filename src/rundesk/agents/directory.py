@@ -205,6 +205,28 @@ def known() -> List[str]:
                   and (one / RECORDS).is_file())
 
 
+def not_an_agent(name: str) -> str:
+    """Why this name is not an agent on this install, or `""` when it is.
+
+    Asked of `known`, which is the one answer to what an agent is — a directory holding `state.db`.
+    A check written against the directory merely existing would accept a half-made one and a
+    directory somebody made by hand, and both are things to be told about rather than operated on.
+
+    **Here rather than beside the verbs that ask it.** Three command groups need this same sentence
+    before they touch an agent, and two had already written it out identically; the third would have
+    been the third copy. What an agent *is* belongs to this module, and so does the sentence for a
+    name that is not one — `taken` beside it already answers the mirror question for a name that
+    cannot be used, in the same shape.
+    """
+    try:
+        there = known()
+    except OSError as why:
+        return str(why)
+    if name in there:
+        return ""
+    return f"{name} is not an agent on this install"
+
+
 def taken(name: str) -> str:
     """Why this name may not be used for a new agent, or `""` when it may.
 

@@ -50,7 +50,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterator, NamedTuple, Optional, Tuple
 
-from rundesk.utils import files, locking, logs
+from rundesk.utils import files, locking, logs, programs
 
 #: The name the kernel holds while a gateway is up, in the agent's own directory.
 LOCK = "gateway.lock"
@@ -279,19 +279,7 @@ def _what_it_said_about_itself(at: Path) -> Standing:
     how, said = files.read_json(at / RECORD)
     if how != files.READ or not isinstance(said, dict):
         return Standing(ONLINE, None, None, "")
-    return Standing(ONLINE, _a_pid(said.get("pid")), _wedged(said.get("since_boot")), "")
-
-
-def _a_pid(said: Any) -> Optional[int]:
-    """A recorded pid, or `None` when it is not one a caller may act on.
-
-    `0` is every process in the caller's own group and `1` is the machine's init — a record holding
-    either, whether corrupted or handwritten, is a record that would have somebody signal the wrong
-    thing entirely. `True` is an `int` to Python and is not a pid to anybody else.
-    """
-    if isinstance(said, bool) or not isinstance(said, int) or said <= 1:
-        return None
-    return said
+    return Standing(ONLINE, programs.a_pid(said.get("pid")), _wedged(said.get("since_boot")), "")
 
 
 def _wedged(said: Any) -> Optional[bool]:

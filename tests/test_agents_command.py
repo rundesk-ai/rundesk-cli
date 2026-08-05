@@ -12,6 +12,8 @@ private shape goes green while the sentence a person reads goes wrong.
 Run directly: `python3 tests/test_agents_command.py`
 """
 
+import fcntl
+import os
 import unittest
 from unittest import mock
 
@@ -19,6 +21,7 @@ import support
 from rundesk.agents import directory
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
+from rundesk.schedules import firing, kept
 
 
 class Listing(support.Isolated):
@@ -255,6 +258,50 @@ class Removing(support.Isolated):
         self.assertIn("this would take the agent cole", err)
         self.assertIn("nothing was removed. To go ahead:", err)
         self.assertIn("rundesk agents remove cole --confirm", err)
+
+    def a_schedule_that_is_running(self, name="slow"):
+        """A real `flock` on a schedule's lock, taken by this case the way a firing takes it.
+
+        The kernel is what the guard asks, so a stand-in would prove nothing. Taken on a descriptor
+        of the case's own, and let go by a cleanup registered the moment it is held.
+        """
+        kept.added("cole", name, {"cron": "0 2 * * *", "command": "/bin/echo hi"})
+        at = firing.lock_of("cole", name)
+        at.parent.mkdir(parents=True, exist_ok=True)
+        held = os.open(at, os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, held)
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return name
+
+    def test_it_refuses_while_a_schedule_of_that_agents_is_still_running(self):
+        # **A schedule run by hand holds only its own lock, never `gateway.lock`** — so an agent with
+        # no gateway anywhere reads as free to the gateway check and can still have a program
+        # running. Removing it here unlinks `schedules/` including that held lock, which hands the
+        # name away: a later agent and schedule of the same names then claim a *fresh* inode and lock
+        # that, while the original child still holds the old one. Two firings of one schedule,
+        # running at once, which is the one thing the whole locking design exists to prevent.
+        self.a_schedule_that_is_running()
+
+        code, _out, err = self.rundesk("agents", "remove", "cole", "--confirm")
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("has work still running: slow", err)
+        self.assertIn("nothing was removed", err)
+        self.assertTrue((paths.agents() / "cole").is_dir(), "the agent was taken away anyway")
+
+    def test_it_goes_ahead_once_that_work_has_finished(self):
+        # The refusal is about work in flight and not about having schedules at all.
+        kept.added("cole", "nightly", {"cron": "0 2 * * *", "command": "/bin/echo hi"})
+        code, _out, err = self.rundesk("agents", "remove", "cole", "--confirm")
+        self.assertEqual(OK, code, err)
+
+    def test_what_it_would_take_names_the_schedules_directory(self):
+        # The preview is what somebody checks before agreeing, so a removal that takes `schedules/`
+        # and does not say so describes a smaller removal than the one about to happen.
+        kept.added("cole", "nightly", {"cron": "0 2 * * *", "command": "/bin/echo hi"})
+        _code, _out, err = self.rundesk("agents", "remove", "cole")
+        self.assertIn("schedules", err)
+        self.assertIn("1 schedule(s)", err)
 
     def test_a_removal_that_did_not_happen_is_reported_as_a_failure(self):
         # The whole point of the flag. Exiting 0 here would tell a script the agent was gone.

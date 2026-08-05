@@ -349,6 +349,27 @@ def still_running(agent: str, name: str) -> bool:
     return False
 
 
+def in_flight(agent: str) -> List[str]:
+    """Every schedule of this agent's with work still going, by name. Asked of the kernel.
+
+    **For whoever is about to take something away from underneath it.** Removing an agent unlinks
+    this whole directory, and unlinking a lock somebody is holding is how two firings of one schedule
+    come to run at once: the name is handed away, so the next claim creates a fresh inode and locks
+    *that* while the original child holds the old one. `agents remove` is the caller, and it needs to
+    know before it acts rather than after.
+
+    Read off the lock files rather than off the records, and that is the point of it: a removal has
+    to be able to ask this even when the database is unreadable, and a firing that is running is
+    running whether or not anything can still say why.
+    """
+    try:
+        locks = sorted(directory.schedules(agent).glob(f"*{LOCK_ENDS}"))
+    except OSError:
+        return []
+    return [one.name[:-len(LOCK_ENDS)] for one in locks
+            if still_running(agent, one.name[:-len(LOCK_ENDS)])]
+
+
 # -- coming up, and looking at the clock -----------------------------------------------
 
 
@@ -388,7 +409,7 @@ def _reckoned(agent: str, where: Path, name: str, watching: Watching) -> None:
                          "gateway that is gone — it is being watched, and what it comes to cannot "
                          "be read", logs.WARNING)
         watching.running[name] = Running(
-            name=name, pid=_a_pid(said.get("pid")), fired_for=str(said.get("fired_for") or ""),
+            name=name, pid=programs.a_pid(said.get("pid")), fired_for=str(said.get("fired_for") or ""),
             mine=False, from_byte=_a_size(said.get("from_byte")), since=time.monotonic())
         return
     _note(where, f"schedule {name} was interrupted: the gateway that started it is gone, so "
@@ -614,7 +635,15 @@ def let_go(agent: str, name: str) -> List[Path]:
 
 
 def stopping(agent: str, where: Path, watching: Watching, within: float) -> Watching:
-    """Stop everything this gateway started, inside the budget it was given. **Never raises.**
+    """Stop everything this gateway started, inside the budget it was given.
+
+    **No ordinary failure escapes this**, which is not quite the same promise as *never raises* and
+    the difference was worth finding: a request to *stop* is deliberately a `BaseException` so that
+    the guards in this module cannot swallow it, and this function is reached during a shutdown that
+    is itself the answer to one. A second `SIGTERM` landing in the middle of it would therefore go
+    straight through `suppress(Exception)` and out of the gateway, exit non-zero, and be read as a
+    request to be restarted. **The caller is what makes that unreachable** — `gateways.host` stands
+    its handlers down once a stop is under way, and says so where it does it.
 
     The whole of an orderly stop has to fit inside the job's `ExitTimeOut`, or launchd `SIGKILL`s
     the gateway and every child is orphaned still holding its lock — so the budget is divided among
@@ -776,18 +805,6 @@ def _read_record(agent: str, name: str) -> Dict[str, Any]:
     """
     how, said = files.read_json(record_of(agent, name))
     return dict(said) if how == files.READ and isinstance(said, dict) else {}
-
-
-def _a_pid(said: Any) -> Optional[int]:
-    """A recorded pid, or `None` when it is not one anybody may act on.
-
-    `0` is every process in this one's own group and `1` is the machine's init, so a record holding
-    either — corrupt, or written by hand — is one that would have somebody signal the wrong thing
-    entirely. `True` is an `int` to Python and is not a pid to anybody else.
-    """
-    if isinstance(said, bool) or not isinstance(said, int) or said <= 1:
-        return None
-    return said
 
 
 def _a_size(said: Any) -> int:

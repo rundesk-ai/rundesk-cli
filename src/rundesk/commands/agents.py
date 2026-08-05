@@ -37,6 +37,7 @@ from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job, standing
+from rundesk.schedules import firing, kept
 from rundesk.skills import grants
 from rundesk.utils import locking
 from rundesk.utils.terminal import as_table
@@ -79,8 +80,11 @@ def register(sub: Subcommands) -> None:
     at exit `1`, in a sentence that ends with the command somebody should run. That is the shape
     `uninstall --confirm` already has, and there is no reason for this to be the second shape.
     """
-    kept = sub.add_parser("agents", help="the agents this install keeps")
-    what = kept.add_subparsers(dest="what", metavar="<what>")
+    # `kept_here` rather than `kept`, which is the name of the schedules store this module now
+    # imports. The shadow would be local to this function and harmless today, and the day somebody
+    # adds a line here that wants the store it would be a `NoneType has no attribute` from a parser.
+    kept_here = sub.add_parser("agents", help="the agents this install keeps")
+    what = kept_here.add_subparsers(dest="what", metavar="<what>")
 
     what.add_parser("list", help="every agent this install keeps, and what is behind it")
 
@@ -210,7 +214,7 @@ def _configured(name: str, provider: Optional[str]) -> int:
     if trouble:
         return _failed(trouble, "nothing was changed")
 
-    gone_wrong = _not_an_agent(name)
+    gone_wrong = directory.not_an_agent(name)
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was changed")
 
@@ -226,7 +230,7 @@ def _configured(name: str, provider: Optional[str]) -> int:
 
 def _forgotten(name: str, confirming: bool) -> int:
     """Take an agent away, or — with nothing confirming it — say exactly what that would take."""
-    gone_wrong = _not_an_agent(name)
+    gone_wrong = directory.not_an_agent(name)
     if gone_wrong:
         # Checked before the confirmation is asked for, so somebody who mistyped the name finds out
         # now rather than after typing `--confirm` for an agent that was never there.
@@ -243,6 +247,15 @@ def _forgotten(name: str, confirming: bool) -> int:
     running = _its_gateway_is_up(name)
     if running:
         return _failed(running, f"stop it with: rundesk gateways stop {name}", "nothing was removed")
+
+    # And whether any of its *schedules* is running, which is a different question with the same
+    # answer. A schedule run by hand holds only its own lock and never `gateway.lock`, so an agent
+    # with no gateway at all can still have work in flight — and this removal takes `schedules/`
+    # with everything else. See `_its_schedules_are_running`.
+    working = _its_schedules_are_running(name)
+    if working:
+        return _failed(working, f"see what it is doing with: rundesk schedules list {name}",
+                       "nothing was removed")
 
     at = paths.agents() / name
     try:
@@ -274,6 +287,20 @@ def _skills_it_holds(name: str) -> List[str]:
         return []
 
 
+def _what_it_has_scheduled(name: str) -> int:
+    """How many schedules this agent keeps, for the removal to name. `0` when it cannot be read.
+
+    Answered as nothing rather than raised, for the reason `_skills_it_holds` gives: this is one line
+    of a description somebody is about to agree to, and a count that could not be taken is not a
+    reason to refuse to describe the removal.
+    """
+    try:
+        return len(kept.all(name))
+    except (kept.Refused, records.NotThere, records.Unreadable, directory.Refused,
+            migration.Ahead, OSError, sqlite3.Error):
+        return 0
+
+
 def _needs_confirming(name: str) -> int:
     """Say exactly what a removal would take, and take none of it.
 
@@ -296,6 +323,14 @@ def _needs_confirming(name: str) -> int:
         print(f"        take   {len(held)} skill grant(s) — {', '.join(held)}; the skills "
               "themselves stay in the library", file=sys.stderr)
     print(f"        take   {at / directory.LOGS}", file=sys.stderr)
+    scheduled = _what_it_has_scheduled(name)
+    if scheduled:
+        # Named because `directory.forgotten` really does take this directory, and a preview that
+        # left it out would describe a smaller removal than the one about to happen — which is the
+        # one thing this list exists not to do. What goes with it is everything every firing of
+        # those schedules wrote.
+        print(f"        take   {at / directory.SCHEDULES} — {scheduled} schedule(s), what each has "
+              "already done, and everything their runs wrote", file=sys.stderr)
     for one in (at / directory.GATEWAY_RECORD, at / directory.GATEWAY_LOCK):
         # Named only when it is there. Listing what a gateway *might* have left would describe a
         # removal larger than the one that would happen, and this list is what somebody checks
@@ -331,21 +366,31 @@ def _its_gateway_is_up(name: str) -> str:
     return ""
 
 
-def _not_an_agent(name: str) -> str:
-    """Why this name is not an agent on this install, or `""` when it is.
+def _its_schedules_are_running(name: str) -> str:
+    """Why this agent may not be taken away yet because work is in flight, or `""` when it may.
 
-    Asked of `directory.known`, which is the one answer to what an agent is — a directory holding
-    `state.db`. A check written against the directory merely existing would accept a half-made one
-    and a directory somebody made by hand, and both are things to be told about rather than things
-    to operate on.
+    **A schedule running by hand holds only its own lock, never `gateway.lock`**, so an agent with no
+    gateway anywhere reads as free to `_its_gateway_is_up` and can still have a program running. This
+    removal takes `schedules/` with everything else — and unlinking a lock while something holds it
+    hands the name away, so a later agent and schedule of the same names claim a *fresh* inode and
+    lock that, while the original child is still holding the old one. Two firings of one schedule,
+    running at once, which is the single thing the whole locking design exists to prevent.
+
+    Asked of the kernel through the lock files rather than of the records, so it is still answerable
+    when the database cannot be read — which is one of the states somebody removes an agent in.
     """
     try:
-        there = directory.known()
-    except OSError as why:
-        return str(why)
-    if name in there:
+        working = firing.in_flight(name)
+    except (directory.Refused, OSError):
+        # Not a reason to refuse a removal on its own: an agent whose directory cannot be listed has
+        # bigger problems, and `directory.forgotten` will raise about the same thing in a moment with
+        # a sentence about what it could not take.
         return ""
-    return f"{name} is not an agent on this install"
+    if not working:
+        return ""
+    return (f"{name} has work still running: {', '.join(working)} — removing it now would take the "
+            "lock that work is holding, and a schedule of the same name later would start a second "
+            "copy beside it")
 
 
 def _provider_trouble(said: Optional[str], typed: str) -> str:

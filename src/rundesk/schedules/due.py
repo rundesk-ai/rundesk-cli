@@ -437,6 +437,14 @@ def _values(part: str, low: int, high: int, name: str) -> frozenset:
 
 
 def _number(said: str, low: int, high: int, name: str) -> int:
+    """One value out of a field, refused in the reader's words rather than the parser's.
+
+    Asked with `isdigit` rather than by catching what `int()` raises, and the difference is which
+    sentence somebody gets: `int("-5")` succeeds, so a negative would pass this and be refused a line
+    later for being out of range — *"minute is 0 to 59, and '-5' is not"* — when what they actually
+    typed is not a number for a cron field at all. A range is a thing to correct; a minus sign in a
+    field that has never allowed one is a thing to notice.
+    """
     if not said.isdigit():
         raise NotASchedule(f"'{said}' is not a number for {name}")
     value = int(said)
