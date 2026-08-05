@@ -211,7 +211,7 @@ def checked(kind: str, options: Sequence[str], env: Dict[str, str],
         describes=str(said.get("describes") or kind),
         notify_place=_a_text(said.get("notify_place")),
         settings=json.dumps(said.get("settings") if isinstance(said.get("settings"), dict) else {}),
-        secret_names=[str(one) for one in _a_list(said.get("secret", {}).get("env"))],
+        secret_names=[str(one) for one in _a_list(_a_mapping(said.get("secret")).get("env"))],
         invite=str(said.get("invite") or ""),
         why="")
 
@@ -310,6 +310,16 @@ def _a_list(said: Any) -> List[Any]:
     if said is None:
         return []
     return list(said) if isinstance(said, (list, tuple)) else [said]
+
+
+def _a_mapping(said: Any) -> Dict[str, Any]:
+    """Whatever an adapter said, as a mapping — `{}` when it said something else entirely.
+
+    `said.get("secret", {})` is not this: a default applies only when the key is *absent*, so an
+    adapter answering `"secret": "A_TOKEN"` handed a string to `.get` and raised `AttributeError`
+    out of the one function whose whole job is to turn an unvetted program's output into an answer.
+    """
+    return said if isinstance(said, dict) else {}
 
 
 def _a_text(said: Any) -> Optional[str]:

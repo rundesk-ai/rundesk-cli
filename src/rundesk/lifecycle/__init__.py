@@ -10,6 +10,7 @@ and no command line anywhere near it, because everything variable arrives as an 
 | `tree` | placing the program, replacing it, and taking it away |
 | `backups` | copies of what the owner keeps, and where they are kept |
 | `home` | the directories an install keeps things in, and the note standing in each |
+| `packages` | the packages a release asks for, built where an adapter can import them |
 | `migration` | carrying an install forward when a newer release expects something different |
 | `steps/` | one migration step per file, found rather than listed |
 

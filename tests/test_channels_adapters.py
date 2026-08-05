@@ -187,6 +187,19 @@ class AskingWhetherItCanConnect(Adapters):
         self.an_adapter("discord", A_CHATTY_ADAPTER)
         self.assertEqual(["ONE_TOKEN"], adapters.checked("discord", (), {}).secret_names)
 
+    def test_an_adapter_that_answers_a_wrong_shape_is_refused_rather_than_crashing(self):
+        # The one function whose whole job is turning an unvetted program's output into an answer
+        # must not raise instead. `said.get("secret", {})` applied its default only when the key
+        # was absent, so an adapter saying `"secret": "A_TOKEN"` handed a string to `.get`.
+        for said in ('{"ok": true, "describes": "x", "secret": "A_TOKEN"}',
+                     '{"ok": true, "describes": "x", "secret": []}',
+                     '{"ok": true, "describes": "x", "settings": "not a mapping"}'):
+            with self.subTest(said=said):
+                self.an_adapter("discord", "#!/bin/sh\necho '" + said + "'\nexit 0\n")
+                answered = adapters.checked("discord", (), {})
+                self.assertTrue(answered.ok)
+                self.assertEqual([], answered.secret_names)
+
     def test_what_the_owner_typed_reaches_the_adapter_exactly(self):
         self.an_adapter("discord", """#!/bin/sh
 shift

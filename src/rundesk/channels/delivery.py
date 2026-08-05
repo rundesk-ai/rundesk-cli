@@ -68,8 +68,9 @@ def split(said: str, at_most: int = WHEN_UNSAID) -> List[str]:
     Whole lines wherever a line boundary is near enough to the limit to be worth taking, and at the
     limit when it is not. A fence left open at a cut is closed and opened again on the next piece.
 
-    Hands back at least one piece always, and never an empty one: a platform refuses an empty
-    message, and that refusal arrives as a failed delivery for something nobody needed sent.
+    Hands back every piece it takes to say the whole of it, and **none at all** for text that is
+    empty or only whitespace — never a piece that is itself empty, which is what a platform actually
+    refuses, arriving as a failed delivery for something nobody needed sent.
     """
     if at_most < 1:
         raise ValueError("a message has to be allowed at least one character")
