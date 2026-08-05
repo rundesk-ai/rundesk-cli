@@ -203,7 +203,8 @@ def fill_in(data: Optional[Path] = None) -> Dict[str, Any]:
     # Held at the install level as well as at the file level. `files`' own lock guards this file
     # against another writer of this file; it cannot guard it against `data/` being renamed out from
     # under it by a restore, which is the race that lost a stated value entirely.
-    with locking.only_one(paths.lock(at.parent.parent), "this install"), \
+    with locking.only_one(paths.lock(at.parent.parent), "this install",
+                          locking.WHILE_A_DIRECTORY_MOVES), \
             files.changing_json(at, empty={}) as held:
         settled = dict(held[0]) if isinstance(held[0], dict) else {}
         for key, value in INITIAL.items():
@@ -232,7 +233,8 @@ def stated_all(values: Dict[str, Any], data: Optional[Path] = None) -> None:
     if unknown:
         raise Refused(f"{unknown[0]} is not a value rundesk is configured with")
     at = where(data)
-    with locking.only_one(paths.lock(at.parent.parent), "this install"), \
+    with locking.only_one(paths.lock(at.parent.parent), "this install",
+                          locking.WHILE_A_DIRECTORY_MOVES), \
             files.changing_json(at, empty=dict(INITIAL)) as held:
         settled = dict(held[0]) if isinstance(held[0], dict) else dict(INITIAL)
         settled.update(values)

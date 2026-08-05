@@ -32,10 +32,22 @@ import time
 from pathlib import Path
 from typing import Dict, Iterator, Optional, Tuple
 
-#: How long to wait for something else to finish before saying so. Read at the moment of asking
-#: rather than bound in a signature, so a test can shorten the ceiling and drive this in
-#: milliseconds.
+#: How long to wait for something else to finish before saying so, when the thing being guarded is
+#: one small file: a read, a decision and a rename. A wait that outlasts this is not a busy machine.
+#:
+#: Read at the moment of asking rather than bound in a signature, so a test can shorten the ceiling
+#: and drive this in milliseconds.
 WAITING_SECONDS = 10.0
+
+#: The ceiling for something that may legitimately be busy for a long time — a whole directory
+#: being copied, swapped or moved to another disk.
+#:
+#: **Sized by measurement, not by feel.** Copying a 120MB directory of sixty thousand files held
+#: the lock for nine seconds, which is already the short ceiling; a real install with agent data,
+#: logs and a database per agent is far larger, and a backup running over one is an ordinary thing
+#: rather than a wedged one. Waiting ten seconds and then announcing that something has gone wrong
+#: would be a confident, wrong answer at the exact moment the machine was working correctly.
+WHILE_A_DIRECTORY_MOVES = 300.0
 
 #: How often the wait looks again. Short enough that an ordinary hold is never noticed.
 LOOKING_AGAIN = 0.02
@@ -58,12 +70,22 @@ class Stuck(Exception):
 
 
 @contextlib.contextmanager
-def only_one(at: Path, guarding: Optional[str] = None) -> Iterator[None]:
+def only_one(at: Path, guarding: Optional[str] = None,
+             waiting: Optional[float] = None) -> Iterator[None]:
     """Hold an exclusive lock on the file `at` for the length of the block.
 
     `guarding` is what the lock is protecting, in the words of whoever took it, so the message when
     it cannot be had names the thing a person cares about rather than a dotfile they have never
-    seen.
+    seen. `waiting` is how long to wait for it — the caller's decision, because how long is too long
+    depends entirely on what is being held and for what.
+
+    **Nothing sweeps a lock and nothing needs to.** The lock is the `flock`, not the file: the
+    kernel drops it when the descriptor closes, however the process ended — a clean exit, a crash,
+    `SIGKILL`, the power going. A leftover file is not a held lock, it is somewhere to hang the
+    next one. A sweep would be worse than useless here: removing the file while another process
+    holds a lock on it means the next caller creates a *new* file and locks that, and both then
+    believe they have it. That is the failure mode lockfile-by-existence schemes have and this one
+    does not.
     """
     key = (threading.get_ident(), os.path.realpath(str(at)))
     if _HELD.get(key):
@@ -77,7 +99,7 @@ def only_one(at: Path, guarding: Optional[str] = None) -> Iterator[None]:
     at.parent.mkdir(parents=True, exist_ok=True)
     holding = os.open(at, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        _taken(holding, guarding or str(at))
+        _taken(holding, guarding or str(at), waiting)
         _HELD[key] = 1
         try:
             yield
@@ -87,9 +109,10 @@ def only_one(at: Path, guarding: Optional[str] = None) -> Iterator[None]:
         os.close(holding)
 
 
-def _taken(holding: int, guarding: str) -> None:
+def _taken(holding: int, guarding: str, waiting: Optional[float]) -> None:
     """Take the lock, looking again until the ceiling. `Stuck` when it never came free."""
-    ceiling = time.monotonic() + WAITING_SECONDS
+    patience = WAITING_SECONDS if waiting is None else waiting
+    ceiling = time.monotonic() + patience
     while True:
         try:
             fcntl.flock(holding, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -98,8 +121,12 @@ def _taken(holding: int, guarding: str) -> None:
             if why.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
                 raise
             if time.monotonic() >= ceiling:
+                # It says what was waited for and how long, and does not claim to know why.
+                # Asserting that something has gone wrong would be a confident wrong answer when
+                # the truth is a large backup still running.
                 raise Stuck(
                     f"something else has been changing {guarding} for longer than "
-                    f"{WAITING_SECONDS:g} seconds, and this one gave up rather than wait for ever"
+                    f"{patience:g} seconds, so this one gave up rather than wait for ever — "
+                    "another rundesk command may still be running"
                 ) from why
             time.sleep(LOOKING_AGAIN)

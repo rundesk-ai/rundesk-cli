@@ -118,7 +118,8 @@ def _one_at_a_time(root: Path) -> ContextManager[None]:
     configuration, which takes it again. `flock` is held per open file description, so a second
     `open` in the same process conflicts with the first exactly as another process would.
     """
-    return locking.only_one(paths.lock(root), "this install")
+    return locking.only_one(paths.lock(root), "this install",
+                            locking.WHILE_A_DIRECTORY_MOVES)
 
 
 def location(backups: Optional[Path] = None) -> Path:

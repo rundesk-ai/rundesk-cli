@@ -258,6 +258,53 @@ class WhenSomethingElseIsChangingTheSameFile(support.Isolated):
         self.assertLess(time.monotonic() - began, 5, "it waited far past its own ceiling")
         self.assertIn(str(self.at), str(refused.exception))
 
+    def test_the_caller_chooses_how_long_is_too_long(self):
+        """How long is too long depends on what is held, so the caller says rather than the module.
+
+        Measured before this existed: copying a 120MB `data/` of sixty thousand files held the
+        install lock for 9.2 seconds against a ceiling of 10 — so a real install with a database per
+        agent would have had an ordinary `backups save` refuse a concurrent command. The ceiling is
+        not a constant one number can be right for.
+        """
+        self.held_by_something_else()
+        lock = self.at.with_name(f".{self.at.name}.lock")
+
+        began = time.monotonic()
+        with self.assertRaises(locking.Stuck) as refused:
+            with locking.only_one(lock, "a big copy", waiting=0.4):
+                pass
+        waited = time.monotonic() - began
+
+        # It waited its own ceiling and not the module's, which is four times shorter.
+        self.assertGreater(waited, 0.3, "it used WAITING_SECONDS and ignored what it was handed")
+        self.assertLess(waited, 3, "it waited past the ceiling it was given")
+        self.assertIn("0.4 seconds", str(refused.exception))
+        self.assertIn("a big copy", str(refused.exception))
+
+    def test_giving_up_does_not_claim_to_know_why(self):
+        """The message a person reads when a large backup is running must not call it a fault.
+
+        It said "this is not a busy machine — it is something that has gone wrong", which was true
+        of a lock over one small JSON file and false of one held across a directory being copied.
+        A confident wrong answer at the moment the machine is working correctly.
+        """
+        self.held_by_something_else()
+        lock = self.at.with_name(f".{self.at.name}.lock")
+
+        with self.assertRaises(locking.Stuck) as refused:
+            with locking.only_one(lock, "this install", waiting=0.05):
+                pass
+
+        said = str(refused.exception)
+        self.assertNotIn("gone wrong", said)
+        self.assertIn("may still be running", said)
+
+    def test_a_directory_that_moves_is_given_far_longer_than_a_file(self):
+        # Not an arbitrary number: the ceiling for a whole-directory operation has to outlast the
+        # 9.2 seconds one was measured taking, with room for an install many times larger.
+        self.assertGreaterEqual(locking.WHILE_A_DIRECTORY_MOVES, 60.0)
+        self.assertGreater(locking.WHILE_A_DIRECTORY_MOVES, locking.WAITING_SECONDS)
+
     def test_it_writes_nothing_when_it_could_not_have_the_file(self):
         files.write_json(self.at, {"a": 1})
         self.held_by_something_else()

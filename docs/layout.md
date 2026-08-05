@@ -35,6 +35,20 @@ One lock for the whole install rather than one per directory, because the races 
 between *different* commands touching different things, and a lock per directory lets exactly those
 through.
 
+**Nothing sweeps it, and a stale file is not a held lock.** The lock is the `flock`, not the file:
+the kernel drops it when the process ends, however it ended — cleanly, on a crash, on `SIGKILL`, on
+the power going. Demonstrated rather than assumed: a process holding it was `SIGKILL`ed and the next
+command had the lock immediately. A sweep would be actively worse, because removing the file while
+another process holds a lock on it means the next caller creates a *new* file and locks that, and
+both then believe they have it — which is the failure lockfile-by-existence schemes have and this
+one does not.
+
+What *is* worth being careful about is how long a command waits for it. A whole-directory copy
+legitimately holds it for a long time: a 120MB `data/` of sixty thousand files measured 9.2 seconds,
+and a real install with a database per agent is larger. So the wait is the caller's to choose — a
+few seconds for one small file, minutes for something that moves a directory — and a command that
+gives up says another may still be running rather than claiming something has gone wrong.
+
 Set the root and every one of those moves with it:
 
 ```sh

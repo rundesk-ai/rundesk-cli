@@ -248,7 +248,8 @@ def _key(at: Optional[Path] = None) -> bytes:
     # the other value can never be opened again. Nothing else about this feature is unrecoverable.
     made.parent.mkdir(parents=True, exist_ok=True)
     made.parent.chmod(ONLY_MINE)
-    with locking.only_one(paths.lock(made.parent.parent), "this install"):
+    with locking.only_one(paths.lock(made.parent.parent), "this install",
+                          locking.WHILE_A_DIRECTORY_MOVES):
         there = _read_key(made)
         if there:
             return there
@@ -370,7 +371,8 @@ def _written(values: Dict[str, Optional[str]], at: Optional[Path]) -> None:
     _not_through_a_link(directory, "the directory the values are kept in")
     directory.mkdir(parents=True, exist_ok=True)
     directory.chmod(ONLY_MINE)
-    with locking.only_one(paths.lock(directory.parent), "this install"):
+    with locking.only_one(paths.lock(directory.parent), "this install",
+                          locking.WHILE_A_DIRECTORY_MOVES):
         with files.changing_json(where(at), empty={}, private=True) as held:
             settled = dict(held[0]) if isinstance(held[0], dict) else {}
             settled.update(values)
