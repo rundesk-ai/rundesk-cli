@@ -13,7 +13,9 @@ what it does on the day something goes wrong.
 Run directly: `python3 tests/test_backups.py`
 """
 
+import argparse
 import contextlib
+import io
 import os
 import shutil
 import sqlite3
@@ -25,6 +27,7 @@ from unittest import mock
 import support
 from rundesk.agents import directory, records
 from rundesk.agents import migration as agent_migration
+from rundesk.commands import backups as command
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import standing
@@ -730,17 +733,17 @@ class SettlingWhatCameBack(Copies):
         self.assertEqual("something else has it", why)
 
 
-class AnAgentInsideACopy(Copies):
-    """`data/` holds a live SQLite database per agent now, and neither half of this had a case.
+class WithRealAgents(Copies):
+    """A scratch install with real agents in it, and real gateways only through `standing.holding`.
 
-    Two things meet here and both were reachable from commands that already shipped. A copy is taken
-    while a gateway holds an agent's records open, which is the torn-snapshot problem with the
-    owner's *backup* as the thing that ends up torn. And a copy put back carries agents that predate
-    this release, which is the same reason `_settle` exists one level up: being back is not the same
-    as being settled.
+    Real agents, built through `directory.made` on the real first migration step, because a stand-in
+    for either would be a second description of what an agent's records are. **No launchd job is
+    placed and `launchctl` is never run** — everything about a gateway that these cases turn on is
+    the lock, and the lock is the kernel's.
 
-    Real agents, built through `directory.made`, and real gateways only through `standing.holding` —
-    no launchd job is placed and `launchctl` is never run.
+    Shared by the two classes below because both need exactly this and neither is about the other: a
+    copy taken while an agent is live, and a restore that would replace the file a live gateway's
+    lock lives on.
     """
 
     def setUp(self):
@@ -785,6 +788,17 @@ class AnAgentInsideACopy(Copies):
                     "these records are not in WAL, so this case is not testing what it says")
                 live.execute("UPDATE config SET owner_name = ? WHERE id = 1", (WRITTEN_LIVE,))
                 yield live
+
+
+class AnAgentInsideACopy(WithRealAgents):
+    """`data/` holds a live SQLite database per agent now, and neither half of this had a case.
+
+    Two things meet here and both were reachable from commands that already shipped. A copy is taken
+    while a gateway holds an agent's records open, which is the torn-snapshot problem with the
+    owner's *backup* as the thing that ends up torn. And a copy put back carries agents that predate
+    this release, which is the same reason `_settle` exists one level up: being back is not the same
+    as being settled.
+    """
 
     def test_a_copy_taken_while_a_gateway_holds_an_agent_is_made_rather_than_refused(self):
         # Decided rather than defaulted: a backup somebody can only take with every gateway stopped
@@ -963,6 +977,306 @@ class AnAgentInsideACopy(Copies):
         self.assertIsNone(done.settled)
         self.assertNotIn("0002_x", agent_migration.recorded(directory.records("cole")))
         self.assertTrue(any("were not carried" in one for one in self.said), self.said)
+
+    def test_the_command_says_which_records_went_into_the_copy_as_they_stood(self):
+        """The fact `save` reports and the command was throwing away.
+
+        `_saved` passed no `saying` at all, so the one account of a database that could not be
+        snapshotted was discarded and the copy sat in `backups/` looking like every other one.
+        `backup_enabled`, `backup_retention` and `update_time` are already in the configuration; the
+        moment a scheduled backup lands, that is a silent, permanent integrity event.
+
+        On stderr, because that is the stream an unattended run's output is read from — and the agent
+        is named, because a count is what hides the one somebody has to look at.
+        """
+        at = self.an_agent()
+        (at / directory.RECORDS).write_bytes(b"this is not a database")
+
+        code, _out, err = self.rundesk("backups", "save")
+
+        self.assertEqual(OK, code, "a copy of records rundesk could not read is still a copy")
+        self.assertIn("copied as it stood rather than as a snapshot", err)
+        self.assertIn(str(at / directory.RECORDS), err)
+
+    def test_the_command_says_nothing_about_records_it_could_read_perfectly_well(self):
+        # The guard must not have turned an ordinary backup into one that warns every time.
+        self.an_agent()
+        code, _out, err = self.rundesk("backups", "save")
+        self.assertEqual(OK, code)
+        self.assertNotIn("as it stood", err)
+
+
+class AGatewayStandIn:
+    """A stand-in for `commands.gateways`, which holds a **real** lock the way a gateway does.
+
+    Nothing is inherited and nothing is registered — `Gateways` is a `Protocol`, so a stand-in has
+    nothing in common with the real thing but the shape.
+
+    **The lock is real, and that is the whole value of this class.** A stand-in that only recorded
+    the call would let a restore that quietly orphaned somebody's lock go on passing: what the defect
+    does is replace the *file* the lock lives on, which nothing but a held `flock` can notice. So
+    `down` really lets go and `up` really claims the name again, through `standing.holding`, which is
+    what a gateway itself uses.
+
+    Every call also records what `data/marker.txt` said at the moment it was made, because "the
+    gateways were stood down **before anything moved**" is an ordering guarantee and there is no
+    other way to see it from outside.
+    """
+
+    def __init__(self, would_not_go_down: str = "", would_not_come_up: str = "") -> None:
+        self.asked = []
+        self.held = {}
+        self.would_not_go_down = would_not_go_down
+        self.would_not_come_up = would_not_come_up
+
+    def running(self, name: str) -> None:
+        """Take this agent's name, the way a gateway holds it for the whole of its life.
+
+        The claim itself and never through `up`, which is what a case may have asked to fail: a
+        stand-in that could not put a gateway up in the first place would leave the case proving
+        nothing at all about what a restore does to one that is running.
+        """
+        holding = contextlib.ExitStack()
+        holding.enter_context(standing.holding(directory.where(name)))
+        self.held[name] = holding
+
+    def down(self, name: str) -> str:
+        self.asked.append(("down", name, self.what_the_data_says()))
+        if self.would_not_go_down:
+            return self.would_not_go_down
+        holding = self.held.pop(name, None)
+        if holding is not None:
+            holding.close()
+        return ""
+
+    def up(self, name: str) -> str:
+        self.asked.append(("up", name, self.what_the_data_says()))
+        if self.would_not_come_up:
+            return self.would_not_come_up
+        holding = contextlib.ExitStack()
+        holding.enter_context(standing.holding(directory.where(name)))
+        self.held[name] = holding
+        return ""
+
+    def let_go(self) -> None:
+        """Drop every lock this stand-in is holding, however a case ended."""
+        for holding in self.held.values():
+            holding.close()
+        self.held.clear()
+
+    def verbs(self):
+        return [(verb, name) for verb, name, _said in self.asked]
+
+    def what_the_data_says(self) -> str:
+        try:
+            return (paths.data() / "marker.txt").read_text()
+        except OSError:
+            return ""
+
+
+class AGatewayHeldAcrossARestore(WithRealAgents):
+    """A restore while a gateway is really holding an agent's name — the case none of these had.
+
+    **Every restore case above lets the gateway's `with` block exit before restoring**, so the lock
+    is always released before the swap and the defect is invisible from all of them. Here the lock is
+    held *across* the restore, which is what an ordinary machine looks like: a gateway is meant to run
+    for days, and the person restoring a copy at four in the morning has not stopped it first.
+
+    What goes wrong without a guard was measured, twice. `_swap` renames `data/` aside and a fresh
+    copy into its place, and **a lock lives on the inode**: a copy never carries a held one. So the
+    running gateway keeps its descriptor while `<agent>/gateway.lock` comes to name a new, unlocked
+    file — after which every command reports that agent as not running while its process is alive,
+    the gateway beats into a record that now resolves inside the restored copy, and a **second**
+    gateway can take the lock at that path. Two processes each believing they are the one gateway for
+    one agent is the identity failure `gateways.standing` exists to make impossible.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.given_data("what was there before")
+        self.an_agent()
+        self.name = backups.save(self.data, self.at, A_MOMENT)
+        self.given_data("changed since the copy")
+
+    def a_gateway(self, would_not_go_down: str = "", would_not_come_up: str = "",
+                  holding: str = "cole") -> AGatewayStandIn:
+        """A stand-in that is already holding this agent's name when the case starts."""
+        one = AGatewayStandIn(would_not_go_down, would_not_come_up)
+        self.addCleanup(one.let_go)
+        if holding:
+            one.running(holding)
+        return one
+
+    def restore(self, confirming: bool = True, gateways=None):
+        """Drive the command itself, seam and all, and hand back `(code, stdout, stderr)`.
+
+        `cmd_backups` rather than `_restored`, because the seam is an argument of the command and a
+        case that reached past it would be proving a private function rather than the verb.
+        """
+        out, err = io.StringIO(), io.StringIO()
+        asked = argparse.Namespace(what="restore", backup=self.name, confirm=confirming)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = command.cmd_backups(asked, gateways)
+        return code, out.getvalue(), err.getvalue()
+
+    def the_data_says(self) -> str:
+        return (self.data / "marker.txt").read_text()
+
+    def test_a_restore_is_refused_while_a_gateway_holds_a_name_and_nothing_can_stand_it_down(self):
+        # Nothing passes the seam today, so this is what a real `rundesk backups restore --confirm`
+        # does on a machine with a gateway up: it refuses, names the agent, and says what to type.
+        # Replacing the data here is what orphans the lock.
+        with standing.holding(directory.where("cole")):
+            code, _out, err = self.restore()
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("a gateway is running for cole", err)
+        self.assertIn("rundesk gateways stop cole", err)
+        self.assertIn("nothing was restored", err)
+        self.assertEqual("changed since the copy", self.the_data_says())
+
+    def test_the_lock_a_live_gateway_holds_still_answers_for_that_agent_afterwards(self):
+        """The defect itself, stated as the guarantee it broke.
+
+        Asked from inside the gateway's own `with` block, which is the only place the question means
+        anything: the process is alive and holding an exclusive lock, so the one right answer is that
+        the agent is online and that nobody else can claim the name. With the data replaced under it,
+        both go the other way — `standing` reads the *restored* copy's fresh, unlocked file and says
+        offline, and a second gateway takes the lock at the same path.
+        """
+        with standing.holding(directory.where("cole")):
+            self.restore()
+
+            self.assertEqual(standing.ONLINE, standing.standing(directory.where("cole")).how,
+                             "a live gateway reads as not running — its lock was orphaned")
+            with self.assertRaises(standing.Taken):
+                with standing.holding(directory.where("cole")):
+                    pass
+
+    def test_a_gateway_that_was_up_is_stood_down_before_anything_moves_and_started_again_after(self):
+        # The order is the guarantee, and the marker each call saw is the only way to see it: `down`
+        # happens while `data/` is still what it was, `up` once the copy is in place.
+        one = self.a_gateway()
+
+        code, out, err = self.restore(gateways=one)
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual([("down", "cole"), ("up", "cole")], one.verbs())
+        self.assertEqual("changed since the copy", one.asked[0][2],
+                         "the gateway was stood down after the data had already been replaced")
+        self.assertEqual("what was there before", one.asked[1][2])
+        self.assertEqual("what was there before", self.the_data_says())
+        self.assertIn("stood the gateway for cole down", out)
+        self.assertIn("started the gateway for cole again", out)
+
+    def test_the_gateway_started_again_holds_the_name_the_next_command_asks_about(self):
+        # The point of standing it down at all: what is holding the lock afterwards is a claim on the
+        # file that is really there now, rather than a descriptor on an inode nothing can reach.
+        one = self.a_gateway()
+
+        self.restore(gateways=one)
+
+        self.assertEqual(standing.ONLINE, standing.standing(directory.where("cole")).how)
+        with self.assertRaises(standing.Taken):
+            with standing.holding(directory.where("cole")):
+                pass
+
+    def test_a_gateway_that_was_already_stopped_is_never_started_by_a_restore(self):
+        # The list starts empty and only a gateway this command really stood down goes into it, so a
+        # restore cannot leave a machine running something the owner had deliberately stopped.
+        one = self.a_gateway(holding="")
+
+        code, _out, err = self.restore(gateways=one)
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual([], one.verbs())
+        self.assertEqual(standing.OFFLINE, standing.standing(directory.where("cole")).how)
+
+    def test_a_gateway_that_would_not_stand_down_stops_the_restore(self):
+        # A restore is one operation over the whole of `data/`: an agent that could not be freed is
+        # not something to report beside a success, because the swap would orphan its lock anyway.
+        one = self.a_gateway(would_not_go_down="it would not answer")
+
+        code, _out, err = self.restore(gateways=one)
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("would not stand down", err)
+        self.assertIn("nothing was restored", err)
+        self.assertEqual("changed since the copy", self.the_data_says())
+
+    def test_a_gateway_stood_down_for_a_restore_that_failed_is_still_started_again(self):
+        # The `finally`. A restore that could not finish must leave the machine as it found it, and
+        # what it found was a gateway that was up.
+        one = self.a_gateway()
+
+        with mock.patch.object(command.backups, "restore", side_effect=OSError("the disk filled")):
+            code, _out, err = self.restore(gateways=one)
+
+        self.assertEqual(FAILED, code)
+        self.assertEqual([("down", "cole"), ("up", "cole")], one.verbs())
+        self.assertIn("nothing was restored", err)
+
+    def test_an_interruption_partway_through_still_brings_the_gateway_back(self):
+        # `KeyboardInterrupt` is not an `Exception` — the one interruption a person actually causes,
+        # and the one an `except` clause does not catch. The `finally` is what makes it safe.
+        one = self.a_gateway()
+
+        with mock.patch.object(command.backups, "restore", side_effect=KeyboardInterrupt()):
+            with self.assertRaises(KeyboardInterrupt):
+                self.restore(gateways=one)
+
+        self.assertEqual([("down", "cole"), ("up", "cole")], one.verbs())
+
+    def test_a_gateway_that_could_not_be_started_again_makes_the_command_non_zero(self):
+        # The restore worked and the machine was left in a state nobody asked for. Reporting that as
+        # an ordinary success is the shape of failure this product refuses.
+        one = self.a_gateway(would_not_come_up="launchd would not take it")
+
+        code, _out, err = self.restore(gateways=one)
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("could not be started again", err)
+        self.assertIn("rundesk gateways start cole", err)
+        self.assertEqual("what was there before", self.the_data_says(),
+                         "the restore itself is reported as not having happened")
+
+    def test_a_gateway_nobody_can_ask_about_is_named_rather_than_read_as_offline(self):
+        # Three answers, not two. A lock that cannot be opened may well be held, and restoring under
+        # one produces exactly the orphaned descriptor this whole path exists to prevent.
+        support.not_as_root(self)
+        lock = directory.where("cole") / standing.LOCK
+        lock.write_bytes(b"")
+        lock.chmod(0o000)
+        self.addCleanup(lock.chmod, 0o600)
+        one = self.a_gateway(holding="")
+
+        code, _out, err = self.restore(gateways=one)
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("nobody can tell whether a gateway is running for cole", err)
+        self.assertIn("not a quiet form of offline", err)
+        self.assertEqual([], one.verbs(), "a gateway nobody could ask about was stood down anyway")
+        self.assertEqual("changed since the copy", self.the_data_says())
+
+    def test_an_install_with_no_gateway_running_stands_nothing_down_at_all(self):
+        # The ordinary case must cost nothing: no agent is asked to stop, and the restore is the
+        # operation it always was.
+        one = self.a_gateway(holding="")
+        code, out, err = self.restore(gateways=one)
+        self.assertEqual(OK, code, err)
+        self.assertEqual([], one.verbs())
+        self.assertNotIn("stood the gateway", out)
+
+    def test_the_description_names_a_gateway_that_would_have_to_be_stopped_first(self):
+        # Said before somebody types the confirmation, not after: this is the description they read
+        # while deciding, and finding out afterwards means they confirmed an operation that was never
+        # going to run.
+        with standing.holding(directory.where("cole")):
+            code, _out, err = self.restore(confirming=False)
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("rundesk gateways stop cole", err)
+        self.assertIn("nothing was restored", err)
 
 
 class MovingThemSomewhereElse(Copies):
@@ -1400,6 +1714,24 @@ class TheCommand(Copies):
         self.assertEqual(FAILED, code)
         self.assertIn("2020-01-01T00-00-00Z", err)
         self.assertIn("neither what it was nor what you asked for", err)
+
+    def test_set_location_that_left_no_link_at_all_is_a_worded_failure_and_not_a_traceback(self):
+        # The explicit worst case for this verb — the new link could not be made *and* the old one
+        # could not be put back — reached `cli.main`, which has no catch-all, as an unhandled
+        # `HalfRestored`. Every other failure path in this product is a worded sentence with what it
+        # leaves under it, and this one printed a stack trace at the moment somebody's copies had
+        # nothing on the machine pointing at them.
+        self.given_copies(ITS_NAME)
+        elsewhere = self.home / "elsewhere"
+        backups.relocate(elsewhere, self.at)
+
+        with mock.patch.object(Path, "symlink_to", side_effect=OSError("the disk is full")):
+            code, _out, err = self.rundesk("backups", "set-location", str(self.home / "further"))
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("backups: FAILED", err)
+        self.assertIn(str(elsewhere), err, "the failure does not say where the copies still are")
+        self.assertIn("nothing on this machine says where the copies are", err)
 
     def test_a_save_that_could_not_be_made_says_so_and_makes_none(self):
         shutil.rmtree(self.data)

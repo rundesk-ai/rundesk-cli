@@ -40,6 +40,13 @@ to `agents`, `core` and `utils`, and it may not reach across to `gateways` — c
 policy that could be written here without inverting the tree, and a rule that would have to be
 broken to be obeyed is the wrong rule.
 
+**And this is true of `save` and false of `restore`, which is not a detail.** A copy taken under a
+live gateway is a *read*: the lock file goes on being the file it was, the gateway's descriptor goes
+on referring to the inode it referred to, and nothing the copy does can be noticed by the process
+holding it. See `restore` for what changes when the same reasoning is carried across to putting one
+back — it is the one operation here that changes what an agent's lock file *is*, and it is refused at
+the layer that may ask rather than here.
+
 SQLite documents the answer, and it is the one used: **the online backup API takes a consistent
 snapshot of a live database**, from a read-only connection, without writing a byte to the original.
 `docs/research/2026-07-26-sqlite-store-and-migrations.md` measured the surrounding behaviour on this
@@ -468,6 +475,22 @@ def restore(name: str, data: Optional[Path] = None, backups: Optional[Path] = No
     itself — the same escape hatch that module already offers, and for the same reason: a guarantee
     about carrying restored data forward that can only be driven by whichever steps a release happens
     to ship is a guarantee nothing proves on the day the directory is empty.
+
+    **No gateway may be running while this is called, and that is the caller's to guarantee.** It is
+    not the same question `save` answers and skips — see the module docstring on why a copy taken
+    under a live gateway is a read. `_swap` renames `data/` aside and a fresh copy into its place, so
+    afterwards `<agent>/gateway.lock` names a **new inode**: a copy never carries a held lock. The
+    running gateway keeps its descriptor on the old one, so `standing` opens the new path, takes its
+    shared probe, succeeds — and every command reports that agent as not running while its process is
+    alive, the gateway beats into a record that now resolves inside the restored copy, and a second
+    gateway can take the lock at that path. Two processes each believing they are the one gateway for
+    that agent is the identity failure the whole of `gateways.standing` exists to make impossible.
+
+    **It cannot be prevented here**, and that is the layer rule rather than a preference: `lifecycle`
+    may not import `gateways`, checked by `tests/test_layers.py`. So it is prevented in
+    `commands.backups`, which may ask — it stands the running gateways down before this is called and
+    starts exactly those again afterwards. Written down here as well because this is the function
+    that does the renaming, and the next caller this grows will read this docstring and not that one.
     """
     at = backups or paths.backups()
     into = data or paths.data()
