@@ -1,0 +1,947 @@
+#!/usr/bin/env python3
+"""Discord, as an agent is reached on it.
+
+Everything about this platform is in this file and nowhere else. A snowflake, an intent bit, the
+two-thousand-character cap, the close codes that mean *stop trying* — none of them appears anywhere
+under `src/rundesk/`, nothing there imports `discord.py`, and nothing here imports rundesk. The
+seam is a pipe carrying newline-delimited JSON, and it is what lets a product whose own code
+imports nothing outside the standard library reach a platform that can only be reached over a
+websocket.
+
+**A channel is a connection, not a place.** One bot per agent. It answers private messages and
+every room it has been invited to, with nothing per-place configured anywhere, and one list of
+ids — `RUNDESK_ALLOW` — governs both. There is no room to look up and paste, no server id to go and
+find, and no second `--check` that would say anything different. The build this replaces wrote a
+channel per *kind of place*, which is a shape for governing a public room full of strangers, and
+strangers are not what this is for.
+
+Three invocations, sharing almost nothing:
+
+    --capabilities   what this can do — offline, no account, the same answer every time
+    --check          sign in, and report what was found, so a person confirms rather than pastes
+    serve            hold the connection open and carry conversations until rundesk ends us
+
+## What crosses the seam
+
+Records go out on **stdout**, one JSON object per line, flushed as it happens. Commands come in on
+**stdin**, the same way. **stderr is for what has no words of ours** — a traceback — and goes to a
+file the gateway rotates. Nothing else may go to stdout: it is a protocol, and one traceback
+written across it is a line no reader can parse in the middle of a stream it is parsing. Something
+worth an owner's attention that *does* have words is a `note` record, which is a line a reader can
+parse.
+
+## What is rundesk's and is never decided here
+
+**Rundesk decides what state a turn is in; this decides only how that looks** — a mark, a typing
+indicator, and nothing else. An adapter working out on its own when a message had been seen would
+be re-implementing the turn, and two surfaces would eventually disagree about one run.
+
+**Whether somebody may be answered is rundesk's.** `RUNDESK_ALLOW` is read here only to avoid
+working for nothing: reacting, or fetching anything, for somebody who can never be answered is
+waste at best and, in a room full of people, an agent visibly attending to a stranger it is about
+to ignore. A message from anybody else is dropped in silence, because replying to a stranger to
+tell them they are a stranger confirms the agent is listening and spends the owner's tokens doing
+it.
+
+**Splitting is rundesk's**, in one place, for every platform. The text handed to `deliver` is
+already inside `MAX_TEXT` and is never re-split here. The build this replaces put the limit in each
+adapter, and the consequence is on the record: Slack fixed a splitting bug and Discord still had
+the original.
+
+**Which interpreter runs this is rundesk's.** It arrives on `PATH` — see `channels/adapters.py`.
+The build this replaces had each adapter count parent directories to find the install's virtualenv;
+the count was wrong for a whole release and nothing failed until somebody added a channel. So
+`discord.py` is imported by name, lazily, and is never located.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import hashlib
+import json
+import os
+import re
+import signal
+import stat
+import sys
+import tempfile
+import traceback
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+#: The vendor library, bound by `the_library()` at the moment it is first needed.
+#:
+#: **Never imported at module scope**, because `--capabilities` must answer on a machine where
+#: nothing is installed: it is asked before a channel exists, offline, and an adapter that cannot
+#: say what it can do until its dependency is present is one rundesk cannot ask.
+discord = None
+
+#: What Discord takes in one message from a bot. **The four-thousand-character Nitro limit does not
+#: apply to us**, and believing it produces a message the platform refuses outright. Nothing here
+#: splits at this number — it is *checked*, because a text longer than this is rundesk having failed
+#: to split, and cutting it quietly would report a delivery as whole that was not.
+MAX_TEXT = 2000
+
+#: What this can do, asked with no network and no account, and the same answer every time. Read when
+#: a channel is added and written into its record, so that a surface which *cannot* edit a message
+#: is told apart from one that can and did not.
+#:
+#: `thread` says threads are ordinary conversations here — reached, answered in, and identified by
+#: their own id. It does not say this opens one: where a reply goes is wherever the message came
+#: from, and an adapter that moved a conversation somewhere rundesk had not been told about would
+#: be deciding the shape of the turn rather than its appearance.
+#:
+#: `max_text` is the constant above and never a second copy of it. Two copies of one limit is how
+#: the build this replaces came to have a splitting rule fixed on one platform and not the other.
+CAPABILITIES = {"stream": True, "edit": "full", "react": True, "thread": True, "attach": True,
+                "max_text": MAX_TEXT}
+
+#: What Discord is told this connection wants, and **zero of it is privileged**:
+#:
+#:     DIRECT_MESSAGES         1 << 12   a private conversation, content and all
+#:     GUILD_MESSAGES          1 <<  9   a room's messages — content only where we are named
+#:     GUILD_MESSAGE_REACTIONS 1 << 10   what becomes of the marks this program puts up
+#:
+#: **`MESSAGE_CONTENT`, `GUILD_MEMBERS` and `GUILD_PRESENCES` are deliberately absent.** Discord
+#: gives a bot the content of a direct message, and of any guild message that @-mentions it, without
+#: any of the three — and those are exactly the two messages this program acts on. Each of the three
+#: costs a toggle in somebody's Developer Portal, and that setup friction is the thing this design
+#: exists to avoid, while asking for one that has not been granted closes the gateway with `4014`,
+#: which is not resumable and looks from the outside like a bot that simply never came up.
+#:
+#: Nothing here reads a reaction. The reactions intent is declared because what a gateway is told at
+#: identify is fixed for the life of that connection, and because it is not privileged.
+INTENTS = 5632
+
+#: What the invite asks a server for, one named permission at a time so that a reader can check each
+#: against something this file actually does. **Short on purpose**: a permission granted for nothing
+#: is a permission somebody was asked for under false pretences. There is no `CREATE_PUBLIC_THREADS`
+#: because this never opens a thread, and no `EMBED_LINKS` because nothing here builds an embed — a
+#: link in an answer is text either way.
+PERMITS = {
+    "view a channel": 1 << 10,
+    "add a reaction": 1 << 6,
+    "send a message": 1 << 11,
+    "attach a file": 1 << 15,
+    "read the history": 1 << 16,          # Discord refuses a reply reference without it
+    "send a message in a thread": 1 << 38,
+}
+
+#: The variable the bot token is read from. **Never an argument**: a command line is readable
+#: through the process list and lands in a shell's history. What rundesk keeps is this name and
+#: never what is in it, which is why `--check` reports the name whether it succeeds or fails.
+TOKEN_FROM = "DISCORD_BOT_TOKEN"
+
+#: How a turn's state looks, and the whole of what this decides. `working` has no mark of its own —
+#: it is the typing indicator — and putting a second mark up would say a turn had been seen twice.
+MARKS = {"seen": "👀", "done": "✅", "stopped": "✋", "failed": "⚠️"}
+
+#: How often the typing indicator is renewed. Discord's lapses in about ten seconds, and an
+#: indicator that has stopped is a turn that looks finished.
+TYPING_SECONDS = 8.0
+
+#: How much of a display name travels. **A display name is a place somebody can write something
+#: shaped like an instruction**, so it is flattened to one line — a newline is how somebody would
+#: end our sentence and start one of their own — and then clipped.
+SAID_MOST = 80
+
+#: How many conversations this holds presentation state for. Bounded because the process runs for
+#: weeks: an entry is made whenever a turn starts, and nothing else would ever remove one.
+LIVE_KEPT = 200
+
+#: The longest single line read from rundesk. Not a limit on what may be said — only on how much is
+#: held at once, so a sender that never writes a newline cannot grow this without bound.
+READS_MOST = 4 * 1024 * 1024
+
+#: How much of a file is read at a time while it is being verified on its way out.
+A_BLOCK = 1024 * 1024
+
+#: Close codes that no amount of trying again will change, and what each one means to a person.
+#: Ten thousand refusals in ten minutes earns a Cloudflare ban of this machine's own address, so
+#: these end the program loudly rather than reconnecting into one.
+WILL_NOT_COME_RIGHT = {
+    4004: "the token was not accepted",
+    4010: "the shard identified with is not one this bot may use",
+    4011: "this bot is in too many servers to connect without sharding",
+    4012: "the gateway version identified with is no longer served",
+    4013: "the intents identified with are not a valid set",
+    4014: "the intents identified with include one this application has not been granted — this "
+          "program asks for none of the privileged three, so something has changed the mask",
+}
+
+#: The exit code for a failure that restarting cannot fix, kept apart from the ordinary one. A
+#: supervisor that reads it can stop restarting; one that does not still sees a non-zero exit, which
+#: is all this program is owed. `78` is `EX_CONFIG`, which is what this is.
+WILL_NOT_FIX = 78
+
+
+class Refused(Exception):
+    """Something this will not do, carrying the sentence that says why.
+
+    A sentence rather than a code, because every one of these ends up in a record somebody reads and
+    is the whole of what they have to act on.
+    """
+
+
+# ---------------------------------------------------------------------------------------------
+# The three ways out of this process: a record, a note, and a traceback.
+# ---------------------------------------------------------------------------------------------
+
+
+def say(record: Dict[str, Any]) -> None:
+    """One object, one line, flushed — because rundesk is reading this as it happens.
+
+    Flushed per line rather than per block: the answer to one message must not sit in a buffer
+    waiting behind the answer to the next.
+    """
+    sys.stdout.write(json.dumps(record) + "\n")
+    sys.stdout.flush()
+
+
+def noted(text: str, level: str = "warning") -> None:
+    """Something an owner should know, said as a record rather than as prose.
+
+    This is the distinction stdout enforces: a `note` is a line the reader parses like every other
+    line, and free text there would be a line nothing can parse. Anything this has no words of its
+    own for goes to `cannot_say` instead.
+    """
+    say({"say": "note", "level": level, "text": text})
+
+
+def cannot_say(said: str) -> None:
+    """stderr, for what this has no words for — a traceback, and nothing pretending to be one.
+
+    The gateway rotates the file behind it and shows each line as it is written, because a channel
+    is held open for weeks and waiting for it to end before showing what it complained about is
+    never showing it.
+    """
+    sys.stderr.write(said if said.endswith("\n") else said + "\n")
+    sys.stderr.flush()
+
+
+# ---------------------------------------------------------------------------------------------
+# What this is given, and what it makes of it.
+# ---------------------------------------------------------------------------------------------
+
+
+def the_library() -> str:
+    """Bring `discord.py` in. `""` when it is here, otherwise the sentence saying it is not.
+
+    Imported at the moment it is needed and never at module scope, so that `--capabilities` answers
+    on a machine with nothing installed — which is the state rundesk asks that question in.
+
+    **Not located, only imported.** Which interpreter runs this is decided by rundesk and handed
+    over on `PATH`; an adapter that went looking for the install's own virtualenv is the defect that
+    survived a whole release in the build this replaces, pointing one directory above the install
+    and telling an owner to run the installer that had already put the package where it belonged.
+    """
+    global discord
+    if discord is not None:
+        return ""
+    try:
+        import discord as library
+    except ImportError as why:
+        return (f"discord.py is not installed for the interpreter running this adapter ({why}) — "
+                f"it is pinned in rundesk's own requirements, so this is an install that has not "
+                f"built its virtualenv rather than a channel that is misconfigured")
+    discord = library
+    return ""
+
+
+def intents_now():
+    """The gateway intents, built from names and then compared against the number.
+
+    **Both, because they answer different questions.** The names are what a reader checks against
+    the docstring on `INTENTS`; the number is what Discord is actually told. Comparing them means
+    that a library which renamed a flag underneath us fails here, loudly, rather than identifying
+    with a quieter mask and producing a bot that connects and never hears anything — which is the
+    exact shape a missing intent already has, and the hardest failure on this platform to see.
+    """
+    intents = discord.Intents.none()
+    intents.guild_messages = True
+    intents.guild_reactions = True
+    intents.dm_messages = True
+    if intents.value != INTENTS:
+        raise Refused(f"discord.py builds {intents.value} for the intents this needs, and Discord "
+                      f"is meant to be told {INTENTS}")
+    return intents
+
+
+def the_token() -> str:
+    """The bot token, from the one variable that carries it, or `""`.
+
+    One place and no fallback file. What rundesk keeps is the *name*; the value lives in its sealed
+    store outside `data/`; and both `--check` and `serve` are handed it under this name — so a
+    second place to look would be a second thing that can silently be the wrong one.
+    """
+    return (os.environ.get(TOKEN_FROM) or "").strip()
+
+
+def who_may_reach() -> List[str]:
+    """The ids this may work for, the owner first. Never shown to anybody, and never the answer.
+
+    An empty list authorises **nobody** — never everybody. That is the rule other people have got
+    backwards at real cost, and here it means an agent that answers no one rather than one that
+    answers everyone.
+    """
+    return [one for one in (os.environ.get("RUNDESK_ALLOW") or "").split(",") if one]
+
+
+def flat(said: Any, most: int = SAID_MOST) -> str:
+    """One line, clipped — for a stranger's words on their way into somebody's prompt."""
+    whole = " ".join(str(said or "").split())
+    return whole if len(whole) <= most else whole[:most - 1] + "…"
+
+
+def invited(application_id: Any) -> str:
+    """Where somebody sends this bot to a server, with the permissions already worked out.
+
+    Reported rather than described in prose, because the whole of what makes setup easy here is that
+    the adapter is signed in by the time it answers: anything the platform can tell it is something
+    an owner should not have to go and look up.
+    """
+    permissions = 0
+    for bit in PERMITS.values():
+        permissions |= bit
+    return (f"https://discord.com/oauth2/authorize?client_id={application_id}"
+            f"&scope=bot&permissions={permissions}")
+
+
+# ---------------------------------------------------------------------------------------------
+# A file on its way out, which is verified twice and sent from neither the path nor trust.
+# ---------------------------------------------------------------------------------------------
+
+
+def a_verified_file(said: Dict[str, Any]):
+    """Re-open what rundesk approved, prove it is still that, and hand back those exact bytes.
+
+    **The second of two checks, and it is the one that closes the window.** Rundesk resolved this
+    path, contained it to a permitted root and fingerprinted it; between that moment and this one a
+    concurrent write can replace the file, or replace a directory above it with a symlink to
+    somewhere else entirely. So every component is opened with `O_NOFOLLOW` from a descriptor on the
+    one above it — a path resolved twice is two different paths — and the bytes are streamed into a
+    snapshot whose size and digest are compared with what was approved.
+
+    **The declared size is also the bound on the read**, which is why there is no constant for it: a
+    file that grew is refused for having grown, rather than truncated into something that would
+    still hash correctly.
+
+    `Refused` on anything at all. Nothing that did not verify is ever sent.
+    """
+    at = said.get("at")
+    expected = said.get("bytes")
+    wanted = said.get("sha256")
+    if not isinstance(at, str) or not at:
+        raise Refused("a file was named with no path to open")
+    if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+        raise Refused(f"could not attach {at}: it was approved without a size to check against")
+    if not isinstance(wanted, str) or re.fullmatch(r"[0-9a-f]{64}", wanted) is None:
+        raise Refused(f"could not attach {at}: it was approved without a digest to check against")
+    path = Path(at)
+    if not path.is_absolute() or not path.parts[1:]:
+        raise Refused(f"could not attach {at}: it is not an absolute path to a file")
+
+    snapshot = tempfile.TemporaryFile()
+    digest = hashlib.sha256()
+    size = 0
+    directory = None
+    descriptor = None
+    try:
+        directory = os.open(path.parts[0], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        for part in path.parts[1:-1]:
+            below = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = below
+        descriptor = os.open(path.parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("it is not a regular file")
+        with os.fdopen(descriptor, "rb") as reading:
+            descriptor = None                      # the file object owns the descriptor from here
+            while size <= expected:
+                block = reading.read(min(A_BLOCK, expected + 1 - size))
+                if not block:
+                    break
+                size += len(block)
+                digest.update(block)
+                snapshot.write(block)
+    except (OSError, ValueError) as why:
+        snapshot.close()
+        raise Refused(f"could not attach {at}: {why}") from why
+    finally:
+        if directory is not None:
+            os.close(directory)
+        if descriptor is not None:
+            os.close(descriptor)
+
+    if size != expected or digest.hexdigest() != wanted:
+        snapshot.close()
+        raise Refused(f"could not attach {at}: it changed after it was approved")
+    snapshot.seek(0)
+    # The name is rundesk's and has already been made its own; taken as a bare name even so,
+    # because a filename with a separator in it is a filename pretending to be somewhere.
+    return discord.File(snapshot, filename=Path(str(said.get("name") or path.name)).name)
+
+
+def an_id(said: Any, called: str) -> int:
+    """A snowflake as the number Discord keeps it as, or `Refused` in words of our own.
+
+    `int()`'s own complaint names a Python type and never the thing somebody has to fix, and every
+    one of these ends up in a record that is the whole of what a person can act on.
+    """
+    try:
+        return int(said)
+    except (TypeError, ValueError) as why:
+        raise Refused(f"{said!r} is not a {called} — Discord keeps its ids as numbers") from why
+
+
+def closed(files: List[Any]) -> None:
+    """Let go of snapshots that will never be sent, so a refused delivery costs nothing."""
+    for one in files:
+        with contextlib.suppress(Exception):
+            one.close()
+
+
+# ---------------------------------------------------------------------------------------------
+# Question one: what can you do?
+# ---------------------------------------------------------------------------------------------
+
+
+def capabilities() -> int:
+    """Say what this can do, and nothing else. No network, no account, no dependency."""
+    say(CAPABILITIES)
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
+# Question two: can you reach it, and what did you find?
+# ---------------------------------------------------------------------------------------------
+
+
+async def check(options: List[str]) -> int:
+    """Sign in, and report what was found, so that a person confirms rather than pastes.
+
+    **`ok: false` still exits `0`.** What is read is the object and not the code: a program that
+    printed `ok: false` *refused*, one that died without printing anything *failed*, and those two
+    lead somewhere different. Every return below is `0` for that reason, and the only way out of
+    here otherwise is by dying — which is honest, and is what rundesk's own ceiling is for.
+
+    Nothing about this channel is written down unless this says yes, so the whole of an owner's
+    diagnosis is the sentence that comes back: it says what was wrong rather than that something
+    was.
+    """
+    if options:
+        return _refused(f"this channel takes no options and was given {' '.join(options)} — a "
+                        f"channel here is a connection rather than a place, so there is nothing to "
+                        f"point it at and nothing to configure")
+    missing = the_library()
+    if missing:
+        return _refused(missing)
+    token = the_token()
+    if not token:
+        # **Named on the way out as well as on the way in.** Saying where the credential is read
+        # from *here* is what lets rundesk offer to take the token without any caller having to
+        # match this sentence — a platform's words are this file's, and a caller that string-matched
+        # them would be the seam failing.
+        return _refused(f"there is no bot token — nothing set {TOKEN_FROM}", secret=True)
+    allow = who_may_reach()
+    if not allow:
+        return _refused("nothing said who may reach this agent, so there is nobody to open a "
+                        "private conversation with — a channel needs at least the owner")
+    if not allow[0].isdigit():
+        return _refused(f"{allow[0]} is not a Discord user id — an id here is the number Discord "
+                        f"copies from Developer Mode, never a username, which can be changed")
+
+    try:
+        client = discord.Client(intents=intents_now())
+    except Refused as why:
+        return _refused(str(why))
+    try:
+        await client.login(token)
+        # **Once, and never in a loop.** Discord's own documentation says so about this call, and
+        # what it answers is the one thing an owner would otherwise have to go and find: where this
+        # agent writes when nobody has asked it anything.
+        person = await client.fetch_user(int(allow[0]))
+        place = await person.create_dm()
+    except Exception as why:               # noqa: BLE001 — a platform boundary, and the diagnosis
+        refused = isinstance(why, discord.LoginFailure)
+        said = (f"Discord would not accept the token in {TOKEN_FROM} — it may have been reset in "
+                f"the Developer Portal, or be an application id rather than a bot token"
+                if refused else f"could not reach Discord: {type(why).__name__}: {why}")
+        await _quietly(client.close)
+        return _refused(said, secret=refused)
+
+    # `login` fetches the application on the way past, so the id below costs no second call. Falling
+    # back to the bot's own user id because for a bot the two are one number, and an invite URL with
+    # no client id in it is a link that goes nowhere.
+    found = {"ok": True,
+             "describes": f"{client.user}, reaching {person}",
+             "notify_place": str(place.id),
+             "settings": {},
+             "secret": {"env": [TOKEN_FROM]},
+             "invite": invited(client.application_id or client.user.id)}
+    await _quietly(client.close)
+    say(found)
+    return 0
+
+
+def _refused(why: str, secret: bool = False) -> int:
+    """One shape for every way this comes back no, so that no path here has to build one."""
+    said = {"ok": False, "why": why}
+    if secret:
+        said["secret"] = {"env": [TOKEN_FROM]}
+    say(said)
+    return 0
+
+
+async def _quietly(closing) -> None:
+    """Close a client that may never have opened. Failing to hang up is not an answer to report."""
+    with contextlib.suppress(Exception):
+        await closing()
+
+
+# ---------------------------------------------------------------------------------------------
+# Question three: carry conversations for as long as the agent is up.
+# ---------------------------------------------------------------------------------------------
+
+
+class Reaching:
+    """The connection, held open for as long as this program runs, and what it is holding.
+
+    Everything kept here is bounded, because this process runs for weeks: a map that grows by one
+    per conversation and shrinks by nothing is a leak that shows up first on the machine which has
+    been up the longest.
+    """
+
+    def __init__(self, allow: List[str]) -> None:
+        self.allow = allow
+        self.client = None
+        #: The mark now standing on a message, so the next one can be added before it is taken away.
+        self.marks: Dict[str, str] = {}
+        #: The typing indicator being renewed in a place, by that place's own id.
+        self.typing: Dict[int, asyncio.Task] = {}
+        #: Whether the socket is up, so `gone` and `ready` are said on the change rather than on
+        #: every reconnection attempt behind it.
+        self.connected = False
+        self.stopping = asyncio.Event()
+        #: What went wrong, if anything did, read as the exit code on the way out.
+        self.trouble = ""
+        self.unrecoverable = False
+
+    # -- the whole of the run --------------------------------------------------------------
+
+    async def run(self, token: str) -> int:
+        """Connect, read rundesk, and keep both going until one of them ends.
+
+        **Asked to stop rather than killed where we stand.** Rundesk ends a channel by signalling
+        the whole process group and giving it a few seconds before it insists, and the default for
+        those two signals is to die immediately — so the goodbye and every last write were simply
+        never reached. Handled, the wait below ends and the cleanup that was always written runs.
+        """
+        self.client = discord.Client(intents=intents_now())
+        # `Client.dispatch` looks a handler up by name on the client itself, which is exactly what
+        # its own `@client.event` decorator does. Set here rather than by subclassing, so that
+        # nothing in this file has to be defined after an import that may never have happened.
+        self.client.on_ready = self._up
+        self.client.on_resumed = self._up
+        self.client.on_disconnect = self._down
+        self.client.on_message = self._arrived
+
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            with contextlib.suppress(NotImplementedError, ValueError):
+                loop.add_signal_handler(sig, self.stopping.set)
+
+        reading = asyncio.ensure_future(self._reading())
+        connected = asyncio.ensure_future(self.client.start(token))
+        asked = asyncio.ensure_future(self.stopping.wait())
+        try:
+            await asyncio.wait({reading, connected, asked}, return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            pass
+        if connected.done() and not connected.cancelled() and connected.exception() is not None:
+            self._the_connection_ended(connected.exception())
+
+        for place in list(self.typing):
+            self._typing_stops(place)
+        say({"say": "gone", "why": self.trouble or "rundesk asked this to stop"})
+        await _quietly(self.client.close)
+        for task in (reading, connected, asked):
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+        if self.unrecoverable:
+            return WILL_NOT_FIX
+        return 1 if self.trouble else 0
+
+    def _the_connection_ended(self, why: BaseException) -> None:
+        """Say what became of the socket, and whether coming back would ever help.
+
+        discord.py resumes what can be resumed and raises what cannot, so arriving here means the
+        connection is over. The codes below are the ones where reconnecting is not patience — it is
+        a refusal repeated until this machine's address is banned outright.
+        """
+        code = getattr(why, "code", None)
+        if isinstance(why, discord.PrivilegedIntentsRequired):
+            code = 4014
+        if isinstance(why, discord.LoginFailure):
+            self._never_again(f"Discord refused the token in {TOKEN_FROM} (HTTP 401) — it has been "
+                              f"reset or revoked, and reconnecting will not change that")
+        elif code in WILL_NOT_COME_RIGHT:
+            self._never_again(f"Discord closed the gateway with {code}: "
+                              f"{WILL_NOT_COME_RIGHT[code]}. Reconnecting cannot fix this and "
+                              f"would only repeat it")
+        else:
+            self.trouble = f"the connection ended: {type(why).__name__}: {why}"
+            noted(self.trouble)
+
+    def _never_again(self, said: str) -> None:
+        """Record a failure that restarting cannot fix, loudly and once."""
+        self.trouble = said
+        self.unrecoverable = True
+        noted(said, "error")
+
+    def _final(self, why: BaseException) -> bool:
+        """Whether a platform refusal is one nothing here can ever get past, and end if it is.
+
+        Only `401`, because only `401` says the credential itself is gone. A `403` is one room this
+        bot was not invited into and a `404` is one message that is no longer there; ending the
+        whole connection over either would take an agent off every other room it is reachable in.
+        """
+        if getattr(why, "status", None) != 401:
+            return False
+        self._never_again(f"Discord answered 401 — the token in {TOKEN_FROM} is no longer accepted")
+        self.stopping.set()
+        return True
+
+    # -- the connection itself -------------------------------------------------------------
+
+    async def _up(self) -> None:
+        """Said on connecting and on resuming, so a quiet agent is not mistaken for a deaf one."""
+        self.connected = True
+        say({"say": "ready", "as": str(self.client.user)})
+
+    async def _down(self) -> None:
+        """Said once per loss, and not once per attempt behind it."""
+        if not self.connected:
+            return
+        self.connected = False
+        say({"say": "gone", "why": "the socket closed"})
+
+    # -- what arrives ----------------------------------------------------------------------
+
+    async def _arrived(self, message) -> None:
+        """One message, if it is one this agent is reachable by, and nothing before that is settled.
+
+        **The order is the whole of it, and every step is cheaper than the one below.** Whether
+        somebody may be answered is still rundesk's decision, but in the build this replaces a
+        message from anybody at all opened a real thread and pulled down as much as three hundred
+        megabytes before that decision was reached — so any member of a shared server could make an
+        agent litter their room and fill a disk without ever being allowed to say a word to it.
+
+        Named, or private, and nothing else. Silence in a room until the bot is mentioned is both
+        the policy and the fact: without `MESSAGE_CONTENT` a room message that does not name us
+        arrives with no content to act on anyway.
+        """
+        if message.author.bot:
+            return
+        # **Asked of the channel, and never of `message.guild`.** With no `GUILDS` intent nothing is
+        # cached, so a room message and a private one *both* answer `None` for `guild` — and a room
+        # would be handled as a private conversation, where nobody has to name us first.
+        direct = isinstance(message.channel, discord.DMChannel)
+        me = self.client.user
+        if not direct and not (me and me in message.mentions):
+            return
+        if str(message.author.id) not in self.allow:
+            return
+
+        text = _without_our_name(message.content, me.id if me else None)
+        brought = _brought(message)
+        if not text and not brought:
+            return
+        say({"say": "arrived",
+             # **The thread's own id, and never its parent's.** A thread is a conversation of its
+             # own, and the build this replaces asked about one by the channel it hung under —
+             # which matched nothing when asked of the thread, and answered every thread in the
+             # server when asked of the parent. Here it is only ever the key a session is kept
+             # under, and this is the id that identifies the exchange somebody is actually having.
+             "conversation": str(message.channel.id),
+             "place": "dm" if direct else "room",
+             "user": str(message.author.id),
+             "display": flat(getattr(message.author, "display_name", None) or message.author.name),
+             "text": text,
+             "external_id": str(message.id),
+             "attachments": brought})
+
+    # -- what rundesk says -----------------------------------------------------------------
+
+    async def _reading(self) -> None:
+        """Everything rundesk says, a line at a time, for as long as it is saying it."""
+        reader = asyncio.StreamReader(limit=READS_MOST)
+        loop = asyncio.get_running_loop()
+        await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
+        while True:
+            try:
+                line = await reader.readline()
+            except ValueError as why:
+                # Longer than anything this protocol carries. What was held is dropped rather than
+                # kept, so this reads on instead of answering one unreadable line for ever.
+                noted(f"a line too long to hold was dropped: {why}", "error")
+                continue
+            if not line:
+                return            # rundesk has stopped speaking, so there is nothing left to carry
+            try:
+                it = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(it, dict):
+                continue
+            try:
+                await self._told(it)
+            except Exception as why:       # noqa: BLE001 — a delivery boundary
+                # **Said, and then read on.** Swallowing this in silence is how a command that never
+                # happened leaves no trace at all, unlike a room that could not be found. The loop
+                # must not end either: one record nobody could act on is not a channel going away.
+                cannot_say(traceback.format_exc())
+                noted(f"could not act on {it.get('do')!r}: {type(why).__name__}: {why}", "error")
+
+    async def _told(self, it: Dict[str, Any]) -> None:
+        """One command, done the way this platform does it."""
+        doing = it.get("do")
+        if doing == "deliver":
+            await self._deliver(it)
+        elif doing == "state":
+            await self._state(it)
+        elif doing == "stop":
+            self.stopping.set()
+        else:
+            # Kept rather than refused: rundesk may be ahead of this adapter, and a command this
+            # does not know is not a channel that has gone wrong.
+            noted(f"nothing here does {doing!r}", "info")
+
+    async def _deliver(self, it: Dict[str, Any]) -> None:
+        """Post what the agent said and report the platform's own id for it — or say why not.
+
+        **All of it, or none of it.** A file that would not verify refuses the whole delivery rather
+        than posting the words and quietly leaving the file behind: the second reports a delivery
+        that did not happen the way it was asked for, and nothing downstream could tell.
+        """
+        given = str(it.get("id") or "")
+        text = it.get("text") or ""
+        files: List[Any] = []
+        try:
+            if not isinstance(text, str):
+                raise Refused("the text to deliver was not text")
+            if len(text) > MAX_TEXT:
+                raise Refused(f"{len(text)} characters is past what Discord takes in one message "
+                              f"({MAX_TEXT}) — this never re-splits what it is handed, because "
+                              f"splitting happens once, on rundesk's side, for every platform")
+            # Named as a number before anything is opened, because a place this platform cannot
+            # parse is the one failure here that no file and no text could ever get past.
+            place = an_id(it.get("place"), "channel id")
+            for one in it.get("files") or []:
+                files.append(a_verified_file(one))
+            if not text and not files:
+                raise Refused("there was nothing to deliver: no text, and no file")
+            reference = None
+            if it.get("reply_to"):
+                # **`fail_if_not_exists=False`, always.** Discord refuses a whole message that
+                # quotes one it cannot resolve, and a turn here runs for minutes — the asker
+                # deleting their own question is enough to lose the answer to it entirely.
+                reference = discord.MessageReference(
+                    message_id=an_id(it["reply_to"], "message id"), channel_id=place,
+                    fail_if_not_exists=False)
+            where = self.client.get_partial_messageable(place)
+        except (Refused, TypeError, ValueError) as why:
+            closed(files)
+            say({"say": "failed", "id": given, "why": str(why)})
+            return
+
+        try:
+            sent = await where.send(content=text or None, files=files or None, reference=reference)
+        except Exception as why:           # noqa: BLE001 — a platform boundary
+            closed(files)
+            self._final(why)
+            failed = {"say": "failed", "id": given,
+                      "why": f"Discord would not take it: {type(why).__name__}: {why}"}
+            # Present only where the library declined to wait a limit out itself. discord.py sleeps
+            # through an ordinary rate limit, so an absent `retry_after` means *there is nothing to
+            # tell you* and never *try again straight away*.
+            after = getattr(why, "retry_after", None)
+            if isinstance(after, (int, float)) and not isinstance(after, bool):
+                failed["retry_after"] = float(after)
+            say(failed)
+            return
+        say({"say": "delivered", "id": given, "external_id": str(sent.id)})
+
+    async def _state(self, it: Dict[str, Any]) -> None:
+        """Show what rundesk says a turn is doing: a mark, an indicator, and no opinion of ours."""
+        state = str(it.get("state") or "")
+        try:
+            place = an_id(it.get("place"), "channel id")
+            named = an_id(it["external_id"], "message id") if it.get("external_id") else None
+        except Refused as why:
+            noted(str(why))
+            return
+        if state == "working":
+            self._typing_starts(place)
+            return
+        if state != "seen":
+            self._typing_stops(place)
+        mark = MARKS.get(state)
+        if mark and named is not None:
+            await self._mark(place, named, mark)
+
+    async def _mark(self, place: int, external_id: int, mark: str) -> None:
+        """Put the new mark up before taking the old one down, so nothing is ever unmarked.
+
+        A message with no mark for a moment reads as a turn nobody picked up, and the order is the
+        only thing that decides which of those somebody sees. If the new one cannot be placed then
+        the old one stays, which is the failure to prefer.
+        """
+        keyed = f"{place}/{external_id}"
+        standing = self.marks.get(keyed)
+        if standing == mark:
+            return
+        where = self.client.get_partial_messageable(place)
+        message = where.get_partial_message(external_id)
+        try:
+            await message.add_reaction(mark)
+        except Exception as why:           # noqa: BLE001 — a platform boundary
+            self._final(why)
+            noted(f"could not mark {external_id} with {mark}: {type(why).__name__}: {why}")
+            return
+        self.marks[keyed] = mark
+        self._make_room()
+        if standing:
+            with contextlib.suppress(Exception):
+                await message.remove_reaction(standing, self.client.user)
+
+    # -- the typing indicator, which is the only thing here with a clock -------------------
+
+    def _typing_starts(self, place: int) -> None:
+        """Begin renewing the indicator in a place, unless it is already being renewed there.
+
+        Nothing repeats on the seam — `working` is sent once, when the turn is admitted, and is not
+        a heartbeat. So an indicator that lapses after ten seconds has to be renewed on this side's
+        own clock, or a turn that is still running looks finished shortly after it began.
+        """
+        if place in self.typing:
+            return
+        self.typing[place] = asyncio.ensure_future(self._typing(place))
+        self._make_room()
+
+    def _typing_stops(self, place: int) -> None:
+        """Stop renewing it, and let go of the task — never one without the other."""
+        task = self.typing.pop(place, None)
+        if task is not None:
+            task.cancel()
+
+    async def _typing(self, place: int) -> None:
+        """Renewed inside Discord's own lapse until the turn ends, or the platform says no.
+
+        One refusal ends it. An indicator is fidelity and a turn completes without one, so asking
+        again every eight seconds for the length of a turn would spend a rate limit saying nothing.
+        """
+        where = self.client.get_partial_messageable(place)
+        while True:
+            try:
+                await where.typing()
+            except asyncio.CancelledError:
+                raise
+            except Exception as why:       # noqa: BLE001 — a platform boundary
+                self._final(why)
+                noted(f"no typing indicator in {place}: {type(why).__name__}: {why}")
+                return
+            await asyncio.sleep(TYPING_SECONDS)
+
+    def _make_room(self) -> None:
+        """Keep what is held bounded, and cancel what is dropped.
+
+        **Dropping an entry without cancelling what it started is the recorded failure**: the
+        indicator went on renewing itself in that conversation for the rest of the process's life,
+        which is weeks. Oldest first, because the oldest conversation is the one least likely to
+        still be waiting on an answer.
+        """
+        while len(self.marks) > LIVE_KEPT:
+            self.marks.pop(next(iter(self.marks)))
+        while len(self.typing) > LIVE_KEPT:
+            self._typing_stops(next(iter(self.typing)))
+
+
+def _without_our_name(text: Any, ours: Optional[int]) -> str:
+    """What was said, with *our* naming taken out — it addressed us, it is not the ask.
+
+    **Ours and nobody else's.** Every mention used to go, and everything between a literal `<@` and
+    the next `>` with them: "ask <@alice> to review it" reached the brain as "ask to review it". Who
+    else somebody named is part of what they asked, and a word they typed is not this file's to
+    remove.
+    """
+    said = str(text or "")
+    if ours is None:
+        return said.strip()
+    for named in (f"<@{ours}>", f"<@!{ours}>"):
+        said = said.replace(named, "")
+    return said.strip()
+
+
+def _brought(message) -> List[Dict[str, Any]]:
+    """What was attached, named and pointed at — and never written anywhere by this.
+
+    **Rundesk owns the filesystem and decides where a file lands**; this owns the credential and
+    says where one is. On Discord those do not conflict, because an attachment URL carries its own
+    expiring signature and needs no header to fetch — which is what makes reporting one enough here,
+    and would not on a platform whose private URL answers an unauthenticated fetch with a sign-in
+    page that downloads perfectly and is not the file.
+
+    The name is a stranger's text and is reported exactly as it arrived, because flattening it is
+    done once, where the file is written, by the code that also has to make the name an unused one.
+    """
+    return [{"name": one.filename, "url": one.url, "bytes": int(one.size or 0)}
+            for one in message.attachments]
+
+
+async def serving() -> int:
+    """Hold the connection open and carry conversations until rundesk ends us."""
+    missing = the_library()
+    if missing:
+        noted(missing, "error")
+        return WILL_NOT_FIX
+    token = the_token()
+    if not token:
+        # Said where the gateway's log will show it. A machine keeping an agent up has no terminal
+        # and no shell profile, which is the state a channel spends its whole life in.
+        noted(f"there is no bot token — nothing set {TOKEN_FROM}", "error")
+        return WILL_NOT_FIX
+    allow = who_may_reach()
+    if not allow:
+        # An empty list authorises nobody, so this would run perfectly and answer no one. Said out
+        # loud, because a channel that is deaf by configuration looks exactly like a broken one.
+        noted("nothing said who may reach this agent, so nothing said here will be answered",
+              "error")
+    try:
+        return await Reaching(allow).run(token)
+    except Refused as why:
+        noted(str(why), "error")
+        return WILL_NOT_FIX
+
+
+def main(argv: List[str]) -> int:
+    """The three invocations, and nothing that quietly resembles one of them.
+
+    Matched exactly rather than searched for: an adapter that took a mistyped `--check` for a
+    request for its capabilities would answer a question nobody asked and look as though it worked.
+    """
+    if argv == ["--capabilities"]:
+        return capabilities()
+    if argv[:1] == ["--check"]:
+        return asyncio.run(check(list(argv[1:])))
+    if argv == ["serve"]:
+        return asyncio.run(serving())
+    cannot_say(f"discord: {' '.join(argv) or 'nothing'} is not one of --capabilities, "
+               f"--check [options] or serve")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
