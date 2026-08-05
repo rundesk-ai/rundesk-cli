@@ -35,6 +35,11 @@ one-domain-verb-one-meaning rule applied to a seam: two verbs that both have to 
 must not each carry their own idea of what that is, or the day somebody wires one of them the other
 is wired to something subtly different. Nothing is *called* across the group boundary — what is
 shared is the shape a caller passes in, and `commands.update` is where its reasoning is kept.
+
+**What is passed in is `commands.gateways.Cycled`, and `cli.main` is what passes it**, because a
+restore happens in the process somebody typed the command into and that is the process holding the
+supervisor. `update` resolves its own, and only because the settling it wires runs in an interpreter
+of its own — one seam, two callers, and each resolved by the one that can.
 """
 
 import argparse
@@ -75,8 +80,10 @@ def cmd_backups(args: argparse.Namespace, gateways: Optional[Gateways] = None) -
 
     `gateways` stands a gateway down and starts it again, and it is resolved by whoever calls rather
     than defaulted in this signature — the same shape `asking` and `fetching` and `supervising` have,
-    and for the same reason. **Nothing passes one yet**, and `_restored` says plainly what a restore
-    does without it rather than pretending: see `Gateways` in `commands.update`.
+    and for the same reason. `cli.main` builds one from the supervisor it was given, so a restore
+    typed at a terminal cycles the gateways that are up rather than refusing while one is; a caller
+    inside this codebase that hands nothing in still gets the refusal `_restored` describes, which is
+    the honest answer for a restore with no way to free a name. See `Gateways` in `commands.update`.
     """
     try:
         paths.home()
@@ -263,11 +270,11 @@ def _the_gateways_stood_down(gateways: Optional[Gateways], stood_down: List[str]
     descriptor this whole path exists to prevent — while standing down and starting again cannot be
     exact for it either, there being nothing to be exact about.
 
-    **This seam is not wired, and nothing here pretends it is.** Standing a gateway down is
-    `commands.gateways`, and until one is passed in, a restore with a gateway up is **refused with
-    the command to type** rather than performed with the fact left unsaid. That is the honest answer:
-    the restore has not happened, the owner's data is untouched, and two lines of typing is a much
-    smaller cost than a live gateway writing into the copy that was just put back.
+    **A caller that hands nothing in is refused with the command to type**, and that is the answer
+    rather than a placeholder: the restore has not happened, the owner's data is untouched, and two
+    lines of typing is a much smaller cost than a live gateway writing into the copy that was just
+    put back. `cli.main` always hands one in, so nothing a person types reaches that branch — what
+    reaches it is a caller inside this codebase, and the type says it may.
     """
     try:
         up = _not_plainly_offline()
@@ -279,9 +286,9 @@ def _the_gateways_stood_down(gateways: Optional[Gateways], stood_down: List[str]
             return (f"nobody can tell whether a gateway is running for {name} — {how.why} — and "
                     "unreadable is not a quiet form of offline")
         if gateways is None:
-            return (f"a gateway is running for {name} and this release has no way to stand one down "
-                    f"from here — a restore replaces the file that gateway's lock lives on, so it "
-                    f"would go on writing into the copy that was just put back. Stop it with: "
+            return (f"a gateway is running for {name} and this call was handed nothing that can "
+                    f"stand one down — a restore replaces the file that gateway's lock lives on, so "
+                    f"it would go on writing into the copy that was just put back. Stop it with: "
                     f"rundesk gateways stop {name}")
         stuck = gateways.down(name)
         if stuck:
@@ -348,9 +355,12 @@ def _needs_confirming(name: str, at: Path, data: Path) -> int:
     The name is checked against what is actually there first, so somebody who mistyped it finds out
     now rather than after typing the confirmation for a copy that does not exist.
 
-    **A gateway that is up is named here too**, rather than only in the refusal a confirmation would
-    meet. This is the description somebody reads before they decide, and telling them afterwards
-    means they typed the confirmation for an operation that was never going to run.
+    **A gateway that is up is named here too, as something this restore will do to it.** It used to
+    be named as something to go and do first, which was true while nothing could stand one down and
+    is now the opposite of what happens: the restore takes them down itself and puts back exactly
+    the ones that were up. Somebody deciding whether to confirm is deciding whether their agents may
+    stop for the length of a restore, and that is the fact worth having before they type it rather
+    than after.
     """
     try:
         there = backups.kept(at)
@@ -371,9 +381,17 @@ def _needs_confirming(name: str, at: Path, data: Path) -> int:
           file=sys.stderr)
     print(f"        put    {name} in its place, from {_where(at)}", file=sys.stderr)
     print(f"        settle what comes back onto this release ({__version__})", file=sys.stderr)
-    for one, _how in up:
-        print(f"        stop   the gateway for {one} first — a restore replaces the file its lock "
-              f"lives on: rundesk gateways stop {one}", file=sys.stderr)
+    for one, how in up:
+        # **Two of the three states are in `up`, and they are described apart.** A gateway that is
+        # running is one this restore stands down and starts again; one nobody can ask about is one
+        # it refuses over, and telling somebody it would be handled would be describing an operation
+        # that is not going to run.
+        if how.how == standing.CANNOT_TELL:
+            print(f"        stop   nobody can tell whether a gateway is running for {one}, and a "
+                  f"restore refuses while that is true — {how.why}", file=sys.stderr)
+        else:
+            print(f"        stop   the gateway for {one} for the length of it, and start it again "
+                  f"after — a restore replaces the file its lock lives on", file=sys.stderr)
     print("        nothing was restored. To go ahead:", file=sys.stderr)
     print(f"        rundesk backups restore {name} --confirm", file=sys.stderr)
     return FAILED

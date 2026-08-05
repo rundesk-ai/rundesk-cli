@@ -95,6 +95,20 @@ either of those: they leave the machine, so a suite that forgot to replace one f
 somebody's network. This one does not leave the machine — the real implementation would answer a
 test perfectly well, against the owner's own login session, booting out jobs that keep real work
 running. The seam is the whole of the defence.
+
+## And a seventh thing, which nobody types: what another command reaches for
+
+`Cycled` is the two of these verbs that another command needs — stand this gateway down, start it
+again — as something it can be handed. Two commands have to free an agent's name for the length of
+one operation: `update` runs a migration step against records a gateway holds open, and `backups
+restore` replaces the very file a gateway's lock lives on. Both were written around a seam and
+neither could be given one until this module existed.
+
+**It is built on the verbs above rather than beside them**, and that is the point of it being here
+at all. What a stop really means in this product — prove the name came free rather than trust a
+`bootout`, fall back to a signal when there is no job to take back, never report a start that no
+gateway came up for — is `_stopped_one` and `_started`, and a private stop written for the seam
+would be a second opinion about every one of those, wrong the first time either changed.
 """
 
 import argparse
@@ -127,6 +141,15 @@ FORCE = ("kill it where it stands instead of asking it to finish — for a gatew
 #: typed it on the wrong agent has to be able to see that from the output alone.
 WAS_KILLED = ("killed rather than asked to finish — whatever it was doing was taken away "
               "mid-flight")
+
+#: What `Cycled` answers with when the verb behind it did not do what it was asked. Short on
+#: purpose: the verb has already printed what went wrong and what that leaves, on the terminal of
+#: whoever ran the command, so what is left to say is which agent and which of the two it was —
+#: inside a sentence the caller is writing about that agent anyway.
+WOULD_NOT = "`rundesk gateways {verb} {name}` could not, and said why in the lines above this one"
+
+#: The same, for the one thing those verbs do not answer for themselves. See `Cycled.down`.
+COULD_NOT_BE_ASKED = "`rundesk gateways {verb} {name}` could not be run at all ({why})"
 
 #: Said out loud whenever a gateway was stopped by signalling its process instead of by taking a
 #: job back, because those are two different things to have happened and only one of them means
@@ -220,6 +243,73 @@ class Pointed(NamedTuple):
     def said(self) -> int:
         """Say the refusal, and hand back the code that says what kind of refusal it was."""
         return _wrong(self.code, *self.refusal)
+
+
+class Cycled:
+    """One agent's gateway, stood down and started again — what a command that must move `data/` asks.
+
+    Handed to `commands.update` and to `commands.backups`, which is where the reasoning for wanting
+    it lives: a gateway holding an agent's records open while a step rewrites them is the `database
+    is locked` failure, and a restore replaces the very inode an agent's lock stands on, so a
+    gateway that lived through one goes on holding a name nothing can reach. Both of those commands
+    already ask `gateways.standing` which gateways are up **before anything moves**, stand exactly
+    those down, and start exactly those again in a `finally`. This is the thing they were missing.
+
+    **It satisfies `commands.update.Gateways` structurally and imports nothing of it.** A `Protocol`
+    is a shape rather than a base class, so that type stays where its reasoning is kept and this
+    module goes on importing nothing but `gateways`, `agents`, `core` and `utils` — two commands
+    that reached into each other would be two commands neither of which could be read on its own.
+
+    **The supervisor is required and there is no default.** `_supervisor` above may resolve one in a
+    body, because somebody typing `rundesk gateways` means this machine's launchd. This is built by
+    a caller, and a default here would be a real `Launchd` reached by any path that forgot to pass
+    one — including a suite, in the owner's own login session, booting out jobs that keep real work
+    running, with nothing going red. `tests/support.py:run_with` spends three guards on that one
+    hole; the fourth is having no way to build one of these that reaches the machine by accident.
+
+    **What comes back is one sentence and never the detail.** `_stopped_one` and `_started` are the
+    verbs themselves: they print what they did, and what a failure leaves, to whoever ran the
+    command, and they answer an exit code. So there is nothing left to hand back but which agent and
+    which verb — and the caller is already writing a sentence about that agent, into which the
+    specifics a second time would be the same failure said twice.
+    """
+
+    def __init__(self, by: job.Supervising) -> None:
+        self.by = by
+
+    def down(self, name: str) -> str:
+        """Stand this agent's gateway down. `""` when it is down, else why it is not.
+
+        **Graceful, never `--force`.** What is wanted is the name, and the gateway holding it is
+        holding somebody's work: it gets the whole of its job's `ExitTimeOut` to finish, exactly as
+        a person typing `rundesk gateways stop` would give it. A carry or a restore that could not
+        wait that out is not one worth taking somebody's work away for.
+
+        **A sentence and never an exception**, which is what the caller's loop needs — an update
+        names the agent and goes on to the next one, and a restore starts again what it stood down
+        from a `finally`, where a raise would replace whatever the restore itself had answered. So
+        the two things the verb below does not word for itself are worded here: a name that reaches
+        outside where agents are kept, and the filesystem underneath it failing.
+        """
+        try:
+            went = _stopped_one(name, self.by)
+        except (directory.Refused, OSError) as why:
+            return COULD_NOT_BE_ASKED.format(verb="stop", name=_as_typed(name), why=why)
+        return "" if went == OK else WOULD_NOT.format(verb="stop", name=_as_typed(name))
+
+    def up(self, name: str) -> str:
+        """Start this agent's gateway again. `""` when it is up, else why it is not.
+
+        The whole resolver, which is what `_started` is: it puts the job back, enables the label
+        against an override nobody remembers, and then asks the kernel whether a gateway is really
+        holding the name. A start that reported a job the supervisor accepted would be this seam
+        telling a restore it had left the machine as it found it when it had not.
+        """
+        try:
+            went = _started(name, self.by)
+        except (directory.Refused, OSError) as why:
+            return COULD_NOT_BE_ASKED.format(verb="start", name=_as_typed(name), why=why)
+        return "" if went == OK else WOULD_NOT.format(verb="start", name=_as_typed(name))
 
 
 def register(sub: Subcommands) -> None:

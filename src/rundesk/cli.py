@@ -24,7 +24,7 @@ from rundesk.commands.configure import cmd_configure
 from rundesk.commands.configure import register as register_configure
 from rundesk.commands.env import cmd_env
 from rundesk.commands.env import register as register_env
-from rundesk.commands.gateways import cmd_gateways
+from rundesk.commands.gateways import Cycled, cmd_gateways
 from rundesk.commands.gateways import register as register_gateways
 from rundesk.commands.install import cmd_install
 from rundesk.commands.status import cmd_status
@@ -131,6 +131,14 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
     login session, booting out jobs that keep real work running. So `tests/support.py` passes a
     stand-in by default, which is the reverse of what it does for the other two, and that reversal
     is deliberate.
+
+    **`backups` is handed a fourth thing, built here out of the third.** A restore replaces the file
+    every running gateway's lock stands on, so it stands those gateways down and starts exactly them
+    again — and what it stands them down *with* is `commands.gateways.Cycled`, which is the same
+    `stop` and `start` a person types. Built here rather than defaulted in that command's signature,
+    for every reason `Cycled` gives for having no default of its own: it is built out of
+    `supervising`, so a suite that replaced the supervisor has replaced this too, without knowing it
+    exists.
     """
     _asked_to_stop_politely()
     parser = build_parser()
@@ -148,7 +156,7 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
     if args.command == "gateways":
         return cmd_gateways(args, supervising)
     if args.command == "backups":
-        return cmd_backups(args)
+        return cmd_backups(args, _gateways(supervising))
     if args.command == "env":
         return cmd_env(args)
     if args.command == "version":
@@ -163,6 +171,21 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
     # Unreachable while every registered verb is dispatched above, and that is the point: a verb
     # added to the parser and wired to nothing fails here loudly rather than exiting 0 in silence.
     raise AssertionError(f"{args.command} is registered on the parser and answered by nothing")
+
+
+def _gateways(supervising: Optional[job.Supervising]) -> Cycled:
+    """Something a command can stand a gateway down with, built out of the supervisor `main` was given.
+
+    Resolved here, in a body, and never bound in a signature — the same rule the supervisor itself
+    is held to one line below, and for the same reason: what a default cannot be reached past is
+    `launchctl`, in the login session of whoever is at the machine.
+
+    **Built out of `supervising` rather than beside it**, which is what makes the isolation
+    automatic: `tests/support.py:run_with` hands every command a stand-in supervisor and replaces
+    `job.Launchd` with something that raises, so this is a stand-in in every case that drives the
+    command and reaches nothing on the machine.
+    """
+    return Cycled(supervising if supervising is not None else job.Launchd())
 
 
 def _asked_to_stop_politely() -> None:

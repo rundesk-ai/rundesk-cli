@@ -6,22 +6,51 @@ ones that fall between those suites: they are about a command that already exist
 directory that did not, and there is no file either of them belongs in.
 
 Carrying agents on an update lives in `test_update.py`, beside the command that does it, and copies
-that hold an agent live in `test_backups.py`. What is left, and what is here, is **removal**.
+that hold an agent live in `test_backups.py`. What is left, and what is here, is **removal** — and
+now the other half of the same meeting: **the gateway that hosts an agent, stood down by a command
+that has to move `data/` and started again afterwards.**
 
-Nothing here places a launchd job or runs `launchctl`, and nothing reaches the network.
+Those cases are here rather than in either of the two suites they touch, for the reason this file
+exists at all: what is under test is one command reaching the *other* command's answer. `update` and
+`backups restore` each prove their own decisions against a stand-in seam; what neither can prove on
+its own is that the thing they are handed really stops and starts a gateway, because that is
+`commands.gateways`, and that suite knows nothing about a restore.
+
+**`launchctl` is never run.** The supervisor is a stand-in throughout — but one that makes the world
+change the way launchd does, taking and letting go of the agent's real lock as it answers, so a
+gateway "coming up" here is the kernel's answer and not a flag a case set. Nothing reaches the
+network.
 
 Run directly: `python3 tests/test_seam.py`
 """
 
+import contextlib
+import io
+import shutil
 import unittest
 from pathlib import Path
+from typing import Dict
+from unittest import mock
 
 import support
 from rundesk.agents import directory
+from rundesk.agents import migration as agent_migration
+from rundesk.commands import update as the_update
+from rundesk.commands.gateways import Cycled
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job, standing
 from rundesk.lifecycle import backups, migration
+
+#: An agent step that leaves something behind, so "this agent was carried" is a file on the disk
+#: rather than a record this suite would have to trust. The same shape `test_update.py` uses.
+AN_AGENT_STEP = '''
+from pathlib import Path
+
+def carry(conn, where):
+    conn.execute('CREATE TABLE IF NOT EXISTS carried (one TEXT) STRICT')
+    (Path(where) / "carried").write_text("the agent step ran")
+'''
 
 
 class AnInstallWithAgentsInIt(support.Isolated):
@@ -68,6 +97,110 @@ class AnInstallWithAgentsInIt(support.Isolated):
         job.plist_of(one).write_bytes(b"<plist/>")
         job.shim_of(one).write_text("#!/bin/sh\n")
         return one
+
+
+class ALaunchdWhereGatewaysReallyRun(support.ASupervisor):
+    """A stand-in supervisor that makes the world change the way launchd's answers say it did.
+
+    **The lock is real, and that is the whole value of this class.** `support.ASupervisor` records
+    what it was asked and answers what a case wants, which is everything `commands.gateways` needed
+    while what it was proving was its own decisions. It is not enough here: what these cases are
+    about is whether a gateway is really gone by the time a restore replaces `data/`, and whether one
+    is really back afterwards, and only the kernel can say that. So a `bootout` that answers success
+    lets go of the agent's own `gateway.lock`, and a `bootstrap` that answers success takes it —
+    through `standing.holding`, which is what a gateway itself uses.
+
+    **Conditioned on the answer, never on the call.** A `bootout` this case made answer `1` is a job
+    launchd would not take back, and the gateway behind it is still running; a stand-in that let go
+    anyway would let a command that misread a refusal go on passing.
+
+    `launchctl` is not run and no launchd job exists. What is being stood in for is the one thing a
+    suite may not have: a supervisor that really starts and stops things in somebody's login session.
+    """
+
+    def __init__(self, **answers: object) -> None:
+        super().__init__(**answers)
+        self.holding: Dict[str, contextlib.ExitStack] = {}
+
+    def running(self, name: str) -> None:
+        """Take this agent's name, the way a gateway holds it for the whole of its life.
+
+        The claim itself, and never through a `place` — a case may have asked bootstrapping to fail,
+        and a gateway that could not be put up in the first place would leave that case proving
+        nothing about what happens to one that is running.
+        """
+        held = contextlib.ExitStack()
+        held.enter_context(standing.holding(directory.where(name)))
+        self.holding[name] = held
+
+    def let_go(self, name: str) -> None:
+        held = self.holding.pop(name, None)
+        if held is not None:
+            held.close()
+
+    def let_go_of_everything(self) -> None:
+        """Drop every lock this stand-in holds, however a case ended."""
+        for name in list(self.holding):
+            self.let_go(name)
+
+    def take_back(self, label: str) -> support.programs.Ran:
+        said = super().take_back(label)
+        if said.trouble is None and (said.code == 0 or said.code in job.ALREADY_GONE):
+            self.let_go(_the_agent_in(label))
+        return said
+
+    def end(self, label: str) -> support.programs.Ran:
+        said = super().end(label)
+        if said.trouble is None and said.code in (0, *job.ALREADY_GONE):
+            self.let_go(_the_agent_in(label))
+        return said
+
+    def place(self, plist: Path) -> support.programs.Ran:
+        said = super().place(plist)
+        if said.trouble is None and said.code == 0:
+            self.running(_the_agent_in(Path(plist).stem))
+        return said
+
+
+def _the_agent_in(label: str) -> str:
+    """Which agent a label is for. `ai.rundesk.<fingerprint>.gateway.<agent>` — the last part."""
+    return label.rsplit(".", 1)[-1]
+
+
+class WithGatewaysThatReallyStartAndStop(AnInstallWithAgentsInIt):
+    """The two guards `support.run_with` puts around a command, for cases that reach past one.
+
+    A restore is driven through `cli.main` and inherits them. `settle` cannot be: it is reached only
+    in an interpreter of its own, so no case can drive it the way a person runs it, and these cases
+    call it by name. What the harness would have been providing is exactly two things — every plist
+    a command writes lands in the scratch root, and nothing reaches the real `launchctl` — and both
+    are put back here rather than left out.
+    """
+
+    def a_supervisor(self, **answers) -> ALaunchdWhereGatewaysReallyRun:
+        """A stand-in launchd whose answers really take and free the agents' names."""
+        by = ALaunchdWhereGatewaysReallyRun(**answers)
+        self.addCleanup(by.let_go_of_everything)
+        return by
+
+    def plists_in_the_scratch_root(self):
+        """`job.job` with the plists kept under the scratch root, as `support.run_with` patches it.
+
+        Reached for rather than written out again: the one answer to *where does a suite's plist go*
+        lives beside the harness that patches it in, and a second copy here would be a second answer
+        to the one question where getting it wrong writes into the owner's real login items.
+        """
+        return mock.patch.object(job, "job", support._in_the_scratch_root)
+
+    def the_supervisor_it_finds(self, by):
+        """`job.Launchd` replaced with this case's stand-in, for the code that resolves its own.
+
+        `update.settle` builds what it stands gateways down with, because the process that ran the
+        update cannot hand an object across the process boundary the settling happens on the far
+        side of. So the way to drive that resolution is to replace what it resolves *to* — which is
+        the same attribute `support.run_with` replaces with something that raises.
+        """
+        return mock.patch.object(job, "Launchd", lambda: by)
 
 
 class RemovingAnInstallThatHasAgents(AnInstallWithAgentsInIt):
@@ -272,6 +405,272 @@ class WhenOnlyTheOverrideRecordCouldNotBeCleared(AnInstallWithAgentsInIt):
         self.assertNotIn(uninstall.TAKEN_BACK_ANYWAY, would_not)
         self.assertFalse(job.plist_of(one).exists(),
                          "the files really do come off the disk before that answer is given")
+
+
+class WhatStandsAGatewayDownAndStartsItAgain(WithGatewaysThatReallyStartAndStop):
+    """`commands.gateways.Cycled` on its own — the thing an update and a restore are handed.
+
+    Both of those commands were written around a seam and proved against a stand-in for it, which
+    proves what they decide and nothing at all about what happens when the seam is real. These are
+    the cases in between: the name really comes free, a gateway really holds it afterwards, and what
+    comes back when either of those did not happen is a sentence and never an exception.
+    """
+
+    def asking(self, doing):
+        """Ask the seam for one verb, and hand back what it answered and what it said out loud."""
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                self.plists_in_the_scratch_root():
+            trouble = doing()
+        return trouble, out.getvalue(), err.getvalue()
+
+    def test_nothing_can_build_one_that_reaches_the_owners_own_launchd(self):
+        # The supervisor is the argument and there is no default, and that is the whole of the
+        # isolation: a default bound here is a real `Launchd` reached by any caller that forgot to
+        # pass one — a suite included, against jobs that keep somebody's real work running.
+        with self.assertRaises(TypeError):
+            Cycled()
+
+    def test_standing_a_live_gateway_down_really_frees_the_name(self):
+        # The kernel's answer and not the stand-in's: what a restore needs is the name free, and
+        # `bootout` reporting success is exactly the thing this product refuses to read as proof.
+        by = self.a_supervisor()
+        by.running("alpha")
+
+        trouble, out, _err = self.asking(lambda: Cycled(by).down("alpha"))
+
+        self.assertEqual("", trouble)
+        self.assertEqual(standing.OFFLINE, standing.standing(directory.where("alpha")).how)
+        self.assertIn("gateway stopped for alpha", out)
+
+    def test_starting_one_again_really_puts_a_gateway_back_on_the_name(self):
+        by = self.a_supervisor()
+
+        trouble, out, _err = self.asking(lambda: Cycled(by).up("alpha"))
+
+        self.assertEqual("", trouble)
+        self.assertEqual(standing.ONLINE, standing.standing(directory.where("alpha")).how)
+        self.assertIn("gateway started for alpha", out)
+        self.assertTrue(job.plist_of(self.the_job_for("alpha")).is_file(),
+                        "a gateway was reported started with no job behind it")
+
+    def test_a_gateway_that_will_not_stop_answers_a_sentence_and_leaves_it_running(self):
+        # Everything the caller sees about it: one sentence to put inside its own, and the detail
+        # printed by the verb itself. A stop that failed must also not have stopped anything.
+        by = self.a_supervisor(bootout=support.ran(1, err="launchd said no"))
+        by.running("alpha")
+
+        trouble, _out, err = self.asking(lambda: Cycled(by).down("alpha"))
+
+        self.assertIn("rundesk gateways stop alpha", trouble)
+        self.assertIn("could not be taken back", err)
+        self.assertEqual(standing.ONLINE, standing.standing(directory.where("alpha")).how)
+
+    def test_a_gateway_that_will_not_start_answers_a_sentence_naming_the_other_verb(self):
+        by = self.a_supervisor(bootstrap=support.ran(1, err="launchd said no"))
+
+        trouble, _out, err = self.asking(lambda: Cycled(by).up("alpha"))
+
+        self.assertIn("rundesk gateways start alpha", trouble)
+        self.assertIn("was not placed", err)
+        self.assertEqual(standing.OFFLINE, standing.standing(directory.where("alpha")).how)
+
+    def test_a_name_that_is_not_an_agent_is_a_sentence_rather_than_something_that_raises(self):
+        # The seam's contract, and the reason it is a sentence at all: an update names this agent
+        # and carries the next one, and a restore starts again what it stood down from a `finally`,
+        # where a raise would replace whatever the restore itself had answered.
+        by = self.a_supervisor()
+
+        trouble, _out, err = self.asking(lambda: Cycled(by).up("nobody"))
+
+        self.assertIn("rundesk gateways start nobody", trouble)
+        self.assertIn("nobody is not an agent on this install", err)
+
+    def test_the_filesystem_failing_under_a_start_is_a_sentence_and_not_a_traceback(self):
+        # The two things the verbs below do not word for themselves. A restore starts its gateways
+        # again from a `finally` and `cli.main` has no catch-all, so a raise here would replace
+        # whatever the restore had answered and reach whoever typed the command as a stack trace.
+        by = self.a_supervisor()
+
+        with mock.patch.object(job, "place", side_effect=OSError("the disk filled")):
+            trouble, _out, _err = self.asking(lambda: Cycled(by).up("alpha"))
+
+        self.assertIn("could not be run at all", trouble)
+        self.assertIn("the disk filled", trouble)
+        self.assertIn("rundesk gateways start alpha", trouble)
+
+    def test_a_name_that_reaches_outside_where_agents_are_kept_is_a_sentence_too(self):
+        by = self.a_supervisor()
+
+        trouble, _out, _err = self.asking(lambda: Cycled(by).down("../elsewhere"))
+
+        self.assertIn("could not be run at all", trouble)
+        self.assertIn("does not stand where agents are kept", trouble)
+
+
+class TheGatewaysARestoreCycles(WithGatewaysThatReallyStartAndStop):
+    """`rundesk backups restore --confirm` on a machine with a gateway up, end to end.
+
+    Driven through `cli.main`, which is what builds the seam, so what is under test is the wiring
+    and not a seam a case handed in. The refusal this replaced was real and honest — a restore
+    renames `data/` aside and a copy into its place, and a lock lives on the inode, so a gateway
+    that lived through one holds a descriptor nothing can reach while a second gateway takes the
+    name — and what is proved here is that the same guarantee now costs a stop and a start instead
+    of a refusal.
+    """
+
+    def setUp(self):
+        super().setUp()
+        (paths.data() / "marker.txt").write_text("what was there before")
+        self.copy = backups.save(paths.data(), paths.backups())
+        (paths.data() / "marker.txt").write_text("changed since the copy")
+
+    def restore(self, by):
+        return support.run_with(["backups", "restore", self.copy, "--confirm"], supervising=by)
+
+    def the_data_says(self) -> str:
+        return (paths.data() / "marker.txt").read_text()
+
+    def test_a_gateway_that_is_up_is_stood_down_and_started_again_rather_than_refused(self):
+        by = self.a_supervisor()
+        by.running("alpha")
+
+        code, out, err = self.restore(by)
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("stood the gateway for alpha down", out)
+        self.assertIn("started the gateway for alpha again", out)
+        self.assertEqual("what was there before", self.the_data_says())
+        self.assertEqual(standing.ONLINE, standing.standing(directory.where("alpha")).how,
+                         "the restore left the agent with no gateway holding its name")
+
+    def test_the_gateway_it_started_holds_the_file_that_is_really_there_now(self):
+        # The whole point of standing it down: a gateway that lived through the swap holds a
+        # descriptor on an inode nothing can reach, and the name it once had is free for a second
+        # gateway to take. What is holding it afterwards has to be a claim on the restored file.
+        by = self.a_supervisor()
+        by.running("alpha")
+
+        self.restore(by)
+
+        with self.assertRaises(standing.Taken):
+            with standing.holding(directory.where("alpha")):
+                pass
+
+    def test_a_gateway_the_owner_had_already_stopped_is_never_started_by_a_restore(self):
+        # Exactly the ones that were up: the list starts empty and only a gateway this command
+        # really stood down goes into it, so a restore cannot leave a machine running something
+        # somebody had deliberately stopped.
+        by = self.a_supervisor()
+        by.running("alpha")
+
+        code, out, err = self.restore(by)
+
+        self.assertEqual(OK, code, err)
+        self.assertNotIn("beta", out)
+        self.assertEqual(standing.OFFLINE, standing.standing(directory.where("beta")).how)
+
+    def test_a_gateway_that_would_not_stand_down_stops_the_restore_and_names_it(self):
+        # A restore is one operation over the whole of `data/`, so an agent whose name could not be
+        # freed is not something to report beside a success — the swap would orphan its lock anyway.
+        by = self.a_supervisor(bootout=support.ran(1, err="launchd said no"))
+        by.running("alpha")
+
+        code, _out, err = self.restore(by)
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("the gateway for alpha would not stand down", err)
+        self.assertIn("rundesk gateways stop alpha", err)
+        self.assertIn("nothing was restored", err)
+        self.assertEqual("changed since the copy", self.the_data_says())
+
+    def test_what_the_seam_says_about_a_gateway_that_would_not_come_back_is_what_is_printed(self):
+        # A gateway that was up and is now down is not a detail for a summary: the restore worked
+        # and the machine was left in a state nobody asked for, so it ends non-zero saying both.
+        by = self.a_supervisor(bootstrap=support.ran(1, err="launchd said no"))
+        by.running("alpha")
+
+        code, _out, err = self.restore(by)
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("could not be started again", err)
+        self.assertIn("rundesk gateways start alpha", err)
+        self.assertEqual("what was there before", self.the_data_says(),
+                         "the restore itself is reported as not having happened")
+
+
+class TheGatewaysAnUpdateCycles(WithGatewaysThatReallyStartAndStop):
+    """`update.settle` carrying an agent whose gateway is up, with nothing handed in to do it.
+
+    **`settle` and not `cmd_update`, because that is where the seam is resolved and why.** The
+    settling is done by the release that has just landed, in an interpreter of its own — so the
+    process somebody typed `rundesk update` into has a process boundary between it and this work,
+    and cannot hand an object across one. What it resolves is replaced instead, which is the same
+    attribute the harness replaces with something that raises.
+
+    A gateway holding an agent's records open while a step rewrites them is the `database is locked`
+    failure, and this used to be an agent **named and not carried** with the update ending non-zero.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.steps = self.home / "agent-steps"
+        self.steps.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(agent_migration.STEPS / "0001_the_records_an_agent_keeps.py", self.steps)
+        stepping = mock.patch.object(agent_migration, "STEPS", self.steps)
+        stepping.start()
+        self.addCleanup(stepping.stop)
+        # One more step than either agent has run, so both have something waiting and neither is
+        # left alone as an agent already on this release would be.
+        (self.steps / "0002_x.py").write_text(AN_AGENT_STEP, encoding="utf-8")
+
+    def settling(self, by):
+        """Settle this install the way the release that just landed does, and say what happened."""
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                self.plists_in_the_scratch_root(), self.the_supervisor_it_finds(by):
+            code = the_update.settle()
+        return code, out.getvalue(), err.getvalue()
+
+    def carried(self, name: str) -> bool:
+        return (paths.agents() / name / "carried").exists()
+
+    def test_an_agent_with_a_gateway_up_is_carried_rather_than_named_and_left(self):
+        by = self.a_supervisor()
+        by.running("alpha")
+
+        code, out, err = self.settling(by)
+
+        self.assertEqual(OK, code, err)
+        self.assertTrue(self.carried("alpha"), "the agent whose gateway was up was never carried")
+        self.assertIn("stood the gateway for alpha down", out)
+        self.assertIn("started the gateway for alpha again", out)
+        self.assertEqual(standing.ONLINE, standing.standing(directory.where("alpha")).how)
+
+    def test_a_gateway_the_owner_had_already_stopped_is_never_started_by_an_update(self):
+        by = self.a_supervisor()
+        by.running("alpha")
+
+        code, out, err = self.settling(by)
+
+        self.assertEqual(OK, code, err)
+        self.assertTrue(self.carried("beta"))
+        self.assertNotIn("gateway for beta", out)
+        self.assertEqual(standing.OFFLINE, standing.standing(directory.where("beta")).how)
+
+    def test_a_gateway_that_would_not_stand_down_leaves_that_agent_named_and_not_carried(self):
+        # The refusal that is still right: carrying under a live writer is the failure this exists
+        # to prevent, and the agent beside it is carried anyway.
+        by = self.a_supervisor(bootout=support.ran(1, err="launchd said no"))
+        by.running("alpha")
+
+        code, _out, err = self.settling(by)
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("its gateway would not stand down", err)
+        self.assertIn("rundesk gateways stop alpha", err)
+        self.assertFalse(self.carried("alpha"), "an agent was carried under a live gateway")
+        self.assertTrue(self.carried("beta"), "one agent's gateway stopped another being carried")
 
 
 if __name__ == "__main__":

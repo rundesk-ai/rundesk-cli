@@ -41,9 +41,10 @@ from rundesk import __version__
 from rundesk.agents import directory, records
 from rundesk.agents import migration as agent_migration
 from rundesk.commands import failed, the_reason
+from rundesk.commands.gateways import Cycled
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
-from rundesk.gateways import standing
+from rundesk.gateways import job, standing
 from rundesk.lifecycle import backups, home, migration, release, tree
 from rundesk.utils import programs
 
@@ -68,18 +69,20 @@ class Gateways(Protocol):
     stands the running gateways down first and starts again **exactly** the ones that were up — see
     `carried_every_agent`, which records which those were before it touches anything.
 
-    **This seam is not wired, and nothing here pretends otherwise.** Stopping and starting a gateway
-    is `commands.gateways`, which does not exist yet — another change is writing it. This layer may
-    not import it before it is there, and inventing a private stop-and-start here would be a second
-    answer to the question that command exists to answer, wrong the day it landed. What is wired is
-    everything up to that call: which gateways are up is asked of `gateways.standing`, which is the
-    kernel's answer rather than something a process wrote down, and the ones that were up are
-    recorded so the restore can be exact.
+    **What answers this is `commands.gateways.Cycled`**, which is the two verbs a person types —
+    `rundesk gateways stop` and `rundesk gateways start` — as something another command can be
+    handed. A shape rather than an import: this stays a `Protocol` so the reasoning lives beside the
+    caller that needs it and neither command has to reach into the other.
 
-    Until it is passed in, an agent with a live gateway and a step waiting is **named and not
-    carried**, and the update ends non-zero saying so. That is the honest answer: carrying under a
-    live gateway risks the failure above, and reporting the agent carried when nothing ran is the
-    one thing this product refuses to do.
+    **Resolved by whoever calls, and never bound as a default in a signature.** For a carry that
+    means `settle`, which is the one function here that runs in an interpreter of its own — see what
+    it says about why the process running the update cannot hand one across.
+
+    Handed nothing, an agent with a live gateway and a step waiting is **named and not carried**,
+    and the run ends non-zero saying so. Nothing in the product arrives here that way, and it stays
+    the answer for a caller inside this codebase that does: carrying under a live gateway risks the
+    failure above, and reporting an agent carried when nothing ran is the one thing this product
+    refuses to do.
 
     A sentence rather than an exception, for `carry_one`'s reason: the caller's job is to go on to
     the next agent, and an exception is the shape that stops a loop.
@@ -192,8 +195,23 @@ def settle(gateways: Optional[Gateways] = None) -> int:
     wiring it. `rundesk update` is documented as idempotent and safe to run again, so a named
     failure with a way out is worth more than a success nothing earned.
 
-    `gateways` is the seam for standing a gateway down and starting it again — see `Gateways`, and
-    read what it says about not being wired before assuming it is.
+    **`gateways` is resolved here, in this body, and it is the one collaborator in this file that
+    cannot be handed in from the command.** `cmd_update` never calls this: the settling is done by
+    the release that just landed, in an interpreter of its own, and `_SETTLE` is what starts it —
+    so the process that ran `rundesk update` has a process boundary between it and this line, and
+    an object cannot cross one. The same is true of `cmd_install`.
+
+    **And widening `_SETTLE` to build one there would be a promise the next release has to keep.**
+    That string comes from the release being *replaced* and runs against the release that has just
+    landed, so every name in it is a name every future release must go on exporting or updates from
+    this one stop settling. `settle` is already such a name; adding a second is a cost paid for
+    ever, and resolving here costs nothing and reaches every install updating *from* an older
+    release as well.
+
+    What that resolution reaches is the real `launchctl`, which is exactly what it should reach in
+    the subprocess it really runs in. In this process it reaches `job.Launchd` by attribute, which
+    is the name `tests/support.py:run_with` replaces with something that raises — so a case that
+    somehow got here without saying ends loudly rather than booting out the owner's own jobs.
     """
     fresh = not config.where(paths.data()).exists()
     try:
@@ -217,7 +235,7 @@ def settle(gateways: Optional[Gateways] = None) -> int:
         # has no agents, so this costs it a listing that answers none — and an install whose
         # `config.json` was lost reads as fresh while its agents are still standing there, which is
         # exactly the case that must not skip them.
-        left = carried_every_agent(_out_loud, gateways)
+        left = carried_every_agent(_out_loud, _the_gateways(gateways))
         if left:
             return _failed(f"this install is carried and {_counted(left)} not: {_said(left)}")
     except (config.Unreadable, config.Stuck, migration.Broken, OSError) as why:
@@ -238,6 +256,16 @@ def settle(gateways: Optional[Gateways] = None) -> int:
     return OK
 
 
+def _the_gateways(gateways: Optional[Gateways]) -> Gateways:
+    """Something that can stand a gateway down, resolved in a body and never in a signature.
+
+    A default decided when this module was defined is one nothing can reach past — and what it
+    cannot reach past here is `launchctl`, against the jobs of whoever is logged in.
+    `commands.gateways._supervisor` is the same shape one layer down and for the same reason.
+    """
+    return gateways if gateways is not None else Cycled(job.Launchd())
+
+
 def carried_every_agent(saying: Callable[[str], None],
                         gateways: Optional[Gateways] = None) -> Dict[str, str]:
     """Carry every agent this install has. Maps the ones that could not be carried to why.
@@ -253,7 +281,9 @@ def carried_every_agent(saying: Callable[[str], None],
        gateway down — or refusing their update because one is up — for an agent with nothing waiting
        would be a cost paid for nothing and a failure reported that did not happen.
     2. **The gateways of exactly those agents are stood down**, and which ones were up is written
-       down before anything moves. See `Gateways` for what is and is not wired here.
+       down before anything moves — asked of `gateways.standing`, which is the kernel's answer
+       rather than something a process wrote about itself. See `Gateways` for what does the
+       standing down.
     3. **Every gateway that was stood down is started again**, in a `finally`, so a carry that
        failed still leaves the machine as it found it. Never one that was already stopped: the list
        started empty and only a gateway this call really stood down is ever added to it.
@@ -316,9 +346,12 @@ def _gateways_stood_down(waiting: List[str], gateways: Optional[Gateways],
                 "unreadable is not a quiet form of offline")
             continue
         if gateways is None:
+            # Not a state `rundesk update` reaches: `settle` resolves one before it calls this.
+            # Kept because the type says it may be `None`, and worded as what it is — this call was
+            # handed nothing — rather than as a release that cannot do it, which is no longer true.
             gone_wrong[name] = (
-                f"{name} was not carried: a gateway is running for it and this release has no way "
-                "to stand one down — stop it, and `rundesk update` again carries it")
+                f"{name} was not carried: a gateway is running for it and this call was handed "
+                "nothing that can stand one down — stop it, and `rundesk update` again carries it")
             continue
         trouble = gateways.down(name)
         if trouble:

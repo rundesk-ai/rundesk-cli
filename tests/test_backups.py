@@ -1122,10 +1122,11 @@ class AGatewayHeldAcrossARestore(WithRealAgents):
     def the_data_says(self) -> str:
         return (self.data / "marker.txt").read_text()
 
-    def test_a_restore_is_refused_while_a_gateway_holds_a_name_and_nothing_can_stand_it_down(self):
-        # Nothing passes the seam today, so this is what a real `rundesk backups restore --confirm`
-        # does on a machine with a gateway up: it refuses, names the agent, and says what to type.
-        # Replacing the data here is what orphans the lock.
+    def test_a_restore_handed_no_seam_is_refused_while_a_gateway_holds_a_name(self):
+        # `cli.main` always hands one in, so this is not what a person typing the command meets any
+        # more — it is what a caller inside this codebase meets, and the type says one may hand
+        # nothing in. Refusing is the answer for it: replacing the data here is what orphans the
+        # lock, and the agent is named with what to type.
         with standing.holding(directory.where("cole")):
             code, _out, err = self.restore()
 
@@ -1267,16 +1268,39 @@ class AGatewayHeldAcrossARestore(WithRealAgents):
         self.assertEqual([], one.verbs())
         self.assertNotIn("stood the gateway", out)
 
-    def test_the_description_names_a_gateway_that_would_have_to_be_stopped_first(self):
-        # Said before somebody types the confirmation, not after: this is the description they read
-        # while deciding, and finding out afterwards means they confirmed an operation that was never
-        # going to run.
+    def test_the_description_says_a_gateway_that_is_up_will_be_stood_down_and_started_again(self):
+        """What somebody reads while deciding, now that a restore stands the gateways down itself.
+
+        This asked for `rundesk gateways stop cole` while nothing could stand one down, and that is
+        now the opposite of what happens — the restore takes it down and puts it back. Somebody
+        confirming is deciding whether their agents may stop for the length of a restore, which is a
+        fact to have before typing the confirmation rather than after.
+        """
         with standing.holding(directory.where("cole")):
             code, _out, err = self.restore(confirming=False)
 
         self.assertEqual(FAILED, code)
-        self.assertIn("rundesk gateways stop cole", err)
+        self.assertIn("stop   the gateway for cole for the length of it, and start it again", err)
+        self.assertNotIn("rundesk gateways stop cole", err)
         self.assertIn("nothing was restored", err)
+
+    def test_the_description_says_a_gateway_nobody_can_ask_about_is_one_it_will_refuse_over(self):
+        # Two of the three states reach that description and they are not one thing to say. A
+        # gateway that is up is stood down and started again; one nobody can ask about is one the
+        # restore refuses over, and describing it as handled would describe an operation that is
+        # never going to run.
+        support.not_as_root(self)
+        lock = directory.where("cole") / standing.LOCK
+        lock.write_bytes(b"")
+        lock.chmod(0o000)
+        self.addCleanup(lock.chmod, 0o600)
+
+        code, _out, err = self.restore(confirming=False)
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("nobody can tell whether a gateway is running for cole", err)
+        self.assertIn("refuses while that is true", err)
+        self.assertNotIn("start it again after", err)
 
 
 class MovingThemSomewhereElse(Copies):
