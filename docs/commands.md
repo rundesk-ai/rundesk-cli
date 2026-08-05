@@ -1,6 +1,6 @@
 # The command surface
 
-Nine operations, and every one of them works. There is no "coming soon" list: a verb rundesk cannot
+Ten operations, and every one of them works. There is no "coming soon" list: a verb rundesk cannot
 perform is a verb rundesk does not have.
 
 ```sh
@@ -11,6 +11,12 @@ rundesk agents                            # the agents this install keeps
 rundesk agents add <agent> --provider <provider>        # make one
 rundesk agents configure <agent> --provider <provider>  # change what is behind one
 rundesk agents remove <agent> --confirm   # take one away, and everything it remembers
+rundesk gateways                          # every agent, and how its gateway stands
+rundesk gateways start <agent>            # start one, and prove a gateway came up
+rundesk gateways stop <agent> | --all     # take the job back, gracefully
+rundesk gateways restart <agent> | --all  # stop it, prove it went, start it again
+rundesk gateways logs <agent> [-n <lines>]  # what one gateway has been saying
+rundesk gateways run <agent>              # be the gateway, in this terminal
 rundesk backups                           # the copies of what rundesk keeps for you
 rundesk backups save                      # copy what rundesk keeps, now
 rundesk backups restore <backup> --confirm        # put a copy back
@@ -26,6 +32,28 @@ rundesk install [--source <dir>] [--bin-dir <dir>]   # what install.sh runs
 
 Ask `rundesk --help` rather than this page when the two disagree — the command is generated from
 nothing and describes itself.
+
+## Some flags are required by the verb rather than by argparse
+
+`--provider`, `--confirm`, and naming either a gateway or `--all` are all required, and none of them
+is registered as `required=True`. That is deliberate and it is the same decision every time:
+argparse's own refusal names a flag and does not say what to type. *"the following arguments are
+required: --provider"* is true and is not an answer, and the person reading it still has to work out
+what a provider is and where the agent's name goes.
+
+So the verb checks instead, and every refusal ends with the whole command somebody should run:
+
+```console
+$ rundesk agents add cole
+agents: FAILED — nothing said which provider — say which with: rundesk agents add cole --provider <provider>
+        nothing was made
+```
+
+The distinction is worth the code because these guard an *effect* rather than describe one.
+`--confirm` is not a value the command needs in order to work; it is the thing standing between a
+person and an agent's whole memory, and a guard on that is worth wording. Which exit code each one
+answers with is below — a missing `--provider` is a command line that was right and refused, and a
+`stop` that named neither a gateway nor `--all` is the command line itself being wrong.
 
 ## status
 
@@ -110,8 +138,9 @@ it by hand would make rundesk skip or repeat a migration step.
 
 ## agents
 
-The agents this install keeps — one directory each, under `data/agents/`. With no sub-verb it lists
-them, because listing is what somebody wants nine times in ten.
+The agents this install keeps — one directory each, under `data/agents/`, and what stands inside one
+is [`layout.md`](layout.md). With no sub-verb it lists them, because listing is what somebody wants
+nine times in ten.
 
 ```console
 $ rundesk agents
@@ -199,13 +228,222 @@ afterwards brings it back.
 
 What it takes is named one thing at a time and never swept, and the agent's own directory goes only
 if it is then empty — anything you left in there is kept, along with the directory holding it, and
-the command says so.
+the command says so. The lock and the record a gateway leaves in that directory are named too, and
+only when they are there: describing a removal larger than the one that would happen defeats the
+point of describing it.
 
-**Whether a gateway is running for that agent is not yet checked.** It cannot be checked by the
-layer that removes one — `agents/` sits below `gateways/` and may not import it — so it belongs to
-this command, and it is left until there is a `rundesk gateways` verb to stop one with. Refusing
-before then would leave somebody an agent they cannot remove and nothing to type to free it. Until
-that lands, removing an agent whose gateway is up leaves a running program with no records.
+**A removal is refused while a gateway is running for that agent**, and this is the check the whole
+confirmation exists to protect. Removing an agent out from under a live gateway leaves a program
+holding a name, writing into a directory that is no longer there, hosting an agent that no longer
+exists — and launchd puts it straight back when it dies, because the job outlives the records the
+removal took.
+
+```console
+$ rundesk agents remove cole --confirm
+agents: FAILED — a gateway is running for cole as pid 96111 — removing it now would leave a running program with no records
+        stop it with: rundesk gateways stop cole
+        nothing was removed
+```
+
+Asked of the kernel through the same lock `rundesk gateways` reads, so a gateway that was killed
+outright is not mistaken for one that is up. Its third answer is kept as a third answer here too:
+an agent nobody can *ask* about is not an agent that is safe to remove, and it is refused in the
+same breath rather than treated as free.
+
+It is checked below the confirmation rather than above it, which looks like the wrong way round and
+is not. A description of a removal describes what would be taken; this decides whether it may happen
+at all — and a gateway can come up in the gap between the two commands anyway, so the only moment
+worth asking in is the moment of acting.
+
+## gateways
+
+One agent has one gateway: a supervised process that holds that agent's name and is brought back
+when it dies. With no sub-verb it lists them, the way `agents` and `backups` do. The other five are
+`start`, `stop`, `restart`, `logs` and `run`.
+
+What a gateway is, and every state one can get stuck in, is [`gateways.md`](gateways.md). This is
+what each verb guarantees and what each refuses.
+
+```console
+$ rundesk gateways
+gateways in /Users/you/.rundesk/data/agents
+AGENT  GATEWAY      JOB         OVERRIDE  LOGIN ITEM
+ada    not running  not placed  enabled   cannot tell
+cole   not running  not placed  enabled   cannot tell
+        ada: not running and no job — start it with: rundesk gateways start ada
+        cole: not running and no job — start it with: rundesk gateways start cole
+```
+
+**Four columns, because no one of them can answer on its own.** `GATEWAY` is the kernel's answer and
+is the one to read first; `JOB` is whether launchd is holding a job for it; `OVERRIDE` is a store
+that outlives every job and can refuse to start one; `LOGIN ITEM` is what macOS has been told about
+it by its owner. Collapsing those into a single word would mean inventing a verdict nothing measured
+— a job that has been disabled prints as a perfectly healthy one, and a job switched off in System
+Settings is gone from launchd entirely. `cannot tell` is a first-class answer in every column: the
+alternative is telling somebody their gateway is fine, or switched off, on the strength of a
+question that failed.
+
+Where they stand is printed even when there are none, because "no gateways" and "no gateways *here*"
+are different things to learn. **A listing that answered exits `0`, whatever it found** — the exit
+code says whether the question was answered, not whether the machine is healthy. What a bad state
+costs is the word `running`, which no row gets unless it earned it:
+
+```console
+$ rundesk gateways
+gateways in /Users/you/.rundesk/data/agents
+AGENT  GATEWAY                            JOB         OVERRIDE  LOGIN ITEM
+ada    not running                        not placed  enabled   cannot tell
+cole   running, UNSUPERVISED (pid 96111)  not placed  enabled   cannot tell
+        ada: not running and no job — start it with: rundesk gateways start ada
+        cole: a gateway is holding this name and launchd has no job behind it — nothing brings it back when it stops, and nothing starts it at the next login. Run: rundesk gateways restart cole
+```
+
+A gateway holding its agent's name with nothing supervising it is the one state that looks like
+health and is not, so it is never written as `running` on its own. Nothing brings it back when it
+stops and nothing starts it at the next login, and somebody who read the word `running` there would
+believe they were covered at the moment they were least covered.
+
+### gateways start
+
+Places the job and then **proves a gateway came up**, rather than proving that launchd accepted one.
+A job the supervisor took is not a process that started: the plist can be perfect and the spawn can
+still fail, in which case launchd removes the job again and says so only in the unified log. So the
+kernel is asked afterwards, and a start that cannot show a gateway holding the name is a failure
+that says where to read next.
+
+It is safe to run again on any state — it rewrites the job, clears an override nobody remembers,
+takes back whatever was loaded under that name, and puts it back — **except on a gateway that is
+already running, where it does nothing at all.** Every step of that resolver begins by taking the
+old job back, which ends the gateway that is up. A start that ran it unconditionally would take an
+agent down in the middle of its work in order to report that it was running, and that is not
+hypothetical: an ordinary start in the build this replaces ended a live agent's whole process tree.
+
+The exception is the one state where "already running" would be a lie:
+
+```console
+$ rundesk gateways start cole
+gateways: FAILED — cole is running as pid 96111 and launchd has no job behind it
+        nothing brings that gateway back when it stops, and nothing starts it at the next login.
+        put it under launchd with: rundesk gateways restart cole
+        nothing was started
+```
+
+A name that is not an agent on this install is refused before anything is placed, and so is an agent
+nobody can ask about — a second gateway started beside a first is the one thing this must never do,
+and "cannot tell" is not a quiet form of "not running".
+
+### gateways stop
+
+Takes the job back and then proves the name came free. **Graceful**: the gateway is sent `SIGTERM`
+and given the whole of its shutdown window to finish what it was holding, because a gateway is
+holding somebody's work and a stop that does not let it finish is a stop that loses some.
+
+The job's file goes with the job, and that is what makes this a stop rather than a pause. At login
+macOS bootstraps the `LaunchAgents` directory on its own, so a stop that left the file behind would
+be a stop that undid itself the next time somebody logged in, with nothing anywhere having said so.
+
+`--force` kills the gateway where it stands instead of asking it to finish. It is for a gateway that
+**will not go** — one ignoring `SIGTERM`, so that a graceful stop blocks for the whole window — and
+never for one that is merely busy, which is exactly the gateway with something to lose. It takes
+work away mid-flight, and the command says so on the line reporting what it did, but only where a
+gateway really was up: claiming it took something away from a name nothing was holding would be the
+command overstating what it cost.
+
+**A name or `--all`, one of them, never both and never neither.** The build this replaces let a bare
+`restart` mean every agent, and it took down every gateway somebody had:
+
+```console
+$ rundesk gateways stop
+gateways: FAILED — stop was not told which gateway
+        one:   rundesk gateways stop <agent>
+        every: rundesk gateways stop --all
+        nothing was changed
+```
+
+That is a `2` and not a `1` — see the table at the bottom. Nobody said which gateway, so the command
+line itself was wrong; the gateway is not one that would not stop.
+
+Stopping something that was never started is not a failure. It is the state that was asked for, and
+it is reported as such.
+
+### gateways restart
+
+Stop, prove the old one is gone, then start — **never the other way round.** Starting over a job the
+supervisor is still holding keeps the definition it already had *without failing*, so a restart that
+started first would report a restart and go on running the old program for ever. A stop that did not
+clearly work therefore ends the cycle there, with the gateway down and the failure said out loud,
+rather than being followed by a start that cannot mean what it says.
+
+`--force` means the same thing it means on `stop` and costs the same thing: the gateway is killed
+rather than asked, and whatever it was doing is taken away where it stood. What it skips is the
+*waiting*. It skips none of the proving — the new gateway is still shown to be holding the name
+before the command says it restarted anything.
+
+### gateways logs
+
+What one gateway has been saying, twenty lines by default — **and, every time, what the machine's
+supervisor caught around it.** Those are two orthogonal facts about one gateway and both are shown,
+each labelled with the file it came from, because the case that matters most is the one where they
+disagree: a gateway that started, wrote its `up` line and then died on an uncaught exception has a
+perfectly ordinary day log and a traceback in a file the day log knows nothing about.
+
+```console
+$ rundesk gateways logs cole -n 5
+logs for cole in /Users/you/.rundesk/data/agents/cole/logs
+        what cole's own gateway wrote, in /Users/you/.rundesk/data/agents/cole/logs:
+[2026-08-05 08:26:43-04:00] INFO:    gateway up for cole on 0.37.0 as pid 95177
+[2026-08-05 08:26:45-04:00] INFO:    gateway stopping for cole: asked to stop with signal 15
+[2026-08-05 08:28:40-04:00] INFO:    gateway up for cole on 0.37.0 as pid 96111
+[2026-08-05 08:28:42-04:00] WARNING: gateway did not start: a gateway is already running for cole as pid 96111 — one agent has one gateway, and this one is standing down
+        the supervisor caught nothing in gateway.out or gateway.err — everything above is the gateway's own log
+```
+
+**Three answers and never two**, for each of them. Lines, nothing yet, or could not be read — an
+empty list handed back for a directory nobody may read is a report of a quiet gateway, and whoever
+believes that goes looking in entirely the wrong place. So an empty source says which kind of empty
+it is rather than being left out.
+
+Nothing anywhere and nothing captured means the gateway never got far enough to write a word, which
+puts the failure upstream of rundesk entirely — so what is printed is the command that finds it:
+
+```console
+$ rundesk gateways logs nina
+logs for nina in /Users/you/.rundesk/data/agents/nina/logs
+        what nina's own gateway wrote, in /Users/you/.rundesk/data/agents/nina/logs:
+        nothing has been written by nina's own gateway yet
+        and the supervisor caught nothing either — a gateway that never started at all leaves its only account in the unified log:
+        log show --last 10m --predicate 'process == "launchd" OR process == "xpcproxy"' --style compact
+```
+
+Asking for no lines is refused rather than answered with nothing, and refused as a `2`, because
+argparse already answers `2` for an `-n` that is not a number. One flag answering `2` for a value
+that is not a number and `1` for a value that is not a count is the same mistake reported two ways,
+and neither a person nor a script can tell why.
+
+### gateways run
+
+Be the gateway for one agent, in this terminal. This is what the job runs, and running it by hand is
+how you watch a gateway start without launchd in the way.
+
+**Its exit code belongs to launchd rather than to you**, and the whole of `gateways.md`'s exit-code
+contract applies to it: every refusal exits `0`, because under this job a non-zero exit is a request
+to be restarted, and a permanent condition that asked to be restarted becomes an endless loop. So an
+agent that does not exist is a refusal and a `0`, and so is a name another gateway is already
+holding:
+
+```console
+$ rundesk gateways run cole
+[2026-08-05 08:28:42-04:00] gateway cole: this process is pid 96134, running 0.37.0
+gateway: NOT RUNNING — a gateway is already running for cole as pid 96111 — one agent has one gateway, and this one is standing down
+```
+
+The first line is written before anything is parsed or read, and it is not decoration: an empty
+capture file beside a job launchd says has run is the one signal that the failure is upstream of
+this program.
+
+**The claim is the check.** There is no version of this that asks whether a gateway is running and
+then starts one — between the asking and the starting another gateway can arrive, and that gap is
+how an ordinary start once ended a live agent's whole process tree.
 
 ## backups
 
@@ -374,6 +612,13 @@ with no terminal is worse than no prompt at all.
 
 What it takes, one named thing at a time, never a sweep:
 
+- **every gateway job this root placed, by the full name launchd knows it by, one agent at a time —
+  and before `app/` goes.** A job that outlived the program it points at is a machine trying to
+  start a command that is not there, at every login, for ever. And it is one label at a time and
+  never a family or a prefix because a job's name belongs to the person rather than to a directory:
+  the build this replaces called every install's job the same thing, and one install's uninstall
+  booted out another install's live gateway. A job that will not come back stops the removal, rather
+  than leaving the machine pointed at a program that is about to be deleted.
 - the PATH link — **only where it points into this install's own `app/`**, so a second install on the
   machine keeps its command
 - `app/`, whole, unless it looks like somebody's checkout
@@ -412,3 +657,40 @@ cannot run.
 | `0` | it was done |
 | `1` | it was attempted and did not work |
 | `2` | the command line itself was wrong — a typo, an unknown verb, a bad flag |
+
+Three codes, and the line between the last two is the one worth being careful about: **`1` says the
+command was understood and could not be carried out, and `2` says it was never a command.** A script
+that cannot tell those apart retries the wrong one.
+
+Everything that lists — `status`, `agents`, `gateways`, `backups`, `env list`, `configure` with
+nothing to change — exits `0` for whatever it found, because the question was *what is there* and
+that question was answered. `rundesk gateways` finding every gateway on the machine down is a
+listing that worked. What a bad state costs is the word `running`, not the exit code.
+
+Three commands are written to have their code read by a script, and they are the ones to build on:
+
+- **`rundesk env check <key>`** exits non-zero when a value is not set, so
+  `rundesk env check DISCORD_TOKEN && …` does the right thing in a shell.
+- **`rundesk version`** exits `0` even when it could not reach GitHub, because the question it was
+  asked — what version is this — was answered from the machine itself. Being unable to ask is said
+  on stderr as `UNKNOWN` and is never reported as being up to date.
+- **`rundesk gateways start <agent>`** exits `0` only once a gateway has been shown to be holding
+  the name. A job the supervisor accepted is not a gateway that started, and the exit code here
+  means the second thing.
+
+Where a refusal is a `2` rather than a `1`, it is because nobody said what to do. **`rundesk
+gateways stop` with neither a name nor `--all` is a `2`** — the gateway is not one that would not
+stop; the command line never named one. `gateways stop <agent> --all` is a `2` for the mirror
+reason, and so is `gateways logs <agent> -n 0`, because argparse already answers `2` for an `-n`
+that is not a number and one flag must not report the same class of mistake two ways.
+
+Where a refusal is a `1`, the command line was right and could not be carried out: an agent that is
+not on this install, an agents directory nobody can read, `--provider` left off, `--confirm` left
+off. **A removal that did not happen is a failure** — `agents remove` and `uninstall` without
+`--confirm` describe what they would take and exit `1`, because a command that took nothing and
+exited `0` would tell a script the removal was done.
+
+**The gateway process itself is the one exception on this page, and it is not an exception to the
+table.** `rundesk gateways run` exits `0` on every refusal. That code is not a report to a person;
+it is a sentence in a conversation with launchd, where `0` means *do not bring me back*. See
+[`gateways.md`](gateways.md).

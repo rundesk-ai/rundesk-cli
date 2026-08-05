@@ -216,8 +216,24 @@ _SHIM = """\
 exec {python} -c {hosting} {src} {name}
 """
 
-#: **Whether this shim is actually what Background Task Management names is UNVERIFIED**, and it is
-#: the single most load-bearing unknown in this file.
+#: **Measured on 2026-08-05, and it is what BTM names.** A real gateway was bootstrapped under a
+#: scratch root and its row read straight out of the store:
+#:
+#:     564 => "8.ai.rundesk.7b13db8d.gateway.cole"
+#:     570 => "rundesk-gateway-cole"
+#:
+#: `rundesk-gateway-cole` — this file's own basename — and not `sh`, and not `Python`. So BTM takes
+#: the name from the program the plist names rather than from the image that ends up resident, and
+#: the shebang chain below does not defeat it. That was the single most load-bearing unknown in this
+#: file and it is now settled.
+#:
+#: **The row only exists while the job does.** Taking the job back and removing the plist removes it,
+#: so this cannot be re-read from a machine with no gateway on it — which is why the evidence is
+#: written down here rather than left as something to check again later.
+#:
+#: What the reasoning below is *for* stands unchanged: a job pointed straight at an interpreter shows
+#: the owner an anonymous `python`, several identical ones once there are several agents, and one
+#: careless toggle takes them all away with no command anywhere that puts them back.
 #:
 #: launchd spawns the shim; the kernel's shebang handling execs `/bin/sh <shim>`; the shell execs
 #: the interpreter. Three images occupy one pid over the job's life, and nothing anybody has read
@@ -238,7 +254,7 @@ exec {python} -c {hosting} {src} {name}
 #:
 #: Written down here rather than fixed on a guess: the alternatives cost real complexity, and
 #: choosing between them before knowing which world this is would be building for an imagined need.
-_SHIM_IS_WHAT_BTM_NAMES = "unverified — see the note above"
+_SHIM_IS_WHAT_BTM_NAMES = "measured 2026-08-05 — see the note above"
 
 
 class Refused(Exception):

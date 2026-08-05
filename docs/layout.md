@@ -55,6 +55,67 @@ Set the root and every one of those moves with it:
 RUNDESK_HOME=/tmp/somewhere rundesk status
 ```
 
+## An agent is a directory, and everything it has is inside it
+
+Agents stand under `data/agents/`, one directory each, named as that agent is:
+
+```
+data/agents/<name>/
+  state.db          what makes this directory an agent — everything it remembers
+  home/             where the agent starts, and what it puts there. Yours, not rundesk's
+  logs/             what its gateway said: a file per day, and what launchd caught
+  gateway.lock      held by the one gateway running this agent, for as long as it runs
+  gateway.json      what that gateway wrote down about itself
+  rundesk-gateway-<name>   the program launchd starts, written when the job is placed
+```
+
+**`state.db` is what makes the directory an agent, and nothing else is.** Not the directory
+existing — a half-made one exists — and not `home/` or `logs/`, which somebody could have made by
+hand. So a stray directory is not listed as an agent and cannot be operated on as one, and an
+interrupted `agents add` leaves litter rather than something wearing an agent's name and not being
+one.
+
+**The names inside are fixed and they are the same for every agent**, which is the whole reason they
+are inside. The build this replaces put them beside the name instead — `<name>.lock`, `<name>.log`,
+`<name>.json`, all flat in one directory — so an agent called `foo.log` and an agent called `foo`
+wanted one file between them, and one agent's log was the other agent's whole existence. It grew a
+published list of every suffix a gateway might ever write, and a name checker that read the list
+back, to make a flat namespace safe. This layout deletes that class of problem rather than defending
+against it: `gateway.lock` inside `foo/` and `gateway.lock` inside `foo.log/` are two different
+files, and no list anywhere has to say so.
+
+An agent's directory is only ever removed by `rundesk agents remove`, one named thing at a time, and
+the directory itself goes only if it is then empty — anything you put in there is kept, along with
+the directory holding it.
+
+## The one thing that is not below the root
+
+```
+~/Library/LaunchAgents/ai.rundesk.<fingerprint>.gateway.<agent>.plist
+```
+
+That is a real exception to this page's whole thesis, so here is why it is one rather than a leak.
+
+It is where macOS requires a login job's definition to be. Every job a person has is registered in
+one place belonging to *the person*, and there is no directory below `RUNDESK_HOME` that `launchd`
+would ever read. So the choice is not between one root and two; it is between a gateway that starts
+at login and one that does not.
+
+**What `RUNDESK_HOME` still decides is which file that is.** The name carries a fingerprint of the
+resolved root, so a scratch install and a real one write different files and neither can reach the
+other's — and nothing in rundesk ever matches a prefix or sweeps that directory. Redirect the root
+and the plist moves with it, exactly like everything above; it simply moves to a different name in a
+directory that was never ours.
+
+That fingerprint is not decoration. A job's name lives in the person's login session and
+`RUNDESK_HOME` cannot isolate it, and the build this replaces gave every install's job the same
+name — so a second install's uninstall booted out the live install's gateway.
+[`gateways.md`](gateways.md) has the rest of it.
+
+`rundesk gateways stop` takes the plist away with the job, and `rundesk uninstall` takes back every
+job this root placed before it removes anything else. Nothing else in this product writes into that
+directory.
+
 ## The copies may live elsewhere, and that is still one variable
 
 `rundesk backups set-location /Volumes/Big/rundesk-backups` moves the copies to another disk and
