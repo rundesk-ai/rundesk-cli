@@ -109,41 +109,40 @@ Anything that replaces this with a sleep-continuous clock trades a real report f
 every laptop this ever runs on, and `time.time()` is not a candidate for a different reason: it moves
 in both directions, so an age taken from it can be negative or hours out after an NTP correction.
 
-## Nothing here starts a child yet, and what the first one has to do
+## The children this process starts, and how they are not orphaned
 
-`utils.programs.start` gives every long-lived child a session and a process group of its own, which
-is what lets a gateway stop the whole tree it started. That has a consequence which only appears when
-the gateway does **not** get to run its shutdown: a child in its own group is outside this process's
-group, so launchd's group-wide cleanup of this job cannot reach it either. If this process is
-`SIGKILL`ed — by `bootout` once `ExitTimeOut` runs out, by the machine reclaiming memory, by a person
-— and no pid was written down before the spawn, that child is left running with nobody able to name
-it, find it or reap it. It survives the restart, the fresh gateway knows nothing about it, and the
-two of them then host one agent between them. That is the state that must not be reachable.
+`schedules.firing` is the first thing here to spawn a child, and it is spawned by
+`utils.programs.start`, which gives every long-lived child a session and a process group of its own.
+That is what lets a gateway stop the whole tree it started, and it has a consequence which only
+appears when the gateway does **not** get to run its shutdown: a child in its own group is outside
+this process's group, so launchd's group-wide cleanup of this job cannot reach it either. If this
+process is `SIGKILL`ed — by `bootout` once `ExitTimeOut` runs out, by the machine reclaiming memory,
+by a person — that child goes on running, and the fresh gateway launchd brings back must not host
+the same agent beside it.
 
-**This is a constraint on whoever adds the first adapter, not something built here.** `host` spawns
-nothing today, and a record with no writer is machinery with no caller. What the first one has to do:
+Four things answer that, and all four live in `firing`:
 
-- **Write the pid down before the spawn, never after.** Everything between `Popen` returning and a
-  record reaching the disk is a window in which a kill orphans that child for good, and a record
-  written after the fact is a record that is missing exactly when it was needed.
-- **Record enough to prove identity later, because a pid alone cannot.** Numbers are reused: a
-  recorded pid that is alive tomorrow may be somebody else's program, and a gateway that signalled it
-  would end a stranger's work. What it was, when it was started, and which agent it belongs to are
-  what let a fresh gateway say *this is still the one I mean* before it acts.
-- **Reconcile at startup, before claiming anything durable.** A gateway coming up reads what the
-  previous one left and settles each entry — still running and still the same program, so adopted or
-  stopped; gone, so removed. A record nothing ever reads back is a record that is always wrong.
-- **The shutdown budget is what bounds all of it.** The job carries `ExitTimeOut = 25`, so everything
-  an orderly stop does — asking each child, waiting on it, then telling it — has to fit inside
-  twenty-five seconds from the `SIGTERM` or launchd `SIGKILL`s this process and every paragraph above
-  becomes real. That is a ceiling on how many children may be stopped one after another and on how
-  long each may be given, and it is the reason the record has to be on disk rather than in memory:
-  the code that would tidy up is exactly the code that does not run.
+- **The claim outlives this process, because the child holds it.** The firing's `flock` descriptor is
+  passed to the child, so a schedule cannot begin again while the last one is still going *whatever
+  happened to the gateway* — and the kernel drops it however the child tree ends. A pid alone could
+  not do this: numbers are reused, and a gateway that signalled a recorded one would end a stranger's
+  work.
+- **The firing is written down before the spawn**, so a kill in between still leaves something on
+  disk saying the work began. A record written after the fact is a record that is missing exactly
+  when it was needed.
+- **A gateway reconciles at startup, before it starts anything.** `firing.settled` reads what the
+  previous one left and settles each entry: the lock is still held, so the work is adopted and
+  watched; the lock is free, so the work is over and nobody can say what it came to.
+- **The shutdown budget bounds all of it.** The job carries `ExitTimeOut = 25`, so everything an
+  orderly stop does — asking each child, waiting on it, then telling it — has to fit inside
+  twenty-five seconds from the `SIGTERM`, or launchd `SIGKILL`s this process and every paragraph
+  above becomes real. `STOPPING_WITHIN` is this side's share of that, and it is deliberately below
+  it: this module may not import `job`, so the two numbers are kept apart and a test holds them in
+  step.
 
-The teardown half already has a seam and it is not a new function — `held`, the `ExitStack` in `run`,
-is entered before anything durable happens and unwound however this process leaves, so a child's stop
-belongs in it and nowhere else. `_serving` is not handed it today because nothing needs it yet. The
-record half has no seam and is not getting one invented before there is a caller.
+The teardown seam is not a new function — `held`, the `ExitStack` in `run`, is entered before
+anything durable happens and unwound however this process leaves, so a child's stop belongs in it and
+nowhere else. `_serving` is handed it for exactly that.
 
 ## This may not import `job`
 
@@ -170,6 +169,7 @@ from rundesk import __version__
 from rundesk.agents import directory, migration
 from rundesk.exits import OK
 from rundesk.gateways import standing
+from rundesk.schedules import firing
 from rundesk.utils import logs
 
 #: What the very first line looks like. Deliberately not through `utils.logs`: this is written to
@@ -195,14 +195,36 @@ CAPTURES_KEPT = 3
 #: is persisted state and a decision for the owner rather than for this file.
 KEPT_DAYS = 14
 
+#: How long the whole of this gateway's shutdown may spend stopping the work its schedules started.
+#:
+#: **Below the job's `ExitTimeOut`, and by enough to matter.** That is twenty-five seconds from the
+#: `SIGTERM`, after which launchd `SIGKILL`s this process and every child is orphaned still holding
+#: its lock — so the stop has to finish with room for the log line that says it did. The number is
+#: written here rather than read from `job.EXIT_TIMEOUT` because **this module may not import
+#: `job`**: a process never talks to its own supervisor. `tests/test_gateway_host.py` holds the two
+#: in step, which is the same arrangement `standing` and `directory` already have for the names of a
+#: gateway's own files.
+STOPPING_WITHIN = 20.0
 
-class Stopped(Exception):
+
+class Stopped(BaseException):
     """A supervisor, or a person, asked this gateway to stop.
 
     Named rather than left as a flag somebody has to poll, and raised rather than set, because a
     flag does not interrupt a sleep: a handler that only recorded the request would leave this
     process waiting out the rest of its beat before noticing, and the beat is fifteen seconds inside
     a shutdown window of twenty-five.
+
+    **`BaseException` and not `Exception`, for the same reason `KeyboardInterrupt` is.** This is
+    raised from a signal handler, so it lands wherever the interpreter happens to be — including
+    inside `schedules.firing`, whose whole contract is that no ordinary failure may end a gateway
+    and which therefore guards its work with `contextlib.suppress(Exception)`. Derived from
+    `Exception` this request to stop was swallowed by that guard, the signal was spent, and the
+    gateway went back to sleep with nobody able to stop it short of a second `SIGTERM` — inside a
+    twenty-five second window after which launchd `SIGKILL`s it and calls it *languishing*.
+
+    Nothing in this module is exposed to that: the handler is installed at the top of `_serving`,
+    which is after every guarded step on the refusal path has already run.
     """
 
 
@@ -260,7 +282,7 @@ def run(name: str) -> int:
             refusal = f"{name} could not claim its own name: {why}"
         else:
             with held:
-                return _serving(name, at)
+                return _serving(name, at, held)
 
     _refused(at, name, refusal)
     return OK
@@ -384,7 +406,7 @@ def _refused(at: Optional[Path], name: str, why: str) -> None:
             logs.note(standing.logs_at(at), f"gateway did not start: {why}", logs.WARNING)
 
 
-def _serving(name: str, at: Path) -> int:
+def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
     """Hold the name, say so, and go on saying so until something stops this process.
 
     Everything from here on is a working gateway, so **an exception is a crash and is let through**:
@@ -395,13 +417,26 @@ def _serving(name: str, at: Path) -> int:
     The record is written *inside* the claim and never outside it: it describes the holder of the
     lock, and one written by anything else is a claim with nothing behind it.
 
-    **The loop is written for a process that is still in it in six months.** Two things happen every
-    time round rather than once on the way up, because a gateway that is never restarted never
-    reaches the way up again: the beat, which says this process is still working, and the sweep,
-    which is what stops one file a day accumulating for as long as the process lives. Neither is
-    allowed to end the gateway — see `_still_working` — and neither may say the same thing every
-    fifteen seconds either, because a log that grows with the beat is the growth it was meant to
-    bound, arrived at from the other side.
+    **What a previous gateway left is reckoned with before this one starts anything**, and before
+    the loop rather than inside it: a firing whose gateway is gone is either still running, in which
+    case this one must not start a second, or over with nobody able to say what it came to. Either
+    way it is a fact about the past and there is nothing for the loop to do about it again.
+
+    **The clock is looked at before the sleep, and the beat still waits.** A schedule is due in one
+    stated minute, so a gateway that waited a whole interval before its first look lost every
+    occurrence due in the last fifteen seconds of the minute it started in — *which is exactly the
+    moment a machine restarts one*. It is safe to look immediately because what has already fired is
+    read off the records themselves: the first look and the first ordinary one cannot start a minute
+    twice. The beat is the other way round and deliberately, because saying a gateway is working
+    before it has done any is a report with nothing behind it.
+
+    **The loop is written for a process that is still in it in six months.** Everything in it
+    happens every time round rather than once on the way up, because a gateway that is never
+    restarted never reaches the way up again: the clock, the beat that says this process is still
+    working, and the sweep that stops one file a day accumulating for as long as the process lives.
+    None of them is allowed to end the gateway — see `_still_working` and `firing.looked` — and none
+    may say the same thing every fifteen seconds either, because a log that grows with the beat is
+    the growth it was meant to bound, arrived at from the other side.
     """
     _stop_politely()
     where = standing.logs_at(at)
@@ -411,12 +446,18 @@ def _serving(name: str, at: Path) -> int:
         # exit non-zero — which under `SuccessfulExit: false` is a request to be restarted.
         standing.write_record(at, name, __version__)
         logs.note(where, f"gateway up for {name} on {__version__} as pid {os.getpid()}")
+        watching = firing.settled(name, where)
+        # Registered on the stack `run` unwinds however this process leaves, which is the one place
+        # a child's stop belongs. The callback reads `watching` as it stands at that moment rather
+        # than as it stands now — it closes over the name, not over this first value.
+        held.callback(lambda: firing.stopping(name, where, watching, STOPPING_WITHIN))
         # Both start as "nothing has happened yet", and the first sweep is the loop's first pass
         # rather than a call of its own before it. One call site: a sweep done on the way up as well
         # as in the loop is one that goes on looking right with the loop's half deleted, and the
         # loop's half is the one that matters — a gateway doing its job is one nobody restarts.
         landing, swept_for = True, ""
         while True:
+            watching = firing.looked(name, where, watching)
             time.sleep(standing.BEAT_SECONDS)
             landing = _still_working(at, where, landing)
             swept_for = _kept_the_days(where, swept_for)

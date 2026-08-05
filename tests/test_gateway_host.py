@@ -16,6 +16,7 @@ Waits are bounded and asked for rather than slept through: `support.waited_until
 Run directly: `python3 tests/test_gateway_host.py`
 """
 
+import contextlib
 import datetime
 import os
 import shutil
@@ -30,7 +31,8 @@ from typing import List, Optional, Tuple
 import support
 from rundesk import __version__
 from rundesk.agents import directory, records
-from rundesk.gateways import host, standing
+from rundesk.gateways import host, job, standing
+from rundesk.schedules import firing, kept
 from rundesk.utils import logs, programs
 
 #: How a gateway is started here: the same handoff the job's shim performs, so what these cases run
@@ -580,6 +582,141 @@ class WhatItGoesOnDoingForMonths(WithAnAgent):
 
         self.assertIsNone(child.poll(), "it ended when its agent went away, which exits non-zero")
         self.assertFalse(self.at.exists(), "it made its agent's directory again to complain into")
+
+
+class TheScheduleItHosts(WithAnAgent):
+    """A real gateway, a real schedule, and the child it really starts.
+
+    Driven through the same gateway process every other case here uses, because the guarantees are
+    about what the *loop* does: when it first looks at the clock, and what it takes down with it.
+    `tests/test_schedules_firing.py` proves everything the firing itself promises; what is here is
+    only the wiring, which is the part no unit case can see.
+    """
+
+    #: A beat long enough that a schedule firing inside it cannot have waited for one. The whole
+    #: point of the case below: with the look after the sleep, nothing happens for this long.
+    A_LONG_BEAT = 30.0
+
+    #: And one short enough that a case about what the log *says* is not sitting out a beat waiting
+    #: for the reaping. What a firing came to is written on the look after it finished, so the
+    #: outcome arrives within one beat of the work ending — which is the design, not a delay to
+    #: engineer around.
+    A_SHORT_BEAT = 1.0
+
+    def given(self, name: str = "tick", command: str = "/bin/echo it ran") -> None:
+        kept.added(self.name, name, {"cron": "* * * * *", "command": command})
+
+    def fired(self, name: str = "tick") -> bool:
+        return kept.one(self.name, name)["last_fired_for"] is not None
+
+    def test_a_gateway_looks_at_the_clock_as_soon_as_it_has_its_name(self):
+        # **Not one interval later.** A schedule is due in one stated minute, so a gateway that
+        # waited a whole beat before its first look lost every occurrence due in the last fifteen
+        # seconds of the minute it started in — which is exactly the moment a machine restarts one.
+        # The beat here is thirty seconds, so a firing that lands promptly cannot have waited for it.
+        self.given()
+        started = time.monotonic()
+        self.a_running_gateway(beat=self.A_LONG_BEAT)
+        self.assertTrue(support.waited_until(self.fired, self.PATIENCE),
+                        f"it never fired. It said: {self.its_log()}")
+        self.assertLess(time.monotonic() - started, self.A_LONG_BEAT,
+                        "the first look waited for a beat, so a firing due in that window is lost")
+
+    def test_the_beat_still_waits_before_saying_anything(self):
+        # The other half, and it is the opposite decision: saying a gateway is working before it has
+        # done any work is a report with nothing behind it. Looking at the clock first must not have
+        # moved the beat forward with it.
+        self.given()
+        child = self.a_running_gateway(beat=self.A_LONG_BEAT)
+        self.assertTrue(support.waited_until(self.fired, self.PATIENCE))
+        how = standing.standing(self.at)
+        self.assertEqual(child.pid, how.pid)
+        self.assertFalse(how.stale, "a gateway that has only just come up already reads as wedged")
+
+    def test_a_gateway_says_in_its_own_log_that_a_schedule_ran_and_what_it_came_to(self):
+        # The whole reason somebody opens this file: it ran, it finished, or it failed and why.
+        self.given(command="/bin/sh -c 'echo the work happened; exit 0'")
+        self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(
+            lambda: "completed" in self.its_log(), self.PATIENCE),
+            f"it never said what became of the schedule. It said: {self.its_log()}")
+        said = self.its_log()
+        self.assertIn("schedule tick is due for", said)
+        self.assertIn("schedule tick started as pid", said)
+        self.assertIn("the work happened", said)
+
+    def test_a_schedule_that_failed_says_why_in_the_gateways_own_log(self):
+        self.given(command="/bin/sh -c 'echo it went wrong >&2; exit 3'")
+        self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(
+            lambda: "failed with exit 3" in self.its_log(), self.PATIENCE),
+            f"a failure was never reported. It said: {self.its_log()}")
+        self.assertIn("it went wrong", self.its_log())
+
+    def test_an_orderly_stop_takes_the_work_a_schedule_started_with_it(self):
+        # A child is in a session of its own, so launchd's group-wide cleanup of this job cannot
+        # reach it: if the gateway does not stop it, nothing ever will.
+        self.given(command="/bin/sh -c 'while true; do sleep 0.05; done'")
+        child = self.a_running_gateway(beat=self.A_LONG_BEAT)
+        # **Waited for by the line the gateway writes, not by the lock.** The lock is taken by the
+        # gateway *before* it spawns — that is what stops two of them starting one schedule — so it
+        # goes to "running" a moment before there is anything to stop, and a case that signalled
+        # there was signalling a gateway that had not taken hold of the work yet. It failed one run
+        # in five on the 3.9 floor and never on a current interpreter, which is exactly the shape of
+        # a race nobody notices until CI does.
+        self.assertTrue(support.waited_until(
+            lambda: "started as pid" in self.its_log(), self.PATIENCE),
+            f"the work never started. It said: {self.its_log()}")
+
+        child.send_signal(signal.SIGTERM)
+        self.assertTrue(support.waited_until(lambda: child.poll() is not None, self.PATIENCE))
+
+        self.assertTrue(support.waited_until(
+            lambda: not firing.still_running(self.name, "tick"), self.PATIENCE),
+            "the gateway stopped and left the work it started running with nobody holding it")
+        self.assertEqual(kept.STOPPED, kept.one(self.name, "tick")["last_outcome"])
+
+    def test_a_schedule_that_could_not_run_never_takes_the_gateway_down(self):
+        # Under `KeepAlive {SuccessfulExit: false}` a non-zero exit is a request to be restarted, so
+        # a firing that ended the process would be a permanent condition turned into a loop.
+        self.given(command="/no/such/program at all")
+        child = self.a_running_gateway(beat=1.0)
+        self.assertTrue(support.waited_until(
+            lambda: "did not start" in self.its_log(), self.PATIENCE),
+            f"it never tried. It said: {self.its_log()}")
+        self.assertIsNone(child.poll(), "a schedule that could not run ended the gateway")
+
+
+class TheStopFitsInsideWhatTheJobAllows(unittest.TestCase):
+    """The one number this module shares with the layer above it, and cannot import.
+
+    `host` may not import `job` — a process never talks to its own supervisor — so the budget a
+    shutdown has and the `ExitTimeOut` the job hands it are two constants that have to agree with
+    nothing forcing them to. Above it, launchd `SIGKILL`s the gateway partway through stopping its
+    children and every one of them is orphaned still holding its lock.
+    """
+
+    def test_a_gateways_stop_budget_leaves_room_inside_the_jobs_exit_timeout(self):
+        self.assertLess(host.STOPPING_WITHIN, job.EXIT_TIMEOUT,
+                        "a gateway may spend longer stopping its children than launchd allows it "
+                        "to live, which orphans every one of them")
+
+    def test_the_budget_is_not_so_small_that_nothing_can_be_stopped_in_it(self):
+        self.assertGreater(host.STOPPING_WITHIN, firing.STOPPING_LEAST)
+
+    def test_a_request_to_stop_is_not_something_a_generic_guard_can_swallow(self):
+        # `Stopped` is raised from a signal handler, so it lands wherever the interpreter happens to
+        # be — including inside `schedules.firing`, whose whole contract is that no ordinary failure
+        # may end a gateway and which therefore guards its work with `suppress(Exception)`. Derived
+        # from `Exception` the request was eaten there, the signal was spent, and the gateway went
+        # back to sleep unstoppable short of a second `SIGTERM` — inside a twenty-five second window
+        # after which launchd `SIGKILL`s it. This is why `KeyboardInterrupt` is a `BaseException`.
+        self.assertFalse(issubclass(host.Stopped, Exception),
+                         "a stop a generic `except Exception` can swallow is a gateway that cannot "
+                         "be stopped from inside a guarded call")
+        with self.assertRaises(host.Stopped):
+            with contextlib.suppress(Exception):
+                raise host.Stopped("asked to stop")
 
 
 class TheProcessNeverTalksToItsSupervisor(unittest.TestCase):

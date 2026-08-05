@@ -92,6 +92,7 @@ def run(argv: Sequence[str], waiting: float, where: Optional[Path] = None,
             start_new_session=True,
             cwd=str(where) if where else None,
             env=env,
+            preexec_fn=a_clean_slate,          # see `a_clean_slate`
         )
     except (OSError, ValueError, IndexError) as why:
         return Ran(None, "", "", f"{DID_NOT_START}: {why}")
@@ -170,6 +171,22 @@ FIRMLY = signal.SIGKILL
 #: How often a wait for something to stop looks again.
 LOOKING_AGAIN = 0.05
 
+#: The children this process started with `start`, kept by process id.
+#:
+#: **Because starting one and reaping it are two calls, and the thing that knows a child's status is
+#: the wrapper that created it.** `start` hands back a bare pid so a caller can write it down and
+#: outlive it; the wrapper stays here so `collected` can take the status through `poll()`, which is
+#: what actually settles the child rather than leaving a zombie.
+#:
+#: It is also what keeps the standard library quiet. A `Popen` collected while it still believes it
+#: owns a running child emits `ResourceWarning: subprocess N is still running` — correct about the
+#: facts and wrong about the intent, since detaching is the whole point of `start`. Holding the
+#: wrapper until the child is reaped answers that honestly rather than silencing it.
+#:
+#: Entries go when the child is reaped or stopped, so this holds one per *live* child and not one
+#: per child ever started.
+_STARTED: Dict[int, subprocess.Popen] = {}
+
 
 class CouldNotStart(Exception):
     """A long-lived program that never began, named with why.
@@ -184,7 +201,8 @@ class CouldNotStart(Exception):
 
 
 def start(argv: Sequence[str], log: Path, where: Optional[Path] = None,
-          env: Optional[Dict[str, str]] = None) -> int:
+          env: Optional[Dict[str, str]] = None,
+          holding: Sequence[int] = ()) -> int:
     """Start a long-lived program in a session of its own and hand back its process id.
 
     Everything it writes is appended to `log`, which is opened here rather than left to the caller
@@ -192,15 +210,27 @@ def start(argv: Sequence[str], log: Path, where: Optional[Path] = None,
 
     The file is opened for appending on purpose: a restart adds to the history rather than replacing
     it, and history is most of what a log is for.
+
+    **`holding` are descriptors the child keeps open, and the point of them is a lock it never asks
+    about.** A `flock` belongs to the open file description rather than to a process, so one taken
+    by *this* process and passed down is held for exactly as long as the child and everything it
+    starts are alive, and the kernel drops it however they end — including a `SIGKILL` that lets no
+    tidying code run anywhere. A caller wanting a claim that outlives its own process, and that
+    another process can ask about, has no other way to get one: a pid it wrote down can be reused,
+    and a file it created is not a lock.
+
+    The caller closes its own copy afterwards, and must: the lock is let go only when the last
+    descriptor onto that description is closed, so a parent that keeps its own is a parent still
+    holding the claim it meant to hand over.
     """
     try:
-        return _started(argv, log, where, env)
+        return _started(argv, log, where, env, holding)
     except (OSError, ValueError, IndexError) as why:
         raise CouldNotStart(f"{DID_NOT_START}: {why}") from why
 
 
 def _started(argv: Sequence[str], log: Path, where: Optional[Path],
-             env: Optional[Dict[str, str]]) -> int:
+             env: Optional[Dict[str, str]], holding: Sequence[int] = ()) -> int:
     """The start itself. See `start`, which turns everything this raises into one answer."""
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "a", encoding="utf-8") as writing:
@@ -213,8 +243,115 @@ def _started(argv: Sequence[str], log: Path, where: Optional[Path],
             start_new_session=True,
             cwd=str(where) if where else None,
             env=env,
+            # `pass_fds` is what clears close-on-exec for these and nothing else — every other
+            # descriptor this process holds is still closed, so a child cannot inherit a database
+            # connection or somebody else's lock by accident.
+            pass_fds=tuple(holding),
+            # See `a_clean_slate`: a blocked signal mask is inherited across the exec, and a child
+            # that inherited one could not be stopped by the parent that started it.
+            preexec_fn=a_clean_slate,
         )
+    _STARTED[started.pid] = started
     return started.pid
+
+
+class Collected(NamedTuple):
+    """What became of a child this process started, asked without waiting for it.
+
+    `over` is the field to read first, and the pair says which of **three** things is true rather
+    than the two a single number could:
+
+    | `over` | `code` | |
+    |---|---|---|
+    | `False` | `None` | still running |
+    | `True` | a number | finished, and this is what it said |
+    | `True` | `None` | over, and nobody can say what it came to |
+
+    The third is not a kind of failure and must never be reported as one. It is what a child of a
+    *previous* process looks like — the one that started it is gone, so the exit status went with
+    it — and work that may well have finished perfectly is not something to write down as failed.
+    """
+
+    over: bool
+    code: Optional[int]
+
+
+def collected(pid: int) -> Collected:
+    """Ask whether a child this process started has finished, and take its status if it has.
+
+    **Taking the status is not optional and cannot be deferred.** A child that has exited stays in
+    the process table as a zombie until somebody collects it, and a zombie answers signal `0`
+    exactly like a running program — so anything asking `alive` in a loop would spin for ever on a
+    program that finished in a millisecond, and every short-lived child would hold a table slot
+    until the machine ran out.
+
+    **Only for a child of this very process.** `waitpid` answers about nobody else's, which is the
+    honest boundary rather than a limitation: a status is something the parent holds, and a gateway
+    that came up after the one which spawned this has no way to learn it. That case is `over` with
+    no code, and the caller is expected to say so rather than to guess.
+
+    Deliberately not folded into `alive`, which answers only whether something is there — the two
+    answer different questions, and a caller that needed the code would find `alive` had already
+    eaten it.
+    """
+    started = _STARTED.get(pid)
+    if started is not None:
+        code = started.poll()
+        if code is None:
+            return Collected(False, None)
+        _STARTED.pop(pid, None)
+        return Collected(True, code)
+    try:
+        gone, status = os.waitpid(pid, os.WNOHANG)
+    except OSError:
+        # Never ours, or already collected. Either way it is over and there is nothing to read.
+        return Collected(True, None)
+    if gone == 0:
+        return Collected(False, None)
+    return Collected(True, os.waitstatus_to_exitcode(status))
+
+
+def a_clean_slate() -> None:
+    """Give a child the signal mask a program expects, between the fork and the exec.
+
+    **A blocked signal mask is inherited across `fork` *and* across `exec`, and dispositions are
+    not.** So a parent that blocks `SIGTERM` for a moment — to make starting a child and writing
+    down that it started one indivisible step, which is exactly what `schedules.firing` does — hands
+    every child it starts in that moment a program that can never be terminated. Measured: a
+    `/bin/sh` started that way survived `SIGTERM` and had to be `SIGKILL`ed, so a gateway stopping
+    its work waited out its whole patience first and reported the child as one that would not stop.
+
+    `subprocess`'s own `restore_signals` does not cover this. It restores *dispositions* Python set
+    to `SIG_IGN`, which is a different thing from the mask, and the difference is invisible until
+    something signals the child.
+
+    Reset to empty rather than to whatever the parent had before it blocked, because that is what a
+    program started from a shell gets and what every program is written expecting.
+    """
+    with contextlib.suppress(OSError, ValueError):
+        signal.pthread_sigmask(signal.SIG_SETMASK, set())
+
+
+def _settled(pid: int) -> None:
+    """Take a child's status if it has finished, and let go of its wrapper once it has.
+
+    One place, because two callers need it for two different reasons and both are easy to get wrong.
+    `alive` needs it so a child that exited on its own is not counted as running for ever. `stop`
+    needs it so the wrapper for a program it just ended does not sit here for the life of the
+    process still believing it owns something that is running.
+
+    Through the wrapper where this module has one, because that is what actually settles the child:
+    a raw `waitpid` takes the status and leaves the wrapper believing otherwise, which is a
+    `ResourceWarning` at interpreter exit about a child that was reaped correctly.
+    """
+    started = _STARTED.get(pid)
+    if started is not None:
+        with contextlib.suppress(OSError, ValueError):
+            if started.poll() is not None:
+                _STARTED.pop(pid, None)
+        return
+    with contextlib.suppress(ChildProcessError, OSError):
+        os.waitpid(pid, os.WNOHANG)
 
 
 def alive(pid: int) -> bool:
@@ -233,8 +370,7 @@ def alive(pid: int) -> bool:
     # `while alive(pid): ...`, would spin on a program that finished in a millisecond, and every
     # short-lived child would hold a table slot until the machine ran out. `ECHILD` means it was
     # never ours to collect, which is ordinary: it may be from an earlier run of the command.
-    with contextlib.suppress(ChildProcessError, OSError):
-        os.waitpid(pid, os.WNOHANG)
+    _settled(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -280,6 +416,9 @@ def stop(pid: int, gently_for: float, firmly_for: float = 5.0) -> str:
         if trouble:
             return trouble
         if _gone_within(group, pid, patience):
+            # Settled on the way out, so this module stops holding a wrapper for a program it has
+            # just ended — see `_settled`.
+            _settled(pid)
             return ""
     return f"{pid} and what it started were still running after being asked and then told to stop"
 
