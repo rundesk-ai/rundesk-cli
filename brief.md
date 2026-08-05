@@ -3,19 +3,26 @@
 # rundesk ask <agent> <prompt>
 rundesk messages <agent> [--adapter <adapter>] [--limit <n>] [--search <query>]
 
-# managing the schedules
-rundesk schedules <agent> 
-rundesk schedules <agent> add <schedule> [--when <cron>] [--at <moment>] [--ask <prompt>] [--provider <provider>]
-rundesk schedules <agent> update <schedule> [--when <cron>] [--at <moment>] [--ask <prompt>] [--provider <provider>]
-rundesk schedules <agent> run <schedule>
-rundesk schedules <agent> show <schedule>
-rundesk schedules <agent> remove <schedule>
-
 # managing the channels
 rundesk channels <agent> add <adapter> --owner <user> [--allow <user>] [--token-stdin]
 rundesk channels <agent> update <adapter> [--owner <user>] [--allow <user>]
 rundesk channels <agent> show <adapter>
 rundesk channels <agent> remove <adapter>
+
+# MANAGING THE SCHEDULES
+# --------------------------------------------
+# list all the schedules for an agent
+rundesk schedules list <agent> 
+# add a new schedule for an agent
+rundesk schedules add <agent> <schedule> [--when <cron>] [--at <moment>] [--ask <prompt>] [--provider <provider>]
+# update an existing schedule for an agent
+rundesk schedules update <agent> <schedule> [--when <cron>] [--at <moment>] [--ask <prompt>] [--provider <provider>]
+# run a schedule for an agent
+rundesk schedules run <agent> <schedule>
+# show details of a schedule for an agent
+rundesk schedules show <agent> <schedule>
+# remove a schedule for an agent
+rundesk schedules remove <agent> <schedule>
 
 # MANAGING THE SKILLS
 # --------------------------------------------
