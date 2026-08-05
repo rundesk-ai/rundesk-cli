@@ -616,13 +616,20 @@ class TheGatewaysAnUpdateCycles(WithGatewaysThatReallyStartAndStop):
         super().setUp()
         self.steps = self.home / "agent-steps"
         self.steps.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(agent_migration.STEPS / "0001_the_records_an_agent_keeps.py", self.steps)
+        # **Every real step, not the first of them.** The agents above were made before this patch
+        # took effect, so their `migrations` rows name every step this release ships — and a fake
+        # directory holding only `0001` makes each of them read as carried *ahead* of the product,
+        # which is a refusal rather than the carry these cases are about. Copied wholesale so that
+        # the next real step to land does not break this suite the way `0002` did.
+        for step in agent_migration.STEPS.glob("[0-9]*.py"):
+            shutil.copy2(step, self.steps)
         stepping = mock.patch.object(agent_migration, "STEPS", self.steps)
         stepping.start()
         self.addCleanup(stepping.stop)
         # One more step than either agent has run, so both have something waiting and neither is
-        # left alone as an agent already on this release would be.
-        (self.steps / "0002_x.py").write_text(AN_AGENT_STEP, encoding="utf-8")
+        # left alone as an agent already on this release would be. Numbered above every real one,
+        # because a step below an agent's high-water mark is refused as back-filled.
+        (self.steps / "9999_x.py").write_text(AN_AGENT_STEP, encoding="utf-8")
 
     def settling(self, by):
         """Settle this install the way the release that just landed does, and say what happened."""

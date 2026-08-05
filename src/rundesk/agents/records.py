@@ -329,7 +329,7 @@ def stated(at: Path, values: Dict[str, Any]) -> None:
     named = sorted(values)
     said = [values[one] for one in named]
     with writing(at) as conn:
-        columns = _columns(conn, at)
+        columns = columns_of(conn, at, "config")
         unknown = [one for one in named if one not in columns]
         if unknown:
             raise Refused(f"{unknown[0]} is not something an agent's configuration holds")
@@ -342,17 +342,27 @@ def stated(at: Path, values: Dict[str, Any]) -> None:
                 "VALUES (1, " + ", ".join("?" for _ in named) + ")", said)
 
 
-def _columns(conn: sqlite3.Connection, at: Path) -> List[str]:
-    """What the configuration table actually has, asked of the table itself.
+def columns_of(conn: sqlite3.Connection, at: Path, table: str) -> List[str]:
+    """What one of an agent's tables actually has, asked of the table itself.
 
-    `id` is left out: it is how the table is kept to one row and not a value anybody states, and a
-    caller that set it to anything but 1 would be refused by the `CHECK` with a sentence about a
-    constraint rather than about what they did.
+    **Asked of SQLite rather than kept as a list here**, so a column a later step adds is settable
+    the day it lands and a list cannot go stale. That is also what makes a statement built by hand
+    from these names safe: the only names that reach it are ones SQLite has just said the table has.
+
+    `id` is left out of every answer. In `config` it is how the table is kept to one row; in
+    `schedules` it is the row's own identity, which nothing states and nothing changes. Either way a
+    caller that set it would be refused by a constraint, in a sentence about the constraint rather
+    than about what they did.
+
+    `table` is interpolated, and it is never a caller's word — every call site in this product names
+    a table literally. A public function taking a name from somewhere else would need quoting rules
+    of its own, and there is no such caller to write them for.
     """
     try:
-        there = [row[1] for row in conn.execute("PRAGMA table_info(config)")]
+        there = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
     except sqlite3.DatabaseError as why:
-        raise Unreadable(f"{at} does not hold an agent's configuration: {why}") from why
+        raise Unreadable(f"{at} does not hold an agent's {table} table: {why}") from why
     if not there:
-        raise Unreadable(f"{at} has no configuration table, so it is not an agent's records")
+        raise Unreadable(
+            f"{at} has no {table} table, so it is not an agent's records as this release keeps them")
     return [one for one in there if one != "id"]

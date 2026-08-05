@@ -96,17 +96,21 @@ STEPS = Path(__file__).resolve().parent / "steps"
 #: `logs/` is here because rolling back the record of what has just gone wrong is backwards: the
 #: lines explaining the failure are the one thing somebody needs afterwards.
 #:
-#: The principle for everything after it: **an unbounded collection directory does not belong in a
-#: rollback.** `sessions/`, `providers/` and `channels/` are coming, one directory per session kept
-#: for the life of the agent, and copying accumulated history aside would make every future
-#: migration slowest on exactly the agents somebody uses most. None of them exists yet, so none of
-#: them is named here — whoever adds the first one adds it to this tuple in the same change, and
-#: reads the rule in `steps/__init__.py` that says what a step may then do inside it.
+#: `schedules/` is here for that same principle: **an unbounded collection directory does not belong
+#: in a rollback.** It holds what every firing of every schedule wrote, which grows for as long as
+#: the agent has schedules, and copying it aside would make every future migration slowest on
+#: exactly the agents somebody uses most. It also holds the lock a *running* firing is holding, and
+#: putting a lock file back underneath a live child is putting back a claim that has moved on.
 #:
-#: Today an agent is `state.db`, `home/` and `logs/`, and `home/` is a few kilobytes of markdown, so
-#: copying the rest aside costs nothing and makes the promise true. That is the trade now; this
-#: tuple is what keeps it true later.
-NOT_PUT_BACK = (directory.LOGS,)
+#: The principle for everything after it is the same. `sessions/` and `providers/` are coming, one
+#: directory per session kept for the life of the agent; neither exists yet, so neither is named
+#: here — whoever adds the first one adds it to this tuple in the same change, and reads the rule in
+#: `steps/__init__.py` that says what a step may then do inside it.
+#:
+#: Today the rest of an agent is `state.db` and `home/`, and `home/` is a few kilobytes of markdown,
+#: so copying it aside costs nothing and makes the promise true. That is the trade now; this tuple
+#: is what keeps it true later.
+NOT_PUT_BACK = (directory.LOGS, directory.SCHEDULES)
 
 #: What the copy of an agent's things is called while that agent is being carried. `utils.files`'
 #: staging convention, so every walk over a directory already skips it, and **inside the agent's own
@@ -375,8 +379,11 @@ def _could_not(name: str, step: Step, why: BaseException, within: Path,
         return (f"{name} could not be carried to {step.id}: {why} — and worse, it could "
                 f"not be put back as it was: {', '.join(stuck)}")
     _let_go(aside)
+    # Every one of `NOT_PUT_BACK` is named rather than the first of them. This sentence is the
+    # caller's whole account of what happened, and one that named `logs/` alone would be a claim
+    # that everything else went back — including the directory holding what a firing wrote.
     return (f"{name} could not be carried to {step.id}: {why} — its records and its files were "
-            f"put back as they were, apart from {directory.LOGS}/")
+            f"put back as they were, apart from {', '.join(f'{one}/' for one in NOT_PUT_BACK)}")
 
 
 def _aside(within: Path) -> Path:

@@ -1,12 +1,14 @@
 """The direction the tree points, checked rather than remembered.
 
     commands  →  lifecycle  ─┐
-              →  gateways   ─┤ →  agents  →  core  →  utils
+              →  gateways   ─┤ →  schedules  ─┐
+              →  skills     ─┴───────────────┴→  agents  →  core  →  utils
 
-Six layers, and every import crosses those lines one way.
+Seven layers, and every import crosses those lines one way.
 
-`agents` sits below two of them because both reach down to it for different reasons: an install
-migration step may have to carry every agent, and a gateway is always the gateway *of* an agent.
+`agents` sits below several of them because each reaches down to it for a different reason: an
+install migration step may have to carry every agent, a gateway is always the gateway *of* an agent,
+a grant lands inside an agent's own home, and a schedule is a row in an agent's own records.
 Neither reaches back up, and an agent knows nothing about the process that hosts it — which is what
 lets one be made, listed and taken away with no gateway anywhere near the case. The rule is written down in `AGENTS.md` and
 in each package's own docstring, and written down is where a rule of this kind stops being true:
@@ -36,14 +38,23 @@ MAY_IMPORT = {
     "utils": (),
     "core": ("utils",),
     "agents": ("core", "utils"),
-    "gateways": ("agents", "core", "utils"),
+    # `schedules` reaches `agents` because a schedule is a row in one agent's own records and a
+    # firing's lock stands in that agent's own directory. It may not reach `gateways`, and that is
+    # the direction that matters: **when a schedule is due is a different question from what starts
+    # it**, so the arithmetic and the store are answerable by a case with no supervisor, no launchd
+    # and no child process anywhere near it.
+    "schedules": ("agents", "core", "utils"),
+    # And `gateways` reaches `schedules` rather than the other way round, because the gateway is
+    # what turns "this is due" into work that has started. It is the only long-lived process this
+    # product has, so it is the only thing that can hold a child and reap it.
+    "gateways": ("schedules", "agents", "core", "utils"),
     "lifecycle": ("agents", "core", "utils"),
     # `skills` reaches `agents` because a grant is a directory entry inside an agent's own home and
     # there is nowhere else to ask where that is. The traffic goes one way only: `agents` may not
     # reach here, so an agent is still something that can be made, carried and removed by code that
     # has never heard of a skill, and presenting a new agent's skills is done in `commands`.
     "skills": ("agents", "core", "utils"),
-    "commands": ("skills", "gateways", "lifecycle", "agents", "core", "utils"),
+    "commands": ("skills", "schedules", "gateways", "lifecycle", "agents", "core", "utils"),
 }
 
 #: Below the layers rather than in them: the version this is, and what a command may exit with.
@@ -196,7 +207,7 @@ class TheTreePointsOneWay(support.Isolated):
         # `utils` was checked and `core` was not, so `core`'s table went on listing a module that
         # had moved a whole layer down and nothing said a word. A table a reader trusts is a table
         # worth checking — all of them, not the one that happened to get a test first.
-        for package in ("agents", "core", "gateways", "lifecycle", "skills", "utils"):
+        for package in ("agents", "core", "gateways", "lifecycle", "schedules", "skills", "utils"):
             table = (WHERE / package / "__init__.py").read_text(encoding="utf-8")
             # A trailing slash names a directory rather than a module — `steps/` is
             # documented deliberately and has no `.py` of its own to match.
@@ -257,7 +268,7 @@ class TheTreePointsOneWay(support.Isolated):
     def test_nothing_below_commands_knows_what_argparse_is(self):
         # The command line is one layer's business. A lifecycle module taking a `Namespace` would be
         # a module that cannot be driven except by typing at it.
-        for package in ("utils", "core", "agents", "gateways", "lifecycle"):
+        for package in ("utils", "core", "agents", "gateways", "lifecycle", "schedules"):
             for module in modules_of(package):
                 with self.subTest(module=f"{package}/{module.name}"):
                     self.assertNotIn("argparse", module.read_text(encoding="utf-8"))

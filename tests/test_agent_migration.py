@@ -1036,6 +1036,59 @@ class HowAStepSplitsItsSql(Steps):
                 self.assertNotIn("rundesk", reached)
 
 
+class WhatThisReleaseReallyShips(support.Isolated):
+    """The real steps against a real agent, with nothing patched.
+
+    Every class above works in a scratch step directory, which is what lets them drive failures and
+    orderings that no shipped step has. The cost is that none of them ever runs what is actually in
+    `agents/steps/` — so a step that ships broken, or one whose table never lands, passes every one
+    of them. This is the case that opens the agent the product just made and looks.
+    """
+
+    def test_the_steps_this_release_ships_are_numbered_in_order_and_unique(self):
+        shipped = migration.found()
+        self.assertTrue(shipped, "this release ships no agent migration steps at all")
+        numbers = [step.order for step in shipped]
+        self.assertEqual(sorted(set(numbers)), numbers,
+                         "two shipped steps share a number, or they are not in order")
+
+    def test_a_brand_new_agent_holds_every_table_this_release_expects(self):
+        directory.made("cole", "claude")
+        with records.reading(directory.records("cole")) as conn:
+            there = {row[0] for row in
+                     conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        self.assertLessEqual({"config", "migrations", "schedules"}, there)
+
+    def test_a_brand_new_agent_is_stamped_with_every_step_and_has_none_outstanding(self):
+        directory.made("cole", "claude")
+        applied = migration.recorded(directory.records("cole"))
+        self.assertEqual([step.id for step in migration.found()], sorted(applied))
+        self.assertEqual([], migration.outstanding(applied))
+
+    def test_an_agent_carried_from_the_first_step_alone_reaches_the_same_shape(self):
+        # The other way in, and the one every existing agent on a real machine takes: records built
+        # by `0001` and then carried forward. A step that only ever runs against a brand new agent
+        # is a step nobody's actual data has been through.
+        at = directory.where("cole")
+        (at / directory.HOME).mkdir(parents=True)
+        (at / directory.LOGS).mkdir()
+        self.assertIsNone(migration.carry_one("cole", _only_the_first(migration.STEPS, self.home)))
+        self.assertIsNone(migration.carry_one("cole"))
+        with records.reading(directory.records("cole")) as conn:
+            there = {row[0] for row in
+                     conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        self.assertIn("schedules", there)
+        self.assertEqual([], migration.outstanding(migration.recorded(directory.records("cole"))))
+
+    def test_carrying_an_agent_that_already_has_every_step_changes_nothing(self):
+        # Rule 5: a step is safe against an agent that does not need it. Proved by running the whole
+        # carry twice and requiring the second to be a no-op rather than a refusal.
+        directory.made("cole", "claude")
+        self.assertIsNone(migration.carry_one("cole"))
+        self.assertEqual([step.id for step in migration.found()],
+                         sorted(migration.recorded(directory.records("cole"))))
+
+
 def _imports(module: Path):
     """Every name this file imports, read off the source rather than by running it."""
     found = set()

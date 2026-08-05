@@ -482,17 +482,17 @@ class CarryingTheAgentsForward(Updating):
         self.an_agent("alpha")
         self.an_agent("beta")
 
-        code, out, err = self.update(archive=self.an_archive(agent_steps={"0002_x": AN_AGENT_STEP}))
+        code, out, err = self.update(archive=self.an_archive(agent_steps={"9999_x": AN_AGENT_STEP}))
 
         self.assertEqual(OK, code, err)
         self.assertTrue(self.carried("alpha"), "the release's agent step never ran for alpha")
         self.assertTrue(self.carried("beta"), "the release's agent step never ran for beta")
-        self.assertIn("carrying alpha to 0002_x", out)
+        self.assertIn("carrying alpha to 9999_x", out)
 
     def test_how_far_each_agent_got_is_recorded_in_its_own_records(self):
         self.an_agent("alpha")
-        self.update(archive=self.an_archive(agent_steps={"0002_x": AN_AGENT_STEP}))
-        self.assertIn("0002_x", agent_migration.recorded(directory.records("alpha")))
+        self.update(archive=self.an_archive(agent_steps={"9999_x": AN_AGENT_STEP}))
+        self.assertIn("9999_x", agent_migration.recorded(directory.records("alpha")))
 
     def test_an_agent_that_cannot_be_carried_does_not_stop_the_next(self):
         # Nineteen agents that are fine are not something to take down for the third one's sake.
@@ -500,7 +500,7 @@ class CarryingTheAgentsForward(Updating):
         self.an_agent("beta")
 
         self.update(archive=self.an_archive(
-            agent_steps={"0002_x": AN_AGENT_STEP_THAT_FAILS_FOR_ONE}))
+            agent_steps={"9999_x": AN_AGENT_STEP_THAT_FAILS_FOR_ONE}))
 
         self.assertFalse(self.carried("alpha"))
         self.assertTrue(self.carried("beta"), "one agent failing stopped the ones after it")
@@ -512,7 +512,7 @@ class CarryingTheAgentsForward(Updating):
         self.an_agent("beta")
 
         code, _, err = self.update(archive=self.an_archive(
-            agent_steps={"0002_x": AN_AGENT_STEP_THAT_FAILS_FOR_ONE}))
+            agent_steps={"9999_x": AN_AGENT_STEP_THAT_FAILS_FOR_ONE}))
 
         self.assertEqual(FAILED, code)
         self.assertIn("alpha", err)
@@ -525,23 +525,23 @@ class CarryingTheAgentsForward(Updating):
 
         code, _, err = self.update(archive=self.an_archive(
             steps={"0001_first": A_STEP},
-            agent_steps={"0002_x": AN_AGENT_STEP_THAT_NEEDS_THE_INSTALL_CARRIED}))
+            agent_steps={"9999_x": AN_AGENT_STEP_THAT_NEEDS_THE_INSTALL_CARRIED}))
 
         self.assertEqual(OK, code, err)
         self.assertTrue(self.carried("alpha"))
 
     def test_an_install_with_no_agents_carries_none_and_still_succeeds(self):
         # Nobody having added an agent is an answer, not a discovery that found nothing.
-        code, _, err = self.update(archive=self.an_archive(agent_steps={"0002_x": AN_AGENT_STEP}))
+        code, _, err = self.update(archive=self.an_archive(agent_steps={"9999_x": AN_AGENT_STEP}))
         self.assertEqual(OK, code, err)
 
     def test_an_agent_already_on_this_release_is_not_carried_again(self):
         self.an_agent("alpha")
-        self.update(archive=self.an_archive(agent_steps={"0002_x": AN_AGENT_STEP}))
+        self.update(archive=self.an_archive(agent_steps={"9999_x": AN_AGENT_STEP}))
         (paths.agents() / "alpha" / "carried").unlink()
 
         self.update(published="v99.0.1",
-                    archive=self.an_archive(agent_steps={"0002_x": AN_AGENT_STEP}))
+                    archive=self.an_archive(agent_steps={"9999_x": AN_AGENT_STEP}))
 
         self.assertFalse(self.carried("alpha"), "the agent step ran a second time")
 
@@ -554,7 +554,7 @@ class CarryingTheAgentsForward(Updating):
         """
         self.an_agent("alpha")
         support.a_real_tree(paths.app(), "after")
-        (paths.app() / "src" / "rundesk" / "agents" / "steps" / "0002_x.py").write_text(
+        (paths.app() / "src" / "rundesk" / "agents" / "steps" / "9999_x.py").write_text(
             AN_AGENT_STEP)
 
         code, _, err = self.update(published=f"v{__version__}")
@@ -619,7 +619,7 @@ class TheGatewaySeam(support.Isolated):
 
     def a_step_waiting(self) -> None:
         """One more step than every agent made so far has run."""
-        (self.steps / "0002_x.py").write_text(AN_AGENT_STEP, encoding="utf-8")
+        (self.steps / "9999_x.py").write_text(AN_AGENT_STEP, encoding="utf-8")
 
     def a_gateway_for(self, name: str):
         """A gateway holding this agent's name, claimed the way a real one claims it.
@@ -738,7 +738,7 @@ class TheGatewaySeam(support.Isolated):
     def test_a_gateway_is_started_again_even_when_the_carry_failed(self):
         # The `finally` this rests on. A carry that died must still leave the machine as it found it.
         self.an_agent("alpha")
-        (self.steps / "0002_x.py").write_text(AN_AGENT_STEP_THAT_FAILS, encoding="utf-8")
+        (self.steps / "9999_x.py").write_text(AN_AGENT_STEP_THAT_FAILS, encoding="utf-8")
         gateways = AFakeGateway()
 
         with self.a_gateway_for("alpha"):

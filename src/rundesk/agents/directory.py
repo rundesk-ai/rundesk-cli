@@ -61,6 +61,12 @@ GATEWAY_LOCK = "gateway.lock"
 #: What the running gateway wrote down about itself. Inside the agent's directory, never beside it.
 GATEWAY_RECORD = "gateway.json"
 
+#: What a firing leaves beside itself: the lock the running one holds, what started it, and what it
+#: wrote. Inside the agent's directory, never beside it — the same rule as `gateway.lock`, and for
+#: the same reason: `<schedule>.lock` inside `foo/` and inside `foo.log/` are two different files,
+#: and no list anywhere has to say so.
+SCHEDULES = "schedules"
+
 #: The note the install writes into `data/agents/`, and therefore a name no agent may have.
 NOTE = "README.md"
 
@@ -128,6 +134,17 @@ def home(name: str) -> Path:
 def logs(name: str) -> Path:
     """Where this agent's gateway writes."""
     return where(name) / LOGS
+
+
+def schedules(name: str) -> Path:
+    """Where this agent's firings keep their locks, their records and what they wrote.
+
+    A directory of its own rather than three names beside `state.db`, because there is one set of
+    these per schedule and a schedule's name is the owner's: putting them at the top of the agent's
+    directory would put `nightly.lock` next to `gateway.lock` and make every future fixed name a
+    name no schedule may have.
+    """
+    return where(name) / SCHEDULES
 
 
 def gateway_lock(name: str) -> Path:
@@ -334,6 +351,7 @@ def _forgotten(name: str) -> List[Path]:
         gone.extend(_removed(one))
     gone.extend(_removed(home(name)))
     gone.extend(_removed(logs(name)))
+    gone.extend(_removed(schedules(name)))
     gone.extend(_removed(gateway_record(name)))
     gone.extend(_removed(gateway_lock(name)))
     try:
