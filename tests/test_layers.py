@@ -44,17 +44,23 @@ MAY_IMPORT = {
     # it**, so the arithmetic and the store are answerable by a case with no supervisor, no launchd
     # and no child process anywhere near it.
     "schedules": ("agents", "core", "utils"),
+    # `channels` reaches `agents` for the same reason and keeps the same distance from `gateways`:
+    # what a channel *is* — a row in one agent's records, a directory in that agent's own tree — is
+    # a different question from what hosts one, and the module that answered both could not be
+    # driven by a case with no supervisor and no child process anywhere near it.
+    "channels": ("agents", "core", "utils"),
     # And `gateways` reaches `schedules` rather than the other way round, because the gateway is
     # what turns "this is due" into work that has started. It is the only long-lived process this
     # product has, so it is the only thing that can hold a child and reap it.
-    "gateways": ("schedules", "agents", "core", "utils"),
+    "gateways": ("channels", "schedules", "agents", "core", "utils"),
     "lifecycle": ("agents", "core", "utils"),
     # `skills` reaches `agents` because a grant is a directory entry inside an agent's own home and
     # there is nowhere else to ask where that is. The traffic goes one way only: `agents` may not
     # reach here, so an agent is still something that can be made, carried and removed by code that
     # has never heard of a skill, and presenting a new agent's skills is done in `commands`.
     "skills": ("agents", "core", "utils"),
-    "commands": ("skills", "schedules", "gateways", "lifecycle", "agents", "core", "utils"),
+    "commands": ("skills", "channels", "schedules", "gateways", "lifecycle", "agents", "core",
+                 "utils"),
 }
 
 #: Below the layers rather than in them: the version this is, and what a command may exit with.
