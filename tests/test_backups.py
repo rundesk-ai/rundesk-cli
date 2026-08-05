@@ -578,6 +578,52 @@ class WhenPuttingOneBackGoesWrong(Copies):
         self.assertEqual([], [one.name for one in self.home.iterdir()
                               if one.name.startswith(".data")])
 
+    def test_a_ctrl_c_in_the_swap_window_does_not_take_the_data_with_it(self):
+        # Measured, not imagined: `KeyboardInterrupt` does not inherit from `Exception`, so a
+        # rollback catching `Exception` skipped the single most likely interruption there is, and
+        # `data/` was left renamed aside with nothing to put it back — the owner's whole install
+        # gone, with a clean exit code.
+        self.given_copies(ITS_NAME)
+        self.given_data("the owner's work")
+        really = os.rename
+
+        def a_person_presses_ctrl_c(src, dst):
+            really(src, dst)
+            if str(dst).endswith(".data.outgoing"):
+                raise KeyboardInterrupt()
+
+        with mock.patch.object(backups.os, "rename", side_effect=a_person_presses_ctrl_c):
+            with self.assertRaises(KeyboardInterrupt):
+                backups._swap(self.at / ITS_NAME, self.data)
+
+        self.assertTrue(self.data.is_dir(), "the data directory was left moved aside")
+        self.assertEqual("the owner's work", (self.data / "marker.txt").read_text())
+        self.assertEqual([], [one.name for one in self.home.iterdir()
+                              if one.name.startswith(".data")])
+
+    def test_the_rollback_asks_the_filesystem_rather_than_trusting_a_flag(self):
+        # The interrupt above lands *between* the rename returning and any bookkeeping on the next
+        # line. A flag set after the fact still says "nothing moved" while the directory really has
+        # — so the decision is made from what is on disk.
+        self.given_copies(ITS_NAME)
+        self.given_data("the owner's work")
+        aside = self.home / ".data.outgoing"
+        really = os.rename
+
+        def interrupt_before_anything_is_recorded(src, dst):
+            really(src, dst)
+            if dst == str(aside) or str(dst).endswith(".data.outgoing"):
+                self.assertTrue(aside.exists(), "the rename really happened")
+                raise KeyboardInterrupt()
+
+        with mock.patch.object(backups.os, "rename",
+                               side_effect=interrupt_before_anything_is_recorded):
+            with self.assertRaises(KeyboardInterrupt):
+                backups._swap(self.at / ITS_NAME, self.data)
+
+        self.assertFalse(aside.exists(), "what was moved aside was never put back")
+        self.assertTrue(self.data.is_dir())
+
     def test_being_unable_to_put_it_back_says_so_rather_than_pretending(self):
         aside = self.home / "never-written"
         with self.assertRaises(backups.HalfRestored) as half:

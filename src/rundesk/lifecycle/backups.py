@@ -398,7 +398,8 @@ def _copy_across(now_at: Path, to: Path, said: Callable[[str], None]) -> List[st
             os.rename(files.stage_copy(entry, to), to / entry.name)
             landed.append(entry.name)
             said(f"moved {entry.name}")
-    except Exception:
+    except BaseException:
+        # As above: a Ctrl-C partway through a move must still take back what it wrote.
         _could_not_remove(to, landed)
         raise
     return landed
@@ -519,19 +520,25 @@ def _swap(a_copy: Path, into: Path) -> None:
 
     try:
         shutil.copytree(a_copy, pending, symlinks=True)
-    except Exception:
+    except BaseException:
         files.discard(pending)
         raise
 
-    swapped = False
     try:
         if into.exists() or into.is_symlink():
             os.rename(into, aside)
-            swapped = True
         os.rename(pending, into)
-    except Exception:
+    except BaseException:
+        # **`BaseException`, and the filesystem rather than a flag.** Two things go wrong here and
+        # both were measured. `KeyboardInterrupt` does not inherit from `Exception`, so a rollback
+        # catching `Exception` is one that does not run when a person presses Ctrl-C — the single
+        # most likely interruption there is. And an interrupt can land between the rename returning
+        # and any `swapped = True` on the next line, so a local variable says the swap never
+        # happened while `data/` really has been moved aside. Asking whether the directory is there
+        # is the fact; a variable is a claim about it, and the two disagree exactly when it matters.
+        # Everything caught is re-raised, so catching more swallows nothing.
         files.discard(pending)
-        if swapped:
+        if aside.exists():
             _put_back(aside, into)
         raise
     files.discard(aside)
