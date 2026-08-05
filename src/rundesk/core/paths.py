@@ -156,13 +156,35 @@ def allowed(where: Path, called: str) -> Path:
         raise Refused(f"{called} must be an absolute path, and is {where}")
 
     settled = where.resolve()
-    if settled == Path(settled.anchor):
+    if _the_same_place(settled, Path(settled.anchor)):
         raise Refused(f"{called} must not be the root of the filesystem, and is {_both(where, settled)}")
-    if settled == Path.home().resolve():
+    if _the_same_place(settled, Path.home()):
         raise Refused(f"{called} must not be the home directory itself, and is {_both(where, settled)}")
     if settled.parent == settled:
         raise Refused(f"{called} has no parent, and is {_both(where, settled)}")
     return settled
+
+
+def _the_same_place(one: Path, other: Path) -> bool:
+    """Whether two paths are the same directory — asked of the filesystem, not of the text.
+
+    **Comparing the strings is not enough on a Mac.** The default volume is case-insensitive, and
+    `resolve()` does not case-fold: `/uSERS/NAME` and `/Users/name` are one directory and two
+    different strings, so a home directory spelled with different capitals sailed past the refusal
+    that exists to stop exactly that — and `uninstall --purge` below such a root would have been
+    operating on somebody's home for real. Not an adversarial input either: a path copy-pasted from
+    a tool that does not preserve case is all it takes.
+
+    `samefile` compares device and inode, which is the only question actually being asked. It needs
+    both paths to exist, so the string comparison stays as the answer for a root that is not there
+    yet — a directory that does not exist cannot be the home directory.
+    """
+    if one == other:
+        return True
+    try:
+        return os.path.samefile(str(one), str(other))
+    except OSError:
+        return False
 
 
 def _both(where: Path, settled: Path) -> str:

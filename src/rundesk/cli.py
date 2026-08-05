@@ -10,6 +10,8 @@ goes to stop being readable.
 """
 
 import argparse
+import contextlib
+import signal
 import sys
 from typing import List, Optional
 
@@ -105,6 +107,7 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
     needs it — so every state of `version` and `update` is driven with no network anywhere
     near the test, and the surface itself knows nothing about GitHub.
     """
+    _asked_to_stop_politely()
     parser = build_parser()
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
@@ -129,6 +132,35 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
     # Unreachable while every registered verb is dispatched above, and that is the point: a verb
     # added to the parser and wired to nothing fails here loudly rather than exiting 0 in silence.
     raise AssertionError(f"{args.command} is registered on the parser and answered by nothing")
+
+
+def _asked_to_stop_politely() -> None:
+    """Turn a hang-up or a termination request into something the rollbacks can catch.
+
+    **Ctrl-C already raises; closing the terminal does not.** Python installs no handler for
+    `SIGHUP`, so the kernel ends the process outright — no exception, no `except` clause of any
+    kind, and every rollback in this product skipped. Measured: a worker sent a real `SIGHUP`
+    mid-copy exited `-1` with nothing run. That is the same window `KeyboardInterrupt` was already
+    fixed for, reached by a signal no amount of care in an `except` could have caught.
+
+    So the two signals a person actually causes — closing the window, and a supervisor asking a
+    command to stop — are turned into `KeyboardInterrupt`, which is precisely what Ctrl-C raises and
+    what every rollback here now catches. One shape of interruption, one way of unwinding.
+
+    `SIGKILL` cannot be handled by anything and is not attempted: what protects against that is the
+    staging convention, not a handler.
+
+    Done here rather than at import: a module that installed handlers merely by being imported would
+    change the behaviour of anything that imported it, including the suite.
+    """
+    def leave(_signal: int, _frame: object) -> None:
+        raise KeyboardInterrupt()
+
+    for asked in (signal.SIGHUP, signal.SIGTERM):
+        with contextlib.suppress(ValueError, OSError, AttributeError):
+            # Only the main thread of the main interpreter may install one, and a platform that
+            # has no `SIGHUP` is not a reason for the command to refuse to run.
+            signal.signal(asked, leave)
 
 
 def offered(parser: argparse.ArgumentParser) -> List[str]:

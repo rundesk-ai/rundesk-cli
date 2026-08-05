@@ -447,6 +447,39 @@ class WhenAPurgeCannotFinish(Uninstalling):
         self.assertTrue(paths.data().exists(), "it said it failed and took the data anyway")
 
 
+class WhenSettlingCannotEvenStart(Installing):
+    """An install must not hand somebody a stack trace, whatever is in the way.
+
+    Settling runs in an interpreter of its own, and whatever it writes to its error stream is the
+    only account of what went wrong — so anything escaping it uncaught arrived verbatim, internal
+    paths and all, on the line beginning `install: FAILED —`.
+    """
+
+    def test_a_file_where_a_directory_belongs_is_said_in_one_sentence(self):
+        # An ordinary precondition: something left behind by an interrupted run, or a slip.
+        self.root.mkdir(parents=True, exist_ok=True)
+        (self.root / "data").write_text("not a directory")
+
+        code, _, err = self.install()
+
+        self.assertEqual(FAILED, code)
+        self.assertNotIn("Traceback", err)
+        self.assertNotIn("NOT APPLIED", err, "the subprocess's own prefix was forwarded whole")
+        self.assertIn("File exists", err)
+        # A worded failure, not an exception's repr. Reducing a traceback to its last line hides
+        # the stack but still leaves `FileExistsError:` in front of the message — which is how you
+        # tell "settle caught this and said it" from "settle let it out and something tidied up
+        # after the fact".
+        self.assertNotIn("FileExistsError", err)
+
+    def test_a_failure_is_reported_once_and_not_under_two_names(self):
+        self.root.mkdir(parents=True, exist_ok=True)
+        (self.root / "data").write_text("not a directory")
+        code, _, err = self.install()
+        self.assertEqual(FAILED, code)
+        self.assertEqual(1, err.count("FAILED"), f"said more than once: {err!r}")
+
+
 class WhenASwapCannotBeUndone(support.Isolated):
     """`tree.HalfReplaced` — the worst thing this product can say, and nothing proved it said it.
 

@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from rundesk import __version__
-from rundesk.commands import failed
+from rundesk.commands import failed, the_reason
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.lifecycle import backups, home, migration, release, tree
@@ -145,10 +145,13 @@ def settle() -> int:
     forward. Deciding it here means the caller never has to be right about it, and running this by
     hand on an install that was interrupted is always safe.
     """
-    home.prepare(saying=_out_loud)
-
     fresh = not config.where(paths.data()).exists()
     try:
+        # Inside the guard, not before it. Laying the directories down is filesystem work like
+        # everything below it — a stray *file* where a directory belongs raises, and outside the
+        # `try` that came out of the subprocess an install settles in as a raw traceback, which
+        # `install: FAILED —` then printed verbatim to whoever ran the installer.
+        home.prepare(saying=_out_loud)
         if fresh:
             config.write_fresh(paths.data())
             # Nothing to carry: the directories were made correctly a moment ago, and the steps
@@ -160,10 +163,14 @@ def settle() -> int:
             gone_wrong = migration.carry(paths.data(), saying=_out_loud)
             if gone_wrong:
                 return _failed(f"{gone_wrong}{kept}")
-    except (config.Unreadable, config.Stuck, migration.Broken) as why:
+    except (config.Unreadable, config.Stuck, migration.Broken, OSError) as why:
         # Every write below `settle` goes through the configuration, including the stamp each
         # migration step lands with, so all of these are caught in one place rather than at each
         # of the calls that can give them.
+        #
+        # `OSError` is here because everything this function does is filesystem work, and the one
+        # thing a settle must never do is end in a traceback: it runs in a subprocess whose stderr
+        # is forwarded whole into the failure a person reads.
         #
         # `Broken` is here because steps that cannot be ordered are found by `stamp_without_running`
         # too, and that is the *fresh install* path — the one place a broken checkout is most likely
@@ -235,7 +242,7 @@ def settled_by_the_new_release(app: Path) -> str:
     if ended.trouble:
         return f"the installed release {ended.trouble}"
     if ended.code != 0:
-        return (ended.err or f"it ended {ended.code}").strip()
+        return the_reason(ended.err) or f"it ended {ended.code}"
     return ""
 
 

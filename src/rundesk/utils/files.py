@@ -68,6 +68,18 @@ READ = "read"
 Stuck = locking.Stuck
 
 
+class Unreadable(ValueError):
+    """A value that is there, cannot be understood, and will not be written over.
+
+    **Named rather than left a bare `ValueError`.** It used to be one, and a bare `ValueError` is
+    something every caller has to remember is possible — so three of them did not, and a corrupt
+    `config.json` reached whoever typed `rundesk configure` as a raw traceback. A caller that means
+    to handle it can now name it; one that does not is at least failing on something it can see.
+
+    Still a `ValueError`, so anything that already caught one goes on working.
+    """
+
+
 def _the_lock_for(where: Path) -> Path:
     """The lock file guarding one value, beside it and never it.
 
@@ -134,7 +146,7 @@ def changing_json(where: Path, empty: Any) -> Iterator[list]:
     with locking.only_one(_the_lock_for(where), str(where)):
         how, value = read_json(where)
         if how == UNREADABLE:
-            raise ValueError(f"{where} is there and cannot be read — refusing to write over it")
+            raise Unreadable(f"{where} is there and cannot be read — refusing to write over it")
         held = [empty if how == MISSING else value]
         yield held
         write_json(where, held[0])

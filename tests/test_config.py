@@ -131,6 +131,45 @@ class WhenAVersionLastArrived(support.Isolated):
         self.assertNotIn("last_updated_at", config.settable())
 
 
+class AConfigurationThatCannotBeRead(support.Isolated):
+    """The same answer whichever way the file was touched — read or written.
+
+    `read` translated it and the three functions that *write* did not, so a value nobody could read
+    came back as a sentence from one and as a raw traceback from the others. Somebody typing
+    `rundesk configure` got the traceback.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.data = self.home / "data"
+        self.data.mkdir(parents=True, exist_ok=True)
+        config.where(self.data).write_text("{ not json")
+
+    def test_reading_it_says_so(self):
+        with self.assertRaises(config.Unreadable):
+            config.read(self.data)
+
+    def test_writing_one_value_says_the_same_thing(self):
+        with self.assertRaises(config.Unreadable):
+            config.stated("backup_retention", 3, self.data)
+
+    def test_writing_several_says_the_same_thing(self):
+        with self.assertRaises(config.Unreadable):
+            config.stated_all({"backup_retention": 3}, self.data)
+
+    def test_filling_in_says_the_same_thing(self):
+        with self.assertRaises(config.Unreadable):
+            config.fill_in(self.data)
+
+    def test_the_command_says_it_rather_than_ending_in_a_traceback(self):
+        code, out, err = self.rundesk("configure", "--update-time", "04:30")
+        self.assertNotEqual(0, code)
+        self.assertNotIn("Traceback", err)
+        self.assertIn("cannot be read", err)
+        self.assertIn("nothing was changed", err)
+        self.assertEqual("", out)
+
+
 class WhenSomethingElseIsChangingTheConfiguration(support.Isolated):
     """The ceiling `jsonfile` keeps, reaching a command somebody typed.
 

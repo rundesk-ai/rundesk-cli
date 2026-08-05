@@ -49,6 +49,27 @@ def failed(saying: str, *and_so: str) -> int:
     return FAILED
 
 
+def the_reason(said: str) -> str:
+    """One sentence out of whatever a subprocess wrote to its error stream.
+
+    Two things run in an interpreter of their own here — the release settling the install it has
+    just landed in, and the placed command being asked to prove it answers — and whatever they
+    write is the only account of what went wrong. Forwarded whole it reads badly in both
+    directions: a settle that failed already says `update: NOT APPLIED — …`, so wrapping that in
+    `install: FAILED — …` says the same thing twice under two names, and a genuine crash arrives
+    as a stack trace with internal paths in it, printed verbatim to whoever ran the installer.
+
+    So: the last thing said, with any `verb: STATUS — ` prefix taken off. On a traceback the last
+    line is the exception's own message, which is the one line of it worth reading; on an ordinary
+    worded failure it is the sentence that was already written for a person.
+    """
+    lines = [one.rstrip() for one in said.splitlines() if one.strip()]
+    if not lines:
+        return ""
+    last = lines[-1].strip()
+    return last.split(" — ", 1)[1] if " — " in last else last
+
+
 def as_written(value: Any) -> str:
     """One configured value as a person reads it, and as they would type it back.
 

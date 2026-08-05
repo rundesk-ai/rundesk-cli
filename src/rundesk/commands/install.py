@@ -26,7 +26,7 @@ import os
 from pathlib import Path
 
 from rundesk import __version__
-from rundesk.commands import failed, update
+from rundesk.commands import failed, the_reason, update
 from rundesk.core import config, paths
 from rundesk.exits import OK
 from rundesk.lifecycle import tree
@@ -100,7 +100,7 @@ def _answers(at: Path) -> str:
     if ended.trouble:
         return ended.trouble
     if ended.code != 0:
-        return (ended.err or ended.out or f"it ended {ended.code}").strip()
+        return the_reason(ended.err) or the_reason(ended.out) or f"it ended {ended.code}"
     return ""
 
 

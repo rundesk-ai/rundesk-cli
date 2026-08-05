@@ -219,7 +219,9 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
         try:
             shutil.copytree(from_where, pending, symlinks=True)
             os.rename(pending, at / name)
-        except Exception:
+        except BaseException:
+            # `BaseException`: a Ctrl-C, or a closed terminal turned into one, is not an
+            # `Exception`, and this leaves a staging entry rather than a copy either way.
             files.discard(pending)
             raise
     return name

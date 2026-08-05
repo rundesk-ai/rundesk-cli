@@ -84,7 +84,7 @@ def replace(from_where: Path, app: Path) -> Path:
                 os.rename(target, aside)
                 swapped.append(target)
             os.rename(pending, target)
-    except Exception:
+    except BaseException:
         _put_back(app, swapped)
         for pending in staged:
             files.discard(pending)

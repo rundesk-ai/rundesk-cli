@@ -73,13 +73,16 @@ class Refused(Exception):
     """A value that may not be set, or may not be set to that."""
 
 
-class Unreadable(Exception):
-    """The configuration is there and cannot be understood.
-
-    Raised rather than defaulted. Treating an unreadable file as an unwritten one would answer every
-    question with the factory setting — so an owner who turned automatic updates off would find them
-    on again, and nothing would have said so.
-    """
+#: The configuration is there and cannot be understood.
+#:
+#: `files`' own answer, named here as well. Raised rather than defaulted: treating an unreadable
+#: file as an unwritten one would answer every question with the factory setting — so an owner who
+#: turned automatic updates off would find them on again, and nothing would have said so.
+#:
+#: **The same name for the read and for the write.** `read` used to translate it and the three
+#: functions that *write* did not, so a value nobody could read came back as a sentence from one
+#: and as a traceback from the others. One name, one answer, whichever way the file was touched.
+Unreadable = files.Unreadable
 
 
 #: Something else is changing the configuration and did not finish. The same answer `files` gives,
