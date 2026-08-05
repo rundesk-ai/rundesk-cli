@@ -192,6 +192,20 @@ def login_items_as_they_stand() -> Optional[List[Tuple[str, int, int]]]:
         return None
 
 
+#: What the owner's login items held when this suite process started.
+#:
+#: **The baseline a case compares against, rather than "there is no rundesk plist anywhere".** That
+#: absolute reading was what this asserted, and it made the suite unrunnable for the one workflow
+#: this product is developed with: `./dev gateways start <agent>` places a real job, on purpose, in
+#: the owner's own login domain — a launchd label belongs to the person and `RUNDESK_HOME` cannot
+#: move it. A developer who used the thing they were building could no longer test it.
+#:
+#: What must be true is that **this run** wrote none, which is a different claim and the one worth
+#: making. Read once, at import, so a gateway started by hand before the run is part of the ground
+#: rather than part of the evidence.
+AS_THE_RUN_BEGAN = login_items_as_they_stand()
+
+
 def ran(code: Optional[int] = 0, out: str = "", err: str = "",
         trouble: Optional[str] = None) -> programs.Ran:
     """One answer from a supervisor, in the shape `utils.programs` hands back."""

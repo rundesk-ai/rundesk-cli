@@ -40,6 +40,7 @@ from unittest import mock
 import support
 from rundesk.agents import directory
 from rundesk.commands import gateways
+from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.gateways import job, standing
 from rundesk.utils import logs, programs
@@ -210,9 +211,20 @@ class WithAnAgent(support.Isolated):
         self.addCleanup(lambda: (self.at / standing.LOCK).chmod(0o600))
 
     def a_placed_job(self, by: Optional[support.ASupervisor] = None) -> support.ASupervisor:
-        """A plist really on disk, the way a start leaves one."""
+        """A plist really on disk, with no gateway behind it.
+
+        **Placed directly rather than by running a start that fails**, which is how this used to get
+        one: a start against a stand-in supervisor placed the job and then could not show a gateway
+        holding the name. That stopped leaving a plist the moment a start that cannot prove a
+        gateway came up began taking its job back — which it must, because a job whose program
+        cannot start is one launchd brings back on the throttle for ever.
+
+        `into` is the scratch root's own `LaunchAgents`, the same answer `support` gives the command,
+        so nothing here writes where the owner's machine looks at login.
+        """
         by = by or support.ASupervisor()
-        self.rundesk_with(by, "gateways", "start", "cole")
+        one = job.job("cole", directory.where("cole"), paths.home(), paths.home() / "LaunchAgents")
+        job.place(one, by)
         return by
 
     def rundesk_with(self, by: support.ASupervisor, *argv: str) -> Tuple[int, str, str]:
@@ -1441,10 +1453,21 @@ class TheSeamItself(WithAnAgent):
 class TheOwnersLoginItems(unittest.TestCase):
     """Proof, in the middle of the run as well as after every case."""
 
-    def test_no_rundesk_plist_has_ever_landed_in_them(self):
+    def test_this_run_wrote_no_rundesk_plist_into_them(self):
         # The whole reason the plist directory is redirected for every command a case drives.
+        #
+        # **Measured against what was there when the run began, not against nothing.** Asserting no
+        # rundesk plist existed at all made the suite unrunnable for anybody who had used
+        # `./dev gateways start` — which places a real job in the owner's login domain on purpose,
+        # because a launchd label belongs to the person and no root can move it. That turned "the
+        # suite writes nothing here" into "you may not run the product you are testing".
+        # **By name, not by (name, size, mtime).** A gateway somebody started by hand before the run
+        # goes on being supervised while the suite runs: launchd respawns it, a `restart` rewrites
+        # its plist, and its mtime moves. None of that is this run placing a job, and comparing the
+        # whole tuple reported all of it as one.
+        began = {one[0] for one in (support.AS_THE_RUN_BEGAN or [])}
         written = [one for one in (support.login_items_as_they_stand() or [])
-                   if job.FAMILY in one[0]]
+                   if job.FAMILY in one[0] and one[0] not in began]
         self.assertEqual([], written, f"a rundesk plist was written into {support.THEIR_LOGIN_ITEMS}")
 
     def test_the_guard_that_watches_them_really_fails_when_they_differ(self):

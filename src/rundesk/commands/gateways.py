@@ -606,9 +606,21 @@ def _resolved(name: str, at: Path, one: job.Job, by: job.Supervising) -> int:
         # An ordinary start never arrives here, and one that does is paying for a real wait.
         by.kick(one.label)
         if not _came_up(at, CAME_UP_SECONDS):
+            # **The job is taken back, and that is not tidiness.** A job whose program cannot start
+            # is one launchd brings back on the throttle for ever, because a non-zero exit is what
+            # tells it to — so a start that walked away from one would leave a crash loop nobody
+            # asked for, writing the same traceback into `gateway.err` every thirty seconds. It also
+            # puts the agent in Login Items & Extensions, whose record outlives the plist and which
+            # no command of any kind can remove. Leaving that behind for a start that failed is the
+            # product creating the one state it says must never happen.
+            #
+            # The logs are untouched: what the gateway managed to say is the whole reason to look.
+            left = job.remove(one, by)
             return _failed(
                 f"launchd took the job for {name} and no gateway came up",
                 "a job the supervisor accepted is not a gateway that started.",
+                (f"the job was taken back, so nothing is being restarted in a loop — {left}"
+                 if left else "the job was taken back, so nothing is being restarted in a loop"),
                 f"read what it managed to say with: rundesk gateways logs {name}")
 
     how = standing.standing(at)

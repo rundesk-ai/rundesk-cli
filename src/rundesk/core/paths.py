@@ -70,6 +70,33 @@ def app() -> Path:
     return home() / "app"
 
 
+def code() -> Path:
+    """The directory holding `rundesk/` that a **new process** should put on its path.
+
+    Not the same question as `app()`, and the difference is the whole reason this exists. `app()` is
+    where an install keeps the program — a location, and the thing an update replaces and an
+    uninstall takes. This is *which copy of the code a subprocess must import*, and there are two
+    arrangements where those differ:
+
+    - an **install**, where the code is `app/src` and must go on being that even if the checkout it
+      was built from is deleted tomorrow; and
+    - a **checkout**, where there is no `app/` at all and the code is the running tree's own `src`.
+
+    **The second was never answered, and two things re-exec through it.** The gateway's shim and
+    `update`'s handoff to the release that just landed both spelled `<home>/app/src` directly, so
+    under `./dev` — a checkout, the only way this product is developed — both pointed at a directory
+    that had never been created. The gateway died with `ModuleNotFoundError: No module named
+    'rundesk'` on every spawn, and launchd, doing exactly what the exit-code contract tells it to,
+    brought it back on the throttle for ever. Nothing caught it because every live run installed
+    first, and an install is the one arrangement where the wrong answer is also the right one.
+
+    `program()` is what answers the checkout half, and it is already the one place that knows where
+    this copy of the code is.
+    """
+    installed = app() / "src"
+    return installed if installed.is_dir() else program() / "src"
+
+
 def data() -> Path:
     """Everything the owner accumulates: agents, logs, skills, catalogs, configuration.
 

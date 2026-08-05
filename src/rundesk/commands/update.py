@@ -129,9 +129,13 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
         # in only where missing, and a migration step that has run is recorded and skipped — so
         # doing it unconditionally costs one process and makes the half-updated state impossible to
         # be left in, rather than merely unlikely.
-        if not paths.app().exists():
-            return OK
-        gone_wrong = settled_by_the_new_release(paths.app())
+        # **No `app/` is a checkout, not a reason to skip settling.** This returned `OK` here
+        # without doing anything, which made `./dev update` — the only way this product is
+        # developed — a command that printed `UP TO DATE` and settled nothing, for ever. An agent
+        # added before a release that ships a migration step therefore stayed unsettled, and its
+        # gateway refused to host it with a sentence nobody was going to read. `paths.code` answers
+        # for both arrangements, so there is nothing left for this guard to protect against.
+        gone_wrong = settled_by_the_new_release(paths.code())
         if gone_wrong:
             return _failed(f"this install is on {__version__} and is not settled — {gone_wrong}")
         _catalogs_checked(refreshing)
@@ -159,7 +163,7 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
     finally:
         shutil.rmtree(holding, ignore_errors=True)
 
-    gone_wrong = settled_by_the_new_release(paths.app())
+    gone_wrong = settled_by_the_new_release(paths.code())
     if gone_wrong:
         # The files landed and the settling did not. Said plainly rather than rolled back: the new
         # release is on disk, and what needs deciding is the data, which is untouched and still there.
@@ -461,8 +465,16 @@ _SETTLE = (
 )
 
 
-def settled_by_the_new_release(app: Path) -> str:
+def settled_by_the_new_release(code: Path) -> str:
     """Run the release now in `app/` to settle the install. `""` when it worked.
+
+    **`code` is the directory holding `rundesk/`, handed in from `core.paths.code`** — not the
+    install's `app/`, which this took and then appended `src` to. That spelling is right for an
+    install and wrong for a checkout, where there is no `app/` at all: `./dev update` therefore
+    handed the subprocess a path that had never existed, and the settle that carries every agent
+    onto this release quietly did nothing while the command printed `UP TO DATE`. An agent added
+    before a release that ships a migration step then stayed unsettled for ever, and its gateway —
+    correctly — refused to host it. See `core.paths.code`.
 
     A subprocess rather than an `exec`, so the process that performed the update is still here to
     report what happened. The environment is inherited, which is what carries `RUNDESK_HOME` through
@@ -472,7 +484,7 @@ def settled_by_the_new_release(app: Path) -> str:
     resolves to depends on the PATH of whoever started the command, so the two can differ on one
     machine. The update runs on the interpreter that is already running it.
     """
-    ended = programs.run([sys.executable, "-c", _SETTLE, str(app / "src")], SETTLE_SECONDS)
+    ended = programs.run([sys.executable, "-c", _SETTLE, str(code)], SETTLE_SECONDS)
     if ended.out:
         sys.stdout.write(ended.out)
     if ended.trouble:

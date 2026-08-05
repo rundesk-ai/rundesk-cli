@@ -74,6 +74,36 @@ class WhereTheProgramIs(support.Isolated):
         self.assertNotIn(str(paths.program()), str(paths.data()))
 
 
+class WhichCopyOfTheCodeANewProcessImports(support.Isolated):
+    """`paths.code`, and the arrangement nothing ever tested: a root with no install.
+
+    Two things re-exec through this — the gateway's launchd shim and `update`'s handoff to the
+    release that just landed — and both spelled `<home>/app/src` directly. That is right for an
+    install and wrong for every checkout, which is the only way `./dev` is ever used. The gateway
+    died with `ModuleNotFoundError: No module named 'rundesk'` on every spawn and launchd brought it
+    back on the throttle for ever; `update` printed `UP TO DATE` and settled nothing, so an agent
+    added before a release that ships a migration step stayed unsettled and its gateway refused to
+    host it. Every live run installed first, and an install is the one arrangement where the wrong
+    answer is also the right one.
+    """
+
+    def test_a_root_with_no_install_answers_the_running_program(self):
+        self.assertFalse(paths.app().exists(), "this case is about a root that has no install")
+        self.assertEqual(paths.program() / "src", paths.code())
+
+    def test_and_what_it_answers_really_holds_rundesk(self):
+        # The whole point: a path a subprocess can put on `sys.path` and then import from. The old
+        # answer was a directory that had never been created, and nothing said so until launchd did.
+        self.assertTrue((paths.code() / "rundesk" / "__init__.py").is_file())
+
+    def test_an_install_answers_its_own_app_rather_than_the_running_program(self):
+        # An installed job must go on working when the checkout it was built from is deleted, so
+        # this must not drift to the running tree the moment both exist.
+        (paths.app() / "src" / "rundesk").mkdir(parents=True)
+        self.assertEqual(paths.app() / "src", paths.code())
+        self.assertNotEqual(paths.program() / "src", paths.code())
+
+
 class ARootThatMustNotBeUsed(support.Isolated):
     """A root that is too broad is one command away from taking somebody's home with it."""
 

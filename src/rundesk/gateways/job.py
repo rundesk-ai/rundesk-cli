@@ -91,6 +91,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Protocol
 
+from rundesk.core import paths
 from rundesk.gateways import standing
 from rundesk.utils import files, programs
 
@@ -845,9 +846,19 @@ def _the_shim(one: Job) -> str:
     return _SHIM.format(
         python=shlex.quote(sys.executable),
         hosting=shlex.quote(HOSTING),
-        src=shlex.quote(str(one.root / "app" / "src")),
+        src=shlex.quote(str(code_for(one))),
         name=shlex.quote(one.name),
     )
+
+
+def code_for(one: Job) -> Path:
+    """Where the shim puts `rundesk/` on its path. `core.paths.code` answers it, and says why.
+
+    Kept as a name here because the shim is written from a `Job`, and because a reader of this
+    module should not have to know that the answer is not `one.root / "app" / "src"` — which is what
+    it was, and which is right for an install and wrong for every checkout.
+    """
+    return paths.code()
 
 
 def _the_environment(one: Job) -> Dict[str, str]:

@@ -62,7 +62,10 @@ def cmd_install(args: argparse.Namespace,
     # install is an update by another name, and the migration steps that must run are the *new*
     # release's — which are the ones now in `app/`, and not necessarily the ones this command
     # imported. One rule with no special case: whatever landed settles the install.
-    gone_wrong = update.settled_by_the_new_release(app)
+    # `app / "src"` and deliberately not `paths.code()`: the whole point here is the release that
+    # was *just placed*, and `paths.code` falls back to the running program when a root has no
+    # install — which is exactly the fallback this one call must not take.
+    gone_wrong = update.settled_by_the_new_release(app / "src")
     if gone_wrong:
         return _failed(gone_wrong)
 
