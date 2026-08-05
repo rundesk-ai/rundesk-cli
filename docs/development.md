@@ -136,14 +136,18 @@ interpreter minds, so run both when you touch anything structural:
 python3 scripts/suites              # whatever your shell finds
 ```
 
-rundesk declares no dependencies. There is no virtualenv to build and nothing to install first.
+**Nothing under `src/rundesk/` imports anything but the standard library**, so there is nothing to
+install before running the suite or the command. What `requirements.txt` pins is for *adapters* —
+separate programs on the far side of a pipe, which is the only reason reaching Discord is compatible
+with a product whose own code imports nothing. `rundesk install` builds those into `app/.venv`; a
+checkout has no such directory and needs none, because nothing you run here imports them.
 
 ## How the code is written
 
 The conventions are ordinary and the code already keeps them; [`ruff.toml`](../ruff.toml) is where a
 machine can check that, and CI does on every pull request. It is **not** a dependency of the product
-— it is fetched in CI and nothing a person installs ever sees it, so `requirements.txt` stays empty
-and no install builds a virtualenv.
+— it is fetched in CI and nothing a person installs ever sees it, which is why it is absent from
+`requirements.txt` even though that file is no longer empty.
 
 You do not need it to work here. If you want it:
 

@@ -418,8 +418,22 @@ def _arrived(agent: str, where: Path, kind: str, record: Dict[str, Any], allowed
         return
     place = str(record.get("conversation") or "")
     body = str(record.get("text") or "")
-    if not place or not body:
+    brought = record.get("attachments")
+    brought = brought if isinstance(brought, list) else []
+    if not place:
         return
+    if not body and not brought:
+        return
+    if brought:
+        # **A message that is only a file is still a message.** Requiring text dropped it in total
+        # silence — not recorded, not logged, nothing said — for somebody who was on the allow list.
+        #
+        # What is recorded is what arrived, by name. Fetching them is the adapter's, because it
+        # holds the credential, and nothing yet asks it to: `channels.files` has the whole landing
+        # path built and tested and no protocol record reaches it. Until one does, this says what
+        # came rather than pretending nothing did.
+        named = ", ".join(str(one.get("name") or "a file") for one in brought[:naming.PER_MESSAGE])
+        body = f"{body}\n[brought {len(brought)} file(s): {named}]".strip()
     landed = arriving.recorded(agent, kind, place, who, body,
                               _a_text(record.get("external_id")))
     if landed.fresh:

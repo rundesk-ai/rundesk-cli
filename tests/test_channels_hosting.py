@@ -185,6 +185,27 @@ class ListeningToOne(Hosting):
         self.assertEqual([], arriving.conversations(self.agent))
         self.assertNotIn("9999", self.said_in_the_log())
 
+    def test_a_message_that_is_only_a_file_is_still_a_message(self):
+        # Requiring text dropped it in total silence — not recorded, not logged, nothing said —
+        # for somebody who was on the allow list.
+        self.an_adapter()
+        self.a_channel(allowed=("2207",), saying=json.dumps({
+            "say": "arrived", "conversation": "1180", "user": "2207", "text": "",
+            "attachments": [{"name": "report.csv", "url": "https://x.invalid/a", "bytes": 12}]}))
+        self.hosting_now()
+        self.assertTrue(support.waited_until(
+            lambda: len(arriving.conversations(self.agent)) == 1, 5.0))
+        landed = arriving.conversations(self.agent)[0]
+        self.assertIn("report.csv", arriving.messages(self.agent, landed["id"])[0]["body"])
+
+    def test_a_message_with_neither_words_nor_files_is_nothing_to_record(self):
+        self.an_adapter()
+        self.a_channel(allowed=("2207",), saying=json.dumps({
+            "say": "arrived", "conversation": "1180", "user": "2207", "text": ""}))
+        self.hosting_now()
+        support.waited_until(lambda: "connected" in self.said_in_the_log(), 5.0)
+        self.assertEqual([], arriving.conversations(self.agent))
+
     def test_something_that_is_not_a_record_does_not_stop_it_listening(self):
         self.an_adapter()
         self.a_channel(saying="this is not json|" + json.dumps(
