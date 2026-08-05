@@ -425,6 +425,14 @@ rather than asked, and whatever it was doing is taken away where it stood. What 
 *waiting*. It skips none of the proving — the new gateway is still shown to be holding the name
 before the command says it restarted anything.
 
+**Both spellings are the same stop**, which is what makes that true. `--force` was once its own path
+that killed the launchd *label* and went straight on to bootstrap a replacement — correct only while
+launchd holds a job for that label. Against a gateway with no job it reached nothing, and the check
+that a gateway had come up was then answered by the original process, still running under its
+original pid. It reported killing and replacing a gateway it had not touched, in the one state a
+person runs `--force` to get out of. Both now go through the stop above, including its fall back to
+signalling the process directly.
+
 ### gateways logs
 
 What one gateway has been saying, twenty lines by default — **and, every time, what the machine's
