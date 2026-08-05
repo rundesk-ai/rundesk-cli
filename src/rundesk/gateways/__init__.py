@@ -10,6 +10,19 @@ a host nobody can say anything true about.
 | Module | Answers |
 |---|---|
 | `standing` | whether a gateway is online, offline, or something nobody can tell — and, when it never came up, where the only account of that is |
+| `job` | handing one gateway to the machine's supervisor, and the four ways of asking whether it is really there |
+| `host` | the gateway process itself: what it refuses to run for, and the one exit code launchd reads |
+
+**`host` may not import `job`, and that is a rule rather than an accident.** A process never talks
+to its own supervisor: a gateway that could bootstrap or boot out its own job could restart itself,
+and the decision to keep a gateway running would sit inside the thing being kept running. It is also
+what lets the whole of `host` be driven by a test with launchd nowhere near it.
+
+**The supervisor arrives as an argument**, `job.Supervising`, in the shape `lifecycle.release.Asking`
+and `commands.update.Fetching` already established — and for a stronger reason than either of those.
+Those leave the machine, so a test that forgot to replace one fails loudly. This one does not: the
+real implementation would answer a test perfectly well, against the owner's own login session, and
+take down jobs that keep real work running.
 
 **What a gateway says is not written here.** A file per day, appended to and swept after so many
 days, is `utils.logs`: rundesk journals its own work the same way, and the layer that does that may
