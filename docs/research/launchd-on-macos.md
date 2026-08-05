@@ -1,315 +1,478 @@
 # What `launchctl` really does, and every state a job can get stuck in
 
-Established 2026-08-04 on **macOS 26.5.1 (build 25F80)**. Every claim below is marked with how it is
-known:
+Established 2026-08-04 against **macOS 26.5.1 (build 25F80)**, Darwin 25.5.0, arm64, `launchd`
+`Darwin Bootstrapper 7.0.0`, session manager `Aqua`. Read-only throughout: no `bootstrap`, `bootout`,
+`kickstart`, `enable`, `disable`, `load`, `unload`, `kill`, `start` or `stop` was run, and
+`~/.rundesk` was not touched.
 
-- **measured** — a read-only command run on that machine, output kept
-- **manual** — `man launchctl`, `man launchd.plist`, or `launchctl help` on that machine
-- **binary** — read out of `/bin/launchctl`, `/sbin/launchd` or `/usr/libexec/xpcproxy`. Decisive for
-  this OS version, but it is reverse engineering and not documentation
-- **reported** — a corroborated account from outside, verified at its source
-- **unverified** — believed, and nobody has shown it
+Every claim is marked with how it is known:
 
-Nothing here was established by running a command that changes launchd state. Everything that would
-have settled a question by *doing* it is marked unverified on purpose, and stays that way until it
-can be done against a scratch install rather than the owner's machine.
+- **`[RAN]`** — a command executed on that machine; the output is what is reported
+- **`[MAN]`** — `man launchctl`, `man 5 launchd.plist`, or `launchctl help <verb>` on that machine
+- **`[BIN]`** — a format string read out of `/sbin/launchd`, `/bin/launchctl` or
+  `/usr/libexec/xpcproxy`. Strong but inferential: it shows the message launchd *can* emit, not
+  always the condition that emits it
+- **`[RECALL]`** — believed and **not verified here**, because verifying it needs a state-changing
+  command. Treat every one as a hypothesis to settle against a scratch label before relying on it
 
-This page exists because the requirement it serves is absolute: **a gateway must never be stuck.**
-Not in an unknown state, and never locked out of being started. Every row of the failure table at
-the bottom therefore has to end in a command that gets out of it, and a row that cannot is a state
-the design has to make unreachable.
+> **This page was rebuilt once.** An earlier draft carried outside citations that had not been read.
+> They are gone. What follows is first-party — commands run here, manual pages here, strings from the
+> binaries here — or explicitly marked `[RECALL]`. The reason to record that rather than quietly fix
+> it is that a confident answer nobody earned is the exact failure this product exists to refuse, and
+> the marks are only worth anything if they are applied when it is inconvenient.
+
+This page exists to serve one absolute requirement: **a gateway must never be stuck** — not in an
+unknown state, and never locked out of being started. So every state it can reach has to end in a
+command that gets out of it. **One does not**, and designing around that one is the most important
+thing on this page.
 
 ---
 
-## The verbs
+## 1. The verbs
 
 | Verb | Target | Sync? | Notes |
 |---|---|---|---|
-| `bootstrap <domain> <plist>` | domain + a file | mostly sync | registers the label. Fails 37 if already there |
-| `bootout <domain>/<label>` | service | **async** | returns before the process has died — see below |
-| `bootout --wait <domain>/<label>` | service | sync | **undocumented**: in `launchctl help bootout`, not in `man launchctl` (manual) |
-| `kickstart [-k] [-p] <domain>/<label>` | service | sync | `-k` kills then restarts, atomically. No deregistration, so no race |
-| `enable` / `disable <domain>/<label>` | service | sync | writes a store that outlives the plist. See §3 |
-| `print <domain>[/<label>]` | either | sync | the truth, verbosely. 113 when the label is unknown |
-| `print-disabled <domain>` | domain | sync | the only launchctl view of the disabled store |
-| `list [label]` | — | sync | legacy, terser, and lies by omission more than `print` does |
+| `bootstrap <domain> <plist-path…>` | **domain + path**, never a service target | accepts sync, **spawns async** | `[MAN]` |
+| `bootout <service-target>` or `<domain> <path>` | either | **async by default** | `[MAN]` |
+| `bootout --wait <service-target>` | **service target only** | sync | exists on 26.5.1 `[MAN]`, absent from the man page |
+| `kickstart [-kps] <service-target>` | service | request sync, spawn async | `-k` kill-then-restart, `-p` print pid, `-s` start suspended (`-s` is in `help`, not the man page) `[MAN]` |
+| `enable` / `disable <service-target>` | service | sync | writes a **persistent** override — §4 |
+| `print <domain>` \| `<service-target>` | either | sync | `[MAN]`: *"This output is NOT API in any sense at all."* |
+| `print-disabled <domain>` | **domain only** | sync | the only launchctl view of the override store |
+| `list [label]` | **bare label**, no domain | sync | legacy, and misleading — §6 |
+| `kill <sig> <service-target>` | service | sync request, async death | signals only; does not unload |
+| `load` / `unload [-wF] <path>` | path | async | `[MAN]`: *"will only return a non-zero exit code due to improper usage. Otherwise, zero is always returned."* **Never use for status.** |
 
-`gui/<uid>` is the login domain and **exists only while that uid owns a live GUI session** (manual).
-Over SSH it is not there, and the answer is 125 or 112 rather than anything about the job.
-
----
-
-## 1. Error codes, and which are worth acting on
-
-Confirmed by running `launchctl error N` (measured):
-
-| Code | Means | Transient? |
-|---|---|---|
-| 5 | Input/output error | **no — it is a catch-all** |
-| 37 | Operation already in progress | no — it is already bootstrapped |
-| 108 | Invalid path | terminal |
-| 112 | Could not find specified domain | terminal here |
-| 113 | Could not find specified service | terminal — the label is not registered |
-| 119 | Service is disabled | terminal until enabled |
-| 122 | Path had bad ownership/permissions | terminal |
-| 125 | Domain does not support specified action | terminal |
-| 134 | Service cannot load in requested session | terminal |
-| 159 | Sandbox restriction | terminal |
-| 161 | Service cannot be launched because of BTM policy | terminal, and invisible — see §5 |
-
-**Error 5 means "go and read the log".** It is returned for a disabled label, a plist with bad
-ownership, a path under a TCC-protected directory, a sandboxed caller, and several other unrelated
-things. `/bin/launchctl` itself carries the string `Try re-running the command as root for richer
-errors.` (binary), which is where that widely-repeated advice comes from. **A command that reports 5
-verbatim to a person has told them nothing**, so anything here that meets a 5 has to go and look.
-
-**37 is the honest "already bootstrapped".** `/bin/launchctl` holds `%s: service already %s` with
-`bootstrapped` and `disabled` as the two fill-ins (binary), and the code is confirmed in the field
-(reported). So 37 is *not* an error for us: it is the state we wanted.
+`gui/<uid>` is the login domain: `[RAN]` `gui/501 = { type = login, creator = loginwindow, session = Aqua }`.
+It exists only while that uid owns a live GUI session.
 
 ---
 
-## 2. `bootout` is asynchronous, and that is the race
+## 2. Exit codes
 
-**This is the single most important mechanical fact on this page**, and it is the one the previous
-build recorded as an incident: taking a job away returns before the machine has finished doing it,
-and offering a replacement into that gap fails with an I/O error that says nothing about timing —
-leaving no job at all, so the next attempt succeeds and the one after that fails, alternately, for
-ever.
+`launchctl error <n>` decodes them; the whole 110–160 range was enumerated `[RAN]`.
 
-The mechanism, from this machine's own log (measured):
+| Code | Text | What it means here | Class |
+|---|---|---|---|
+| 3 | No such process | `bootout` by path, label already gone | terminal, **benign** |
+| 5 | Input/output error | launchd's catch-all. In practice: bootstrapping into a domain still tearing down the previous instance of that label | **transient** for the race; terminal if it repeats |
+| 17 | File exists | already bootstrapped `[RECALL]` | terminal, **benign** |
+| 36 / 37 | Operation now / already in progress | a request is mid-flight | **transient** — wait and re-poll, do not re-issue |
+| 110 / 111 | Invalid or missing service identifier / Program | bad plist | terminal |
+| 112 | Could not find specified domain | **no GUI session for this uid** | terminal *in this session* |
+| **113** | Could not find specified service | launchd does not know this label | **terminal and ambiguous — §6** |
+| **119** | Service is disabled | the override store says so | **terminal until `enable`** |
+| 122 | Path had bad ownership/permissions | plist not ours, or group/world-writable | terminal |
+| 124 | Domain is tearing down | logging out | terminal for this session |
+| 125 | Domain does not support specified action | wrong domain for the verb | terminal |
+| 133 | Multiple errors were returned | several plist paths given | terminal — parse stderr per path |
+| 134 | Service cannot load in requested session | `LimitLoadToSessionType` mismatch | terminal |
+| 155 | Refusing to execute/trust quarantined program | `com.apple.quarantine` on the interpreter or script | terminal |
+| 159 | Sandbox restriction | | terminal |
+
+Measured exactly `[RAN]`:
 
 ```
-bootout initiated by: launchctl[…]
-signaled service: Terminated: 15
-scheduling cleanup in 5 sec after sending Terminated: 15
-exited due to SIGTERM | sent by launchd[1], ran for 15835ms
-removing service: <label>
+print gui/501/ai.hermes.gateway        -> 0
+print gui/501/ai.openclaw.gateway      -> 113   (plist exists on disk)
+print gui/501/totally.made.up.label    -> 113   (byte-identical)
+print gui/9999/whatever                -> 112
+print-disabled gui/501                 -> 0
 ```
 
-The label stays registered until the process actually dies, and `exit timeout = 5` is the
-SIGTERM→SIGKILL grace window. **A job that ignores SIGTERM keeps its label alive for up to five
-seconds after `bootout` has returned.**
+launchctl's envelopes, for parsing `[BIN]`: `Bootstrap failed: %d: %s`, `Boot-out failed: %d: %s`,
+`Could not kickstart service "%s": %d: %s`, `%s: service already %s`. **Prefer the process exit code
+to the text** — it is the same number and it does not get reworded.
 
-Three ways out, in the order this build should prefer them:
-
-1. **`kickstart -k` for a restart.** It stops and starts atomically and never deregisters, so the
-   race does not exist. This is why `gateways restart` uses it rather than stop-then-start.
-2. **`bootout --wait` when the label really must go** (uninstall, removal). Undocumented but real
-   and implemented — the request carries a `no-einprogress` key, and `launchctl` refuses
-   `--wait` for more than one service with `--wait can only be used for booting-out a single
-   service.` (binary + manual). Its own help warns it **may block indefinitely**, so it still needs
-   a ceiling of ours around it.
-3. **Poll until `print` answers 113.** The exit code is confirmed (measured). Treating it as a
-   settled convention is not — nobody outside documents it (unverified). Use it as the backstop
-   behind a bounded wait, never as the only thing.
+> **A trap that cost the researcher an hour, and would cost us a wrong answer.** Piping `launchctl`
+> through anything makes `$?` the *pipe's* exit code: a command that really returned 113 read as 0.
+> In `subprocess`, never pipe launchctl through a filter — capture it and post-process in Python.
 
 ---
 
-## 3. Disabled — the state that locks a gateway out of starting
+## 3. Idempotency, and the race this build already hit once
 
-This is exactly the failure the owner named, and it is worse than it looks.
+**`bootout` is asynchronous.** `launchctl help bootout` on this machine `[MAN]`:
 
-- The state lives in **`/var/db/com.apple.xpc.launchd/disabled.<uid>.plist`**, a flat
-  `label => bool` map owned by root (measured). It **persists across reboots** (manual).
-- **It is independent of the plist file.** An entry survives deleting the plist entirely — verified
-  on this machine, where `ai.rundesk.gateway` appears in the store as `enabled` while no plist of
-  that name exists at all (measured). A label that has ever been installed leaves a record behind.
-- `bootstrap` against a disabled label fails — reported as **5** in one well-documented case and as
-  **119** in another (reported). **Expect either and handle both.**
-- Being disabled no longer means unloaded. `launchctl help load` states it outright (manual):
-  > In previous versions of launchd, being disabled meant that a service was not loaded. Now,
-  > services are always loaded. If a service is disabled, launchd does not advertise its service
-  > endpoints.
-- The in-plist `Disabled` key still sets an initial default, but **the external store wins** —
-  `man launchd.plist` says this state "is kept externally" (manual). Writing `Disabled: false` into
-  our plist would therefore be a comforting no-op, which is why this build does not write the key
-  at all.
-- `print-disabled gui/<uid>` and `print-disabled user/<uid>` return the **same** set: the store is
-  per-uid, not per-domain (measured).
+> `--wait` — Waits for bootout to complete before returning. Only applicable to a single service
+> target. (WARNING: this may block indefinitely).
 
-**Detection and the way out:** `launchctl print-disabled gui/<uid>` names it, and
-`launchctl enable gui/<uid>/<label>` clears it. Anything in this build that starts a gateway has to
-ask, because otherwise `start` reports a success while nothing runs — which is the exact shape of
-failure this product exists to refuse.
+So the correct cycle is `bootout --wait` (service-target form is required for `--wait`), then
+`bootstrap`, with our own ceiling around it because of that warning. The fallback is to poll
+`print` until it answers 113 — never `sleep(2)`, which is the shape that produced the previous
+build's recorded I/O error and left it with no job at all.
 
-**The System Settings connection.** macOS's Login Items pane writes into this same store: this
-machine's `disabled.501.plist` holds precisely its Login Items roster, and the log shows
-`Setting service … to disabled (initiated by smd[…])` (measured). So a person toggling a switch in
-System Settings can disable a gateway, and `print-disabled` is how we see that they did.
+That teardown is genuinely multi-stage `[BIN]`: `Service did not exit %u seconds after SIGTERM.
+Sending SIGKILL.`, `exceeded sigkill timeout: %u`, `service is still not a zombie, abandoning`,
+`Cannot safely abandon service instance. Leaving it to languish.` **If the gateway ignores SIGTERM,
+`bootout --wait` blocks for the whole `ExitTimeOut`.**
 
----
-
-## 4. Throttling — it never gives up, and nothing can bypass it
-
-- Default `ThrottleInterval` is 10 seconds (manual). Setting it to `0` is ignored, with
-  `/sbin/launchd` carrying the string `ThrottleInterval set to zero. You're not that important.
-  Ignoring.` (binary).
-- The delay is measured from **launch** time, so the push-out is `minimum runtime − actual runtime`.
-  Real lines from this machine (measured):
-  ```
-  Service only ran for 2 seconds. Pushing respawn out by 8 seconds.
-  service spawn deferred by 8 seconds due to throttle
-  ```
-- Modern launchd adds **exponential** backoff: `interval = base << (crashes − grace)`, hard-capped
-  at **1200 seconds** (binary). **There is no code path that stops rescheduling.** The string is
-  `service exceeded successive crash limit. launch will be throttled` — throttled, not abandoned.
-  The old "may be suspended and not launched again" language survives only in Apple's *archived*
-  launchd1 documentation and those strings are absent from the shipping binary; do not design
-  against it.
-- `launchctl print` has **no "waiting for throttle" line.** The complete state table is
-  `not running` · `spawn scheduled` · `spawning` · `running` · `SIGTERMed` · `SIGKILLed` ·
-  `languishing` · `exited` (binary). **`state = spawn scheduled` is the throttle window**, confirmed
-  by a live transition in the log (measured). The other tell is `minimum runtime` having grown past
-  `base minimum runtime`.
-- **`kickstart` cannot unthrottle.** The request carries an `unthrottle` flag, but `launchctl` only
-  sets it for a `-u` option that is not in kickstart's getopt string — dead code, with no way to
-  reach it from the command line (binary). `-k` does not help either: the kill is an exit, which
-  re-arms the window.
-
-**What this means for us.** A gateway that crashes on start is retried for ever at up to twenty
-minutes apart, and no command shortens that. So the design cannot rely on being able to force a
-retry — it has to make the *first* start correct, and it has to be able to say "this is throttled,
-it crashed N times, here is the log" rather than appearing to hang.
-
-A different state, **the penalty box**, is for *spawn* failures rather than crash loops — an
-unreadable executable, a bad user, a bad architecture. It generally needs bootout/bootstrap to clear
-(reported).
-
----
-
-## 5. What launchctl cannot see at all
-
-**Background Task Management** can block a job with no trace in any launchctl output. The failure
-appears only in the unified log (reported):
+**Overwriting the plist while the job is loaded does nothing.** launchd holds an imported in-memory
+copy; nothing watches the file `[MAN + RECALL]`. Worse, and this is the finding that matters most
+in this section `[BIN]`:
 
 ```
-Service could not initialize: Unable to verify trusted spawn(…), error 0xa1
-  - Service cannot be launched because of BTM policy
+Attempt to re-bootstrap service from different path, will use existing:
+  service = %s, existing = %s, conflicting = %s
+```
+
+**launchd keeps the existing definition and ignores the new plist, without failing.** A build that
+rewrote a plist and bootstrapped over it would go on running the old program for ever with nothing
+on the command line saying so.
+
+> **Design rule taken from this: every plist write is followed by an unconditional
+> `bootout --wait` → `bootstrap` cycle.** Never bootstrap over a live job, and always compare
+> `print`'s `path =` against the plist we just wrote.
+
+---
+
+## 4. Disabled — and two other lockouts, one with no way out
+
+### Where it lives, and that it outlives the plist
+
+`[RAN]` `/var/db/com.apple.xpc.launchd/disabled.501.plist`, root-owned `0644`.
+`[MAN 5 launchd.plist]` on `Disabled`: *"Previous Darwin operating systems would modify the
+configuration file's value for this key, but now this state is kept externally."*
+`[MAN launchctl]`: *"This state persists across boots of the device."*
+
+Proven on this machine `[RAN]`:
+
+```
+$ plutil -p /var/db/com.apple.xpc.launchd/disabled.501.plist
+  "ai.rundesk.gateway" => false      <-- no plist of that name exists anywhere
+```
+
+**A previous rundesk install wrote that record and uninstalling did not clear it.** So a stale
+`disable` from an install that is long gone can silently poison a future one that reuses the label.
+
+> **Two design rules from this.** Install **unconditionally `enable`s the label before
+> bootstrapping** — it is cheap, and it is the only defence against an override nobody remembers.
+> And uninstall **clears the override**, because leaving a record behind is how the next install
+> inherits a decision nobody made.
+
+### `launchctl print` does not show disabled state
+
+The complete `properties` flag vocabulary was read out of the binary `[BIN]`: `keepalive`,
+`runatload`, `launch only once`, `inferred program`, `supports transactions`,
+`supports pressured exit`, `penalty box`, `exponential throttling`, `wait for debugger`,
+`event monitor`, `abandon process group`, `role account`, `untrusted`. **`disabled` is not among
+them.** The only renderings are `disabled services = { … }` on the *domain* print.
+
+**So a disabled job prints as a perfectly healthy job that will never start.** Disabled state must
+be queried separately, every time.
+
+```
+$ launchctl print-disabled gui/501
+	disabled services = {
+		"com.apple.Siri.agent" => disabled
+		"ai.rundesk.gateway" => enabled
+		...
+	}
+```
+**Absence from that block means enabled.** `[RAN]`
+
+Clearing it — `[MAN]` says `enable`/`disable` *"may only target services within the system domain or
+user and user-login domains"*. `gui/<uid>` is a user-login domain, so it is legal; fall back to
+`user/<uid>` on 125. **`enable` starts nothing** — bootstrap after it.
+
+### How a gateway gets disabled without anybody meaning to
+
+**`launchctl unload -w`** `[MAN launchctl help unload]`: *"`-w` Additionally disables the service
+such that future load operations will result in a service which launchd tracks but **cannot be
+launched or discovered in any way**."* That is verbatim the "start appears to work and nothing runs"
+case. Any old blog post, install script or troubleshooting session does it.
+
+No path was found where launchd disables a job on its own `[BIN]`.
+
+### The lockout with no command: Background Task Management
+
+`[RAN]` `/var/db/com.apple.backgroundtaskmanagement/BackgroundItems-v16.btm` is world-readable, and
+**every plist in `~/Library/LaunchAgents` on this machine is registered in it**. `[BIN]` launchd
+carries:
+
+```
 Untrusted service was denied launch by BTM. Removing.
 ```
 
-`launchctl error 0xa1` is 161 (measured). There are two shapes: the job registers and every spawn
-dies with 161 logged, or the job is **never registered at boot at all** — the plist is on disk and
-launchd has no record of it, so `print` answers 113 with nothing anywhere mentioning BTM. A manual
-`bootstrap` then works for the session and does not survive a reboot, because BTM's own database is
-untouched.
+**A BTM denial does not merely block the launch — it removes the service from launchd**, after which
+`print` returns 113, indistinguishable from never having been installed.
 
-`sudo sfltool dumpbtm` is the only authoritative read, and it needs root. **So this build must never
-report "not loaded" as a fact when it might be this.** It is the clearest case in the whole design
-for the third answer: *cannot tell*, plus where to look.
+**There is no `launchctl` command, and no user-level command of any kind, that re-enables a
+BTM-disabled item.** `sfltool dumpbtm` is root-only and read-only. The user must toggle it back on
+in System Settings → General → Login Items & Extensions.
 
----
+And here is the part that makes it likely rather than theoretical. `[RAN]` BTM names each row by the
+**executable's basename**, not by the label:
 
-## 6. Standard output, and the trap that eats every log
-
-**launchd does create the parent directory of `StandardOutPath` / `StandardErrorPath`** — the common
-belief that it does not is wrong. `/usr/libexec/xpcproxy` calls `mkpath_np(dirname, 0766)` before
-staging the spawn, and logs `Unable to create stdout directory (%s)` when it cannot (binary).
-
-**But it creates it before dropping privileges**, so for a job running as another user the directory
-lands root-owned at `0766 & ~022 = 0744` — no execute bit for group or other, so the job cannot
-traverse into the directory its own configuration just created, and no output ever appears
-(reported, with a matching account from Apple). That is why everybody believes launchd does not
-create it: they are describing the symptom.
-
-If the file cannot be opened, **the job does not spawn at all** — `xpcproxy` exits 78 (`EX_CONFIG`),
-and repeated failures land it in the penalty box.
-
-**So this build creates the agent's `logs/` directory itself, with its own ownership and mode,
-before it ever writes a plist.** Those two files are the only account of a start that died before
-our own logger existed; a design that let launchd create them is a design where the evidence of the
-failure is the thing that failed.
-
-Where to look when it happens:
-
-```sh
-log show --last 1h --predicate 'process == "launchd" OR process == "xpcproxy"' --info --style compact
+```
+name='python'  id='8.ai.hermes.gateway'       disposition=9 (enabled|notified)
+name='sh'      id='8.ai.openclaw.gateway'     disposition=9
+name='bash'    id='8.ai.hermes.daily-backup'  disposition=9
 ```
 
-`xpcproxy` matters as much as `launchd` here, because the stdio failures come from it.
+**Under the plist as originally designed, every rundesk gateway would appear to the owner as an
+anonymous `python` row** — several identical `python` rows for several gateways — and one careless
+toggle kills them all. After which `print` says 113, `print-disabled` says `enabled`, and a command
+that trusted either would confidently report "not installed".
+
+> **The change this forces, and it is the highest-value line on the page:** make
+> `ProgramArguments[0]` a **named per-install shim** rather than a bare interpreter, so the Login
+> Items row reads something the owner recognises instead of `python`. It costs one file and it is
+> the only real mitigation for the one failure mode with no command.
+>
+> Second: **detect it.** The BTM store is world-readable and parseable with `plistlib` (an
+> `NSKeyedArchiver` archive — walk `$objects` for dicts with a `disposition`, match `8.<label>`,
+> bit `0x1` = enabled). The format is undocumented, so guard it and **degrade to "cannot tell"**
+> rather than guessing. `[RAN]` for the format; the bit meaning is inference consistent with all
+> five agents on this machine.
+
+**Quarantine** is a third lockout: error 155, if the install root was ever unzipped from a download.
+`xattr -dr com.apple.quarantine <root>` clears it.
 
 ---
 
-## 7. Ownership, permissions and symlinks
+## 5. Throttling
 
-- An agent's plist in `~/Library/LaunchAgents` must be owned by the loading user and **must disallow
-  group and world writes** (manual, stated under the legacy `load` section but enforced by
-  `bootstrap` in every field report). Read bits do not matter — a working mix of `0644` and `0600`
-  is present on this machine (measured). **We write `0600`.**
-- Bad ownership surfaces as **122**, or as **5** with the real reason only in the log (reported).
-- **Symlinks are loaded by an explicit `bootstrap` and ignored at login from macOS 14 onwards**
-  (reported, consistent community testing, no Apple statement either way). This kills the tidy idea
-  of keeping the real plist under `RUNDESK_HOME` and linking it into `~/Library/LaunchAgents`: it
-  would work when tested by hand and silently fail to survive a reboot, which is the worst of both.
-  **We write a real file.**
+`[RAN]` `ThrottleInterval` renders in `print` as **`minimum runtime`** — a live job with
+`ThrottleInterval => 30` prints `minimum runtime = 30`.
+
+`[MAN 5 launchd.plist]`: *"by default, jobs will not be spawned more than once every 10 seconds."*
+**So `ThrottleInterval: 10` buys nothing — it is the default.** A gateway that dies inside ten
+seconds is broken rather than busy, so this build sets something meaningful or drops the key.
+
+Escalation is real `[BIN]`:
+
+```
+Service only ran for %llu seconds. Pushing respawn out by %llu seconds.
+service exceeded successive crash limit. launch will be throttled
+Exponential throttling is in effect for %llu seconds.
+cannot spawn: service is throttled  /  canceling throttled spawn
+successive crashes = %u   /   exponential throttling grace limit = %u
+```
+
+Flat deferral first, then exponential backoff past a successive-crash limit. **It never stops
+rescheduling** — the word is *throttled*, not abandoned — but the interval grows, and a crash-looping
+gateway can end up minutes apart and simply look dead.
+
+**What `print` shows:** `state = spawn scheduled`, no `pid =` line, and `successive crashes = N`
+(the field is omitted when zero). The full state enum `[BIN]` is `not running | spawn scheduled |
+spawning | running | SIGTERMed | SIGKILLed | languishing | exited`.
+
+**Does `kickstart -k` bypass the throttle?** `[BIN, strong]` yes — launchd's kick-request handler
+carries `unthrottle` in its key table, adjacent to `service spawned with pid: %d`. So
+`launchctl kickstart -kp gui/<uid>/<label>` is the "start it now regardless" command, and it is what
+`start` should run after bootstrapping rather than trusting `RunAtLoad`. *(An earlier draft claimed
+the opposite from a retracted source. Treat this as strong inference, not proof, and do not build
+anything that only works if it is true.)*
+
+**The penalty box** is a separate, harder stop `[BIN]`: `attempt to launch while in penalty box`,
+`cannot spawn: service is in penalty box`. What puts a user agent into it, and what gets it out, is
+**unverified** — flagged rather than guessed.
 
 ---
 
-## 8. The environment a job actually gets
+## 6. Detecting truth — and when to say "cannot tell"
 
-A `gui/` agent inherits almost nothing. The previous build recorded losing a working provider
-because `~/.local/bin` was missing from the job's `PATH` while `which` in the owner's shell answered
-perfectly well — rundesk had installed itself into a directory it then refused to look in.
+### Parsing traps, both measured
 
-So `EnvironmentVariables` carries everything the job needs. For this build that is exactly three
-things — `RUNDESK_HOME`, `HOME`, and a `PATH` that includes `~/.local/bin` — and the shortness of
-that list is the point. The previous build baked in **nine** `RUNDESK_*_DIR` variables and was still
-wrong, because a tenth was added later and nothing caught it.
+**`launchctl list <label>` reports the raw `wait(2)` status.** `[RAN]` a job whose exit code was 75
+shows `"LastExitStatus" = 19200`, and `19200 >> 8 == 75`. The aggregate `launchctl list` had already
+decoded the same number to `75`. **Two launchctl surfaces report one number in two encodings.**
+Shift by 8 for the code, mask `& 0x7f` for the signal.
+
+**`last exit code` coexists with a running pid.** `[RAN]` a healthy gateway prints `pid = 71237`,
+`runs = 2`, **and** `last exit code = 75: EX_TEMPFAIL` — that 75 is from the previous run. Reading it
+as "the gateway is failing" without checking `state` and `pid` is a wrong answer about a working
+machine.
+
+Also: `print`'s `path =` is the plist launchd *imported*, which may not be the plist on disk (§3);
+and `[MAN]` warns outright that the output *"is NOT API in any sense at all"* and that these commands
+*"are intended for use by human developers and system administrators, not for automation."* Parse
+defensively, and treat an unparseable print as **cannot tell**, never as **no**.
+
+### 113 is ambiguous three ways, proven
+
+`[RAN]` byte-identical stderr for three entirely different situations:
+
+1. `ai.openclaw.gateway` — **plist on disk, never bootstrapped**
+2. `ai.rundesk.gateway` — **no plist, but a persistent override record**
+3. `totally.made.up.label` — **never existed**
+
+And `[BIN]` launchd has paths that *delete* a service that was successfully installed:
+`Removed service on spawn failure` and `Untrusted service was denied launch by BTM. Removing.` So
+113 can also mean *"it was installed, it tried to start, and launchd threw it away."*
+
+**Status must therefore be a three-way decision over three independent sources:**
+
+```
+rc == 112                        -> "cannot tell — no GUI session for this uid"
+rc == 0                          -> read state / pid / properties
+rc == 113 and no plist on disk   -> "not installed"          <- the ONLY safe "no"
+rc == 113 and plist on disk      -> "cannot tell — installed, and launchd has no record"
+```
+
+**`rc == 112` must never be reported as "not running".** Over SSH into a machine nobody has logged
+into at the desktop, *every* gateway looks absent.
+
+---
+
+## 7. Permissions and symlinks
+
+- `~/Library/LaunchAgents` is `drwx------` and needs nothing special `[RAN]`.
+- `[MAN]` agent plists *"must be owned by the user loading them"* and *"must disallow group and world
+  writes"*. Violation is error 122, with `Caller specified a plist with bad ownership/permissions`
+  in the log `[BIN]`. `[MAN load -F]` notes the modern `-F` **no longer** bypasses the check.
+- Both `0600` and `0644` work `[RAN]`. Write the mode explicitly: `O_CREAT`'s mode is masked by the
+  umask, so create then `fchmod`, or a permissive umask lands `0664` and it is refused.
+- **Symlinked plist: no evidence either way.** No `O_NOFOLLOW`/`realpath` handling was found in the
+  import strings, and it cannot be tested read-only `[RECALL, low confidence]`. **Write a real file.
+  There is no upside**, and the ownership check makes a second file's ownership a question nobody
+  needs to have.
+
+---
+
+## 8. Standard output — better than feared, with two traps
+
+**launchd does create the parent directories.** `/usr/libexec/xpcproxy` imports `_mkpath_np` and
+carries `Unable to create stdout directory (%s)` / `…stderr…` `[BIN]`. Create them anyway: one
+`makedirs(exist_ok=True)` costs nothing and removes a dependency on undocumented behaviour.
+
+**The files are opened `O_CREAT|O_RDWR|O_APPEND|O_CLOEXEC`, mode 0666** `[BIN]`, corroborated by
+`[MAN 5 launchd.plist]`: *"this file is opened as readable and writable as mandated by the POSIX
+specification for unclear reasons."*
+
+> **`O_APPEND`, never `O_TRUNC`, and launchd never rotates them.** In a crash loop every throttled
+> restart appends another traceback, for ever. **`gateway.out` and `gateway.err` must be rotated by
+> us** — they are outside the day-stamped scheme, so they need their own answer.
+
+**If the path is unwritable the spawn fails**, and the reason goes to the unified log *only* — it
+cannot go to `StandardErrorPath`, which is the thing that failed to open `[BIN]`:
+
+```
+%s spawn failed: %d: %s   /   Could not spawn process %s: %d: %s
+Missing executable detected. Job: '%s' Executable: '%s'
+Removed service on spawn failure
+```
+
+That last line is how a correctly-installed gateway becomes a 113.
+
+**The recovery command, for "I started it and nothing happened":**
+
+```sh
+log show --last 10m --predicate 'process == "launchd" OR process == "xpcproxy"' --style compact | grep <label>
+```
+
+`[RAN]` two caveats: on a healthy machine this returns **nothing** — launchd is quiet, so silence is
+not evidence of health — and it can take tens of seconds, so give it a ceiling.
+
+> **A design consequence worth more than it looks.** The very first thing the gateway process does —
+> before parsing arguments, before reading anything — is write one line with a timestamp and its own
+> pid. If `gateway.out` is empty while `runs` is non-zero, the failure is upstream of our code and
+> belongs in the unified log. That one line turns "cannot tell" into "look here."
+
+---
+
+## 9. Login, reboot, and why writing a plist installs nothing
+
+**Proven on this machine** `[RAN]`. Boot was 14 days ago; every plist below was written after login:
+
+```
+ai.hermes.gateway              print -> 0     (its installer bootstrapped it)
+ai.hermes.daily-backup         print -> 113
+ai.openclaw.gateway            print -> 113
+com.google.GoogleUpdater.wake  print -> 113
+```
+
+**Three plists have sat on disk for two weeks doing nothing at all.** Writing the file is not
+installing the job; `bootstrap` is.
+
+At login, loginwindow creates `gui/<asid>` and bootstraps the `LaunchAgents` directories `[MAN + BIN]`,
+so `RunAtLoad` then starts the gateway with no action from us — provided the label is not in
+`disabled.<uid>.plist` and BTM has not disabled it.
+
+**Jobs do not survive logout**: a `gui/` agent's domain is the login session, and logout tears it
+down (error 124; `denying spawn, domain shutting down` `[BIN]`).
+
+**`load`/`unload` still matter in one way:** `[MAN]` they *"will only return a non-zero exit code due
+to improper usage"* — a user's failed `load` reports success — and `unload -w` writes the persistent
+disable that is sitting on this machine right now.
+
+---
+
+## 10. The environment a job actually gets
+
+Measured from a live job's own `print` `[RAN]`:
+
+```
+inherited environment = { SSH_AUTH_SOCK => /var/run/com.apple.launchd.…/Listeners }
+default environment   = { PATH => /usr/bin:/bin:/usr/sbin:/sbin }
+```
+
+**That is the whole of it.** No `HOME`, no `USER`, no `SHELL`, no `LANG`, no `TMPDIR`, no shell rc
+files, no Homebrew, no `~/.local/bin`. `launchctl getenv PATH` is empty `[RAN]`.
+
+**This is the exact explanation of the previous build's lost provider.** `~/.local/bin` is absent
+from `/usr/bin:/bin:/usr/sbin:/sbin`, so a tool installed there is invisible to the job while `which`
+in the owner's login shell — which sourced his rc files — finds it instantly. The two PATHs have
+nothing to do with each other, and **you cannot diagnose this by asking somebody to run `which`.**
+
+`[MAN]` `EnvironmentVariables`: *"Values other than strings will be ignored."* An accidental `int`
+disappears without a word — coerce everything with `str()`.
 
 ---
 
 ## The failure table
 
-Every state a gateway can be in, how to tell, and the command that gets out.
+`$U = id -u`, `$L` = label, `$P = ~/Library/LaunchAgents/$L.plist`.
 
-| State | How it is detected | The way out |
+| State | Detection | The way out |
 |---|---|---|
-| Running normally | flock held, `print` says `state = running` | — |
-| Stopped, job loaded | flock free, `print` succeeds | `rundesk gateways start <agent>` |
-| Job not registered | `print` → 113 | `rundesk gateways start <agent>` — writes the plist and bootstraps |
-| Already bootstrapped | `bootstrap` → 37 | nothing to do; it is the state we wanted |
-| Plist stale (points at a moved program) | `print` shows the old path | `rundesk gateways start <agent>` rewrites the plist, boots out and back |
-| Crash-looping / throttled | `print` shows `state = spawn scheduled`, `minimum runtime` grown | read the log; fix the cause. **No command shortens the throttle** |
-| Wedged (alive, not beating) | flock held, beat older than 3 intervals | `rundesk gateways restart <agent> --force` → `kickstart -k` |
-| Disabled | `print-disabled gui/<uid>` names it | `launchctl enable gui/<uid>/<label>` — and `start` does this itself |
-| Spawn failure / penalty box | `print` shows `penalty box`, log shows the reason | bootout then bootstrap — what `start` does anyway |
-| Bad plist ownership | `bootstrap` → 122, or 5 with the reason in the log | `start` rewrites it `0600`, owned by us |
-| Log directory unwritable | job never spawns; `xpcproxy` exits 78 | `start` creates `logs/` itself before writing the plist |
-| **Blocked by BTM** | **nothing in launchctl. Log shows 161** | **System Settings → General → Login Items. `sudo sfltool dumpbtm` to confirm** |
-| No GUI session (SSH) | `bootstrap` → 125 or 112 | log in at the desktop, or run `rundesk gateways run <agent>` in the foreground |
-
-**The two rows with no command of ours in them are BTM and the throttle**, and they are the two the
-design has to answer differently rather than fix:
-
-- **BTM** is why `rundesk gateways` reports the job as *cannot tell* rather than *not loaded* when
-  the plist is present and launchd has no record of it. Reporting "not loaded" there would be a
-  confident wrong answer, and the person would go on to reinstall something that is not broken.
-- **The throttle** is why a gateway that refuses to run **exits 0**. With
-  `KeepAlive: {SuccessfulExit: false}`, exiting 0 means *do not bring me back* — so a gateway that
-  cannot run says why, once, and stops. Exiting non-zero would have the machine retry it for ever at
-  up to twenty minutes apart, which is the closest thing to permanently stuck that launchd offers.
+| Healthy | `print` 0, `state = running`, `pid` present | — |
+| Plist written, never bootstrapped **(3 live examples on this machine)** | `print` 113 **and** `$P` exists | `bootstrap gui/$U "$P"` |
+| Not installed | `print` 113 **and** no `$P` | write plist, bootstrap |
+| Stale — plist edited under a live job | `print` 0 but `path`/`arguments` ≠ what we wrote | `bootout --wait` then `bootstrap` |
+| **Loaded from a different plist path, silently** | `print`'s `path =` ≠ `$P` | same — bootout first is **mandatory** |
+| Bootout→bootstrap race, `Bootstrap failed: 5` | bootstrap 5 after a bootout | `bootout --wait`, or poll `print` for 113; retry bootstrap on 5/37 |
+| Already bootstrapped | bootstrap 17 (or 37) | nothing — verify with `print` |
+| **Disabled** | `print-disabled` says `disabled`. **`print` looks normal** | `enable gui/$U/$L` (fall back to `user/$U/$L` on 125), then bootout→bootstrap→kickstart |
+| **Stale override from a prior install** (live on this machine) | 113 + an entry in `print-disabled` | `enable` **before** bootstrapping — unconditionally |
+| Throttled | `state = spawn scheduled`, no pid, `successive crashes = N` | `kickstart -kp` — and fix the crash |
+| Penalty box | `properties` contains `penalty box` | **unverified.** bootout+bootstrap is the obvious attempt |
+| Bad plist ownership/mode | 122 | `chmod 0644`, `chown`, bootstrap |
+| Quarantined interpreter | 155 | `xattr -dr com.apple.quarantine <root>` |
+| **Spawn failed → launchd removed it** | 113 **with `$P` present**; `log show` shows `spawn failed` | fix the cause, bootstrap again — **only findable in the unified log** |
+| **No GUI session (SSH)** | `print` 112 | none from here. **Report "cannot tell", never "not running"** |
+| Gateway ignores SIGTERM, `--wait` hangs | `state = SIGTERMed` then `languishing` | `kill -KILL`, then bootout — **and handle SIGTERM** |
+| **Disabled in System Settings (BTM)** | 113 + `$P` present + `print-disabled` says `enabled` + the BTM store's enabled bit is clear | 🔴 **NONE.** The owner must re-enable it in System Settings → General → Login Items & Extensions |
 
 ---
 
-## What is still unverified, and how to settle it
+## What this changes in the plist as designed
 
-None of these can be answered without running a state-changing command, and none of them will be run
-against the owner's machine. They are settled against a scratch install with a fingerprinted label,
-during the real run at the end of this work.
+1. **`ThrottleInterval: 10` is the default and buys nothing.** Set something meaningful or drop it.
+2. **`KeepAlive {SuccessfulExit: false}` implies `RunAtLoad`** `[MAN]` — *"the job needs to run at
+   least once before an exit status can be determined."* So **bootstrapping is starting**: there is
+   no "install it stopped" at the launchd layer, and the command surface must not imply one.
+3. **The exit-0 contract has a sharp edge.** `SuccessfulExit: false` means restart unless exit was 0.
+   But an uncaught Python exception exits 1 — so a gateway refusing to run **must reach exit 0 on
+   every path, including when the refusal check itself raises.** Otherwise a permanent condition
+   becomes an infinite restart loop that escalates into exponential throttling and looks like a hang.
+4. **`ProgramArguments[0]` becomes a named per-install shim**, not a bare interpreter — the BTM
+   naming problem in §4.
+5. **Set `ExitTimeOut` explicitly.** It bounds SIGTERM→SIGKILL, and `bootout --wait` blocks for that
+   whole window.
+6. **`PATH` must be complete and explicit**, `HOME` too, every value a `str`. Consider `LANG` — a
+   POSIX locale makes 3.9 misbehave on non-ASCII — and `TMPDIR`, which is not inherited.
+7. **Rotate `gateway.out` / `gateway.err` ourselves.** `O_APPEND` for ever, otherwise.
+8. **Label and filename must match** `[MAN]`, and the agent name must be restricted to
+   `[A-Za-z0-9._-]`: a label containing `<` cannot have its disable state persisted at all `[BIN]`.
 
-- Whether `bootout --wait` waits for the whole teardown or only for the process to exit.
-- Whether `kickstart` on a disabled service really answers 119.
-- What `print` shows for a job genuinely sitting inside its throttle window.
-- Whether writing the plist alone triggers the BTM notification, or only bootstrapping does.
-- The precise boundary between 112 and 125 for a session with no GUI.
+## Still unverified — to settle against a scratch label, never the owner's machine
 
-## One incidental measurement worth keeping
-
-On this machine, `ai.rundesk.gateway` appears in `disabled.501.plist` as `enabled` while **no plist
-of that name exists** (measured). A label that has ever been installed leaves a record in launchd's
-store that removing the plist does not clear.
-
-That is not a leak worth chasing — the entry is inert and says `enabled` — but it is the concrete
-proof of §3's claim that the store is independent of the file, and it is a reason removal should say
-what it took rather than assume the label is gone once the file is.
+- The exact code for bootstrapping an already-bootstrapped label (17 or 37 — sources disagree).
+- Whether bootstrapping a **disabled** label fails with 119 or succeeds-and-does-not-run. **Test
+  this first**; it is the most load-bearing unknown here.
+- Whether `--wait` closes the EIO race or merely narrows it.
+- What puts a job in the penalty box, and what gets it out.
+- Symlinked plist behaviour.
+- The BTM archive's disposition bits — consistent with all five agents here, which is not proof.
