@@ -216,6 +216,21 @@ def checked(kind: str, options: Sequence[str], env: Dict[str, str],
         why="")
 
 
+def talking_to(kind: str, env: Dict[str, str], errors: Path,
+               holding: int) -> programs.Talking:
+    """Start this adapter's long-lived half and keep both ends of the conversation open.
+
+    The third invocation, and the only one that is not bounded: `--capabilities` and `--check` are
+    questions with answers, and this is a program that will still be here in six months.
+
+    `holding` is the channel's claim, passed down so it lives exactly as long as the child — see
+    `channels.hosting`, which takes it. **Whatever calls this must drain `stdout` continuously**;
+    `utils.programs.talking` says what happens to anything that does not.
+    """
+    return programs.talking([str(where(kind)), "serve"], errors, env=_environment(env),
+                            holding=(holding,))
+
+
 def _refused(why: str) -> Checked:
     """One shape for every way this can come back no, so no caller has to build it."""
     return Checked(ok=False, describes="", notify_place=None, settings="{}", secret_names=[],
