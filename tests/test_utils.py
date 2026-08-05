@@ -24,7 +24,7 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from rundesk.utils import files, locking, programs, terminal
+from rundesk.utils import files, locking, programs, scripts, terminal
 from rundesk.utils.terminal import as_table
 
 
@@ -1154,6 +1154,89 @@ class AProgramThatKeepsRunning(support.Isolated):
         pid = self.given_running("import time; time.sleep(30)")
         self.assertTrue(programs.alive(pid))
         self.assertFalse(programs.alive(2 ** 22))
+
+
+class ADirectoryOfNumberedScripts(support.Isolated):
+    """`scripts` — what both levels of migration ask before they carry anything.
+
+    Covered here as well as through each runner, because the runners disagree about what a script is
+    handed and agree about everything this module does. A bug here is a bug in both of them.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.where = self.home / "steps"
+        self.where.mkdir()
+
+    def given(self, name: str, body: str = "def carry(*said):\n    pass\n") -> Path:
+        (self.where / name).write_text(body, encoding="utf-8")
+        return self.where / name
+
+    def test_it_finds_them_rather_than_being_told_what_is_there(self):
+        self.given("0002_second.py")
+        self.given("0001_first.py")
+        self.assertEqual(["0001_first", "0002_second"],
+                         [one.id for one in scripts.found(self.where)])
+
+    def test_they_run_in_the_order_their_number_gives_and_not_the_order_of_the_name(self):
+        # Sorted by number rather than by filename, or `0010` would run before `0002`.
+        self.given("0010_later.py")
+        self.given("0002_earlier.py")
+        self.assertEqual([2, 10], [one.order for one in scripts.found(self.where)])
+
+    def test_anything_not_named_like_one_costs_nothing(self):
+        # `__init__.py` is there in every real steps directory, and editors leave things behind.
+        for name in ("__init__.py", "notes.py", "1_short.py", "0001-dashed.py", "0001_Caps.py"):
+            self.given(name)
+        self.assertEqual([], scripts.found(self.where))
+
+    def test_two_sharing_a_number_are_refused_while_it_is_still_a_broken_checkout(self):
+        # What happens the first time two branches each add a step and both take the next free
+        # number. After it ships, every machine has already made a different arbitrary choice.
+        self.given("0001_alpha.py")
+        self.given("0001_beta.py")
+        with self.assertRaises(scripts.Broken) as refused:
+            scripts.found(self.where)
+        self.assertIn("0001", str(refused.exception))
+
+    def test_a_directory_that_is_not_there_has_no_scripts_rather_than_failing(self):
+        # A release may legitimately ship none, and that is an answer.
+        self.assertEqual([], scripts.found(self.home / "never-made"))
+
+    def test_it_hands_back_the_one_function_the_script_exists_to_run(self):
+        self.given("0001_counts.py", "seen = []\n\n\ndef carry(what):\n    seen.append(what)\n")
+        carry = scripts.carrying(scripts.found(self.where)[0], "probe")
+        carry("something")
+        self.assertEqual(["something"], carry.__globals__["seen"])
+
+    def test_a_script_with_nothing_to_run_is_refused_by_name(self):
+        self.given("0001_empty.py", "value = 1\n")
+        with self.assertRaises(scripts.Broken) as refused:
+            scripts.carrying(scripts.found(self.where)[0], "probe")
+        self.assertIn("0001_empty", str(refused.exception))
+
+    def test_a_script_that_will_not_load_says_so_rather_than_raising_from_inside(self):
+        self.given("0001_broken.py", "this is not python at all\n")
+        with self.assertRaises(SyntaxError):
+            scripts.carrying(scripts.found(self.where)[0], "probe")
+
+    def test_nothing_is_left_on_the_import_path_afterwards(self):
+        # A script is arbitrary code from a directory, not a module of this product's. Left
+        # registered, the next thing importing that name would get this one instead.
+        self.given("0001_leaves.py")
+        before = set(sys.modules)
+        scripts.carrying(scripts.found(self.where)[0], "probe")
+        self.assertEqual(set(), set(sys.modules) - before)
+
+    def test_two_runners_loading_the_same_number_do_not_collide(self):
+        # The install and an agent both ship an `0001`, and both are loaded in one process during
+        # an update. Named by the caller's prefix so one cannot be handed the other's module.
+        self.given("0001_same.py", "which = 'from the steps directory'\n\n\ndef carry(*said):\n"
+                                   "    pass\n")
+        one = scripts.carrying(scripts.found(self.where)[0], "install")
+        other = scripts.carrying(scripts.found(self.where)[0], "agent")
+        self.assertIsNot(one, other)
+        self.assertEqual(set(), set(sys.modules) & {"install_0001_same", "agent_0001_same"})
 
 
 if __name__ == "__main__":

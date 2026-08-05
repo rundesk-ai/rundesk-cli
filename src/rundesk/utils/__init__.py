@@ -25,6 +25,7 @@ gradually.
 | `files` | putting bytes on disk without leaving a reader something half-written |
 | `locking` | letting one process at a time change something, with a ceiling on the waiting |
 | `programs` | running another program, whether it answers in a moment or runs for hours |
+| `scripts` | a directory of numbered scripts, found in order and loaded to run |
 | `terminal` | what a person sees: weight, colour, and columns that line up |
 
 `tests/test_layers.py` checks this table against the directory rather than trusting it to be kept —

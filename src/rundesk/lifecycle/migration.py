@@ -35,83 +35,37 @@ written to change already gone — because an owner tidied it, or because a half
 far — so **every step is written to be safe to run against an install that does not need it**.
 """
 
-import importlib.util
-import re
-import sys
 from pathlib import Path
-from typing import Callable, List, NamedTuple, Optional
+from typing import Callable, List, Optional
 
 from rundesk.core import config
-
-#: What a step file is called: a number that orders it, then what it does.
-NAMED = re.compile(r"^(\d{4})_([a-z0-9_]+)\.py$")
+from rundesk.utils import scripts
 
 STEPS = Path(__file__).resolve().parent / "steps"
 
+#: One step: where it is, the order it runs in, and its id.
+#:
+#: `utils.scripts`' own record, named here as well. Finding numbered scripts in a directory, putting
+#: them in order and refusing two that share a number is the same problem for an install as it is
+#: for an agent, and neither of them is the interesting part — what differs is what a step is handed
+#: and how what has run is written down, and that is what stays in each runner.
+Step = scripts.Script
 
-class Step(NamedTuple):
-    """One migration step: where it is, the order it runs in, its id, and the change it makes.
-
-    A record rather than an object with a life of its own, and immutable on purpose: a step's id is
-    how every install on every machine knows whether it has already run, so nothing should be able
-    to change one after it has been found.
-    """
-
-    at: Path
-    order: int
-    id: str
-
-    def __repr__(self) -> str:
-        return f"<step {self.id}>"
-
-    def carry(self, data: Path) -> None:
-        """Load the step and run it. Loaded when it is run, never imported at module level."""
-        spec = importlib.util.spec_from_file_location(f"rundesk_step_{self.id}", self.at)
-        if spec is None or spec.loader is None:
-            raise Broken(f"{self.id} could not be loaded")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        try:
-            spec.loader.exec_module(module)
-            carry = getattr(module, "carry", None)
-            if not callable(carry):
-                raise Broken(f"{self.id} has no carry(data) to run")
-            carry(data)
-        finally:
-            sys.modules.pop(spec.name, None)
-
-
-class Broken(Exception):
-    """A step that cannot be run at all, as opposed to one that ran and failed."""
+#: A step that cannot be run at all, as opposed to one that ran and failed. `utils.scripts`' answer,
+#: named here too so a caller of this module never has to know which file the mechanism lives in —
+#: the same courtesy `config` does for `files.Unreadable`.
+Broken = scripts.Broken
 
 
 def found(where: Optional[Path] = None) -> List[Step]:
-    """Every step, in the order they run. Found rather than listed.
+    """Every step this release ships, in the order they run. Found rather than listed.
 
-    A file that is not named like a step is ignored rather than refused, so `__init__.py` and
-    anything an editor leaves behind cost nothing.
-
-    **Two steps may not share a number.** How far an install has been carried is one id, so the
-    order steps run in has to be the same order everywhere, for ever — and two files numbered the
-    same have no order except the one their filenames happen to give. An install stamped with the
-    first would run the second; an install stamped with the second would skip the first, silently
-    and for good. This is not a hypothetical mistake: it is what happens the first time two
-    branches each add a step and both reach for the next free number. Refused here, where it is
-    still only a broken checkout, rather than after it has shipped and every install has already
-    made a different arbitrary choice.
+    The rule that makes the id trustworthy — **two steps may not share a number** — is enforced by
+    `utils.scripts` and matters here for a reason that is this module's own: how far an install has
+    been carried is *one* id, so an install stamped with the first of two would run the second, and
+    one stamped with the second would skip the first, silently and for good.
     """
-    steps = []
-    for at in sorted((where or STEPS).glob("*.py")):
-        said = NAMED.match(at.name)
-        if said:
-            steps.append(Step(at, int(said.group(1)), f"{said.group(1)}_{said.group(2)}"))
-    steps.sort(key=lambda step: step.order)
-    for before, after in zip(steps, steps[1:]):
-        if before.order == after.order:
-            raise Broken(
-                f"{before.id} and {after.id} are both numbered {before.order:04d}, and how far an "
-                "install has been carried is one id — there is no order between them")
-    return steps
+    return scripts.found(where or STEPS)
 
 
 def newest(where: Optional[Path] = None) -> Optional[str]:
@@ -162,7 +116,7 @@ def carry(data: Path, where: Optional[Path] = None,
     for step in waiting:
         said(f"carrying {step.id}")
         try:
-            step.carry(data)
+            scripts.carrying(step, "rundesk_step")(data)
         except Exception as why:                      # noqa: BLE001 — a step is arbitrary code
             return f"{step.id} did not finish: {why}"
         config.stated("migration", step.id, data)
