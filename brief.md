@@ -219,6 +219,8 @@ Rundesk local:
 /.rundesk/projects/~ a empty/shared directory for agents to install repos into 
 /.rundesk/projects/README.md - tells the agent what this directory can be used for if they enter it. a simple message about using it for shared projects, like git repos.
 
+/.rundesk/.rundesk.lock - held while one command at a time changes this install
+
 /.rundesk/data/agents/~ houses each of the agents that are added
 /.rundesk/data/logs/~ all rundesk level logs like updates, backups etc
 /.rundesk/data/catalog/~ the catalog of skills installed
