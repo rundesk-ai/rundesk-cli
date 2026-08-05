@@ -114,6 +114,23 @@ class Adding(support.Isolated):
         self.assertIn("recorded and not proven", out)
         self.assertIn("nothing in this release runs one", out)
 
+    def test_a_name_no_launchd_label_can_carry_is_warned_about_where_it_is_chosen(self):
+        # `agents` allows any name a directory may have; a launchd label is narrower. Such an agent
+        # is one no job can ever be placed for — nothing starts its gateway at login and nothing
+        # brings it back when it stops. Said here, at the moment the name is picked and while adding
+        # it again under another is free, rather than weeks later when somebody wonders why it never
+        # came back. The gateway can still be run and stopped by hand, so the note says how.
+        _, out, _ = self.rundesk("agents", "add", "my agent", "--provider", "claude")
+        self.assertIn("no job can ever be placed for it", out)
+        self.assertIn("rundesk gateways run", out)
+        self.assertIn("rundesk gateways stop", out)
+
+    def test_an_ordinary_name_is_not_warned_about(self):
+        # The note has to stay rare to stay read. A name launchd is perfectly happy with must not
+        # carry a warning about supervision it is going to get.
+        _, out, _ = self.rundesk("agents", "add", "cole", "--provider", "claude")
+        self.assertNotIn("no job can ever be placed", out)
+
     def test_a_provider_is_required_and_the_refusal_says_what_to_type(self):
         code, out, err = self.rundesk("agents", "add", "cole")
         self.assertEqual(FAILED, code)

@@ -36,7 +36,7 @@ from rundesk.agents import directory, migration, records
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK
-from rundesk.gateways import standing
+from rundesk.gateways import job, standing
 from rundesk.utils import locking
 from rundesk.utils.terminal import as_table
 
@@ -45,6 +45,15 @@ from rundesk.utils.terminal import as_table
 #: One string rather than a sentence written twice, because `add` and `configure` make exactly the
 #: same claim and two wordings of it would eventually become two different claims.
 NOT_PROVEN = "the provider is recorded and not proven — nothing in this release runs one"
+
+#: What a name outside `job.IN_A_LABEL` costs, said where the name is chosen rather than where it is
+#: next needed. `agents` allows any name a directory may have and launchd's labels are narrower, so
+#: this is an agent no job can ever be placed for — and the moment somebody finds that out must not
+#: be the moment they cannot stop it.
+NO_JOB_EVER = ("this name cannot be a launchd label, so no job can ever be placed for it — nothing "
+               "starts its gateway at login and nothing brings it back when it stops. Run it with "
+               "`rundesk gateways run` and stop it with `rundesk gateways stop`, or add the agent "
+               "again under a name of letters, digits, a dot, a dash or an underscore")
 
 #: Everything making, changing or taking an agent away can end as.
 #:
@@ -176,6 +185,8 @@ def _made(name: str, provider: Optional[str]) -> int:
     print(f"        home      {at / directory.HOME}")
     print(f"        logs      {at / directory.LOGS}")
     print(f"        records   {at / directory.RECORDS}")
+    if job.name_trouble(name):
+        print(f"        note      {NO_JOB_EVER}")
     print(f"        note      {NOT_PROVEN}")
     return OK
 
