@@ -19,6 +19,7 @@ import shutil
 import unittest
 from pathlib import Path
 from typing import List
+from unittest import mock
 
 import support
 from rundesk.agents import directory, migration, records
@@ -69,14 +70,20 @@ def carry(conn, where):
     conn.execute('CREATE TABLE IF NOT EXISTS carried (one TEXT) STRICT')
 '''
 
-#: A step that fails *and* takes away the one permission putting the records back needs, so the
-#: rollback fails too. The state somebody has to be told about out loud.
+#: A step that fails *and* makes the rollback fail, for proving that an agent left neither carried
+#: nor put back is said out loud.
+#:
+#: **It takes the write bit off the agent's directory, not off the database.** Making the file
+#: read-only used to be enough, because the restore copied onto the live file and could not open it
+#: for writing. The restore is now staged beside its destination and renamed into place, and
+#: `os.replace` asks permission of the *directory* — so a read-only database is now restored
+#: perfectly well, which is a better product and a worse way to fail on purpose.
 A_STEP_THAT_CANNOT_BE_PUT_BACK = '''
 import os
 from pathlib import Path
 
 def carry(conn, where):
-    os.chmod(Path(where) / "state.db", 0o400)
+    os.chmod(Path(where), 0o500)
     raise RuntimeError("this step could not finish")
 '''
 
@@ -378,11 +385,33 @@ class WhenAStepCannotFinish(Steps):
         migration.carry_one("cole", self.steps)
         self.assertEqual(nina, directory.records("nina").read_bytes())
 
+    def test_the_records_are_never_half_restored_however_the_restore_is_interrupted(self):
+        # The property the old restore could not have. It copied straight onto the live database,
+        # which truncates it to nothing before writing a byte — so a machine that died partway
+        # through a rollback left the records neither carried nor put back but *truncated*, which is
+        # a state nothing recovers from. And a rollback runs after something has already gone wrong,
+        # so it is the likeliest moment for that to happen, not the least.
+        #
+        # Driven by making the rename itself fail, which is the last instruction of the restore:
+        # everything before it has run, so if any of it wrote onto the live file this case sees it.
+        was = directory.records("cole").read_bytes()
+        self.given("0003_broken", A_STEP_THAT_FAILS)
+
+        def refuse(_staged, _one):
+            raise OSError("interrupted exactly here")
+
+        with mock.patch("rundesk.agents.migration.os.replace", side_effect=refuse):
+            gone_wrong = migration.carry_one("cole", self.steps)
+
+        self.assertIn("could not be put back", gone_wrong)
+        self.assertEqual(was, directory.records("cole").read_bytes(),
+                         "the live records were written into before the rename")
+
     def test_a_rollback_that_itself_fails_is_said_out_loud(self):
         # An agent left neither carried nor put back is the one state somebody has to be told
         # about, rather than counted in a summary of how many failed.
         self.given("0003_stuck", A_STEP_THAT_CANNOT_BE_PUT_BACK)
-        self.addCleanup(os.chmod, str(directory.records("cole")), 0o600)
+        self.addCleanup(os.chmod, str(directory.where("cole")), 0o700)
         gone_wrong = migration.carry_one("cole", self.steps)
         self.assertIn("0003_stuck", gone_wrong)
         self.assertIn("could not be put back", gone_wrong)
@@ -391,7 +420,7 @@ class WhenAStepCannotFinish(Steps):
         # It is the only way back. Letting go of it because the operation is over would take away
         # the one thing that could still repair the agent.
         self.given("0003_stuck", A_STEP_THAT_CANNOT_BE_PUT_BACK)
-        self.addCleanup(os.chmod, str(directory.records("cole")), 0o600)
+        self.addCleanup(os.chmod, str(directory.where("cole")), 0o700)
         migration.carry_one("cole", self.steps)
         self.assertTrue((directory.where("cole") /
                          files.OUTGOING.format(name=directory.RECORDS)).is_file())

@@ -45,6 +45,7 @@ Finding steps and loading them is `utils.scripts`, shared with the install level
 only what differs: what an agent is handed, and how what has run is written down.
 """
 
+import os
 import shutil
 import sqlite3
 from datetime import datetime, timezone
@@ -280,16 +281,43 @@ def _put_back(at: Path, kept: List[Path]) -> List[str]:
     bytes and none of the meaning. The old build recorded exactly this.
     """
     stuck = []
-    for one in records.beside(at):
+    # **The records themselves go back last.** Each replacement below is atomic on its own, but
+    # three of them are not atomic together, and the order decides what an interruption between two
+    # of them leaves. Sidecars first means the moment of truth is the single rename of the database:
+    # before it, the copies are all still on disk and the whole restore can simply be run again;
+    # after it, what stands is the database that was set aside. The other order leaves a restored
+    # write-ahead log beside a database that has not been put back yet, which the next connection
+    # reads as that database's most recent truth.
+    for one in reversed(records.beside(at)):
         copy = one.with_name(files.OUTGOING.format(name=one.name))
         try:
             if one in kept:
-                shutil.copy2(copy, one)
+                _replaced(copy, one)
             elif one.exists():
                 one.unlink()
         except OSError as why:
             stuck.append(f"{one.name} ({why})")
     return stuck
+
+
+def _replaced(copy: Path, one: Path) -> None:
+    """Put one file back where it was, without it ever being half there.
+
+    **`shutil.copy2` onto the live file would truncate it before writing a byte of the restore.**
+    That is the failure `utils.files` exists to prevent, and this is the worst possible place to
+    reintroduce it: a rollback runs *after* something has already gone wrong, so the machine is
+    already the kind of machine that dies partway. An interruption there would leave the agent's
+    records neither carried nor put back, but truncated — which is not a state anything can recover
+    from, and it is the one the caller has just promised cannot happen.
+
+    So the copy is staged beside its destination under a name the walks already skip, and renamed
+    into place. `os.replace` is atomic within a filesystem, and both of these are inside the agent's
+    own directory, so it always is one.
+    """
+    staged = one.with_name(files.INCOMING.format(name=one.name))
+    files.discard(staged)
+    shutil.copy2(copy, staged)
+    os.replace(staged, one)
 
 
 def _let_go(kept: List[Path]) -> None:
