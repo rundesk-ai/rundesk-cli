@@ -1,12 +1,16 @@
 # The command surface
 
-Eight operations, and every one of them works. There is no "coming soon" list: a verb rundesk cannot
+Nine operations, and every one of them works. There is no "coming soon" list: a verb rundesk cannot
 perform is a verb rundesk does not have.
 
 ```sh
 rundesk status                            # the version, where the install is, and every configured value
 rundesk version                           # the version, and whether it is out of date
 rundesk configure [--<setting> <value>]   # change what this install is configured with
+rundesk agents                            # the agents this install keeps
+rundesk agents add <agent> --provider <provider>        # make one
+rundesk agents configure <agent> --provider <provider>  # change what is behind one
+rundesk agents remove <agent> --confirm   # take one away, and everything it remembers
 rundesk backups                           # the copies of what rundesk keeps for you
 rundesk backups save                      # copy what rundesk keeps, now
 rundesk backups restore <backup> --confirm        # put a copy back
@@ -37,6 +41,7 @@ data              /Users/you/.rundesk/data
 backups           /Users/you/.rundesk/backups
 secrets           /Users/you/.rundesk/secrets
 projects          /Users/you/.rundesk/projects
+agents            /Users/you/.rundesk/data/agents — 2 agents
 fit to run        yes
 backup_enabled    yes
 backup_retention  7
@@ -51,6 +56,11 @@ update_time       03:00
 moved. A run of `update` that finds nothing newer does not touch it, so the answer does not drift to
 "just now" every time you check. Which version that was is `rundesk version`, so it is not repeated
 here.
+
+`agents` is where they stand and how many there are, in one row rather than two — the count is only
+ever *of* that directory. A root nothing has been installed into, an install nobody has added an
+agent to, and an agents directory that cannot be read are three different answers and not one.
+Which agents they are is `rundesk agents`, so the names are not repeated here.
 
 `program` says which copy of the code answered and whether it is this root's own install or a
 checkout — running a checkout against an install's data is an ordinary thing to do by accident, and
@@ -97,6 +107,105 @@ install in a state nobody typed.
 
 How far the install has been carried (`migration`) is shown by `status` but is not settable: setting
 it by hand would make rundesk skip or repeat a migration step.
+
+## agents
+
+The agents this install keeps — one directory each, under `data/agents/`. With no sub-verb it lists
+them, because listing is what somebody wants nine times in ten.
+
+```console
+$ rundesk agents
+agents in /Users/you/.rundesk/data/agents
+AGENT  PROVIDER
+ada    claude
+cole   openai
+```
+
+Where they stand is printed even when there are none, and an install nobody has added one to says
+so rather than printing an empty table:
+
+```console
+$ rundesk agents
+agents in /Users/you/.rundesk/data/agents
+        no agents yet — add one with: rundesk agents add <agent> --provider <provider>
+```
+
+**An agent is a directory holding `state.db`.** Not a name in a list somewhere — so a half-made
+directory and a directory somebody made by hand are not agents and are not listed as ones. An agent
+whose records are there and cannot be read is listed with a provider nobody can answer for, rather
+than left out: leaving it out would say the agent is gone, and what somebody does next is make a new
+one over what survived.
+
+### agents add
+
+Makes an agent: its records, `home/`, and `logs/`. `--provider` is required.
+
+```console
+$ rundesk agents add cole --provider claude
+agent cole added
+        provider  claude
+        home      /Users/you/.rundesk/data/agents/cole/home
+        logs      /Users/you/.rundesk/data/agents/cole/logs
+        records   /Users/you/.rundesk/data/agents/cole/state.db
+        note      the provider is recorded and not proven — nothing in this release runs one
+```
+
+**The provider is recorded and it is not proven**, and the command says so every time. Nothing in
+this release runs one: no credential is checked, no request is made, and there is no gateway to
+start. An agent added with a provider nobody has ever spelled correctly looks exactly like one that
+works, and a line implying otherwise would be a success this release did not earn.
+
+All of it is built under a staged name and renamed into place once, at the end — so an interruption
+leaves litter rather than a directory wearing an agent's name and not being one.
+
+A name already taken is refused, and the refusal names the agent that is there. That includes a name
+differing only by case: the volume macOS ships with cannot tell `Cole` from `cole`, so allowing both
+would give two agents one `state.db` to write over each other in.
+
+### agents configure
+
+Changes what an agent is configured with.
+
+```console
+$ rundesk agents configure cole --provider openai
+cole: provider is now openai
+        the provider is recorded and not proven — nothing in this release runs one
+```
+
+**Naming nothing to change is refused rather than reported as a success.** A command that says it
+worked having changed nothing teaches somebody it worked, and the next thing they do rests on a
+change that never happened — the same reasoning as `configure` one level up.
+
+### agents remove
+
+`--confirm` is required. Without it, the command says exactly what it would take and takes none of
+it, and exits non-zero: **a removal that did not happen is a failure.**
+
+```console
+$ rundesk agents remove cole
+remove: this would take the agent cole from /Users/you/.rundesk/data/agents
+        take   /Users/you/.rundesk/data/agents/cole/state.db — everything cole remembers, and what SQLite keeps beside it
+        take   /Users/you/.rundesk/data/agents/cole/home — where cole started, and what it put there
+        take   /Users/you/.rundesk/data/agents/cole/logs
+        keep   anything else you put in /Users/you/.rundesk/data/agents/cole
+        nothing was removed. To go ahead:
+        rundesk agents remove cole --confirm
+```
+
+Confirmation is a flag rather than a typed answer at a prompt, for the reason `uninstall` gives: a
+prompt in a script is a command that hangs, and one that assumes "yes" with no terminal is worse
+than no prompt at all. An agent's whole memory is what this takes, and no copy of `data/` made
+afterwards brings it back.
+
+What it takes is named one thing at a time and never swept, and the agent's own directory goes only
+if it is then empty — anything you left in there is kept, along with the directory holding it, and
+the command says so.
+
+**Whether a gateway is running for that agent is not yet checked.** It cannot be checked by the
+layer that removes one — `agents/` sits below `gateways/` and may not import it — so it belongs to
+this command, and it is left until there is a `rundesk gateways` verb to stop one with. Refusing
+before then would leave somebody an agent they cannot remove and nothing to type to free it. Until
+that lands, removing an agent whose gateway is up leaves a running program with no records.
 
 ## backups
 

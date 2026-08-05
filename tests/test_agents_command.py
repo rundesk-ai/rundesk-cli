@@ -1,0 +1,341 @@
+"""`rundesk agents` — what a person types, and what a person is shown.
+
+Driven through `self.rundesk(...)`, so the real parser and the real dispatch answer every case. A
+case that called `cmd_agents` directly would prove the module and not the command: the sub-verb it
+registered, the flag it spelled, and the exit code the shell reads are exactly the parts a direct
+call skips.
+
+Every assertion is on what somebody sees or on the number a script reads. Nothing here looks at the
+agents layer's internals except to break something on purpose, because a test that asserts on a
+private shape goes green while the sentence a person reads goes wrong.
+
+Run directly: `python3 tests/test_agents_command.py`
+"""
+
+import unittest
+from unittest import mock
+
+import support
+from rundesk.agents import directory
+from rundesk.core import paths
+from rundesk.exits import FAILED, OK, USAGE
+
+
+class Listing(support.Isolated):
+    """`rundesk agents`, and the same thing spelled `rundesk agents list`."""
+
+    def test_an_install_with_no_agents_says_so_and_says_what_to_type(self):
+        # `as_table` prints nothing at all when there are no rows, headings included — so a listing
+        # that leant on it here would print the directory and then stop, and "no agents" would be
+        # something the reader had to infer from silence.
+        code, out, _ = self.rundesk("agents")
+        self.assertEqual(OK, code)
+        self.assertIn("no agents yet", out)
+        self.assertIn("rundesk agents add <agent> --provider <provider>", out)
+
+    def test_where_they_stand_is_said_even_when_there_are_none(self):
+        # "No agents" and "no agents *here*" are different things to learn.
+        _, out, _ = self.rundesk("agents")
+        self.assertIn(str(paths.agents()), out)
+
+    def test_it_lists_the_agent_and_what_is_behind_it(self):
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+        code, out, _ = self.rundesk("agents")
+        self.assertEqual(OK, code)
+        self.assertIn("AGENT", out)
+        self.assertIn("PROVIDER", out)
+        self.assertIn("cole", out)
+        self.assertIn("claude", out)
+
+    def test_the_bare_verb_and_the_named_one_answer_the_same(self):
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+        self.assertEqual(self.rundesk("agents"), self.rundesk("agents", "list"))
+
+    def test_every_agent_is_listed_in_name_order(self):
+        for name in ("zoe", "cole", "ada"):
+            self.rundesk("agents", "add", name, "--provider", "claude")
+        _, out, _ = self.rundesk("agents")
+        listed = [line.split()[0] for line in out.splitlines()[2:] if line.strip()]
+        self.assertEqual(["ada", "cole", "zoe"], listed)
+
+    def test_records_that_cannot_be_read_are_said_rather_than_left_out(self):
+        # Leaving the agent out would say it is not there, which is a different and worse thing to
+        # be told: the directory is on the disk and something has to be done about it.
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+        directory.records("cole").write_bytes(b"not a database at all")
+
+        code, out, _ = self.rundesk("agents")
+
+        self.assertEqual(OK, code)
+        self.assertIn("cole", out)
+        self.assertIn("cannot be read", out)
+
+    def test_records_that_went_away_are_told_apart_from_records_that_cannot_be_read(self):
+        # The two ways a provider cannot be answered are different situations, and this is the one
+        # a case cannot reach by hand: records taken away between the listing and the reading of
+        # them. Telling somebody with a corrupt database that their agent is simply missing sends
+        # them to make a new one over what survived, so the sentences must not be the same one.
+        with mock.patch.object(directory, "known", return_value=["ghost"]):
+            code, out, _ = self.rundesk("agents")
+        self.assertEqual(OK, code)
+        self.assertIn("ghost", out)
+        self.assertIn("records are not there", out)
+
+    def test_a_directory_that_is_not_an_agent_is_not_listed_as_one(self):
+        # An agent is a directory holding `state.db`. A listing that counted anything else would
+        # offer somebody an agent that cannot answer.
+        (paths.agents() / "half-made").mkdir(parents=True)
+        _, out, _ = self.rundesk("agents")
+        self.assertNotIn("half-made", out)
+
+
+class Adding(support.Isolated):
+    """`rundesk agents add <agent> --provider <provider>`."""
+
+    def test_it_makes_an_agent_and_says_what_was_made(self):
+        code, out, _ = self.rundesk("agents", "add", "cole", "--provider", "claude")
+        self.assertEqual(OK, code)
+        self.assertIn("agent cole added", out)
+        self.assertIn("claude", out)
+        for one in ("home", "logs", "state.db"):
+            self.assertIn(one, out, f"the line naming {one} is not there")
+
+    def test_what_was_made_is_really_there_afterwards(self):
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+        self.assertTrue(directory.records("cole").is_file())
+        self.assertTrue(directory.home("cole").is_dir())
+        self.assertTrue(directory.logs("cole").is_dir())
+
+    def test_it_says_out_loud_that_the_provider_is_not_proven(self):
+        # Nothing in this release runs a provider: no credential is checked and no request is made.
+        # An agent added with a provider nobody has ever spelled correctly looks exactly like one
+        # that works, and wording that implied otherwise would claim a success this did not earn.
+        _, out, _ = self.rundesk("agents", "add", "cole", "--provider", "claude")
+        self.assertIn("recorded and not proven", out)
+        self.assertIn("nothing in this release runs one", out)
+
+    def test_a_provider_is_required_and_the_refusal_says_what_to_type(self):
+        code, out, err = self.rundesk("agents", "add", "cole")
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out, "a refusal on stdout is a failure a script reads as the answer")
+        self.assertIn("nothing said which provider", err)
+        self.assertIn("rundesk agents add cole --provider <provider>", err)
+        self.assertIn("nothing was made", err)
+
+    def test_nothing_is_made_when_no_provider_was_given(self):
+        self.rundesk("agents", "add", "cole")
+        self.assertNotIn("cole", directory.known())
+
+    def test_a_provider_with_nothing_in_it_is_refused(self):
+        # Usually a shell variable that was not set, which is the case where being told to type the
+        # flag again does not help — so it gets its own sentence.
+        code, _, err = self.rundesk("agents", "add", "cole", "--provider", "  ")
+        self.assertEqual(FAILED, code)
+        self.assertIn("an agent with nothing behind it cannot answer", err)
+        self.assertNotIn("cole", directory.known())
+
+    def test_a_name_already_taken_is_refused_and_the_refusal_names_the_one_there(self):
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+        code, _, err = self.rundesk("agents", "add", "cole", "--provider", "openai")
+        self.assertEqual(FAILED, code)
+        self.assertIn("cole is already an agent", err)
+        self.assertIn("nothing was made", err)
+
+    def test_a_name_already_taken_leaves_the_agent_that_is_there_alone(self):
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+        self.rundesk("agents", "add", "cole", "--provider", "openai")
+        _, out, _ = self.rundesk("agents")
+        self.assertIn("claude", out)
+        self.assertNotIn("openai", out)
+
+    def test_a_name_that_could_never_be_a_directory_is_refused(self):
+        code, _, err = self.rundesk("agents", "add", "a/b", "--provider", "claude")
+        self.assertEqual(FAILED, code)
+        self.assertIn("nothing was made", err)
+
+    def test_it_needs_a_name(self):
+        code, _, _ = self.rundesk("agents", "add", "--provider", "claude")
+        self.assertEqual(USAGE, code)
+
+
+class Configuring(support.Isolated):
+    """`rundesk agents configure <agent> --provider <provider>`."""
+
+    def setUp(self):
+        super().setUp()
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+
+    def test_it_changes_what_is_behind_an_agent(self):
+        code, out, _ = self.rundesk("agents", "configure", "cole", "--provider", "openai")
+        self.assertEqual(OK, code)
+        self.assertIn("cole: provider is now openai", out)
+
+    def test_the_change_is_what_the_listing_shows_afterwards(self):
+        self.rundesk("agents", "configure", "cole", "--provider", "openai")
+        _, out, _ = self.rundesk("agents")
+        self.assertIn("openai", out)
+        self.assertNotIn("claude", out)
+
+    def test_it_says_out_loud_that_the_provider_is_not_proven(self):
+        _, out, _ = self.rundesk("agents", "configure", "cole", "--provider", "openai")
+        self.assertIn("recorded and not proven", out)
+
+    def test_naming_nothing_to_change_is_refused_rather_than_called_a_success(self):
+        # A command that reports success having changed nothing teaches somebody that it worked,
+        # and the next thing they do rests on a change that never happened. `configure` one layer
+        # up makes the same decision for the same reason.
+        code, out, err = self.rundesk("agents", "configure", "cole")
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("nothing was named to change about cole", err)
+        self.assertIn("rundesk agents configure cole --provider <provider>", err)
+        self.assertIn("nothing was changed", err)
+
+    def test_an_agent_that_is_not_there_is_refused(self):
+        code, _, err = self.rundesk("agents", "configure", "nobody", "--provider", "openai")
+        self.assertEqual(FAILED, code)
+        self.assertIn("nobody is not an agent on this install", err)
+        self.assertIn("nothing was changed", err)
+
+    def test_a_directory_that_is_not_an_agent_is_not_configurable(self):
+        (paths.agents() / "half-made").mkdir(parents=True)
+        code, _, err = self.rundesk("agents", "configure", "half-made", "--provider", "openai")
+        self.assertEqual(FAILED, code)
+        self.assertIn("is not an agent on this install", err)
+
+    def test_a_provider_with_nothing_in_it_is_refused(self):
+        code, _, err = self.rundesk("agents", "configure", "cole", "--provider", "")
+        self.assertEqual(FAILED, code)
+        self.assertIn("an agent with nothing behind it cannot answer", err)
+        _, out, _ = self.rundesk("agents")
+        self.assertIn("claude", out, "the agent was changed by a refusal")
+
+
+class Removing(support.Isolated):
+    """`rundesk agents remove <agent> --confirm`."""
+
+    def setUp(self):
+        super().setUp()
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+
+    def test_it_takes_the_agent_away_and_says_what_it_took(self):
+        code, out, _ = self.rundesk("agents", "remove", "cole", "--confirm")
+        self.assertEqual(OK, code)
+        self.assertIn("agent cole removed", out)
+        self.assertIn("state.db", out)
+        self.assertIn("home", out)
+        self.assertIn("logs", out)
+
+    def test_what_it_says_it_took_is_really_gone(self):
+        self.rundesk("agents", "remove", "cole", "--confirm")
+        self.assertFalse((paths.agents() / "cole").exists())
+        self.assertEqual([], directory.known())
+
+    def test_without_confirming_it_says_what_it_would_take_and_takes_none_of_it(self):
+        code, out, err = self.rundesk("agents", "remove", "cole")
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("this would take the agent cole", err)
+        self.assertIn("nothing was removed. To go ahead:", err)
+        self.assertIn("rundesk agents remove cole --confirm", err)
+
+    def test_a_removal_that_did_not_happen_is_reported_as_a_failure(self):
+        # The whole point of the flag. Exiting 0 here would tell a script the agent was gone.
+        code, _, _ = self.rundesk("agents", "remove", "cole")
+        self.assertEqual(FAILED, code)
+        self.assertTrue(directory.records("cole").is_file())
+        self.assertIn("cole", directory.known())
+
+    def test_what_it_would_take_is_named_one_thing_at_a_time(self):
+        _, _, err = self.rundesk("agents", "remove", "cole")
+        for one in ("state.db", "home", "logs"):
+            self.assertIn(one, err, f"the line naming {one} is not there")
+
+    def test_an_agent_that_is_not_there_is_refused_before_the_confirmation_is_asked_for(self):
+        # Somebody who mistyped the name finds out now rather than after typing `--confirm`.
+        code, _, err = self.rundesk("agents", "remove", "nobodie")
+        self.assertEqual(FAILED, code)
+        self.assertIn("nobodie is not an agent on this install", err)
+        self.assertNotIn("--confirm", err)
+
+    def test_an_agent_that_is_not_there_is_refused_with_the_confirmation_too(self):
+        code, _, err = self.rundesk("agents", "remove", "nobody", "--confirm")
+        self.assertEqual(FAILED, code)
+        self.assertIn("nobody is not an agent on this install", err)
+        self.assertIn("nothing was removed", err)
+
+    def test_what_the_owner_left_in_there_is_kept_and_said(self):
+        # Taking an agent away is not a licence to sweep, and a directory that survives has to be
+        # reported — otherwise "removed" is a word the disk disagrees with.
+        (paths.agents() / "cole" / "notes.md").write_text("mine", encoding="utf-8")
+        code, out, _ = self.rundesk("agents", "remove", "cole", "--confirm")
+        self.assertEqual(OK, code)
+        self.assertIn("something you put in there is still there", out)
+        self.assertTrue((paths.agents() / "cole" / "notes.md").is_file())
+
+    def test_it_needs_a_name(self):
+        code, _, _ = self.rundesk("agents", "remove", "--confirm")
+        self.assertEqual(USAGE, code)
+
+
+class OnTheParser(support.Isolated):
+    """The verb as the command line sees it."""
+
+    def test_a_sub_verb_named_wrongly_is_a_usage_error(self):
+        code, _, _ = self.rundesk("agents", "ad")
+        self.assertEqual(USAGE, code)
+
+    def test_a_flag_it_does_not_have_is_a_usage_error(self):
+        code, _, _ = self.rundesk("agents", "add", "cole", "--model", "big")
+        self.assertEqual(USAGE, code)
+
+    def test_a_root_that_must_not_be_used_is_refused_rather_than_worked_on(self):
+        import os
+        os.environ["RUNDESK_HOME"] = "/"
+        code, out, err = self.rundesk("agents")
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("root of the filesystem", err)
+
+
+class InTheStatus(support.Isolated):
+    """The row `status` grew, and the rows it must not have disturbed."""
+
+    def test_it_says_where_the_agents_stand(self):
+        _, out, _ = self.rundesk("status")
+        self.assertIn(str(paths.agents()), out)
+
+    def test_an_install_with_no_agents_says_none_yet_rather_than_nothing(self):
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+        self.rundesk("agents", "remove", "cole", "--confirm")
+        _, out, _ = self.rundesk("status")
+        self.assertIn("none yet", self._row(out))
+
+    def test_a_root_nothing_stands_in_is_told_apart_from_one_with_no_agents(self):
+        _, out, _ = self.rundesk("status")
+        self.assertIn("not there yet", self._row(out))
+
+    def test_it_says_how_many_there_are(self):
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+        self.assertIn("1 agent", self._row(self.rundesk("status")[1]))
+        self.rundesk("agents", "add", "ada", "--provider", "claude")
+        self.assertIn("2 agents", self._row(self.rundesk("status")[1]))
+
+    def test_the_rows_that_were_there_still_answer_against_this_root(self):
+        # `tests/test_cli.py` rests on these three, and a new row must not have moved them.
+        _, out, _ = self.rundesk("status")
+        seen = [line for line in out.splitlines() if line.startswith(("home", "data", "backups"))]
+        self.assertEqual(3, len(seen), "status lost one of the rows it had")
+        for line in seen:
+            self.assertIn(str(self.home), line)
+
+    def _row(self, out):
+        """The `agents` row of a `status` table, whatever else moved around it."""
+        for line in out.splitlines():
+            if line.startswith("agents"):
+                return line
+        raise AssertionError(f"status has no agents row:\n{out}")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -16,6 +16,8 @@ import sys
 from typing import List, Optional
 
 from rundesk.commands import Subcommands
+from rundesk.commands.agents import cmd_agents
+from rundesk.commands.agents import register as register_agents
 from rundesk.commands.backups import cmd_backups
 from rundesk.commands.backups import register as register_backups
 from rundesk.commands.configure import cmd_configure
@@ -34,6 +36,8 @@ EPILOG = """\
 examples:
   rundesk status                how rundesk is on this machine
   rundesk configure             what this install is configured with
+  rundesk agents                the agents this install keeps
+  rundesk agents add <agent> --provider <provider>
   rundesk backups               the copies of what rundesk keeps for you
   rundesk backups save          copy what rundesk keeps, now
   rundesk env list              the values rundesk hands to what it talks to
@@ -63,6 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     _register_status(sub)
     _register_version(sub)
     register_configure(sub)
+    register_agents(sub)
     register_backups(sub)
     register_env(sub)
     _register_install(sub)
@@ -122,6 +127,8 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
         return cmd_status(args)
     if args.command == "configure":
         return cmd_configure(args)
+    if args.command == "agents":
+        return cmd_agents(args)
     if args.command == "backups":
         return cmd_backups(args)
     if args.command == "env":

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, List, Tuple
 
 from rundesk import __version__
+from rundesk.agents import directory
 from rundesk.commands import as_written, failed
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
@@ -40,6 +41,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
         ("backups", _backups()),
         ("secrets", _shown(paths.secrets())),
         ("projects", _shown(paths.projects())),
+        ("agents", _agents()),
         ("fit to run", "yes" if not unfit else f"no — {unfit}"),
     ]
     rows.extend(_configured())
@@ -111,6 +113,30 @@ def _backups() -> str:
     if real.is_dir():
         return f"{at} → {real}"
     return f"{at} → {real} — that directory is not there"
+
+
+def _agents() -> str:
+    """Where the agents stand, and how many of them there are.
+
+    One row rather than two, for the reason `_program` gives about itself: a directory and a count
+    printed under two labels are two things somebody compares, and the count is only ever *of* that
+    directory. Which agents they are is `rundesk agents`, so the names are not repeated here.
+
+    **"Not there yet", "none yet" and "cannot be read" are three answers, not one.** A root nothing
+    has been installed into, an install nobody has added an agent to, and an agents directory that
+    is there and unreadable are different situations — and the last is precisely the kind of wrong
+    somebody runs `status` to find out about, so it says so rather than reporting no agents.
+    """
+    at = paths.agents()
+    if not at.is_dir():
+        return f"{at} — not there yet"
+    try:
+        there = directory.known()
+    except OSError as why:
+        return f"{at} — ? — {why}"
+    if not there:
+        return f"{at} — none yet"
+    return f"{at} — {len(there)} agent" + ("" if len(there) == 1 else "s")
 
 
 def _shown(where: Path) -> str:
