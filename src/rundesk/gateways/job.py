@@ -169,7 +169,15 @@ LANG = "en_US.UTF-8"
 #: are the whole of the conversation and each one was paid for by a real failure.
 ALREADY_THERE = (17, 37)                 #: bootstrap: this label is already loaded
 GO_AND_READ_THE_LOG = 5                  #: bootstrap: launchd's catch-all — the reason is in the log
-NO_GUI_SESSION = (112, 125)              #: no login domain for this uid: over SSH, or logging out
+NO_GUI_SESSION = 112                     #: no login domain for this uid: over SSH, or logging out
+#: launchd will not take this verb in this domain. **Not the same as `112`, and it was written here
+#: as though it were** — the two shared one name, so a `125` told somebody there was no login
+#: session and to go and log in at the desktop, which is a different machine state with a different
+#: remedy. `docs/research/launchd-on-macos.md` measured it as "domain does not support specified
+#: action", and `allow` already relies on exactly that reading: it retries `enable` in `user/<uid>`
+#: when `gui/<uid>` answers `125`, which only makes sense for a verb the domain refused. Both still
+#: answer `CANNOT_TELL` — the disposition was never wrong, only the sentence explaining it.
+WRONG_DOMAIN_FOR_THE_VERB = 125
 NOT_KNOWN = 113                          #: launchd has no record of this label — ambiguous, see `stands`
 ALREADY_GONE = (3, 113)                  #: bootout: it was not there, which is the state asked for
 IS_DISABLED = 119                        #: the override store says no
@@ -684,10 +692,15 @@ def stands(one: Job, supervising: Optional[Supervising] = None) -> Stands:
     if asked.trouble is not None:
         return Stands(CANNOT_TELL, disabled, allowed, there,
                       f"the supervisor could not be asked about {one.label} ({asked.trouble})")
-    if asked.code in NO_GUI_SESSION:
+    if asked.code == NO_GUI_SESSION:
         return Stands(CANNOT_TELL, disabled, allowed, there,
                       f"there is no login session for this user to ask about {one.label} — this is "
                       "not the same as the gateway not running")
+    if asked.code == WRONG_DOMAIN_FOR_THE_VERB:
+        return Stands(CANNOT_TELL, disabled, allowed, there,
+                      f"this launchd would not answer a question about {one.label} in "
+                      "the domain it was asked in — this is not the same as the gateway not "
+                      "running")
     if asked.code == 0:
         return Stands(PLACED, disabled, allowed, there, _running_something_else(asked, plist)
                       or _but_disabled(disabled))
@@ -865,9 +878,13 @@ def _how_it_landed(one: Job, landed: programs.Ran) -> Placed:
         # than the one just written. Said out loud instead of counted as an ordinary success.
         return Placed(PLACED, f"{one.label} was already loaded, so launchd may still be running the "
                               "definition it had rather than the one just written")
-    if landed.code in NO_GUI_SESSION:
+    if landed.code == NO_GUI_SESSION:
         return Placed(CANNOT_TELL, f"there is no login session for this user to place {one.label} "
                                    "in — a gateway is placed from the desktop, not over SSH")
+    if landed.code == WRONG_DOMAIN_FOR_THE_VERB:
+        return Placed(CANNOT_TELL, f"this launchd would not take {one.label} in the domain it was "
+                                   "asked in — which is not a machine with nobody logged in, "
+                                   "and is worth looking at rather than waiting out")
     if landed.code == GO_AND_READ_THE_LOG:
         return Placed(CANNOT_TELL, f"launchd would not say why it refused {one.label}. Read: "
                                    "log show --last 10m --predicate 'process == \"launchd\" OR "

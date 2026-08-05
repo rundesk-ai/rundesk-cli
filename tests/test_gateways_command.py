@@ -359,12 +359,22 @@ class Listing(WithAnAgent):
     def test_no_login_session_is_never_reported_as_not_running(self):
         # Over SSH into a machine nobody has logged into at the desktop, every gateway on it would
         # otherwise look absent.
-        for code in job.NO_GUI_SESSION:
-            with self.subTest(code=code):
-                by = support.ASupervisor(print=ran(code))
-                _, out, _ = self.rundesk_with(by, "gateways")
-                self.assertIn("login session", out)
-                self.assertIn("cannot tell", out)
+        by = support.ASupervisor(print=ran(job.NO_GUI_SESSION))
+        _, out, _ = self.rundesk_with(by, "gateways")
+        self.assertIn("login session", out)
+        self.assertIn("cannot tell", out)
+
+    def test_a_domain_that_refused_the_verb_is_not_reported_as_no_login_session(self):
+        # `112` and `125` shared one name and one sentence, so a `125` told somebody there was no
+        # login session and to go and log in at the desktop. The research page measured `125` as
+        # "domain does not support specified action", and `allow` already relies on that reading —
+        # it retries `enable` in `user/<uid>` when `gui/<uid>` answers `125`. Both are still
+        # `cannot tell`; the disposition was never wrong, only the sentence explaining it.
+        by = support.ASupervisor(print=ran(job.WRONG_DOMAIN_FOR_THE_VERB))
+        _, out, _ = self.rundesk_with(by, "gateways")
+        self.assertIn("cannot tell", out)
+        self.assertIn("would not answer a question about", out)
+        self.assertNotIn("login session", out)
 
     def test_a_gateway_nobody_can_ask_about_is_not_a_gateway_that_is_not_running(self):
         self.a_gateway_nobody_can_ask_about()
@@ -717,7 +727,10 @@ class ComingDownByForce(WithAnAgent):
         by = support.ASupervisor()
         code, out, err = self.rundesk_with(by, "gateways", "restart", "cole", "--force")
         self.assertEqual(FAILED, code)
-        self.assertEqual("", out)
+        # The stop half says what it found, exactly as the graceful restart does — `--force` used
+        # to say nothing here, which was the one place the two verbs disagreed about a gateway that
+        # was not running. What must not appear is a claim that one started.
+        self.assertEqual("cole is not running\n", out)
         self.assertIn("no gateway came up", err)
 
     def test_a_restart_by_force_says_where_the_new_gateway_is(self):
@@ -823,6 +836,26 @@ class WhenThereIsNoJobToTakeBack(WithAnAgent):
         self.assertIn("gateway stopped for cole", out)
         self.assertIn("stopped by signalling the process directly", out)
         self.assertFalse(programs.alive(pid))
+
+    def test_a_restart_by_force_really_ends_a_gateway_launchd_never_started(self):
+        # The one that was reported killed and replaced while it went on running under its original
+        # pid. `--force` used to `launchctl kill` the *label*, which reaches a process only while
+        # launchd holds a job for it. Against a gateway launchd never started, the kill hit nothing;
+        # the replacement launchd bootstrapped found the name already held and stood down as it
+        # should; and the check that a gateway was up was then answered by the original process,
+        # which had never been touched. Two false claims in one command, about the one state a
+        # person runs `--force` to get out of.
+        pid = self.a_real_gateway("cole")
+        code, out, _err = self.stopped("gateways", "restart", "cole", "--force")
+        self.assertFalse(programs.alive(pid),
+                         "restart --force left the gateway it said it killed still running")
+        self.assertIn("stopped by signalling the process directly", out,
+                      "the only thing that can stop a gateway launchd never started")
+        self.assertNotIn(f"gateway started for cole as pid {pid}", out,
+                         "it reported starting a gateway that is the process it never stopped")
+        self.assertNotEqual(OK, code,
+                            "the stand-in starts nothing, so a restart that reported success here "
+                            "would be claiming a gateway came up that never did")
 
     def test_the_fallback_is_not_used_when_there_is_a_job(self):
         # An ordinary stop takes the job back and the gateway goes with it. Reaching for a signal
@@ -1010,7 +1043,9 @@ class Restarting(WithAnAgent):
         by = support.ASupervisor(bootstrap=ran(job.IS_DISABLED))
         code, out, err = self.rundesk_with(by, "gateways", "restart", "cole", "--force")
         self.assertEqual(FAILED, code)
-        self.assertEqual("", out)
+        # The stop half reports what it found, as the graceful restart already did; what must not
+        # be there is any claim that a gateway came up.
+        self.assertEqual("cole is not running\n", out)
         self.assertIn("was not placed", err)
         self.assertIn("nothing is running", err)
 

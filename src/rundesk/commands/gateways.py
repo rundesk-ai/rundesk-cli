@@ -735,14 +735,29 @@ def _restarted(name: Optional[str], every: bool, forcing: bool, by: job.Supervis
 
     worst = OK
     for one in pointed.named:
-        went = _forced_one(one, by) if forcing else _restarted_one(one, by)
+        went = _restarted_one(one, by, forcing)
         if went != OK:
             worst = FAILED
     return worst
 
 
-def _restarted_one(name: str, by: job.Supervising) -> int:
+def _restarted_one(name: str, by: job.Supervising, forcing: bool = False) -> int:
     """Stop, prove the old one is gone, then start. **Never the other way round.**
+
+    **`--force` is this same cycle with a kill in front of the stop, and it was once its own
+    function that skipped the proving.** That copy ran `kill SIGKILL` against the *label* and went
+    straight on to bootstrap a replacement — which is correct only while launchd holds a job for
+    that label. Against a gateway with no job — one started by `rundesk gateways run`, or one whose
+    job was never bootstrapped, both states this command documents and points people here to fix —
+    the kill reached nothing, the replacement launchd started found the name already held and stood
+    down as it should, and the check that a gateway was up was then satisfied by *the original
+    process*, which had never been touched. It reported killing and replacing a gateway that was
+    still running, under its original pid. Measured, not reasoned about.
+
+    Routing both through `_stopped_one` is what fixes it: that is the one place that proves the name
+    came free, and the only place that falls back to signalling the process when there is no job to
+    take back. `--force` still skips the *waiting* — it kills first, so the `bootout --wait` behind
+    it returns at once — and now skips none of the proving, which is what it always claimed.
 
     A start bootstraps, and bootstrapping over a label launchd still holds keeps the definition it
     already had *without failing* — so a restart that started before the old one was proven gone
@@ -755,52 +770,21 @@ def _restarted_one(name: str, by: job.Supervising) -> int:
     up immediately; the one call in this module that waits out a `ThrottleInterval` is the kick in
     `_resolved`, reached only by a gateway that came up and died inside its own throttle window.
     """
-    if _stopped_one(name, by) != OK:
+    if _stopped_one(name, by, forcing) != OK:
         # Said as a continuation of the stop's own failure rather than as a second one: what went
         # wrong has already been named, and what is added here is the consequence.
         print(f"        {name} was not started again — a start over a job launchd still holds "
               "keeps the definition it already had, and does not fail", file=sys.stderr)
         return FAILED
-    return _started(name, by)
 
-
-def _forced_one(name: str, by: job.Supervising) -> int:
-    """`restart --force`: end it where it stands, then run the whole resolver over the freed name.
-
-    **The kill is the only difference, and everything the ordinary cycle guarantees still holds.**
-    After it, `job.place` enables, boots out — returning at once, because there is no process left
-    to wait for — and bootstraps, and `_resolved` then proves a gateway came up rather than that a
-    job was accepted. So `--force` skips the *waiting*, which is what it was asked to skip, and
-    skips none of the proving.
-
-    **It is not a `kickstart`, and that is measured rather than preferred.** `kickstart -k` waits
-    out the entire `ThrottleInterval` before respawning — 30 seconds against a throttle of 30, with
-    the caller blocked for all of it — while kill, `bootout --wait` and `bootstrap` put a new pid up
-    immediately. This verb ran a `kickstart` under a ten-second ceiling and failed on a machine
-    where nothing was wrong.
-
-    **What the kill answered is not read**, in the same way and for the same reason `job.place`
-    throws away what `enable` answered: everything after it goes back to the same `launchctl` and
-    reports for itself. A kill that did not land only means the `bootout --wait` behind it does what
-    it always did and waits for `SIGTERM` — slower, and still correct. What makes this a restart is
-    the bootstrap and the proof that a gateway came up, and the kill is neither.
-    """
-    at = directory.where(name)
-    one, trouble = _job_for(name, at)
+    one, _trouble = _job_for(name, directory.where(name))
     if one is None:
-        # **The kill still happens, and only the start cannot.** There is no label to `launchctl
-        # kill`, so the process is signalled directly; what follows is the honest half of a restart
-        # this name can never have, said as the failure it is rather than passed over.
-        went = _signalled_directly(name, at, True, trouble)
-        if went != OK:
-            return went
-        return _no_job_can_ever_be_placed(name, trouble, "it was stopped and not started again")
-
-    was = standing.standing(at)
-    _ended(one, by)
-    if was.how == standing.ONLINE:
-        print(f"{name}: {WAS_KILLED}")
-    return _resolved(name, at, one, by)
+        # **Stopped, and it is the start that can never happen** — the agent is named something no
+        # launchd label can carry. Said here rather than left to `_started`, which would answer
+        # "nothing was started" and so describe a restart that did nothing at all. Half of this one
+        # really happened, and the half that cannot is the failure.
+        return _no_job_can_ever_be_placed(name, _trouble, "it was stopped and not started again")
+    return _started(name, by)
 
 
 def _ended(one: job.Job, by: job.Supervising) -> None:
@@ -833,8 +817,8 @@ def _signalled_directly(name: str, at: Path, forcing: bool, why_there_is_no_job:
     that was asked for, and a stop that reported an error for it would make `stop` unsafe to run
     twice.
 
-    **What the signal answered is not what decides this. The lock is.** The same rule `_forced_one`
-    states for `launchctl kill`, and here it is not a preference: measured on this machine
+    **What the signal answered is not what decides this. The lock is.** The same rule `_stopped_one`
+    holds to for `launchctl kill`, and here it is not a preference: measured on this machine
     2026-08-05, `killpg` against the group of a process that has just become a **zombie** answers
     `EPERM` on macOS rather than `ESRCH`, so a gateway that took the `SIGTERM` and died in the
     instant before the `SIGKILL` behind it has that `SIGKILL` refused — and `utils.programs.stop`

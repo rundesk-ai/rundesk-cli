@@ -410,11 +410,19 @@ class WhatABootstrapAnswered(WithAJob):
 
     def test_no_login_session_is_never_reported_as_a_failure_to_place(self):
         # Over SSH into a machine nobody has logged into at the desktop, this is every job.
-        for code in job.NO_GUI_SESSION:
-            with self.subTest(code=code):
-                _by, landed = self.placed(bootstrap=ran(code))
-                self.assertEqual(job.CANNOT_TELL, landed.how)
-                self.assertIn("login session", landed.why)
+        _by, landed = self.placed(bootstrap=ran(job.NO_GUI_SESSION))
+        self.assertEqual(job.CANNOT_TELL, landed.how)
+        self.assertIn("login session", landed.why)
+
+    def test_a_domain_that_refused_the_verb_is_told_apart_from_no_login_session(self):
+        # `112` and `125` were one constant with one sentence, so a `125` — measured as "domain
+        # does not support specified action" — told somebody to go and log in at the desktop. Both
+        # are still `cannot tell`: the disposition was never wrong, only the explanation. `allow`
+        # in this same module already reads `125` correctly, which is what gave it away.
+        _by, landed = self.placed(bootstrap=ran(job.WRONG_DOMAIN_FOR_THE_VERB))
+        self.assertEqual(job.CANNOT_TELL, landed.how)
+        self.assertIn("would not take", landed.why)
+        self.assertNotIn("login session", landed.why)
 
     def test_a_disabled_label_is_not_placed_and_says_something_is_disabling_it(self):
         _by, landed = self.placed(bootstrap=ran(job.IS_DISABLED))
@@ -533,11 +541,17 @@ class WhereAJobStands(WithAJob):
 
     def test_no_login_session_is_never_reported_as_not_running(self):
         # Over SSH, every gateway on the machine would otherwise look absent.
-        for code in job.NO_GUI_SESSION:
-            with self.subTest(code=code):
-                how = self.stands(print=ran(code))
-                self.assertEqual(job.CANNOT_TELL, how.how)
-                self.assertIn("login session", how.why)
+        how = self.stands(print=ran(job.NO_GUI_SESSION))
+        self.assertEqual(job.CANNOT_TELL, how.how)
+        self.assertIn("login session", how.why)
+
+    def test_a_domain_that_refused_the_question_is_told_apart_from_no_login_session(self):
+        # Same split as the bootstrap side: still `cannot tell`, and no longer claiming a cause it
+        # cannot support. Neither is ever reported as the gateway not running.
+        how = self.stands(print=ran(job.WRONG_DOMAIN_FOR_THE_VERB))
+        self.assertEqual(job.CANNOT_TELL, how.how)
+        self.assertIn("would not answer a question about", how.why)
+        self.assertNotIn("login session", how.why)
 
     def test_a_label_launchd_knows_and_no_plist_anywhere_is_the_only_safe_no(self):
         how = self.stands(print=ran(job.NOT_KNOWN))
