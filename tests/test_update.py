@@ -16,17 +16,23 @@ Run directly: `python3 tests/test_update.py`
 import contextlib
 import io
 import os
+import shutil
 import tarfile
 import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Dict, List
 from unittest import mock
 
 import support
 from rundesk import __version__
+from rundesk.agents import directory
+from rundesk.agents import migration as agent_migration
+from rundesk.commands import update as the_update
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
+from rundesk.gateways import standing
 from rundesk.lifecycle import backups, migration, release, tree
 
 A_STEP = '''
@@ -34,6 +40,47 @@ from pathlib import Path
 
 def carry(data):
     (Path(data) / "carried").write_text("the step ran")
+'''
+
+#: An agent step: a table and a file together, which is what a step is handed both for.
+AN_AGENT_STEP = '''
+from pathlib import Path
+
+def carry(conn, where):
+    conn.execute('CREATE TABLE IF NOT EXISTS carried (one TEXT) STRICT')
+    (Path(where) / "carried").write_text("the agent step ran")
+'''
+
+#: An agent step that cannot finish for one agent and finishes for every other. How "one that fails
+#: does not stop the next" is proved rather than asserted.
+AN_AGENT_STEP_THAT_FAILS_FOR_ONE = '''
+from pathlib import Path
+
+def carry(conn, where):
+    if Path(where).name == "alpha":
+        raise RuntimeError("this step could not finish")
+    conn.execute('CREATE TABLE IF NOT EXISTS carried (one TEXT) STRICT')
+    (Path(where) / "carried").write_text("the agent step ran")
+'''
+
+#: An agent step that cannot finish. An agent step and an install step do not take the same
+#: arguments, so the install one from `support` would fail here for the wrong reason entirely.
+AN_AGENT_STEP_THAT_FAILS = '''
+def carry(conn, where):
+    raise RuntimeError("this step could not finish")
+'''
+
+#: An agent step that refuses to run until the install's own step has landed. The order under test
+#: is not a comment: an install step may reshape where an agent's things stand, and an agent step
+#: run first would be run against a layout the release has not finished making.
+AN_AGENT_STEP_THAT_NEEDS_THE_INSTALL_CARRIED = '''
+from pathlib import Path
+
+def carry(conn, where):
+    if not (Path(where).parent.parent / "carried").exists():
+        raise RuntimeError("the install's own step had not run yet")
+    conn.execute('CREATE TABLE IF NOT EXISTS carried (one TEXT) STRICT')
+    (Path(where) / "carried").write_text("the agent step ran")
 '''
 
 
@@ -60,13 +107,20 @@ class Updating(support.Isolated):
         config.write_fresh(paths.data())
         migration.stamp_without_running(paths.data())
 
-    def an_archive(self, marker: str = "after", steps=None, broken: bool = False,
-                   escaping_link: str = "") -> Path:
-        """A release tarball, built on disk, exactly as one arrives from GitHub."""
+    def an_archive(self, marker: str = "after", steps=None, agent_steps=None,
+                   broken: bool = False, escaping_link: str = "") -> Path:
+        """A release tarball, built on disk, exactly as one arrives from GitHub.
+
+        `agent_steps` ship in the release beside the install's own, because that is the only way an
+        agent step can reach an update at all: the settling is done by the release that landed, in
+        an interpreter of its own, so a step written into *this* process never gets there.
+        """
         inside = self.home / "release" / "rundesk-cli-v99"
         support.a_real_tree(inside, marker)
         for name, body in (steps or {}).items():
             (inside / "src" / "rundesk" / "lifecycle" / "steps" / f"{name}.py").write_text(body)
+        for name, body in (agent_steps or {}).items():
+            (inside / "src" / "rundesk" / "agents" / "steps" / f"{name}.py").write_text(body)
 
         at = self.home / "release.tar.gz"
         with tarfile.open(at, "w:gz") as held:
@@ -397,6 +451,306 @@ class CarryingTheInstallForward(Updating):
         (paths.data() / "carried").unlink()
         self.update(published="v99.0.1", archive=self.an_archive(steps={"0001_first": A_STEP}))
         self.assertFalse((paths.data() / "carried").exists(), "the step ran a second time")
+
+
+class CarryingTheAgentsForward(Updating):
+    """The half nothing called. `carry_every` shipped, was tested, and was reached from nowhere.
+
+    Driven end to end rather than against the helper, because the seam being closed is precisely the
+    one between a release's agent steps and the command that is supposed to run them — and the
+    settling happens in an interpreter of its own, so a case that patched something in this process
+    would prove nothing about the update anybody runs.
+    """
+
+    def an_agent(self, name: str) -> Path:
+        """A real agent, built the way `agents add` builds one, on the release installed now.
+
+        Made by this checkout, which ships `0001` and nothing else, so an archive carrying a `0002`
+        is an agent with a step waiting — which is the whole situation under test.
+        """
+        return directory.made(name, "anthropic")
+
+    def carried(self, name: str) -> bool:
+        return (paths.agents() / name / "carried").exists()
+
+    def test_every_agent_is_carried_by_an_update(self):
+        self.an_agent("alpha")
+        self.an_agent("beta")
+
+        code, out, err = self.update(archive=self.an_archive(agent_steps={"0002_x": AN_AGENT_STEP}))
+
+        self.assertEqual(OK, code, err)
+        self.assertTrue(self.carried("alpha"), "the release's agent step never ran for alpha")
+        self.assertTrue(self.carried("beta"), "the release's agent step never ran for beta")
+        self.assertIn("carrying alpha to 0002_x", out)
+
+    def test_how_far_each_agent_got_is_recorded_in_its_own_records(self):
+        self.an_agent("alpha")
+        self.update(archive=self.an_archive(agent_steps={"0002_x": AN_AGENT_STEP}))
+        self.assertIn("0002_x", agent_migration.recorded(directory.records("alpha")))
+
+    def test_an_agent_that_cannot_be_carried_does_not_stop_the_next(self):
+        # Nineteen agents that are fine are not something to take down for the third one's sake.
+        self.an_agent("alpha")
+        self.an_agent("beta")
+
+        self.update(archive=self.an_archive(
+            agent_steps={"0002_x": AN_AGENT_STEP_THAT_FAILS_FOR_ONE}))
+
+        self.assertFalse(self.carried("alpha"))
+        self.assertTrue(self.carried("beta"), "one agent failing stopped the ones after it")
+
+    def test_an_agent_that_could_not_be_carried_makes_the_update_non_zero(self):
+        # An install whose agents are not carried is not a settled install, and `rundesk update` is
+        # idempotent and safe to run again — which is the way out, and only exists if it is said.
+        self.an_agent("alpha")
+        self.an_agent("beta")
+
+        code, _, err = self.update(archive=self.an_archive(
+            agent_steps={"0002_x": AN_AGENT_STEP_THAT_FAILS_FOR_ONE}))
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("alpha", err)
+        self.assertNotIn("beta", err, "an agent that carried perfectly well was reported as failed")
+
+    def test_the_installs_own_steps_run_before_any_agent_is_carried(self):
+        # An install step may reshape where an agent's things stand. The agent step here refuses to
+        # run until the install's has landed, so the wrong order is a failure rather than a comment.
+        self.an_agent("alpha")
+
+        code, _, err = self.update(archive=self.an_archive(
+            steps={"0001_first": A_STEP},
+            agent_steps={"0002_x": AN_AGENT_STEP_THAT_NEEDS_THE_INSTALL_CARRIED}))
+
+        self.assertEqual(OK, code, err)
+        self.assertTrue(self.carried("alpha"))
+
+    def test_an_install_with_no_agents_carries_none_and_still_succeeds(self):
+        # Nobody having added an agent is an answer, not a discovery that found nothing.
+        code, _, err = self.update(archive=self.an_archive(agent_steps={"0002_x": AN_AGENT_STEP}))
+        self.assertEqual(OK, code, err)
+
+    def test_an_agent_already_on_this_release_is_not_carried_again(self):
+        self.an_agent("alpha")
+        self.update(archive=self.an_archive(agent_steps={"0002_x": AN_AGENT_STEP}))
+        (paths.agents() / "alpha" / "carried").unlink()
+
+        self.update(published="v99.0.1",
+                    archive=self.an_archive(agent_steps={"0002_x": AN_AGENT_STEP}))
+
+        self.assertFalse(self.carried("alpha"), "the agent step ran a second time")
+
+    def test_an_update_that_found_nothing_newer_still_carries_the_agents(self):
+        """The half-updated install, one level down: files landed, agents never carried.
+
+        A machine that slept between the swap and the settle leaves this, and asking GitHub
+        afterwards answers UP TO DATE for ever. Unless being current also carries the agents, the
+        step the release shipped for them never runs and nothing ever says so.
+        """
+        self.an_agent("alpha")
+        support.a_real_tree(paths.app(), "after")
+        (paths.app() / "src" / "rundesk" / "agents" / "steps" / "0002_x.py").write_text(
+            AN_AGENT_STEP)
+
+        code, _, err = self.update(published=f"v{__version__}")
+
+        self.assertEqual(OK, code, err)
+        self.assertTrue(self.carried("alpha"),
+                        "an install left half-updated never carried its agents")
+
+
+class AFakeGateway:
+    """Standing a gateway down and starting it again — recorded rather than done.
+
+    Nothing here starts a launchd job or shells out to `launchctl`. What is under test is which
+    gateways an update decides to touch and in which order, and that is entirely a question about
+    the caller: the seam is a pair of calls, so a pair of lists is the whole of what has to be seen.
+
+    Which agents it refuses for is named on the way in, so a case about a gateway that will not stop
+    and a case about one that will not start again are the same object with a different argument.
+    """
+
+    def __init__(self, refusing_down=(), refusing_up=()):
+        self.went_down: List[str] = []
+        self.came_up: List[str] = []
+        self._refusing_down = set(refusing_down)
+        self._refusing_up = set(refusing_up)
+
+    def down(self, name: str) -> str:
+        if name in self._refusing_down:
+            return "it would not stop"
+        self.went_down.append(name)
+        return ""
+
+    def up(self, name: str) -> str:
+        if name in self._refusing_up:
+            return "it would not start"
+        self.came_up.append(name)
+        return ""
+
+
+class TheGatewaySeam(support.Isolated):
+    """Which gateways an update stands down before it carries, and which it starts again.
+
+    `carried_every_agent` by name rather than through the command, because the settling runs in an
+    interpreter of its own: a gateway held in this process is invisible to that one, and a seam
+    passed in from this process could never reach it. The command's own behaviour is proved by
+    `CarryingTheAgentsForward`; what is here is the decision.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.steps = self.home / "agent-steps"
+        self.steps.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(agent_migration.STEPS / "0001_the_records_an_agent_keeps.py", self.steps)
+        self.said: List[str] = []
+        stepping = mock.patch.object(agent_migration, "STEPS", self.steps)
+        stepping.start()
+        self.addCleanup(stepping.stop)
+
+    def an_agent(self, name: str) -> Path:
+        """A real agent, carried onto whatever steps stand in the scratch directory right now."""
+        return directory.made(name, "anthropic")
+
+    def a_step_waiting(self) -> None:
+        """One more step than every agent made so far has run."""
+        (self.steps / "0002_x.py").write_text(AN_AGENT_STEP, encoding="utf-8")
+
+    def a_gateway_for(self, name: str):
+        """A gateway holding this agent's name, claimed the way a real one claims it.
+
+        `standing.holding` and nothing else: the claim is the check, it is the kernel that answers,
+        and no launchd job is anywhere near it.
+        """
+        return standing.holding(directory.where(name))
+
+    def carrying(self, gateways=None) -> Dict[str, str]:
+        return the_update.carried_every_agent(self.said.append, gateways)
+
+    def carried(self, name: str) -> bool:
+        return (paths.agents() / name / "carried").exists()
+
+    def test_a_live_gateway_with_nothing_to_stand_it_down_stops_that_agent_being_carried(self):
+        # Carrying an agent while its gateway holds the records open is the `database is locked`
+        # failure. Named and refused rather than attempted, and never reported as carried.
+        self.an_agent("alpha")
+        self.a_step_waiting()
+
+        with self.a_gateway_for("alpha"):
+            gone_wrong = self.carrying()
+
+        self.assertIn("alpha", gone_wrong)
+        self.assertIn("a gateway is running for it", gone_wrong["alpha"])
+        self.assertFalse(self.carried("alpha"), "an agent was carried under a live gateway")
+
+    def test_an_agent_whose_gateway_is_down_is_carried_beside_one_whose_is_not(self):
+        self.an_agent("alpha")
+        self.an_agent("beta")
+        self.a_step_waiting()
+
+        with self.a_gateway_for("alpha"):
+            gone_wrong = self.carrying()
+
+        self.assertEqual(["alpha"], sorted(gone_wrong))
+        self.assertTrue(self.carried("beta"))
+
+    def test_exactly_the_gateways_that_were_up_are_stood_down_and_started_again(self):
+        self.an_agent("alpha")
+        self.an_agent("beta")
+        self.a_step_waiting()
+        gateways = AFakeGateway()
+
+        with self.a_gateway_for("alpha"):
+            gone_wrong = self.carrying(gateways)
+
+        self.assertEqual({}, gone_wrong)
+        self.assertEqual(["alpha"], gateways.went_down)
+        self.assertEqual(["alpha"], gateways.came_up,
+                         "a gateway that was already stopped was started by an update")
+        self.assertTrue(self.carried("alpha"))
+        self.assertTrue(self.carried("beta"))
+
+    def test_a_gateway_is_left_alone_when_that_agent_has_nothing_waiting(self):
+        # The ordinary install: every agent already on this release. Standing somebody's gateway
+        # down for an agent with nothing to carry is a cost paid for nothing, and refusing their
+        # update because one is running is a failure that did not happen.
+        self.an_agent("alpha")
+        gateways = AFakeGateway()
+
+        with self.a_gateway_for("alpha"):
+            gone_wrong = self.carrying(gateways)
+
+        self.assertEqual({}, gone_wrong)
+        self.assertEqual([], gateways.went_down)
+
+    def test_a_gateway_nobody_can_ask_about_is_not_read_as_one_that_is_not_running(self):
+        # Three answers, not two. Reporting an agent nobody can ask about as offline is how a carry
+        # happens under a live writer.
+        support.not_as_root(self)
+        self.an_agent("alpha")
+        self.a_step_waiting()
+        with self.a_gateway_for("alpha"):
+            pass
+        lock = directory.where("alpha") / standing.LOCK
+        lock.chmod(0o000)
+        self.addCleanup(lock.chmod, 0o600)
+
+        gone_wrong = self.carrying(AFakeGateway())
+
+        self.assertIn("alpha", gone_wrong)
+        self.assertIn("nobody can tell", gone_wrong["alpha"])
+        self.assertFalse(self.carried("alpha"))
+
+    def test_a_gateway_that_would_not_stand_down_stops_that_agent_being_carried(self):
+        self.an_agent("alpha")
+        self.a_step_waiting()
+        gateways = AFakeGateway(refusing_down=["alpha"])
+
+        with self.a_gateway_for("alpha"):
+            gone_wrong = self.carrying(gateways)
+
+        self.assertIn("would not stand down", gone_wrong["alpha"])
+        self.assertEqual([], gateways.came_up, "a gateway that never went down was started anyway")
+        self.assertFalse(self.carried("alpha"))
+
+    def test_a_gateway_that_was_stood_down_and_would_not_start_again_is_said_out_loud(self):
+        # A gateway that was up and is now down is not a detail for a summary: the machine is not as
+        # this update found it, and the update has to end non-zero saying so.
+        self.an_agent("alpha")
+        self.a_step_waiting()
+        gateways = AFakeGateway(refusing_up=["alpha"])
+
+        with self.a_gateway_for("alpha"):
+            gone_wrong = self.carrying(gateways)
+
+        self.assertIn("could not be started again", gone_wrong["alpha"])
+        self.assertTrue(self.carried("alpha"), "the agent was not carried after all")
+
+    def test_a_gateway_is_started_again_even_when_the_carry_failed(self):
+        # The `finally` this rests on. A carry that died must still leave the machine as it found it.
+        self.an_agent("alpha")
+        (self.steps / "0002_x.py").write_text(AN_AGENT_STEP_THAT_FAILS, encoding="utf-8")
+        gateways = AFakeGateway()
+
+        with self.a_gateway_for("alpha"):
+            gone_wrong = self.carrying(gateways)
+
+        self.assertIn("alpha", gone_wrong)
+        self.assertEqual(["alpha"], gateways.came_up,
+                         "a carry that failed left the gateway it stood down lying stopped")
+
+    def test_an_install_with_no_agents_touches_no_gateway_at_all(self):
+        gateways = AFakeGateway()
+        self.assertEqual({}, self.carrying(gateways))
+        self.assertEqual(([], []), (gateways.went_down, gateways.came_up))
+
+    def test_an_agent_whose_records_cannot_be_read_is_named_rather_than_passed_over(self):
+        at = self.an_agent("alpha")
+        (at / directory.RECORDS).write_bytes(b"this is not a database")
+
+        gone_wrong = self.carrying(AFakeGateway())
+
+        self.assertIn("alpha", gone_wrong)
 
 
 class StagingAndPuttingBack(support.Isolated):

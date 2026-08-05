@@ -13,16 +13,21 @@ what it does on the day something goes wrong.
 Run directly: `python3 tests/test_backups.py`
 """
 
+import contextlib
 import os
 import shutil
+import sqlite3
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
 import support
+from rundesk.agents import directory, records
+from rundesk.agents import migration as agent_migration
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
+from rundesk.gateways import standing
 from rundesk.lifecycle import backups
 from rundesk.utils import files
 
@@ -49,6 +54,28 @@ def carry(data):
 #: takes its clock as an argument for exactly this reason.
 A_MOMENT = datetime(2026, 8, 4, 3, 0, 0, tzinfo=timezone.utc)
 ITS_NAME = "2026-08-04T03-00-00Z"
+
+#: An agent step — two arguments rather than one, because an agent step is handed a connection and
+#: the agent's own directory so it can change tables and files together.
+AN_AGENT_STEP = '''
+from pathlib import Path
+
+def carry(conn, where):
+    conn.execute('CREATE TABLE IF NOT EXISTS carried (one TEXT) STRICT')
+    (Path(where) / "carried").write_text("the agent step ran")
+'''
+
+#: An agent step that cannot finish. Not `support.A_STEP_THAT_FAILS`, which is an *install* step and
+#: would fail here for having the wrong number of arguments rather than for the reason under test.
+AN_AGENT_STEP_THAT_FAILS = '''
+def carry(conn, where):
+    raise RuntimeError("this step could not finish")
+'''
+
+#: What the owner's name is set to through a live connection, so a case can tell a snapshot of a
+#: database apart from a copy of its bytes: this value is committed and left sitting in the
+#: write-ahead log, which `state.db` on its own does not hold.
+WRITTEN_LIVE = "written while a gateway held it"
 
 
 def unwritable(where: Path) -> None:
@@ -701,6 +728,241 @@ class SettlingWhatCameBack(Copies):
         with mock.patch.object(config, "read", side_effect=config.Stuck("something else has it")):
             why = backups._settle(self.data, self.steps, lambda _line: None)
         self.assertEqual("something else has it", why)
+
+
+class AnAgentInsideACopy(Copies):
+    """`data/` holds a live SQLite database per agent now, and neither half of this had a case.
+
+    Two things meet here and both were reachable from commands that already shipped. A copy is taken
+    while a gateway holds an agent's records open, which is the torn-snapshot problem with the
+    owner's *backup* as the thing that ends up torn. And a copy put back carries agents that predate
+    this release, which is the same reason `_settle` exists one level up: being back is not the same
+    as being settled.
+
+    Real agents, built through `directory.made`, and real gateways only through `standing.holding` —
+    no launchd job is placed and `launchctl` is never run.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.steps = self.home / "steps"
+        self.steps.mkdir(parents=True, exist_ok=True)
+        self.agent_steps = self.home / "agent-steps"
+        self.agent_steps.mkdir(parents=True, exist_ok=True)
+        # The real first step, because it is what makes a directory an agent at all. A stand-in for
+        # it would be a second description of an agent's records.
+        shutil.copy2(agent_migration.STEPS / "0001_the_records_an_agent_keeps.py", self.agent_steps)
+        stepping = mock.patch.object(agent_migration, "STEPS", self.agent_steps)
+        stepping.start()
+        self.addCleanup(stepping.stop)
+        self.said = []
+
+    def an_agent(self, name: str = "cole") -> Path:
+        """A real agent, made the way `agents add` makes one, on the steps standing right now."""
+        return directory.made(name, "anthropic")
+
+    def a_step_waiting(self, body: str = "") -> None:
+        """One step more than every agent made so far has run."""
+        (self.agent_steps / "0002_x.py").write_text(body or AN_AGENT_STEP, encoding="utf-8")
+
+    def in_the_copy(self, name: str, agent: str = "cole") -> Path:
+        return self.at / name / "agents" / agent / directory.RECORDS
+
+    @contextlib.contextmanager
+    def a_gateway_writing_to(self, name: str = "cole"):
+        """A gateway holding this agent, with a commit of its own sitting in the write-ahead log.
+
+        Both halves are the case. `standing.holding` is a real claim on the agent's name, taken the
+        way a gateway takes it and answered by the kernel. The open connection is what keeps the
+        commit from being checkpointed back into `state.db` — which is the state a copy of the
+        file's bytes cannot carry correctly, and the whole thing being proved.
+        """
+        with standing.holding(directory.where(name)):
+            with contextlib.closing(
+                    sqlite3.connect(str(directory.records(name)), isolation_level=None)) as live:
+                self.assertEqual(
+                    "wal", str(live.execute("PRAGMA journal_mode").fetchone()[0]).lower(),
+                    "these records are not in WAL, so this case is not testing what it says")
+                live.execute("UPDATE config SET owner_name = ? WHERE id = 1", (WRITTEN_LIVE,))
+                yield live
+
+    def test_a_copy_taken_while_a_gateway_holds_an_agent_is_made_rather_than_refused(self):
+        # Decided rather than defaulted: a backup somebody can only take with every gateway stopped
+        # is a backup nobody takes, and this layer may not reach across to `gateways` to ask anyway.
+        self.an_agent()
+        with self.a_gateway_writing_to():
+            name = backups.save(self.data, self.at, A_MOMENT, self.said.append)
+        self.assertEqual(ITS_NAME, name)
+
+    def test_the_records_in_that_copy_hold_what_was_only_in_the_write_ahead_log(self):
+        """The torn copy, in the two assertions that between them say it is not one.
+
+        The value was committed through a live connection and is sitting in the log rather than in
+        `state.db`; the log the copy carries is empty; and the copy reads that value back. A copy of
+        the file's bytes satisfies the third and fails the second — the log would come across with
+        frames in it, from an instant that is not the database's.
+        """
+        self.an_agent()
+        with self.a_gateway_writing_to():
+            name = backups.save(self.data, self.at, A_MOMENT, self.said.append)
+            # The premise, asserted rather than assumed: there really is a log to be torn from.
+            self.assertTrue(records.beside(directory.records("cole"))[1].exists(),
+                            "there is no write-ahead log, so nothing here is torn to begin with")
+
+        log = self.in_the_copy(name).with_name(directory.RECORDS + backups.WAL)
+        self.assertEqual(0, log.stat().st_size, "the copy carries a log with frames in it")
+        self.assertEqual(WRITTEN_LIVE, records.read(self.in_the_copy(name))["owner_name"])
+
+    def test_the_copy_keeps_the_log_and_never_the_shared_memory_index(self):
+        # An archived `-shm` is a stale claim about processes that stopped running long ago, and the
+        # log is kept only because a WAL database with neither sidecar cannot be opened read-only on
+        # the 3.9 floor — see `backups._an_empty_log`.
+        self.an_agent()
+        with self.a_gateway_writing_to():
+            name = backups.save(self.data, self.at, A_MOMENT, self.said.append)
+
+        left = sorted(one.name for one in (self.at / name / "agents" / "cole").iterdir())
+        self.assertIn(directory.RECORDS, left)
+        self.assertIn(f"{directory.RECORDS}{backups.WAL}", left)
+        self.assertNotIn(f"{directory.RECORDS}-shm", left)
+
+    def test_the_log_this_module_names_really_is_the_write_ahead_log(self):
+        # `backups.WAL` is the first of `records.SIBLINGS`, and a copy keeps that one and not the
+        # other. Reordering them there would silently make every copy carry the wrong file.
+        self.assertEqual(("-wal", "-shm"), records.SIBLINGS)
+        self.assertEqual("-wal", backups.WAL)
+
+    def test_a_copy_can_be_read_on_the_oldest_python_this_product_supports(self):
+        """The failure the 3.9 floor caught and a current interpreter cannot see.
+
+        SQLite 3.51.0, which the floor ships, will not open a WAL database read-only unless it can
+        reach the shared-memory index — and a read-only connection may not create one. SQLite 3.53.2
+        reads the same file without complaint. So a copy that was fine on the machine it was written
+        on was unreadable on the oldest one, and only running the suite on both said so.
+
+        This case is the floor's, and it passes on a current interpreter for free — which is the
+        point: it is here so the guarantee is stated where somebody reads it rather than living in a
+        version of Python that half the runs use.
+        """
+        self.an_agent()
+        name = backups.save(self.data, self.at, A_MOMENT, self.said.append)
+        self.assertEqual("cole", records.read(self.in_the_copy(name))["agent_name"])
+
+    def test_the_copy_leaves_nothing_staged_beside_the_records_it_replaced(self):
+        self.an_agent()
+        name = backups.save(self.data, self.at, A_MOMENT, self.said.append)
+        left = [one.name for one in (self.at / name / "agents" / "cole").iterdir()]
+        self.assertEqual([], [one for one in left if files.staged(one)])
+
+    def test_the_live_records_are_never_written_to_by_a_copy_being_taken(self):
+        # A backup that can write to what it is backing up is not a backup. Checkpointing the
+        # owner's database to make the copy easy is the tempting shortcut, and it is a write.
+        at = self.an_agent()
+        before = (at / directory.RECORDS).read_bytes()
+        with self.a_gateway_writing_to():
+            pass
+        was = (at / directory.RECORDS).read_bytes()
+        backups.save(self.data, self.at, A_MOMENT, self.said.append)
+        self.assertEqual(was, (at / directory.RECORDS).read_bytes())
+        self.assertNotEqual(b"", before)
+
+    def test_records_that_cannot_be_read_are_copied_as_they_stood_and_said_out_loud(self):
+        # An agent whose records are corrupt is still the owner's, and a copy is what somebody
+        # reaches for on the worst day they have had.
+        at = self.an_agent()
+        (at / directory.RECORDS).write_bytes(b"this is not a database")
+
+        name = backups.save(self.data, self.at, A_MOMENT, self.said.append)
+
+        self.assertEqual(b"this is not a database", self.in_the_copy(name).read_bytes())
+        self.assertTrue(any("copied as it stood" in one for one in self.said), self.said)
+
+    def test_a_restore_puts_back_records_that_can_still_be_read(self):
+        self.an_agent()
+        name = backups.save(self.data, self.at, A_MOMENT)
+        records.stated(directory.records("cole"), {"owner_name": "changed since"})
+
+        backups.restore(name, self.data, self.at, None, self.steps, self.said.append)
+
+        held = records.read(directory.records("cole"))
+        self.assertEqual("cole", held["agent_name"])
+        self.assertIsNone(held["owner_name"], "the copy put back was not the copy that was taken")
+
+    def test_what_came_back_passes_sqlite_s_own_integrity_check(self):
+        self.an_agent()
+        with self.a_gateway_writing_to():
+            name = backups.save(self.data, self.at, A_MOMENT)
+
+        backups.restore(name, self.data, self.at, None, self.steps, self.said.append)
+
+        with records.reading(directory.records("cole")) as conn:
+            self.assertEqual("ok", conn.execute("PRAGMA integrity_check").fetchone()[0])
+
+    def test_a_restore_carries_the_agents_it_put_back(self):
+        # The copy's agents ran the steps of the release that took it and nothing since. Being back
+        # is not the same as being settled, one level further down than `_settle` already reaches.
+        self.an_agent()
+        name = backups.save(self.data, self.at, A_MOMENT)
+        self.a_step_waiting()
+
+        done = backups.restore(name, self.data, self.at, None, self.steps, self.said.append)
+
+        self.assertIsNone(done.settled)
+        self.assertIn("0002_x", agent_migration.recorded(directory.records("cole")))
+        self.assertTrue((directory.where("cole") / "carried").exists(),
+                        "the step the restored agent never ran was never run")
+
+    def test_it_says_which_agent_it_is_carrying(self):
+        self.an_agent()
+        name = backups.save(self.data, self.at, A_MOMENT)
+        self.a_step_waiting()
+        backups.restore(name, self.data, self.at, None, self.steps, self.said.append)
+        self.assertTrue(any("carrying cole to 0002_x" in one for one in self.said), self.said)
+
+    def test_a_restored_agent_that_could_not_be_carried_is_not_reported_as_restored(self):
+        # `settled` being a reason rather than `None` is the case that matters: the data really is
+        # the copy that was asked for, and it has not been carried forward onto this release.
+        self.an_agent()
+        name = backups.save(self.data, self.at, A_MOMENT)
+        self.a_step_waiting(AN_AGENT_STEP_THAT_FAILS)
+
+        done = backups.restore(name, self.data, self.at, None, self.steps, self.said.append)
+
+        self.assertIsNotNone(done.settled)
+        self.assertIn("cole", done.settled)
+
+    def test_an_agent_already_on_this_release_has_nothing_run_over_it_again(self):
+        self.a_step_waiting()
+        self.an_agent()
+        # Taken away *before* the copy, so the file standing there afterwards can only have been
+        # written by the step running a second time — and never by the copy putting it back.
+        (directory.where("cole") / "carried").unlink()
+        name = backups.save(self.data, self.at, A_MOMENT)
+
+        backups.restore(name, self.data, self.at, None, self.steps, self.said.append)
+
+        self.assertFalse((directory.where("cole") / "carried").exists(),
+                         "a step the agent had already run was run a second time")
+
+    def test_a_restore_somewhere_else_never_carries_this_installs_agents(self):
+        """A restore handed a directory that is not this install's data reaches no agent at all.
+
+        `agents.directory` answers where an agent stands from the one root, and there is no way to
+        point it at a directory a caller handed in. So carrying regardless would run migration steps
+        against the **live install's** agents on the strength of somebody restoring somewhere else —
+        the defect this whole rebuild exists to have removed. Said out loud rather than skipped,
+        because a guarantee that silently never fires is the shape of every bug here.
+        """
+        self.an_agent()
+        name = backups.save(self.data, self.at, A_MOMENT)
+        self.a_step_waiting()
+
+        done = backups.restore(name, self.home / "elsewhere", self.at, None, self.steps,
+                               self.said.append)
+
+        self.assertIsNone(done.settled)
+        self.assertNotIn("0002_x", agent_migration.recorded(directory.records("cole")))
+        self.assertTrue(any("were not carried" in one for one in self.said), self.said)
 
 
 class MovingThemSomewhereElse(Copies):

@@ -20,6 +20,46 @@ A restore replaces everything the owner has accumulated, from a name they typed.
 of what is there **first**, before anything is replaced, and says what that copy is called. The
 restore is then a thing that can be undone, which a restore otherwise is not.
 
+## A copy taken while an agent is live is consistent, and never refused
+
+`data/` holds a SQLite database per agent now, and a gateway holds one of those open for days at a
+time. Copying a database's bytes while somebody is writing to it is the torn-snapshot problem, and
+here it is the **owner's backup** that is torn: `-wal` and `-shm` are copied at a different instant
+from the database they belong to, so a restore puts back a write-ahead log that may not match its
+database — which the next connection reads as that database's most recent truth.
+
+**Consistent, and not refused, and the reasoning is two things rather than a preference.**
+
+A backup somebody can only take with every gateway stopped is a backup nobody takes. That is the
+whole of the product argument, and it is decided the same way `uninstall` decides what it names: the
+operation has to work on an ordinary machine on an ordinary day.
+
+And **this layer structurally cannot ask whether a gateway is running.** `lifecycle` may reach down
+to `agents`, `core` and `utils`, and it may not reach across to `gateways` — checked by
+`tests/test_layers.py`, not merely written down. So "refuse while a gateway holds it" is not a
+policy that could be written here without inverting the tree, and a rule that would have to be
+broken to be obeyed is the wrong rule.
+
+SQLite documents the answer, and it is the one used: **the online backup API takes a consistent
+snapshot of a live database**, from a read-only connection, without writing a byte to the original.
+`docs/research/2026-07-26-sqlite-store-and-migrations.md` measured the surrounding behaviour on this
+platform — WAL is sticky, readers do not block writers, and the busy timeout is the binding's rather
+than anybody's decision — and the snapshot was measured here on both this project's 3.9 floor and a
+current interpreter.
+
+**The `-wal` and `-shm` are handled by name and never incidentally.** Both are removed from the copy
+— named through `agents.records.beside`, which exists so that nothing globs for them — because a
+sidecar copied at a different instant from its database is exactly the disagreement being removed.
+What a copy keeps beside the snapshot is a **write-ahead log holding nothing, written here rather
+than carried across**: measured, a WAL database standing alone with neither sidecar cannot be opened
+read-only by the SQLite the 3.9 floor ships, and would be unreadable on the oldest machine this
+product supports while looking perfectly fine on the newest. `_an_empty_log` has the measurement and
+the rest of the reasoning. The shared-memory index is never kept at all.
+
+**A database that cannot be read is copied as it stood, and said out loud.** An agent whose records
+are corrupt is still the owner's, and a backup is the thing they reach for on the worst day they
+have had — refusing to copy it, or dropping it, would be this command deciding what is worth keeping.
+
 ## What comes back may be older than this release
 
 Data that was copied three releases ago is data this release has never carried forward, so putting it
@@ -40,13 +80,17 @@ answering `<root>/backups`, so the copies can live anywhere without there being 
 look — which is the defect this whole rebuild exists to have removed.
 """
 
+import contextlib
 import os
 import re
 import shutil
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, ContextManager, List, NamedTuple, Optional
 
+from rundesk.agents import directory, records
+from rundesk.agents import migration as agent_migration
 from rundesk.core import config, paths
 from rundesk.lifecycle import migration
 from rundesk.utils import files, locking
@@ -61,6 +105,13 @@ WHEN = "%Y-%m-%dT%H-%M-%SZ"
 #: What counts as a copy. Nothing else in the directory is ever listed, moved, put back or removed —
 #: an owner may keep their own things in here and rundesk is not entitled to any of them.
 NAMED = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(-\d{2})?$")
+
+#: The write-ahead log, as `agents.records` names it — the first of the two files SQLite keeps
+#: beside a database, the other being the shared-memory index. Named here rather than reached for by
+#: position because a copy keeps one of them and never the other, and `tests/test_backups.py`
+#: asserts this really is the log so a reordering there goes red instead of silently swapping which
+#: file every copy carries.
+WAL = records.SIBLINGS[0]
 
 #: What the note in a copy has to be for the copy to be one: every install writes `config.json`, so a
 #: directory without a readable one is not a copy of an install's data whatever it is called.
@@ -195,11 +246,16 @@ def named(when: Optional[datetime] = None, backups: Optional[Path] = None) -> st
 
 
 def save(data: Optional[Path] = None, backups: Optional[Path] = None,
-         when: Optional[datetime] = None) -> str:
+         when: Optional[datetime] = None, saying: Optional[Callable[[str], None]] = None) -> str:
     """Copy what the owner keeps, and hand back what the copy is called.
 
     Staged under a name no copy has and renamed into place once all of it is there, so an
     interruption leaves litter rather than a copy that is not one.
+
+    **Every agent's records in the copy are a snapshot SQLite itself took**, not the bytes of a file
+    somebody may be writing to — see the module docstring on why this is consistent rather than
+    refused. `saying` is how a set of records that could not be read is named; without it the fact
+    is still true and nobody hears it, which is why every caller in this product passes one.
 
     Removes nothing. What is kept and what is let go is `prune`, asked for separately, because the
     caller that wants a copy and the caller that wants a tidy directory are not always the same one —
@@ -208,6 +264,7 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
     """
     from_where = data or paths.data()
     at = backups or paths.backups()
+    said = saying or (lambda _line: None)
     if not from_where.is_dir():
         raise Refused(f"there is nothing to copy: {from_where} is not there")
     # The one entry point this guard did not reach. `mkdir(exist_ok=True)` still raises on a broken
@@ -225,6 +282,10 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
         files.discard(pending)
         try:
             shutil.copytree(from_where, pending, symlinks=True)
+            # **Before the rename, so a copy is never named like one until every database in it is
+            # a snapshot.** After it, the window between a copy appearing under its own name and
+            # its records being made consistent is a window a restore can happen in.
+            _snapshotted(from_where, pending, said)
             os.rename(pending, at / name)
         except BaseException:
             # `BaseException`: a Ctrl-C, or a closed terminal turned into one, is not an
@@ -232,6 +293,110 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
             files.discard(pending)
             raise
     return name
+
+
+def _snapshotted(from_where: Path, pending: Path, said: Callable[[str], None]) -> None:
+    """Make every agent's records in this copy a snapshot of the live ones, rather than their bytes.
+
+    **Found by the one name records have**, `agents.directory.RECORDS`, and not by knowing where
+    agents stand. Nothing here has to be told that they live under `agents/`: a copy is a copy of
+    `data/`, whatever shape a migration step gives it, and a second answer to where an agent stands
+    is the kind of thing that goes stale in a release nobody connects it to.
+
+    **The walk does not follow links.** `rglob` never recurses through a symbolic link, which is
+    what keeps an agent directory replaced by a link to somebody's documents from having those
+    documents walked — the copy already carries it as a link, and `directory.where` refuses one on
+    the way in.
+    """
+    for copied in sorted(pending.rglob(directory.RECORDS)):
+        if copied.is_file() and not copied.is_symlink():
+            _a_snapshot(from_where / copied.relative_to(pending), copied, said)
+
+
+def _a_snapshot(live: Path, copied: Path, said: Callable[[str], None]) -> None:
+    """Replace one set of copied records with a snapshot SQLite took of the live ones.
+
+    **Read-only on the way in.** The source is opened through `agents.records.reading`, which asks
+    SQLite for `mode=ro` at connect time rather than intending not to write — a backup that can
+    write to what it is backing up is not a backup. Nothing here checkpoints the owner's database or
+    touches its write-ahead log, which is the tempting shortcut and would be a write.
+
+    **Staged beside the file it replaces and renamed into place**, so a snapshot that dies partway
+    leaves the byte copy standing rather than half a database wearing its name.
+
+    Then the `-wal` and `-shm` that came across with the byte copy are removed, **named through
+    `records.beside` rather than globbed**, because a sidecar copied at a different instant from the
+    database it belongs to is read by the next connection as that database's most recent truth. What
+    stands beside the snapshot afterwards is a log this function wrote and nothing that was carried
+    across — `_an_empty_log` says why there is one at all, and it is a measurement rather than a
+    preference.
+
+    A set of records that cannot be read is left exactly as it was copied, sidecars and all, and
+    said out loud. That is the honest shape: rundesk cannot say what is in them, they are still the
+    owner's, and a copy is what somebody reaches for on the worst day they have had.
+    """
+    staged = files.incoming_of(copied)
+    _litter(staged)
+    try:
+        with records.reading(live) as source:
+            with contextlib.closing(sqlite3.connect(str(staged))) as into:
+                source.backup(into)
+                in_wal = str(into.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal"
+    except (records.NotThere, records.Unreadable, sqlite3.Error, OSError) as why:
+        _litter(staged)
+        said(f"{live} was copied as it stood rather than as a snapshot: {why}")
+        return
+    for one in records.beside(copied):
+        if one != copied:
+            files.remove_one(one)
+    os.replace(staged, copied)
+    # Whatever the interpreter's SQLite left beside the staged name. Two of them differ about this:
+    # on the 3.9 floor a closed connection leaves both sidecars standing and on a current one it
+    # does not, so they are taken away rather than assumed gone.
+    _litter(staged)
+    if in_wal:
+        _an_empty_log(copied)
+
+
+def _an_empty_log(copied: Path) -> None:
+    """Put a write-ahead log holding nothing beside a snapshot that is kept in WAL.
+
+    **Measured, on the floor this project pins, and it is the reason this function exists at all.**
+    A database whose header says WAL, standing alone with neither sidecar, **cannot be opened
+    read-only** by the SQLite the 3.9 floor ships (3.51.0): the read needs the shared-memory index
+    and a read-only connection may not create one, so every such copy answered `unable to open
+    database file`. A current interpreter's SQLite (3.53.2) reads it perfectly well, which is the
+    worst possible way round — the copy looks fine on the machine it was written on and is
+    unreadable on the oldest one this product supports.
+
+    A zero-length log is the documented way out and was measured to work on both: it holds no
+    frames, so there is nothing in it that can disagree with the database beside it, and SQLite
+    reads the database itself. It is **created here rather than carried across** — the one a copy
+    was taken from belongs to a different instant, and this one is empty by construction.
+
+    The shared-memory index is deliberately never kept. It is what live processes coordinate
+    through, rebuilt from the log whenever it is wanted, and an archived one is a stale claim about
+    processes that stopped running long ago.
+
+    Keeping the mode rather than writing the copy out in the default rollback journal is the other
+    half. A copy is put back as an agent's whole records, and `records` asks for WAL **once, when a
+    database is made** — so a copy written in the default journal would restore an agent that had
+    quietly lost WAL for good, with nothing anywhere saying so.
+    """
+    with open(str(copied.with_name(copied.name + WAL)), "wb"):
+        pass
+
+
+def _litter(staged: Path) -> None:
+    """Let go of a staged snapshot and whatever SQLite left beside it.
+
+    Never raises: this is a name this function chose and nothing an owner keeps, and turning a copy
+    that worked into a reported failure over litter is the wrong answer. The copy's *own* sidecars
+    are a different question and go through `files.remove_one`, which does raise — a stale
+    write-ahead log that would not go is a copy that must not be named like a finished one.
+    """
+    for one in records.beside(staged):
+        files.discard(one)
 
 
 def prune(keeping: int, backups: Optional[Path] = None,
@@ -316,7 +481,7 @@ def _put_back_now(name: str, at: Path, into: Path, when: Optional[datetime],
                   steps: Optional[Path], said: Callable[[str], None]) -> Restored:
     """The restore itself, with the install already held. See `restore`."""
     a_copy = _a_copy(at, name)
-    safety = save(into, at, when) if into.is_dir() else None
+    safety = save(into, at, when, said) if into.is_dir() else None
     if safety:
         # Said **before** anything is replaced, not in a summary afterwards. Every failure from here
         # on is one where knowing this name is the way back, and a summary is exactly the thing that
@@ -568,10 +733,19 @@ def _put_back(aside: Path, into: Path) -> None:
 def _settle(into: Path, steps: Optional[Path], said: Callable[[str], None]) -> Optional[str]:
     """Carry what came back onto this release. `None` when it is settled, otherwise why it is not.
 
-    Two things, in this order: settings this release has added that the copy predates, and then the
-    migration steps the copy never ran. Filling in first because a step is entitled to read the
-    configuration, and a step written against a value this release introduced would otherwise find it
-    missing on exactly the installs the step exists for.
+    Three things, in this order: settings this release has added that the copy predates, then the
+    install's migration steps the copy never ran, and then **the agents inside the copy**. Filling in
+    first because a step is entitled to read the configuration, and a step written against a value
+    this release introduced would otherwise find it missing on exactly the installs the step exists
+    for. The install's steps before the agents' for the reason `update.settle` runs them in the same
+    order: an install step may reshape where an agent's things stand, and an agent step run before
+    that would be run against a layout this release has not finished making.
+
+    **Being back is not the same as being settled, and that is as true of an agent as of the install
+    around it.** The records in a copy taken three releases ago have run the steps of the release
+    that took it, and nothing since. Putting them back and reporting a restore would leave every one
+    of those agents on a layout this rundesk was never written against — the same defect this
+    function already exists to prevent one level up.
 
     **Both under one guard, not just the first.** Every write here goes through the configuration —
     including the stamp each migration step lands with — so `carry` can give the same two answers
@@ -583,9 +757,38 @@ def _settle(into: Path, steps: Optional[Path], said: Callable[[str], None]) -> O
     """
     try:
         config.fill_in(into)
-        return migration.carry(into, steps, said)
+        return migration.carry(into, steps, said) or _the_agents_carried(into, said)
     except (config.Unreadable, config.Refused, config.Stuck, ValueError) as why:
         return str(why)
+
+
+def _the_agents_carried(into: Path, said: Callable[[str], None]) -> Optional[str]:
+    """Carry the agents that came back onto this release. `None` when every one of them is on it.
+
+    **Only when the data being settled is this install's own, and that is a refusal rather than a
+    tidiness.** `agents.directory` answers where an agent stands from `paths.agents()`, which is
+    derived from the one root — there is no way to point it at a directory a caller handed in, and
+    there must not be a second one. So a `restore` given some other directory to work on would, if
+    this carried regardless, reach past what it was given and run migration steps against the
+    **live install's** agents on the strength of somebody restoring somewhere else. That is the
+    defect this whole rebuild exists to have removed, and it is said out loud rather than skipped
+    quietly: a guarantee that silently never fires is the shape of every bug this product is written
+    against.
+
+    One agent that cannot be carried does not stop the others — `carry_every`'s contract — and every
+    one that failed is named, because a summary counting them hides the one somebody has to look at.
+    """
+    if into.resolve() != paths.data().resolve():
+        said(f"the agents in {into} were not carried: {into} is not where this install keeps its "
+             "agents, and rundesk carries the agents of the install it was pointed at")
+        return None
+    try:
+        gone_wrong = agent_migration.carry_every(directory.known(), saying=said)
+    except OSError as why:
+        return f"the agents that came back could not be carried: {why}"
+    if not gone_wrong:
+        return None
+    return "; ".join(gone_wrong[name] for name in sorted(gone_wrong))
 
 
 def _inside(child: Path, parent: Path) -> bool:

@@ -35,12 +35,15 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Dict, List, Optional, Protocol, Tuple
 
 from rundesk import __version__
+from rundesk.agents import directory, records
+from rundesk.agents import migration as agent_migration
 from rundesk.commands import failed, the_reason
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
+from rundesk.gateways import standing
 from rundesk.lifecycle import backups, home, migration, release, tree
 from rundesk.utils import programs
 
@@ -54,6 +57,39 @@ FETCH_SECONDS = 60
 #: How long the newly installed release is given to settle the install. Generous: a migration step
 #: may legitimately move a lot of files.
 SETTLE_SECONDS = 300
+
+
+class Gateways(Protocol):
+    """Standing one agent's gateway down, and starting it again. One name in, `""` when it was done.
+
+    **A gateway holding an agent's records open while that agent is carried is the `database is
+    locked` failure**, and it is not a rare one: a gateway is meant to run for days, and a step that
+    changes a table needs the write lock the gateway's own reader is contending for. So a carry
+    stands the running gateways down first and starts again **exactly** the ones that were up — see
+    `carried_every_agent`, which records which those were before it touches anything.
+
+    **This seam is not wired, and nothing here pretends otherwise.** Stopping and starting a gateway
+    is `commands.gateways`, which does not exist yet — another change is writing it. This layer may
+    not import it before it is there, and inventing a private stop-and-start here would be a second
+    answer to the question that command exists to answer, wrong the day it landed. What is wired is
+    everything up to that call: which gateways are up is asked of `gateways.standing`, which is the
+    kernel's answer rather than something a process wrote down, and the ones that were up are
+    recorded so the restore can be exact.
+
+    Until it is passed in, an agent with a live gateway and a step waiting is **named and not
+    carried**, and the update ends non-zero saying so. That is the honest answer: carrying under a
+    live gateway risks the failure above, and reporting the agent carried when nothing ran is the
+    one thing this product refuses to do.
+
+    A sentence rather than an exception, for `carry_one`'s reason: the caller's job is to go on to
+    the next agent, and an exception is the shape that stops a loop.
+    """
+
+    def down(self, name: str) -> str:
+        """Stand this agent's gateway down. `""` when it is down, else why it is not."""
+
+    def up(self, name: str) -> str:
+        """Start this agent's gateway again. `""` when it is up, else why it is not."""
 
 
 def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = None,
@@ -137,13 +173,27 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
     return OK
 
 
-def settle() -> int:
-    """Make this install match the release now sitting in `app/`.
+def settle(gateways: Optional[Gateways] = None) -> int:
+    """Make this install match the release now sitting in `app/`, agents and all.
 
     Self-determining rather than told which case it is: an install with no configuration file has
     never been settled and has nothing to carry, and one with a configuration file is being moved
     forward. Deciding it here means the caller never has to be right about it, and running this by
     hand on an install that was interrupted is always safe.
+
+    **Two levels are settled here, and the second one had no caller at all.** The install's own
+    steps run first — one of them may reshape where agents stand, and an agent step run before that
+    would be run against a layout the release has not finished making. Then every agent this install
+    has is carried, because an install whose agents are still on the release before it is an install
+    that is not settled: `agents.migration.carry_every` existed, was tested, and was reached from
+    nothing, so an update printed success while every agent stayed exactly where it was.
+
+    **An agent that could not be carried makes this non-zero**, and that is the whole point of
+    wiring it. `rundesk update` is documented as idempotent and safe to run again, so a named
+    failure with a way out is worth more than a success nothing earned.
+
+    `gateways` is the seam for standing a gateway down and starting it again — see `Gateways`, and
+    read what it says about not being wired before assuming it is.
     """
     fresh = not config.where(paths.data()).exists()
     try:
@@ -163,6 +213,13 @@ def settle() -> int:
             gone_wrong = migration.carry(paths.data(), saying=_out_loud)
             if gone_wrong:
                 return _failed(f"{gone_wrong}{kept}")
+        # **After the install's own steps, and outside the fresh/carried branch.** A fresh install
+        # has no agents, so this costs it a listing that answers none — and an install whose
+        # `config.json` was lost reads as fresh while its agents are still standing there, which is
+        # exactly the case that must not skip them.
+        left = carried_every_agent(_out_loud, gateways)
+        if left:
+            return _failed(f"this install is carried and {_counted(left)} not: {_said(left)}")
     except (config.Unreadable, config.Stuck, migration.Broken, OSError) as why:
         # Every write below `settle` goes through the configuration, including the stamp each
         # migration step lands with, so all of these are caught in one place rather than at each
@@ -179,6 +236,131 @@ def settle() -> int:
         # message somebody was meant to read.
         return _failed(str(why))
     return OK
+
+
+def carried_every_agent(saying: Callable[[str], None],
+                        gateways: Optional[Gateways] = None) -> Dict[str, str]:
+    """Carry every agent this install has. Maps the ones that could not be carried to why.
+
+    **One that fails is named and the others still carry**, which is `carry_every`'s whole contract
+    and the reason the agent level is not the install level: twenty agents where the third has a
+    corrupt database is nineteen agents that are fine.
+
+    Three things happen in an order that is the guarantee:
+
+    1. **Which agents have a step waiting** is asked first, before any gateway is touched. An
+       install whose agents are all on this release is the ordinary case, and standing somebody's
+       gateway down — or refusing their update because one is up — for an agent with nothing waiting
+       would be a cost paid for nothing and a failure reported that did not happen.
+    2. **The gateways of exactly those agents are stood down**, and which ones were up is written
+       down before anything moves. See `Gateways` for what is and is not wired here.
+    3. **Every gateway that was stood down is started again**, in a `finally`, so a carry that
+       failed still leaves the machine as it found it. Never one that was already stopped: the list
+       started empty and only a gateway this call really stood down is ever added to it.
+
+    Being handed an install with no agents is not a discovery that found nothing — it is an install
+    nobody has added an agent to, which is ordinary and silent.
+    """
+    names = directory.known()
+    if not names:
+        return {}
+
+    waiting = [name for name in names if _has_a_step_waiting(name)]
+    gone_wrong, were_up = _gateways_stood_down(waiting, gateways, saying)
+    try:
+        gone_wrong.update(agent_migration.carry_every(
+            [name for name in names if name not in gone_wrong], saying=saying))
+    finally:
+        _gateways_started_again(were_up, gateways, gone_wrong, saying)
+    return gone_wrong
+
+
+def _has_a_step_waiting(name: str) -> bool:
+    """Whether this agent has a step that has not run. `True` when the question cannot be answered.
+
+    Asked so that an install whose agents are already on this release never has a gateway stood down
+    for it, and never fails an update because one is running.
+
+    **A question this cannot answer is answered `True` rather than skipped**, and the difference
+    matters: records that are unreadable, or carried further than this release ships, are things
+    `carry_every` names in its own words a moment later. Answering `False` here would be this
+    function quietly deciding an agent needed nothing on the strength of not being able to look.
+    """
+    try:
+        return bool(agent_migration.outstanding(
+            agent_migration.recorded(directory.records(name))))
+    except (agent_migration.Ahead, agent_migration.Backfilled, agent_migration.Broken,
+            records.NotThere, records.Unreadable, directory.Refused, OSError):
+        return True
+
+
+def _gateways_stood_down(waiting: List[str], gateways: Optional[Gateways],
+                         said: Callable[[str], None]) -> Tuple[Dict[str, str], List[str]]:
+    """Stand down the gateway of every agent that has a step waiting. Returns what failed, and which
+    gateways were really up.
+
+    **Three answers, not two**, because `standing` gives three. A gateway nobody can ask about is
+    not a gateway that is not running: carrying under one would be carrying under a live writer, and
+    "cannot tell" is the one state where standing it down and starting it again cannot be exact
+    either — there is nothing to be exact about. Named and left alone.
+    """
+    gone_wrong: Dict[str, str] = {}
+    were_up: List[str] = []
+    for name in waiting:
+        how = standing.standing(directory.where(name)).how
+        if how == standing.OFFLINE:
+            continue
+        if how == standing.CANNOT_TELL:
+            gone_wrong[name] = (
+                f"{name} was not carried: nobody can tell whether a gateway is running for it, and "
+                "unreadable is not a quiet form of offline")
+            continue
+        if gateways is None:
+            gone_wrong[name] = (
+                f"{name} was not carried: a gateway is running for it and this release has no way "
+                "to stand one down — stop it, and `rundesk update` again carries it")
+            continue
+        trouble = gateways.down(name)
+        if trouble:
+            gone_wrong[name] = f"{name} was not carried: its gateway would not stand down ({trouble})"
+            continue
+        were_up.append(name)
+        said(f"stood the gateway for {name} down")
+    return gone_wrong, were_up
+
+
+def _gateways_started_again(were_up: List[str], gateways: Optional[Gateways],
+                            gone_wrong: Dict[str, str], said: Callable[[str], None]) -> None:
+    """Start again exactly the gateways this call stood down, and say when one would not.
+
+    `gateways` cannot be `None` while `were_up` holds anything — the only way a name gets in there
+    is a `down` that answered — so the seam is never called on a run that had none to call it with.
+
+    A gateway that was up and is now down is not a detail to leave in a summary: it is added to what
+    went wrong, beside whatever the carry said, so the update ends non-zero and names both.
+    """
+    for name in were_up:
+        trouble = gateways.up(name) if gateways is not None else "there is nothing here to start one"
+        if trouble:
+            also = (f"the gateway for {name} was stood down and could not be started again "
+                    f"({trouble})")
+            gone_wrong[name] = f"{gone_wrong[name]} — and {also}" if name in gone_wrong else also
+            continue
+        said(f"started the gateway for {name} again")
+
+
+def _counted(gone_wrong: Dict[str, str]) -> str:
+    """How many agents were left behind, in words that read the same for one as for twenty."""
+    return "one of its agents is" if len(gone_wrong) == 1 else f"{len(gone_wrong)} of its agents are"
+
+
+def _said(gone_wrong: Dict[str, str]) -> str:
+    """Every agent that was left behind, each in its own sentence, in name order.
+
+    All of them rather than the first. A summary saying "3 failed" is the shape that hides the one
+    an owner has to look at, and each of these sentences already begins with the agent's own name.
+    """
+    return "; ".join(gone_wrong[name] for name in sorted(gone_wrong))
 
 
 def _kept_before_carrying() -> str:
