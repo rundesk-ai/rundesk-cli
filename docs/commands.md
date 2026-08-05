@@ -1,6 +1,6 @@
 # The command surface
 
-Seven operations, and every one of them works. There is no "coming soon" list: a verb rundesk cannot
+Eight operations, and every one of them works. There is no "coming soon" list: a verb rundesk cannot
 perform is a verb rundesk does not have.
 
 ```sh
@@ -11,6 +11,10 @@ rundesk backups                           # the copies of what rundesk keeps for
 rundesk backups save                      # copy what rundesk keeps, now
 rundesk backups restore <backup> --confirm        # put a copy back
 rundesk backups set-location <path>       # keep the copies in another directory
+rundesk env list                          # every value rundesk keeps, shown only as a hint
+rundesk env check <key>                   # whether one is set
+rundesk env set <key>                     # keep one — typed, never passed as an argument
+rundesk env unset <key>                   # empty one, leaving the name
 rundesk update                            # move to the newest release, or say it is up to date
 rundesk uninstall --confirm [--purge]     # remove rundesk; --purge also takes the data
 rundesk install [--source <dir>] [--bin-dir <dir>]   # what install.sh runs
@@ -177,6 +181,42 @@ Everything is copied to the new place **first**, and taken from the old one only
 confirmed to be there — so a move that dies partway is a tidying job and never a loss. Everything is
 carried, not only the copies: a move that left your own files behind in a directory it then replaced
 with a link would be a move it did not make.
+
+## env
+
+The values rundesk hands to what it talks to — a Discord bot's token, a Slack app's key. An owner
+places one once and everything rundesk starts finds it, with nobody having exported anything in a
+shell a gateway will never see.
+
+```console
+$ rundesk env set DISCORD_TOKEN
+DISCORD_TOKEN: 
+DISCORD_TOKEN is set — MTIxxxxxxxxken
+
+$ rundesk env list
+values in /Users/you/.rundesk/secrets
+NAME             IS
+DISCORD_TOKEN    MTIxxxxxxxxken
+SLACK_BOT_TOKEN  not set
+```
+
+**A value is never typed as an argument.** There is no `env set KEY value` and no flag that takes
+one: `argv` is in your shell's history the moment you press return, and visible in `ps` to every
+other user on the machine while the command runs. It is read from the terminal without echoing, or
+from a pipe when something else is driving — `printf %s "$TOKEN" | rundesk env set KEY` — so it
+never becomes a command that hangs in a script either.
+
+**Nothing ever shows a whole value**, to you or to anything else. What is shown is three characters
+at each end; a short value shows nothing at all, because six characters of eight is most of it, and
+the width between is fixed so the shape says nothing about the length.
+
+`check` exits non-zero when a value is not set, so `rundesk env check DISCORD_TOKEN && …` does the
+right thing in a shell. `unset` empties a name and **leaves the name**, so a listing shows an
+integration that was configured here and is now switched off, rather than one that was never set up.
+
+Where these are kept and what protects them is [`layout.md`](layout.md) — the short version is that
+a backup cannot contain one, the files are yours alone, and each value is sealed on disk with a key
+kept beside it.
 
 ## update
 

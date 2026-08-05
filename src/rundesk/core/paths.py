@@ -85,6 +85,21 @@ def backups() -> Path:
     return home() / "backups"
 
 
+def secrets() -> Path:
+    """Where values only this machine's owner may read are kept.
+
+    **Deliberately not below `data/`, and that is the whole of its security.** A copy is a copy of
+    `data/` and nothing else, so an install's backups are *structurally incapable* of holding a
+    credential rather than careful not to — there is no code path to get one wrong, because there
+    is no code that reaches here from there. The build this replaces made the same choice and said
+    so in the same words.
+
+    It follows that a credential is **not** carried by a restore either. That is the right way
+    round: a value somebody typed once is not state a copy should be able to put back.
+    """
+    return home() / "secrets"
+
+
 def projects() -> Path:
     """The shared directory work is checked out into. The owner's, never rundesk's to tidy."""
     return home() / "projects"

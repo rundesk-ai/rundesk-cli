@@ -38,6 +38,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
         ("program", _program()),
         ("data", _shown(paths.data())),
         ("backups", _backups()),
+        ("secrets", _shown(paths.secrets())),
         ("projects", _shown(paths.projects())),
         ("fit to run", "yes" if not unfit else f"no — {unfit}"),
     ]

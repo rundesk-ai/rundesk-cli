@@ -11,6 +11,7 @@ $RUNDESK_HOME/
   data/           everything you accumulate — agents, logs, skills, catalogs, configuration
   backups/        copies of data/
   projects/       the shared directory work is checked out into
+  secrets/        the values you place for what rundesk talks to
   .rundesk.lock   held while a command changes this install
 ```
 
@@ -20,6 +21,7 @@ $RUNDESK_HOME/
 | `data/` | never touched by an update; kept by an uninstall unless a purge asks for it |
 | `backups/` | survives removal, including a purge; may be a link to another disk |
 | `projects/` | yours, never rundesk's to tidy |
+| `secrets/` | **never copied by a backup**; taken only by a purge |
 | `.rundesk.lock` | rundesk's own; taken away by an uninstall |
 
 `.rundesk.lock` is the file one command at a time holds while it changes the install. It stands
@@ -60,6 +62,22 @@ And when that disk is not plugged in, it says so rather than reading as an insta
 ```
 backups  /Users/you/.rundesk/backups → /Volumes/Big/rundesk-backups — that directory is not there
 ```
+
+## Why the values you place are not below `data/`
+
+`rundesk env set` keeps a token where a backup cannot reach it, and that is the whole of its
+placement: **a copy is a copy of `data/` and nothing else**, so this install's backups are
+structurally incapable of holding a credential rather than careful not to. There is no code path
+from a copy to `secrets/`, so there is none to get wrong.
+
+It follows that a restore does not put a credential back either, which is the right way round: a
+value somebody typed once is not state a copy should be able to reinstate.
+
+The directory is `0700` and every file in it `0600`, repaired on each write. Each value is sealed
+with a key kept beside it — so nothing is readable text on the disk — and signed, so a value that
+was tampered with is refused rather than opened into nonsense. **The key sits beside the values
+because a gateway has to start at boot with nobody typing**, which is the honest limit of it:
+this stops a credential being readable text on a disk, not somebody with the owner's account.
 
 ## What a copy does not carry
 

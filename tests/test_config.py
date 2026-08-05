@@ -227,9 +227,9 @@ class SettingSeveralValuesAtOnce(support.Isolated):
         writes = []
         real = files.write_json
 
-        def counted(where, value):
+        def counted(where, value, private=False):
             writes.append(where)
-            return real(where, value)
+            return real(where, value, private)
 
         self.addCleanup(setattr, files, "write_json", real)
         files.write_json = counted

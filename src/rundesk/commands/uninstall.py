@@ -70,6 +70,17 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         else:
             kept.append(str(paths.data()))
 
+    if paths.secrets().exists():
+        if args.purge:
+            # A purge takes what the owner accumulated, and a credential left behind on a machine
+            # rundesk has been removed from is the worst thing here to leave lying about.
+            gone_wrong = _purge(paths.secrets())
+            if gone_wrong:
+                return _failed(gone_wrong)
+            taken.append(str(paths.secrets()))
+        else:
+            kept.append(f"{paths.secrets()} (the values you placed)")
+
     if paths.backups().exists():
         kept.append(f"{paths.backups()} (copies always survive removal)")
     if paths.projects().exists():
@@ -120,6 +131,9 @@ def _needs_confirming(root: Path, purging: bool) -> int:
         print(f"        take   {paths.data()} — everything rundesk kept for you", file=sys.stderr)
     else:
         print(f"        keep   {paths.data()}", file=sys.stderr)
+    if paths.secrets().exists():
+        print(f"        {'take  ' if purging else 'keep  '} {paths.secrets()} — the values you placed",
+              file=sys.stderr)
     print(f"        keep   {paths.backups()}", file=sys.stderr)
     print("        nothing was removed. To go ahead:", file=sys.stderr)
     print(f"        rundesk uninstall --confirm{' --purge' if purging else ''}", file=sys.stderr)

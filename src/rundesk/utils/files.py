@@ -104,11 +104,21 @@ def read_json(where: Path) -> Tuple[str, Any]:
         return UNREADABLE, None
 
 
-def write_json(where: Path, value: Any) -> None:
+#: What only the owner may read. Used for anything a credential can reach.
+ONLY_MINE = 0o600
+
+
+def write_json(where: Path, value: Any, private: bool = False) -> None:
     """Write a JSON value whole, and rename it into place.
 
     The temporary file is made beside the target rather than in a temp directory, because
     `os.replace` is only atomic within one filesystem.
+
+    **`private` opens the staging file at `0600` before a byte is written**, rather than writing it
+    and tightening it afterwards. The difference is a window: created at the umask, the file is
+    world-readable for as long as the write takes, and the value is already in it. `os.replace`
+    carries the mode across, so the file that lands is private too. A caller holding anything a
+    credential can reach passes `private=True`; nothing else needs to think about it.
     """
     where.parent.mkdir(parents=True, exist_ok=True)
     beside = where.with_name(INCOMING.format(name=where.name))
@@ -117,7 +127,9 @@ def write_json(where: Path, value: Any) -> None:
     # truncate it anyway, "the next write tidies it" is a thing to have decided rather than to have
     # happened to be true.
     discard(beside)
-    with open(beside, "w", encoding="utf-8") as writing:
+    opened = (os.open(beside, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, ONLY_MINE)
+              if private else beside)
+    with open(opened, "w", encoding="utf-8") as writing:
         json.dump(value, writing, indent=2, sort_keys=True)
         writing.write("\n")
         writing.flush()
@@ -127,7 +139,7 @@ def write_json(where: Path, value: Any) -> None:
 
 
 @contextlib.contextmanager
-def changing_json(where: Path, empty: Any) -> Iterator[list]:
+def changing_json(where: Path, empty: Any, private: bool = False) -> Iterator[list]:
     """Hold the read, the decision and the write under one lock.
 
     Yields a one-item list holding the current value; replace `held[0]` and it is written on the way
@@ -149,7 +161,7 @@ def changing_json(where: Path, empty: Any) -> Iterator[list]:
             raise Unreadable(f"{where} is there and cannot be read — refusing to write over it")
         held = [empty if how == MISSING else value]
         yield held
-        write_json(where, held[0])
+        write_json(where, held[0], private)
 
 
 def _settle(directory: Path) -> None:

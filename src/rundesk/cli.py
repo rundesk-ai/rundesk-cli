@@ -20,6 +20,8 @@ from rundesk.commands.backups import cmd_backups
 from rundesk.commands.backups import register as register_backups
 from rundesk.commands.configure import cmd_configure
 from rundesk.commands.configure import register as register_configure
+from rundesk.commands.env import cmd_env
+from rundesk.commands.env import register as register_env
 from rundesk.commands.install import cmd_install
 from rundesk.commands.status import cmd_status
 from rundesk.commands.uninstall import cmd_uninstall
@@ -34,6 +36,7 @@ examples:
   rundesk configure             what this install is configured with
   rundesk backups               the copies of what rundesk keeps for you
   rundesk backups save          copy what rundesk keeps, now
+  rundesk env list              the values rundesk hands to what it talks to
   rundesk version               what version this is, and whether it is out of date
   rundesk update                move to the newest published release
   rundesk uninstall --confirm   remove rundesk, keeping what it kept for you
@@ -61,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     _register_version(sub)
     register_configure(sub)
     register_backups(sub)
+    register_env(sub)
     _register_install(sub)
     _register_update(sub)
     _register_uninstall(sub)
@@ -120,6 +124,8 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
         return cmd_configure(args)
     if args.command == "backups":
         return cmd_backups(args)
+    if args.command == "env":
+        return cmd_env(args)
     if args.command == "version":
         return cmd_version(args, asking)
     if args.command == "install":

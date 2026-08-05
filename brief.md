@@ -1,11 +1,5 @@
 ```bash
 
-# managing the agents 
-rundesk agents list
-rundesk agents add <agent> --provider <provider>
-rundesk agents <agent> configure --provider <provider>
-rundesk agents <agent> remove
-
 # rundesk ask <agent> <prompt>
 rundesk messages <agent> [--adapter <adapter>] [--limit <n>] [--search <query>]
 
@@ -32,18 +26,37 @@ rundesk channels <agent> update <adapter> [--owner <user>] [--allow <user>]
 rundesk channels <agent> show <adapter>
 rundesk channels <agent> remove <adapter>
 
-# managing the env
-rundesk env list
-rundesk env check <key>
-rundesk env set <key>
-rundesk env unset <key>
-
 # managing the gateways
 rundesk gateways
 rundesk gateways start <agent>
 rundesk gateways stop <agent> [--all]
 rundesk gateways restart <agent> [--all] [--force]
 rundesk gateways logs <agent> [-n <lines>]
+
+
+# MANAGING THE AGENTS
+# --------------------------------------------
+# listing all the agents alpha by their name
+rundesk agents list
+# adding a new agent with the specified provider
+rundesk agents add <agent> --provider <provider>
+# configuring an existing agent with the specified provider
+rundesk agents <agent> configure --provider <provider>
+# removing an agent
+rundesk agents <agent> remove
+
+# MANAGING THE ENV
+# --------------------------------------------
+# displays a list of all the env variables (does not show full values, just first 3 characters and last 3 with x's between)
+# the list should show in table format and grouped by their name (alpha)
+rundesk env list
+# checks if env variable is set
+rundesk env check <key>
+# sets an env variable, requires it to be inputted interactively
+# values are encrypted with a salt hash preventing plain text values
+rundesk env set <key>
+# unsets an env variable to null
+rundesk env unset <key>
 
 # MANAGING BACKUPS
 # --------------------------------------------
