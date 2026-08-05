@@ -26,13 +26,23 @@ rundesk channels <agent> update <adapter> [--owner <user>] [--allow <user>]
 rundesk channels <agent> show <adapter>
 rundesk channels <agent> remove <adapter>
 
-# managing the gateways
+# MANAGING THE GATEWAYS
+# --------------------------------------------
+# displays a list of all the gateways, their status of online/offline
 rundesk gateways
+# start a gateway that is offline
+# returns error if gateway is already online
 rundesk gateways start <agent>
+# stop a gateway that is online
+# returns error if gateway is already offline
 rundesk gateways stop <agent> [--all]
+# restart a gateway that is online or offline
+# returns error if gateway is already offline
+# all does all gateways at once 
+# force restarts the gateway without waiting for it to turn off
 rundesk gateways restart <agent> [--all] [--force]
+# view the logs of that specific gateway (from newest to oldest)
 rundesk gateways logs <agent> [-n <lines>]
-
 
 # MANAGING THE AGENTS
 # --------------------------------------------
@@ -41,9 +51,9 @@ rundesk agents list
 # adding a new agent with the specified provider
 rundesk agents add <agent> --provider <provider>
 # configuring an existing agent with the specified provider
-rundesk agents <agent> configure --provider <provider>
+rundesk agents configure <agent> --provider <provider>
 # removing an agent
-rundesk agents <agent> remove
+rundesk agents remove <agent>
 
 # MANAGING THE ENV
 # --------------------------------------------
@@ -66,7 +76,7 @@ rundesk backups
 rundesk backups save
 # restores the data from a given back up and it must have a hook that runs after
 # the hook later will be used for things like running migrations if the data is older. 
-rundesk backups restore <backup>
+rundesk backups restore <backup> [--confirm]
 # moves the backups to a new location and symlinks it back to the original location
 rundesk backups set-location <path>
 
