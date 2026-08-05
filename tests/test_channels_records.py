@@ -8,10 +8,11 @@ go in through `records.writing` — which is the point: these guarantees have to
 writes them, including a later caller who has not read the step. A rule that only holds while every
 caller remembers it is a rule that lasts until the second caller.
 
-The two worth naming: **an empty allow list authorises nobody**, never everybody — a gateway
+Three are worth naming. **An empty allow list authorises nobody**, never everybody — a gateway
 elsewhere shipped a default-allow fallback for an empty recipient set and sent approval prompts to
-every client connected to it. And **at most one channel is the notified one**, because unprompted
-things need exactly one place to go and two claims is a state with no meaning.
+every client connected to it. **At most one channel is the notified one**, because unprompted things
+need exactly one place to go. And **a channel is a connection rather than a place**, so one platform
+is one row: there is no name to invent and no room to configure.
 
 Run directly: `python3 tests/test_channels_records.py`
 """
@@ -34,15 +35,15 @@ class Channels(support.Isolated):
     def at(self):
         return directory.records(self.agent)
 
-    def add(self, name="dm", place="1180", notified=0, allowed='["2207"]', place_kind="dm"):
+    def add(self, kind="discord", notified=0, notify_place="1180", allowed='["2207"]'):
         """One channel row, written through nothing, so the table is what refuses it."""
         with records.writing(self.at()) as conn:
             conn.execute(
-                "INSERT INTO channels (name, kind, place_id, place_kind, describes, notified,"
-                " allowed, created_at) VALUES (?, 'discord', ?, ?, 'somewhere', ?, ?, '2026-08-05')",
-                (name, place, place_kind, notified, allowed))
+                "INSERT INTO channels (kind, describes, notified, notify_place, allowed,"
+                " created_at) VALUES (?, 'somewhere', ?, ?, ?, '2026-08-05')",
+                (kind, notified, notify_place, allowed))
 
-    def conversation(self, source="channel", source_id="1180", channel="dm"):
+    def conversation(self, source="channel", source_id="1180", channel="discord"):
         with records.writing(self.at()) as conn:
             conn.execute(
                 "INSERT INTO conversations (source, source_id, channel, created_at)"
@@ -84,56 +85,60 @@ class WhoMayReachTheAgent(Channels):
         self.assertEqual(0, self.counted("channels"))
 
     def test_more_than_one_id_may_reach_one_channel(self):
+        # One list governs a private message and a room alike, because a channel is a connection
+        # rather than a place — so several ids is the ordinary case and not a special one.
         self.add(allowed='["2207", "4418", "9930"]')
         with records.reading(self.at()) as conn:
             self.assertEqual('["2207", "4418", "9930"]',
                              conn.execute("SELECT allowed FROM channels").fetchone()[0])
 
 
+class OneConnectionPerPlatform(Channels):
+    """A channel is its platform. There is no name to invent and no second one to add."""
+
+    def test_a_platform_cannot_be_connected_twice(self):
+        self.add("discord")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.add("discord")
+        self.assertEqual(1, self.counted("channels"))
+
+    def test_two_platforms_are_two_channels(self):
+        self.add("discord")
+        self.add("slack")
+        self.assertEqual(2, self.counted("channels"))
+
+
 class WhichOneIsTold(Channels):
 
     def test_two_channels_cannot_both_be_the_notified_one(self):
-        self.add("dm", place="1180", notified=1)
+        self.add("discord", notified=1)
         with self.assertRaises(sqlite3.IntegrityError):
-            self.add("ops", place="9930", notified=1)
+            self.add("slack", notified=1)
         self.assertEqual(1, self.counted("channels"))
 
     def test_any_number_of_channels_may_be_told_nothing(self):
-        self.add("dm", place="1180")
-        self.add("ops", place="9930")
-        self.add("alerts", place="4418")
+        self.add("discord")
+        self.add("slack")
+        self.add("email")
         self.assertEqual(3, self.counted("channels"))
 
     def test_no_channel_being_told_is_a_state_the_records_allow(self):
-        self.add("ops", place="9930")
+        self.add("discord")
         with records.reading(self.at()) as conn:
             self.assertIsNone(
                 conn.execute("SELECT id FROM channels WHERE notified = 1").fetchone())
 
-
-class WhatAChannelReaches(Channels):
-
-    def test_two_channels_cannot_name_the_same_place(self):
-        self.add("dm", place="1180")
+    def test_the_notified_channel_must_say_where_that_lands(self):
+        # A gateway that has just come up is answering nobody, so there is no conversation to reply
+        # into. Left nullable, this row would be found broken at the moment it was needed — which
+        # for a gateway notice is the moment somebody's agent has stopped.
         with self.assertRaises(sqlite3.IntegrityError):
-            self.add("again", place="1180")
+            self.add("discord", notified=1, notify_place=None)
+        self.assertEqual(0, self.counted("channels"))
 
-    def test_the_same_place_id_on_another_platform_is_a_different_place(self):
-        self.add("dm", place="1180")
-        with records.writing(self.at()) as conn:
-            conn.execute(
-                "INSERT INTO channels (name, kind, place_id, place_kind, describes, allowed,"
-                " created_at) VALUES ('slack-dm', 'slack', '1180', 'dm', 'x', '[\"u\"]', 'now')")
-        self.assertEqual(2, self.counted("channels"))
-
-    def test_a_place_is_a_direct_message_or_a_room_and_nothing_else(self):
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.add(place_kind="group")
-
-    def test_two_channels_cannot_share_a_name(self):
-        self.add("dm", place="1180")
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.add("dm", place="9930")
+    def test_a_channel_nobody_is_told_through_needs_no_such_place(self):
+        self.add("discord", notified=0, notify_place=None)
+        self.assertEqual(1, self.counted("channels"))
 
 
 class WhatCameOfIt(Channels):
@@ -143,6 +148,13 @@ class WhatCameOfIt(Channels):
         with self.assertRaises(sqlite3.IntegrityError):
             self.conversation(source_id="1180")
         self.assertEqual(1, self.counted("conversations"))
+
+    def test_a_room_and_a_private_message_are_two_conversations_on_one_channel(self):
+        # The place is a fact about the exchange, never about the connection: rooms are discovered
+        # when somebody speaks in one, and nothing had to be configured for this to be two.
+        self.conversation(source_id="1180", channel="discord")
+        self.conversation(source_id="9930", channel="discord")
+        self.assertEqual(2, self.counted("conversations"))
 
     def test_the_same_id_from_a_different_kind_of_source_is_a_different_conversation(self):
         self.conversation(source="channel", source_id="1180")
@@ -173,12 +185,12 @@ class WhatCameOfIt(Channels):
     def test_which_channel_an_exchange_arrived_through_outlives_that_channel(self):
         # Deliberately not a foreign key. Where something came from is a fact about the past, and a
         # constraint that tidied it away on removal would lose history to stay consistent.
-        self.add("ops", place="9930")
-        self.conversation(channel="ops")
+        self.add("discord")
+        self.conversation(channel="discord")
         with records.writing(self.at()) as conn:
-            conn.execute("DELETE FROM channels WHERE name = 'ops'")
+            conn.execute("DELETE FROM channels WHERE kind = 'discord'")
         with records.reading(self.at()) as conn:
-            self.assertEqual("ops",
+            self.assertEqual("discord",
                              conn.execute("SELECT channel FROM conversations").fetchone()[0])
 
 

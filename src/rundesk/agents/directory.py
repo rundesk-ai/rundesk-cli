@@ -67,16 +67,27 @@ GATEWAY_RECORD = "gateway.json"
 #: and no list anywhere has to say so.
 SCHEDULES = "schedules"
 
-#: What each configured channel keeps, **one directory per channel**: the lock its adapter holds,
-#: what started it, what it wrote to standard error, the files that arrived through it, and a home
-#: the adapter itself may keep things in between restarts.
+#: What each configured channel keeps, one directory per channel:
 #:
-#: A directory of its own for the reason `SCHEDULES` gives — a channel's name is the owner's, so
-#: `dm.lock` at the top of the agent's directory would make every fixed name a name no channel may
-#: have. And a directory *per channel*, rather than the three suffixed names a firing keeps beside
-#: each other, because a channel needs somewhere for what arrives whatever else it needs: with one
-#: directory each, the next thing a channel has to keep is a name inside it instead of another
-#: suffix that no channel may then be called.
+#:     channels/discord/lock                   the claim, held by the adapter for as long as it runs
+#:     channels/discord/record.json            the pid, so a gateway can stop one it did not start
+#:     channels/discord/stderr.log             what the adapter could not say in words; rotated
+#:     channels/discord/in/<day>/<message>/    what arrived, swept by day
+#:
+#: **A channel is named for its adapter until there are two of them.** Adding Discord gives a channel
+#: called `discord`; a second place on the same platform is the only thing that needs a name of the
+#: owner's, because a private message and a room full of people carry different lists of who may
+#: reach the agent and are therefore two channels rather than one that branches.
+#:
+#: **Three of those four are what a firing already keeps** — a lock, a record beside it, and the
+#: output nothing else captures — so this is the existing shape rather than a new one. The fourth is
+#: the reason a channel gets a directory where a firing gets three suffixed names: what arrives has
+#: to land somewhere, and once there is a directory anyway, the next thing a channel needs is a name
+#: inside it rather than another suffix that no channel may then be called.
+#:
+#: A directory under `channels/` rather than at the top of the agent's, for the reason `SCHEDULES`
+#: gives: a channel's name is the owner's, and `dm.lock` beside `gateway.lock` would make every
+#: fixed name a name no channel may have.
 CHANNELS = "channels"
 
 #: The note the install writes into `data/agents/`, and therefore a name no agent may have.

@@ -67,7 +67,7 @@ A_STEP_THAT_WRITES_INTO_CHANNELS = '''
 from pathlib import Path
 
 def carry(conn, where):
-    at = Path(where) / "channels" / "dm"
+    at = Path(where) / "channels" / "discord"
     at.mkdir(parents=True, exist_ok=True)
     (at / "lock").write_text("")
 '''
@@ -656,7 +656,7 @@ class WhatARollbackCovers(Steps):
         self.given("0003_channelling", A_STEP_THAT_WRITES_INTO_CHANNELS)
         self.given("0004_broken", A_STEP_THAT_FAILS)
         migration.carry_one("cole", self.steps)
-        self.assertTrue((directory.channels("cole") / "dm" / "lock").is_file(),
+        self.assertTrue((directory.channels("cole") / "discord" / "lock").is_file(),
                         "what a channel keeps was rolled back along with the step that failed")
 
     def test_the_records_go_back_before_the_files_do(self):
