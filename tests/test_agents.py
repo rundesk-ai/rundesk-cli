@@ -407,6 +407,34 @@ class TakingAnAgentAway(Agents):
         self.assertIn(directory.home("cole"), gone)
         self.assertTrue((theirs / "keep.txt").is_file(), "the link was followed and its target emptied")
 
+    def test_an_agent_whose_own_directory_is_a_link_is_refused_before_anything_is_removed(self):
+        # Measured, not imagined: with the agent's directory replaced by a link, `forgotten` removed
+        # the target's `home/` and `logs/`. Every individual removal was correct and every one
+        # refused to follow a link — and the whole thing still reached a directory that had nothing
+        # to do with rundesk, because by the time a path is derived it is already outside. Which is
+        # why the guard is on the way in, and why checking the *name* was never enough.
+        theirs = self.home / "somebody-elses"
+        (theirs / "home").mkdir(parents=True)
+        (theirs / "home" / "keep.txt").write_text("keep", encoding="utf-8")
+        shutil.rmtree(directory.where("cole"))
+        (paths.agents() / "cole").symlink_to(theirs)
+
+        with self.assertRaises(directory.Refused) as refused:
+            directory.forgotten("cole")
+
+        self.assertIn("does not stand where agents are kept", str(refused.exception))
+        self.assertTrue((theirs / "home" / "keep.txt").is_file(),
+                        "the link was followed and a directory outside the install was emptied")
+
+    def test_a_linked_directory_is_not_offered_as_an_agent_either(self):
+        # The other half: refusing to remove it is no good if it is listed, because the person is
+        # then shown an agent every verb will refuse.
+        theirs = self.home / "somebody-elses"
+        theirs.mkdir()
+        (theirs / directory.RECORDS).write_text("", encoding="utf-8")
+        (paths.agents() / "linked").symlink_to(theirs)
+        self.assertEqual(["cole", "nina"], directory.known())
+
     def test_an_agent_that_is_not_there_is_a_failure_and_not_a_quiet_success(self):
         # A removal that did not happen is never reported as one.
         with self.assertRaises(directory.Refused):

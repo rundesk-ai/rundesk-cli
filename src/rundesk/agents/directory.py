@@ -85,8 +85,31 @@ class Refused(Exception):
 
 
 def where(name: str) -> Path:
-    """This agent's own directory: everything it is, in one place."""
-    return paths.agents() / name
+    """This agent's own directory: everything it is, in one place.
+
+    **Refused when the name reaches somewhere else.** Checking the name is not enough, and this was
+    measured rather than reasoned about: with `data/agents/cole` replaced by a symbolic link to
+    another directory, `forgotten("cole")` removed that directory's `home/` and `logs/` — every
+    individual removal below was correct, every one refused to follow a link, and the whole thing
+    still reached a directory that had nothing to do with rundesk. The guard has to be here, on the
+    way *in*, because by the time a path has been derived it is already outside.
+
+    So the resolved directory has to stand directly under the resolved agents directory. Resolved on
+    both sides: `data/agents` may itself be reached through a link — `/tmp` is `/private/tmp` on this
+    platform — and comparing what was typed would refuse an ordinary install.
+
+    A name nothing stands under yet resolves to itself, so making an agent passes and creating one
+    over a link does not.
+
+    The build this replaces had the same check and said the same thing about it: a name that does not
+    stand where agents are kept is not that agent's name, whatever it looks like.
+    """
+    at = paths.agents() / name
+    stands = at.resolve()
+    if stands.parent != paths.agents().resolve():
+        raise Refused(
+            f"{name} does not stand where agents are kept — it reaches {stands}")
+    return at
 
 
 def records(name: str) -> Path:
@@ -162,7 +185,9 @@ def known() -> List[str]:
     if not at.is_dir():
         return []
     return sorted(one.name for one in at.iterdir()
-                  if not files.staged(one.name) and (one / RECORDS).is_file())
+                  if not files.staged(one.name)
+                  and not one.is_symlink()
+                  and (one / RECORDS).is_file())
 
 
 def taken(name: str) -> str:
