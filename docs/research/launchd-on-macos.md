@@ -92,7 +92,35 @@ to the text** — it is the same number and it does not get reworded.
 
 ## 3. Idempotency, and the race this build already hit once
 
-**`bootout` is asynchronous.** `launchctl help bootout` on this machine `[MAN]`:
+**`bootout` is asynchronous, and this was observed directly** `[RAN]`. Taking down a real running
+gateway (`ExitTimeOut = 25`) on 2026-08-04:
+
+```
+$ launchctl bootout gui/501/<label>      -> rc=0
+$ launchctl print   gui/501/<label>      -> rc=0        still registered
+$ ps -p <pid>                            -> STILL ALIVE
+```
+
+**`bootout` reported success while the label was still registered and the process still running.**
+A build that treated rc 0 as "it is gone" and bootstrapped next would have hit exactly the recorded
+I/O error. Polling `print` then showed the label released a moment later, once SIGTERM had landed:
+
+```
+$ launchctl print gui/501/<label>        -> rc=113      gone
+$ ps -p <pid>                            -> gone
+```
+
+**And `bootout` on a label that was never loaded** `[RAN]` — previously `[RECALL]`:
+
+```
+$ launchctl bootout gui/501/<never-loaded-label>
+Boot-out failed: 3: No such process       -> rc=3
+```
+
+So **0, 3 and 113 all mean "it is not there any more"** and an uninstall treats all three as success.
+What an uninstall must *not* do is treat rc 0 as "the process has stopped".
+
+`launchctl help bootout` on this machine `[MAN]`:
 
 > `--wait` — Waits for bootout to complete before returning. Only applicable to a single service
 > target. (WARNING: this may block indefinitely).
@@ -144,6 +172,20 @@ $ plutil -p /var/db/com.apple.xpc.launchd/disabled.501.plist
 
 **A previous rundesk install wrote that record and uninstalling did not clear it.** So a stale
 `disable` from an install that is long gone can silently poison a future one that reuses the label.
+
+**Measured a second time, deliberately** `[RAN]`. On 2026-08-04 the machine's Hermes agents were
+removed: both jobs booted out, and both plists deleted from `~/Library/LaunchAgents`. Afterwards:
+
+```
+$ launchctl print-disabled gui/501 | grep hermes
+		"ai.hermes.daily-backup" => enabled
+```
+
+The plist is gone from the disk and the record is still there. **Removing a plist does not remove
+the label from launchd's override store, and nothing on the command line does** — there is an
+`enable` and a `disable` verb, and no verb that deletes an entry. The best an uninstall can do is
+leave it `enabled`, which is inert; what it must never do is leave it `disabled`, because that is a
+decision the next install inherits from an install nobody remembers.
 
 > **Two design rules from this.** Install **unconditionally `enable`s the label before
 > bootstrapping** — it is cheap, and it is the only defence against an override nobody remembers.
