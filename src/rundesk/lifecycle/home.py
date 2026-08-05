@@ -58,9 +58,24 @@ and never tidied. It is not backed up either: what is in here is expected to be 
 something that lives somewhere else.
 """
 
+AGENTS_NOTE = """# agents/
+
+One directory per agent, named as that agent is.
+
+Each holds `state.db` — everything that agent has ever kept — a `home/` it starts in and reads from,
+and `logs/`, where its gateway says what it has been doing.
+
+**If you are an agent, the one named after you is yours.** Every other directory here is another
+agent's whole memory, and nothing rundesk does gives one agent a reason to read another's.
+
+Made by the install rather than by the command that adds the first agent, so a fresh machine has the
+shape from the first moment. An empty one means nobody has added an agent yet.
+"""
+
 #: Which note stands in which directory. The one list, read by both the making and the checking.
 NOTES: Dict[str, str] = {
     "data": DATA_NOTE,
+    "agents": AGENTS_NOTE,
     "backups": BACKUPS_NOTE,
     "projects": PROJECTS_NOTE,
 }
@@ -71,9 +86,16 @@ def directories(root: Optional[Path] = None) -> Dict[str, Path]:
 
     `app/` is deliberately absent: it is placed by `tree.place` as one whole thing rather than made
     empty and filled, and it is the one directory here that an update replaces.
+
+    **Not all of these stand directly below the root**, and `agents` is the first that does not: it
+    belongs under `data/` because it is something the owner accumulated, and what protects `data/`
+    from an update has to protect it too. Derived from `where` rather than from `paths.agents()` for
+    the same reason every other entry is — this function answers about a root it may be handed, and
+    `paths` only ever answers about the one in the environment.
     """
     where = root or paths.home()
-    return {"data": where / "data", "backups": where / "backups", "projects": where / "projects"}
+    return {"data": where / "data", "agents": where / "data" / "agents",
+            "backups": where / "backups", "projects": where / "projects"}
 
 
 def prepare(root: Optional[Path] = None,
@@ -82,10 +104,20 @@ def prepare(root: Optional[Path] = None,
 
     Safe to run on an install that already has all of it — which is exactly what happens on every
     update, and is why nothing here refuses when something is already there.
+
+    **Walked parents before children, and sorted by the path rather than by the name.** Sorting the
+    names was harmless while every directory stood directly below the root and stopped being so the
+    moment one did not: `agents` sorts before `data`, so a file sitting where `data/` belongs was
+    reported as `Not a directory: …/data/agents` — a true sentence about the wrong path, naming a
+    directory the person has nothing to fix and hiding the one they do.
+
+    Sorted here rather than left to the order `directories` happens to list them in, because that
+    order would then be load-bearing and nothing would say so: somebody tidying the mapping into
+    alphabetical order would put the failure back, silently.
     """
     said = saying or (lambda _line: None)
     touched = []
-    for name, where in sorted(directories(root).items()):
+    for name, where in sorted(directories(root).items(), key=lambda entry: entry[1].parts):
         if not where.is_dir():
             where.mkdir(parents=True, exist_ok=True)
             said(f"made {where}")

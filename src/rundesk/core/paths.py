@@ -78,6 +78,21 @@ def data() -> Path:
     return home() / "data"
 
 
+def agents() -> Path:
+    """Where the agents this install keeps stand, one directory each.
+
+    Below `data()` because an agent is something the owner accumulated: an update never touches it,
+    and an uninstall keeps it unless a purge asks for it.
+
+    **Derived, and there is no variable that reaches it.** The build this replaces had
+    `RUNDESK_AGENTS_DIR`, and its own value beat the one for the data directory — so a scratch run
+    that redirected the root, the run directory, the log directory and the jobs directory, which
+    looks exhaustive, went on making agents in the owner's live install and reporting success. Three
+    were created that way and had to be removed by hand. Here there is nothing to miss.
+    """
+    return data() / "agents"
+
+
 def backups() -> Path:
     """Copies of what the owner keeps, which survive removal — including a purge.
 

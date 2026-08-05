@@ -33,6 +33,22 @@ class OneRootDecidesEverything(support.Isolated):
         self.assertEqual(self.home / "backups", paths.backups())
         self.assertEqual(self.home / "projects", paths.projects())
 
+    def test_the_agents_stand_below_the_data_and_move_with_the_root(self):
+        # Below `data/` and not below the root directly, because an agent's records are something
+        # the owner accumulated: an update must not be able to reach them.
+        self.assertEqual(paths.data() / "agents", paths.agents())
+        moved = self.home / "moved"
+        os.environ[paths.HOME_IS] = str(moved)
+        self.assertEqual(moved / "data" / "agents", paths.agents())
+
+    def test_no_variable_of_its_own_reaches_the_agents(self):
+        # The defect this rebuild exists to fix, in its most expensive form: `RUNDESK_AGENTS_DIR`
+        # beat the data directory's own variable, so a run that redirected four locations still made
+        # three real agents in the owner's live install and reported success each time.
+        os.environ["RUNDESK_AGENTS_DIR"] = str(Path.home() / ".rundesk" / "data" / "agents")
+        self.addCleanup(os.environ.pop, "RUNDESK_AGENTS_DIR", None)
+        self.assertEqual(self.home / "data" / "agents", paths.agents())
+
     def test_an_unset_root_falls_back_to_the_owners_install(self):
         # Named out loud because it is the dangerous default and every guard here exists for it.
         del os.environ[paths.HOME_IS]

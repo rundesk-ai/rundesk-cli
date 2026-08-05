@@ -14,17 +14,37 @@ class TheDirectoriesAnInstallMakes(support.Isolated):
 
     def test_it_makes_every_one_of_them(self):
         home.prepare()
-        for where in (paths.data(), paths.backups(), paths.projects()):
+        for where in (paths.data(), paths.agents(), paths.backups(), paths.projects()):
             self.assertTrue(where.is_dir(), f"{where} was not made")
 
     def test_every_one_of_them_stands_below_the_root(self):
+        # Below it, not directly below it: `agents` belongs under `data/`, because what protects
+        # `data/` from an update is what has to protect an agent's records.
         for where in home.directories().values():
-            self.assertEqual(self.home, where.parent)
+            with self.subTest(directory=where.name):
+                self.assertIn(self.home, where.parents)
+
+    def test_agents_stands_below_data_so_an_update_cannot_reach_it(self):
+        # The one guarantee an agent's whole memory rests on. Asserted against `directories()`
+        # rather than against `paths`, because this is the map the installer actually lays down.
+        self.assertEqual(paths.data(), home.directories()["agents"].parent)
 
     def test_the_program_directory_is_not_one_of_them(self):
         # `app/` is placed whole by the installer rather than made empty and filled, and it is the
         # one directory an update replaces.
         self.assertNotIn(paths.app(), home.directories().values())
+
+    def test_a_failure_names_the_directory_somebody_has_to_fix(self):
+        # `agents` stands inside `data`, so walking these by name reaches the child first — and a
+        # file sitting where `data/` belongs was then reported against `data/agents`, a path nobody
+        # made and nobody can fix. Parents first, so the failure names the thing that is wrong.
+        (self.home / "data").write_text("a file where a directory belongs")
+
+        with self.assertRaises(OSError) as refused:
+            home.prepare()
+
+        self.assertIn("data", str(refused.exception))
+        self.assertNotIn("agents", str(refused.exception))
 
     def test_running_it_twice_changes_nothing_the_second_time(self):
         home.prepare()
@@ -50,6 +70,11 @@ class TheNoteInEachDirectory(support.Isolated):
         home.prepare()
         said = (paths.data() / "README.md").read_text()
         self.assertIn("update never touches it", said)
+
+    def test_the_agents_note_tells_an_agent_which_directory_is_its_own(self):
+        home.prepare()
+        said = (paths.agents() / "README.md").read_text()
+        self.assertIn("the one named after you is yours", said)
 
     def test_the_backups_note_says_copies_survive_a_purge(self):
         home.prepare()
@@ -90,7 +115,7 @@ class WhatAnInstallLaysDown(support.Isolated):
         code, _, err = support.run(
             ["install", "--source", str(source), "--bin-dir", str(self.home / "bin")])
         self.assertEqual(0, code, err)
-        for where in (paths.data(), paths.backups(), paths.projects()):
+        for where in (paths.data(), paths.agents(), paths.backups(), paths.projects()):
             self.assertTrue((where / "README.md").is_file(), f"{where} has no note")
 
 
