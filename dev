@@ -39,6 +39,21 @@ fi
 
 mkdir -p "$SCRATCH"
 
+# `install` with no --bin-dir writes a `rundesk` link into a real directory on the owner's PATH,
+# and that is the one thing pinning the root does not cover: the root moves, the link does not.
+# Somebody trying an install out from a checkout has already said which directory they mean by
+# running this script, so say it for them rather than leaving it as a rule to remember at the one
+# moment it matters. Named explicitly on the command line, never defaulted quietly, so the output
+# says where the link went.
+for arg in ${1+"$@"}; do
+  if [[ "$arg" == "--bin-dir" ]]; then PINNED=yes; fi
+done
+if [[ "${1:-}" == "install" && -z "${PINNED:-}" ]]; then
+  mkdir -p "${SCRATCH}/bin"
+  set -- "$@" --bin-dir "${SCRATCH}/bin"
+  echo "dev: --bin-dir=${SCRATCH}/bin (pinned, so nothing lands on your PATH)" >&2
+fi
+
 # Scrub first, set second. `env -i` is deliberately not used: PATH, HOME and TERM are what makes the
 # command behave like one somebody typed, and dropping them would test a machine nobody has.
 scrubbed=()
