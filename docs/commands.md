@@ -191,6 +191,22 @@ A name already taken is refused, and the refusal names the agent that is there. 
 differing only by case: the volume macOS ships with cannot tell `Cole` from `cole`, so allowing both
 would give two agents one `state.db` to write over each other in.
 
+**A name no launchd label can carry is allowed, and warned about here.** An agent may be called
+anything a directory may be called; a label is narrower. Such an agent works in every respect but
+one — no job can ever be placed for it, so nothing starts its gateway at login and nothing brings it
+back when it stops. It is said at the moment the name is chosen, while picking another is still free:
+
+```console
+$ rundesk agents add 'my agent' --provider claude
+agent my agent added
+        ...
+        note      this name cannot be a launchd label, so no job can ever be placed for it — nothing starts its gateway at login and nothing brings it back when it stops. Run it with `rundesk gateways run` and stop it with `rundesk gateways stop`, or add the agent again under a name of letters, digits, a dot, a dash or an underscore
+```
+
+The note is not a refusal, because such a gateway does run and can be stopped — only supervision is
+impossible. An ordinary name carries no note at all; one that appeared on every agent would stop
+being read.
+
 ### agents configure
 
 Changes what an agent is configured with.
@@ -303,6 +319,19 @@ health and is not, so it is never written as `running` on its own. Nothing bring
 stops and nothing starts it at the next login, and somebody who read the word `running` there would
 believe they were covered at the moment they were least covered.
 
+**One row is worse than that and gets a word of its own.** An agent whose name cannot be a launchd
+label is not merely unsupervised now — it can never be supervised at all, and no restart changes
+that, so none is offered:
+
+```console
+$ rundesk gateways
+AGENT     GATEWAY                               JOB               OVERRIDE     LOGIN ITEM
+my agent  running, NEVER SUPERVISED (pid 8184)  cannot be placed  cannot tell  cannot tell
+        my agent: a gateway is holding this name and launchd can never have a job for it — 'my agent' cannot be part of a launchd label. Nothing brings it back when it stops, nothing starts it at the next login, and no restart changes either of those while the agent is named this. Take it down with: rundesk gateways stop 'my agent'
+```
+
+Commands printed for such a name are quoted for a shell, so what is offered is what a shell accepts.
+
 ### gateways start
 
 Places the job and then **proves a gateway came up**, rather than proving that launchd accepted one.
@@ -365,6 +394,23 @@ line itself was wrong; the gateway is not one that would not stop.
 
 Stopping something that was never started is not a failure. It is the state that was asked for, and
 it is reported as such.
+
+**A gateway with no job to take back is stopped by signalling the process directly.** Two gateways
+have none: one whose agent is named something no launchd label can carry — `rundesk gateways run`
+hosts it quite happily — and one whose job came back cleanly while the name is still held, which is
+the proof launchd never started that process. Without this route both are running programs no command
+can reach.
+
+```console
+$ rundesk gateways stop 'my agent'
+gateway stopped for my agent as pid 8851
+        this gateway had no job, so it was stopped by signalling the process directly
+        why    'my agent' cannot be part of a launchd label — an agent hosted by one is named with letters, digits, a dot, a dash or an underscore
+```
+
+The pid comes from the lock, so one is only ever signalled while the kernel says a gateway is holding
+that name, and whether it really went is decided by the lock rather than by what the signal answered.
+See [gateways.md](./gateways.md) for why that distinction is load-bearing on macOS.
 
 ### gateways restart
 

@@ -147,6 +147,29 @@ before it says it restarted anything.
 job the supervisor is still holding keeps the definition it already had *without failing*, so a
 restart that started first would report a restart and go on running the old program for ever.
 
+### A gateway with no job is stopped by signalling it directly
+
+Every stop above goes through the job, and for most gateways that is the whole story. Two do not have
+one to go through, and a stop that only knew the one route would refuse them both — leaving a running
+process no command could reach:
+
+- **An agent whose name cannot be a launchd label.** `rundesk agents add` allows any name a directory
+  may have, and a label is narrower. `rundesk gateways run` will host such an agent quite happily, so
+  it is a real gateway with a real lock and no possible job. `agents add` now warns at the moment the
+  name is chosen, but an agent added before that warning existed is still on somebody's disk.
+- **An agent whose job launchd never actually started.** The job comes back cleanly and the name is
+  still held, which is the proof the process was not launchd's to begin with.
+
+In both cases the pid is read from the lock — so a pid is only ever signalled while the kernel says a
+gateway is holding that name — and the process is sent the same signals its job would have sent it,
+with the same window. The line reporting the stop says which route it took and why there was no job.
+
+**Whether the process is really gone is decided by the lock, never by the signal's answer.** On macOS,
+signalling the process group of something that has *just* become a zombie answers `EPERM` rather than
+`ESRCH` — so with `--force`'s zero-second window, a gateway that had genuinely been killed reported
+itself as one that would not go, perhaps one time in five. Asking the kernel who holds the lock is the
+answer that cannot be wrong about this, and it is the one the command uses.
+
 ## Where a gateway's account of itself is
 
 Two places, and they answer different questions. `rundesk gateways logs <agent>` reads both.
@@ -187,6 +210,7 @@ gateway as switched off on the strength of a guess would be worse than saying no
 | Nothing | `GATEWAY` says running, `JOB` says placed | — |
 | It was never started | `not running`, `not placed` | `rundesk gateways start <agent>` |
 | It is running and nothing is supervising it | `running, UNSUPERVISED`, `not placed` | `rundesk gateways restart <agent>` — the job can only be placed over a name that is free |
+| It is running and nothing ever **can** supervise it | `running, NEVER SUPERVISED`, `cannot be placed` | 🔴 **No restart helps**, and none is offered. The agent's name cannot be a launchd label, so no job can ever be placed for it. Stop it with `rundesk gateways stop <agent>`; to have it supervised, add the agent again under a name of letters, digits, a dot, a dash or an underscore |
 | It is up and has stopped working | `running, no beat` | `rundesk gateways logs <agent>` first, then `rundesk gateways restart <agent>` |
 | It keeps dying and being brought back | a start that placed the job and could not show a gateway holding the name | `rundesk gateways logs <agent>` — and fix what it says. Restarting a crash loop faster does not end it |
 | Something switched the job off, perhaps years ago | `OVERRIDE` says `disabled` | `rundesk gateways start <agent>` — it clears the override before every start, unconditionally, because nothing on a Mac ever deletes one of those records |
