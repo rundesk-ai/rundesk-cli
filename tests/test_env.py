@@ -432,7 +432,7 @@ class TheCommand(Values):
 
     def typing(self, said):
         """Stand in for the person at the terminal, so nothing is ever passed as an argument."""
-        return mock.patch("rundesk.commands.env._typed", return_value=said)
+        return mock.patch("rundesk.commands.env.typed", return_value=said)
 
     def test_with_nothing_named_it_lists(self):
         code, out, _ = self.rundesk("env")
@@ -552,13 +552,13 @@ class TheCommand(Values):
 
 
 class WhatIsTyped(Values):
-    """`_typed` — never `argv`, never echoed, and never a command that hangs."""
+    """`typed` — never `argv`, never echoed, and never a command that hangs."""
 
     def test_it_is_read_without_echoing_when_there_is_a_terminal(self):
         from rundesk.commands import env
         with mock.patch.object(env.sys.stdin, "isatty", return_value=True):
             with mock.patch.object(env.getpass, "getpass", return_value=A_TOKEN) as asked:
-                self.assertEqual(A_TOKEN, env._typed("KEY: "))
+                self.assertEqual(A_TOKEN, env.typed("KEY: "))
         self.assertTrue(asked.called, "it echoed the value back to the terminal")
 
     def test_it_reads_a_pipe_rather_than_hanging_when_there_is_no_terminal(self):
@@ -567,14 +567,14 @@ class WhatIsTyped(Values):
         with mock.patch.object(env, "sys") as pretending:
             pretending.stdin = io.StringIO(A_TOKEN + "\n")
             pretending.stdin.isatty = lambda: False
-            self.assertEqual(A_TOKEN, env._typed("KEY: "))
+            self.assertEqual(A_TOKEN, env.typed("KEY: "))
 
     def test_nothing_typed_is_nothing_kept(self):
         from rundesk.commands import env
         with mock.patch.object(env, "sys") as pretending:
             pretending.stdin = io.StringIO("\n")
             pretending.stdin.isatty = lambda: False
-            self.assertIsNone(env._typed("KEY: "))
+            self.assertIsNone(env.typed("KEY: "))
 
 
 if __name__ == "__main__":

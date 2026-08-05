@@ -29,6 +29,13 @@ class TheDirectoriesAnInstallMakes(support.Isolated):
         # rather than against `paths`, because this is the map the installer actually lays down.
         self.assertEqual(paths.data(), home.directories()["agents"].parent)
 
+    def test_skills_stand_below_data_so_an_update_cannot_reach_them(self):
+        # A skill an owner wrote is work rundesk did not do, so it is protected by the same thing
+        # that protects an agent's memory — and it follows for free that a copy of `data/` carries
+        # the whole library.
+        self.assertEqual(paths.data(), home.directories()["skills"].parent)
+        self.assertEqual(paths.skills(), home.directories()["skills"])
+
     def test_the_program_directory_is_not_one_of_them(self):
         # `app/` is placed whole by the installer rather than made empty and filled, and it is the
         # one directory an update replaces.
@@ -75,6 +82,14 @@ class TheNoteInEachDirectory(support.Isolated):
         home.prepare()
         said = (paths.agents() / "README.md").read_text()
         self.assertIn("the one named after you is yours", said)
+
+    def test_the_skills_note_says_where_an_agents_own_skill_goes(self):
+        # An agent that wants to write one has to be told which directory is not replaced by the
+        # next catalog check, because every other directory here is.
+        home.prepare()
+        said = (paths.skills() / "README.md").read_text()
+        self.assertIn("local/", said)
+        self.assertIn("replaced the next time that catalog is checked", said)
 
     def test_the_backups_note_says_copies_survive_a_purge(self):
         home.prepare()

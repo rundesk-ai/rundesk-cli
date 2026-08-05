@@ -30,13 +30,14 @@ puts it straight back when it dies, because the job outlives the records.
 import argparse
 import sqlite3
 import sys
-from typing import Optional
+from typing import List, Optional
 
 from rundesk.agents import directory, migration, records
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job, standing
+from rundesk.skills import grants
 from rundesk.utils import locking
 from rundesk.utils.terminal import as_table
 
@@ -260,6 +261,19 @@ def _forgotten(name: str, confirming: bool) -> int:
     return OK
 
 
+def _skills_it_holds(name: str) -> List[str]:
+    """What this agent holds, for the removal to name. Empty when it holds nothing or cannot be read.
+
+    Answered as nothing rather than raised. This is one line of a description somebody is about to
+    agree to, and a listing that could not be built is not a reason to refuse to describe the
+    removal — the removal itself does not depend on it.
+    """
+    try:
+        return [one.name for one in grants.held(name)]
+    except (grants.Refused, directory.Refused, OSError):
+        return []
+
+
 def _needs_confirming(name: str) -> int:
     """Say exactly what a removal would take, and take none of it.
 
@@ -272,6 +286,15 @@ def _needs_confirming(name: str) -> int:
           "SQLite keeps beside it", file=sys.stderr)
     print(f"        take   {at / directory.HOME} — where {name} started, and what it put there",
           file=sys.stderr)
+    held = _skills_it_holds(name)
+    if held:
+        # Named separately although `home/` already covers it. A grant is a link inside that
+        # directory, so it goes with it either way — and somebody reading a line about "where the
+        # agent started" has no way to know that the skills they granted are inside it. What is
+        # *not* taken is the skill itself, and saying so is the point: this reads as though a
+        # removal could cost them a catalog.
+        print(f"        take   {len(held)} skill grant(s) — {', '.join(held)}; the skills "
+              "themselves stay in the library", file=sys.stderr)
     print(f"        take   {at / directory.LOGS}", file=sys.stderr)
     for one in (at / directory.GATEWAY_RECORD, at / directory.GATEWAY_LOCK):
         # Named only when it is there. Listing what a gateway *might* have left would describe a

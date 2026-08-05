@@ -23,21 +23,29 @@ somebody their machine is ready when it is not, and they find out later and some
 
 import argparse
 import os
+import sys
 from pathlib import Path
+from typing import Optional
 
 from rundesk import __version__
-from rundesk.commands import failed, the_reason, update
+from rundesk.commands import failed, skills, the_reason, update
 from rundesk.core import config, paths
 from rundesk.exits import OK
 from rundesk.lifecycle import tree
+from rundesk.skills import catalogs
 from rundesk.utils import programs
 
 #: How long the installed command is given to answer before the install is called a failure.
 ANSWER_SECONDS = 30
 
 
-def cmd_install(args: argparse.Namespace) -> int:
-    """Install rundesk, and refuse to report success it did not earn."""
+def cmd_install(args: argparse.Namespace,
+                refreshing: Optional[catalogs.Fetching] = None) -> int:
+    """Install rundesk, and refuse to report success it did not earn.
+
+    `refreshing` brings down a catalog of skills, and like every other collaborator in this product it
+    arrives as an argument so the whole command runs with no network near it.
+    """
     from_where = Path(args.source).expanduser().resolve() if args.source else paths.program()
 
     try:
@@ -80,6 +88,13 @@ def cmd_install(args: argparse.Namespace) -> int:
     print(f"        data      {paths.data()}")
     print(f"        command   {at}")
     _say_if_unreachable(at)
+
+    # **After the install has already earned its success, and it does not take that away.** The
+    # catalog rundesk ships is placed out of the release, so this needs no network to give a fresh
+    # machine working skills; checking the published repository is the part that can fail, and a
+    # repository somebody deleted is not a reason to tell `install.sh` the machine is broken.
+    for line in skills.refreshed(refreshing):
+        print(f"        {line}", file=sys.stderr)
     return OK
 
 

@@ -93,6 +93,21 @@ def agents() -> Path:
     return data() / "agents"
 
 
+def skills() -> Path:
+    """The skill library: one directory per catalog, and the skills inside each.
+
+    Below `data()` for the same reason `agents()` is — it is something the owner accumulated, so an
+    update never touches it and an uninstall keeps it unless a purge asks for it. It follows that a
+    copy of `data/` carries the whole library, which is what makes a skill an owner wrote survivable.
+
+    **Derived, and there is no variable that reaches it.** The build this replaces had
+    `RUNDESK_SKILL_LIBRARY`, one of a dozen independent locations, and a scratch run that redirected
+    the others deleted an owner's installed skills while reporting an ordinary success. Here there is
+    nothing to miss.
+    """
+    return data() / "skills"
+
+
 def backups() -> Path:
     """Copies of what the owner keeps, which survive removal — including a purge.
 

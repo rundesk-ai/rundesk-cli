@@ -40,12 +40,13 @@ from typing import Callable, Dict, List, Optional, Protocol, Tuple
 from rundesk import __version__
 from rundesk.agents import directory, records
 from rundesk.agents import migration as agent_migration
-from rundesk.commands import failed, the_reason
+from rundesk.commands import failed, skills, the_reason
 from rundesk.commands.gateways import Cycled
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job, standing
 from rundesk.lifecycle import backups, home, migration, release, tree
+from rundesk.skills.catalogs import Fetching as Refreshing
 from rundesk.utils import programs
 
 #: How a release archive is brought down: given where it is and where to put it, it puts it there.
@@ -96,12 +97,18 @@ class Gateways(Protocol):
 
 
 def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = None,
-               fetching: Optional[Fetching] = None) -> int:
+               fetching: Optional[Fetching] = None,
+               refreshing: Optional[Refreshing] = None) -> int:
     """Move to the newest published release, or say it is already up to date.
 
-    Takes no flags. `asking` looks up what is published and `fetching` downloads it; both are
-    resolved here rather than bound in the signature, so the whole command is driven with no network
-    anywhere near it.
+    Takes no flags. `asking` looks up what is published, `fetching` downloads it and `refreshing`
+    brings down a catalog of skills; all three are resolved here rather than bound in the signature,
+    so the whole command is driven with no network anywhere near it.
+
+    **The skill catalogs are checked on every run of this, including one that found nothing newer.**
+    That is what makes them current daily rather than only when rundesk itself moves: a catalog is
+    somebody else's repository and it changes on its own schedule. It happens last, it cannot change
+    this command's exit code, and `commands.skills.refreshed` says why.
     """
     line, published, could_ask = release.standing(__version__, asking)
     if not could_ask:
@@ -127,6 +134,7 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
         gone_wrong = settled_by_the_new_release(paths.app())
         if gone_wrong:
             return _failed(f"this install is on {__version__} and is not settled — {gone_wrong}")
+        _catalogs_checked(refreshing)
         return OK
 
     try:
@@ -173,7 +181,20 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
     print(f"rundesk updated to {published}")
     if where:
         print(f"        what changed: {where}")
+    _catalogs_checked(refreshing)
     return OK
+
+
+def _catalogs_checked(refreshing: Optional[Refreshing]) -> None:
+    """Bring the skill catalogs up to date and say what could not be, changing no exit code.
+
+    Deliberately returns nothing. What this command reports is whether *it* worked, and by the time
+    this runs it has: the release landed, the data was carried, and the command answers. A catalog
+    repository that has been deleted is a true thing to say and a false reason to tell a script the
+    update failed.
+    """
+    for line in skills.refreshed(refreshing):
+        print(f"        {line}", file=sys.stderr)
 
 
 def settle(gateways: Optional[Gateways] = None) -> int:

@@ -120,7 +120,7 @@ def _stated(key: str) -> int:
     if trouble:
         return _failed(trouble)
 
-    said = _typed(f"{key}: ")
+    said = typed(f"{key}: ")
     if said is None:
         return _failed("nothing was typed", "nothing was kept")
 
@@ -146,9 +146,15 @@ def _emptied(key: str) -> int:
     return OK
 
 
-def _typed(asking: str) -> Optional[str]:
+def typed(asking: str) -> Optional[str]:
     """A value from the person at the terminal, or from whatever is piping into this. `None` when
     there was nothing.
+
+    **Public because `skills configure` reads a value the same way**, and there is exactly one right
+    way to do it: everything in this docstring is the reason, and a second copy of it beside a second
+    copy of the code is how one of them comes to be missing the `sys.stdin is None` case. The build
+    this replaces reached across command modules for a *private* and its own notes recorded that as a
+    trap; the fix is to say plainly that this is shared, not to duplicate it.
 
     Not echoed when there is a terminal, so it is not left on screen or in a scrollback buffer. Read
     as an ordinary line when there is not, so `printf %s "$TOKEN" | rundesk env set K` works in an

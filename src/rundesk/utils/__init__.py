@@ -22,6 +22,7 @@ gradually.
 
 | Module | Answers |
 |---|---|
+| `archives` | unpacking an archive somebody else made, without letting it write outside where you put it |
 | `files` | putting bytes on disk without leaving a reader something half-written |
 | `locking` | letting one process at a time change something, with a ceiling on the waiting |
 | `logs` | a day of lines in a file named after the day, and keeping the last so many days |

@@ -38,7 +38,12 @@ MAY_IMPORT = {
     "agents": ("core", "utils"),
     "gateways": ("agents", "core", "utils"),
     "lifecycle": ("agents", "core", "utils"),
-    "commands": ("gateways", "lifecycle", "agents", "core", "utils"),
+    # `skills` reaches `agents` because a grant is a directory entry inside an agent's own home and
+    # there is nowhere else to ask where that is. The traffic goes one way only: `agents` may not
+    # reach here, so an agent is still something that can be made, carried and removed by code that
+    # has never heard of a skill, and presenting a new agent's skills is done in `commands`.
+    "skills": ("agents", "core", "utils"),
+    "commands": ("skills", "gateways", "lifecycle", "agents", "core", "utils"),
 }
 
 #: Below the layers rather than in them: the version this is, and what a command may exit with.
@@ -68,6 +73,19 @@ def imports(module: Path):
             if node.module.split(".")[0] == "rundesk":
                 found.add(node.module)
     return found
+
+
+def reaches_for(module: Path, held_in: str, called: str):
+    """Every line in `module` that really calls `held_in.called`, ignoring prose that names it.
+
+    A module that explains in its own docstring why it must not reach for something would fail a
+    search of its text, so the only way to pass would be to delete the explanation. Asked of the
+    tree instead: this finds the attribute access and nothing that merely spells it.
+    """
+    said = ast.parse(module.read_text(encoding="utf-8"))
+    return [one.lineno for one in ast.walk(said)
+            if isinstance(one, ast.Attribute) and one.attr == called
+            and isinstance(one.value, ast.Name) and one.value.id == held_in]
 
 
 def modules_of(package: str):
@@ -133,11 +151,30 @@ class TheTreePointsOneWay(support.Isolated):
                                  f"{module.name} reaches outside utils — the bottom layer is the "
                                  "standard library and its own siblings, and nothing else")
 
+    def test_nothing_in_skills_reads_a_credentials_value(self):
+        # `secrets.value` is the one way a whole value leaves that module, and it exists for the
+        # programs rundesk starts — an adapter reaching for its own token. Everything in `skills/`
+        # is a listing, a readout or a diagnosis, and none of those is one of those programs.
+        #
+        # Checked mechanically rather than left as a rule, for the same reason the layer walk is:
+        # this is a boundary somebody would cross while doing something that felt reasonable, and
+        # the failure — a token in a table, in a log, in a terminal somebody screen-shared — is not
+        # one anybody notices from a green suite.
+        # Asked of the syntax tree rather than of the text, because these modules *describe* the
+        # rule in their own docstrings — a substring check reads that prose as a violation and the
+        # only way to keep it quiet is to stop writing down why the rule exists.
+        for module in modules_of("skills"):
+            with self.subTest(module=module.name):
+                self.assertEqual(
+                    [], reaches_for(module, "secrets", "value"),
+                    f"{module.name} reads a credential's value — ask `secrets.placed` whether it "
+                    "is set instead")
+
     def test_every_package_table_names_what_is_in_its_directory(self):
         # `utils` was checked and `core` was not, so `core`'s table went on listing a module that
         # had moved a whole layer down and nothing said a word. A table a reader trusts is a table
         # worth checking — all of them, not the one that happened to get a test first.
-        for package in ("agents", "core", "gateways", "lifecycle", "utils"):
+        for package in ("agents", "core", "gateways", "lifecycle", "skills", "utils"):
             table = (WHERE / package / "__init__.py").read_text(encoding="utf-8")
             # A trailing slash names a directory rather than a module — `steps/` is
             # documented deliberately and has no `.py` of its own to match.

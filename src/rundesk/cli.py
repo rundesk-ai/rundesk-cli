@@ -27,6 +27,8 @@ from rundesk.commands.env import register as register_env
 from rundesk.commands.gateways import Cycled, cmd_gateways
 from rundesk.commands.gateways import register as register_gateways
 from rundesk.commands.install import cmd_install
+from rundesk.commands.skills import cmd_skills
+from rundesk.commands.skills import register as register_skills
 from rundesk.commands.status import cmd_status
 from rundesk.commands.uninstall import cmd_uninstall
 from rundesk.commands.update import Fetching, cmd_update
@@ -34,6 +36,7 @@ from rundesk.commands.version import cmd_version
 from rundesk.exits import OK
 from rundesk.gateways import job
 from rundesk.lifecycle import release
+from rundesk.skills.catalogs import Fetching as Refreshing
 
 EPILOG = """\
 examples:
@@ -47,6 +50,8 @@ examples:
   rundesk backups               the copies of what rundesk keeps for you
   rundesk backups save          copy what rundesk keeps, now
   rundesk env list              the values rundesk hands to what it talks to
+  rundesk skills                the skills this install has, and who holds which
+  rundesk skills doctor         what an agent cannot use, and exactly why
   rundesk version               what version this is, and whether it is out of date
   rundesk update                move to the newest published release
   rundesk uninstall --confirm   remove rundesk, keeping what it kept for you
@@ -77,6 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_gateways(sub)
     register_backups(sub)
     register_env(sub)
+    register_skills(sub)
     _register_install(sub)
     _register_update(sub)
     _register_uninstall(sub)
@@ -113,17 +119,19 @@ def _register_uninstall(sub: Subcommands) -> None:
 
 def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = None,
          fetching: Optional[Fetching] = None,
-         supervising: Optional[job.Supervising] = None) -> int:
+         supervising: Optional[job.Supervising] = None,
+         refreshing: Optional[Refreshing] = None) -> int:
     """Parse what was typed and hand it to the one module that answers it.
 
     Bare `rundesk` describes what it can do and exits `0`: somebody who typed the command with no
     operation asked a reasonable question and got an answer.
 
-    `asking` looks up what version is published, `fetching` downloads a release, and `supervising`
-    is the machine's supervisor. All three arrive as arguments and default to `None`, which each
-    command resolves to the real thing at the moment it needs it — so every state of `version`,
-    `update` and `gateways` is driven with no network and no `launchctl` anywhere near the test,
-    and the surface itself knows nothing about GitHub or launchd.
+    `asking` looks up what version is published, `fetching` downloads a release, `refreshing` brings
+    down a catalog of skills, and `supervising` is the machine's supervisor. All four arrive as
+    arguments and default to `None`, which each command resolves to the real thing at the moment it
+    needs it — so every state of `version`, `update`, `gateways` and `skills` is driven with no
+    network and no `launchctl` anywhere near the test, and the surface itself knows nothing about
+    GitHub or launchd.
 
     **The third one is the one with no safety net.** A suite that forgot `asking=` fails loudly,
     because the harness points every proxy variable at a closed port; there is no closed port for
@@ -159,12 +167,14 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
         return cmd_backups(args, _gateways(supervising))
     if args.command == "env":
         return cmd_env(args)
+    if args.command == "skills":
+        return cmd_skills(args, refreshing)
     if args.command == "version":
         return cmd_version(args, asking)
     if args.command == "install":
-        return cmd_install(args)
+        return cmd_install(args, refreshing)
     if args.command == "update":
-        return cmd_update(args, asking, fetching)
+        return cmd_update(args, asking, fetching, refreshing)
     if args.command == "uninstall":
         return cmd_uninstall(args, supervising)
 

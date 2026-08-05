@@ -72,10 +72,27 @@ Made by the install rather than by the command that adds the first agent, so a f
 shape from the first moment. An empty one means nobody has added an agent yet.
 """
 
+SKILLS_NOTE = """# skills/
+
+The skill library: one directory per catalog, and the skills inside each.
+
+A skill is a directory holding a `SKILL.md` — the format every provider CLI already reads, so nothing
+here is rundesk's own invention. `rundesk skills` lists what is here and which agent holds which.
+
+**If you are an agent and you want to write a skill, it goes in `local/`.** Nothing fetches into that
+one and nothing rundesk does removes it. Every other directory here came from a repository, and
+**anything you edit inside one is replaced the next time that catalog is checked** — to change one,
+change it where it is published, or copy it into `local/` under a new name.
+
+Granting a skill to an agent does not copy it: a link stands in that agent's own directory, so editing
+a skill here changes it for everybody holding it, with nothing to re-run.
+"""
+
 #: Which note stands in which directory. The one list, read by both the making and the checking.
 NOTES: Dict[str, str] = {
     "data": DATA_NOTE,
     "agents": AGENTS_NOTE,
+    "skills": SKILLS_NOTE,
     "backups": BACKUPS_NOTE,
     "projects": PROJECTS_NOTE,
 }
@@ -95,6 +112,7 @@ def directories(root: Optional[Path] = None) -> Dict[str, Path]:
     """
     where = root or paths.home()
     return {"data": where / "data", "agents": where / "data" / "agents",
+            "skills": where / "data" / "skills",
             "backups": where / "backups", "projects": where / "projects"}
 
 
