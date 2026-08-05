@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import support
 from rundesk.core import config, paths
@@ -418,6 +419,108 @@ class WhatLooksLikeARundeskTree(support.Isolated):
 
     def test_somewhere_that_is_not_there_at_all_is_not(self):
         self.assertFalse(tree.is_rundesk(self.home / "never-made"))
+
+
+class WhenAPurgeCannotFinish(Uninstalling):
+    """A removal that did not happen must never report success — the rule this command exists for.
+
+    Every purge case here succeeds, so the branch that turns a `data/` it could not remove into a
+    failure had never run. Somebody believing their machine is clean when it is not is the whole
+    damage this command is written to prevent.
+    """
+
+    def test_a_purge_that_could_not_take_the_data_is_reported_as_a_failure(self):
+        if os.geteuid() == 0:
+            self.skipTest("root may remove from a directory with no write permission")
+        self.install()
+        held = paths.data() / "held"
+        held.mkdir(parents=True, exist_ok=True)
+        (held / "a-file").write_text("the owner's")
+        held.chmod(0o500)
+        self.addCleanup(held.chmod, 0o700)
+
+        code, out, err = self.uninstall("--confirm", "--purge")
+
+        self.assertEqual(FAILED, code)
+        self.assertNotIn("rundesk removed", out)
+        self.assertIn("could not be removed", err)
+        self.assertTrue(paths.data().exists(), "it said it failed and took the data anyway")
+
+
+class WhenASwapCannotBeUndone(support.Isolated):
+    """`tree.HalfReplaced` — the worst thing this product can say, and nothing proved it said it.
+
+    Its own exception because there is no clever recovery left: the install is neither the release
+    it was nor the one it was becoming. Both `install` and `update` carry a branch for it, and
+    until now nothing ever drove one.
+    """
+
+    def test_a_swap_that_cannot_be_put_back_says_the_install_must_be_made_again(self):
+        app = self.home / "app"
+        support.a_real_tree(app, "before")
+        fresh = support.a_real_tree(self.home / "fresh", "after")
+        really = os.rename
+
+        def never_puts_anything_back(src, dst):
+            # Fails the swap, and then fails the undo as well — the only route to `HalfReplaced`.
+            if str(src).endswith(".incoming") or ".outgoing" in str(src):
+                raise OSError("the filesystem went away")
+            return really(src, dst)
+
+        with mock.patch.object(tree.os, "rename", side_effect=never_puts_anything_back):
+            with self.assertRaises(tree.HalfReplaced) as half:
+                tree.replace(fresh, app)
+
+        self.assertIn("must be installed again", str(half.exception))
+
+    def test_an_install_that_half_replaced_the_tree_reports_it_rather_than_crashing(self):
+        # The command layer's own branch for it, which was equally unproven.
+        source = support.a_real_tree(self.home / "source", "after")
+        with mock.patch.object(tree, "place",
+                               side_effect=tree.HalfReplaced("it is part-replaced")):
+            code, _, err = support.run_with(["install", "--source", str(source),
+                                             "--bin-dir", str(self.home / "bin")])
+        self.assertEqual(FAILED, code)
+        self.assertIn("part-replaced", err)
+
+
+class WhereTheCommandGoesWhenNobodySays(support.Isolated):
+    """`tree._a_bin_dir` — what a real `curl | bash` install uses, and what no test ever ran.
+
+    Every case here passes `--bin-dir`, because `AGENTS.md` requires it: an install with none
+    writes into a real directory on somebody's PATH. That safety rule is exactly why the code
+    deciding *which* real directory had never been exercised.
+    """
+
+    def test_it_takes_the_first_one_it_can_write_to(self):
+        first, second = self.home / "first", self.home / "second"
+        first.mkdir()
+        second.mkdir()
+        with mock.patch.object(tree, "BIN_DIRS", (str(first), str(second))):
+            self.assertEqual(first, tree._a_bin_dir())
+
+    def test_it_passes_over_one_it_cannot_write_to(self):
+        if os.geteuid() == 0:
+            self.skipTest("root may write to a directory with no write permission")
+        first, second = self.home / "first", self.home / "second"
+        first.mkdir(mode=0o500)
+        self.addCleanup(first.chmod, 0o700)
+        second.mkdir()
+        with mock.patch.object(tree, "BIN_DIRS", (str(first), str(second))):
+            self.assertEqual(second, tree._a_bin_dir())
+
+    def test_it_passes_over_one_that_is_not_there(self):
+        second = self.home / "second"
+        second.mkdir()
+        with mock.patch.object(tree, "BIN_DIRS", (str(self.home / "never-made"), str(second))):
+            self.assertEqual(second, tree._a_bin_dir())
+
+    def test_with_nowhere_writable_it_names_the_last_rather_than_nothing(self):
+        # A path that does not exist yet is still an answer — `link` makes the directory. Returning
+        # nothing here would make the installer fail where it could have succeeded.
+        one, two = self.home / "one", self.home / "two"
+        with mock.patch.object(tree, "BIN_DIRS", (str(one), str(two))):
+            self.assertEqual(two, tree._a_bin_dir())
 
 
 if __name__ == "__main__":

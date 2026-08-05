@@ -4,13 +4,22 @@ Nothing here reaches the network. What is published arrives as `asking=` and the
 `fetching=`, both handed to `cli.main`, so every state — behind, current, unable to ask, a broken
 archive, a failed swap — is driven against real files on disk with no GitHub anywhere near it.
 
+**And the code behind that seam is driven too.** Replacing `asking=` proves what a command does with
+each answer; it says nothing about the code that produces one. That code — the only place in the
+product that reads a GitHub response — had never run under test at all, hidden by how well the seam
+worked. `AskingGitHubForReal` drives it with the standard library's own `urlopen` replaced instead,
+one layer further down, and still leaves nothing able to reach the network.
+
 Run directly: `python3 tests/test_update.py`
 """
 
+import contextlib
 import io
 import os
 import tarfile
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 from unittest import mock
 
@@ -388,6 +397,139 @@ class StagingAndPuttingBack(support.Isolated):
         with self.assertRaises(tree.Refused):
             tree.replace(empty, self.app)
         self.assertEqual("old", (self.app / "rundesk").read_text())
+
+
+class AskingGitHubForReal(support.Isolated):
+    """`latest_published` and `_asked_of_the_api` — the code the `asking=` seam has been hiding.
+
+    Every other case in this suite replaces `asking=` with a closure, which is exactly right for
+    proving what a *command* does with each answer. The cost, unnoticed until it was measured, is
+    that the code which produces those answers — the only code in the product that reads a GitHub
+    response — had never once run under test.
+
+    So this drives the real functions with `urlopen` replaced instead. Nothing leaves the machine:
+    the seam being replaced here is the standard library's, one layer lower down.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.asked = []
+
+    def answering(self, url_landed_on=None, body=None, raising=None):
+        """Stand in for `urlopen`, as either a redirect that landed somewhere or a JSON body."""
+        def opened(request, *_args, **_named):
+            self.asked.append(request.full_url)
+            if raising is not None:
+                raise raising
+            return contextlib.closing(_AnAnswer(url_landed_on, body))
+        return mock.patch.object(urllib.request, "urlopen", opened)
+
+    def test_the_tag_is_read_off_the_redirect(self):
+        with self.answering(url_landed_on="https://github.com/o/r/releases/tag/v1.2.3"):
+            self.assertEqual(("v1.2.3", None), release.latest_published())
+
+    def test_a_trailing_slash_on_the_redirect_is_not_the_tag(self):
+        with self.answering(url_landed_on="https://github.com/o/r/releases/tag/v1.2.3/"):
+            self.assertEqual(("v1.2.3", None), release.latest_published())
+
+    def test_nothing_published_is_told_apart_from_unreachable(self):
+        gone = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
+        with self.answering(raising=gone):
+            self.assertEqual((None, release.NOTHING_PUBLISHED), release.latest_published())
+
+    def test_nothing_published_is_settled_at_the_first_ask_and_not_asked_again(self):
+        # A 404 on "latest" is an answer, not a failure to get one, so there is nothing for the
+        # second way of asking to add. Without this the branch is untestable by its result alone:
+        # the API 404s too, so removing the short-circuit gives the same answer by a longer road.
+        gone = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
+
+        def opened(request, *_args, **_named):
+            self.asked.append(request.full_url)
+            if len(self.asked) == 1:
+                raise gone
+            return contextlib.closing(_AnAnswer(None, '{"tag_name": "v1.0.0"}'))
+
+        with mock.patch.object(urllib.request, "urlopen", opened):
+            self.assertEqual((None, release.NOTHING_PUBLISHED), release.latest_published())
+        self.assertEqual(1, len(self.asked), "it asked a second time after a settled answer")
+
+    def test_being_unable_to_reach_it_is_never_a_version(self):
+        for why in (urllib.error.URLError("no route"), OSError("refused"), ValueError("odd")):
+            with self.subTest(why=type(why).__name__):
+                with self.answering(raising=why):
+                    tag, said = release.latest_published()
+                self.assertIsNone(tag)
+                self.assertEqual(release.UNREACHABLE, said)
+
+    def test_a_redirect_that_does_not_end_in_a_version_falls_back_to_the_api(self):
+        # The reason there are two ways of asking at all.
+        landed = ["https://github.com/o/r/releases", '{"tag_name": "v4.5.6"}']
+
+        def opened(request, *_args, **_named):
+            self.asked.append(request.full_url)
+            return contextlib.closing(_AnAnswer(landed[0], landed[1])
+                                      if len(self.asked) == 1
+                                      else _AnAnswer(None, landed[1]))
+        with mock.patch.object(urllib.request, "urlopen", opened):
+            self.assertEqual(("v4.5.6", None), release.latest_published())
+        self.assertEqual(2, len(self.asked), "it never asked the second way")
+
+    def test_the_api_says_nothing_published_for_a_404_and_unreachable_for_anything_else(self):
+        for code, wanted in ((404, release.NOTHING_PUBLISHED), (500, release.UNREACHABLE),
+                             (403, release.UNREACHABLE)):
+            with self.subTest(code=code):
+                why = urllib.error.HTTPError("u", code, "no", {}, None)
+                with self.answering(raising=why):
+                    self.assertEqual((None, wanted), release._asked_of_the_api())
+
+    def test_the_api_giving_a_tag_that_is_not_a_version_is_unreachable_not_current(self):
+        # The rule the whole module exists for: being unable to get an answer is never a quiet
+        # form of being up to date.
+        with self.answering(body='{"tag_name": "nightly"}'):
+            self.assertEqual((None, release.UNREACHABLE), release._asked_of_the_api())
+
+    def test_a_body_that_is_not_json_at_all_is_unreachable(self):
+        with self.answering(body="<html>rate limited</html>"):
+            self.assertEqual((None, release.UNREACHABLE), release._asked_of_the_api())
+
+    def test_it_asks_the_repository_this_release_belongs_to(self):
+        with self.answering(url_landed_on="https://github.com/o/r/releases/tag/v1.2.3"):
+            release.latest_published()
+        self.assertIn(release.REPO, self.asked[0])
+
+
+class _AnAnswer:
+    """What `urlopen` hands back: something with a final URL and a body, closeable."""
+
+    def __init__(self, landed, body):
+        self._landed = landed
+        self._body = body or ""
+
+    def geturl(self):
+        return self._landed
+
+    def read(self):
+        return self._body.encode("utf-8")
+
+    def close(self):
+        pass
+
+
+class WhereAReleaseIsFetchedFrom(support.Isolated):
+    """`archive_url` and `release_url` — built on every update and asserted on by nothing."""
+
+    def test_the_archive_is_asked_for_by_tag(self):
+        # Every update case replaces `fetching=` with a stub that ignores the URL, so a typo in
+        # the template would run green for ever and 404 the first time somebody really updated.
+        built = release.archive_url("v9.9.9")
+        self.assertIn(release.REPO, built)
+        self.assertIn("v9.9.9", built)
+        self.assertTrue(built.startswith("https://"), built)
+
+    def test_the_notes_are_named_for_a_version_and_only_for_a_version(self):
+        self.assertIn("v9.9.9", release.release_url("v9.9.9"))
+        self.assertIsNone(release.release_url("nightly"))
+        self.assertIsNone(release.release_url(None))
 
 
 if __name__ == "__main__":
