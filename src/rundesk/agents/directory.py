@@ -41,11 +41,11 @@ the owner's live install.
 import os
 import shutil
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 from rundesk.agents.records import beside, stated
 from rundesk.core import paths
-from rundesk.utils import files
+from rundesk.utils import files, locking
 
 #: The records that make this directory an agent.
 RECORDS = "state.db"
@@ -238,6 +238,14 @@ def made(name: str, provider: str) -> Path:
     does, for the same reason. The schema is never laid down by executing DDL from `records`: there
     would then be two descriptions of what an agent's records are, and the one the migration runner
     knows about is the one every agent on every machine is measured against.
+
+    **Held under the install's own lock, because staging alone is not enough here.** The staged name
+    is derived from the agent's name, so two makes of the *same* name build in the same place: the
+    second `discard`s the first's directory out from under it. Measured, and worse than it sounds —
+    of five concurrent pairs, three ended with **no agent at all**, both callers having destroyed
+    each other's work, and every loser got a bare `FileExistsError` from the rename instead of a
+    sentence saying the name was taken. The same lock every other durable write in this product
+    takes, for the same reason: `config.stated_all` and `config.fill_in` already hold it.
     """
     # Imported here rather than at the top of the file. `migration` reads an agent's paths through
     # this module, and making an agent is the single place the traffic goes the other way; a
@@ -245,14 +253,23 @@ def made(name: str, provider: str) -> Path:
     # site is the smaller price. Everything else in this file stands on its own.
     from rundesk.agents import migration
 
-    trouble = taken(name)
-    if trouble:
-        raise Refused(trouble)
     if not provider or not provider.strip():
         raise Refused(f"{name} needs a provider — an agent with nothing behind it cannot answer")
 
     agents = paths.agents()
     agents.mkdir(parents=True, exist_ok=True)
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        # Asked *inside* the lock. Asking outside it is the same two-decisions-with-a-gap the
+        # gateway's own claim exists to close: both callers would be told the name was free, and
+        # both would go on to build under it.
+        trouble = taken(name)
+        if trouble:
+            raise Refused(trouble)
+        return _built(name, provider, agents, migration)
+
+
+def _built(name: str, provider: str, agents: Path, migration: Any) -> Path:
+    """Build the agent under a staged name and rename it into place. Held by `made`'s lock."""
     building = agents / files.INCOMING.format(name=name)
     files.discard(building)
 

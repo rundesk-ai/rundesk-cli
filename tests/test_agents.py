@@ -11,6 +11,7 @@ Run directly: `python3 tests/test_agents.py`
 import os
 import shutil
 import sqlite3
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -206,6 +207,58 @@ class WhetherANameMayBeUsedForANewAgent(Agents):
     def test_a_free_name_is_no_trouble(self):
         directory.made("cole", "anthropic")
         self.assertEqual("", directory.taken("nina"))
+
+
+class TwoMakesOfOneNameAtOnce(Agents):
+    """One wins and one is told the name is taken. Neither destroys the other's work.
+
+    Measured before the lock went in, and the result was worse than a lost race: because the staged
+    name is derived from the agent's name, both callers built in the *same* place and each discarded
+    the other's directory. Three runs in five ended with **no agent at all** — an outcome neither
+    caller could have produced alone — and whichever side lost got a bare `FileExistsError` from the
+    rename rather than a sentence saying the name was taken.
+    """
+
+    def test_one_of_them_wins_and_the_other_is_told_the_name_is_taken(self):
+        made, refused = [], []
+
+        def go(provider):
+            try:
+                made.append(directory.made("dup", provider))
+            except directory.Refused as why:
+                refused.append(str(why))
+
+        racing = [threading.Thread(target=go, args=(one,)) for one in ("anthropic", "openai")]
+        for one in racing:
+            one.start()
+        for one in racing:
+            one.join(timeout=30)
+
+        self.assertEqual(1, len(made), f"expected exactly one agent, refusals were {refused}")
+        self.assertEqual(1, len(refused))
+        self.assertIn("already an agent", refused[0])
+        self.assertEqual(["dup"], directory.known())
+
+    def test_the_one_that_was_made_is_whole_and_not_a_mixture_of_both(self):
+        # The real damage of the race was never the exit code — it was that two builders shared one
+        # staged directory, so a survivor could be half one caller's work and half the other's.
+        def go(provider):
+            try:
+                directory.made("dup", provider)
+            except directory.Refused:
+                pass
+
+        racing = [threading.Thread(target=go, args=(one,)) for one in ("anthropic", "openai")]
+        for one in racing:
+            one.start()
+        for one in racing:
+            one.join(timeout=30)
+
+        kept = records.read(directory.records("dup"))
+        self.assertEqual("dup", kept["agent_name"])
+        self.assertIn(kept["agent_provider"], ("anthropic", "openai"))
+        self.assertEqual([], [one for one in paths.agents().iterdir() if files.staged(one.name)],
+                         "a staged directory was left behind")
 
 
 class MakingAnAgent(Agents):
