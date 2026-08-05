@@ -854,7 +854,6 @@ class WhenSomethingElseHoldsTheInstallLock(Skills):
                 self.assertEqual("", out)
                 self.assertIn("skills: FAILED", err)
                 self.assertIn(landed, err)
-                self.assertIn("rundesk skills doctor", err)
 
     def test_a_grant_that_landed_but_could_not_be_linked_says_which_it_was(self):
         # The write and the linking are two lock acquisitions, so the second can be refused for
@@ -950,6 +949,92 @@ class WhatIsOfferedAtAll(Skills):
                 # none of them reaches the `AssertionError`, which would come out as a traceback.
                 code, _out, _err = self.rundesk("skills", verb, "x", "y")
                 self.assertIn(code, (0, 1, 2))
+
+
+class WhetherTheAdviceAfterALinkingFailureIsTrue(Skills):
+    """The last line of a refusal is a command somebody will run. It has to be able to help them.
+
+    Asserting a refusal merely mentions `rundesk skills doctor` proves nothing — the existing test did
+    exactly that and missed this. So each verb's advice is checked by running it.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.install()
+        directory.made("alan", "claude")
+
+    def refuse_the_linking(self, *argv: str):
+        with mock.patch("rundesk.skills.grants.presented",
+                        side_effect=locking.Stuck("something else has the lock")):
+            return self.rundesk(*argv)
+
+    def test_after_a_grant_it_names_doctor_and_doctor_really_reports_it(self):
+        code, _out, err = self.refuse_the_linking("skills", "grant", "alan", "acme/writing-plans")
+        self.assertEqual(1, code)
+        self.assertIn("rundesk skills doctor", err)
+        code, out, _err = self.rundesk("skills", "doctor")
+        self.assertEqual(1, code, "doctor has to be able to see the fault it was named for")
+        self.assertIn("UNSEEN", out)
+
+    def test_after_a_revoke_it_does_not_name_doctor_because_doctor_cannot_see_it(self):
+        # `grants.revoked` takes the grant away before it presents, so nothing is left for `doctor` to
+        # walk: it says "nothing is granted" and exits zero while the vendor links sit there. The
+        # shared wording sent somebody to a diagnosis that could not answer them.
+        self.rundesk("skills", "grant", "alan", "acme/writing-plans")
+        code, _out, err = self.refuse_the_linking("skills", "revoke", "alan", "writing-plans")
+        self.assertEqual(1, code)
+        self.assertNotIn("rundesk skills doctor", err)
+        self.assertIn("rundesk update", err)
+        code, out, _err = self.rundesk("skills", "doctor")
+        self.assertEqual(0, code, "there is genuinely no grant left to diagnose")
+        self.assertIn("nothing is granted", out)
+
+    def test_the_update_it_names_after_a_revoke_really_clears_the_links(self):
+        # Driven through `grants.refreshed`, which is exactly the sweep `rundesk update` runs, because
+        # `rundesk update` itself asks GitHub what the newest release is and every case here is
+        # offline. What is being proved is that the advice is actionable, not that the release check
+        # works — `test_update.py` holds that.
+        self.rundesk("skills", "grant", "alan", "acme/writing-plans")
+        self.refuse_the_linking("skills", "revoke", "alan", "writing-plans")
+        left = directory.home("alan") / ".claude/skills" / "writing-plans"
+        self.assertTrue(left.is_symlink(), "the litter this advice is about")
+        grants.refreshed()
+        self.assertFalse(left.is_symlink(), "rundesk update said it would clear it")
+
+
+class WhenTheSweepAfterAnUpdateCannotFinish(Skills):
+    """A catalog that was replaced is not a catalog that failed to be replaced.
+
+    `refreshed` takes a lock per agent, so ordinary contention anywhere in it — what `locking.Stuck`
+    exists for — used to come out of `skills update` as the verb's own failure, having already
+    swapped the tree on disk.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.install()
+        directory.made("alan", "claude")
+
+    def test_the_update_is_reported_as_the_success_it_was(self):
+        self.a_source(version="1.1.0", skills=("writing-plans",))
+        with mock.patch("rundesk.skills.grants.presented",
+                        side_effect=locking.Stuck("something else has the lock")):
+            code, out, err = self.rundesk("skills", "update", "acme", "--confirm")
+        self.assertEqual(0, code, err)
+        self.assertIn("1.0.0 -> 1.1.0", out)
+        self.assertIn("the grants could not all be brought up to date", err)
+
+    def test_the_tree_really_was_replaced_despite_the_sweep(self):
+        self.a_source(version="1.1.0", skills=("writing-plans",))
+        with mock.patch("rundesk.skills.grants.presented",
+                        side_effect=locking.Stuck("something else has the lock")):
+            self.rundesk("skills", "update", "acme", "--confirm")
+        self.assertEqual("1.1.0", library.read("acme").manifest.version)
+
+    def test_a_sweep_that_worked_says_nothing_about_itself(self):
+        self.a_source(version="1.1.0", skills=("writing-plans",))
+        _code, _out, err = self.rundesk("skills", "update", "acme", "--confirm")
+        self.assertNotIn("could not all be brought up to date", err)
 
 
 if __name__ == "__main__":

@@ -343,13 +343,47 @@ def unseen(grant: Grant) -> List[str]:
 
     Read-only, and deliberately not `presented`: something has to be able to *ask* without also
     changing the answer, or a diagnosis becomes a repair and can no longer report what it found.
+
+    **A link somebody else made under the granted name counts as missing**, because to the provider it
+    is. `_linked` refuses to replace one, deliberately, so the state is reachable and permanent: the
+    brain follows their link and never sees the grant. Asking only whether *a* symlink stood there
+    reported that as present, which is this verdict's own failure mode reached through a name
+    collision rather than through a refused presentation.
     """
     if not grant.resolves:
         # Nothing should be linked to a grant pointing at nothing, and `doctor` says `DANGLING` about
         # it first anyway. Answering "unseen" here as well would be two verdicts for one fault.
         return []
     home = directory.home(grant.agent)
-    return [root for root in VENDOR_ROOTS if not (home / root / grant.name).is_symlink()]
+    return [root for root in VENDOR_ROOTS if not _ours(home / root / grant.name, where(grant.agent))]
+
+
+def taken(grant: Grant) -> List[str]:
+    """Which provider roots have something under this grant's name that rundesk did not put there.
+
+    A subset of `unseen`, told apart from it because **the two have different answers and only one of
+    them is rundesk's to give.** A root with nothing under the name is linked by the next sweep, so
+    `rundesk update` repairs it. A root where somebody's own link or directory stands is one this
+    module refuses to touch, by rule and with tests of its own — so no command rundesk has will ever
+    clear it, and offering one would be the same false advice as sending them to a diagnosis that
+    cannot see the fault.
+    """
+    if not grant.resolves:
+        return []
+    home = directory.home(grant.agent)
+    return [root for root in VENDOR_ROOTS
+            if _stands_at(home / root / grant.name) and not _ours(home / root / grant.name,
+                                                                 where(grant.agent))]
+
+
+def _stands_at(at: Path) -> bool:
+    """Whether anything at all stands at `at`, including a link whose target has gone.
+
+    `exists` follows a link and answers `False` for a broken one, and a broken link of somebody else's
+    is exactly the case `_pruned`'s docstring is about — an owner's link to a volume that is not
+    mounted. It occupies the name whether it resolves today or not.
+    """
+    return at.is_symlink() or at.exists()
 
 
 def stale(grant: Grant) -> bool:
@@ -579,6 +613,20 @@ def _renamed(said: str, to: str) -> str:
     return "".join(lines)
 
 
+def _ours(at: Path, grants: Path) -> bool:
+    """Whether the link at `at` is one rundesk made for this agent — decided by where it points.
+
+    **The one place "ours" is decided**, asked by everything that stands a link, takes one away, or
+    reports one missing. It was written out at each of them, and the third to be written asked a
+    weaker question than the other two, which is how a foreign link came to read as a grant standing.
+
+    A name collision is not ownership: an owner's own `.claude/skills/writing-plans` pointing at a
+    checkout of their own is a link this module must never replace, never delete, and must never count
+    as the grant being present.
+    """
+    return at.is_symlink() and _linked_at(at).parent == Path(os.path.normpath(str(grants)))
+
+
 def _linked(root: Path, grants: Path, wanted: Set[str]) -> List[Path]:
     """Stand every granted skill in one vendor's root. Returns the links made.
 
@@ -593,11 +641,10 @@ def _linked(root: Path, grants: Path, wanted: Set[str]) -> List[Path]:
         if at.is_symlink():
             if os.readlink(at) == points:
                 continue
-            if _linked_at(at).parent != Path(os.path.normpath(str(grants))):
-                # Somebody else's link, and not ours to replace — the same "ours is decided by where
-                # it points" test `_pruned` uses to decide what it may remove. Replacing on a name
-                # collision alone was the one place this module took something it had not put there,
-                # and it contradicted the rule its own docstring states.
+            if not _ours(at, grants):
+                # Somebody else's link, and not ours to replace. Replacing on a name collision alone
+                # was the one place this module took something it had not put there, and it
+                # contradicted the rule its own docstring states.
                 continue
             at.unlink()
         elif at.exists():
@@ -621,7 +668,7 @@ def _pruned(root: Path, grants: Path, wanted: Set[str]) -> List[Path]:
     for one in sorted(root.iterdir(), key=lambda entry: entry.name):
         if not one.is_symlink() or one.name in wanted:
             continue
-        if _linked_at(one).parent != Path(os.path.normpath(str(grants))):
+        if not _ours(one, grants):
             continue
         one.unlink()
         gone.append(one)

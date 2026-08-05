@@ -182,10 +182,18 @@ def _verdict(grant: grants.Grant) -> Finding:
     # diagnosis making the unearned claim, at the moment somebody followed the product's own advice.
     missing = grants.unseen(grant)
     if missing:
+        # **Which of the two it is decides whether there is anything to type.** A root with nothing
+        # under the name is linked by the next sweep; a root where somebody's own link or directory
+        # stands is one rundesk refuses to touch, so naming `rundesk update` for it would be advice
+        # that cannot work — the same defect as sending somebody to a diagnosis that cannot see the
+        # fault, which is what this verdict was added to fix.
+        held = grants.taken(grant)
+        if held:
+            return _finding(grant, UNSEEN, _taken_by_someone(held), fix="")
         return _finding(grant, UNSEEN, _cannot_find(missing), fix="rundesk update")
 
     declared = needs.declared(grant.at)
-    # Walked once. `needs.started` and `needs.usable` each call `needs.every` themselves, so asking
+    # Walked once. `needs.usable` calls `needs.every` itself, so asking
     # all three meant three passes over the same profile set — and every pass asks the credential
     # store whether each name is placed.
     every = needs.every(declared)
@@ -262,6 +270,18 @@ def _cannot_find(missing: List[str]) -> str:
     if len(missing) == 1:
         return f"{missing[0]} has no link to it"
     return ", ".join(missing) + " have no link to it"
+
+
+def _taken_by_someone(held: List[str]) -> str:
+    """Why an unseen grant cannot be linked, when the name is already somebody else's.
+
+    Says what stands in the way and does not offer a command, because there is not one: the way out is
+    to move that entry, or to hold the skill under another name with `--as`, and both are decisions
+    about somebody else's files rather than something rundesk may do on their behalf.
+    """
+    standing = "hold" if len(held) > 1 else "holds"
+    return (f"{', '.join(held)} {standing} something of your own under this name, and rundesk will "
+            "not replace it")
 
 
 def readable(finding: Finding) -> List[str]:

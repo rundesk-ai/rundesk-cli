@@ -393,5 +393,68 @@ class ASkillNoProviderCanFind(Doctor):
         self.assertEqual(doctor.READY, self.verdict("writing-plans").verdict)
 
 
+class AVendorRootHoldingSomebodyElsesLink(Doctor):
+    """The verdict has to hold when the name is taken by something rundesk may not replace.
+
+    And the *fix line* has to hold too. An unseen grant has two causes with two different answers: a
+    root with nothing under the name is linked by the next sweep, so `rundesk update` repairs it — and
+    a root holding somebody's own link or directory is one rundesk refuses to touch, so no command it
+    has will ever clear it. Naming `rundesk update` for the second is the same false advice this
+    verdict was added to remove, one step over.
+    """
+
+    def taken_by_them(self, root: str = ".claude/skills", directory_instead: bool = False) -> None:
+        at = directory.home("alan") / root / "writing-plans"
+        at.parent.mkdir(parents=True, exist_ok=True)
+        if directory_instead:
+            at.mkdir()
+            return
+        elsewhere = self.home / f"of-my-own-{root.replace('/', '-')}"
+        elsewhere.mkdir()
+        at.symlink_to(elsewhere)
+
+    def test_a_foreign_link_under_the_granted_name_is_unseen_and_not_ready(self):
+        self.taken_by_them()
+        self.grant("acme/writing-plans")
+        found = self.verdict("writing-plans")
+        self.assertEqual(doctor.UNSEEN, found.verdict)
+        self.assertTrue(found.trouble)
+
+    def test_it_says_what_is_in_the_way_rather_than_that_nothing_is_linked(self):
+        self.taken_by_them()
+        self.grant("acme/writing-plans")
+        self.assertEqual(".claude/skills holds something of your own under this name, and rundesk "
+                         "will not replace it", self.verdict("writing-plans").said)
+
+    def test_no_command_is_offered_for_it_because_there_is_not_one(self):
+        self.taken_by_them()
+        self.grant("acme/writing-plans")
+        self.assertEqual([], doctor.fixes(doctor.counted(doctor.looked_over())))
+
+    def test_a_directory_of_their_own_is_treated_the_same_way(self):
+        # `_linked` skips a real directory under the name for the same reason it skips a foreign link.
+        self.taken_by_them(directory_instead=True)
+        self.grant("acme/writing-plans")
+        found = self.verdict("writing-plans")
+        self.assertEqual(doctor.UNSEEN, found.verdict)
+        self.assertIn("something of your own", found.said)
+        self.assertEqual("", found.fix)
+
+    def test_two_roots_of_theirs_read_as_two(self):
+        self.taken_by_them(".claude/skills")
+        self.taken_by_them(".grok/skills")
+        self.grant("acme/writing-plans")
+        self.assertIn(".claude/skills, .grok/skills hold something of your own",
+                      self.verdict("writing-plans").said)
+
+    def test_a_root_that_is_merely_empty_still_names_the_update(self):
+        # The other cause, kept apart: nothing of theirs is in the way, so the sweep can repair it.
+        self.grant("acme/writing-plans")
+        (directory.home("alan") / ".grok/skills" / "writing-plans").unlink()
+        found = self.verdict("writing-plans")
+        self.assertEqual(doctor.UNSEEN, found.verdict)
+        self.assertEqual("rundesk update", found.fix)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -740,7 +740,7 @@ what it summarises when both are merged into one pipe.
 | `PARTIAL` | at least one profile is usable and at least one is not |
 | `BLOCKED` | no profile is usable — a required value is missing everywhere |
 | `UNRUNNABLE` | every credential is in place and a command it ships is not executable |
-| `UNSEEN` | the grant is there and no provider can find it; `rundesk update` links it |
+| `UNSEEN` | the grant is there and no provider can find it; `rundesk update` links it, unless something of yours holds the name |
 | `STALE` | a copied grant is behind the catalog it came from; `rundesk update` remakes it |
 | `DANGLING` | the grant no longer resolves — its skill left its catalog, or the catalog went |
 | `BROKEN` | the skill itself will not load, or what it declares cannot be read |
@@ -751,9 +751,16 @@ the site that fails at three in the morning.
 
 `UNSEEN` exists because a grant and its linking are two separate writes. The link into each provider's
 own root is made after the grant, under a lock of its own, so it can be refused on its own — and what
-that leaves is a skill that is correct in every listing and invisible to every brain. `grant` and
-`revoke` both send anybody who meets that refusal here, so this is the command that has to be able to
-answer it.
+that leaves is a skill that is correct in every listing and invisible to every brain. `grant` sends anybody who
+meets that refusal here, so this is the command that has to be able to answer it. (`revoke` does not,
+and deliberately: it takes the grant away before it links, so by the time it can fail there is no
+grant left for this command to look at. It names `rundesk update`, which clears the leftover links.)
+
+**`UNSEEN` has two causes and only one of them is rundesk's to fix.** A provider root with nothing
+under the name is linked by the next sweep, so `rundesk update` repairs it. A root where a link or
+directory of *your own* stands under that name is one rundesk will never replace — so it says what is
+in the way and offers no command, because there is not one: move that entry, or hold the skill under
+another name with `rundesk skills grant … --as <name>`.
 
 Writing a skill or publishing a catalog is [`catalogs.md`](catalogs.md).
 

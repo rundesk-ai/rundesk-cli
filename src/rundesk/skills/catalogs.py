@@ -118,12 +118,17 @@ class Installed(NamedTuple):
     does not any more — named rather than counted, because each one is a grant somewhere that has to
     be taken away and somebody has to be told which.
 
-    **`fresh` says whether a tree actually came back, and it is the only thing a caller may read to
-    find that out.** `before == after` does not answer it: a catalog author who edits a skill without
-    bumping the version is ordinary, and this whole module is built on content deciding rather than a
-    version number — the version is metadata shown to a person. Reading it off the versions had
+    **`changed` says whether the tree now standing is a new one, and it is the only thing a caller may
+    read to find that out.** `before == after` does not answer it: a catalog author who edits a skill
+    without bumping the version is ordinary, and this whole module is built on content deciding rather
+    than a version number — the version is metadata shown to a person. Reading it off the versions had
     `rundesk skills update` report "up to date, and nothing was fetched" immediately after replacing
     the entire tree.
+
+    **Not called `fresh`, which `Coming` already uses for something weaker.** A `Coming` is fresh when
+    the far end sent a body rather than a `304`; this is true only when what it sent is not the tree
+    already on disk. One function reads the first and returns the second, so one name for the two
+    would be a trap laid in the exact place this field exists to make safe.
     """
 
     name: str
@@ -131,7 +136,7 @@ class Installed(NamedTuple):
     after: str
     skills: List[str]
     retired: List[str]
-    fresh: bool
+    changed: bool
 
 
 class Refreshed(NamedTuple):
@@ -341,11 +346,15 @@ def update(name: str, fetching: Optional[Fetching] = None,
     was = library.read_manifest(settled.at / library.TREE)
     holding = library.found(settled.at / library.TREE)
     said = saying or (lambda _line: None)
+    # Both ways of finding nothing to do end in the same sentence and the same answer, so each is
+    # written once here rather than spelled out at both of them.
+    up_to_date = f"{name} {was.version}: up to date"
+    unmoved = Installed(name, was.version, was.version, holding, [], False)
 
     with brought(settled.provenance.source, settled.provenance.etag, fetching) as coming:
         if not coming.fresh or coming.at is None or coming.manifest is None:
-            said(f"{name} {was.version}: up to date")
-            return Installed(name, was.version, was.version, holding, [], False)
+            said(up_to_date)
+            return unmoved
         if coming.manifest.name != name:
             raise Refused(f"{settled.provenance.source} now calls itself {coming.manifest.name} "
                           f"and this install has it as {name} — install it under its new name and "
@@ -355,8 +364,8 @@ def update(name: str, fetching: Optional[Fetching] = None,
             # Swapping it in replaces a tree with a copy of itself and reports a change nobody made.
             # The `ETag` is still written down, which is what `_noted` is for.
             _noted(settled.at, coming)
-            said(f"{name} {was.version}: up to date")
-            return Installed(name, was.version, was.version, holding, [], False)
+            said(up_to_date)
+            return unmoved
         retired = [one for one in holding if one not in coming.skills]
         _swapped(settled.at, coming)
     # Names a version movement only when there is one, the way the preview does. A tree that was
@@ -568,9 +577,7 @@ def _swapped(at: Path, coming: Coming) -> None:
                         f"{at.name} could not be replaced and its own tree could not be put back — "
                         f"it is at {aside} ({put_back})") from put_back
             raise
-        library.stated_provenance(
-            at, library.Provenance(coming.source, coming.etag, coming.manifest.version,
-                                   library.stamped()))
+        _recorded(at, coming)
         files.discard(aside)
 
 
@@ -589,9 +596,21 @@ def _noted(at: Path, coming: Coming) -> None:
     if coming.manifest is None:
         raise Refused("nothing was fetched, so there is nothing to write down")
     with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
-        library.stated_provenance(
-            at, library.Provenance(coming.source, coming.etag, coming.manifest.version,
-                                   library.stamped()))
+        _recorded(at, coming)
+
+
+def _recorded(at: Path, coming: Coming) -> None:
+    """Write down what the far end said about the tree at `at`. **The caller holds the install lock.**
+
+    One statement, and it was written out twice — once at the end of a swap and once by the function
+    that records without swapping. Two copies of "what we know about this fetch" is two places for a
+    field to be forgotten when `Provenance` grows one.
+    """
+    if coming.manifest is None:
+        raise Refused("nothing was fetched, so there is nothing to write down")
+    library.stated_provenance(
+        at, library.Provenance(coming.source, coming.etag, coming.manifest.version,
+                               library.stamped()))
 
 
 def _checked(tree: Path, name: str) -> List[str]:

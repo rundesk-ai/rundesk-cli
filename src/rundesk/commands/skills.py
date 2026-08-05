@@ -28,7 +28,7 @@ retires three grants the answer is yes.
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from rundesk.agents import directory
 from rundesk.commands import Subcommands, env, failed
@@ -315,13 +315,24 @@ def _updated(name: str, confirm: bool, fetching: Optional[catalogs.Fetching]) ->
         # `refreshed`, which has no other voice. Handed both, one `rundesk skills update` said the
         # outcome twice — once indented and once not.
         did = catalogs.update(name, fetching)
-        went = grants.retired(name, did.retired)
-        grants.refreshed(_out_loud)
     except TROUBLE as why:
         return _failed(str(why))
 
-    # **Decided by `did.fresh`, never by the versions matching** — see `catalogs.Installed`.
-    if not did.fresh:
+    # **Its own boundary, because by here the catalog has already been replaced on disk.** Sharing the
+    # guard above reported `skills: FAILED` for an update that had entirely succeeded: `refreshed`
+    # sweeps every agent and takes a lock per agent, so ordinary contention anywhere in it — the thing
+    # `locking.Stuck` exists for — came out as the verb's own failure. The same reasoning, and the
+    # same wording, as the sweep `install` and `rundesk update` run through `refreshed` above.
+    went: Dict[str, List[str]] = {}
+    sweeping = ""
+    try:
+        went = grants.retired(name, did.retired)
+        grants.refreshed(_out_loud)
+    except TROUBLE as why:
+        sweeping = str(why)
+
+    # **Decided by `did.changed`, never by the versions matching** — see `catalogs.Installed`.
+    if not did.changed:
         # "nothing changed" rather than "nothing was fetched", because both answers arrive here:
         # a `304` fetched nothing at all, and a local directory hands back a whole tree that turns out
         # to be the one already standing. The second had this line claiming no fetch had happened.
@@ -335,7 +346,21 @@ def _updated(name: str, confirm: bool, fetching: Optional[catalogs.Fetching]) ->
         print(f"        {one} is no longer in this catalog")
     for agent in sorted(went):
         print(f"        {agent} no longer holds {', '.join(went[agent])}")
+    _swept(sweeping)
     return OK
+
+
+def _swept(why: str) -> None:
+    """Say that the grants could not all be brought into line, if they could not.
+
+    On stderr and without changing the exit code, for the reason `refreshed` gives at length: what the
+    verb reports is whether *it* worked, and it did — the tree was replaced. A sweep that could not
+    finish is a true thing to say and a false reason to tell a script the update failed.
+    """
+    if not why:
+        return
+    print(f"        the grants could not all be brought up to date: {why}", file=sys.stderr)
+    print("        rundesk skills doctor says which agent is affected", file=sys.stderr)
 
 
 def _would_update(name: str, fetching: Optional[catalogs.Fetching]) -> int:
@@ -439,7 +464,9 @@ def _granted(agent: str, address: str, alias: str) -> int:
         skill = library.look_up(address)
         held = grants.granted(agent, skill, alias)
     except grants.NotPresented as why:
-        return _not_presented(why, f"{agent} does hold it")
+        return _not_presented(why, f"{agent} does hold it",
+                              "rundesk skills doctor reports it as UNSEEN, and rundesk update "
+                              "repairs it")
     except grants.Occupied as why:
         # The one refusal with a way out. Told apart by its own kind rather than worked out from the
         # address afterwards — see `grants.Occupied` for the two refusals that trick that.
@@ -471,17 +498,23 @@ def _granted(agent: str, address: str, alias: str) -> int:
     return OK
 
 
-def _not_presented(why: Exception, landed: str) -> int:
+def _not_presented(why: Exception, landed: str, then: str) -> int:
     """Say that the change landed and the linking did not, which is not the same as having failed.
 
     One function because two verbs reach it and the wording has to hold for both. The difference
     decides what somebody does next: told a grant had failed they retry and meet "already holds it",
     and told a revoke had failed they look for a skill that is already gone — in each case having been
     given no reason to think the first command worked.
+
+    **The last line is the caller's, and that is not a style choice.** After a grant the skill is
+    still held, so `doctor` walks it and reports `UNSEEN`. After a revoke it is not: `grants.revoked`
+    takes the grant away *before* it presents, so there is nothing left for `doctor` to walk — it says
+    "nothing is granted" and exits zero while the vendor links sit there. One shared line sent
+    somebody to `doctor` for a fault `doctor` cannot see, which is the defect this whole change exists
+    to remove, pointing the other way.
     """
     return failed(f"skills: FAILED — {why}", landed,
-                  "this was the linking into each provider's own root",
-                  "rundesk skills doctor reports it as UNSEEN, and rundesk update repairs it")
+                  "this was the linking into each provider's own root", then)
 
 
 def _revoked(agent: str, name: str) -> int:
@@ -494,7 +527,10 @@ def _revoked(agent: str, name: str) -> int:
         # verb that does not name it does not catch it at all, and `revoke` did not: an ordinary
         # revoke under lock contention came out of `cli.main` as a traceback. Splitting a type out of
         # a blanket catch is not finished until every caller of what raises it has been checked.
-        return _not_presented(why, f"{agent} no longer holds it")
+        # No mention of `doctor`: there is no grant left for it to look at. `rundesk update` prunes
+        # the links, which is a true thing to say and the only one there is.
+        return _not_presented(why, f"{agent} no longer holds it",
+                              "rundesk update clears any link left standing in a provider's root")
     except TROUBLE as why:
         return _failed(str(why))
 
@@ -659,8 +695,14 @@ def _doctored(agent: Optional[str]) -> int:
     # pipe and stderr is not, so `rundesk skills doctor | less` showed the summary *above* the
     # findings it summarises.
     sys.stdout.flush()
-    print(f"skills: {len(trouble)} of {len(found)} cannot be used:", file=sys.stderr)
-    for line in doctor.fixes(trouble):
+    # **The colon is only earned when something follows it.** Not every verdict has a command behind
+    # it — a provider root holding something of the operator's own is a fault rundesk states and
+    # refuses to act on — and a heading reading "3 of 4 cannot be used:" with nothing under it reads
+    # like output that went missing.
+    typing = doctor.fixes(trouble)
+    ending = ":" if typing else " — each of them says what is in the way"
+    print(f"skills: {len(trouble)} of {len(found)} cannot be used{ending}", file=sys.stderr)
+    for line in typing:
         print(f"        {line}", file=sys.stderr)
     return FAILED
 

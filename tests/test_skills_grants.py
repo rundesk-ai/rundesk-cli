@@ -633,5 +633,89 @@ class BringingProviderLinksBackIntoLine(Grants):
         self.assertEqual([[], []], [grants.unseen(one) for one in held])
 
 
+class AVendorRootHoldingSomebodyElsesLink(Grants):
+    """A link under the granted name that rundesk did not make is the grant *not* standing.
+
+    `_linked` refuses to replace one, deliberately and with a test of its own, so this state is
+    reachable and it does not heal: the brain follows their link and never sees the granted skill.
+    Ownership is decided by where a link points, and `unseen` asked a weaker question than the two
+    functions that stand and remove links — so a foreign link read as the grant being present, and
+    `doctor` said READY about a skill no provider could reach.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.elsewhere = self.home / "of-my-own"
+        self.elsewhere.mkdir()
+        at = self.vendor("alan", ".claude/skills", "writing-plans")
+        at.parent.mkdir(parents=True, exist_ok=True)
+        at.symlink_to(self.elsewhere)
+        self.held = self.grant("alan", "acme/writing-plans")
+
+    def test_the_foreign_link_is_left_exactly_as_it_was_found(self):
+        at = self.vendor("alan", ".claude/skills", "writing-plans")
+        self.assertEqual(str(self.elsewhere), os.readlink(at))
+
+    def test_that_root_is_reported_as_holding_no_link_to_the_grant(self):
+        self.assertEqual([".claude/skills"], grants.unseen(self.held))
+
+    def test_the_roots_rundesk_did_link_are_not_reported(self):
+        self.assertNotIn(".codex/skills", grants.unseen(self.held))
+
+    def test_a_sweep_does_not_quietly_take_it_either(self):
+        # The report has to stay true after the repair everything else points at: `rundesk update`
+        # cannot fix this one, because fixing it would mean deleting something of theirs.
+        grants.refreshed()
+        self.assertEqual(str(self.elsewhere), os.readlink(
+            self.vendor("alan", ".claude/skills", "writing-plans")))
+        self.assertEqual([".claude/skills"], grants.unseen(self.held))
+
+
+class WhichRootsHoldSomethingOfTheirOwn(Grants):
+    """`taken` — the subset of `unseen` that no command rundesk has can repair."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.held = self.grant("alan", "acme/writing-plans")
+
+    def theirs(self, root: str, broken: bool = False) -> None:
+        at = self.vendor("alan", root, "writing-plans")
+        if at.is_symlink():
+            at.unlink()
+        at.symlink_to(self.home / ("gone" if broken else "of-my-own"))
+
+    def test_a_root_rundesk_linked_holds_nothing_of_theirs(self):
+        self.assertEqual([], grants.taken(self.held))
+
+    def test_a_root_that_is_merely_empty_holds_nothing_of_theirs(self):
+        # The distinction that decides whether there is anything to type: unseen, but repairable.
+        self.vendor("alan", ".grok/skills", "writing-plans").unlink()
+        self.assertEqual([".grok/skills"], grants.unseen(self.held))
+        self.assertEqual([], grants.taken(self.held))
+
+    def test_a_link_of_their_own_is_named(self):
+        (self.home / "of-my-own").mkdir()
+        self.theirs(".claude/skills")
+        self.assertEqual([".claude/skills"], grants.taken(self.held))
+
+    def test_a_broken_link_of_their_own_still_occupies_the_name(self):
+        # `exists` follows a link and answers False for a broken one — but a link to a volume that is
+        # not mounted is exactly the case this module must never delete, and it holds the name either
+        # way. Asked with `exists` alone, this read as a root rundesk could simply link into.
+        self.theirs(".claude/skills", broken=True)
+        self.assertEqual([".claude/skills"], grants.taken(self.held))
+
+    def test_a_directory_of_their_own_is_named(self):
+        at = self.vendor("alan", ".codex/skills", "writing-plans")
+        at.unlink()
+        at.mkdir()
+        self.assertEqual([".codex/skills"], grants.taken(self.held))
+
+    def test_a_grant_pointing_at_nothing_names_none_of_them(self):
+        # `DANGLING` is its one verdict, as with `unseen`.
+        shutil.rmtree(library.tree("acme") / library.INSIDE / "writing-plans")
+        self.assertEqual([], grants.taken(grants.holding("alan", "writing-plans")))
+
+
 if __name__ == "__main__":
     unittest.main()

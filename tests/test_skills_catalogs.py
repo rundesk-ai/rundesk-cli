@@ -668,14 +668,14 @@ class WhatCountsAsAChange(Catalogs):
 
     def test_the_far_end_saying_nothing_changed_is_not_fresh(self):
         self.install(self.a_source())
-        self.assertFalse(catalogs.update("acme", Answering([None])).fresh)
+        self.assertFalse(catalogs.update("acme", Answering([None])).changed)
 
     def test_content_that_moved_under_an_unchanged_version_is_fresh(self):
         self.install(self.a_source())
         moved = self.a_source(name="acme", version="1.0.0",
                               skills=("writing-plans", "filing-issues"))
         did = catalogs.update("acme", Answering([moved]))
-        self.assertTrue(did.fresh)
+        self.assertTrue(did.changed)
         self.assertEqual(("1.0.0", "1.0.0"), (did.before, did.after))
         self.assertEqual(["filing-issues", "writing-plans"],
                          [one.name for one in library.held("acme")])
@@ -685,7 +685,7 @@ class WhatCountsAsAChange(Catalogs):
         # hands back everything it has every single time.
         source = self.a_source()
         self.install(source)
-        self.assertFalse(catalogs.update("acme", Answering([source])).fresh)
+        self.assertFalse(catalogs.update("acme", Answering([source])).changed)
 
     def test_an_identical_tree_is_left_where_it_stands_rather_than_swapped(self):
         # Told apart from "swapped for a copy of itself", which no report would distinguish. A swap
@@ -696,6 +696,20 @@ class WhatCountsAsAChange(Catalogs):
         was = standing.stat().st_ino
         catalogs.update("acme", Answering([source]))
         self.assertEqual(was, standing.stat().st_ino)
+
+    def test_the_etag_is_written_down_when_the_tree_really_is_replaced(self):
+        # **A changed source deliberately.** The swap records the provenance itself, and nothing else
+        # does it for that path — but with an identical source the recording is done by the no-change
+        # path instead, so the swap's own write goes unexercised. That is exactly what happened here:
+        # treating an identical tree as no change rerouted the one test that had covered this, and
+        # taking the write out of the swap altogether then broke nothing at all.
+        self.install(self.a_source())
+        moved = self.a_source(name="acme", version="1.1.0",
+                              skills=("writing-plans", "filing-issues"))
+        catalogs.update("acme", Answering([moved], ['W/"after-the-swap"']))
+        after = library.read("acme").provenance
+        self.assertEqual('W/"after-the-swap"', after.etag)
+        self.assertEqual("1.1.0", after.version)
 
     def test_the_etag_of_an_identical_tree_is_still_written_down(self):
         # So the next check is one conditional request rather than another whole download of
@@ -714,12 +728,12 @@ class WhatCountsAsAChange(Catalogs):
         drifted = library.tree("acme") / library.INSIDE / "writing-plans" / library.DECLARED
         drifted.write_text("---\nname: writing-plans\ndescription: edited.\n---\n",
                            encoding="utf-8")
-        self.assertTrue(catalogs.update("acme", Answering([source])).fresh)
+        self.assertTrue(catalogs.update("acme", Answering([source])).changed)
 
     def test_installing_a_catalog_is_always_a_tree_that_arrived(self):
         source = self.a_source()
         with catalogs.brought(str(source)) as coming:
-            self.assertTrue(catalogs.installed(coming).fresh)
+            self.assertTrue(catalogs.installed(coming).changed)
 
     def test_the_predicate_says_no_of_a_far_end_that_handed_back_nothing(self):
         # Asked by the preview with whatever `brought` yielded, including the empty answer — so it has
