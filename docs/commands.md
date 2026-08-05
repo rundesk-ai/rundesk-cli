@@ -705,17 +705,22 @@ script can run is decided from what is on the disk.
 ```console
 $ rundesk skills doctor
 alan
-  jira              rundesk-skills  PARTIAL   2 of 3 profiles are usable
+  jira           rundesk-skills  PARTIAL   2 of 3 profiles are usable
       acme  ready
       beta  ready
       gamma  INCOMPLETE
           JIRA_API_TOKEN__GAMMA — an API token from id.atlassian.com
-  old-thing         —               DANGLING  the grant points at nothing
-
+  writing-plans  rundesk-skills  READY     needs nothing
+  old-thing      —               DANGLING  the grant points at nothing
 skills: 2 of 3 cannot be used:
         rundesk skills configure rundesk-skills/jira --profile gamma
         rundesk skills revoke alan old-thing
 ```
+
+The columns are measured against what is actually there rather than fixed, so a long catalog name
+does not run into the next one. The findings go to stdout and the summary to stderr, so a script can
+read one and ignore the other — and the findings are flushed first, or the summary would appear above
+what it summarises when both are merged into one pipe.
 
 | Verdict | Means |
 |---|---|
