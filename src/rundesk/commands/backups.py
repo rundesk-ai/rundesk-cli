@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from rundesk import backup as backups
 from rundesk import config
@@ -179,6 +180,31 @@ def _agreed() -> bool:
         return False
 
 
+def _which_side(why: OSError) -> str:
+    """Which of a backup's two trees an errno belongs to, said as what happened to it (R-BKP-32).
+
+    A backup reads one directory and writes another, and an `OSError` carries the path it
+    was raised on. Naming the destination for all of them is wrong for half of them, and
+    wrong in the direction that costs a diagnosis: an errno raised on a file under the data
+    directory, reported as a destination that could not be written to, sends whoever reads
+    it to a directory that is perfectly healthy — which is how a run of failed backups went
+    two days unexplained (#318).
+
+    Where the errno names nothing, the destination is still the answer: it is the side that
+    may be a disk nobody plugged in or a cloud directory that will not answer, and that is
+    the failure this handler was written for.
+    """
+    named = getattr(why, "filename", None)
+    if named:
+        try:
+            Path(named).relative_to(data_home())
+        except ValueError:
+            pass
+        else:
+            return f"{data_home()} could not be read: {why}"
+    return f"{backups_home()} could not be written to: {why}"
+
+
 def _take_a_backup() -> int:
     """Take one now, and say where it went and what it cost."""
     try:
@@ -187,10 +213,7 @@ def _take_a_backup() -> int:
         print(f"backups add: FAILED — {why}", file=sys.stderr)
         return 1
     except OSError as why:
-        # The destination may be a disk that is not plugged in or a cloud directory that
-        # will not answer, which is a different thing from having nothing to back up.
-        print(f"backups add: FAILED — {backups_home()} could not be written to: {why}",
-              file=sys.stderr)
+        print(f"backups add: FAILED — {_which_side(why)}", file=sys.stderr)
         return 1
     said = backups.manifest_of(at)
     print(f"took a backup: {at}")
@@ -201,6 +224,11 @@ def _take_a_backup() -> int:
         for one in said["copied_whole"]:
             print(f"        WARNING: {one} could not be copied consistently and is in the "
                   f"backup exactly as it is on disk", file=sys.stderr)
+    for one in said.get("vanished", ()):
+        # Said for the same reason, and read off the manifest for the same reason: a copy
+        # that is not complete must never look exactly like one that is (R-BKP-31).
+        print(f"        WARNING: {one} was removed while the backup was being written and "
+              f"is not in this copy", file=sys.stderr)
     # Pruned here rather than on a second schedule of its own: the only thing that puts a
     # copy past the last few is a newer one arriving, so this is the moment the question has
     # a new answer, and a machine that has stopped taking backups stops deleting them too.

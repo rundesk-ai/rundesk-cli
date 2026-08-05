@@ -7,7 +7,10 @@ backs that up, because the one thing a backup suite must never do is practise on
 
 from __future__ import annotations
 
+import contextlib
 import datetime
+import errno
+import io
 import json
 import copy
 import os
@@ -20,10 +23,12 @@ import threading
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk import backup, config, migration, store
+from rundesk.commands import backups as backups_command
 
 #: A fixed moment, so a name and a manifest are the same in every run and on every machine.
 AT = datetime.datetime(2026, 7, 27, 4, 0, 0, tzinfo=datetime.timezone.utc)
@@ -367,6 +372,117 @@ class ADatabaseBeingWrittenTo(WithSomethingToBackUp):
             self.assertEqual(b"this was a database once",
                              opened.read("data/agents/broken/state.db"))
             self.assertIn("data/agents/ava/state.db", opened.namelist())
+
+
+class SomethingThatGoesWhileTheArchiveIsWritten(WithSomethingToBackUp):
+    """A listed file removed before its turn came, which is a daily event on a real install.
+
+    The listing is taken in one go before anything is written and archiving a data directory
+    takes minutes, so any supported concurrent behaviour that removes a file lands inside
+    that window. `transcript.sweep` retiring a run older than the keep window (R-RUN-23) is
+    the one that fires on every turn, and a machine whose daily backup and an agent schedule
+    share an hour hits it every day (#318).
+    """
+
+    def swept_after_the_listing(self, doomed: Path) -> None:
+        """Remove this file once the listing has been taken, the way a sweep really does.
+
+        The removal is real and outside the archive code; only its *moment* is made
+        deterministic, by hanging it off the first entry rather than off a clock. A case that
+        raced two threads would prove the same thing on the machines where it happened to
+        lose.
+        """
+        real_members = backup._members
+        self.addCleanup(setattr, backup, "_members", real_members)
+
+        def a_sweep_fires_mid_archive(where, leaving):
+            for nth, entry in enumerate(real_members(where, leaving)):
+                if nth == 0:
+                    doomed.unlink()
+                yield entry
+
+        backup._members = a_sweep_fires_mid_archive
+
+    def test_a_file_removed_while_the_backup_is_being_written_is_left_out_and_named(self):
+        """R-BKP-31 — refusing the whole backup over one diagnostic file the owner no longer
+        keeps leaves every healthy agent uncopied as well, for as long as the two clocks
+        agree — which on the install this was found on was every day. It goes out of the
+        copy and into the manifest, because a copy that is not complete must never be
+        silently indistinguishable from one."""
+        home = self.an_agent()
+        (home / "logs" / "runs").mkdir(parents=True)
+        doomed = home / "logs" / "runs" / "100-0bus.jsonl"
+        doomed.write_text('{"printed": "old"}\n')
+        self.swept_after_the_listing(doomed)
+
+        at = self.taken()
+
+        said = backup.manifest_of(at)
+        self.assertEqual(["agents/ava/logs/runs/100-0bus.jsonl"], said["vanished"])
+        self.assertEqual([], said["copied_whole"])
+        held = self.inside(at)
+        self.assertNotIn("data/agents/ava/logs/runs/100-0bus.jsonl", held)
+        self.assertIn("data/agents/ava/state.db", held,
+                      "a healthy agent went uncopied over a file that was already gone")
+
+    def test_a_database_that_went_while_it_was_being_copied_is_named_as_gone_not_as_kept(self):
+        """R-BKP-31 — the two lists answer opposite questions. `copied_whole` says the bytes
+        are in the archive and may not be consistent; `vanished` says there are no bytes at
+        all. A file in both would tell a reader to go and look at something that is not
+        there, so the snapshot that fails on a file already removed is not damage."""
+        self.an_agent()
+        real_snapshot = backup.snapshot
+        self.addCleanup(setattr, backup, "snapshot", real_snapshot)
+
+        def swept_before_it_could_be_copied(records, into):
+            Path(records).unlink()
+            return real_snapshot(records, into)
+
+        backup.snapshot = swept_before_it_could_be_copied
+
+        said = backup.manifest_of(self.taken())
+
+        self.assertEqual(["agents/ava/state.db"], said["vanished"])
+        self.assertEqual([], said["copied_whole"])
+
+
+class WhichSideOfABackupFailed(unittest.TestCase):
+    """A backup reads one directory and writes another, and says which one refused."""
+
+    DATA = Path("/somewhere/data")
+    INTO = Path("/elsewhere/backups")
+
+    def said_by_the_command(self, why: OSError) -> tuple:
+        """What `backups add` prints when `take` raises this, and what it exits with."""
+        held = io.StringIO()
+        with mock.patch.object(backups_command, "data_home", lambda: self.DATA), \
+                mock.patch.object(backups_command, "backups_home", lambda: self.INTO), \
+                mock.patch.object(backups_command.backups, "take", side_effect=why), \
+                contextlib.redirect_stderr(held):
+            code = backups_command._take_a_backup()
+        return code, held.getvalue()
+
+    def test_a_backup_that_could_not_read_the_data_never_blames_the_destination(self):
+        """R-BKP-32 — the errno belongs to a source file and the message named the
+        destination, so whoever read it went and looked at a directory that was healthy.
+        Two days of failed backups went unexplained that way (#318)."""
+        code, said = self.said_by_the_command(OSError(
+            errno.EACCES, "Permission denied",
+            str(self.DATA / "agents" / "ava" / "logs" / "runs" / "100-0bus.jsonl")))
+
+        self.assertEqual(1, code)
+        self.assertIn(f"{self.DATA} could not be read", said)
+        self.assertNotIn("could not be written to", said)
+
+    def test_a_destination_that_will_not_answer_is_still_named_as_the_destination(self):
+        """R-BKP-32 — the failure this handler was written for, which the other half must
+        not cost. An errno naming nothing at all is the destination too: it is the side that
+        may be a disk nobody plugged in, and an unknown side is not a reason to go quiet."""
+        for why in (OSError(errno.ENOENT, "No such file or directory", str(self.INTO)),
+                    OSError("the volume said nothing")):
+            code, said = self.said_by_the_command(why)
+            self.assertEqual(1, code, f"{why!r} was not reported as a failure")
+            self.assertIn(f"{self.INTO} could not be written to", said, f"{why!r}")
 
 
 class ReadingTheDirectory(WithSomethingToBackUp):

@@ -50,6 +50,8 @@ own act, and the dangerous half.
 | ✅ | R-BKP-28 | Unavailable backup storage does not prevent install health from answering | `status survives a backup directory that does not answer` |
 | ✅ | R-BKP-29 | Every command that reads the backup directory answers within a bound, and names a directory that did not rather than reporting none | `listing the backups survives a directory that does not answer`, `a directory that does not answer is not reported as no backups` |
 | ✅ | R-BKP-30 | A copy of what the owner keeps holds none of the values every program is given (R-SEC-26) | `what is kept stands outside everything a copy of this install holds`, `the default stands outside the installs own data` |
+| ✅ | R-BKP-31 | A file removed while the archive is being written is left out and named | `a file removed while the backup is being written is left out and named`, `a database that went while it was being copied is named as gone not as kept` |
+| ✅ | R-BKP-32 | A backup that fails names the tree it failed in rather than always the destination | `a backup that could not read the data never blames the destination`, `a destination that will not answer is still named as the destination` |
 
 ## Open questions
 

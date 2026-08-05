@@ -248,6 +248,9 @@ def describe(data: Path, now: datetime.datetime, why: str) -> dict:
         # Filled in as the archive is written, because whether a database could be copied
         # honestly is not knowable until it is tried.
         "copied_whole": [],
+        # Filled in the same way, and for the same reason: whether a listed file is still
+        # there when its turn comes is not knowable until it is reached.
+        "vanished": [],
     }
 
 
@@ -342,30 +345,53 @@ def take(data: Path, into: Path, now=None, why: str = "asked", note=None) -> Pat
     try:
         with zipfile.ZipFile(writing, "w", zipfile.ZIP_DEFLATED) as archive:
             for one, under in _members(data, leaving):
-                if one.name == store.NAME and one.is_file() and not one.is_symlink():
-                    # Never the file as it sits. A database being written to is not a thing
-                    # that can be copied byte for byte and still be a database.
-                    copy = Path(held) / store.NAME
-                    with contextlib.suppress(OSError):
-                        os.remove(copy)
-                    try:
-                        snapshot(one, copy)
-                    except Exception as trouble:   # noqa: BLE001 — see below
-                        # **Kept as it is rather than abandoned.** A database too damaged to
-                        # be copied honestly is exactly the one somebody will want the bytes
-                        # of afterwards, and refusing the whole backup over it would leave
-                        # every healthy agent uncopied as well — for as long as the damage
-                        # lasts, which could be for ever. So the file goes in whole and the
-                        # manifest says which ones did, because a copy that is not a
-                        # consistent copy must never be silently indistinguishable from one.
-                        said["copied_whole"].append(under)
-                        say(f"{under} could not be copied consistently ({trouble}) — "
-                            f"it is in the backup exactly as it is on disk")
-                        _add(archive, one, f"{INSIDE}/{under}", now)
+                try:
+                    if one.name == store.NAME and one.is_file() and not one.is_symlink():
+                        # Never the file as it sits. A database being written to is not a
+                        # thing that can be copied byte for byte and still be a database.
+                        copy = Path(held) / store.NAME
+                        with contextlib.suppress(OSError):
+                            os.remove(copy)
+                        try:
+                            snapshot(one, copy)
+                        except Exception as trouble:   # noqa: BLE001 — see below
+                            if not one.exists():
+                                # Not damage. It went between being listed and being
+                                # reached, which the branch below is what answers for —
+                                # and a file cannot honestly be in both lists at once.
+                                raise FileNotFoundError(
+                                    f"{one} was removed while the backup was being written"
+                                ) from trouble
+                            # **Kept as it is rather than abandoned.** A database too damaged
+                            # to be copied honestly is exactly the one somebody will want the
+                            # bytes of afterwards, and refusing the whole backup over it would
+                            # leave every healthy agent uncopied as well — for as long as the
+                            # damage lasts, which could be for ever. So the file goes in whole
+                            # and the manifest says which ones did, because a copy that is not
+                            # a consistent copy must never be silently indistinguishable
+                            # from one.
+                            said["copied_whole"].append(under)
+                            say(f"{under} could not be copied consistently ({trouble}) — "
+                                f"it is in the backup exactly as it is on disk")
+                            _add(archive, one, f"{INSIDE}/{under}", now)
+                            continue
+                        _add(archive, copy, f"{INSIDE}/{under}", now)
                         continue
-                    _add(archive, copy, f"{INSIDE}/{under}", now)
-                    continue
-                _add(archive, one, f"{INSIDE}/{under}", now)
+                    _add(archive, one, f"{INSIDE}/{under}", now)
+                except FileNotFoundError:
+                    # **Left out and named rather than fatal.** The listing is taken in one
+                    # go before anything is written, and archiving a data directory takes
+                    # minutes — so a supported concurrent behaviour may legitimately remove
+                    # one of these files in between. `transcript.sweep` retiring a run older
+                    # than the keep window is exactly that, and it runs on every turn
+                    # (R-RUN-23). A file the owner no longer keeps is not one this copy owes
+                    # them, and refusing the whole backup over it leaves every healthy agent
+                    # uncopied too — daily, for as long as the two clocks agree. So it is
+                    # left out, and the manifest says so, because a copy that is not complete
+                    # must never be silently indistinguishable from one (R-BKP-31).
+                    said["vanished"].append(under)
+                    say(f"{under} was removed while the backup was being written — "
+                        f"it is not in this copy")
             # Last, because until every entry is written it is not yet known whether any of
             # them had to be copied whole — and where it sits costs a reader nothing: a zip
             # is read through its index, so asking for one entry by name never unpacks the
