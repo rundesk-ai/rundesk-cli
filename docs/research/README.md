@@ -36,6 +36,7 @@ Two rules for a page here:
 | [`instruction-layers.md`](instruction-layers.md) | how a system prompt was assembled, and the one rule the shape rested on |
 | [`open-questions.md`](open-questions.md) | what the previous build wrote down and never settled |
 | [`working-practice.md`](working-practice.md) | how that build wrote things down, named things, and moved readers onto a new store |
+| [`2026-08-05-what-a-skills-commands-are-handed.md`](2026-08-05-what-a-skills-commands-are-handed.md) | the environment a skill's own commands will be given, decided while building skills and not yet implemented |
 
 ## Carried over intact
 

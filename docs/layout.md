@@ -88,6 +88,82 @@ An agent's directory is only ever removed by `rundesk agents remove`, one named 
 the directory itself goes only if it is then empty — anything you put in there is kept, along with
 the directory holding it.
 
+## Every skill is in a catalog, and a catalog is a directory
+
+Skills stand under `data/skills/`, one directory per catalog:
+
+```
+data/skills/
+  rundesk/                  ships inside the release — how to operate this rundesk
+    catalog.json            what rundesk wrote down about where it came from
+    app/                    the catalog's own tree, verbatim
+      manifest.json         what makes the directory a catalog
+      skills/managing-rundesk/SKILL.md
+  rundesk-skills/           fetched from GitHub — the general catalog rundesk depends on
+  local/                    yours. Never fetched, never removed by rundesk
+    app/skills/my-thing/SKILL.md
+```
+
+**`app/manifest.json` is what makes the directory a catalog**, the same way `state.db` makes a
+directory an agent. `catalog.json` deliberately is not: it records where a catalog was *fetched* from,
+and `local` was never fetched from anywhere.
+
+**Which skills a catalog holds is found rather than listed** — every directory under `app/skills/`
+with a `SKILL.md` in it. The build this replaces listed each one in the manifest with its path, so
+three places had to agree about one name: the manifest entry, the directory, and the frontmatter
+inside. They disagreed, and every disagreement was a catalog that installed and then behaved as
+though a skill were not there.
+
+**Nothing shares a name, because nothing shares a directory.** That flat namespace was the other
+thing the previous build got wrong here: one `data/skills/<name>` for every catalog meant a second
+catalog offering `writing-plans` could not be installed at all — not the colliding skill, the whole
+catalog. An owner who wanted both had to fork one. A skill is now addressed `<catalog>/<skill>`, and
+the collision survives only where it is unavoidable: a single agent cannot hold two directories under
+one name, because a brain finds a skill by its directory name.
+
+### Two of them cannot be removed, for two different reasons
+
+`rundesk` ships **inside the release** and is replaced out of it on every install and update. What is
+in it is how to operate *this* rundesk and how to write a skill for it, so it is coupled to the
+version — a machine on an older release must not be handed a newer release's instructions, which is
+exactly what would happen if a repository on its own schedule governed it. It is never fetched from
+anywhere, and it is the reason a machine with no network finishes installing with working skills.
+
+`rundesk-skills` is **fetched**, like anybody else's catalog. Nothing in it is coupled to a version —
+how to write a pull request does not change when rundesk does — so it lives on its own release
+schedule, where a correction reaches every install without cutting a rundesk release.
+
+`local` is where your own skills go. Nothing fetches into it, and nothing rundesk does removes it.
+
+### A grant is a link in the agent's own directory
+
+Granting a skill copies nothing. A link stands in that agent's `home/skills/`, and rundesk links each
+skill from there into every root a provider CLI reads:
+
+```
+data/agents/alan/home/
+  skills/writing-plans -> ../../../../skills/rundesk/app/skills/writing-plans
+  .claude/skills/writing-plans -> ../../skills/writing-plans
+  .codex/skills/writing-plans  -> ../../skills/writing-plans
+  .agents/skills/writing-plans -> ../../skills/writing-plans
+  .grok/skills/writing-plans   -> ../../skills/writing-plans
+```
+
+**There is no record of who holds what** — the grant *is* the entry standing there, so it is legible,
+diffable and revocable by hand, and there is no second register to fall out of step with the first.
+Which catalog a grant came from is read back off the link's own target rather than written down
+anywhere.
+
+**One link per skill, never a link to the whole directory.** Linking `skills/` itself would make a
+path a vendor owns an alias for rundesk's own, so that vendor's skill installer would write into the
+library and anything aimed at that directory would destroy it.
+
+The one exception is `rundesk skills grant --as <name>`, which is how one agent holds two skills of
+one name. That grant is a **copy** with its frontmatter rewritten to match the directory it stands in,
+because a brain that found the two disagreeing would index it under a name nothing granted. A copy can
+go stale, so it carries `.rundesk-grant.json` naming where it came from, and every update makes it
+again.
+
 ## The one thing that is not below the root
 
 ```
