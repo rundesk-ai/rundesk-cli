@@ -451,6 +451,22 @@ class WhenRemakingACopyFails(Grants):
                 grants.refreshed()
         self.assertIn("other-plans", str(broken.exception))
 
+    def test_a_failure_to_present_is_not_an_ordinary_refusal_either(self):
+        self.assertTrue(issubclass(grants.NotPresented, Exception))
+        self.assertFalse(issubclass(grants.NotPresented, grants.Refused),
+                         "a handler for an ordinary refusal must not be able to swallow this")
+
+    def test_a_half_copy_is_not_an_ordinary_refusal(self):
+        # Structural, because the difference only shows in a caller that does not exist yet: one
+        # that catches an ordinary refusal and says "nothing changed". Declared as a `Refused` — which
+        # it was — every blanket handler swallows it into that same sentence, so the distinction lives
+        # in the docstring and nowhere anybody can act on. Its two siblings, `catalogs.HalfInstalled`
+        # and `lifecycle.tree.HalfReplaced`, both subclass `Exception` for exactly this reason.
+        self.assertTrue(issubclass(grants.HalfCopied, Exception))
+        self.assertFalse(issubclass(grants.HalfCopied, grants.Refused),
+                         "a handler for an ordinary refusal must not be able to swallow this")
+        self.assertFalse(issubclass(catalogs.HalfInstalled, catalogs.Refused))
+
     def test_nothing_staged_is_left_behind_either(self):
         with self.assertRaises(OSError):
             with _replaces_failing_on(2):

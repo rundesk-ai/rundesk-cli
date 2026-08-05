@@ -315,6 +315,19 @@ class CheckingACatalogForChanges(Catalogs):
         self.assertEqual("1.0.0", library.read("acme").manifest.version)
         self.assertEqual(["writing-plans"], [one.name for one in library.held("acme")])
 
+    def test_a_copy_that_fails_partway_leaves_no_staged_tree_behind(self):
+        # The copy used to run *before* the guard, so a copy that failed partway — a full disk, an
+        # unreadable member — left the staged tree with nothing to tidy it, because the `except` that
+        # discards it had not been entered. `grants._copied` was written later with the copy inside,
+        # so the two swaps disagreed about it until this.
+        self.install(self.a_source())
+        with self.assertRaises(OSError):
+            with mock.patch("shutil.copytree", side_effect=OSError("the disk is full")):
+                catalogs.update("acme", Answering([self.a_source(version="1.1.0")]))
+        left = sorted(one.name for one in (library.where() / "acme").iterdir())
+        self.assertEqual(sorted([library.TREE, library.PROVENANCE]), left)
+        self.assertEqual("1.0.0", library.read("acme").manifest.version)
+
     def test_a_swap_that_cannot_put_the_old_tree_back_says_so_in_its_own_words(self):
         # Every other failure here leaves the install exactly as it was found, and this one does
         # not. Reported in the same words as the others, it would be telling somebody nothing had

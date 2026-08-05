@@ -61,7 +61,7 @@ from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 from rundesk.agents import directory
 from rundesk.core import paths
 from rundesk.skills import library
-from rundesk.utils import files, locking
+from rundesk.utils import files, locking, terminal
 
 #: Where an agent's grants stand, inside its own home. The name is not a vendor's and is read by no
 #: brain on its own — it is rundesk's canonical directory, and the vendor roots link into it.
@@ -89,12 +89,36 @@ class Refused(Exception):
     """Something that may not be done to a grant, named with why."""
 
 
-class HalfCopied(Refused):
+class NotPresented(Exception):
+    """The grant landed and standing it where a brain looks did not, naming what is missing.
+
+    Its own kind because it decides what somebody does next, and the two answers are opposite. A
+    grant that failed is retried; a grant that landed and was not linked is *already there*, so
+    retrying meets "already holds it" and reads as though nothing had worked.
+
+    Presenting is a second lock acquisition, taken after the write has landed and released its own —
+    so it can be refused for contention alone while the grant itself is on disk and correct. `AGENTS.md`
+    forbids reporting a success that was not earned; reporting a failure that was not earned sends
+    somebody to undo work that is fine, which is the same fault pointing the other way.
+
+    Not a `Refused`, for the reason `HalfCopied` is not: a blanket handler for ordinary refusals must
+    not be able to swallow it.
+    """
+
+
+class HalfCopied(Exception):
     """A copy that failed and whose predecessor could not be put back, naming what stands where.
 
-    Its own kind for the reason `catalogs.HalfInstalled` is: every other failure here leaves the
-    agent exactly as it was found, and this one does not. Reported in the same words as the others it
-    would be telling somebody nothing had happened while a skill they were using sat moved aside.
+    Its own kind for the reason `catalogs.HalfInstalled` and `lifecycle.tree.HalfReplaced` are: every
+    other failure here leaves the agent exactly as it was found, and this one does not. Reported in
+    the same words as the others it would be telling somebody nothing had happened while a skill they
+    were using sat moved aside.
+
+    **Not a `Refused`, and that is the whole point of declaring it.** It was one, which meant every
+    blanket `except Refused` swallowed it into the same sentence as an ordinary refusal — so the
+    distinction existed in the docstring and nowhere a caller could act on. Its two siblings both
+    subclass `Exception` for exactly this reason, and a caller that means to say "nothing changed"
+    has to be able to catch this one first.
     """
 
 
@@ -139,7 +163,7 @@ class Grant(NamedTuple):
         return f"{self.catalog}/{self.skill}" if self.catalog and self.skill else ""
 
 
-def source_shown(catalog: str, copied: bool, nothing: str = "—") -> str:
+def source_shown(catalog: str, copied: bool) -> str:
     """Which catalog a grant came from, as a listing shows it.
 
     One function because it was two, rendering one fact from the same two fields in two layers — a
@@ -148,7 +172,7 @@ def source_shown(catalog: str, copied: bool, nothing: str = "—") -> str:
     it is the only kind of grant that can be `STALE`.
     """
     if not catalog:
-        return nothing
+        return terminal.NOTHING
     return f"{catalog} (--as)" if copied else catalog
 
 
@@ -204,7 +228,7 @@ def granted(agent: str, skill: library.Skill, alias: str = "") -> Grant:
             raise Occupied(_already_holding(agent, name))
         at.mkdir(parents=True, exist_ok=True)
         _placed(skill, standing, at, name)
-    presented(agent)
+    _presented_after(agent, name)
     return _read(agent, standing)
 
 
@@ -231,8 +255,23 @@ def revoked(agent: str, name: str) -> Grant:
             raise Refused(
                 f"{agent} does not hold {name} — rundesk skills list {agent} says what it has")
         files.remove_one(standing.at)
-    presented(agent)
+    _presented_after(agent, name)
     return standing
+
+
+def _presented_after(agent: str, name: str) -> None:
+    """Stand this agent's grants where brains look, once the write has already landed.
+
+    The write is done by the time this runs, so anything going wrong here is a different fact from the
+    write going wrong — see `NotPresented`. Every other caller of `presented` is reconciling rather
+    than following a write, and wants the ordinary exception.
+    """
+    try:
+        presented(agent)
+    except (Refused, locking.Stuck, OSError) as why:
+        raise NotPresented(
+            f"{name} was granted to {agent} and could not be linked into every provider's own "
+            f"root — {why}") from why
 
 
 def presented(agent: str) -> List[Path]:
@@ -250,9 +289,13 @@ def presented(agent: str) -> List[Path]:
     touched: List[Path] = []
     # **Locked here rather than at each caller.** This is the last mutating function in the module,
     # and it reads what is granted and then writes links derived from it — two steps that must not
-    # have somebody else's grant land between them. Putting the lock inside means every caller is
-    # covered wherever it is called from, and the lock being re-entrant per thread makes it free for
-    # the callers that already hold it.
+    # have somebody else's grant land between them.
+    #
+    # No current caller holds the lock when it reaches here: `granted`, `revoked` and `retired` each
+    # release theirs first, deliberately, so the write is not held up by the presenting. The lock is
+    # re-entrant per thread, so one that did would be safe — but nothing does, and an earlier version
+    # of this comment claimed otherwise, which is the kind of drift that has somebody reason about a
+    # call graph the code does not have.
     with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
         wanted = {one.name for one in held(agent)}
         for root in VENDOR_ROOTS:
@@ -424,6 +467,12 @@ def _copied(skill: library.Skill, to: Path) -> None:
     `SKILL.md` and is not the skill it claims to be. The rewrite is checked afterwards rather than
     trusted: a frontmatter this could not rewrite is a copy every brain would index under the
     source's name, which is the exact collision the alias existed to avoid.
+
+    **`aside` is cleared first, as far as it can be.** `files.discard` swallows what it cannot
+    remove, so litter left inside it by an earlier partial failure survives — and then the rename onto
+    it fails cleanly rather than corrupting anything, leaving the agent's own copy untouched and the
+    trouble reported as an ordinary error. Guaranteed on the happy path, not against a filesystem that
+    is already in a state nothing here made.
 
     **The copy standing there is moved aside rather than deleted, and put back if the swap fails.**
     An earlier version discarded it and *then* renamed, so a rename that failed — a full disk, a

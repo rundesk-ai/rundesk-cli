@@ -36,16 +36,14 @@ from rundesk.core import paths, secrets
 from rundesk.exits import FAILED, OK
 from rundesk.skills import catalogs, doctor, grants, library, needs
 from rundesk.utils import archives, locking
-from rundesk.utils.terminal import as_table
+from rundesk.utils.terminal import NOTHING, as_table
 
 #: Everything a verb here can be stopped by. One tuple, because six verbs catch the same set and six
 #: copies of it is five chances for one to fall behind.
 TROUBLE = (library.Refused, catalogs.Refused, catalogs.HalfInstalled, grants.Refused,
+           grants.HalfCopied,
            needs.Refused, archives.Refused, directory.Refused, secrets.Refused, locking.Stuck,
            OSError)
-
-#: What a listing puts in a cell that has no answer.
-NOTHING = "—"
 
 
 def register(sub: Subcommands) -> None:
@@ -422,6 +420,14 @@ def _granted(agent: str, address: str, alias: str) -> int:
     try:
         skill = library.look_up(address)
         held = grants.granted(agent, skill, alias)
+    except grants.NotPresented as why:
+        # **The grant landed and the linking did not**, which is not the same as having failed. Said
+        # apart from an ordinary refusal because the difference decides what somebody does next: told
+        # this had failed, they retry the same command and meet "already holds it", having been given
+        # no reason to think the first one worked.
+        return _failed(str(why),
+                       f"{agent} does hold it — this was the linking into each provider's own root",
+                       "rundesk skills doctor says whether anything is missing")
     except grants.Occupied as why:
         # The one refusal with a way out. Told apart by its own kind rather than worked out from the
         # address afterwards — see `grants.Occupied` for the two refusals that trick that.
@@ -629,7 +635,7 @@ def _by_agent(found: List[doctor.Finding]) -> List[str]:
     # which is the kind of defect a test asserting `assertIn` never sees.
     skill = max((len(one.skill) for one in found), default=0) + 2
     where = max((len(doctor.where(one)) for one in found), default=0) + 2
-    verdict = max(len(one.verdict) for one in found) + 2
+    verdict = max((len(one.verdict) for one in found), default=0) + 2
 
     lines: List[str] = []
     standing = ""
@@ -657,7 +663,7 @@ def _agents_holding(catalog: str, skill: str) -> List[str]:
 
 def _from(grant: grants.Grant) -> str:
     """Which catalog a grant came from, as a listing shows it. The same answer `doctor` gives."""
-    return grants.source_shown(grant.catalog, grant.copied, NOTHING)
+    return grants.source_shown(grant.catalog, grant.copied)
 
 
 def _counted(grant: grants.Grant) -> str:

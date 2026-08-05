@@ -506,9 +506,14 @@ def _swapped(at: Path, coming: Coming) -> None:
         aside = files.outgoing_of(tree)
         files.discard(pending)
         files.discard(aside)
-        shutil.copytree(coming.at, pending, symlinks=False)
         moved = False
         try:
+            # **Inside the guard, not before it.** A copy that failed partway — a full disk, an
+            # unreadable member — left the staged tree behind with nothing to tidy it, because the
+            # `except` that discards it had not been entered yet. `grants._copied` was written later
+            # with the copy inside, so the two swaps disagreed about it; this is the older one
+            # catching up rather than a new rule.
+            shutil.copytree(coming.at, pending, symlinks=False)
             if tree.exists():
                 os.rename(tree, aside)
                 moved = True

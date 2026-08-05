@@ -758,6 +758,7 @@ class WhenSomethingElseHoldsTheInstallLock(Skills):
     def setUp(self) -> None:
         super().setUp()
         self.install()
+        directory.made("alan", "claude")
 
     def held_by_something_else(self):
         return mock.patch("rundesk.skills.catalogs.locking.only_one",
@@ -773,6 +774,22 @@ class WhenSomethingElseHoldsTheInstallLock(Skills):
                 self.assertEqual(1, code)
                 self.assertEqual("", out)
                 self.assertIn("skills: FAILED", err)
+
+    def test_a_grant_that_landed_but_could_not_be_linked_says_which_it_was(self):
+        # The write and the linking are two lock acquisitions, so the second can be refused for
+        # contention alone while the grant itself is on disk and correct. Told this had failed, an
+        # operator retries and meets "already holds it" — having been given no reason to think the
+        # first one worked. `AGENTS.md` forbids claiming a success nobody earned; claiming a failure
+        # nobody earned sends them to undo work that is fine.
+        with mock.patch("rundesk.skills.grants.presented",
+                        side_effect=locking.Stuck("something else is changing this install")):
+            code, out, err = self.rundesk("skills", "grant", "alan", "acme/writing-plans")
+        self.assertEqual(1, code)
+        self.assertEqual("", out)
+        self.assertIn("does hold it", err)
+        self.assertIn("rundesk skills doctor", err)
+        # And it really is there, which is the whole reason the wording has to differ.
+        self.assertIsNotNone(grants.holding("alan", "writing-plans"))
 
     def test_a_grant_refuses_rather_than_raising_too(self):
         with mock.patch("rundesk.skills.grants.locking.only_one",

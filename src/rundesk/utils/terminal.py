@@ -41,6 +41,15 @@ CODES = {
 #: Back to whatever the terminal was doing, so nothing leaks into the next line.
 RESET = "\x1b[0m"
 
+#: What a cell holds when there is no answer for it — an em dash, not an empty cell.
+#:
+#: Here because it is what a person sees and it knows nothing about this product, and in one place
+#: because it was briefly in two: a renderer in `skills/` and a renderer in `commands/` both wanted
+#: the same character, and the parameter passing it between them was a knob neither ever varied. A
+#: blank cell reads as missing data rather than as an answer, which is the whole reason it is a
+#: character at all.
+NOTHING = "—"
+
 _WORN = re.compile(r"\x1b\[[0-9;]*m")
 
 
