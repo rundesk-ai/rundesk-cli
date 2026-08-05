@@ -139,6 +139,20 @@ class WhatMayBeSent(Files):
         with self.assertRaises(files.Refused):
             files.approved(self.agent, str(pointing / "real.txt"))
 
+    def test_a_relative_step_cannot_walk_out_of_a_permitted_root(self):
+        # **A working exploit before this was refused.** `Path.parents` collapses nothing, so this
+        # path has `home/` among its parents and read as contained; `O_NOFOLLOW` refuses a symlink
+        # and `..` is not one, so the walk stepped out and returned the agent's whole history.
+        escaping = directory.home(self.agent) / ".." / directory.RECORDS
+        with self.assertRaises(files.Refused):
+            files.approved(self.agent, str(escaping))
+
+    def test_a_relative_step_is_refused_however_deep_it_reaches(self):
+        for said in ("home/../../../etc/passwd", "home/./notes.md", "home/../../nina/home/x"):
+            with self.subTest(said=said):
+                with self.assertRaises(files.Refused):
+                    files.approved(self.agent, str(directory.where(self.agent) / said))
+
     def test_a_file_that_is_not_there_is_refused_rather_than_reported_empty(self):
         with self.assertRaises(files.Refused):
             files.approved(self.agent, str(directory.home(self.agent) / "never-written"))

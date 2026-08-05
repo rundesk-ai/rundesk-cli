@@ -106,7 +106,7 @@ def arrived_at(agent: str, kind: str, message: str,
     comes from the name rather than from a modification time a restore would have reset.
     """
     day = (when or datetime.now()).strftime(logs.DAY)
-    return directory.channels(agent) / kind / ARRIVED_IN / day / _plainly(str(message))
+    return directory.channels(agent) / kind / ARRIVED_IN / day / plainly(str(message))
 
 
 def written(into: Path, name: str, body: bytes) -> Path:
@@ -119,7 +119,7 @@ def written(into: Path, name: str, body: bytes) -> Path:
     if len(body) > EACH_AT_MOST:
         raise Refused(f"{name} is {len(body)} bytes, and one file may be {EACH_AT_MOST}")
     into.mkdir(parents=True, exist_ok=True)
-    at = _somewhere_new(into, _plainly(name))
+    at = _somewhere_new(into, plainly(name))
     at.write_bytes(body)
     return at
 
@@ -138,6 +138,16 @@ def approved(agent: str, said: str) -> Sending:
     at = Path(said)
     if not at.is_absolute():
         raise Refused(f"{said} is not an absolute path, and only an absolute one can be checked")
+    # **Before the containment check, not inside the walk, and this is the whole of it.**
+    # `Path.parents` is purely lexical and collapses nothing, so `<home>/../state.db` has `home/`
+    # among its parents and reads as contained. `O_NOFOLLOW` does not save it either: it refuses a
+    # *symlink*, and `..` is not one — the walk steps out of the root exactly as the kernel would.
+    # Proven with a working exploit that read `state.db`, the one file this function's docstring
+    # says can never be reached. Refused by shape, the way `plainly` refuses a name by shape.
+    if any(part in (".", "..") for part in at.parts):
+        raise Refused(
+            f"{said} reaches through a relative step, and a path that does that cannot be checked "
+            "— name the file where it actually stands")
     root = _the_root_holding(agent, at)
     if root is None:
         raise Refused(
@@ -151,7 +161,7 @@ def approved(agent: str, said: str) -> Sending:
         os.close(held)
     if size > EACH_AT_MOST:
         raise Refused(f"{at.name} is {size} bytes, and one file may be {EACH_AT_MOST}")
-    return Sending(name=_plainly(at.name), at=at, bytes=size, sha256=digest)
+    return Sending(name=plainly(at.name), at=at, bytes=size, sha256=digest)
 
 
 def swept(agent: str, kind: str, keeping: int = KEPT_DAYS,
@@ -258,7 +268,7 @@ def _weighed(held: int) -> tuple:
     return size, digest.hexdigest()
 
 
-def _plainly(said: str) -> str:
+def plainly(said: str) -> str:
     """A name from somewhere else, made into one this machine can hold and nothing can escape with.
 
     Everything outside letters, digits and `-_.` becomes a single `-`, which is what makes a
