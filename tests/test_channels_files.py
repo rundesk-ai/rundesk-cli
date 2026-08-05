@@ -14,6 +14,7 @@ Run directly: `python3 tests/test_channels_files.py`
 
 import hashlib
 import os
+import shutil
 import unittest
 from datetime import date, datetime
 
@@ -152,6 +153,37 @@ class WhatMayBeSent(Files):
             with self.subTest(said=said):
                 with self.assertRaises(files.Refused):
                     files.approved(self.agent, str(directory.where(self.agent) / said))
+
+    def test_a_permitted_root_that_is_itself_a_link_is_not_a_permitted_root(self):
+        # **A working exploit before this was refused**, and resolving both sides does not close it:
+        # with home/ pointing at an ancestor, `.resolve()` makes that ancestor the root and every
+        # path on the machine is genuinely under it — both sides agree and containment means nothing.
+        at = directory.home(self.agent)
+        shutil.rmtree(at)
+        at.symlink_to(self.home)
+        directory.made("nina", "claude")
+        with self.assertRaises(files.Refused):
+            files.approved(self.agent, str(directory.records("nina")))
+
+    def test_a_file_reachable_under_a_second_name_is_refused(self):
+        # **A hardlink is not a symlink and O_NOFOLLOW has nothing to refuse** — it is an ordinary
+        # entry onto the same inode. An agent may write in its own home, so it could link its own
+        # records to a name in there and every other check passes. The link count is the only thing
+        # that sees this.
+        pointing = directory.home(self.agent) / "notes.txt"
+        os.link(str(directory.records(self.agent)), str(pointing))
+        with self.assertRaises(files.Refused) as refused:
+            files.approved(self.agent, str(pointing))
+        self.assertIn("more than one name", str(refused.exception).replace("2 names",
+                                                                          "more than one name"))
+
+    def test_a_named_pipe_is_refused_rather_than_waited_on(self):
+        # It used to wedge whatever thread asked, for ever: opening a FIFO for reading waits for a
+        # writer that never comes, and refusing it afterwards is too late because the open blocks.
+        pipe = directory.home(self.agent) / "pipe"
+        os.mkfifo(str(pipe))
+        with self.assertRaises(files.Refused):
+            files.approved(self.agent, str(pipe))
 
     def test_a_file_that_is_not_there_is_refused_rather_than_reported_empty(self):
         with self.assertRaises(files.Refused):

@@ -17,7 +17,9 @@ enters the gateway. Everything crosses as newline-delimited JSON on a pipe.
 
 May depend on `agents`, `core` and `utils`, and on nothing else. In particular it may not reach
 `gateways`: what a channel *is* and what hosts it are different questions, and the module that
-answered both would be untestable without a supervisor. The gateway imports this, not the reverse.
+answered both would be untestable without a supervisor. When this is hosted, the gateway will import it and not the reverse — nothing in
+`gateways` reaches here yet, which `gateways.host`'s own docstring says of everything it
+will one day host.
 
 | Module | Answers |
 |---|---|

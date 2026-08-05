@@ -45,10 +45,13 @@ so age taken from the disk would silently sweep everything it had just brought b
 May depend on `agents`, `core` and `utils`.
 """
 
+import contextlib
+import fcntl
 import hashlib
 import os
 import re
 import shutil
+import stat
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, NamedTuple, Optional
@@ -156,6 +159,7 @@ def approved(agent: str, said: str) -> Sending:
 
     held = _opened_without_following(root, at)
     try:
+        _one_name_only(held, at)
         size, digest = _weighed(held)
     finally:
         os.close(held)
@@ -207,13 +211,24 @@ def _the_root_holding(agent: str, at: Path) -> Optional[Path]:
             settled = root.resolve()
         except OSError:
             continue
-        if settled == at or settled in at.parents:
-            return settled
+        # **A root that is itself a link is not a root**, and this is the check that says so.
+        # Resolving both sides is not enough on its own: with `home/` replaced by a link to an
+        # ancestor, `.resolve()` turns it into that ancestor and *every* path on the machine is
+        # then genuinely under it — both sides agree and the containment means nothing. Proven with
+        # a working exploit that read another agent's `state.db`. `agents.directory.where` refuses
+        # an agent reached through a link for the same reason, one level up.
+        if root.is_symlink():
+            raise Refused(
+                f"{root} is a link, and what an agent may send from may not be reached through one")
+        # Then resolved on both sides, at any depth. `utils.files.escapes` is the near neighbour of
+        # this and is deliberately not reused: it asks whether something stands *directly* inside a
+        # parent, and what is sent stands in directories below one.
         try:
-            if root in at.parents or root == at:
-                return root
+            settled_at = at.resolve()
         except OSError:
             continue
+        if settled_at == settled or settled in settled_at.parents:
+            return settled
     return None
 
 
@@ -243,11 +258,44 @@ def _opened_without_following(root: Path, at: Path) -> int:
             os.close(holding)
             holding = stepping
         try:
-            return os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=holding)
+            # **`O_NONBLOCK`, and it is not an optimisation.** Opening a named pipe for reading
+            # waits for a writer that may never come, so a FIFO under the agent's own home — which
+            # it may write in — wedged whatever thread asked, for ever. Refusing it afterwards is
+            # too late, because the open is what blocks. It is cleared again below once the kind of
+            # thing this is has been established.
+            return os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=holding)
         except OSError as why:
             raise Refused(f"{at} could not be opened without following a link") from why
     finally:
         os.close(holding)
+
+
+def _one_name_only(held: int, at: Path) -> None:
+    """Refuse a file reachable under more than one name, or one that is not an ordinary file.
+
+    **A hardlink is not a symlink, and `O_NOFOLLOW` has nothing to refuse.** It is an ordinary
+    directory entry onto the same inode, indistinguishable at open time — so an agent with write
+    access to its own `home/`, which it is explicitly given, can link `state.db` to a name in there
+    and every check above passes. Proven with a working exploit that read the whole of it. The link
+    count is the only thing that sees this.
+
+    The `S_ISREG` half refuses a device or a named pipe in the same breath, which the adapter's own
+    walk already does: a FIFO under `home/` made the read below wait for a writer that never came,
+    wedging whatever thread asked.
+    """
+    how = os.fstat(held)
+    if stat.S_ISREG(how.st_mode):
+        # An ordinary file never blocks, so the flag that saved us from the pipe is taken off again
+        # rather than left to make the read below answer short.
+        with contextlib.suppress(OSError):
+            fcntl.fcntl(held, fcntl.F_SETFL,
+                        fcntl.fcntl(held, fcntl.F_GETFL) & ~os.O_NONBLOCK)
+    if not stat.S_ISREG(how.st_mode):
+        raise Refused(f"{at} is not an ordinary file, and only an ordinary file can be sent")
+    if how.st_nlink > 1:
+        raise Refused(
+            f"{at} is reachable under {how.st_nlink} names, so what it is cannot be established "
+            "from where it stands — send a copy of it instead")
 
 
 def _weighed(held: int) -> tuple:

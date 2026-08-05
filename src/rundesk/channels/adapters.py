@@ -29,11 +29,15 @@ adapter is an executable with a shebang of its own and may be a shell script, so
 `python3` is nonsense. Putting `app/.venv/bin` first means `#!/usr/bin/env python3` resolves to the
 install's own interpreter, a shell adapter is unaffected, and neither had to be told anything.
 
-**Nothing yet builds that virtualenv** — `install.sh` does not, and `lifecycle.tree` deliberately
-excludes `.venv` from the program copy, which is right because it has to be built at the destination
-rather than carried there. Until an install grows that step, an adapter needing a package works only
-where somebody has put one on the path themselves, and `checked` reports the `ImportError` as the
-refusal it is rather than pretending otherwise.
+**`lifecycle.packages` builds that virtualenv**, on every `install` and every `update`, from the
+`requirements.txt` of the tree that just landed. `lifecycle.tree` refuses to *copy* one, which is the
+other half of the same rule: an environment holds absolute paths and is built at its destination
+rather than carried there.
+
+It can be absent — a machine with no network has a working install and no packages, which
+`packages.built` reports without failing the install. An adapter needing one then works only where
+somebody has put it on the path themselves, and `checked` reports the `ImportError` as the refusal it
+is rather than pretending otherwise.
 
 ## Two questions, both bounded, both before anything is written down
 

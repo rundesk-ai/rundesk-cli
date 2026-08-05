@@ -446,6 +446,11 @@ def _arrived(agent: str, where: Path, kind: str, record: Dict[str, Any], allowed
 def _reaped(agent: str, where: Path, watching: Watching) -> None:
     """Take the status of any adapter that has stopped, and let go of what it held."""
     for kind, one in list(watching.running.items()):
+      # One bad adapter may not stop the others being reaped. `still_running` deliberately
+      # re-raises anything that is not ordinary contention, so a permissions failure on one
+      # channel's lock used to end this whole loop for every channel, every beat, silently.
+      # `firing._reaped` guards each item for exactly this reason and this dropped it.
+      with contextlib.suppress(Exception):
         if one.mine and one.pid:
             gone = programs.collected(one.pid)
             if not gone.over:
