@@ -210,8 +210,14 @@ def stage_copy(entry: Path, into: Path, ignore: Optional[Callable] = None) -> Pa
     return pending
 
 
-#: The longest a single path segment may be on the filesystems this runs on, in bytes rather than
-#: characters — one accented letter can be several bytes, and the limit counts bytes.
+#: The longest a single path segment may be, counted both ways because the filesystems disagree
+#: about which way they count.
+#:
+#: ext4 enforces 255 *bytes*. APFS enforces 255 *UTF-16 code units* — measured on a real volume:
+#: 255 accented letters are accepted and 256 refused, and 127 emoji are accepted and 128 refused,
+#: which is 254 and 256 code units and not any byte count. Checking only bytes refuses names macOS
+#: would take; checking only code units accepts names Linux would refuse. Both, so a name that
+#: passes here works on either.
 LONGEST = 255
 
 _SEPARATORS = ("/", "\\", "\0")
@@ -237,6 +243,6 @@ def name_trouble(said: str) -> str:
         return "a name cannot start with a dot — those are kept for locks and half-written things"
     if any(unicodedata.category(one) in ("Cc", "Cf") for one in said):
         return "a name cannot contain a control character"
-    if len(said.encode("utf-8")) > LONGEST:
-        return f"a name cannot be longer than {LONGEST} bytes"
+    if len(said.encode("utf-8")) > LONGEST or len(said.encode("utf-16-le")) // 2 > LONGEST:
+        return f"a name cannot be longer than {LONGEST} characters as a filesystem counts them"
     return ""

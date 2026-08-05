@@ -29,7 +29,13 @@ from rundesk.utils import files
 COMMAND = "rundesk"
 
 #: Where the link goes when nobody says otherwise, in the order they are tried.
-BIN_DIRS = ("/usr/local/bin", "~/.local/bin")
+#:
+#: `/opt/homebrew/bin` first, because on an Apple Silicon Mac that is the directory the shell has
+#: actually been told about: `/usr/local/bin` exists but belongs to root and is not writable, so an
+#: install would skip it and land in `~/.local/bin`, which is on nobody's PATH by default. The
+#: command then installs correctly and cannot be run, which the note about PATH admits but does not
+#: fix. On an Intel Mac and on Linux there is no `/opt/homebrew` and the order is unchanged.
+BIN_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "~/.local/bin")
 
 
 class Refused(Exception):

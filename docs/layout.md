@@ -61,6 +61,16 @@ And when that disk is not plugged in, it says so rather than reading as an insta
 backups  /Users/you/.rundesk/backups → /Volumes/Big/rundesk-backups — that directory is not there
 ```
 
+## What a copy does not carry
+
+A copy is made with the standard library, and on macOS that quietly means **extended attributes and
+resource forks are not copied** — Finder tags, Finder comments, and anything else stored beside a
+file rather than in it. Not a choice: CPython has no `os.listxattr` on macOS at all, so the standard
+library's own copy step is a no-op there, on every version including the 3.9 floor.
+
+The contents of every file are copied exactly. It is worth knowing before you rely on a restore to
+bring back something that was never in the bytes.
+
 ## Why one variable and not twelve
 
 The build this replaces read a dozen independent variables — one each for the install, the data,

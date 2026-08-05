@@ -160,10 +160,16 @@ def settle() -> int:
             gone_wrong = migration.carry(paths.data(), saying=_out_loud)
             if gone_wrong:
                 return _failed(f"{gone_wrong}{kept}")
-    except (config.Unreadable, config.Stuck) as why:
+    except (config.Unreadable, config.Stuck, migration.Broken) as why:
         # Every write below `settle` goes through the configuration, including the stamp each
-        # migration step lands with, so both answers are caught in one place rather than at each
-        # of the four calls that can give them.
+        # migration step lands with, so all of these are caught in one place rather than at each
+        # of the calls that can give them.
+        #
+        # `Broken` is here because steps that cannot be ordered are found by `stamp_without_running`
+        # too, and that is the *fresh install* path — the one place a broken checkout is most likely
+        # to be discovered. `carry` already answers it as a sentence; without this, the same fault a
+        # second later came out of the other branch as a raw traceback, through a subprocess, into a
+        # message somebody was meant to read.
         return _failed(str(why))
     return OK
 

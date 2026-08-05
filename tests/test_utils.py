@@ -1072,6 +1072,21 @@ class AProgramThatKeepsRunning(support.Isolated):
         self.assertTrue(self.waited_until(lambda: not programs.alive(pid)),
                         "it read as alive long after it had exited")
 
+    def test_a_leader_that_has_already_been_collected_still_stops_its_group(self):
+        # The ordinary shape of a program that backgrounds something: the launcher starts its
+        # worker and exits at once. Once that leader has been collected `getpgid` can no longer
+        # resolve it — but the group it led outlives it and still holds the worker. Reading "cannot
+        # ask" as "nothing left" said stopped in milliseconds and abandoned the worker.
+        pid = programs.start(["sh", "-c", "sleep 60 & exit 0"], self.log)
+        self.started.append(pid)
+        self.assertTrue(self.waited_until(lambda: not programs.alive(pid)),
+                        "the leader never exited")
+
+        self.assertEqual("", programs.stop(pid, 2.0, 2.0))
+
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(pid, 0)
+
     def test_stopping_this_command_s_own_group_is_refused(self):
         # `killpg` on our own group signals this very process and everything beside it. Reachable
         # by an honest mistake — a recorded id reused by something started from this shell.

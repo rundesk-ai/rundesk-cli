@@ -723,6 +723,22 @@ class MovingThemSomewhereElse(Copies):
             backups.relocate(self.at / "below", self.at)
         self.assertIn("inside one another", str(refused.exception))
 
+    def test_the_place_it_lands_is_the_one_that_was_checked(self):
+        # `allowed` hands back the canonical form because a value that passed the check and then
+        # went on being used as typed can still resolve somewhere else. Thrown away, the guard
+        # proved one path safe and the link was made to another.
+        self.given_copies(ITS_NAME)
+        elsewhere = self.home / "elsewhere"
+        elsewhere.mkdir()
+        elsewhere.rmdir()
+        the_long_way = Path(f"{self.home}/./elsewhere/../elsewhere")
+
+        landed = backups.relocate(the_long_way, self.at)
+
+        self.assertEqual(elsewhere.resolve(), landed)
+        self.assertEqual(elsewhere.resolve(), Path(os.readlink(str(self.at))),
+                         "the link points somewhere other than what was checked")
+
     def test_a_place_that_is_not_a_directory_is_refused(self):
         self.elsewhere.write_text("a file")
         with self.assertRaises(backups.Refused) as refused:

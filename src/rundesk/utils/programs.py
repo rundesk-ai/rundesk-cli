@@ -153,6 +153,15 @@ def _said(maybe) -> str:
 #
 # **Stopping is asked before it is insisted on.** A program gets a chance to finish what it was
 # doing, and only then is it taken away.
+#
+# **None of this stops a program the machine's own supervisor is keeping up.** Measured against a
+# real launchd job with `KeepAlive`: a SIGTERM is read as a crash and the job comes straight back
+# under a new pid and a new group, neither of which anybody wrote down. `stop` then watches the old
+# group go, correctly reports it gone, and the program is still running — untracked. That is not a
+# defect here and cannot be fixed here: this module knows nothing about rundesk and still less about
+# launchd. The layer that hands a job to the machine is the layer that has to take it back, with
+# `launchctl bootout`, and whatever calls `stop` on a supervised process is asking the wrong
+# question of the wrong thing.
 
 #: How the group is asked, and then told. In this order, never the other way round.
 GENTLY = signal.SIGTERM
@@ -246,11 +255,19 @@ def stop(pid: int, gently_for: float, firmly_for: float = 5.0) -> str:
     if pid <= 1:
         return f"{pid} is not a process this may signal"
     try:
-        group = os.getpgid(pid)
-    except ProcessLookupError:
-        return ""
+        os.getpgid(pid)
     except PermissionError as why:
         return f"{pid} belongs to somebody else ({why})"
+    except ProcessLookupError:
+        # **Not gone — merely no longer askable.** Once the leader has been collected, `getpgid`
+        # cannot resolve it, but the *group* it led outlives it and keeps whatever it started. This
+        # said "stopped" in milliseconds while a survivor ran on, which is the same abandonment the
+        # group-wide wait was written to prevent, reached by the other road: the leader that exits
+        # the instant it has spawned its worker is not an edge case, it is the ordinary shape of a
+        # program that backgrounds something. `_group_of` falls back to the pid, which is the group
+        # id — `start_new_session` makes the leader its own group, so the two are the same number.
+        pass
+    group = _group_of(pid)
 
     # `killpg` on our own group signals this very process and everything beside it. It is reachable
     # by an honest mistake — a recorded id that was reused by something started from this shell —

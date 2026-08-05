@@ -11,6 +11,7 @@ import unittest
 from unittest import mock
 
 import support
+from rundesk.commands import update
 from rundesk.core import config
 from rundesk.lifecycle import migration
 
@@ -68,6 +69,35 @@ class StepsThatCannotBeOrdered(Steps):
             code, out, _ = self.rundesk("status")
         self.assertEqual(0, code)
         self.assertIn("0001", out)
+
+    def test_settling_a_fresh_install_says_it_rather_than_raising(self):
+        # The fresh-install path stamps without running, which still has to *find* the steps — and
+        # a broken checkout is most likely to be discovered on exactly that path. Uncaught, it left
+        # `settle` as a raw traceback, through the subprocess an install settles in, folded into a
+        # message somebody was meant to read.
+        #
+        # Driven against `settle` itself rather than through `install`: an install settles in its
+        # own interpreter by design, so patching the steps in this one would never reach it.
+        self.given("0001_alpha")
+        self.given("0001_beta")
+        # Genuinely fresh: the shared fixture writes a configuration, and `settle` decides which
+        # path it is on by whether one exists. With it there this took the other branch entirely,
+        # which is how the first version of this case passed against the bug it was written for.
+        config.where(self.data).unlink()
+
+        with mock.patch.object(migration, "STEPS", self.steps):
+            code, _, _ = support.run_with(["status"])           # still answers when steps are broken
+            self.assertEqual(0, code, "status stopped answering")
+            code = update.settle()
+
+        self.assertNotEqual(0, code)
+
+    def test_settling_an_install_that_already_exists_says_it_too(self):
+        self.given("0001_alpha")
+        self.given("0001_beta")
+        config.write_fresh(self.data)
+        with mock.patch.object(migration, "STEPS", self.steps):
+            self.assertNotEqual(0, update.settle())
 
     def test_a_gap_in_the_numbering_is_fine(self):
         # Only sameness is ambiguous. Steps are appended, and nothing says they must be contiguous.

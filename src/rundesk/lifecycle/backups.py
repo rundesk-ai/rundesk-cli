@@ -349,7 +349,11 @@ def _moved_now(to: Path, at: Path, said: Callable[[str], None]) -> Path:
     # Nothing to copy and nothing reachable to copy are different: the second would move no copies,
     # re-point the link, and leave every one of them orphaned on the old disk reporting success.
     _reachable(at)
-    paths.allowed(to, "the backups location")
+    # **Kept, not merely asked.** `allowed` hands back the canonical form, and the whole reason it
+    # does is that a value which passed the check and then went on being used as typed can still
+    # resolve somewhere else afterwards. Throwing it away here meant the guard proved one path safe
+    # and the link was made to another — the exact half-fix the resolving was introduced to close.
+    to = paths.allowed(to, "the backups location")
 
     if to.exists() and not to.is_dir():
         raise Refused(f"{to} is not a directory")
