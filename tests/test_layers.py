@@ -29,8 +29,9 @@ import support
 MAY_IMPORT = {
     "utils": (),
     "core": ("utils",),
+    "gateways": ("core", "utils"),
     "lifecycle": ("core", "utils"),
-    "commands": ("lifecycle", "core", "utils"),
+    "commands": ("gateways", "lifecycle", "core", "utils"),
 }
 
 #: Below the layers rather than in them: the version this is, and what a command may exit with.
@@ -110,7 +111,7 @@ class TheTreePointsOneWay(support.Isolated):
         # `utils` was checked and `core` was not, so `core`'s table went on listing a module that
         # had moved a whole layer down and nothing said a word. A table a reader trusts is a table
         # worth checking — all of them, not the one that happened to get a test first.
-        for package in ("core", "lifecycle", "utils"):
+        for package in ("core", "gateways", "lifecycle", "utils"):
             table = (WHERE / package / "__init__.py").read_text(encoding="utf-8")
             # A trailing slash names a directory rather than a module — `steps/` is
             # documented deliberately and has no `.py` of its own to match.
@@ -146,7 +147,7 @@ class TheTreePointsOneWay(support.Isolated):
     def test_nothing_below_commands_knows_what_argparse_is(self):
         # The command line is one layer's business. A lifecycle module taking a `Namespace` would be
         # a module that cannot be driven except by typing at it.
-        for package in ("utils", "core", "lifecycle"):
+        for package in ("utils", "core", "gateways", "lifecycle"):
             for module in modules_of(package):
                 with self.subTest(module=f"{package}/{module.name}"):
                     self.assertNotIn("argparse", module.read_text(encoding="utf-8"))

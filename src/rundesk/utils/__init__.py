@@ -24,6 +24,7 @@ gradually.
 |---|---|
 | `files` | putting bytes on disk without leaving a reader something half-written |
 | `locking` | letting one process at a time change something, with a ceiling on the waiting |
+| `logs` | a day of lines in a file named after the day, and keeping the last so many days |
 | `programs` | running another program, whether it answers in a moment or runs for hours |
 | `scripts` | a directory of numbered scripts, found in order and loaded to run |
 | `terminal` | what a person sees: weight, colour, and columns that line up |

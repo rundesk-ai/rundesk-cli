@@ -13,6 +13,7 @@ Run directly: `python3 tests/test_utils.py`
 """
 
 import contextlib
+import datetime
 import fcntl
 import io
 import os
@@ -24,7 +25,7 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from rundesk.utils import files, locking, programs, scripts, terminal
+from rundesk.utils import files, locking, logs, programs, scripts, terminal
 from rundesk.utils.terminal import as_table
 
 
@@ -1237,6 +1238,495 @@ class ADirectoryOfNumberedScripts(support.Isolated):
         other = scripts.carrying(scripts.found(self.where)[0], "agent")
         self.assertIsNot(one, other)
         self.assertEqual(set(), set(sys.modules) & {"install_0001_same", "agent_0001_same"})
+
+
+class Counting:
+    """A file that says how much of itself was read.
+
+    So that "it does not read the whole log to answer for the end of it" is something a case can
+    observe, rather than a claim about how the code happens to be written today.
+    """
+
+    def __init__(self, handle, tally):
+        self.handle, self.tally = handle, tally
+
+    def read(self, *how_much):
+        got = self.handle.read(*how_much)
+        self.tally.append(len(got))
+        return got
+
+    def seek(self, *where):
+        return self.handle.seek(*where)
+
+    def tell(self) -> int:
+        return self.handle.tell()
+
+    def close(self) -> None:
+        self.handle.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *gone) -> bool:
+        self.handle.close()
+        return False
+
+
+class WithSomewhereToWrite(support.Isolated):
+    """A scratch log directory, and the means to put whole days in it."""
+
+    def setUp(self):
+        super().setUp()
+        self.where = self.home / "logs"
+
+    def a_day(self, days_ago: int) -> datetime.datetime:
+        """A moment that many whole days back, on the machine's own clock — which is what the file
+        names are counted in."""
+        return datetime.datetime.now().astimezone() - datetime.timedelta(days=days_ago)
+
+    def in_a_timezone(self, named: str) -> None:
+        """Put the machine in a timezone of this case's choosing, and put it back afterwards.
+
+        The only way to meet a daylight-saving fall-back in a test rather than wait a year for one.
+        Restored rather than removed: `TZ` is a real variable a real shell may have set, and the
+        interpreter caches what it read until `tzset` is called again.
+        """
+        self.addCleanup(time.tzset)
+        env_as_it_was(self, "TZ")
+        os.environ["TZ"] = named
+        time.tzset()
+
+    def given_a_day(self, days_ago: int, *said: str) -> Path:
+        """One day's file, written by hand so the order across days can be asserted exactly."""
+        self.where.mkdir(parents=True, exist_ok=True)
+        where = self.where / logs.named_for(self.a_day(days_ago))
+        where.write_text("".join(f"{one}\n" for one in said), encoding="utf-8")
+        return where
+
+    def not_as_root(self) -> None:
+        """A permission a superuser does not meet cannot be tested by a superuser."""
+        if os.geteuid() == 0:
+            self.skipTest("root is refused nothing, so an unwritable directory proves nothing")
+
+    def waited_until(self, wanted, patience=30.0) -> bool:
+        """Wait for a condition, with a ceiling. A case that can hang for ever is worse than one
+        that fails."""
+        ceiling = time.monotonic() + patience
+        while time.monotonic() < ceiling:
+            if wanted():
+                return True
+            time.sleep(0.02)
+        return False
+
+
+class ADayOfLines(WithSomewhereToWrite):
+    """`logs.note` — one line, appended to the file named for the day it belongs to."""
+
+    def test_the_line_lands_in_the_file_named_for_today(self):
+        logs.note(self.where, "the backup finished")
+        today = self.where / logs.named_for(self.a_day(0))
+        self.assertIn("the backup finished", today.read_text())
+
+    def test_a_line_says_when_it_was_and_how_serious_it_was(self):
+        # `[when] LEVEL: what happened`, and the when is the clock on the machine's own menu bar —
+        # the question somebody asks a log is "what happened at nine last night", and every other
+        # account of the same machine answers in local time.
+        logs.note(self.where, "could not reach GitHub", logs.WARNING)
+        said = (self.where / logs.named_for(self.a_day(0))).read_text().strip()
+        self.assertRegex(
+            said,
+            r"^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d[+-]\d\d:\d\d\] WARNING:\s+could not reach GitHub$")
+
+    def test_the_time_on_a_line_is_this_machine_s_own_with_its_offset(self):
+        # Asserted against the clock rather than against a shape, because a stamp that merely looks
+        # like a local time and is really UTC passes every regex anybody would write for it.
+        logs.note(self.where, "something happened")
+        said = (self.where / logs.named_for(self.a_day(0))).read_text().strip()
+        stamped = datetime.datetime.fromisoformat(said[1:said.index("]")])
+
+        here = datetime.datetime.now().astimezone()
+        self.assertEqual(here.utcoffset(), stamped.utcoffset(), "the line carries no local offset")
+        self.assertLess(abs((here - stamped).total_seconds()), 120,
+                        "the time on the line is not the time it is here")
+
+    def test_an_hour_that_happens_twice_is_two_different_lines(self):
+        # The one real objection to a local timestamp, and what the offset answers. Across a
+        # fall-back the clock reads 01:30 twice, an hour apart; without the offset those two are
+        # the same text, in the hour somebody is most likely to be reading a log about something
+        # odd. Driven rather than waited a year for.
+        self.in_a_timezone("America/Los_Angeles")
+        during = datetime.datetime(2026, 11, 1, 8, 30, tzinfo=datetime.timezone.utc)
+        an_hour_later = during + datetime.timedelta(hours=1)
+
+        logs.note(self.where, "the first one", when=during)
+        logs.note(self.where, "the second one", when=an_hour_later)
+
+        said = (self.where / "2026-11-01.log").read_text().splitlines()
+        self.assertIn("[2026-11-01 01:30:00-07:00]", said[0])
+        self.assertIn("[2026-11-01 01:30:00-08:00]", said[1])
+
+    def test_the_levels_line_up_down_the_page(self):
+        # A screen of these is read at a glance, and a column that moves about is a column nobody
+        # can read down. `INFO:` and `WARNING:` are not the same width, so the short one is padded.
+        for level in logs.LEVELS:
+            logs.note(self.where, "something happened", level)
+        said = (self.where / logs.named_for(self.a_day(0))).read_text().splitlines()
+        self.assertEqual(len(logs.LEVELS), len(said))
+        columns = {one.index("something happened") for one in said}
+        self.assertEqual(1, len(columns),
+                         f"the message starts at {sorted(columns)} down the page")
+
+    def test_a_severity_this_vocabulary_does_not_have_is_never_written_through(self):
+        # Four words and no fifth, or the column stops being something anybody can filter on. The
+        # names somebody reaches for from outside the four are PSR-3's, three of which are graver
+        # than ERROR — so an unclassifiable line is never shown to a person as a routine one.
+        for said, expected in (("CRITICAL", logs.ERROR), ("EMERGENCY", logs.ERROR),
+                               ("NOTICE", logs.ERROR), ("", logs.ERROR),
+                               ("info", logs.INFO), (" warning ", logs.WARNING),
+                               (logs.DEBUG, logs.DEBUG)):
+            with self.subTest(level=said):
+                where = self.where / logs.named_for(self.a_day(0))
+                files.discard(where)
+                logs.note(self.where, "something happened", said)
+                self.assertRegex(where.read_text(), rf"^\[[^\]]+\] {expected}:\s+something")
+
+    def test_it_appends_rather_than_replacing(self):
+        # A log is mostly history. A write that replaced the day would leave the last line of it.
+        for which in ("first", "second", "third"):
+            logs.note(self.where, which)
+        said = (self.where / logs.named_for(self.a_day(0))).read_text()
+        self.assertEqual(3, len(said.strip().splitlines()))
+        self.assertIn("first", said)
+
+    def test_something_running_through_midnight_lands_in_two_days(self):
+        # A long-lived process is the case a held-open handler gets wrong: it goes on writing into
+        # yesterday's file for as long as it runs. The day comes from the moment, every time — and
+        # from the machine's own midnight, so the name and the lines inside it agree about the day.
+        midnight = datetime.datetime(2026, 8, 4, 23, 59, 59)
+        logs.note(self.where, "before midnight", when=midnight)
+        logs.note(self.where, "after midnight", when=midnight + datetime.timedelta(seconds=2))
+
+        self.assertIn("before midnight", (self.where / "2026-08-04.log").read_text())
+        self.assertIn("after midnight", (self.where / "2026-08-05.log").read_text())
+
+    def test_the_day_in_the_name_is_the_day_on_the_lines_inside_it(self):
+        # Half past eight in the evening in California is already tomorrow in UTC. A file named for
+        # the UTC day would hold lines dated the day before, and somebody looking for last Tuesday
+        # would open Wednesday and find Tuesday's evening in it.
+        self.in_a_timezone("America/Los_Angeles")
+        evening = datetime.datetime(2026, 8, 5, 3, 30, tzinfo=datetime.timezone.utc)
+
+        logs.note(self.where, "still Tuesday evening here", when=evening)
+
+        # Asked of the naming itself as well as of what `note` did with it, because `named_for` is
+        # what anything reporting on a log calls, and it is handed whatever that caller had.
+        self.assertEqual("2026-08-04.log", logs.named_for(evening))
+        self.assertEqual(["2026-08-04.log"], [one.name for one in logs.kept(self.where)])
+        self.assertIn("[2026-08-04 20:30:00-07:00]", (self.where / "2026-08-04.log").read_text())
+
+    def test_it_makes_the_directory_it_writes_into(self):
+        logs.note(self.home / "not" / "yet", "the first thing that happened")
+        self.assertTrue((self.home / "not" / "yet").is_dir())
+
+    def test_a_line_that_could_not_be_written_never_fails_what_was_being_done(self):
+        # A log is an account of the work, not the work. A backup that could not write its own note
+        # is a backup that succeeded, and saying otherwise turns a good run into a reported failure.
+        self.not_as_root()
+        self.where.mkdir(parents=True)
+        self.addCleanup(self.where.chmod, 0o700)
+        self.where.chmod(0o500)
+
+        logs.note(self.where, "this cannot land anywhere")
+
+        self.assertEqual([], list(self.where.iterdir()))
+
+    def test_a_message_that_ends_in_a_newline_does_not_leave_a_blank_line(self):
+        logs.note(self.where, "said with its own ending\n")
+        said = (self.where / logs.named_for(self.a_day(0))).read_text()
+        self.assertEqual(1, len(said.splitlines()))
+
+    def test_a_day_is_only_readable_by_whoever_it_belongs_to(self):
+        # A log holds what a program was doing and for whom. Created at the mode it should have
+        # rather than tightened afterwards, which is a window with the lines already in it.
+        logs.note(self.where, "something worth keeping to ourselves")
+        mode = (self.where / logs.named_for(self.a_day(0))).stat().st_mode & 0o777
+        self.assertEqual(files.ONLY_MINE, mode, oct(mode))
+
+
+class WhenSeveralThingsWriteAtOnce(WithSomewhereToWrite):
+    """The property the whole day-file scheme rests on: one write, one whole line."""
+
+    #: Enough writers and enough lines that an interleaving would be met rather than missed, and
+    #: lines long enough that half of one is unmistakable.
+    WRITERS = 4
+    EACH = 120
+    LONG = 400
+
+    def test_every_line_from_every_writer_arrives_whole(self):
+        # Real processes rather than threads: the guarantee is the kernel's, that a write to a file
+        # opened `O_APPEND` takes the offset and the bytes together. Most of this product is
+        # short-lived processes and several of them run at once — a person typing a command while a
+        # scheduled job runs — so this is the ordinary case rather than a stressed one.
+        started = []
+        self.addCleanup(lambda: [programs.stop(pid, 0.5, 1.0) for pid in started])
+        for which in range(self.WRITERS):
+            started.append(programs.start(
+                [sys.executable, "-c", self.a_writer(which)], self.home / "what-they-said.log"))
+
+        wanted = self.WRITERS * self.EACH
+        self.assertTrue(
+            self.waited_until(lambda: len(logs.tail(self.where, wanted * 2).lines) >= wanted),
+            "the writers never finished, or lines were lost")
+
+        said = logs.tail(self.where, wanted * 2).lines
+        self.assertEqual(wanted, len(said), "lines were lost or torn in half")
+        for line in said:
+            self.assertRegex(
+                line,
+                r"^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d[+-]\d\d:\d\d\] INFO:\s+writer \d x{%d} line \d+$"
+                % self.LONG,
+                "a line was torn in half by another writer")
+
+    def a_writer(self, which: int) -> str:
+        """One process that does nothing but write lines into the same day as the others."""
+        return (
+            "import sys\n"
+            f"sys.path.insert(0, {str(support.CHECKOUT / 'src')!r})\n"
+            "from pathlib import Path\n"
+            "from rundesk.utils import logs\n"
+            f"where = Path({str(self.where)!r})\n"
+            f"for line in range({self.EACH}):\n"
+            f"    logs.note(where, 'writer {which} ' + 'x' * {self.LONG} + ' line %d' % line)\n")
+
+
+class TheDaysThatAreKept(WithSomewhereToWrite):
+    """`logs.kept` — what is ours to read, newest first, and what is somebody else's."""
+
+    def test_the_days_come_back_newest_first(self):
+        for how_long_ago in (3, 1, 2, 0):
+            self.given_a_day(how_long_ago, "something happened")
+        self.assertEqual([logs.named_for(self.a_day(which)) for which in (0, 1, 2, 3)],
+                         [one.name for one in logs.kept(self.where)])
+
+    def test_nothing_that_is_not_named_for_a_day_is_offered(self):
+        # A directory a program writes into is a directory somebody else leaves a file in — and
+        # launchd leaves two of its own beside these. Offered as logs, they would be read as ours
+        # and swept as ours.
+        self.where.mkdir(parents=True)
+        for name in ("gateway.out", "gateway.err", "notes.log", ".log", "2026-8-4.log",
+                     "2026-13-45.log", "2026-02-31.log", "2026-08-04.log.old", "readme.txt"):
+            (self.where / name).write_text("not a day of this log")
+        self.assertEqual([], logs.kept(self.where))
+
+    def test_a_directory_nothing_has_written_in_offers_nothing(self):
+        self.assertEqual([], logs.kept(self.home / "never-written-in"))
+
+    def test_a_day_shaped_name_that_is_not_a_date_is_not_a_day(self):
+        # `2026-02-31.log` has exactly the right shape and is not a date. Shape and value refuse
+        # different things, so both are asked.
+        self.assertIsNone(logs.the_day_of("2026-02-31.log"))
+        self.assertIsNone(logs.the_day_of("notes.log"))
+        self.assertEqual(datetime.date(2026, 8, 4), logs.the_day_of("2026-08-04.log"))
+
+
+class ReadingBackTheEndOfALog(WithSomewhereToWrite):
+    """`logs.tail` — the last lines across the days, in three answers rather than one."""
+
+    def test_the_lines_come_back_exactly_as_they_were_written(self):
+        # What a command prints and what a person greps must be the same text. Re-rendered on the
+        # way out, the line somebody searched for is not the line they were shown.
+        logs.note(self.where, "the gateway started", logs.INFO)
+        logs.note(self.where, "it could not be carried onto this release", logs.ERROR)
+        on_disk = (self.where / logs.named_for(self.a_day(0))).read_text().splitlines()
+
+        self.assertEqual(on_disk, logs.tail(self.where, 20).lines)
+
+    def test_it_hands_back_the_end_of_today_in_order(self):
+        self.given_a_day(0, "first", "second", "third", "fourth")
+        got = logs.tail(self.where, 2)
+        self.assertEqual(logs.READ, got.how)
+        self.assertEqual(["third", "fourth"], got.lines)
+
+    def test_it_spans_the_days_oldest_first(self):
+        # The whole point of reading more than one: the last twenty lines are the last twenty lines
+        # even when nineteen of them were written yesterday.
+        self.given_a_day(2, "two days ago")
+        self.given_a_day(1, "yesterday")
+        self.given_a_day(0, "today")
+        self.assertEqual(["two days ago", "yesterday", "today"], logs.tail(self.where, 5).lines)
+
+    def test_asking_for_more_lines_than_there_are_gives_what_there_is(self):
+        self.given_a_day(1, "yesterday")
+        self.given_a_day(0, "today")
+        self.assertEqual(["yesterday", "today"], logs.tail(self.where, 500).lines)
+
+    def test_a_directory_nothing_has_written_in_is_not_an_unreadable_one(self):
+        got = logs.tail(self.home / "never-written-in", 20)
+        self.assertEqual(logs.NOTHING_YET, got.how)
+        self.assertEqual([], got.lines)
+        self.assertIn("never-written-in", got.why)
+
+    def test_a_directory_that_cannot_be_read_is_not_an_empty_one(self):
+        # Writing is silent about failing, on purpose, so this is where a person finds out. Handed
+        # back as "no lines yet", a permission problem reads as a program that has been quiet.
+        self.not_as_root()
+        self.given_a_day(0, "something happened")
+        self.addCleanup(self.where.chmod, 0o700)
+        self.where.chmod(0o000)
+
+        got = logs.tail(self.where, 20)
+        self.assertEqual(logs.UNREADABLE, got.how)
+        self.assertEqual([], got.lines)
+        self.assertIn(str(self.where), got.why)
+
+    def test_one_day_that_cannot_be_read_stops_the_whole_answer(self):
+        # Skipping it would hand back a tail with a hole in it, presented as the end of the log.
+        self.not_as_root()
+        older = self.given_a_day(1, "yesterday", "and again")
+        self.given_a_day(0, "today")
+        self.addCleanup(older.chmod, 0o600)
+        older.chmod(0o000)
+
+        self.assertEqual(logs.UNREADABLE, logs.tail(self.where, 3).how)
+
+    def test_days_with_nothing_in_them_are_read_and_empty(self):
+        # Told apart from a directory nothing has written in: a program that started and has said
+        # nothing yet is a different report from one that has never run.
+        self.given_a_day(0)
+        got = logs.tail(self.where, 20)
+        self.assertEqual(logs.READ, got.how)
+        self.assertEqual([], got.lines)
+
+    def test_asking_for_no_lines_at_all_is_not_an_error(self):
+        self.given_a_day(0, "something")
+        for how_many in (0, -1):
+            with self.subTest(lines=how_many):
+                got = logs.tail(self.where, how_many)
+                self.assertEqual(logs.READ, got.how)
+                self.assertEqual([], got.lines)
+
+    def test_the_last_line_comes_back_even_when_nothing_ended_it(self):
+        # A log is read while it is being written to, so the last line has no newline after it about
+        # as often as it has one.
+        self.where.mkdir(parents=True)
+        (self.where / logs.named_for(self.a_day(0))).write_text("first\nhalf a line")
+        self.assertEqual(["half a line"], logs.tail(self.where, 1).lines)
+
+    def test_a_line_longer_than_one_read_still_comes_back_whole(self):
+        # The walk backwards is in blocks, and a program logging a stack trace or a body it was
+        # sent writes lines far longer than one.
+        long_one = "x" * (logs.BLOCK_BYTES * 3)
+        self.given_a_day(0, "before", long_one, "after")
+        self.assertEqual([long_one, "after"], logs.tail(self.where, 2).lines)
+
+    def test_nothing_that_is_not_a_day_is_read_back_as_one(self):
+        self.given_a_day(0, "ours")
+        (self.where / "gateway.err").write_text("launchd caught this\n")
+        self.assertEqual(["ours"], logs.tail(self.where, 20).lines)
+
+    def test_it_does_not_read_a_directory_of_days_to_answer_for_the_end_of_it(self):
+        # A year of these is asked for its last five lines. Reading them to answer works on a
+        # fixture and stops working on the machine this was written for.
+        for how_long_ago in range(4):
+            self.given_a_day(how_long_ago, *[f"day {how_long_ago} line {one}"
+                                             for one in range(40000)])
+        how_big = sum(one.stat().st_size for one in logs.kept(self.where))
+        self.assertGreater(how_big, 2 * 1024 * 1024, "this is not enough log to prove anything")
+
+        tally = []
+        opening = open
+
+        def counted(*where, **how):
+            return Counting(opening(*where, **how), tally)
+
+        with mock.patch.object(logs, "open", counted, create=True):
+            got = logs.tail(self.where, 5)
+
+        self.assertEqual([f"day 0 line {one}" for one in range(39995, 40000)], got.lines)
+        self.assertLess(sum(tally), 100 * 1024,
+                        f"it read {sum(tally)} bytes of {how_big} to answer for five lines")
+
+
+class SweepingTheOldDaysAway(WithSomewhereToWrite):
+    """`logs.swept` — retention counted in days, decided by the name, and nothing else touched."""
+
+    def test_it_keeps_exactly_the_days_it_was_told_to(self):
+        for how_long_ago in range(20):
+            self.given_a_day(how_long_ago, "something happened")
+
+        logs.swept(self.where, 14)
+
+        self.assertEqual([logs.named_for(self.a_day(which)) for which in range(14)],
+                         [one.name for one in logs.kept(self.where)])
+
+    def test_what_it_hands_back_is_what_actually_went(self):
+        for how_long_ago in (0, 30, 31):
+            self.given_a_day(how_long_ago, "something happened")
+
+        gone = logs.swept(self.where, 14)
+
+        self.assertEqual({logs.named_for(self.a_day(30)), logs.named_for(self.a_day(31))},
+                         {one.name for one in gone})
+        for one in gone:
+            self.assertFalse(one.exists())
+
+    def test_it_decides_by_the_name_and_never_by_the_files_own_timestamp(self):
+        # An mtime is changed by a copy, a restore, or a backup putting a file back — so a restore
+        # would silently age out the logs it had just brought back, or keep a year of them, and
+        # nothing anywhere would say which had happened.
+        old = self.given_a_day(40, "this was a long time ago")
+        os.utime(old, None)                      # as a restore would have left it: touched just now
+        fresh = self.given_a_day(0, "this happened today")
+        os.utime(fresh, (0, 0))                  # and this one looking ancient
+
+        logs.swept(self.where, 14)
+
+        self.assertFalse(old.exists(), "it swept by the timestamp rather than by the day")
+        self.assertTrue(fresh.exists(), "it took today's log because the timestamp looked old")
+
+    def test_it_leaves_alone_everything_it_cannot_read_as_a_day(self):
+        # Somebody else's file in the same directory is not ours to delete — and two of them are
+        # launchd's own capture, which is the only account of a start that died on the way up.
+        self.given_a_day(0, "ours")
+        self.where.mkdir(parents=True, exist_ok=True)
+        theirs = []
+        for name in ("gateway.out", "gateway.err", "notes.log", "2026-02-31.log", "keep-me.txt"):
+            (self.where / name).write_text("not ours")
+            theirs.append(self.where / name)
+
+        self.assertEqual([], logs.swept(self.where, 1))
+
+        for one in theirs:
+            with self.subTest(file=one.name):
+                self.assertTrue(one.exists())
+
+    def test_a_retention_that_lost_its_value_removes_nothing(self):
+        # A `0` arriving here is a configuration that lost its value somewhere, and reading it as
+        # "keep none of it" would empty a log directory on the strength of a variable nobody set.
+        for how_long_ago in (0, 100):
+            self.given_a_day(how_long_ago, "something happened")
+        for keeping in (0, -1):
+            with self.subTest(keeping=keeping):
+                self.assertEqual([], logs.swept(self.where, keeping))
+                self.assertEqual(2, len(logs.kept(self.where)))
+
+    def test_keeping_one_day_keeps_today(self):
+        self.given_a_day(1, "yesterday")
+        today = self.given_a_day(0, "today")
+
+        logs.swept(self.where, 1)
+
+        self.assertEqual([today.name], [one.name for one in logs.kept(self.where)])
+
+    def test_a_day_from_the_future_is_never_swept(self):
+        # A machine whose clock ran ahead once has a file dated next week in it. Sweeping it as
+        # "not within the last fourteen days" would take the newest log there is.
+        ahead = self.given_a_day(-3, "the clock was ahead")
+        logs.swept(self.where, 14)
+        self.assertTrue(ahead.exists())
+
+    def test_sweeping_a_directory_that_is_not_there_is_not_an_error(self):
+        self.assertEqual([], logs.swept(self.home / "never-written-in", 14))
 
 
 if __name__ == "__main__":
