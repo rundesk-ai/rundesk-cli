@@ -7,10 +7,11 @@ is a function of it:
 
 ```
 $RUNDESK_HOME/
-  app/        the program itself
-  data/       everything you accumulate — agents, logs, skills, catalogs, configuration
-  backups/    copies of data/
-  projects/   the shared directory work is checked out into
+  app/            the program itself
+  data/           everything you accumulate — agents, logs, skills, catalogs, configuration
+  backups/        copies of data/
+  projects/       the shared directory work is checked out into
+  .rundesk.lock   held while a command changes this install
 ```
 
 | Below the root | What may reach it |
@@ -19,6 +20,18 @@ $RUNDESK_HOME/
 | `data/` | never touched by an update; kept by an uninstall unless a purge asks for it |
 | `backups/` | survives removal, including a purge; may be a link to another disk |
 | `projects/` | yours, never rundesk's to tidy |
+| `.rundesk.lock` | rundesk's own; taken away by an uninstall |
+
+`.rundesk.lock` is the file one command at a time holds while it changes the install. It stands
+beside the directories rather than inside `data/` on purpose: the operations it makes safe *move
+`data/` itself*, and a lock inside the thing being renamed away is a lock two commands can end up
+holding different copies of. That is not hypothetical — a `configure` landing in the moment a
+restore had renamed `data/` aside recreated the directory, reported success, and had its change
+deleted by the restore's own rollback.
+
+One lock for the whole install rather than one per directory, because the races worth stopping are
+between *different* commands touching different things, and a lock per directory lets exactly those
+through.
 
 Set the root and every one of those moves with it:
 

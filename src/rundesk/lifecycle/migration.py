@@ -90,13 +90,28 @@ def found(where: Optional[Path] = None) -> List[Step]:
 
     A file that is not named like a step is ignored rather than refused, so `__init__.py` and
     anything an editor leaves behind cost nothing.
+
+    **Two steps may not share a number.** How far an install has been carried is one id, so the
+    order steps run in has to be the same order everywhere, for ever — and two files numbered the
+    same have no order except the one their filenames happen to give. An install stamped with the
+    first would run the second; an install stamped with the second would skip the first, silently
+    and for good. This is not a hypothetical mistake: it is what happens the first time two
+    branches each add a step and both reach for the next free number. Refused here, where it is
+    still only a broken checkout, rather than after it has shipped and every install has already
+    made a different arbitrary choice.
     """
     steps = []
     for at in sorted((where or STEPS).glob("*.py")):
         said = NAMED.match(at.name)
         if said:
             steps.append(Step(at, int(said.group(1)), f"{said.group(1)}_{said.group(2)}"))
-    return sorted(steps, key=lambda step: step.order)
+    steps.sort(key=lambda step: step.order)
+    for before, after in zip(steps, steps[1:]):
+        if before.order == after.order:
+            raise Broken(
+                f"{before.id} and {after.id} are both numbered {before.order:04d}, and how far an "
+                "install has been carried is one id — there is no order between them")
+    return steps
 
 
 def newest(where: Optional[Path] = None) -> Optional[str]:

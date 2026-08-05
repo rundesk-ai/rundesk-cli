@@ -114,9 +114,9 @@ Restore from a copy, never from git — the file you are restoring holds everyth
 and not yet committed:
 
 ```sh
-cp src/rundesk/paths.py /tmp/paths.keep     # before breaking anything
+cp src/rundesk/core/paths.py /tmp/paths.keep     # before breaking anything
 # … break it, run the suite, read the failure …
-cp /tmp/paths.keep src/rundesk/paths.py
+cp /tmp/paths.keep src/rundesk/core/paths.py
 ```
 
 ## Python

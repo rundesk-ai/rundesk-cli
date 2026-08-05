@@ -5,7 +5,7 @@ nothing else; it never builds a parser for another group, and it never calls a g
 
 May depend on `lifecycle`, `core` and `utils`. Nothing in any of them may depend on this.
 
-Columns are laid out by `utils.table`, so every listing in the product lines up the same way. What a
+Columns are laid out by `utils.terminal`, so every listing in the product lines up the same way. What a
 value *says* is `as_written` below, and it is here rather than there on purpose: aligning columns is
 something any program does, and choosing the words this one speaks is not.
 """
@@ -59,7 +59,7 @@ def as_written(value: Any) -> str:
 
     **Here rather than in `utils`, though it looks like a formatter.** Choosing "not yet" over
     "unset" over "—" is choosing the words this product speaks, and a program's voice is not common
-    functionality another project could pick up unchanged. `utils.table` lays the columns out; this
+    functionality another project could pick up unchanged. `utils.terminal` lays the columns out; this
     decides what is in them.
     """
     if value is None:

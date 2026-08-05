@@ -99,7 +99,7 @@ def _one_at_a_time():
     """Hold the install while this operation moves directories about.
 
     **Every operation here renames or removes a whole directory, and none of them was serialised
-    against anything.** `jsonfile` locks one file at a time, which is the wrong shape for this:
+    against anything.** `files` locks one file at a time, which is the wrong shape for this:
     `_swap` renames `data/` aside and back, and in the moment between those two renames the
     directory does not exist — so a `configure` landing there calls `mkdir(parents=True)` on the way
     to writing `config.json`, recreates `data/` from nothing, reports an ordinary success, and is

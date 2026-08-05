@@ -82,7 +82,7 @@ class Unreadable(Exception):
     """
 
 
-#: Something else is changing the configuration and did not finish. The same answer `jsonfile` gives,
+#: Something else is changing the configuration and did not finish. The same answer `files` gives,
 #: named here as well because this file is the one every command changes, so every command that
 #: writes has to be able to say it — and none of them should have to know which module it came from.
 Stuck = files.Stuck
@@ -196,7 +196,7 @@ def fill_in(data: Optional[Path] = None) -> dict:
     looks exactly like a default nobody set.
     """
     at = where(data)
-    # Held at the install level as well as at the file level. `jsonfile`'s lock guards this file
+    # Held at the install level as well as at the file level. `files`' own lock guards this file
     # against another writer of this file; it cannot guard it against `data/` being renamed out from
     # under it by a restore, which is the race that lost a stated value entirely.
     with locking.only_one(paths.lock(), "this install"), files.changing_json(at, empty={}) as held:

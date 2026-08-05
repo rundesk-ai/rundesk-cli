@@ -1,7 +1,7 @@
 """rundesk — a lightweight, provider-agnostic multi-agent gateway, in standard library Python.
 
 This package holds one thing: **what version this copy is**. Nothing else lives here, because
-everything else has somewhere better to be — where an install keeps its files is `paths.py`, what a
+everything else has somewhere better to be — where an install keeps its files is `core/paths.py`, what a
 command may exit with is `exits.py`, and what the command offers is `cli.py`.
 
 `__version__` is the single source of that answer. The command reports it, an update compares against

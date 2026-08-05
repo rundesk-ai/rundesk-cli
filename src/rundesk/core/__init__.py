@@ -7,6 +7,5 @@ every other module, so it may never depend on one of them.
 | Module | Answers |
 |---|---|
 | `paths` | where an install keeps everything — one root, everything derived downward |
-| `jsonfile` | reading and writing a small JSON file safely |
 | `config` | what this install is configured with, and how far it has been carried |
 """

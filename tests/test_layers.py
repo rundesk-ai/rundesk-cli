@@ -106,6 +106,21 @@ class TheTreePointsOneWay(support.Isolated):
                                  f"{module.name} reaches outside utils — the bottom layer is the "
                                  "standard library and its own siblings, and nothing else")
 
+    def test_every_package_table_names_what_is_in_its_directory(self):
+        # `utils` was checked and `core` was not, so `core`'s table went on listing a module that
+        # had moved a whole layer down and nothing said a word. A table a reader trusts is a table
+        # worth checking — all of them, not the one that happened to get a test first.
+        for package in ("core", "lifecycle", "utils"):
+            table = (WHERE / package / "__init__.py").read_text(encoding="utf-8")
+            # A trailing slash names a directory rather than a module — `steps/` is
+            # documented deliberately and has no `.py` of its own to match.
+            named = set(re.findall(r"^\| `(\w+)` \|", table, re.M))
+            there = {one.stem for one in modules_of(package) if one.stem != "__init__"}
+            with self.subTest(package=package):
+                self.assertTrue(named, f"{package}/__init__.py names no modules at all")
+                self.assertEqual(there, named,
+                                 f"the table in {package}/__init__.py and the directory disagree")
+
     def test_every_module_in_utils_is_named_in_its_table(self):
         # The table in `utils/__init__.py` is what a reader trusts to know what is down there, and
         # it is the first thing that goes stale: it had already fallen a module behind by the time

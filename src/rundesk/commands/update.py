@@ -41,7 +41,7 @@ from rundesk import __version__
 from rundesk.commands import failed
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
-from rundesk.lifecycle import home, migration, release, tree
+from rundesk.lifecycle import backups, home, migration, release, tree
 from rundesk.utils import programs
 
 #: How a release archive is brought down: given where it is and where to put it, it puts it there.
@@ -156,15 +156,49 @@ def settle() -> int:
             migration.stamp_without_running(paths.data())
         else:
             config.fill_in(paths.data())
+            kept = _kept_before_carrying()
             gone_wrong = migration.carry(paths.data(), saying=_out_loud)
             if gone_wrong:
-                return _failed(gone_wrong)
+                return _failed(f"{gone_wrong}{kept}")
     except (config.Unreadable, config.Stuck) as why:
         # Every write below `settle` goes through the configuration, including the stamp each
         # migration step lands with, so both answers are caught in one place rather than at each
         # of the four calls that can give them.
         return _failed(str(why))
     return OK
+
+
+def _kept_before_carrying() -> str:
+    """Copy the data before any step touches it, and say which copy that is. `""` when none.
+
+    **This is the rollback, and it is deliberately not a down-step.** A step that failed halfway
+    has left the data in a shape only that step knew about, and an inverse written months earlier
+    by somebody who never ran it is not a way back — it is a second untested change applied to an
+    install that is already broken. A copy taken a moment before is the whole of the answer, it
+    needs nothing written per step, and the way back is a command that already exists and is
+    already proven: `rundesk backups restore <name> --confirm`.
+
+    Taken only when there is something to carry, so an ordinary update that changes no data does
+    not leave a copy behind every time. And only when the owner keeps copies at all: `backup_enabled`
+    has been a setting that governed nothing until now, and an owner who turned it off should not
+    be surprised by one appearing.
+
+    A copy that could not be made is not a reason to refuse to carry — it is said, and the carrying
+    goes ahead, because an install left un-migrated is its own kind of broken.
+    """
+    data = paths.data()
+    try:
+        settled = config.read(data)
+        if not migration.outstanding(settled.get("migration")):
+            return ""
+        if not settled.get("backup_enabled"):
+            return ""
+        name = backups.save(data)
+    except (config.Unreadable, migration.Broken, backups.Refused, OSError) as why:
+        _out_loud(f"no copy was taken before carrying: {why}")
+        return ""
+    _out_loud(f"kept {name} — the data as it was before carrying")
+    return f" — {paths.data()} as it was before this is the copy {name}"
 
 
 #: Loading the release that has just landed and asking it to settle the install. Run in a separate

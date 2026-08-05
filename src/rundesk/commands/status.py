@@ -66,7 +66,12 @@ def _readably(key: str, value: Any) -> str:
     an unexplained `None`. Everything else reads the way it reads everywhere else in the product.
     """
     if key == "migration":
-        ships = migration.newest()
+        try:
+            ships = migration.newest()
+        except migration.Broken as why:
+            # `status` is the one command that must answer whatever is wrong, and steps that
+            # cannot be ordered are exactly the kind of wrong somebody runs it to find out about.
+            return f"? — {why}"
         if ships is None:
             return "nothing to carry — this release ships no migration steps"
         if value is None:

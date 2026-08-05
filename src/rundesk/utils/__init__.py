@@ -7,7 +7,7 @@ that lines up — and **nothing here knows what an install, a release, an agent 
 That is the whole membership rule, and it is worth stating as a test somebody can apply: *if this
 function had to be told about rundesk to be written, it belongs a layer up.* `paths` reads
 `RUNDESK_HOME` and `config` knows what an install may be configured with, so both stay in `core`
-however reusable they look. `jsonfile` would work unchanged in somebody else's program, so it is
+however reusable they look. `files` would work unchanged in somebody else's program, so it is
 here.
 
 **May import the standard library and nothing else in this product** — not `core`, and certainly not

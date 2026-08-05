@@ -8,6 +8,7 @@ Run directly: `python3 tests/test_migration.py`
 """
 
 import unittest
+from unittest import mock
 
 import support
 from rundesk.core import config
@@ -36,6 +37,44 @@ class Steps(support.Isolated):
 
     def applied(self):
         return config.read(self.data).get("migration")
+
+
+class StepsThatCannotBeOrdered(Steps):
+    """Two steps numbered the same, which is how the append-only rule gets broken in practice."""
+
+    def test_two_steps_with_one_number_are_refused(self):
+        # How far an install has been carried is one id, so the order steps run in has to be the
+        # same everywhere for ever. Two files numbered the same have no order but the one their
+        # filenames happen to give: an install stamped with the first would run the second, and one
+        # stamped with the second would skip the first, silently and for good.
+        self.given("0001_alpha")
+        self.given("0001_beta")
+        with self.assertRaises(migration.Broken) as refused:
+            migration.found(self.steps)
+        self.assertIn("0001", str(refused.exception))
+
+    def test_it_is_refused_where_it_is_still_only_a_broken_checkout(self):
+        # Not after it has shipped and every install has already made a different arbitrary choice.
+        self.given("0001_alpha")
+        self.given("0001_beta")
+        self.assertIsNotNone(migration.carry(self.data, self.steps))
+
+    def test_status_still_answers_when_the_steps_cannot_be_ordered(self):
+        # The one command that must answer whatever is wrong, and this is the kind of wrong
+        # somebody runs it to find out about.
+        self.given("0001_alpha")
+        self.given("0001_beta")
+        with mock.patch.object(migration, "STEPS", self.steps):
+            code, out, _ = self.rundesk("status")
+        self.assertEqual(0, code)
+        self.assertIn("0001", out)
+
+    def test_a_gap_in_the_numbering_is_fine(self):
+        # Only sameness is ambiguous. Steps are appended, and nothing says they must be contiguous.
+        self.given("0001_first")
+        self.given("0009_ninth")
+        self.assertEqual(["0001_first", "0009_ninth"],
+                         [step.id for step in migration.found(self.steps)])
 
 
 class WhichStepsExist(Steps):

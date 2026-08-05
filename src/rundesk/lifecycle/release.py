@@ -89,7 +89,8 @@ def latest_published() -> Tuple[Optional[str], Optional[str]]:
     """Ask GitHub for the newest published tag.
 
     Returns `(tag, None)`, or `(None, why)` where `why` tells nothing-published from unreachable.
-    The only function here that touches the network, so it is the only one a test replaces.
+    One of the two functions here that touch the network, and the only one anything calls: the
+    second way of asking is reached only through this one, so replacing this replaces both.
     """
     try:
         asked = urllib.request.Request(
