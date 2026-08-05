@@ -64,6 +64,7 @@ data/agents/<name>/
   state.db          what makes this directory an agent — everything it remembers
   home/             where the agent starts, and what it puts there. Yours, not rundesk's
   logs/             what its gateway said: a file per day, and what launchd caught
+  schedules/        what each firing holds, wrote, and was: <schedule>.lock, .out and .json
   gateway.lock      held by the one gateway running this agent, for as long as it runs
   gateway.json      what that gateway wrote down about itself
   rundesk-gateway-<name>   the program launchd starts, written when the job is placed
@@ -83,6 +84,19 @@ published list of every suffix a gateway might ever write, and a name checker th
 back, to make a flat namespace safe. This layout deletes that class of problem rather than defending
 against it: `gateway.lock` inside `foo/` and `gateway.lock` inside `foo.log/` are two different
 files, and no list anywhere has to say so.
+
+`schedules/` is where a firing keeps the three things it needs and the agent's records cannot hold.
+`<schedule>.lock` is claimed before the work starts and **held by the work itself**, so it lives
+exactly as long as that work and is dropped by the kernel however it ends — which is what makes "is
+this still running" a question with an honest answer after a crash, and what stops a terminal and a
+gateway each starting a copy. `<schedule>.json` says which minute the firing was for and what its
+process id is, written before the spawn so that a gateway killed outright still leaves something
+pointing at the work. `<schedule>.out` is everything that schedule's work has ever written, appended
+across runs and rotated by size.
+
+It is one of the two directories a migration does not copy aside and put back, along with `logs/`:
+both grow without bound, and putting a lock file back underneath a child that is still running would
+be putting back a claim that has moved on.
 
 An agent's directory is only ever removed by `rundesk agents remove`, one named thing at a time, and
 the directory itself goes only if it is then empty — anything you put in there is kept, along with

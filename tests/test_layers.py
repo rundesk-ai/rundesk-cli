@@ -203,6 +203,29 @@ class TheTreePointsOneWay(support.Isolated):
                                 "neither in TROUBLE nor given an `except` of its own, so any verb "
                                 "reaching it crashes instead of refusing")
 
+    def test_every_kind_the_schedules_layer_raises_is_caught_by_the_command_layer(self):
+        # The same rule `skills` is held to, and it is here because the same thing already went
+        # wrong there: a kind kept out of `TROUBLE` so a verb could answer it separately is a kind
+        # the verbs that *do not* name it do not catch at all, and one of them reached a person as
+        # a traceback rather than a refusal.
+        #
+        # `Occupied` and `NoRunner` are deliberately outside `TROUBLE` — `run` answers each with a
+        # sentence of its own — so the rule is "caught somehow" rather than "named in the tuple".
+        said = (WHERE / "commands" / "schedules.py").read_text(encoding="utf-8")
+        trouble = said.split("TROUBLE = (")[1].split(")")[0]
+        for module, kinds in (("kept", ("Refused",)),
+                              ("due", ("NotASchedule",)),
+                              ("firing", ("Occupied", "NoRunner"))):
+            raises = (WHERE / "schedules" / f"{module}.py").read_text(encoding="utf-8")
+            for name in kinds:
+                with self.subTest(kind=f"{module}.{name}"):
+                    self.assertIn(f"class {name}(", raises, f"{module}.{name} has gone")
+                    caught = (f"{module}.{name}" in trouble) or (f"except {module}.{name}" in said)
+                    self.assertTrue(caught,
+                                    f"nothing in commands/schedules.py catches {module}.{name} — "
+                                    "it is neither in TROUBLE nor given an `except` of its own, so "
+                                    "any verb reaching it crashes instead of refusing")
+
     def test_every_package_table_names_what_is_in_its_directory(self):
         # `utils` was checked and `core` was not, so `core`'s table went on listing a module that
         # had moved a whole layer down and nothing said a word. A table a reader trusts is a table

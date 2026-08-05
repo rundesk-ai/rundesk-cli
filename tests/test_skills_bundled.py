@@ -162,7 +162,11 @@ class WhatAShippedSkillMayClaim(Bundled):
         # The guard on the guard. A pattern that matched nothing, or a verb set that answered
         # everything, would leave the case above green for ever — and this is exactly the check
         # whose failure mode is silence.
-        self.assertNotIn("schedules", verbs_of(cli.build_parser()))
+        # Re-pointed when `schedules` landed. It has to name a verb this build really does not have,
+        # so the next one to arrive moves it again — which is the point: the day `channels` ships,
+        # this line goes red and whoever is looking at it is the person who can see what is still
+        # absent.
+        self.assertNotIn("channels", verbs_of(cli.build_parser()))
         self.assertEqual(["gateways"], verbs_named("run `rundesk gateways logs alan` to see"))
         self.assertEqual(["env"], verbs_named("```sh\nrundesk env set NAME\n```"))
         self.assertEqual(["--help"], verbs_named("`rundesk --help` is generated"))

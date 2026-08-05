@@ -563,21 +563,51 @@ def _reaped(agent: str, where: Path, watching: Watching) -> Watching:
 
 
 def _finished(agent: str, where: Path, one: Running, code: Optional[int]) -> None:
-    """Write down what one firing came to, in the row and in the log, with what it wrote."""
+    """Write down what one firing came to, in the row and in the log, with what it wrote.
+
+    **The time is said as an upper bound, because that is the only honest thing to say about it.**
+    A gateway notices a child has finished on the beat after it did, so the figure here is the age of
+    the firing when it was *noticed* and not how long the work took — measured on a real run, an
+    `/bin/echo` that took milliseconds was reported as having taken fifteen seconds. Somebody sizing
+    a backup window would read that and believe it. Saying *under* is true whatever the beat is, and
+    on a run of any real length the difference stops mattering.
+    """
     took = _how_long(time.monotonic() - one.since)
     if code is None:
         outcome, level = kept.STOPPED, logs.WARNING
-        said = f"stopped after {took} — nobody can say what it came to"
+        said = f"stopped within {took} — nobody can say what it came to"
     elif code == 0:
         outcome, level = kept.COMPLETED, logs.INFO
-        said = f"completed in {took}"
+        said = f"completed in under {took}"
     else:
         outcome, level = kept.FAILED, logs.ERROR
-        said = f"failed with exit {code} after {took}"
+        said = f"failed with exit {code} in under {took}"
     _note(where, f"schedule {one.name} {said}", level)
     for line in _what_it_wrote(output_of(agent, one.name), one.from_byte):
         _note(where, f"  {line}", level)
     _became(agent, where, one.name, outcome)
+
+
+def let_go(agent: str, name: str) -> List[Path]:
+    """Take away what a schedule's firings left behind, and say what went. Nothing when work is live.
+
+    **Only while the lock is free, and that is not tidiness — unlinking a held lock is how two
+    firings of one schedule come to run at once.** A lock lives on the inode: removing the name hands
+    it away, so the next claim creates a fresh inode and locks *that*, while the child still holding
+    the old one goes on running. So a schedule taken away mid-run keeps its files, the work finishes,
+    and the next gateway reckons with the record exactly as it would have anyway.
+
+    Named one thing at a time and never globbed, for the reason `directory.forgotten` gives: a glob
+    over a schedule's name is easy to get subtly wrong, and what is left behind is a lock file the
+    next schedule of that name inherits.
+    """
+    if still_running(agent, name):
+        return []
+    gone = []
+    for one in (lock_of(agent, name), record_of(agent, name), output_of(agent, name)):
+        if files.remove_one(one):
+            gone.append(one)
+    return gone
 
 
 # -- going down ------------------------------------------------------------------------
@@ -601,6 +631,21 @@ def stopping(agent: str, where: Path, watching: Watching, within: float) -> Watc
     for one in mine:
         with contextlib.suppress(Exception):                    # a stop that failed
             # may not stop the next one, and this gateway is on its way out either way.
+            gone = programs.collected(one.pid)
+            if gone.over:
+                # **Finished between the last beat and this shutdown, so it is reaped and not
+                # stopped.** Two reasons, and the second is the one that was measured. It gets its
+                # real outcome rather than being written down as `stopped`, which would be a worse
+                # answer than the one available. And nothing signals a process that has gone: a pid
+                # whose leader has been collected no longer resolves to a group, `programs.stop`
+                # falls back to treating the pid *as* the group id, and process ids are reused — so
+                # a gateway going down was seen asking the kernel to end a group that had nothing to
+                # do with it, and being told it had no permission. Being refused is luck, not a
+                # design.
+                _finished(agent, where, one, gone.code)
+                files.remove_one(record_of(agent, one.name))
+                del watching.running[one.name]
+                continue
             stuck = programs.stop(one.pid, gently_for=each * 0.6, firmly_for=each * 0.4)
             said = f"would not stop: {stuck}" if stuck else "was stopped with this gateway"
             _note(where, f"schedule {one.name} {said}", logs.WARNING)

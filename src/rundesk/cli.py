@@ -27,6 +27,8 @@ from rundesk.commands.env import register as register_env
 from rundesk.commands.gateways import Cycled, cmd_gateways
 from rundesk.commands.gateways import register as register_gateways
 from rundesk.commands.install import cmd_install
+from rundesk.commands.schedules import cmd_schedules
+from rundesk.commands.schedules import register as register_schedules
 from rundesk.commands.skills import cmd_skills
 from rundesk.commands.skills import register as register_skills
 from rundesk.commands.status import cmd_status
@@ -47,6 +49,9 @@ examples:
   rundesk gateways              every agent, and how its gateway stands
   rundesk gateways start <agent>
   rundesk gateways logs <agent>
+  rundesk schedules             work an agent starts because the time came
+  rundesk schedules add <agent> <schedule> --when '0 9 * * *' --run '<program>'
+  rundesk schedules run <agent> <schedule>
   rundesk backups               the copies of what rundesk keeps for you
   rundesk backups save          copy what rundesk keeps, now
   rundesk env list              the values rundesk hands to what it talks to
@@ -82,6 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_gateways(sub)
     register_backups(sub)
     register_env(sub)
+    register_schedules(sub)
     register_skills(sub)
     _register_install(sub)
     _register_update(sub)
@@ -167,6 +173,8 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
         return cmd_backups(args, _gateways(supervising))
     if args.command == "env":
         return cmd_env(args)
+    if args.command == "schedules":
+        return cmd_schedules(args)
     if args.command == "skills":
         return cmd_skills(args, refreshing)
     if args.command == "version":

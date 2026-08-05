@@ -1,6 +1,6 @@
 # The command surface
 
-Eleven operations, and every one of them works. There is no "coming soon" list: a verb rundesk cannot
+Twelve operations, and every one of them works. There is no "coming soon" list: a verb rundesk cannot
 perform is a verb rundesk does not have.
 
 ```sh
@@ -17,6 +17,13 @@ rundesk gateways stop <agent> | --all     # take the job back, gracefully
 rundesk gateways restart <agent> | --all  # stop it, prove it went, start it again
 rundesk gateways logs <agent> [-n <lines>]  # what one gateway has been saying
 rundesk gateways run <agent>              # be the gateway, in this terminal
+rundesk schedules                         # everything every agent starts because the time came
+rundesk schedules list <agent>            # one agent's
+rundesk schedules add <agent> <schedule> --run '<program>' --when '<cron>' | --at <moment>
+rundesk schedules update <agent> <schedule> [--when|--at|--until|--run|--enable|--disable]
+rundesk schedules show <agent> <schedule> # everything one was given
+rundesk schedules run <agent> <schedule>  # run one now, in this terminal
+rundesk schedules remove <agent> <schedule>       # take one away
 rundesk backups                           # the copies of what rundesk keeps for you
 rundesk backups save                      # copy what rundesk keeps, now
 rundesk backups restore <backup> --confirm        # put a copy back
@@ -510,6 +517,121 @@ this program.
 **The claim is the check.** There is no version of this that asks whether a gateway is running and
 then starts one — between the asking and the starting another gateway can arrive, and that gap is
 how an ordinary start once ended a live agent's whole process tree.
+
+## schedules
+
+Work an agent starts because the time came, rather than because somebody asked. A schedule belongs to
+one agent and lives in that agent's own records, so no other agent can run it, report on it or change
+it — and the gateway hosting that agent is what fires it. With no sub-verb it lists every schedule on
+the install; with an agent it lists that agent's.
+
+What a schedule is, and every state one can get stuck in, is [`schedules.md`](schedules.md). This is
+what each verb guarantees and what each refuses.
+
+```console
+$ rundesk schedules
+schedules in /Users/you/.rundesk/data/agents
+AGENT  SCHEDULE  WHEN         NEXT              LAST
+ada    digest    0 9 * * 1    2026-08-10 09:00  completed 2026-08-03 09:00
+cole   nightly   0 2 * * *    2026-08-06 02:00  failed 2026-08-05 02:00
+cole   once      2026-09-01T06:00  2026-09-01 06:00  never ran
+```
+
+`NEXT` is a local minute, or one of three words that are not times: `off` for a schedule somebody
+switched off, `expired` for one that can never be due again, and `never` for one whose date does not
+arrive — `0 0 30 2 *` says the thirtieth of February. `LAST` tells `never ran` from an outcome,
+because an owner seeing only that a schedule is spent cannot tell work that happened from work that
+silently did not, and it says `running` while work is in flight.
+
+**A schedule is stated on this machine's own clock.** `--when` takes the five fields schedules have
+always used and `--at` takes one moment, `YYYY-MM-DDTHH:MM`. Both are kept exactly as typed. A moment
+carrying a zone or a `Z` is refused rather than converted — an owner who writes one means something
+rundesk cannot honour, and quietly reinterpreting it is worse than saying so. What a schedule last
+*did* is recorded in UTC, because that is compared and sorted, and is shown back in local time.
+
+### schedules add
+
+```console
+$ rundesk schedules add cole nightly --when '0 2 * * *' --run '/usr/local/bin/backup.sh --full'
+schedule nightly added for cole
+        when      0 2 * * *
+        run       /usr/local/bin/backup.sh --full
+        until     not yet
+        enabled   yes
+        next      2026-08-06 02:00
+        last      never ran
+        logs      /Users/you/.rundesk/data/agents/cole/logs
+        output    /Users/you/.rundesk/data/agents/cole/schedules/nightly.out
+```
+
+**`--run` takes one string and never reaches a shell.** It is split into words the way a shell would
+split them and handed straight to the program, so nothing in it is globbed, expanded, or read as `;`,
+`&&` or a redirection — a schedule cannot mean one thing when a person tests it and another when the
+gateway runs it.
+
+**The program is located when the schedule is added.** A path that is not on the machine is a mistake
+somebody can fix at the moment they make it; found instead by a gateway, it is a line in a log at two
+in the morning saying a schedule nobody was watching did not run.
+
+```console
+$ rundesk schedules add cole nightly --when '0 2 * * *' --run '/usr/local/bin/backup.sh'
+schedules: FAILED — /usr/local/bin/backup.sh is not a program on this machine — a schedule naming one that is not there can never run, so say where it really is
+        nothing was added
+```
+
+`--until <moment>` is when it is finished: after it, the schedule never runs again, however often its
+time comes round. `--disabled` keeps it and does not run it.
+
+### schedules update
+
+Changes one in place, keeping every record of what it has already done. **Only what is named moves**,
+and `--when` and `--at` replace each other — a schedule states a repeating time or one moment, never
+both. Naming nothing to change is refused rather than reported as a success.
+
+```console
+$ rundesk schedules update cole nightly
+schedules: FAILED — nothing was named to change about nightly
+        change one with: rundesk schedules update cole nightly --when '<cron>'
+        nothing was changed
+```
+
+### schedules run
+
+Runs one now, in this terminal, whether or not it is due — and prints what the program wrote, on the
+stream the program wrote it to.
+
+```console
+$ rundesk schedules run cole nightly
+backing up /Users/you/work
+done, 412 files
+schedule nightly completed
+```
+
+**The exit code is the program's**, so this composes in a script. A program that never started is a
+`1` with no exit code quoted, because nothing ran and reporting a code would say it ran and disagreed.
+
+**Running by hand never uses up the one moment a schedule states and never moves when it next falls
+due.** Testing a schedule must not be how you stop it happening. It does write down what became of it,
+because it did run — and it takes the same lock the clock takes, so it cannot start a second copy of
+work a gateway is already doing.
+
+### What a firing leaves behind
+
+Everything a schedule's work writes is appended to `data/agents/<agent>/schedules/<schedule>.out`, and
+the account of each firing is in the agent's own log beside every other thing its gateway said:
+
+```console
+$ rundesk gateways logs cole
+[2026-08-05 02:00:00-04:00] INFO:    schedule nightly is due for 2026-08-05 02:00
+[2026-08-05 02:00:00-04:00] INFO:    schedule nightly started as pid 4471: /usr/local/bin/backup.sh --full
+[2026-08-05 02:00:31-04:00] ERROR:   schedule nightly failed with exit 2 in under 31s
+[2026-08-05 02:00:31-04:00] ERROR:     rsync: link_stat "/Volumes/x" failed: No such file or directory
+```
+
+It ran, it finished, or it failed and why — and the last of those carries a bounded tail of what the
+program wrote, so the file is worth opening on its own. Every way a firing does not get that far is
+named rather than left silent, and [`schedules.md`](schedules.md#when-a-schedule-is-not-doing-what-you-expected)
+lists what each of those lines means and what to do about it.
 
 ## backups
 

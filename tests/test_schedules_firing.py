@@ -223,11 +223,15 @@ class WhatTheLogSays(Firing):
         self.assertIn("schedule tick started as pid", said)
         self.assertIn("/bin/echo ran", said)
 
-    def test_a_firing_that_finished_says_so_with_how_long_it_took(self):
+    def test_a_firing_that_finished_says_so_and_says_how_long_as_an_upper_bound(self):
+        # **Under, never exactly.** A gateway notices a child finished on the beat *after* it did,
+        # so the figure is the age of the firing when it was noticed rather than how long the work
+        # took. Measured on a real run: an `/bin/echo` taking milliseconds was reported as having
+        # taken fifteen seconds, and somebody sizing a backup window would read that and believe it.
         self.given("tick")
         self.watching = self.look(watching=self.watching)
         self.assertTrue(self.waited_for_an_outcome("tick"), self.said())
-        self.assertRegex(self.said(), r"schedule tick completed in \d")
+        self.assertRegex(self.said(), r"schedule tick completed in under \d")
 
     def test_a_firing_that_failed_says_why_and_carries_what_the_program_wrote(self):
         # The whole reason a person opens this file. A failure with no output beside it is a failure
@@ -416,6 +420,25 @@ class GoingDown(Firing):
         self.assertEqual({}, watching.running)
         self.assertEqual(kept.STOPPED, self.outcome_of("slow"))
         self.assertIn("was stopped with this gateway", self.said())
+
+    def test_work_that_finished_before_the_shutdown_is_reaped_rather_than_signalled(self):
+        # Two things, and the second is why this is not a nicety. It gets its real outcome instead of
+        # `stopped`, which would be a worse answer than the one available. And nothing signals a
+        # process that has gone: a pid whose leader was collected no longer resolves to a group,
+        # `programs.stop` then treats the pid *as* the group id, and process ids are reused — so a
+        # gateway going down was seen asking the kernel to end a group that had nothing to do with
+        # it. It was refused, which is luck rather than design.
+        self.given("tick")
+        watching = self.look()
+        self.assertTrue(support.waited_until(
+            lambda: not firing.still_running(self.agent, "tick"), PATIENCE))
+
+        firing.stopping(self.agent, self.where, watching, within=10.0)
+
+        self.assertEqual(kept.COMPLETED, self.outcome_of("tick"))
+        self.assertEqual({}, watching.running)
+        self.assertNotIn("was stopped with this gateway", self.said())
+        self.assertNotIn("would not stop", self.said())
 
     def test_a_stop_with_nothing_running_does_nothing_at_all(self):
         watching = firing.Watching({}, {})
