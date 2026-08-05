@@ -59,6 +59,34 @@ telling somebody: nothing brings it back when it stops, and nothing starts it at
 Saying "running" there tells a person they are covered when they are not, so it is said as the
 failure it is, with the command that resolves it.
 
+**There are two of those states and they are not one state**, because what a person does about them
+is not the same. A job that is *not placed yet* is one a restart puts back. A job that can **never**
+be placed — the agent is named something a launchd label cannot carry, which `agents` allows and
+`job.IN_A_LABEL` does not — is one no command of this product will ever place, however many times it
+is run. Both are said as failures; only one of them is offered a restart.
+
+## When there is no job to take back, the gateway is still stopped
+
+**A gateway must never be stuck, and never locked out.** That is the absolute the research page is
+built around, and a stopping verb that gives up because there is no job to ask launchd about breaks
+it through a supported verb: `gateways run <agent>` starts a gateway for any agent, including one
+whose name can never be a label, and every stopping verb used to refuse that name before it had even
+asked whether a gateway was running. The process held the agent's name and nothing in the product
+could take it back.
+
+So `stop` and `restart` fall back to `utils.programs.stop`, which signals the recorded pid's process
+*group* — `SIGTERM`, then `SIGKILL` — whenever there is no launchd job to talk to: a name no label
+can carry, or a job that was never bootstrapped, which is what a gateway still holding the name
+after its job came back proves.
+
+**The pid is read from `standing`, and only ever while the lock says a gateway is running.** A pid
+from a record whose process is gone is a number that now belongs to somebody else, and signalling it
+kills a stranger's program — which is the whole reason liveness is a `flock` and not a pid file.
+
+**Graceful still means graceful.** A gateway signalled directly gets the same window to finish that
+its job's `ExitTimeOut` would have given it under launchd, and `--force` is the only thing that skips
+the waiting — the same bargain it makes on every other path here.
+
 ## The supervisor arrives as an argument
 
 `job.Supervising` is passed in, exactly as `lifecycle.release.Asking` and `commands.update.Fetching`
@@ -71,6 +99,7 @@ running. The seam is the whole of the defence.
 
 import argparse
 import os
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -81,7 +110,7 @@ from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.gateways import host, job, standing
-from rundesk.utils import logs
+from rundesk.utils import logs, programs
 from rundesk.utils.terminal import as_table
 
 #: How many lines of a gateway's log are shown when nobody says how many.
@@ -98,6 +127,27 @@ FORCE = ("kill it where it stands instead of asking it to finish — for a gatew
 #: typed it on the wrong agent has to be able to see that from the output alone.
 WAS_KILLED = ("killed rather than asked to finish — whatever it was doing was taken away "
               "mid-flight")
+
+#: Said out loud whenever a gateway was stopped by signalling its process instead of by taking a
+#: job back, because those are two different things to have happened and only one of them means
+#: launchd will not start it again.
+BY_SIGNAL = "this gateway had no job, so it was stopped by signalling the process directly"
+
+#: How long a gateway that has to be signalled directly is given to finish what it was doing.
+#: **The job's own `ExitTimeOut`**, which is the window `bootout --wait` would have given it, so a
+#: gateway with no job behind it is not held to a shorter standard than one with — a gateway is
+#: holding somebody's work whether or not launchd ever heard of it.
+GENTLY_FOR = float(job.EXIT_TIMEOUT)
+
+#: How long the process group is given to be gone after `SIGKILL`, which is not a courtesy but the
+#: time the kernel takes: a wait of zero here would report a gateway that is on its way out as one
+#: that would not stop.
+FIRMLY_FOR = 5.0
+
+#: What `--force` gives it instead, and it is the whole of what `--force` means on this path: the
+#: `SIGTERM` is still sent, and nothing waits to see whether it was honoured before the `SIGKILL`
+#: behind it lands.
+FORCED_FOR = 0.0
 
 #: How long a gateway is given to come up on its own after launchd has taken the job. Bootstrapping
 #: *is* starting — `KeepAlive {"SuccessfulExit": false}` implies `RunAtLoad` — so this is the window
@@ -123,6 +173,13 @@ CAPTURED_BYTES = 65536
 #: What the four sources are called in the listing, in the words each of them actually answers in.
 RUNNING = "running"
 UNSUPERVISED = "running, UNSUPERVISED"
+
+#: And the same state one degree worse: a gateway whose agent is named something a launchd label
+#: can never carry. `UNSUPERVISED` is a job that is not placed *yet* and a restart places it; this
+#: one is a job that can never be placed at all, and no command of this product changes that while
+#: the agent is named as it is. Two different facts, so two different words.
+UNSUPERVISABLE = "running, NEVER SUPERVISED"
+
 WEDGED = "running, no beat"
 NOT_RUNNING = "not running"
 CANNOT_TELL = "cannot tell"
@@ -306,13 +363,18 @@ def _stood(name: str, by: job.Supervising) -> Stood:
     if one is None:
         # A name a launchd label cannot carry never had a job and never could have one, so there is
         # nothing to ask launchd about — and the gateway may still be running, started by hand.
-        return Stood(name, _as_the_kernel_has_it(how, False), "cannot be placed",
-                     CANNOT_TELL, CANNOT_TELL, trouble)
+        #
+        # **Which is exactly why this may not report plain `running`.** This branch is reached only
+        # when no job can exist in any state, so a gateway found here is the least supervised one
+        # there is: nothing brings it back, nothing starts it at the next login, and unlike the
+        # branch below there is no restart that changes that.
+        return Stood(name, _as_the_kernel_has_it(how, UNSUPERVISABLE), "cannot be placed",
+                     CANNOT_TELL, CANNOT_TELL, _what_to_say_about_no_job_ever(name, how, trouble))
 
     stands = job.stands(one, by)
     return Stood(
         name,
-        _as_the_kernel_has_it(how, stands.how == job.NOT_PLACED),
+        _as_the_kernel_has_it(how, UNSUPERVISED if stands.how == job.NOT_PLACED else ""),
         {job.PLACED: "placed", job.NOT_PLACED: "not placed"}.get(stands.how, CANNOT_TELL),
         {True: "disabled", False: "enabled"}.get(stands.disabled, CANNOT_TELL),
         {True: "on", False: "switched off"}.get(stands.allowed, CANNOT_TELL),
@@ -320,11 +382,15 @@ def _stood(name: str, by: job.Supervising) -> Stood:
     )
 
 
-def _as_the_kernel_has_it(how: standing.Standing, unsupervised: bool) -> str:
+def _as_the_kernel_has_it(how: standing.Standing, unsupervised: str) -> str:
     """What the flock said, in the words a person reads — and never one that overstates it.
 
     A gateway up with nothing supervising it is not written as `running`: whoever reads that word
     believes the agent is covered, and it is the one state where they are not.
+
+    **`unsupervised` is the word rather than a flag**, because there are two of those states and
+    they are told apart on the row itself: a job that is not placed yet, and one that can never be
+    placed at all. A caller with nothing to say about supervision passes `""`.
 
     The pid comes from the record and is shown only once the lock has already said somebody is
     there — a pid read off a gateway that is gone is a number that now belongs to something else.
@@ -334,10 +400,30 @@ def _as_the_kernel_has_it(how: standing.Standing, unsupervised: bool) -> str:
     if how.how == standing.OFFLINE:
         return NOT_RUNNING
     if unsupervised:
-        return f"{UNSUPERVISED}{_a_pid(how.pid)}"
+        return f"{unsupervised}{_a_pid(how.pid)}"
     if how.stale:
         return f"{WEDGED}{_a_pid(how.pid)}"
     return f"{RUNNING}{_a_pid(how.pid)}"
+
+
+def _what_to_say_about_no_job_ever(name: str, how: standing.Standing, trouble: str) -> str:
+    """The one thing worth saying about an agent no launchd label can ever be made for.
+
+    **Worded apart from `_what_to_say_about`, because the two facts are different.** There, a job
+    that is `NOT_PLACED` is a job that has not been placed *yet*, and the sentence ends in the
+    restart that places it. Here no job can be placed at all — not now and not after any command
+    this product has — so offering a restart would send somebody round a loop that cannot end, and
+    what they need instead is the reason and the two things that really do work: the gateway can
+    still be stopped, and it can still be run in a terminal.
+    """
+    if how.how == standing.CANNOT_TELL:
+        return f"{how.why} — this is not the same as the gateway not running"
+    if how.how == standing.ONLINE:
+        return (f"a gateway is holding this name and launchd can never have a job for it — "
+                f"{trouble}. Nothing brings it back when it stops, nothing starts it at the next "
+                f"login, and no restart changes either of those while the agent is named this. "
+                f"Take it down with: rundesk gateways stop {_as_typed(name)}")
+    return f"{trouble} — it can still be run in a terminal with: rundesk gateways run {_as_typed(name)}"
 
 
 def _what_to_say_about(name: str, how: standing.Standing, stands: job.Stands) -> str:
@@ -395,7 +481,7 @@ def _started(name: str, by: job.Supervising) -> int:
 
     one, trouble = _job_for(name, at)
     if one is None:
-        return _failed(trouble, "nothing was started")
+        return _no_job_can_ever_be_placed(name, trouble, "nothing was started")
 
     if how.how == standing.ONLINE:
         return _already_running(name, how, job.stands(one, by))
@@ -497,11 +583,17 @@ def _stopped_one(name: str, by: job.Supervising, forcing: bool = False) -> int:
     login, `loginwindow` bootstraps the `LaunchAgents` directories on its own — so a stop that left
     the file behind would be a stop that undid itself the next time somebody logged in, with
     nothing anywhere having said so.
+
+    **And when there is no job to take back, the gateway is stopped anyway** — by signalling the
+    process, which is the only thing left that can. Reached two ways: a name no label can carry, so
+    there is nothing to ask launchd about at all, and a name still held after the job came back,
+    which proves it was not launchd that started it. A stop that refused either of those would leave
+    a gateway holding its agent's name with nothing in the product able to take it back.
     """
     at = directory.where(name)
     one, trouble = _job_for(name, at)
     if one is None:
-        return _failed(trouble, "nothing was stopped")
+        return _signalled_directly(name, at, forcing, trouble)
 
     was = standing.standing(at)
     had_a_job = job.plist_of(one).is_file()
@@ -516,13 +608,14 @@ def _stopped_one(name: str, by: job.Supervising, forcing: bool = False) -> int:
                        "loaded")
 
     if not _went_away(at):
-        how = standing.standing(at)
-        return _failed(
-            f"the job for {name} is gone and a gateway is still holding the name"
-            f"{_as_pid(how.pid)}",
-            "launchd is not keeping it up any more, so it was not launchd that started it — a "
-            f"`rundesk gateways run {name}` is stopped in the terminal it is running in",
-            "the job was taken back")
+        # **The job came back cleanly and something is still holding the name**, which is the proof
+        # that it was never launchd keeping it up — a job that was never bootstrapped, or a gateway
+        # started by hand in a terminal. Nothing supervises it, so nothing but a signal stops it,
+        # and the job it never had is exactly why there is no gentler way left.
+        return _signalled_directly(
+            name, at, forcing,
+            "launchd took its job back and a gateway is still holding the name, so it was not "
+            "launchd that started it")
 
     if was.how == standing.ONLINE:
         print(f"gateway stopped for {name}")
@@ -605,7 +698,13 @@ def _forced_one(name: str, by: job.Supervising) -> int:
     at = directory.where(name)
     one, trouble = _job_for(name, at)
     if one is None:
-        return _failed(trouble, "nothing was restarted")
+        # **The kill still happens, and only the start cannot.** There is no label to `launchctl
+        # kill`, so the process is signalled directly; what follows is the honest half of a restart
+        # this name can never have, said as the failure it is rather than passed over.
+        went = _signalled_directly(name, at, True, trouble)
+        if went != OK:
+            return went
+        return _no_job_can_ever_be_placed(name, trouble, "it was stopped and not started again")
 
     was = standing.standing(at)
     _ended(one, by)
@@ -626,17 +725,107 @@ def _ended(one: job.Job, by: job.Supervising) -> None:
     by.end(one.label)
 
 
+def _signalled_directly(name: str, at: Path, forcing: bool, why_there_is_no_job: str) -> int:
+    """Stop a gateway nothing supervises, by signalling the process itself. The last thing that can.
+
+    **`utils.programs.stop` and not a `kill` written here.** It signals the process *group*, so what
+    the gateway started stops with it rather than being orphaned with nothing left holding its ids;
+    it asks with `SIGTERM` before it insists with `SIGKILL`; and it refuses a pid of `1` or less and
+    a group that is this command's own, which is what stands between a reused pid and a command that
+    kills itself mid-sentence. Every one of those was already built and tested there.
+
+    **The pid is read here, from `standing`, and never carried in from a caller.** `standing` hands
+    one back only while the lock says a gateway is holding the name — a pid off a record whose
+    process is gone is a number that now belongs to something else, and this is the one function in
+    the product that would signal it.
+
+    Three answers, and the middle one is not a failure: a gateway that is not running is the state
+    that was asked for, and a stop that reported an error for it would make `stop` unsafe to run
+    twice.
+
+    **What the signal answered is not what decides this. The lock is.** The same rule `_forced_one`
+    states for `launchctl kill`, and here it is not a preference: measured on this machine
+    2026-08-05, `killpg` against the group of a process that has just become a **zombie** answers
+    `EPERM` on macOS rather than `ESRCH`, so a gateway that took the `SIGTERM` and died in the
+    instant before the `SIGKILL` behind it has that `SIGKILL` refused — and `utils.programs.stop`
+    reports a program it really did stop as one that would not go. Asking the kernel whether the
+    name came free settles it either way, and it is the same question `_went_away` asks after a
+    `bootout`.
+    """
+    how = standing.standing(at)
+    if how.how == standing.CANNOT_TELL:
+        return _failed(f"nobody can tell whether a gateway is running for {name} — {how.why}",
+                       "there is no job to take it back, and nothing may be signalled on a guess",
+                       "nothing was stopped")
+    if how.how != standing.ONLINE:
+        # Nothing is holding the name, and there was no job to take back either — so there is
+        # nothing here to stop, which is the state that was asked for.
+        print(f"{name} is not running")
+        return OK
+    if how.pid is None:
+        return _failed(
+            f"a gateway is holding {name} and nothing readable says which process it is",
+            f"there is no job to take back and no pid in {at / standing.RECORD}, so nothing here "
+            "can reach it — find it with: ps -axo pid,command | grep rundesk",
+            "nothing was stopped")
+
+    trouble = programs.stop(how.pid, FORCED_FOR if forcing else GENTLY_FOR, FIRMLY_FOR)
+    if not _went_away(at):
+        went_wrong = f"the gateway holding {name} could not be stopped"
+        return _failed(f"{went_wrong} — {trouble}" if trouble else went_wrong,
+                       f"it is still holding the name{_as_pid(how.pid)}", "nothing was stopped")
+
+    print(f"gateway stopped for {name}{_as_pid(how.pid)}")
+    print(f"        {BY_SIGNAL}")
+    print(f"        why    {why_there_is_no_job}")
+    if forcing:
+        print(f"        {WAS_KILLED}")
+    return OK
+
+
+def _no_job_can_ever_be_placed(name: str, trouble: str, and_so: str) -> int:
+    """Refuse a start for a name launchd can never carry, and say what still works instead.
+
+    **Never a restart, which is what the refusal beside this one offers.** A job that is not placed
+    is placed by running the resolver again; this one cannot be placed by running anything, so the
+    only two true things left are that the gateway can be run in a terminal, and that an agent named
+    inside `job.IN_A_LABEL` is one launchd can host.
+    """
+    return _failed(trouble,
+                   f"no command puts it under launchd while it is named this — but a gateway for "
+                   f"it can still be run in this terminal with: rundesk gateways "
+                   f"run {_as_typed(name)}",
+                   and_so)
+
+
+def _as_typed(name: str) -> str:
+    """One agent's name as somebody would have to type it, quoted only when it needs to be.
+
+    Every command this module prints is meant to be pasted, and the names that reach these
+    particular sentences are exactly the ones a shell would take apart: an agent called `my agent`
+    is two arguments unless it is quoted, and a suggestion that does not work is worse than none.
+    """
+    return shlex.quote(name)
+
+
 def _said(name: str, lines: int) -> int:
     """What this agent's gateway has been saying — lines, none yet, or could not be read.
 
     Three answers and never two. An empty list handed back for a directory nobody may read is a
     report of a quiet gateway, and whoever reads that goes looking in entirely the wrong place.
 
-    **When the gateway's own log is empty, what the supervisor caught is shown instead.** A gateway
-    that died before it could open a log of its own — a missing interpreter, a job launchd would not
-    take, an exception on the way up — leaves nothing in `logs/`, because nothing had opened it yet.
-    The only account of that is in the two files launchd captured, and this is where somebody is
-    standing when they need them.
+    **What the supervisor caught is shown every time, and not only when the day log is empty.**
+    It was shown only then, and that made it unreachable in practice: a gateway writes `gateway up
+    for …` as its first act after claiming the lock and `logs.tail` walks backwards across the day
+    files, so one successful start anywhere in the retained window meant the fallback never fired
+    again. The incident is a gateway that started, wrote its `up` line, and died inside its throttle
+    window on an uncaught exception — and `gateways logs` showed the `up` line and nothing else,
+    while the traceback sat in `gateway.err`.
+
+    They are two orthogonal facts about one gateway: what it wrote, and what the machine's
+    supervisor caught around it. Both are bounded reads, both are labelled with the file they came
+    from, and whichever is genuinely empty says so — because *nothing yet* and *nobody could tell*
+    are not the same answer, and neither is *I did not look*.
     """
     gone_wrong = _not_an_agent(name)
     if gone_wrong:
@@ -659,25 +848,31 @@ def _said(name: str, lines: int) -> int:
     print(f"logs for {name} in {where}")
     if said.how == logs.UNREADABLE:
         return _failed(said.why, "nothing was read")
-    if said.lines:
-        for line in said.lines:
-            print(line)
-        return OK
 
-    print(f"        nothing has been written by {name}'s own gateway yet")
-    return _what_the_supervisor_caught(at, lines)
+    print(f"        what {name}'s own gateway wrote, in {where}:")
+    for line in said.lines:
+        print(line)
+    if not said.lines:
+        print(f"        nothing has been written by {name}'s own gateway yet")
+    return _what_the_supervisor_caught(at, lines, bool(said.lines))
 
 
-def _what_the_supervisor_caught(at: Path, lines: int) -> int:
+def _what_the_supervisor_caught(at: Path, lines: int, wrote_its_own: bool) -> int:
     """The end of `gateway.out` and `gateway.err`, which launchd wrote and this product never does.
 
     Both, not only the erroring one: the very first thing a gateway does is write one line to
     standard output saying what pid it is, and a refusal it decided for itself is said there too.
     An empty `gateway.out` beside a job launchd says has run is the signal that the failure is
     upstream of this product entirely, and belongs in the unified log.
+
+    **`wrote_its_own` decides only the last sentence, and it decides a real difference.** A gateway
+    that said nothing anywhere may never have started at all, and the unified log is then the one
+    place left to look; a gateway with a log of its own and quiet capture files is the ordinary
+    healthy shape, and sending somebody to `log show` for it is sending them nowhere.
     """
+    caught = standing.captured(at)
     empty = True
-    for one in standing.captured(at):
+    for one in caught:
         how, said = _the_end_of(one, lines)
         if how == logs.UNREADABLE:
             print(f"        {one} could not be read ({said[0] if said else ''})")
@@ -690,7 +885,10 @@ def _what_the_supervisor_caught(at: Path, lines: int) -> int:
         for line in said:
             print(f"        {line}")
 
-    if empty:
+    if empty and wrote_its_own:
+        print(f"        the supervisor caught nothing in {caught[0].name} or {caught[1].name} — "
+              "everything above is the gateway's own log")
+    elif empty:
         print("        and the supervisor caught nothing either — a gateway that never started at "
               "all leaves its only account in the unified log:")
         print("        log show --last 10m --predicate 'process == \"launchd\" OR "

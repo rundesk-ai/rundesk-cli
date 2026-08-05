@@ -18,11 +18,20 @@ are exactly as they were found, after every case in every suite.
 kernel is what `standing` asks, and a stand-in for a lock would prove nothing about the one property
 this whole design exists to have: that a gateway which was killed outright never looks alive.
 
+**And a gateway that has to be *stopped* is a real process**, started by the case itself and by
+nothing else. A signal that lands is the whole of what those cases prove, so there is nothing to
+stand in for: a mock would be asserting that this suite can call a function. Every one of them
+signals only the pid it started, never a group and never a number it read somewhere, and takes that
+process away again however the case ended.
+
 Run directly: `python3 tests/test_gateways_command.py`
 """
 
 import contextlib
 import os
+import subprocess
+import sys
+import time
 import unittest
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -40,6 +49,41 @@ def ran(code: Optional[int] = 0, out: str = "", err: str = "",
         trouble: Optional[str] = None) -> programs.Ran:
     """One answer from a supervisor, in the shape `utils.programs` hands back."""
     return support.ran(code, out, err, trouble)
+
+
+#: An agent named something `agents` allows and a launchd label can never carry.
+#:
+#: **The two rules really are different, and that is the whole of the defect these cases cover.**
+#: `agents add "my agent"` succeeds, `gateways run "my agent"` is a supported verb, and
+#: `job.IN_A_LABEL` refuses the name — so a gateway can be started for an agent that can never have
+#: a job, and every stopping verb used to refuse the name before it had even asked whether one was
+#: running.
+UNLABELABLE = "my agent"
+
+#: A real gateway, for the cases whose whole point is that a signal has to land on one.
+#:
+#: It does the two things `host` does that those cases turn on and nothing else: it takes the
+#: agent's `flock` and writes the record beside it, so `standing` answers `ONLINE` with its pid.
+#: The paths are handed in rather than derived here, so this carries no second opinion about what
+#: either file is called.
+#:
+#: `ignoring` makes it deaf to `SIGTERM`, which is the one gateway `--force` exists for — the state
+#: where a graceful stop waits out its whole window and a forced one does not.
+A_REAL_GATEWAY = """\
+import fcntl, json, os, signal, sys, time
+
+lock, record, how = sys.argv[1], sys.argv[2], sys.argv[3]
+if how == "ignoring":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+held = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+with open(record + ".being-written", "w") as writing:
+    json.dump({"name": "a real gateway", "pid": os.getpid(), "version": "0.0.0",
+               "started_at": "now", "beat_at": "now", "since_boot": time.monotonic()}, writing)
+os.rename(record + ".being-written", record)
+while True:
+    time.sleep(0.05)
+"""
 
 
 class ALaunchdThatReallyStarts(support.ASupervisor):
@@ -119,6 +163,45 @@ class WithAnAgent(support.Isolated):
             standing.write_record(at, name, "0.0.0")
             yield
 
+    def a_real_gateway(self, name: str = "cole", ignoring_sigterm: bool = False) -> int:
+        """A process of this case's own, really holding one agent's name. Hands back its pid.
+
+        **Started rather than pretended, because what these cases prove is that a signal lands.**
+        A stand-in holding the lock inside this very process could not be signalled at all —
+        `utils.programs.stop` refuses this command's own process group, which is the guard that
+        stands between a reused pid and a suite killing its own runner.
+
+        Waited for rather than slept after: the case may not go on until the kernel has really
+        given the lock away and the record beside it names this process.
+        """
+        at = directory.where(name)
+        at.mkdir(parents=True, exist_ok=True)
+        started = subprocess.Popen(
+            [sys.executable, "-c", A_REAL_GATEWAY, str(at / standing.LOCK),
+             str(at / standing.RECORD), "ignoring" if ignoring_sigterm else "asking"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            # A session of its own, exactly as `utils.programs.start` gives a real gateway one —
+            # which is what makes it a process group the command may signal, and what keeps this
+            # suite's own group out of reach of the signal it is about to ask for.
+            start_new_session=True)
+        self.addCleanup(self.ended, started)
+        self.assertTrue(
+            support.waited_until(lambda: standing.standing(at).pid == started.pid, 10.0),
+            f"the gateway this case started never took {at / standing.LOCK}")
+        return started.pid
+
+    def ended(self, started: "subprocess.Popen") -> None:
+        """Take away a process this case started, however the case ended.
+
+        The one process this case started, and never its group: a case that signalled a whole group
+        would be reaching for processes it did not start. Collected afterwards, because an
+        uncollected child answers signal `0` exactly like a running one — and because the object is
+        held until then, so a case that stopped the gateway under test leaves nothing behind.
+        """
+        with contextlib.suppress(OSError):
+            started.kill()
+        started.wait()
+
     def a_gateway_nobody_can_ask_about(self) -> None:
         """A lock file that exists and cannot be opened, which is `standing`'s third answer."""
         support.not_as_root(self)
@@ -191,6 +274,34 @@ class Listing(WithAnAgent):
         self.assertIn("UNSUPERVISED", out)
         self.assertIn("nothing brings it back", out)
         self.assertIn("rundesk gateways restart cole", out)
+
+    def test_a_gateway_that_can_never_be_supervised_is_never_called_running_either(self):
+        # This row is reached only when no launchd label can carry the agent's name, so the gateway
+        # on it can never have a job in any state — the least supervised a gateway gets. Calling it
+        # `running` tells somebody they are covered when nothing will ever bring it back and
+        # nothing will ever start it at the next login.
+        directory.made(UNLABELABLE, "claude")
+        with self.a_running_gateway(UNLABELABLE):
+            code, out, _ = self.rundesk("gateways")
+        row = next(line for line in out.splitlines() if line.startswith(UNLABELABLE))
+        self.assertEqual(OK, code)
+        self.assertIn("NEVER SUPERVISED", row)
+        self.assertIn("cannot be placed", row)
+        self.assertIn(str(os.getpid()), row)
+
+    def test_no_job_ever_is_not_worded_as_no_job_yet(self):
+        # Two states, two different things to do about them. `NOT_PLACED` is a job that has not
+        # been placed *yet* and a restart places it; this one can never be placed at all, so the
+        # same sentence would send somebody round a loop that cannot end.
+        directory.made(UNLABELABLE, "claude")
+        with self.a_running_gateway(), self.a_running_gateway(UNLABELABLE):
+            _, out, _ = self.rundesk("gateways")
+        never = next(line for line in out.splitlines() if line.strip().startswith(UNLABELABLE + ":"))
+        yet = next(line for line in out.splitlines() if line.strip().startswith("cole:"))
+        self.assertIn("rundesk gateways restart cole", yet)
+        self.assertIn("can never have a job", never)
+        self.assertNotIn("rundesk gateways restart", never)
+        self.assertIn(f"rundesk gateways stop '{UNLABELABLE}'", never)
 
     def test_a_113_with_a_plist_on_disk_is_never_reported_as_not_installed(self):
         # Proven byte-identical for four different situations: a plist never bootstrapped, a label
@@ -460,16 +571,18 @@ class Stopping(WithAnAgent):
         self.assertIn("could not be taken back", err)
         self.assertTrue(self.plist().is_file(), "the plist went while the job stayed")
 
-    def test_a_gateway_still_holding_the_name_afterwards_is_a_failure(self):
-        # `bootout` without `--wait` reports success while the process is still running — measured
-        # on a real gateway. And a gateway nothing supervises cannot be stopped by taking a job
-        # away, because there is no job.
+    def test_a_gateway_this_command_would_have_to_kill_itself_to_stop_is_refused(self):
+        # A gateway still holding the name after its job came back is stopped by signalling the
+        # process — but never when the pid on the record is in this command's own process group.
+        # `killpg` there signals this very process and everything beside it, and it is reachable by
+        # an honest mistake: a recorded id reused by something started from this shell.
         with self.a_running_gateway():
             code, out, err = self.rundesk("gateways", "stop", "cole")
         self.assertEqual(FAILED, code)
         self.assertEqual("", out)
-        self.assertIn("still holding the name", err)
-        self.assertIn("rundesk gateways run cole", err)
+        self.assertIn("could not be stopped", err)
+        self.assertIn("own process group", err)
+        self.assertIn("nothing was stopped", err)
 
     def test_stopping_what_was_never_started_is_the_state_that_was_asked_for(self):
         code, out, _ = self.rundesk("gateways", "stop", "cole")
@@ -665,6 +778,184 @@ class ComingDownByForce(WithAnAgent):
                 self.assertIn(said, " ".join(restarting.split()))
 
 
+class WhenThereIsNoJobToTakeBack(WithAnAgent):
+    """The absolute: **a gateway must never be stuck, and never locked out.**
+
+    `agents add "my agent"` succeeds, `gateways run "my agent"` is a supported verb, and no launchd
+    label can carry that name — so a gateway can be running for an agent that can never have a job.
+    Every stopping verb used to refuse the name before it had even asked whether one was running,
+    which left the process holding the agent's name with nothing in the product able to take it
+    back. These cases are that requirement, and each of them stops a process this case started.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.unlabelable = directory.made(UNLABELABLE, "claude")
+
+    def stopped(self, *argv: str) -> Tuple[int, str, str]:
+        """Drive one of the stopping verbs against a stand-in supervisor that answers nothing."""
+        return self.rundesk_with(support.ASupervisor(), *argv)
+
+    def test_a_gateway_whose_name_can_never_be_a_label_is_stopped_by_pid(self):
+        pid = self.a_real_gateway(UNLABELABLE)
+        code, out, err = self.stopped("gateways", "stop", UNLABELABLE)
+        self.assertEqual(OK, code, err)
+        self.assertIn(f"gateway stopped for {UNLABELABLE}", out)
+        self.assertFalse(programs.alive(pid), "the process is still running")
+        self.assertEqual(standing.OFFLINE, standing.standing(self.unlabelable).how)
+
+    def test_it_says_it_signalled_the_process_and_why_it_had_to(self):
+        # Two different things can have happened to a gateway that is now down, and only one of
+        # them means launchd will never start it again. A stop that said the same sentence for both
+        # would hide the fact that this agent has no job at all.
+        self.a_real_gateway(UNLABELABLE)
+        _code, out, _err = self.stopped("gateways", "stop", UNLABELABLE)
+        self.assertIn("stopped by signalling the process directly", out)
+        self.assertIn("cannot be part of a launchd label", out)
+
+    def test_a_gateway_launchd_never_started_is_stopped_by_pid_too(self):
+        # The other way in, and the name is perfectly labelable: nothing was ever bootstrapped, so
+        # the job comes back cleanly and the name is still held afterwards. That is the proof it
+        # was not launchd keeping it up, and a signal is the only thing left that stops it.
+        pid = self.a_real_gateway("cole")
+        code, out, err = self.stopped("gateways", "stop", "cole")
+        self.assertEqual(OK, code, err)
+        self.assertIn("gateway stopped for cole", out)
+        self.assertIn("stopped by signalling the process directly", out)
+        self.assertFalse(programs.alive(pid))
+
+    def test_the_fallback_is_not_used_when_there_is_a_job(self):
+        # An ordinary stop takes the job back and the gateway goes with it. Reaching for a signal
+        # there would be this command killing a process launchd was already bringing down
+        # gracefully — and killing it under a supervisor that puts it straight back.
+        signalled: List[int] = []
+        by = ALaunchdThatReallyStarts(self.at)
+        self.addCleanup(by.let_go)
+        self.rundesk_with(by, "gateways", "start", "cole")
+        with mock.patch.object(programs, "stop", lambda pid, *_a, **_kw: signalled.append(pid)):
+            code, out, err = self.rundesk_with(by, "gateways", "stop", "cole")
+        self.assertEqual(OK, code, err)
+        self.assertEqual([], signalled, "a gateway with a job behind it was signalled")
+        self.assertNotIn("signalling the process directly", out)
+
+    def test_only_a_pid_the_lock_says_is_running_is_ever_signalled(self):
+        # **A pid from a record whose process is gone belongs to something else now.** So the
+        # record is read only once the kernel has said somebody is holding the name — here it names
+        # a live process that is holding a different agent's name entirely, and signalling it would
+        # take away a stranger's program on the strength of a number in a file.
+        somebody_else = self.a_real_gateway("cole")
+        (self.unlabelable / standing.RECORD).write_text(
+            f'{{"name": "{UNLABELABLE}", "pid": {somebody_else}, "version": "0.0.0"}}',
+            encoding="utf-8")
+        code, out, err = self.stopped("gateways", "stop", UNLABELABLE)
+        self.assertEqual(OK, code, err)
+        self.assertIn(f"{UNLABELABLE} is not running", out)
+        self.assertTrue(programs.alive(somebody_else), "it signalled a pid nothing was holding")
+
+    def test_a_signal_that_was_refused_is_not_a_gateway_that_is_still_running(self):
+        # **Measured on this machine, 2026-08-05.** `killpg` against the group of a process that
+        # has just become a zombie answers `EPERM` on macOS rather than `ESRCH` — so a gateway that
+        # took the `SIGTERM` and died in the instant before the `SIGKILL` behind it has that
+        # `SIGKILL` refused, and the program that really did stop is reported as one that would not
+        # go. What decides is the lock, exactly as it decides after a `bootout`.
+        pid = self.a_real_gateway(UNLABELABLE)
+        really = programs.stop
+
+        def stopped_it_and_then_said_otherwise(one: int, *rest: float) -> str:
+            really(one, *rest)
+            return f"process group {one} could not be signalled ([Errno 1] Operation not permitted)"
+
+        with mock.patch.object(programs, "stop", stopped_it_and_then_said_otherwise):
+            code, out, err = self.stopped("gateways", "stop", UNLABELABLE)
+        self.assertEqual(OK, code, err)
+        self.assertIn(f"gateway stopped for {UNLABELABLE}", out)
+        self.assertFalse(programs.alive(pid))
+
+    def test_a_gateway_nobody_can_ask_about_is_never_signalled_on_a_guess(self):
+        support.not_as_root(self)
+        (self.unlabelable / standing.LOCK).write_bytes(b"")
+        (self.unlabelable / standing.LOCK).chmod(0o000)
+        self.addCleanup((self.unlabelable / standing.LOCK).chmod, 0o600)
+        code, _out, err = self.stopped("gateways", "stop", UNLABELABLE)
+        self.assertEqual(FAILED, code)
+        self.assertIn("nobody can tell whether a gateway is running", err)
+        self.assertIn("nothing was stopped", err)
+
+    def test_stopping_one_that_is_not_running_is_the_state_that_was_asked_for(self):
+        code, out, err = self.stopped("gateways", "stop", UNLABELABLE)
+        self.assertEqual(OK, code, err)
+        self.assertIn(f"{UNLABELABLE} is not running", out)
+
+    def test_force_says_out_loud_that_the_work_was_taken_away(self):
+        pid = self.a_real_gateway(UNLABELABLE)
+        code, out, err = self.stopped("gateways", "stop", UNLABELABLE, "--force")
+        self.assertEqual(OK, code, err)
+        self.assertIn("mid-flight", out)
+        self.assertFalse(programs.alive(pid))
+
+    def test_force_does_not_wait_where_the_graceful_stop_does(self):
+        # **The one gateway `--force` exists for**: one that will not answer `SIGTERM`, so that
+        # asking it costs the whole window. Graceful means graceful even here — the window is the
+        # same one the job's own `ExitTimeOut` would have given it — and `--force` is the only
+        # thing that skips it.
+        with mock.patch.object(gateways, "GENTLY_FOR", 1.0):
+            asked = self.how_long_a_stop_took()
+            forced = self.how_long_a_stop_took("--force")
+        self.assertGreaterEqual(asked, 1.0, "the graceful stop did not wait for it to finish")
+        self.assertLess(forced, 1.0, "--force waited out a window it was asked to skip")
+        self.assertLess(forced, asked)
+
+    def how_long_a_stop_took(self, *argv: str) -> float:
+        """Stop a gateway that ignores `SIGTERM`, and hand back how long that took in seconds."""
+        pid = self.a_real_gateway(UNLABELABLE, ignoring_sigterm=True)
+        started = time.monotonic()
+        code, _out, err = self.stopped("gateways", "stop", UNLABELABLE, *argv)
+        took = time.monotonic() - started
+        self.assertEqual(OK, code, err)
+        self.assertFalse(programs.alive(pid), "a gateway ignoring SIGTERM was never insisted on")
+        return took
+
+    def test_the_window_it_is_given_is_the_one_its_job_would_have_given_it(self):
+        # Asserted rather than assumed, because the case above shortens it: a gateway with no job
+        # behind it is holding somebody's work exactly as one with a job is, and a stop that gave
+        # it a fraction of a second would take that work away while calling itself graceful.
+        self.assertEqual(float(job.EXIT_TIMEOUT), gateways.GENTLY_FOR)
+
+    def test_a_restart_stops_it_and_says_it_can_never_be_started_again(self):
+        # Honest in both halves. The gateway really is down — which is the requirement — and the
+        # start that cannot follow is said as the failure it is rather than passed over.
+        pid = self.a_real_gateway(UNLABELABLE)
+        code, out, err = self.stopped("gateways", "restart", UNLABELABLE)
+        self.assertEqual(FAILED, code)
+        self.assertIn(f"gateway stopped for {UNLABELABLE}", out)
+        self.assertFalse(programs.alive(pid))
+        self.assertIn("cannot be part of a launchd label", err)
+        self.assertIn(f"rundesk gateways run '{UNLABELABLE}'", err)
+
+    def test_a_restart_by_force_stops_it_too(self):
+        pid = self.a_real_gateway(UNLABELABLE)
+        code, out, err = self.stopped("gateways", "restart", UNLABELABLE, "--force")
+        self.assertEqual(FAILED, code)
+        self.assertIn(f"gateway stopped for {UNLABELABLE}", out, err)
+        self.assertIn("mid-flight", out)
+        self.assertFalse(programs.alive(pid))
+        self.assertIn("it was stopped and not started again", err)
+
+    def test_what_it_says_to_type_is_what_a_shell_would_accept(self):
+        # A name with a space in it is two arguments unless it is quoted, and a command somebody
+        # pastes that does something else is worse than one that was never offered.
+        _code, _out, err = self.stopped("gateways", "start", UNLABELABLE)
+        self.assertIn(f"rundesk gateways run '{UNLABELABLE}'", err)
+
+    def test_all_reaches_the_one_that_has_no_job_as_well(self):
+        # The verb somebody types when something is wrong and they do not know which agent it is.
+        pid = self.a_real_gateway(UNLABELABLE)
+        code, out, err = self.stopped("gateways", "stop", "--all")
+        self.assertEqual(OK, code, err)
+        self.assertIn(f"gateway stopped for {UNLABELABLE}", out)
+        self.assertFalse(programs.alive(pid))
+
+
 class Restarting(WithAnAgent):
     """`rundesk gateways restart` — and the bare one that took down every gateway somebody had."""
 
@@ -783,6 +1074,40 @@ class WhatItHasBeenSaying(WithAnAgent):
         out_file.write_text("[now] gateway cole: this process is pid 42\n", encoding="utf-8")
         _, out, _ = self.rundesk("gateways", "logs", "cole")
         self.assertIn("this process is pid 42", out)
+
+    def test_a_crash_the_supervisor_caught_is_shown_beside_a_day_log_that_has_lines(self):
+        # **The incident.** A gateway starts, writes its `up` line, and dies inside its throttle
+        # window on an uncaught exception. The next morning the day log holds the `up` line and
+        # nothing else, and the traceback is in `gateway.err`. A fallback that fired only on an
+        # empty day log was unreachable for ever after the first successful start in the window.
+        logs.note(standing.logs_at(self.at), "gateway up for cole")
+        _out, err = standing.captured(self.at)
+        err.parent.mkdir(parents=True, exist_ok=True)
+        err.write_text("Traceback (most recent call last):\nRuntimeError: it fell over\n",
+                       encoding="utf-8")
+        code, out, _ = self.rundesk("gateways", "logs", "cole")
+        self.assertEqual(OK, code)
+        self.assertIn("gateway up for cole", out)
+        self.assertIn("RuntimeError: it fell over", out)
+
+    def test_each_of_the_two_says_which_file_it_came_from(self):
+        # Two orthogonal facts about one gateway, and a person reading them has to know which of
+        # the two files they are looking at before they can act on either.
+        logs.note(standing.logs_at(self.at), "gateway up for cole")
+        _out, err = standing.captured(self.at)
+        err.parent.mkdir(parents=True, exist_ok=True)
+        err.write_text("RuntimeError: it fell over\n", encoding="utf-8")
+        _, out, _ = self.rundesk("gateways", "logs", "cole")
+        self.assertIn(f"what cole's own gateway wrote, in {standing.logs_at(self.at)}", out)
+        self.assertIn(f"what the supervisor caught in {err}", out)
+
+    def test_a_gateway_with_a_log_of_its_own_is_not_sent_to_the_unified_log(self):
+        # `log show` is for a gateway that never started at all. Offering it for one whose own log
+        # is right there is sending somebody to look somewhere nothing happened.
+        logs.note(standing.logs_at(self.at), "gateway up for cole")
+        _, out, _ = self.rundesk("gateways", "logs", "cole")
+        self.assertIn("the supervisor caught nothing", out)
+        self.assertNotIn("log show", out)
 
     def test_nothing_anywhere_names_the_one_place_left_to_look(self):
         _, out, _ = self.rundesk("gateways", "logs", "cole")
