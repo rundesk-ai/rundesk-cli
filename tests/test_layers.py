@@ -49,18 +49,25 @@ MAY_IMPORT = {
     # a different question from what hosts one, and the module that answered both could not be
     # driven by a case with no supervisor and no child process anywhere near it.
     "channels": ("agents", "core", "utils"),
+    # `providers` reaches `channels` because a turn's answer is a message in the store `arriving`
+    # already owns, cut to the platform's limit by `delivery` and vetted by `files` — three things
+    # with one home each, and a second copy of any of them is a second answer that can disagree.
+    # **The traffic goes one way only**: `channels` may not reach here, so `hosting` is handed an
+    # object exactly as `firing` is handed a `Starting`, and every channel case stays drivable by a
+    # test with no brain, no adapter and no subprocess anywhere near it.
+    "providers": ("channels", "agents", "core", "utils"),
     # And `gateways` reaches `schedules` rather than the other way round, because the gateway is
     # what turns "this is due" into work that has started. It is the only long-lived process this
     # product has, so it is the only thing that can hold a child and reap it.
-    "gateways": ("channels", "schedules", "agents", "core", "utils"),
+    "gateways": ("providers", "channels", "schedules", "agents", "core", "utils"),
     "lifecycle": ("agents", "core", "utils"),
     # `skills` reaches `agents` because a grant is a directory entry inside an agent's own home and
     # there is nowhere else to ask where that is. The traffic goes one way only: `agents` may not
     # reach here, so an agent is still something that can be made, carried and removed by code that
     # has never heard of a skill, and presenting a new agent's skills is done in `commands`.
     "skills": ("agents", "core", "utils"),
-    "commands": ("skills", "channels", "schedules", "gateways", "lifecycle", "agents", "core",
-                 "utils"),
+    "commands": ("skills", "providers", "channels", "schedules", "gateways", "lifecycle",
+                 "agents", "core", "utils"),
 }
 
 #: Below the layers rather than in them: the version this is, and what a command may exit with.
@@ -236,7 +243,8 @@ class TheTreePointsOneWay(support.Isolated):
         # `utils` was checked and `core` was not, so `core`'s table went on listing a module that
         # had moved a whole layer down and nothing said a word. A table a reader trusts is a table
         # worth checking — all of them, not the one that happened to get a test first.
-        for package in ("agents", "core", "gateways", "lifecycle", "schedules", "skills", "utils"):
+        for package in ("agents", "channels", "core", "gateways", "lifecycle", "providers",
+                        "schedules", "skills", "utils"):
             table = (WHERE / package / "__init__.py").read_text(encoding="utf-8")
             # A trailing slash names a directory rather than a module — `steps/` is
             # documented deliberately and has no `.py` of its own to match.
@@ -297,7 +305,8 @@ class TheTreePointsOneWay(support.Isolated):
     def test_nothing_below_commands_knows_what_argparse_is(self):
         # The command line is one layer's business. A lifecycle module taking a `Namespace` would be
         # a module that cannot be driven except by typing at it.
-        for package in ("utils", "core", "agents", "gateways", "lifecycle", "schedules"):
+        for package in ("utils", "core", "agents", "channels", "gateways", "lifecycle",
+                        "providers", "schedules"):
             for module in modules_of(package):
                 with self.subTest(module=f"{package}/{module.name}"):
                     self.assertNotIn("argparse", module.read_text(encoding="utf-8"))

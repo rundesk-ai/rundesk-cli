@@ -1,0 +1,22 @@
+"""Running an agent's brain, and writing down what it did.
+
+A provider is a **program rundesk runs**, never code it loads. rundesk hands it a turn through the
+environment and its input, reads whole records off its output, and ends it when the turn is over —
+so rundesk never puts a stranger's code inside the gateway that runs every other agent, an adapter
+can be written in anything, and a brain nobody here has heard of is reached by exactly the seam a
+shipped one is.
+
+**No module in this package may name a vendor.** Every fact about a particular brain — its flags,
+its stream shape, its session files, its permission model, its usage arithmetic — lives in one
+executable file under `src/providers/` and appears nowhere else. `tests/test_providers_protocol.py`
+checks that mechanically, because a rule of this kind stops being true quietly.
+
+| Module | Answers |
+|---|---|
+| `protocol` | what an adapter may say, and what a turn's records add up to |
+
+May depend on `channels`, `agents`, `core` and `utils`. It reaches `channels` because a turn's answer
+becomes a message, is cut to a platform's limit and has its files vetted — all of which already have
+one home. The traffic goes one way only: **`channels` may not reach here**, so every channel case is
+still drivable by a test with no brain anywhere near it.
+"""
