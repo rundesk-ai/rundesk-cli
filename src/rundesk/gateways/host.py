@@ -196,7 +196,7 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 from rundesk import __version__
 from rundesk.agents import directory, migration
@@ -207,6 +207,7 @@ from rundesk.exits import OK
 from rundesk.gateways import standing
 from rundesk.providers import answering, kept
 from rundesk.schedules import firing
+from rundesk.skills import grants
 from rundesk.utils import logs
 
 #: What the very first line looks like. Deliberately not through `utils.logs`: this is written to
@@ -269,6 +270,18 @@ STOP_ASKED_WITH = (signal.SIGHUP, signal.SIGTERM)
 #: gateway that announces itself in one voice and leaves in another reads as two different products.
 #: The log lines these accompany are deliberately *not* changed to match — a log is read by grep and
 #: a notice is read by a person, and a colour in a log file is noise in the one place it cannot help.
+#: What a person is told when this agent gains or loses a skill. **What it may do changed, and that
+#: is the only thing said** — never the steady state, so an agent whose skills nobody touches for six
+#: months says nothing at all about them.
+SKILL_GRANTED = "🧩 Skill granted — `{name}`"
+SKILL_REVOKED = "🗑️ Skill revoked — `{name}`"
+
+#: What became of one notice. Three and not two: `TELLS_NOBODY` is settled and `NOT_YET` is a wait,
+#: and a caller deciding whether to write something down has to tell them apart — see `_told`.
+TOLD = "told"
+TELLS_NOBODY = "tells nobody"
+NOT_YET = "not yet"
+
 CAME_UP = "🟢 Gateway online — rundesk is online."
 WENT_DOWN = "🔴 Gateway offline — rundesk has shut down."
 
@@ -284,11 +297,6 @@ GOODBYE_WITHIN = 3.0
 #: but it is named rather than written as a literal so that a reader of the exit finds the word
 #: `restart` rather than a `1` shared with every crash there has ever been.
 COME_BACK = 70
-
-#: What a person is told on the way out, and it depends on why. A gateway going for good and one
-#: going for ten seconds are the same event to this process and are not the same news to somebody
-#: watching a room: told the second as the first, they go and start it by hand for nothing.
-WENT_DOWN_TO_COME_BACK = "🔁 Gateway restarting — back in a moment."
 
 
 class Stopped(BaseException):
@@ -365,8 +373,17 @@ def run(name: str) -> int:
             # non-zero exit, which would turn a permanent condition into an endless restart.
             refusal = f"{name} could not claim its own name: {why}"
         else:
+            asked_for: List[str] = []
             with held:
-                return _serving(name, at, held)
+                code = _serving(name, at, held, asked_for)
+            # **Outside the stack, and that is the whole of why it is here rather than inside it.**
+            # A restart replaces this program with a fresh copy of itself, and everything this
+            # gateway was holding has to be let go of first: every child stopped, every adapter
+            # closed, and the claim on the agent's own name dropped — because the copy is going to
+            # take that claim again and cannot while this one still has it.
+            if asked_for and asked_for[0] == hosting.RESTART:
+                _again(name, standing.logs_at(at))
+            return code
 
     _refused(at, name, refusal)
     return OK
@@ -490,7 +507,8 @@ def _refused(at: Optional[Path], name: str, why: str) -> None:
             logs.note(standing.logs_at(at), f"gateway did not start: {why}", logs.WARNING)
 
 
-def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
+def _serving(name: str, at: Path, held: contextlib.ExitStack,
+             asked_for: List[str]) -> int:
     """Hold the name, say so, and go on saying so until something stops this process.
 
     Everything from here on is a working gateway, so **an exception is a crash and is let through**:
@@ -534,10 +552,6 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
     # whatever channels are up, and a name that is not bound yet would raise `NameError` out of the
     # handler for a stop that landed early — a non-zero exit, which is *bring me back*.
     channels_up = hosting.Watching({}, {}, {})
-    # Bound out here for the same reason, and read by the handler below to choose the exit code:
-    # **a restart and a shutdown leave by the same door and must not leave the same way.** Empty is
-    # a stop nobody asked for from a channel, which is every other stop there is.
-    asked_for: List[str] = []
     up_at = datetime.datetime.now(datetime.timezone.utc)
     try:
         # Inside the `try`, not before it. A stop asked for in the instant between coming up and
@@ -573,6 +587,10 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
         # as in the loop is one that goes on looking right with the loop's half deleted, and the
         # loop's half is the one that matters — a gateway doing its job is one nobody restarts.
         landing, swept_for, said_up = True, "", False
+        # What this agent's owner has already been told it may do. `None` until this process has
+        # established it — from the file, which is what makes a revoke done while the gateway was
+        # down a thing that is still said. Never seeded here: the first pass is the first look.
+        knew: Optional[Tuple[str, ...]] = None
         while True:
             watching = firing.looked(name, where, watching, telling=notices,
                                      asking=on_a_schedule)
@@ -593,6 +611,9 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
             time.sleep(standing.BEAT_SECONDS)
             landing = _still_working(at, where, landing)
             swept_for = _kept_the_days(name, where, swept_for)
+            # In the tail rather than before the sleep, so that on the pass where a gateway both
+            # comes up and finds a change, `CAME_UP` lands first — which is the order a person needs.
+            knew = _told_what_changed(name, where, channels_up, knew)
     except Stopped as why:
         # **Asked once is enough, and from here on another ask may not interrupt anything.** The
         # stack `run` unwinds after this now has real work on it — stopping every child a schedule
@@ -622,7 +643,7 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
         # real Discord bot: the owner was told the gateway came up and never that it went away, with
         # nothing in any log to say so. Bounded, and out of a budget that has room for it: this is
         # one round trip against the `STOPPING_WITHIN` seconds the stop below is allowed.
-        _told(name, where, channels_up, going_away(asked_for), landed_within=GOODBYE_WITHIN)
+        _told(name, where, channels_up, WENT_DOWN, landed_within=GOODBYE_WITHIN)
         # **A restart leaves by exiting, and that is not this process talking to its supervisor.**
         # It cannot place, boot out or kick its own job — that would put the decision to keep a
         # gateway running inside the thing being kept running — but ending is not asking anybody for
@@ -773,6 +794,82 @@ class _Notices:
         _told(self.name, self.where, self.hosted(), saying)
 
 
+def _told_what_changed(name: str, where: Path, channels_up: hosting.Watching,
+                       knew: Optional[Tuple[str, ...]]) -> Optional[Tuple[str, ...]]:
+    """Say what this agent has gained or lost since the last look. Hands back what is now known,
+    which is the loop's carrier.
+
+    **The directory is watched rather than reported, and it is the only source of truth here.** A
+    grant *is* an entry in the agent's own `skills/`, and four things change one — the command, a
+    catalog update that retires a skill, a catalog removal, and a link somebody made by hand. Only
+    the first could ever have told a gateway, so none of them is asked: what is standing there is
+    read, every pass, and compared with what was standing on the pass before.
+
+    **Nothing is written down, and that is deliberate.** What was last announced is held in this
+    process and nowhere else, so there is no second record of what an agent may do to fall out of
+    step with the directory that decides it. The cost is stated plainly rather than hidden: a change
+    made while this gateway was *not running* is never announced, because the first look establishes
+    the baseline. Coming back up is not an event, and every skill the agent holds at that moment is
+    simply what it holds.
+
+    **A first look therefore says nothing.** Announcing on it would make every restart — and launchd
+    restarts a gateway whenever it dies — replay the agent's whole skill list into somebody's chat.
+
+    **Absent is not empty.** A home taken away, unmounted or unreadable would otherwise read as this
+    agent having lost every skill it has, and be announced as such.
+
+    Nothing here may end the gateway: an exception in this loop exits non-zero into `KeepAlive` and
+    comes straight back into the same condition.
+    """
+    try:
+        stands, now = grants.where(name), _what_it_may_do(name)
+    except Exception:                              # noqa: BLE001 — a loop nothing may end
+        return knew
+    if knew is None:
+        # The first look is the baseline, whatever is standing there.
+        return now
+    if not stands.is_dir():
+        return knew
+    changed = _what_changed(knew, now)
+    if not changed:
+        # Worked out afresh against what was last said rather than accumulated, so a skill granted
+        # and revoked again between two looks leaves nothing to say.
+        return knew
+    if not _the_told_channel_is_connected(name, channels_up):
+        # **Asked as well as `_told`'s own answer, and it is not the same question.** `hosting.told`
+        # answers `False` only when there is no child at all — an adapter that has been started and
+        # has not authenticated takes the write into its pipe and answers `True`, which is the
+        # measured bug the up-notice already waits on this gate to avoid. Nothing is carried forward,
+        # so the change is still owed on the next pass.
+        return knew
+    how = _told(name, where, channels_up, "\n".join(changed))
+    if how == NOT_YET:
+        return knew
+    if how == TOLD:
+        logs.note(where, f"told {name}'s owner about {len(changed)} skill change(s)")
+    return now
+
+
+def _what_it_may_do(name: str) -> Tuple[str, ...]:
+    """Every skill standing in this agent's own directory, in name order.
+
+    Asked of `grants`, which is the one thing that knows a dotfile is not a grant and that a copy
+    being staged under `.<name>.incoming` is not one either. A listing written here instead would
+    announce a half-copied alias as granted and revoke it a second later.
+    """
+    return tuple(one.name for one in grants.held(name))
+
+
+def _what_changed(knew: Sequence[str], now: Sequence[str]) -> List[str]:
+    """The lines saying what an agent gained and lost, gains first. Empty when nothing did.
+
+    One message rather than one per skill: a catalog update that retires six of them is one change
+    to what this agent can do, not six notifications.
+    """
+    return ([SKILL_GRANTED.format(name=one) for one in now if one not in knew]
+            + [SKILL_REVOKED.format(name=one) for one in knew if one not in now])
+
+
 def _the_told_channel_is_connected(name: str, channels_up: hosting.Watching) -> bool:
     """Whether the channel this agent asked to be told things through has reached its platform.
 
@@ -787,8 +884,14 @@ def _the_told_channel_is_connected(name: str, channels_up: hosting.Watching) -> 
 
 
 def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
-          landed_within: float = 0.0) -> None:
+          landed_within: float = 0.0) -> str:
     """Send one notice out through the channel this agent asked to be told things. Never raises.
+
+    Answers which of **three** things happened, because a caller that has to decide whether to write
+    something down cannot act on two. `TELLS_NOBODY` is settled — there is nobody to tell and there
+    never will be until a channel is marked — while `NOT_YET` is a wait, and treating them alike
+    either loses a change for ever or repeats one every beat. `CAME_UP` and `WENT_DOWN` ignore the
+    answer, which is why this stayed `None` until something needed it.
 
     **Nothing here may end a gateway**, which is why the whole of it stands inside one guard: a
     platform that is down, an adapter that is restarting, a record that will not read — none of them
@@ -805,17 +908,54 @@ def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
     `hosting.told` answers `False` when there is no adapter to send through, and that is left alone
     for the same reason — a notice is an account of something, never the thing itself.
     """
-    with contextlib.suppress(Exception):
+    # `try`/`except` rather than `suppress`, only so there is somewhere to answer from. The rule is
+    # unchanged and is the one that matters: `Exception` and never `BaseException`, so that `Stopped`
+    # still lands. A restructure is exactly where that gets widened by accident.
+    try:
         going = delivery.notice(name, saying)
-        if going is not None:
-            hosting.told(name, where, channels_up, going.kind, going.place, going.pieces,
-                         landed_within=landed_within)
+        if going is None:
+            return TELLS_NOBODY
+        if hosting.told(name, where, channels_up, going.kind, going.place, going.pieces,
+                        landed_within=landed_within):
+            return TOLD
+    except Exception:                              # noqa: BLE001 — see the docstring
+        return NOT_YET
+    return NOT_YET
 
 
-def going_away(asked_for: List[str]) -> str:
-    """Which goodbye this is. A restart says so, so nobody goes and starts it by hand for nothing."""
-    return (WENT_DOWN_TO_COME_BACK if asked_for and asked_for[0] == hosting.RESTART
-            else WENT_DOWN)
+def _again(name: str, where: Path) -> None:
+    """Restart this gateway by **becoming a fresh copy of itself**. Returns only if it could not.
+
+    `os.execv` replaces the running program in place: same process, same id, same everything the
+    supervisor is holding — so a gateway with a launchd job keeps it and a gateway started by hand
+    comes back just the same. **That is what makes this a restart rather than a request for one.**
+    Exiting and hoping to be brought back works only where something is watching, and a gateway run
+    from a terminal is not watched by anything: it asked to restart, exited, and simply stopped.
+
+    **Everything held is let go of before this**, because the copy takes the agent's claim again the
+    moment it starts and cannot while this one still holds it. Python opens descriptors
+    close-on-exec by default, so the claim goes as the image is replaced even if something else
+    still had a reference to it.
+
+    **Started as exactly what started this**, which is `sys.argv` and not a command reassembled from
+    parts. Under launchd that is the agent's own small program; from a terminal it is the `rundesk`
+    on somebody's PATH; and the environment — `RUNDESK_HOME` above all — is carried across an exec
+    untouched, so the copy resolves the same install rather than the default one under a home
+    directory. A command built here instead would be a second opinion about how this gateway is run.
+
+    Returning is a failure and is treated as one by the caller — the exit code says *bring me back*,
+    which is the best that can be done where the exec itself would not.
+    """
+    logs.note(where, f"gateway restarting for {name}")
+    argv = list(sys.argv)
+    if argv and Path(argv[0]).is_file():
+        with contextlib.suppress(Exception):
+            os.execv(argv[0], argv)
+    # Started some way this cannot repeat — `python -c`, a zipapp, an argv nobody set. Said rather
+    # than guessed at, because a command invented here would start *a* gateway and possibly not this
+    # one, against a different root.
+    logs.note(where, f"gateway could not restart itself for {name}: it was started as "
+                     f"{argv[0] if argv else 'nothing this can run again'}", logs.ERROR)
 
 
 def _asked_from_a_channel(asked_for: List[str], word: str) -> None:

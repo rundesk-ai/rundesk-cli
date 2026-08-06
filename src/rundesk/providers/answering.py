@@ -503,10 +503,12 @@ class Gestures:
         everybody — so the narrower question is asked here rather than reusing the one that let
         somebody in.
 
-        **The session takes care of itself.** A handle is kept per conversation *and per brain*, so
-        a conversation that moves to a different provider has no handle on it and starts fresh
-        without anything being deleted. Nothing is thrown away either: moving back finds the old
-        conversation exactly where it was left.
+        **Every handle this conversation holds is thrown away, on every brain.** Keying sessions by
+        conversation *and* brain already makes the move itself fresh — the new one has no handle to
+        resume — but it leaves the old one sitting there, so moving back would silently pick up a
+        conversation from before the change. A person who changed brain and changed back has started
+        again twice as far as they are concerned, and an agent resuming a thread from two providers
+        ago is the opposite of what either of those asked for.
         """
         wanted = provider.strip()
         if not wanted:
@@ -527,8 +529,10 @@ class Gestures:
         if str(settled.get("provider_name") or "") == wanted:
             return f"**{agent}** already answers on **{wanted}**."
         records.stated(directory.records(agent), {"provider_name": wanted})
-        return (f"🧠 **{agent}** now answers on **{wanted}**. This conversation starts fresh on it — "
-                f"and whatever it had on the old brain is still there if you move back.")
+        found = arriving.standing_in(agent, place)
+        if found is not None:
+            kept.forget_sessions(agent, found)
+        return f"**{agent}** now uses **{wanted}**. This conversation starts fresh."
 
     def _only_one(self, agent: str, kind: str) -> Optional[str]:
         """The single person this channel allows, or `None` where it allows any other number."""

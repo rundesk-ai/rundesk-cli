@@ -441,20 +441,24 @@ class AMessageOnAChannelIsAnswered(Answering):
         said = self.a_gesture().configured(self.agent, "discord", "1180", "2207", was)
         self.assertIn("already", said)
 
-    def test_moving_to_another_brain_leaves_the_old_conversation_where_it_was(self):
-        """A handle is kept per conversation **and per brain**, so moving is fresh without anything
-        being deleted — and moving back finds the old conversation exactly where it was left."""
+    def test_changing_brain_throws_away_every_handle_this_conversation_held(self):
+        """Keying sessions by conversation *and* brain already makes the move itself fresh — the new
+        one has no handle to resume. What it leaves is the **old** one, so moving back would
+        silently pick up a conversation from before the change: somebody who changed brain and
+        changed back has started again twice as far as they are concerned."""
         self.a_channel(allowed=("2207",))
         conversation = arriving.recorded(self.agent, "discord", "1180", "2207", "hello").conversation
         kept.save_session(self.agent, conversation, support.A_STAND_IN, "thread-old")
 
         other = self.a_provider()
-        self.a_gesture().configured(self.agent, "discord", "1180", "2207", other)
+        said = self.a_gesture().configured(self.agent, "discord", "1180", "2207", other)
 
+        self.assertEqual(f"**{self.agent}** now uses **{other}**. This conversation starts fresh.",
+                         said)
         self.assertIsNone(kept.get_session(self.agent, conversation, other),
                           "the new brain inherited a handle that was not its own")
-        self.assertEqual("thread-old", kept.get_session(self.agent, conversation,
-                                                        support.A_STAND_IN))
+        self.assertIsNone(kept.get_session(self.agent, conversation, support.A_STAND_IN),
+                          "moving back would have resumed a conversation from before the change")
 
     def test_the_answer_is_recorded_as_a_message_carrying_the_turn_that_said_it(self):
         """What was said and what it cost are two questions, and this is the one join between them.
