@@ -148,6 +148,9 @@ class Messageable:
         #: Set by a case that needs a send to be genuinely *in flight* — the only way to check what
         #: happens when something else is posted while a write has not come back yet.
         self.holds: Optional[asyncio.Event] = None
+        #: Every time the indicator was renewed here, and what the platform said if it refused.
+        self.typed: List[Any] = []
+        self.typing_refuses: Optional[Exception] = None
 
     async def send(self, **called: Any) -> Posted:
         self.sent.append(called)
@@ -162,7 +165,9 @@ class Messageable:
         return PartialMessage(self, which)
 
     async def typing(self) -> None:
-        pass
+        self.typed.append(True)
+        if self.typing_refuses is not None:
+            raise self.typing_refuses
 
 
 class Client:
@@ -749,6 +754,100 @@ class HowActivityIsCounted(unittest.TestCase):
         shown, kept = adapter.bounded([(f"-# 💻 {'x' * 4000}", 1)])
         self.assertEqual(1, len(kept))
         self.assertIn("x", shown)
+
+
+class HowLongTheIndicatorRuns(Records):
+    """The typing indicator, which is what `working` looks like on this platform (R-DIS-6).
+
+    Nothing repeats on the seam — `working` is sent once, when the turn is admitted — so an
+    indicator that lapses after ten seconds has to be renewed on this side's own clock. A turn that
+    is still running and looks finished is the failure this exists to prevent.
+    """
+
+    async def marking(self, reaching: Any, place: str, state: str,
+                      external_id: Optional[str] = None) -> None:
+        said = {"do": "state", "place": place, "state": state}
+        if external_id:
+            said["external_id"] = external_id
+        await reaching._state(said)
+
+    def test_a_turn_being_worked_on_starts_the_indicator(self) -> None:
+        async def exchange(reaching: Any) -> None:
+            await self.marking(reaching, "800", "working")
+            self.assertIn(800, reaching.typing)
+            reaching._typing_stops(800)
+
+        self.during(exchange)
+
+    def test_it_is_renewed_rather_than_set_once(self) -> None:
+        # Discord's own lapses in about ten seconds. Renewed inside that, on this side's clock.
+        self.assertLess(adapter.TYPING_SECONDS, 10.0)
+
+        async def exchange(reaching: Any) -> None:
+            reaching._typing_starts(800)
+            for _ in range(4):             # let the loop go round more than once
+                await asyncio.sleep(0)
+            reaching._typing_stops(800)
+
+        self.during(exchange)
+        self.assertGreaterEqual(len(self.client.places[800].typed), 1)
+
+    def test_asking_twice_renews_one_indicator_and_not_two(self) -> None:
+        async def exchange(reaching: Any) -> None:
+            await self.marking(reaching, "800", "working")
+            first = reaching.typing[800]
+            await self.marking(reaching, "800", "working")
+            self.assertIs(first, reaching.typing[800])
+            reaching._typing_stops(800)
+
+        self.during(exchange)
+
+    def test_every_way_a_turn_can_end_stops_it(self) -> None:
+        # An indicator that outlived its turn says the agent is still working on something it
+        # finished, which is worse than never having shown one.
+        for ending in ("done", "stopped", "failed"):
+            async def exchange(reaching: Any, ending: str = ending) -> None:
+                await self.marking(reaching, "800", "working")
+                self.assertIn(800, reaching.typing)
+                await self.marking(reaching, "800", ending, external_id="84")
+                self.assertNotIn(800, reaching.typing, f"{ending} left the indicator running")
+
+            self.during(exchange)
+
+    def test_a_message_being_seen_does_not_start_or_stop_one(self) -> None:
+        # `seen` belongs to a message arriving and has no turn behind it.
+        async def exchange(reaching: Any) -> None:
+            await self.marking(reaching, "800", "seen", external_id="84")
+            self.assertNotIn(800, reaching.typing)
+            await self.marking(reaching, "800", "working")
+            await self.marking(reaching, "800", "seen", external_id="85")
+            self.assertIn(800, reaching.typing, "a second message stopped the turn's indicator")
+            reaching._typing_stops(800)
+
+        self.during(exchange)
+
+    def test_one_refusal_ends_it_rather_than_asking_again_for_the_whole_turn(self) -> None:
+        # An indicator is fidelity and a turn completes without one, so asking again every eight
+        # seconds for the length of a turn would spend a rate limit saying nothing.
+        #
+        # **The task ending is the assertion, not the call count.** Counting calls proves nothing:
+        # a loop that went on retrying would sleep for TYPING_SECONDS before the second one, which
+        # is longer than any case here waits — so the toothless version passed either way.
+        held: List[Any] = []
+
+        async def exchange(reaching: Any) -> None:
+            where = self.client.get_partial_messageable(800)
+            where.typing_refuses = RuntimeError("Discord would not take it")
+            reaching._typing_starts(800)
+            held.append(reaching.typing[800])
+            for _ in range(6):
+                await asyncio.sleep(0)
+            self.assertTrue(held[0].done(), "it is still waiting to ask again after a refusal")
+            self.assertIsNone(held[0].exception(), "the refusal escaped the loop")
+
+        records = self.during(exchange)
+        self.assertEqual(1, len(self.client.places[800].typed))
+        self.assertTrue(any("no typing indicator" in one for one in self.noted(records)))
 
 
 class HowTheCommentaryGrows(Records):
