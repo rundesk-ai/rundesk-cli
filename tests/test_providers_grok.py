@@ -207,6 +207,18 @@ class OneCapturedTurn(support.Isolated):
         self.assertEqual([], only(self.said, "limit"))
         self.assertEqual([], only(self.said, "file"))
 
+    def test_somewhere_it_cannot_keep_the_raw_stream_does_not_cost_the_turn(self):
+        """**Offered, never required** — and that has to be true of the failure as well as of the
+        absence. Opened bare, this raised out of the one place a turn has nothing to say for itself:
+        the brain is already started and the guard that promises a `done` has not been entered, so
+        there were no records at all, a traceback, and a vendor process left behind.
+        """
+        said, got = replayed(self.home, RUNDESK_RAW=str(self.home / "not-a-dir" / "raw.jsonl"))
+        self.assertEqual(1, len(only(said, "done")))
+        self.assertTrue(said[-1]["ok"], "a turn failed over a copy nobody needed")
+        self.assertEqual(0, got.returncode)
+        self.assertIn("could not be kept", got.stderr)
+
     def test_what_the_brain_itself_printed_is_kept_verbatim_when_somewhere_was_offered(self):
         """Rundesk sees what the *adapter* reported and never what the brain said, so without this a
         vendor changing its stream shows up as records quietly going missing."""
@@ -420,6 +432,11 @@ class AStreamThisSideCannotRead(support.Isolated):
         self.assertEqual("done", said[-1]["type"])
         self.assertFalse(said[-1]["ok"])
         self.assertNotEqual(0, got.returncode)
+        # **This is the path where two threads arrive at once.** A brain that dies mid-turn is seen
+        # by the thread reading it and by the thread that asked at the same instant, and each used
+        # to ask `have we finished?` for itself — so both could pass before either answered, and
+        # rundesk was handed two endings for one turn. It would not have reproduced often.
+        self.assertEqual(1, len(only(said, "done")), "one turn ended twice")
 
     def test_a_line_too_long_to_hold_is_dropped_whole_and_the_turn_carries_on(self):
         """**Half a record is not a smaller record, it is a corrupt one** — nothing downstream could
@@ -457,6 +474,19 @@ class EveryWayTheTurnCanEnd(support.Isolated):
         ended, got = self.ended_as("end_turn")
         self.assertTrue(ended["ok"])
         self.assertEqual(0, got.returncode)
+
+    def test_a_turn_ends_exactly_once_however_it_ends(self):
+        """Both the reply to the asking and the notification can end a turn, and either may arrive
+        first. Whichever is second must add nothing."""
+        for stopped in ("end_turn", "cancelled", "refusal"):
+            with self.subTest(stopped=stopped):
+                at = self.home / "ended.jsonl"
+                at.write_text("\n".join(a_conversation(
+                    an_update(sessionUpdate="turn_completed", stop_reason=stopped, usage={}),
+                )) + "\n", encoding="utf-8")
+                said, _got = replayed(self.home, captured=at)
+                self.assertEqual(1, len(only(said, "done")), "one turn ended twice")
+                self.assertLessEqual(len(only(said, "usage")), 1, "one turn was billed twice")
 
     def test_a_turn_somebody_stopped_is_cancelled_and_not_an_error(self):
         ended, _got = self.ended_as("cancelled")

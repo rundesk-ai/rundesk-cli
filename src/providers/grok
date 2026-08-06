@@ -245,9 +245,12 @@ def one_turn() -> int:
     try:
         return turn.run()
     except Exception as why:                       # noqa: BLE001 — a turn that dies silently is a
-        # turn rundesk can only call `crashed` with nothing to read. Whatever this was, it is said.
-        finished(False, failure_code="crashed",
-                 failure_message=f"the grok adapter went wrong: {type(why).__name__}: {why}")
+        # turn rundesk can only call `crashed` with nothing to read. Whatever this was, it is said —
+        # but **through the same claim every other ending goes through**, because the likeliest way
+        # to arrive here is a brain that died, and the thread reading it has already said so. Saying
+        # it again from this side reports one turn ending twice: measured, as a `done` for the brain
+        # ending and a second `done` for the broken pipe that writing to it then raised.
+        turn.could_not_read_it(f"the grok adapter went wrong: {type(why).__name__}: {why}")
         return 1
     finally:
         turn.take_the_brain_away()
@@ -261,7 +264,7 @@ class Turn:
         self.where = where
         # Held open for the length of the turn and closed in `take_the_brain_away`: a file reopened
         # per line is a turn that spends its time on `open` rather than on work.
-        self.raw = open(raw, "a", encoding="utf-8") if raw else None
+        self.raw = kept_at(raw)
         self.asked = 0
         self.answers = {}
         self.saying = threading.Lock()
@@ -274,9 +277,11 @@ class Turn:
         #: is arriving would repeat the last answer and end this turn before its prompt was sent.
         self.reporting = False
 
-        #: Whether the one record that ends a turn has been said. Rundesk reading none at all is a
-        #: turn nobody can explain, so this is what makes "always one" true rather than intended.
+        #: Whether the one record that ends a turn has been said, and the lock that makes asking and
+        #: answering that one thing. Rundesk reading none at all is a turn nobody can explain and
+        #: reading two is a turn it cannot reconcile — see `the_turn_ended`.
         self.said_done = False
+        self.finishing = threading.Lock()
 
         #: Whether *this side* is what went wrong, as against the brain reporting a failure it
         #: handled correctly. The exit code says what became of the program and nothing else.
@@ -294,21 +299,14 @@ class Turn:
     # ── the wire ──────────────────────────────────────────────────────────────────────────────
 
     def send(self, method: str, params=None, wants_reply: bool = True):
-        """One request or notification to the brain. Returns the id, or `None` for a notification.
-
-        Behind a lock because two threads write here — the one draining the brain and the one
-        answering a request it sent back — and two interleaved halves of two JSON objects is a
-        stream neither end can recover.
-        """
+        """One request or notification to the brain. Returns the id, or `None` for a notification."""
         said = {"jsonrpc": "2.0", "method": method}
         if params is not None:
             said["params"] = params
         if wants_reply:
             self.asked += 1
             said["id"] = self.asked
-        with self.saying:
-            self.brain.stdin.write(json.dumps(said) + "\n")
-            self.brain.stdin.flush()
+        self.write(said)
         return said.get("id")
 
     def refuse(self, which) -> None:
@@ -318,10 +316,18 @@ class Turn:
         advertising one makes this brain send work back and wait for it. A request that goes
         unanswered is a brain waiting for ever, so every one gets an answer and the answer is no.
         """
+        self.write({"jsonrpc": "2.0", "id": which,
+                    "error": {"code": -32601, "message": "rundesk offers no client services"}})
+
+    def write(self, one: dict) -> None:
+        """One line to the brain, under the lock.
+
+        Behind the lock because two threads write here — the one draining the brain and the one
+        answering a request it sent back — and two interleaved halves of two JSON objects is a
+        stream neither end can recover.
+        """
         with self.saying:
-            self.brain.stdin.write(json.dumps(
-                {"jsonrpc": "2.0", "id": which,
-                 "error": {"code": -32601, "message": "rundesk offers no client services"}}) + "\n")
+            self.brain.stdin.write(json.dumps(one) + "\n")
             self.brain.stdin.flush()
 
     def waited_for(self, asked: int, within: float):
@@ -350,9 +356,7 @@ class Turn:
         """
         while not self.ended.wait(WATCHING_EVERY):
             if asked in self.answers:
-                got = self.answers.pop(asked)
-                if not self.said_done:
-                    self.that_is_the_turn(what_the_reply_said(got))
+                self.that_is_the_turn(what_the_reply_said(self.answers.pop(asked)))
                 return
             if self.brain.poll() is not None:
                 return
@@ -393,8 +397,10 @@ class Turn:
         except Exception as why:                   # noqa: BLE001 — see the docstring
             self.could_not_read_it(f"reading grok went wrong ({type(why).__name__}: {why})")
         finally:
-            if not self.said_done:
-                self.could_not_read_it("grok ended without finishing the turn")
+            # Said unconditionally: `could_not_read_it` claims the ending itself and does nothing
+            # when the turn already has one, which is the only way two threads can both arrive here
+            # without one of them inventing a second ending.
+            self.could_not_read_it("grok ended without finishing the turn")
             self.ended.set()
 
     def read_a_line(self):
@@ -450,9 +456,15 @@ class Turn:
     def could_not_read_it(self, said: str) -> None:
         """End the turn because *this side* could not go on. Said as a `done`, because rundesk
         reading none at all is a turn nobody can explain — and remembered, because the exit code
-        says what became of the **program** and this is the program going wrong."""
+        says what became of the **program** and this is the program going wrong.
+
+        **Nothing at all when the turn already ended**, including the exit code: a brain that
+        answered and was reported, and only then went wrong on the way out, is a turn that was
+        delivered. Saying so afterwards would report a failure nobody suffered.
+        """
+        if not self.the_turn_ended():
+            return
         self.could_not_go_on = True
-        self.the_turn_ended()
         finished(False, session_id=self.session_id, failure_code=self.a_sign_in_word(),
                  failure_message=said)
 
@@ -469,9 +481,21 @@ class Turn:
             return "signed_out"
         return "crashed"
 
-    def the_turn_ended(self) -> None:
-        """Say that the record which ends a turn is about to be said, **once**."""
-        self.said_done = True
+    def the_turn_ended(self) -> bool:
+        """Claim the right to say the record that ends a turn. **True for the first caller only.**
+
+        Checked and set as one thing, under a lock, because two threads reach here and a brain that
+        dies mid-turn brings them both at once: the thread reading it sees its output close, and the
+        main thread sees the process go at the same instant. Asked as a plain `if not self.said_done`
+        in each of them, both pass before either sets it and rundesk is handed **two** endings for
+        one turn — which it cannot reconcile, and which would not reproduce often enough to be
+        found by running the suite again.
+        """
+        with self.finishing:
+            if self.said_done:
+                return False
+            self.said_done = True
+            return True
 
     # ── the turn ──────────────────────────────────────────────────────────────────────────────
 
@@ -511,8 +535,7 @@ class Turn:
         self.waited_out_the_turn(self.send("session/prompt", {
             "sessionId": self.session_id,
             "prompt": [{"type": "text", "text": prompt}]}))
-        if not self.said_done:
-            self.could_not_read_it("grok stopped before the turn was finished")
+        self.could_not_read_it("grok stopped before the turn was finished")
         # The exit code says what became of the **program**. A brain that reported a failure is an
         # adapter that did its job; a stream this side could not go on reading is not.
         return 1 if self.could_not_go_on else 0
@@ -522,8 +545,9 @@ class Turn:
         why = ""
         if isinstance(got, dict):
             why = str((got.get("error") or {}).get("message") or "")
+        if not self.the_turn_ended():
+            return 1
         self.could_not_go_on = True
-        self.the_turn_ended()
         finished(False, failure_code=self.a_sign_in_word(),
                  failure_message=one_line(f"{said}{': ' + why if why else ''}"))
         return 1
@@ -693,8 +717,13 @@ class Turn:
              "summary": one_line(what_it_reported(update))})
 
     def that_is_the_turn(self, ended: dict) -> None:
-        """The turn ended. Say what it cost, then say what became of it, then stop reading."""
-        if self.said_done:
+        """The turn ended. Say what it cost, then say what became of it, then stop reading.
+
+        **Claimed before any of it happens**, because this is reached from the thread reading the
+        brain and from the one that asked, and whichever gets here second would otherwise say a
+        second cost and a second ending for the same turn.
+        """
+        if not self.the_turn_ended():
             return
         # A brain that reasoned right up to the end has a thought still being gathered, and a turn
         # that ended is the last thing that can finish one.
@@ -704,7 +733,6 @@ class Turn:
         # Both spellings are live: the notification says `stop_reason` and the reply to the request
         # says `stopReason`, and this is reached from each.
         stopped = ended.get("stop_reason") or ended.get("stopReason")
-        self.the_turn_ended()
         if stopped == FINISHED:
             finished(True, session_id=self.session_id)
         else:
@@ -763,6 +791,26 @@ class Turn:
 
 
 # ── Reading one update ────────────────────────────────────────────────────────────────────────
+
+
+def kept_at(raw):
+    """Where the brain's own stream is kept, or nothing when it cannot be.
+
+    **Offered, never required**, and that has to be true of the failure as well as of the absence.
+    Opened bare, this raises out of the one place a turn has nothing to say for itself: the brain is
+    already started, `Turn` is not yet built, so the guard that promises a `done` has not been
+    entered and the `finally` that reaps the brain never runs either. Measured with `RUNDESK_RAW`
+    pointed at a directory that is not there: no records at all, a traceback, and a vendor process
+    left behind. A turn that could not keep a copy of what its brain said is a whole turn.
+    """
+    if not raw:
+        return None
+    try:
+        return open(raw, "a", encoding="utf-8")
+    except OSError as gone:
+        went_wrong(f"what this brain said could not be kept at {raw}: {gone}")
+        return None
+
 
 def text_of(update: dict) -> str:
     """What the brain said on this fragment, whether it wrapped it or not."""

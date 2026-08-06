@@ -90,6 +90,13 @@ HANDSHAKE_WITHIN = 120.0
 #: held while it is being read, which is what makes the bound true rather than aspirational.
 A_LINE_AT_MOST = 1024 * 1024
 
+#: How long to wait for the brain to end after its input is closed, at each of two steps.
+GOING_WITHIN = 5.0
+
+#: How often anything here looks again at something another thread will set. Small enough that a
+#: turn does not sit finished for a noticeable moment, large enough that waiting costs nothing.
+WATCHING_EVERY = 0.01
+
 #: How much of what a tool printed goes in its `result` summary. The whole of it is in the raw
 #: stream; this is what belongs on a line somebody is watching go past.
 A_SUMMARY_AT_MOST = 400
@@ -191,7 +198,7 @@ def one_turn() -> int:
     where = os.environ.get("RUNDESK_CWD") or os.getcwd()
     raw = os.environ.get("RUNDESK_RAW")
     try:
-        server = subprocess.Popen(
+        brain = subprocess.Popen(
             [CODEX, *APP_SERVER], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=None, text=True, bufsize=1, cwd=where, env=os.environ.copy(),
             # **`errors="replace"`, and it is not tidiness.** A coding agent reads binary files, and
@@ -204,7 +211,7 @@ def one_turn() -> int:
         finished(False, failure_code="crashed",
                  failure_message=f"codex could not be started: {why}")
         return 1
-    turn = Turn(server, where, raw)
+    turn = Turn(brain, where, raw)
     try:
         return turn.run()
     except Exception as why:                       # noqa: BLE001 — a turn that dies silently is a
@@ -213,18 +220,18 @@ def one_turn() -> int:
                  failure_message=f"the codex adapter went wrong: {type(why).__name__}: {why}")
         return 1
     finally:
-        turn.take_the_server_away()
+        turn.take_the_brain_away()
 
 
 class Turn:
     """One turn on one thread, from `initialize` to `done`."""
 
-    def __init__(self, server, where: str, raw):
-        self.server = server
+    def __init__(self, brain, where: str, raw):
+        self.brain = brain
         self.where = where
-        # Held open for the length of the turn and closed in `take_the_server_away`: a file
+        # Held open for the length of the turn and closed in `take_the_brain_away`: a file
         # reopened per line is a turn that spends its time on `open` rather than on work.
-        self.raw = open(raw, "a", encoding="utf-8") if raw else None
+        self.raw = kept_at(raw)
         self.asked = 0
         self.answers = {}
         self.saying = threading.Lock()
@@ -271,8 +278,8 @@ class Turn:
             self.asked += 1
             said["id"] = self.asked
         with self.saying:
-            self.server.stdin.write(json.dumps(said) + "\n")
-            self.server.stdin.flush()
+            self.brain.stdin.write(json.dumps(said) + "\n")
+            self.brain.stdin.flush()
         return said.get("id")
 
     def waited_for(self, asked: int, within: float):
@@ -281,9 +288,9 @@ class Turn:
         while time.monotonic() < until:
             if asked in self.answers:
                 return self.answers.pop(asked)
-            if self.server.poll() is not None:
+            if self.brain.poll() is not None:
                 return None
-            time.sleep(0.01)
+            time.sleep(WATCHING_EVERY)
         return None
 
     def heard(self):
@@ -337,7 +344,7 @@ class Turn:
         for, which is where the one guard is.
         """
         while True:
-            said = self.server.stdout.readline(A_LINE_AT_MOST + 1)
+            said = self.brain.stdout.readline(A_LINE_AT_MOST + 1)
             if not said:
                 return
             if not said.endswith("\n"):
@@ -352,7 +359,7 @@ class Turn:
         the reason the caller is: what is being skipped past is by definition a stream writing
         without ever ending a line."""
         while True:
-            more = self.server.stdout.readline(A_LINE_AT_MOST + 1)
+            more = self.brain.stdout.readline(A_LINE_AT_MOST + 1)
             if not more or more.endswith("\n"):
                 return
 
@@ -514,7 +521,7 @@ class Turn:
         elif method == "account/rateLimits/updated":
             self.an_allowance(params.get("rateLimits") or {})
         elif method == "error":
-            self.went_wrong(params)
+            self.an_error(params)
         elif method == "turn/completed":
             self.that_is_the_turn(params.get("turn") or {})
 
@@ -641,7 +648,7 @@ class Turn:
             self.allowance = record
             say(record)
 
-    def went_wrong(self, params: dict) -> None:
+    def an_error(self, params: dict) -> None:
         """A failure the brain reported. Kept rather than acted on: `turn/completed` still arrives,
         and a turn the brain is going to retry itself has not failed."""
         if params.get("willRetry"):
@@ -688,16 +695,16 @@ class Turn:
         if len(record) > 1:
             say(record)
 
-    def take_the_server_away(self) -> None:
+    def take_the_brain_away(self) -> None:
         """End the server, whatever happened. A brain left running is a brain nobody will reap."""
         with contextlib.suppress(Exception):
-            if self.server.stdin and not self.server.stdin.closed:
-                self.server.stdin.close()
+            if self.brain.stdin and not self.brain.stdin.closed:
+                self.brain.stdin.close()
         with contextlib.suppress(Exception):
-            self.server.terminate()
-            self.server.wait(timeout=5)
+            self.brain.terminate()
+            self.brain.wait(timeout=GOING_WITHIN)
         with contextlib.suppress(Exception):
-            self.server.kill()
+            self.brain.kill()
         if self.raw is not None:
             with contextlib.suppress(OSError):
                 self.raw.close()
@@ -747,6 +754,25 @@ def a_failure_word(info):
     return FAILURE_FOR.get(named)
 
 
+def kept_at(raw):
+    """Where the brain's own stream is kept, or nothing when it cannot be.
+
+    **Offered, never required**, and that has to be true of the failure as well as of the absence.
+    Opened bare, this raises out of the one place a turn has nothing to say for itself: the brain is
+    already started, `Turn` is not yet built, so the guard that promises a `done` has not been
+    entered and the `finally` that reaps the brain never runs either. Measured with `RUNDESK_RAW`
+    pointed at a directory that is not there: no records at all, a traceback, and a vendor process
+    left behind. A turn that could not keep a copy of what its brain said is a whole turn.
+    """
+    if not raw:
+        return None
+    try:
+        return open(raw, "a", encoding="utf-8")
+    except OSError as gone:
+        went_wrong(f"what this brain said could not be kept at {raw}: {gone}")
+        return None
+
+
 def what_the_agent_lives_by() -> dict:
     """`NAME=verb` pairs, as rundesk names them. Read rather than held, so a file renamed there does
     not silently stop being reported here."""
@@ -783,6 +809,13 @@ def finished(ok: bool, session_id=None, failure_code=None, failure_message=None)
         if value:
             record[name] = value
     say(record)
+
+
+def went_wrong(said: str) -> None:
+    """Something for whoever is reading this turn, on the stream that is the adapter's own."""
+    with contextlib.suppress(OSError, ValueError):
+        sys.stderr.write(said.rstrip() + "\n")
+        sys.stderr.flush()
 
 
 def say(record: dict) -> None:

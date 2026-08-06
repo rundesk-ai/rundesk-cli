@@ -3,7 +3,21 @@
 # gate it was invisible, so the one adapter that ships was unlinted and unparsed and a syntax error
 # in it would have gone green. Measured: `ruff check src tests` saw 109 files and none of them was
 # `src/channels/discord`.
-extend-include = ["src/channels/*"]
+#
+# **It happened again, the same way, one directory along.** This list said `src/channels/*` and
+# nothing else, so every provider adapter — 2,800 lines of it — was invisible to the gate from the
+# day the first one shipped. The gate reported clean while reading none of them. A list of the
+# places this rule applies is a list somebody has to remember to add to, and nobody did; each line
+# below is here because a file of that shape was already being written when it was added, so the
+# next kind of extensionless program will be missed too unless whoever adds it reads this.
+extend-include = ["src/channels/*", "src/providers/*", "tests/samples/*"]
+
+# What lives beside those programs and is **not** one. `tests/samples/` holds both the stand-in
+# brains — extensionless executables, which is why the directory is included above — and the
+# captured vendor streams they replay. A capture is JSON, so reading one as Python reports several
+# hundred errors about a file nobody wrote by hand. Matched on the extension, because that is the
+# thing that actually tells a program from a recording here.
+extend-exclude = ["tests/samples/*.json", "tests/samples/*.jsonl"]
 
 # How this code is written, in the one place a machine can check it.
 #

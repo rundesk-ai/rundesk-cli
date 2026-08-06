@@ -213,6 +213,18 @@ class OneCapturedTurn(support.Isolated):
         gets attached to a message on a channel."""
         self.assertEqual([], only(self.said, "file"))
 
+    def test_somewhere_it_cannot_keep_the_raw_stream_does_not_cost_the_turn(self):
+        """**Offered, never required** — and that has to be true of the failure as well as of the
+        absence. Opened bare, this raised out of the one place a turn has nothing to say for itself:
+        the brain is already started and the guard that promises a `done` has not been entered, so
+        there were no records at all, a traceback, and a vendor process left behind.
+        """
+        said, got = replayed(self.home, RUNDESK_RAW=str(self.home / "not-a-dir" / "raw.jsonl"))
+        self.assertEqual(1, len(only(said, "done")))
+        self.assertTrue(said[-1]["ok"], "a turn failed over a copy nobody needed")
+        self.assertEqual(0, got.returncode)
+        self.assertIn("could not be kept", got.stderr)
+
     def test_what_the_brain_itself_printed_is_kept_verbatim_when_somewhere_was_offered(self):
         at = self.home / "raw.jsonl"
         said, _got = replayed(self.home, RUNDESK_RAW=str(at))

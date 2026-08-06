@@ -94,9 +94,6 @@ THE_PROMPT_WITHIN = 60.0
 #: How long to wait for a thread to finish once the turn is over, and for the brain to end.
 GOING_WITHIN = 5.0
 
-#: How often anything here looks again at something another thread will set.
-WATCHING_EVERY = 0.01
-
 #: How much of one line is read at once. Not a limit on what the brain may say — only on what is
 #: held while it is being read, which is what makes the bound true rather than aspirational.
 A_LINE_AT_MOST = 1024 * 1024
@@ -280,9 +277,12 @@ def one_turn() -> int:
         try:
             code = turn.run()
         except Exception as why:                   # noqa: BLE001 — a turn that dies silently is a
-            # turn rundesk can only call `crashed` with nothing to read. Whatever this was, it said.
-            finished(False, failure_code="crashed",
-                     failure_message=f"the claude adapter went wrong: {type(why).__name__}: {why}")
+            # turn rundesk can only call `crashed` with nothing to read. Whatever this was, it is
+            # said — but **through the same claim every other ending goes through**, because the
+            # likeliest way to arrive here is a brain that died, and the side reading it has already
+            # said so. Saying it again reports one turn ending twice.
+            turn.could_not_read_it(
+                f"the claude adapter went wrong: {type(why).__name__}: {why}")
             return 1
         finally:
             turn.take_the_brain_away()
@@ -305,15 +305,17 @@ class Turn:
         self.resume = resume
         # Held open for the length of the attempt: a file reopened per line is a turn that spends
         # its time on `open` rather than on work.
-        self.raw = open(raw, "a", encoding="utf-8") if raw else None
+        self.raw = kept_at(raw)
         self.brain = None
         self.control = Control()
         self.ended = threading.Event()
         self.trouble = []
 
-        #: Whether the one record that ends a turn has been said. Rundesk reading none at all is a
-        #: turn nobody can explain, so this is what makes "always one" true rather than intended.
+        #: Whether the one record that ends a turn has been said, and the lock that makes asking
+        #: and answering that one thing. Rundesk reading none at all is a turn nobody can explain
+        #: and reading two is a turn it cannot reconcile — see `the_turn_ended`.
         self.said_done = False
+        self.finishing = threading.Lock()
 
         #: Whether *this side* is what went wrong, as against the brain reporting a failure it
         #: handled correctly. The exit code says what became of the program and nothing else.
@@ -457,14 +459,32 @@ class Turn:
     def could_not_read_it(self, said: str) -> None:
         """End the turn because *this side* could not go on. Said as a `done`, because rundesk
         reading none at all is a turn nobody can explain — and remembered, because the exit code
-        says what became of the **program** and this is the program going wrong."""
+        says what became of the **program** and this is the program going wrong.
+
+        **Nothing at all when the turn already ended**, including the exit code: a brain that
+        answered and was reported, and only then went wrong on the way out, is a turn that was
+        delivered. Saying so afterwards would report a failure nobody suffered.
+        """
+        if not self.the_turn_ended():
+            return
         self.could_not_go_on = True
-        self.the_turn_ended()
         finished(False, failure_code="crashed", failure_message=one_line(said))
 
-    def the_turn_ended(self) -> None:
-        """Say that the record which ends a turn is about to be said, **once**."""
-        self.said_done = True
+    def the_turn_ended(self) -> bool:
+        """Claim the right to say the record that ends a turn. **True for the first caller only.**
+
+        Checked and set as one thing, under a lock. The reading happens on this adapter's own thread
+        and the feeding on another, so a brain that dies brings both at once — one seeing its output
+        close and one seeing a broken pipe — and each asking `have we finished?` for itself means
+        both pass before either answers. Rundesk is then handed **two** endings for one turn, which
+        it cannot reconcile, and which would not reproduce often enough to be found by running the
+        suite again.
+        """
+        with self.finishing:
+            if self.said_done:
+                return False
+            self.said_done = True
+            return True
 
     def a_lost_conversation(self) -> bool:
         """Whether this brain has forgotten the conversation, rather than the turn having failed.
@@ -485,9 +505,10 @@ class Turn:
             return
         counted, ending = self.holding
         self.holding = None
+        if not self.the_turn_ended():
+            return
         if counted:
             say(counted)
-        self.the_turn_ended()
         say(ending)
 
     def take_the_brain_away(self) -> None:
@@ -735,6 +756,17 @@ class Control:
                 self.no_longer_owed(subtype)
             elif subtype == "interrupt":
                 accepted = self.watching.wait_for(lambda: self.owed == 0, timeout=CONTROL_WITHIN)
+                if not accepted:
+                    # **Giving up on the drain gives the mark back, and that is the whole point.**
+                    # The brain accepted the interrupt and then took longer than this to finish the
+                    # request — a tool slow to notice it has been cancelled is enough. Keeping the
+                    # mark would make `interrupting()` true for the rest of the turn, so every
+                    # genuinely failed tool after this one would be silently dropped as though
+                    # steering had caused it, and `interrupted()` would swallow the turn's own
+                    # ending as one more remnant. Nothing would then close the brain's input, so a
+                    # turn that really answered would hang until rundesk's silence window ended it
+                    # half an hour later and called it a timeout.
+                    self.no_longer_owed(subtype)
             return accepted
 
     def no_longer_owed(self, subtype: str) -> None:
@@ -871,6 +903,26 @@ def a_user_message(word) -> dict:
 
 
 # ── Reading one line ──────────────────────────────────────────────────────────────────────────
+
+
+def kept_at(raw):
+    """Where the brain's own stream is kept, or nothing when it cannot be.
+
+    **Offered, never required**, and that has to be true of the failure as well as of the absence.
+    Opened bare, this raises out of the one place a turn has nothing to say for itself: the brain is
+    already started, `Turn` is not yet built, so the guard that promises a `done` has not been
+    entered and the `finally` that reaps the brain never runs either. Measured with `RUNDESK_RAW`
+    pointed at a directory that is not there: no records at all, a traceback, and a vendor process
+    left behind. A turn that could not keep a copy of what its brain said is a whole turn.
+    """
+    if not raw:
+        return None
+    try:
+        return open(raw, "a", encoding="utf-8")
+    except OSError as gone:
+        went_wrong(f"what this brain said could not be kept at {raw}: {gone}")
+        return None
+
 
 def what_it_changed(inputs) -> str:
     """Which of the files an agent lives by this just changed, when that is what it changed.
