@@ -17,6 +17,7 @@ checks that mechanically, because a rule of this kind stops being true quietly.
 | `adapters` | the program behind a provider: finding it, asking what it can do, starting one |
 | `environment` | everything an adapter is told about one turn, and the whole of it |
 | `streaming` | one adapter that is running: the records off it, the words to it, and ending it |
+| `instructions` | what a brain reads before it reads a word of the task |
 | `kept` | what an agent's records hold about its turns, and finding what was said |
 
 May depend on `channels`, `agents`, `core` and `utils`. It reaches `channels` because a turn's answer

@@ -29,6 +29,10 @@ from rundesk.commands.env import register as register_env
 from rundesk.commands.gateways import Cycled, cmd_gateways
 from rundesk.commands.gateways import register as register_gateways
 from rundesk.commands.install import cmd_install
+from rundesk.commands.messages import cmd_messages
+from rundesk.commands.messages import register as register_messages
+from rundesk.commands.providers import cmd_providers
+from rundesk.commands.providers import register as register_providers
 from rundesk.commands.schedules import cmd_schedules
 from rundesk.commands.schedules import register as register_schedules
 from rundesk.commands.skills import cmd_skills
@@ -97,6 +101,8 @@ def build_parser() -> argparse.ArgumentParser:
     register_gateways(sub)
     register_backups(sub)
     register_env(sub)
+    register_messages(sub)
+    register_providers(sub)
     register_schedules(sub)
     register_channels(sub)
     register_skills(sub)
@@ -187,6 +193,10 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
         return cmd_backups(args, _gateways(supervising))
     if args.command == "env":
         return cmd_env(args)
+    if args.command == "messages":
+        return cmd_messages(args)
+    if args.command == "providers":
+        return cmd_providers(args)
     if args.command == "schedules":
         return cmd_schedules(args)
     if args.command == "channels":

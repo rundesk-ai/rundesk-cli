@@ -162,13 +162,17 @@ class WhatAShippedSkillMayClaim(Bundled):
         # The guard on the guard. A pattern that matched nothing, or a verb set that answered
         # everything, would leave the case above green for ever — and this is exactly the check
         # whose failure mode is silence.
-        # Re-pointed when `schedules` landed, and again when `channels` did — exactly as intended:
-        # it has to name a verb this build really does not have, so the next one to arrive moves it
-        # again, and the person moving it is the person who can see what is still absent. What is
-        # still absent is the provider: an agent records which one is behind it and nothing in this
-        # release runs one, so there is no verb for them and `rundesk providers` is a verb rundesk
-        # does not have.
-        self.assertNotIn("providers", verbs_of(cli.build_parser()))
+        # Re-pointed when `schedules` landed, again when `channels` did, and again when `providers`
+        # did — exactly as intended: it has to name a verb this build really does not have, so the
+        # next one to arrive moves it again, and the person moving it is the person who can see what
+        # is still absent.
+        #
+        # What is still absent is delegation. An agent can be asked something by a person, by the
+        # clock and by a channel; being asked by *another agent* is reserved throughout — the
+        # conversation records already hold `agent` and `role` as sources, and the prompt builder
+        # keeps a layer for each — and nothing produces one, so `rundesk delegations` is a verb
+        # rundesk does not have.
+        self.assertNotIn("delegations", verbs_of(cli.build_parser()))
         self.assertEqual(["gateways"], verbs_named("run `rundesk gateways logs alan` to see"))
         self.assertEqual(["env"], verbs_named("```sh\nrundesk env set NAME\n```"))
         self.assertEqual(["--help"], verbs_named("`rundesk --help` is generated"))

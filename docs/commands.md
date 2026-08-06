@@ -842,6 +842,100 @@ and the summary to stderr, so a script can read one and ignore the other — and
 flushed first, or the summary would appear above what it summarises when both are merged into one
 pipe.
 
+## providers
+
+The brains this install can run. A provider is a **program rundesk runs**, never code it loads, so
+this asks about programs — where each one is, and what it says it can do. All three verbs are
+offline: none runs a turn, needs an account, or reaches a network.
+
+```console
+$ rundesk providers
+providers in /Users/you/.rundesk/app/src/providers and /Users/you/.rundesk/data/providers
+PROVIDER    PROGRAM
+a-stand-in  /Users/you/.rundesk/data/providers/a-stand-in
+```
+
+A bare name resolves among the ones that ship and then among the ones this install has been given, in
+that order — a release's own adapter is what somebody gets by typing its name, and an install cannot
+quietly shadow it. Anything with a separator in it is used as a path, so an adapter being written
+right now needs nothing installed anywhere.
+
+```console
+$ rundesk providers check a-stand-in
+a-stand-in
+  program   /Users/you/.rundesk/data/providers/a-stand-in
+CAN     IT SAYS
+tools   yes
+resume  yes
+model   no
+usage   yes
+steer   no
+
+it also said, and rundesk did not ask:
+NAME     VALUE
+version  "0.146.0"
+```
+
+**Absent means no.** An adapter that answers `{}` can do none of it, which is a complete and honest
+answer rather than an error — a plain conversational CLI is a first-class brain here, not a degraded
+one. Anything it reported that rundesk did not ask about is shown as it said it, because a version an
+adapter volunteers is what somebody reads a month later to find out what changed under them.
+
+```console
+$ rundesk providers instructions ava --layers
+LAYER           BYTES
+core            510
+a_person_asked  593
+
+1105 bytes in 2 layers, 3fe0d980fc34
+```
+
+What a brain is told before it reads a word of the task, with what each layer costs. Without
+`--layers` it prints the prompt itself; with `--trigger` it renders a different situation. Naming no
+agent leaves the placeholders standing, which is how to read the shape of a layer on an install with
+no agents in it.
+
+The number at the end is a fingerprint of the whole. Every turn records it, so what a brain was told
+is provable afterwards without a copy of it being kept — and a prompt that changed between releases
+says so rather than leaving somebody to guess.
+
+## messages
+
+What an agent has been told, and what it said back.
+
+**The agent is the first caller of this, before its owner is.** A person refers to work the agent has
+no record of — *"the invoice bug you looked at last week"* — and the agent reads its own history back
+before answering rather than saying it does not know. Its own instructions name this command for
+exactly that.
+
+```console
+$ rundesk messages ava --search invoice
+2 ava said or was told holding 'invoice'
+WHEN                  WHO   WHERE    IN  SAID
+2026-08-06T13:11:29Z  user  slack    2   [invoice] again, different room
+2026-08-06T13:11:29Z  user  discord  1   the [invoice] bug is in the parser
+```
+
+One bounded line each, because every line the agent reads costs tokens and a listing that answered
+with fifty whole messages would spend a turn's budget on finding out what the turn was about.
+`--full` prints bodies. `IN` is the conversation, which is what `--conversation` takes.
+
+Four ways to narrow and they compose: `--search` for words, `--channel` for where it was said,
+`--source` for what kind of thing started it, `--conversation` for one exchange, and `--since` for a
+day. With no words at all it is the conversation read back, newest first.
+
+**An empty answer says what was looked for**, so "nothing matched" is readable apart from "you
+narrowed it to nothing":
+
+```console
+$ rundesk messages ava --search invoice --channel nowhere
+nothing ava said or was told holding 'invoice', on nowhere
+```
+
+**Where an install has no full-text index it says so.** SQLite is not always built with one; the
+search then falls back to matching plain text, which finds different things — no stemming, no phrase,
+no ranking — and somebody comparing two answers has to know which they got.
+
 ## backups
 
 The copies of `data/`. With no sub-verb it lists them, newest first, because listing is what somebody
