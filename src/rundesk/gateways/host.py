@@ -202,9 +202,10 @@ from rundesk import __version__
 from rundesk.agents import directory, migration
 from rundesk.channels import delivery, hosting
 from rundesk.channels import files as arrivals
+from rundesk.core import config, paths
 from rundesk.exits import OK
 from rundesk.gateways import standing
-from rundesk.providers import answering
+from rundesk.providers import answering, kept
 from rundesk.schedules import firing
 from rundesk.utils import logs
 
@@ -658,7 +659,35 @@ def _kept_the_days(name: str, where: Path, swept_for: str) -> str:
         with contextlib.suppress(OSError):
             logs.swept(where, KEPT_DAYS)
         _kept_what_arrived(name)
+        _kept_what_turns_did(name, where)
     return today
+
+
+def _kept_what_turns_did(name: str, where: Path) -> None:
+    """Sweep what turns *did* out of this agent's records, past the days it keeps. Never raises.
+
+    **The one table that grows with tool calls**, and the only one anything sweeps: a turn's own row
+    is the ledger and what was said is the owner's history, so neither is touched. `turn_records` is
+    diagnostic, and a fortnight after the fact what a turn did has been read if it was ever going to
+    be.
+
+    Here rather than anywhere else because this is where the same decision already lives — the day
+    files and the arrivals grow for as long as the process lives, and so does this. It is the same
+    once-a-day schedule for the same reason: a gateway up since March that swept only at startup
+    swept once, in March.
+
+    **`turn_records_days` said how long to keep and nothing read it.** The setting was configurable,
+    documented, and wired to nothing at all, which is a worse state than not offering it — somebody
+    who set it to 3 believed they had bounded something.
+
+    Said out loud when it removed anything, because a sweep nobody can see is one nobody can tell
+    from a sweep that never ran, and this one removes rows rather than files.
+    """
+    with contextlib.suppress(Exception):
+        keeping = int(config.read(paths.data())["turn_records_days"])
+        went = kept.sweep_turn_records(name, keeping)
+        if went:
+            logs.note(where, f"swept {went} records of what turns did, past {keeping} days")
 
 
 def _kept_what_arrived(name: str) -> None:

@@ -32,12 +32,13 @@ from typing import List, Optional, Tuple
 import support
 from rundesk import __version__
 from rundesk.agents import directory, records
+from rundesk.channels import arriving, hosting
 from rundesk.channels import files as arrivals
-from rundesk.channels import hosting
 from rundesk.channels import kept as channels
 from rundesk.core import paths
 from rundesk.exits import OK
 from rundesk.gateways import host, job, standing
+from rundesk.providers import kept as turns_kept
 from rundesk.schedules import firing, kept
 from rundesk.utils import logs, programs
 
@@ -605,6 +606,54 @@ class WhatItGoesOnDoingForMonths(WithAnAgent):
         self.assertEqual(logs.named_for(datetime.datetime.now()), today)
         self.assertFalse(old.exists(), "an unreadable channel directory stopped the day files being "
                                        "swept at all")
+
+    def a_turn_with_records(self, old: int, recent: int) -> int:
+        """One turn carrying records from long ago and records from today."""
+        conversation = arriving.asked_at_a_terminal(self.name, "what changed?").conversation
+        turn = turns_kept.add_turn(self.name, {"conversation_id": conversation,
+                                               "provider_name": "a-stand-in",
+                                               "access_mode": "read"})
+        long_ago = (datetime.datetime.now(datetime.timezone.utc)
+                    - datetime.timedelta(days=host.KEPT_DAYS + 16))
+        for n in range(old):
+            turns_kept.add_turn_record(self.name, turn, "tool", {"n": n}, when=long_ago)
+        for n in range(recent):
+            turns_kept.add_turn_record(self.name, turn, "tool", {"n": n})
+        return turn
+
+    def test_it_sweeps_what_turns_did_on_the_same_beat(self):
+        """`turn_records_days` was configurable, documented, and read by nothing at all — which is
+        worse than not offering it, because somebody who set it believed they had bounded
+        something."""
+        turn = self.a_turn_with_records(old=5, recent=2)
+        where = standing.logs_at(self.at)
+        where.mkdir(parents=True, exist_ok=True)
+
+        host._kept_the_days(self.name, where, "")
+
+        self.assertEqual(2, len(turns_kept.list_turn_records(self.name, turn)),
+                         "what turns did grew without bound however the setting was set")
+
+    def test_the_turn_and_what_was_said_are_never_swept_with_it(self):
+        """A turn's own row is the ledger and what was said is the owner's history."""
+        turn = self.a_turn_with_records(old=3, recent=0)
+        where = standing.logs_at(self.at)
+        where.mkdir(parents=True, exist_ok=True)
+
+        host._kept_the_days(self.name, where, "")
+
+        self.assertEqual(turn, turns_kept.get_turn(self.name, turn)["id"])
+        self.assertTrue(arriving.conversations(self.name), "a conversation was swept away")
+
+    def test_records_it_cannot_sweep_never_end_the_gateway(self):
+        """Tidying may not end a gateway — the same rule the day files are swept under."""
+        self.a_turn_with_records(old=1, recent=0)
+        where = standing.logs_at(self.at)
+        where.mkdir(parents=True, exist_ok=True)
+        directory.records(self.name).write_text("this is prose, not a database", encoding="utf-8")
+
+        self.assertEqual(logs.named_for(datetime.datetime.now()),
+                         host._kept_the_days(self.name, where, ""))
 
     def test_a_beat_that_cannot_be_written_does_not_take_a_working_gateway_down(self):
         # A full disk, a volume gone read-only, a record taken away — none of them is a reason to

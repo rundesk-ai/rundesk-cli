@@ -48,6 +48,11 @@ BY_RUNDESK = "rundesk"
 #: enough that no ordinary message is touched.
 BODY_AT_MOST = 64 * 1024
 
+#: How many conversations a listing answers with unless somebody asks for more. Generous, because
+#: this is a person looking at their own agent rather than a brain spending tokens — but a ceiling,
+#: because a channel makes a conversation per room and per person for as long as the agent lives.
+CONVERSATIONS_AT_MOST = 200
+
 
 class Landed(NamedTuple):
     """What became of one arriving message.
@@ -154,11 +159,17 @@ def said_by_agent(agent: str, source: str, place: str, body: str, turn: Optional
     return Landed(conversation, message, fresh)
 
 
-def conversations(agent: str) -> List[Dict[str, Any]]:
-    """Every conversation this agent has, newest first."""
+def conversations(agent: str, most: int = CONVERSATIONS_AT_MOST) -> List[Dict[str, Any]]:
+    """This agent's conversations, newest first.
+
+    **Bounded, like every other read here.** A busy channel makes a conversation per room and per
+    person indefinitely, so the unbounded form was one query that grew for the life of the agent
+    while every read beside it had a ceiling. Newest first is what makes a default honest: the
+    ceiling cuts off the oldest, which is the end nobody was looking for.
+    """
     with records.reading(directory.records(agent)) as conn:
         return [dict(row) for row in _rows(
-            conn, agent, "SELECT * FROM conversations ORDER BY id DESC")]
+            conn, agent, "SELECT * FROM conversations ORDER BY id DESC LIMIT ?", (most,))]
 
 
 def messages(agent: str, conversation: int, most: int = 50) -> List[Dict[str, Any]]:
