@@ -76,6 +76,10 @@ FOUND_AT_MOST = 20
 #: enough to recognise the exchange and go and read it, not the exchange itself.
 AROUND_A_MATCH = 12
 
+#: What escapes a wildcard in the fallback's `LIKE`. Named because it has to be spelled the same in
+#: the pattern and in the `ESCAPE` clause, and escaping without the clause does nothing at all.
+LIKE_ESCAPE = "\\"
+
 
 class Refused(Exception):
     """Something that may not be written about a turn, named with why.
@@ -312,6 +316,10 @@ def search_messages(agent: str, saying: str = "", channel: Optional[str] = None,
     **Falls back to a scan where there is no index**, and the caller is expected to say so: a scan
     has no stemming, no phrase and no ranking, and it finds different things. It is bounded by the
     same limit, so the fallback is slower and never unbounded.
+
+    **What somebody typed is words, never a query.** Both branches take it as words — see
+    `_as_words` and `_as_a_pattern` — so the two find the same things and neither can be made to
+    mean something by what a person happened to type.
     """
     narrowing, values = _narrowed(channel, source, conversation, since)
     if not saying.strip():
@@ -325,11 +333,47 @@ def search_messages(agent: str, saying: str = "", channel: Optional[str] = None,
                f"FROM {SEARCH} f JOIN {MESSAGES} m ON m.id = f.rowid "
                f"JOIN conversations c ON c.id = m.conversation_id "
                f"WHERE {SEARCH} MATCH ? {_and(narrowing)} ORDER BY rank LIMIT ?")
-        return _found(agent, sql, (saying, *values, most))
+        return _found(agent, sql, (_as_words(saying), *values, most))
     sql = (f"SELECT m.*, c.source, c.channel, c.source_id FROM {MESSAGES} m "
            f"JOIN conversations c ON c.id = m.conversation_id "
-           f"WHERE m.body LIKE ? {_and(narrowing)} ORDER BY m.id DESC LIMIT ?")
-    return _found(agent, sql, (f"%{saying}%", *values, most))
+           f"WHERE m.body LIKE ? ESCAPE '{LIKE_ESCAPE}' {_and(narrowing)} "
+           "ORDER BY m.id DESC LIMIT ?")
+    return _found(agent, sql, (_as_a_pattern(saying), *values, most))
+
+
+def _as_words(saying: str) -> str:
+    """What somebody typed, as words for the index rather than as a query language.
+
+    **FTS5's `MATCH` takes a query, not a string, and that is the whole of this.** Handed what a
+    person typed, `C++` is a syntax error near `+`, `it's fine` is one near `'`, and an unbalanced
+    `"` is an unterminated string — none of which is a search that found nothing. Worse, every one
+    of them arrived here as `OperationalError`, which `_rows` reads as records that cannot be read:
+    somebody searching for `C++` was told their agent's memory was unreadable.
+
+    So each word becomes a quoted phrase, with any `"` doubled the way FTS5 escapes its own. The
+    tokenizer then throws away what is not a token, so `+++` finds nothing rather than raising.
+    Several words are still several phrases, which FTS5 requires all of — the same *and* the
+    unquoted form meant.
+
+    **This spends the operators to buy the apostrophe**, deliberately: `--search <words>` is
+    documented as words, and `parser OR lunch` was never something the surface offered. A bare
+    apostrophe is what people actually type.
+    """
+    return " ".join('"{}"'.format(one.replace('"', '""')) for one in saying.split())
+
+
+def _as_a_pattern(saying: str) -> str:
+    """What somebody typed, as a `LIKE` pattern that means only itself.
+
+    `%` and `_` are wildcards, so a search for `50%` matched every message ever written and one for
+    `a_b` matched `axb`. Escaped here, and the `ESCAPE` clause is spelled at the statement —
+    escaping without it does nothing, which is the way this is usually got wrong.
+
+    The escape character is escaped first, or escaping the wildcards would escape it again.
+    """
+    for one in (LIKE_ESCAPE, "%", "_"):
+        saying = saying.replace(one, LIKE_ESCAPE + one)
+    return f"%{saying}%"
 
 
 def _narrowed(channel, source, conversation, since):

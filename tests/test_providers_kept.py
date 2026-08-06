@@ -433,6 +433,59 @@ class WhenThereIsNoIndex(WithAnAgent):
             arriving.recorded("ava", "discord", "ops", "2207", f"invoice note {n}")
         self.assertEqual(len(kept.search_messages("ava", "invoice")), kept.FOUND_AT_MOST)
 
+    def test_a_wildcard_somebody_typed_is_a_character_and_not_a_wildcard(self):
+        """`%` and `_` are `LIKE`'s own, so unescaped they match everything ever said.
+
+        `setUp` leaves one message with no `%` in it, so a `%` that is still a wildcard finds both
+        and a `%` that is a character finds the one that has one.
+        """
+        arriving.recorded("ava", "discord", "ops", "2207", "the rollout is 50% done")
+        self.assertEqual([one["body"] for one in kept.search_messages("ava", "50%")],
+                         ["the rollout is 50% done"])
+        self.assertEqual([one["body"] for one in kept.search_messages("ava", "%")],
+                         ["the rollout is 50% done"])
+        self.assertEqual(kept.search_messages("ava", "in_oice"), [])
+
+
+class WhatSomebodyTypedIsWordsAndNeverAQuery(WithAnAgent):
+    """The one place a person's own text reaches the records, and it used to raise.
+
+    `MATCH` takes a query language rather than a string: `C++` is a syntax error near `+`, an
+    apostrophe is one near `'`, and an unbalanced `"` is an unterminated string. Every one of them
+    surfaced as `OperationalError`, which `_rows` reads as records that cannot be read — so
+    searching for `C++` told somebody their agent's whole memory was unreadable.
+    """
+
+    #: Each of these raised before the terms were quoted. None of them is an unusual thing to type.
+    TYPED = ("C++", "it's fine", 'what about the "cache', "deploy AND", "deploy)", "-- x", "*", "")
+
+    def setUp(self):
+        super().setUp()
+        arriving.recorded("ava", "discord", "ops", "2207", "the deploy is 50% done in C++")
+
+    def test_none_of_it_is_reported_as_records_that_cannot_be_read(self):
+        for typed in self.TYPED:
+            with self.subTest(typed=typed):
+                kept.search_messages("ava", typed)
+
+    def test_the_words_still_find_the_message(self):
+        self.assertEqual(len(kept.search_messages("ava", "C++")), 1)
+        self.assertEqual(len(kept.search_messages("ava", "deploy")), 1)
+
+    def test_several_words_still_mean_all_of_them(self):
+        self.assertEqual(len(kept.search_messages("ava", "deploy C++")), 1)
+        self.assertEqual(len(kept.search_messages("ava", "deploy lunch")), 0)
+
+    def test_a_word_that_is_only_punctuation_finds_nothing_rather_than_raising(self):
+        self.assertEqual(kept.search_messages("ava", "+++"), [])
+
+    def test_the_two_branches_agree_about_what_was_typed(self):
+        """The fallback is slower and finds different things; it must not find *wrong* things."""
+        with_index = [one["id"] for one in kept.search_messages("ava", "C++")]
+        _without_search("ava")
+        self.assertFalse(kept.has_search_index("ava"))
+        self.assertEqual([one["id"] for one in kept.search_messages("ava", "C++")], with_index)
+
 
 if __name__ == "__main__":
     unittest.main()
