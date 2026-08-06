@@ -411,7 +411,12 @@ class Turn:
     # ── what the brain says ───────────────────────────────────────────────────────────────────
 
     def a_notification(self, method: str, params: dict) -> None:
-        if method == "turn/started":
+        if method == "thread/started":
+            # **Taken from whichever says it first.** The reply to `thread/start` also carries it,
+            # and a turn that settled before that reply had been read reported no handle at all —
+            # so a conversation would have started again from nothing on its next turn.
+            self.thread_id = self.thread_id or (params.get("thread") or {}).get("id")
+        elif method == "turn/started":
             self.turn_id = (params.get("turn") or {}).get("id")
             for waiting in self.steers:
                 self.steer(waiting)
