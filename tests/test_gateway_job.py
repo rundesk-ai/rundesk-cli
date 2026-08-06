@@ -775,8 +775,15 @@ class TheOwnersLoginItems(unittest.TestCase):
     def test_every_plist_this_suite_wrote_landed_somewhere_that_is_not_theirs(self):
         # The whole reason `into` is an argument. Stated as a case so that a default quietly
         # resolving to the real directory goes red here rather than on somebody's machine.
-        written = [one for one in (as_it_stands() or []) if job.FAMILY in one[0]]
-        self.assertEqual([], written, f"a rundesk plist was written into {THEIRS}")
+        #
+        # **What this suite added, not what is there.** An owner running `rundesk gateways start`
+        # puts a rundesk plist in this directory on purpose — that is what the verb is for — so a
+        # case that refused to pass while one existed would go red on every machine the product is
+        # actually used on, which is the one place a guard must not cry wolf. What may never happen
+        # is *this suite* putting one there, and that is a difference against what it found.
+        was = {one[0] for one in (AS_FOUND or [])}
+        added = [one for one in (as_it_stands() or []) if job.FAMILY in one[0] and one[0] not in was]
+        self.assertEqual([], added, f"a rundesk plist was written into {THEIRS} by this suite")
 
 
 class TheCommandsLaunchdIsActuallyGiven(support.Isolated):
