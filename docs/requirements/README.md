@@ -1,6 +1,6 @@
-# The channel requirements, and why they are in the tree
+# The requirements the previous build wrote, and why they are in the tree
 
-Four pages the previous build wrote and tracked, moved here from `.knowledge_old/prd/` — which is
+Six pages the previous build wrote and tracked, moved here from `.knowledge_old/` — which is
 gitignored, reference-only, and expected to be deleted. **That is the whole reason this directory
 exists.** A requirements document nobody can see from the repository is one nobody consults.
 
@@ -8,11 +8,18 @@ They are not this build's promises. They are the **previous** build's, and they 
 rewrite with a working predecessor has a specification already written, and rebuilding from its
 source instead loses everything the source never said.
 
+The four channel pages came from `prd/`, where they were ratified. **`agent-delegation.md` and
+`agent-role.md` came from `prd-drafts/`**, and the difference is worth keeping in view: they were
+never ratified, so their evidence columns describe an implementation that existed rather than
+obligations somebody signed off. Read them as the most complete account of what the predecessor did,
+not as a contract this build inherited whole — several of their requirements are deliberately not
+carried, and where that is so the docstring that replaces one says which and why.
+
 ## What that cost, measured
 
 | | |
 |---|---|
-| Requirement rows across these four pages | **140** |
+| Requirement rows across the four channel pages | **140** |
 | Met by this build at the time they were found | **34** |
 | Met, excluding Slack — a platform this build does not have | **34 of 95** |
 | Times the previous build cited a requirement id in its own source | **1,109** |

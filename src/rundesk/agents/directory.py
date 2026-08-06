@@ -233,6 +233,25 @@ def name_trouble(said: str) -> str:
     return ""
 
 
+#: How long what an agent is for may be. **Short because every agent's costs every other agent's
+#: prompt**: what this install has is listed for whoever might delegate, so ten agents at a thousand
+#: characters would be ten thousand characters charged to every turn any of them ever takes. One
+#: sentence is what the listing is for, and a paragraph there is somebody using the wrong field.
+DESCRIBES_AT_MOST = 200
+
+
+def describes_trouble(said: str) -> str:
+    """Why `said` may not be what an agent is for, or `""` when it may.
+
+    Says the limit **and the length given**, because a refusal that names only the rule leaves
+    somebody counting characters by hand to find out how far over they are.
+    """
+    if len(said) > DESCRIBES_AT_MOST:
+        return (f"what an agent is for goes in one sentence — at most {DESCRIBES_AT_MOST} "
+                f"characters, and this is {len(said)}")
+    return ""
+
+
 def known() -> List[str]:
     """Every agent this install has, sorted by name.
 
@@ -315,8 +334,13 @@ def taken(name: str) -> str:
     return ""
 
 
-def made(name: str, provider: str) -> Path:
+def made(name: str, provider: str, describes: str = "") -> Path:
     """Make an agent, and hand back the directory it stands in.
+
+    `describes` is what this agent is for, in one sentence, and it is optional because an install
+    that predates the field has none and a made-up one would read as something its owner wrote.
+    What it is *used* for is the listing another agent reads before delegating — see
+    `providers.instructions`.
 
     **All of it is built under a staged name and renamed into place once, at the end.** An
     interruption anywhere before that rename leaves `.<name>.incoming` — litter, which `known`
@@ -346,6 +370,9 @@ def made(name: str, provider: str) -> Path:
 
     if not provider or not provider.strip():
         raise Refused(f"{name} needs a provider — an agent with nothing behind it cannot answer")
+    trouble = describes_trouble(describes or "")
+    if trouble:
+        raise Refused(trouble)
 
     agents = paths.agents()
     agents.mkdir(parents=True, exist_ok=True)
@@ -356,10 +383,10 @@ def made(name: str, provider: str) -> Path:
         trouble = taken(name)
         if trouble:
             raise Refused(trouble)
-        return _built(name, provider, agents, migration)
+        return _built(name, provider, describes or "", agents, migration)
 
 
-def _built(name: str, provider: str, agents: Path, migration: Any) -> Path:
+def _built(name: str, provider: str, describes: str, agents: Path, migration: Any) -> Path:
     """Build the agent under a staged name and rename it into place. Held by `made`'s lock."""
     building = files.incoming_of(agents / name)
     files.discard(building)
@@ -391,7 +418,13 @@ def _built(name: str, provider: str, agents: Path, migration: Any) -> Path:
         if gone_wrong:
             raise Refused(f"{name} could not be made: {gone_wrong}")
         migration.stamp_without_running(building / RECORDS)
-        stated(building / RECORDS, {"agent_name": name, "provider_name": provider})
+        # `describes` only when there is one. Writing `""` would be indistinguishable from an owner
+        # who deliberately said nothing, and the listing has to be able to tell an agent nobody has
+        # described from one described as nothing.
+        said = {"agent_name": name, "provider_name": provider}
+        if describes.strip():
+            said["describes"] = describes.strip()
+        stated(building / RECORDS, said)
         at = agents / name
         os.replace(building, at)
     except BaseException:

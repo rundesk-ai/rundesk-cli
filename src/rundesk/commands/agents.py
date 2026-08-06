@@ -32,7 +32,7 @@ import argparse
 import sqlite3
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from rundesk.agents import directory, migration, pages, records
 from rundesk.channels import hosting
@@ -51,6 +51,12 @@ from rundesk.utils.terminal import as_table
 #: same claim and two wordings of it would eventually become two different claims.
 NOT_PROVEN = ("the provider is recorded and not proven — check it with: "
               "rundesk providers check")
+
+#: What `--describes` is for, said once for the same reason `NOT_PROVEN` is: `add` and `configure`
+#: offer the identical field, and two wordings of it would eventually become two different claims
+#: about what belongs in it.
+WHAT_IT_IS_FOR = ("what it is for, in one sentence — what another agent reads while deciding "
+                  "whether to delegate to it")
 
 #: What a name outside `job.IN_A_LABEL` costs, said where the name is chosen rather than where it is
 #: next needed. `agents` allows any name a directory may have and launchd's labels are narrower, so
@@ -106,11 +112,13 @@ def register(sub: Subcommands) -> None:
     new.add_argument("agent", metavar="<agent>", help="what to call it")
     new.add_argument("--provider", metavar="<provider>", default=None,
                      help="required — what is behind it; recorded, and not proven")
+    new.add_argument("--describes", metavar="<text>", default=None, help=WHAT_IT_IS_FOR)
 
     changed = what.add_parser("configure", help="change what an agent is configured with")
     changed.add_argument("agent", metavar="<agent>", help="which one, as `rundesk agents` lists it")
     changed.add_argument("--provider", metavar="<provider>", default=None,
                          help="what is behind it; recorded, and not proven")
+    changed.add_argument("--describes", metavar="<text>", default=None, help=WHAT_IT_IS_FOR)
 
     gone = what.add_parser("remove", help="take an agent away, and everything it remembers")
     gone.add_argument("agent", metavar="<agent>", help="which one, as `rundesk agents` lists it")
@@ -129,9 +137,9 @@ def cmd_agents(args: argparse.Namespace) -> int:
     if what in (None, "list"):
         return _listed()
     if what == "add":
-        return _made(args.agent, args.provider)
+        return _made(args.agent, args.provider, args.describes)
     if what == "configure":
-        return _configured(args.agent, args.provider)
+        return _configured(args.agent, args.provider, args.describes)
     if what == "remove":
         return _forgotten(args.agent, args.confirm)
 
@@ -225,20 +233,24 @@ def _the_pages_it_lives_by(home: Path) -> str:
             "rundesk update gives it them")
 
 
-def _made(name: str, provider: Optional[str]) -> int:
+def _made(name: str, provider: Optional[str], describes: Optional[str] = None) -> int:
     """Make an agent, and say what was made — one named thing at a time.
 
     The provider is checked here before anything is built, so somebody who left it out is told what
     to type rather than told by argparse which flag is missing. `directory.made` refuses an empty
     one too, and refuses it again inside the install lock where the name is checked; this is the
     refusal worded for a person, not a second opinion about the rule.
+
+    `describes` gets no such pre-check, and the difference is the point: `_provider_trouble` says
+    something `directory.made` cannot — the command to type — so it earns its place, while a second
+    call to `describes_trouble` here would produce the identical sentence a moment earlier.
     """
     trouble = _provider_trouble(provider, f"rundesk agents add {name} --provider <provider>")
     if trouble:
         return _failed(trouble, "nothing was made")
 
     try:
-        at = directory.made(name, provider or "")
+        at = directory.made(name, provider or "", describes or "")
     except TROUBLE as why:
         return _failed(str(why), "nothing was made")
 
@@ -255,7 +267,7 @@ def _made(name: str, provider: Optional[str]) -> int:
     return OK
 
 
-def _configured(name: str, provider: Optional[str]) -> int:
+def _configured(name: str, provider: Optional[str], describes: Optional[str] = None) -> int:
     """Change what one agent is configured with, or refuse having changed nothing.
 
     **Naming nothing to change is refused rather than reported as a success.** `configure` makes the
@@ -263,27 +275,53 @@ def _configured(name: str, provider: Optional[str]) -> int:
     changed nothing teaches somebody that it worked, and the next thing they do rests on a change
     that never happened. Showing what the agent is configured with instead is a listing wearing the
     name of a change, and `rundesk agents` already answers that question.
+
+    **Either flag, or both, and every named field moves in one write.** Two `stated` calls would be
+    two chances to half-succeed, and an agent left with a new description and its old provider is a
+    state nobody asked for.
+
+    An empty `--describes` takes the description away rather than storing a blank. That is the one
+    way back for somebody who wrote the wrong thing, and it is why `""` and *not given* have to stay
+    different answers here — `None` means the flag was absent, and `""` means somebody typed it.
     """
-    if provider is None:
+    if provider is None and describes is None:
         return _failed(f"nothing was named to change about {name}",
                        f"change one with: rundesk agents configure {name} --provider <provider>",
+                       f"or: rundesk agents configure {name} --describes <text>",
                        "nothing was changed")
-    trouble = _provider_trouble(provider,
-                                f"rundesk agents configure {name} --provider <provider>")
-    if trouble:
-        return _failed(trouble, "nothing was changed")
+    if provider is not None:
+        trouble = _provider_trouble(provider,
+                                    f"rundesk agents configure {name} --provider <provider>")
+        if trouble:
+            return _failed(trouble, "nothing was changed")
+    if describes is not None:
+        trouble = directory.describes_trouble(describes)
+        if trouble:
+            return _failed(trouble, "nothing was changed")
 
     gone_wrong = directory.not_an_agent(name)
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was changed")
 
+    moving: Dict[str, Optional[str]] = {}
+    if provider is not None:
+        moving["provider_name"] = provider
+    if describes is not None:
+        # `None` rather than `""`, so an agent nobody has described and one described as nothing
+        # stay the same answer — which is what taking a description away has to mean.
+        moving["describes"] = describes.strip() or None
+
     try:
-        records.stated(directory.records(name), {"provider_name": provider})
+        records.stated(directory.records(name), moving)
     except TROUBLE as why:
         return _failed(str(why), "nothing was changed")
 
-    print(f"{name}: provider is now {provider}")
-    print(f"        {NOT_PROVEN}")
+    if provider is not None:
+        print(f"{name}: provider is now {provider}")
+        print(f"        {NOT_PROVEN}")
+    if describes is not None:
+        said = describes.strip()
+        print(f"{name}: is for {said}" if said else f"{name}: is described by nothing now")
     return OK
 
 
