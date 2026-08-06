@@ -135,7 +135,28 @@ TOKEN_FROM = "DISCORD_BOT_TOKEN"
 
 #: How a turn's state looks, and the whole of what this decides. `working` has no mark of its own —
 #: it is the typing indicator — and putting a second mark up would say a turn had been seen twice.
+#:
+#: **These five words are the vocabulary, and `taken`/`running`/`finished` are not.** Both sets
+#: existed: these are what this file has always rendered, and the other three are what the previous
+#: build's published contract said. Rundesk now speaks these — see `channels/hosting.py`, which says
+#: why — so there is one vocabulary and no translation anywhere. Only `seen` is ever sent today,
+#: because it is the one that needs no turn behind it.
 MARKS = {"seen": "👀", "done": "✅", "stopped": "✋", "failed": "⚠️"}
+
+#: Where what somebody attached is put on its way through: inside `RUNDESK_CHANNEL_HOME`, which is
+#: this channel's own directory and the only place rundesk will take a file from. Each message gets
+#: its own, and the files in it are named by their position rather than by anything the platform
+#: said — **a filename is a stranger's text**, and flattening one is done once, on rundesk's side,
+#: by the code that also has to make the name an unused one.
+FETCHED_IN = "fetched"
+
+#: What is fetched for one message, and how big one of them may be. **Rundesk enforces its own**,
+#: and these are not a second copy of that rule: they exist so this does not spend somebody's
+#: bandwidth and somebody's disk on files that are going to be refused a moment later. In the build
+#: this replaces a message from anybody at all could pull down three hundred megabytes before the
+#: question of whether they may be answered had been asked.
+BROUGHT_MOST = 10
+BROUGHT_BYTES = 32 * 1024 * 1024
 
 #: How often the typing indicator is renewed. Discord's lapses in about ten seconds, and an
 #: indicator that has stopped is a turn that looks finished.
@@ -656,7 +677,9 @@ class Reaching:
             return
 
         text = _without_our_name(message.content, me.id if me else None)
-        brought = _brought(message)
+        # **After the allow check and nothing before it.** Fetching is the first expensive, visible
+        # thing this program does, and in the build this replaces it happened for anybody at all.
+        brought = await self._brought(message)
         if not text and not brought:
             return
         say({"say": "arrived",
@@ -672,6 +695,61 @@ class Reaching:
              "text": text,
              "external_id": str(message.id),
              "attachments": brought})
+
+    async def _brought(self, message) -> List[Dict[str, Any]]:
+        """Fetch what was attached onto this machine, and say where each one was put.
+
+        **Onto the disk rather than passed on as a link.** The brain that will open these runs on
+        rundesk's side, holds no credential for this platform, and handing it a URL would be handing
+        it an instruction to go and fetch something on a stranger's say-so. The build this replaces
+        got that right and this build had lost it: the adapter reported a name and a URL and
+        downloaded nothing, so `channels/files.py` had the whole landing path built and tested with
+        nothing ever reaching it.
+
+        **Where it is put is rundesk's and where it ends up is rundesk's.** This writes into
+        `RUNDESK_CHANNEL_HOME`, which rundesk hands over, under a name that is only a number —
+        rundesk takes each one from there into the agent's own account of what arrived, flattening
+        the platform's name and making it unused in the one place that does that. Nothing is left
+        behind: a file rundesk takes is a file rundesk removes, and one it refuses is removed too.
+
+        A file that could not be fetched is a line and never a refused message: the rest of what
+        somebody sent is still worth carrying.
+        """
+        if not message.attachments:
+            return []
+        home = (os.environ.get("RUNDESK_CHANNEL_HOME") or "").strip()
+        if not home:
+            noted("nothing said where this channel may put what it fetches, so an attachment was "
+                  "left where only Discord can reach it", "error")
+            return []
+        into = Path(home) / FETCHED_IN / str(message.id)
+        brought: List[Dict[str, Any]] = []
+        for nth, one in enumerate(message.attachments[:BROUGHT_MOST]):
+            declared = int(one.size or 0)
+            if declared > BROUGHT_BYTES:
+                noted(f"{one.filename} is {declared} bytes, which is more than one message may "
+                      f"bring in ({BROUGHT_BYTES})")
+                continue
+            at = into / str(nth)
+            try:
+                into.mkdir(parents=True, exist_ok=True)
+                await one.save(at)
+                # **What a platform declares and what it sends are two facts.** A save that returned
+                # is not a file of the right length, and rundesk refuses a mismatch — so it is caught
+                # here too, where the file can simply be dropped rather than reported and refused.
+                fetched = at.stat().st_size
+                if fetched > BROUGHT_BYTES:
+                    at.unlink()
+                    raise Refused(f"it arrived as {fetched} bytes, past the {BROUGHT_BYTES} one "
+                                  f"message may bring in")
+            except Exception as why:       # noqa: BLE001 — a platform boundary
+                noted(f"could not bring in {one.filename}: {type(why).__name__}: {why}")
+                continue
+            brought.append({"name": one.filename, "at": str(at), "bytes": fetched})
+        if len(message.attachments) > BROUGHT_MOST:
+            noted(f"{len(message.attachments)} files were attached and only the first "
+                  f"{BROUGHT_MOST} were brought in")
+        return brought
 
     # -- what rundesk says -----------------------------------------------------------------
 
@@ -883,22 +961,6 @@ def _without_our_name(text: Any, ours: Optional[int]) -> str:
     for named in (f"<@{ours}>", f"<@!{ours}>"):
         said = said.replace(named, "")
     return said.strip()
-
-
-def _brought(message) -> List[Dict[str, Any]]:
-    """What was attached, named and pointed at — and never written anywhere by this.
-
-    **Rundesk owns the filesystem and decides where a file lands**; this owns the credential and
-    says where one is. On Discord those do not conflict, because an attachment URL carries its own
-    expiring signature and needs no header to fetch — which is what makes reporting one enough here,
-    and would not on a platform whose private URL answers an unauthenticated fetch with a sign-in
-    page that downloads perfectly and is not the file.
-
-    The name is a stranger's text and is reported exactly as it arrived, because flattening it is
-    done once, where the file is written, by the code that also has to make the name an unused one.
-    """
-    return [{"name": one.filename, "url": one.url, "bytes": int(one.size or 0)}
-            for one in message.attachments]
 
 
 async def serving() -> int:

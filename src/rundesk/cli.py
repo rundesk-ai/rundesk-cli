@@ -20,6 +20,8 @@ from rundesk.commands.agents import cmd_agents
 from rundesk.commands.agents import register as register_agents
 from rundesk.commands.backups import cmd_backups
 from rundesk.commands.backups import register as register_backups
+from rundesk.commands.channels import Reaching, cmd_channels
+from rundesk.commands.channels import register as register_channels
 from rundesk.commands.configure import cmd_configure
 from rundesk.commands.configure import register as register_configure
 from rundesk.commands.env import cmd_env
@@ -57,6 +59,9 @@ examples:
   rundesk schedules             work an agent starts because the time came
   rundesk schedules add <agent> <schedule> --when '0 9 * * *' --run '<program>'
   rundesk schedules run <agent> <schedule>
+  rundesk channels              how each agent is reached, and how it reaches back
+  rundesk channels add <agent> <adapter> --allow <id>
+  rundesk channels doctor       what a channel cannot do, and exactly why
   rundesk backups               the copies of what rundesk keeps for you
   rundesk backups save          copy what rundesk keeps, now
   rundesk env list              the values rundesk hands to what it talks to
@@ -93,6 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_backups(sub)
     register_env(sub)
     register_schedules(sub)
+    register_channels(sub)
     register_skills(sub)
     _register_install(sub)
     _register_update(sub)
@@ -132,14 +138,16 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
          fetching: Optional[Fetching] = None,
          supervising: Optional[job.Supervising] = None,
          refreshing: Optional[Refreshing] = None,
-         building: Optional[Building] = None) -> int:
+         building: Optional[Building] = None,
+         reaching: Optional[Reaching] = None) -> int:
     """Parse what was typed and hand it to the one module that answers it.
 
     Bare `rundesk` describes what it can do and exits `0`: somebody who typed the command with no
     operation asked a reasonable question and got an answer.
 
     `asking` looks up what version is published, `fetching` downloads a release, `refreshing` brings
-    down a catalog of skills, and `supervising` is the machine's supervisor. All four arrive as
+    down a catalog of skills, `reaching` runs the program behind a channel, and `supervising` is the
+    machine's supervisor. All five arrive as
     arguments and default to `None`, which each command resolves to the real thing at the moment it
     needs it — so every state of `version`, `update`, `gateways` and `skills` is driven with no
     network and no `launchctl` anywhere near the test, and the surface itself knows nothing about
@@ -181,6 +189,8 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
         return cmd_env(args)
     if args.command == "schedules":
         return cmd_schedules(args)
+    if args.command == "channels":
+        return cmd_channels(args, reaching)
     if args.command == "skills":
         return cmd_skills(args, refreshing)
     if args.command == "version":

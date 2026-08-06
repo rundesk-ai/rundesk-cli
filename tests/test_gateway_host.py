@@ -18,6 +18,7 @@ Run directly: `python3 tests/test_gateway_host.py`
 
 import contextlib
 import datetime
+import json
 import os
 import shutil
 import signal
@@ -31,6 +32,10 @@ from typing import List, Optional, Tuple
 import support
 from rundesk import __version__
 from rundesk.agents import directory, records
+from rundesk.channels import files as arrivals
+from rundesk.channels import hosting
+from rundesk.channels import kept as channels
+from rundesk.core import paths
 from rundesk.exits import OK
 from rundesk.gateways import host, job, standing
 from rundesk.schedules import firing, kept
@@ -52,6 +57,35 @@ from rundesk.gateways import standing
 standing.BEAT_SECONDS = {beat!r}
 from rundesk.gateways.host import run
 raise SystemExit(run({name!r}))
+"""
+
+#: A channel adapter that connects and writes down everything it is asked to deliver, so a case can
+#: read what a real gateway really said to a real platform. The same shape
+#: `tests/test_channels_hosting.py` uses, kept here rather than imported: what is being proved there
+#: is the hosting and what is being proved here is the wiring, and a suite that borrowed the other's
+#: fixture would go red for a reason that had nothing to do with it.
+AN_ADAPTER = """#!/usr/bin/env python3
+import json, os, signal, sys
+if "--capabilities" in sys.argv:
+    print(json.dumps({"stream": True, "max_text": 2000})); raise SystemExit(0)
+# **Goodbye is said on the protocol, not by vanishing on the signal**, which is what an adapter
+# holding a connection to a platform has to do — and what makes the last thing a gateway says
+# provable here at all. `_asked_to_stop` writes `{"do": "stop"}` and does *not* wait for it, so an
+# adapter that died where the signal landed would race every notice sent in the same breath.
+# Nothing can outlive its gateway by doing this: `programs.stop` escalates to `SIGKILL`.
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+settings = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
+print(json.dumps({"say": "ready", "as": "a-bot"}), flush=True)
+for line in sys.stdin:
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    if record.get("do") == "stop":
+        break
+    if record.get("do") == "deliver":
+        with open(settings["heard"], "a") as writing:
+            writing.write(record.get("place", "") + " :: " + record.get("text", "") + "\\n")
 """
 
 
@@ -501,6 +535,14 @@ class WhatItGoesOnDoingForMonths(WithAnAgent):
         one.write_text("[an older day] INFO:   gateway up\n", encoding="utf-8")
         return one
 
+    def an_arrival_from(self, days_ago: int, kind: str = "discord") -> Path:
+        """One day's worth of what came in through a channel, from that many days ago."""
+        when = datetime.datetime.now() - datetime.timedelta(days=days_ago)
+        at = arrivals.arrived_at(self.name, kind, f"m{days_ago}", when)
+        at.mkdir(parents=True, exist_ok=True)
+        (at / "report.csv").write_text("one,two\n", encoding="utf-8")
+        return at
+
     def test_it_sweeps_the_days_it_no_longer_keeps(self):
         # A file a day, kept for ever, is the same unbounded growth as a capture nobody truncates —
         # reached slowly instead of quickly. `utils.logs` has always had the sweep; nothing called it.
@@ -523,16 +565,46 @@ class WhatItGoesOnDoingForMonths(WithAnAgent):
         where = standing.logs_at(self.at)
         old = self.a_day_file_from(host.KEPT_DAYS + 1)
 
-        today = host._kept_the_days(where, "")           # the sweep on the way up
+        today = host._kept_the_days(self.name, where, "")   # the sweep on the way up
 
         self.assertFalse(old.exists(), "it did not sweep at all")
         again = self.a_day_file_from(host.KEPT_DAYS + 1)
-        self.assertEqual(today, host._kept_the_days(where, today))
+        self.assertEqual(today, host._kept_the_days(self.name, where, today))
         self.assertTrue(again.exists(), "it swept twice in one day, which is a listing per beat")
 
-        host._kept_the_days(where, "a day that has now turned")
+        host._kept_the_days(self.name, where, "a day that has now turned")
 
         self.assertFalse(again.exists(), "the day turned and it never swept again")
+
+    def test_it_sweeps_what_arrived_through_a_channel_on_the_same_beat_it_sweeps_its_own_days(self):
+        # Arrivals are the other thing here that gains a directory a day with nobody having decided
+        # to keep it, and this loop is the only thing that will ever remove one — `channels.files`
+        # has always had the sweep and nothing called it, which is exactly how the day files began.
+        where = standing.logs_at(self.at)
+        old = self.an_arrival_from(arrivals.KEPT_DAYS + 1)
+        recent = self.an_arrival_from(1)
+
+        host._kept_the_days(self.name, where, "")
+
+        self.assertFalse(old.exists(), "a day of arrivals older than any are kept was left standing")
+        self.assertTrue(recent.exists(), "it swept a day of arrivals it was told to keep")
+
+    def test_a_channel_directory_it_cannot_read_never_stops_it_sweeping_or_ends_the_gateway(self):
+        # Tidying may not end a gateway, and this one walks a directory a stranger's adapter writes
+        # into. `_kept_the_days` answers with the day whatever happened, because what it answers is
+        # what stops the loop doing the arithmetic every fifteen seconds.
+        support.not_as_root(self)
+        where = standing.logs_at(self.at)
+        old = self.a_day_file_from(host.KEPT_DAYS + 1)
+        directory.channels(self.name).mkdir(parents=True, exist_ok=True)
+        directory.channels(self.name).chmod(0o000)
+        self.addCleanup(directory.channels(self.name).chmod, 0o700)
+
+        today = host._kept_the_days(self.name, where, "")
+
+        self.assertEqual(logs.named_for(datetime.datetime.now()), today)
+        self.assertFalse(old.exists(), "an unreadable channel directory stopped the day files being "
+                                       "swept at all")
 
     def test_a_beat_that_cannot_be_written_does_not_take_a_working_gateway_down(self):
         # A full disk, a volume gone read-only, a record taken away — none of them is a reason to
@@ -723,6 +795,171 @@ class TheScheduleItHosts(WithAnAgent):
         self.assertIsNone(child.poll(), "a schedule that could not run ended the gateway")
 
 
+class TheChannelsItHosts(WithAnAgent):
+    """A real gateway, a real channel, and the adapter it really starts.
+
+    The second tenant, wired through the same gateway process every other case here uses.
+    `tests/test_channels_hosting.py` proves everything hosting an adapter promises on its own; what
+    is here is only what a *supervised process* adds — that a channel cannot stop a gateway starting,
+    that what leaves through one really leaves, and that a stop takes the adapter with it.
+    """
+
+    #: Short enough that a case is not sitting out a beat waiting for the loop to come round, and
+    #: long enough to still be a loop. The adapters are started on the loop's first pass, so most
+    #: cases here would be answered on any beat at all; the schedule cases need several passes.
+    A_SHORT_BEAT = 1.0
+
+    def setUp(self) -> None:
+        super().setUp()
+        # `paths.code()` answers with the checkout when the scratch root has no installed tree, and
+        # a case writing an adapter would then write one into the repository. Made here for the same
+        # reason `tests/test_channels_hosting.py` makes it.
+        (self.home / "app" / "src").mkdir(parents=True, exist_ok=True)
+        self.adapters = paths.code() / "channels"
+        self.adapters.mkdir(parents=True, exist_ok=True)
+        self.heard = self.home / "heard.txt"
+
+    def an_adapter(self, kind: str = "discord", body: str = AN_ADAPTER) -> Path:
+        at = self.adapters / kind
+        at.write_text(body, encoding="utf-8")
+        at.chmod(0o755)
+        return at
+
+    def a_channel(self, kind: str = "discord", told: bool = True) -> None:
+        channels.added(self.name, kind, {
+            "describes": kind, "allowed": json.dumps(["2207"]),
+            "settings": json.dumps({"heard": str(self.heard)})})
+        if told:
+            channels.telling(self.name, kind, "1180")
+
+    def was_heard(self) -> str:
+        """Everything the adapter was really asked to deliver, as the adapter itself saw it."""
+        return self.heard.read_text(encoding="utf-8") if self.heard.exists() else ""
+
+    def several_beats(self) -> None:
+        """A window rather than a question, for the two cases about something that must *not* happen.
+
+        The same shape and the same reasoning as `WhatItGoesOnDoingForMonths.several_more_beats`:
+        there is nothing to wait *for* when what is being proved is a silence, so the wait is a few
+        passes of a loop the case has already made fast.
+        """
+        time.sleep(self.A_SHORT_BEAT * 3)
+
+    def test_a_gateway_starts_the_adapter_for_a_configured_channel(self):
+        self.an_adapter()
+        self.a_channel()
+        self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(
+            lambda: "channel discord: started as pid" in self.its_log(), self.PATIENCE),
+            f"no adapter was ever started. It said: {self.its_log()}")
+        self.assertTrue(support.waited_until(
+            lambda: hosting.still_running(self.name, "discord"), self.PATIENCE),
+            "the claim was never taken, so nothing is holding this channel")
+
+    def test_a_gateway_that_came_up_says_so_through_the_channel_that_is_told_things(self):
+        # Not into the log — a person who wanted to know their gateway is back is not reading a file
+        # on the machine it is running on. The one channel marked `notified` is where it lands.
+        self.an_adapter()
+        self.a_channel()
+        self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(lambda: "gateway up for" in self.was_heard(),
+                                             self.PATIENCE),
+                        f"nobody was told. It said: {self.its_log()}")
+        self.assertIn("1180 ::", self.was_heard(), "it went somewhere other than the told place")
+        self.assertIn(self.name, self.was_heard())
+
+    def test_an_agent_that_tells_nobody_anything_is_a_gateway_that_says_nothing(self):
+        # `delivery.notice` answers `None`, which is an ordinary answer rather than a failure: an
+        # agent with no notified channel is one somebody configured to be quiet.
+        self.an_adapter()
+        self.a_channel(told=False)
+        child = self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(
+            lambda: "channel discord: started as pid" in self.its_log(), self.PATIENCE),
+            f"no adapter was ever started. It said: {self.its_log()}")
+
+        self.several_beats()
+
+        self.assertEqual("", self.was_heard(), "it told a channel nobody marked as the told one")
+        self.assertIsNone(child.poll(), "having nobody to tell ended the gateway")
+
+    def test_a_gateway_asked_to_stop_says_so_through_the_channel_before_it_goes(self):
+        # It has to leave *before* the stack unwinds, because unwinding it is what closes the
+        # adapter the notice leaves through.
+        self.an_adapter()
+        self.a_channel()
+        child = self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(lambda: "gateway up for" in self.was_heard(),
+                                             self.PATIENCE), self.its_log())
+
+        os.kill(child.pid, signal.SIGTERM)
+        self.assertTrue(support.waited_until(lambda: child.poll() is not None, self.PATIENCE))
+
+        self.assertTrue(support.waited_until(
+            lambda: "gateway stopping for" in self.was_heard(), self.PATIENCE),
+            f"it went down without telling anybody. It heard: {self.was_heard()}")
+        self.assertEqual(OK, child.returncode)
+
+    def test_a_schedule_that_failed_is_told_and_one_that_worked_is_not(self):
+        # **The restraint is the guarantee.** A notice for every successful nightly job is how
+        # somebody learns to ignore the channel, and the one they then miss is this one — so the
+        # case asserts the silence as hard as it asserts the sentence, with a schedule that really
+        # did complete standing beside the one that really did fail.
+        self.an_adapter()
+        self.a_channel()
+        kept.added(self.name, "good", {"cron": "* * * * *", "command": "/bin/echo it worked"})
+        kept.added(self.name, "bad", {"cron": "* * * * *",
+                                      "command": "/bin/sh -c 'echo it went wrong >&2; exit 3'"})
+        self.a_running_gateway(beat=self.A_SHORT_BEAT)
+
+        self.assertTrue(support.waited_until(
+            lambda: "schedule bad failed with exit 3" in self.was_heard(), self.PATIENCE),
+            f"a failing schedule told nobody. It heard: {self.was_heard()}. "
+            f"It said: {self.its_log()}")
+        self.assertIn("schedule good completed", self.its_log(),
+                      "the schedule that worked never finished, so its silence proves nothing")
+        self.assertNotIn("schedule good", self.was_heard(),
+                         "a schedule that worked perfectly was announced to a person")
+
+    def test_a_channel_whose_adapter_is_not_installed_never_stops_a_gateway_starting(self):
+        # **Nothing about a channel is in `_may_not_run`.** A platform that is down, a credential
+        # that has expired, an adapter somebody never installed — every one of those is a condition
+        # a gateway should be up and complaining about, and a refusal here would take an agent's
+        # whole gateway away over a misconfiguration in one of its channels.
+        self.a_channel()                                 # and deliberately no adapter written
+        child = self.a_running_gateway(beat=self.A_SHORT_BEAT)
+
+        self.assertTrue(support.waited_until(
+            lambda: "channel discord: did not start" in self.its_log(), self.PATIENCE),
+            f"it never even tried. It said: {self.its_log()}")
+        self.several_beats()
+        self.assertIsNone(child.poll(), "a channel that could not start ended the gateway")
+        self.assertEqual(standing.ONLINE, standing.standing(self.at).how)
+
+    def test_an_orderly_stop_takes_the_adapter_it_started_with_it(self):
+        # An adapter is in a session of its own, so launchd's group-wide cleanup of this job cannot
+        # reach it either: if the gateway does not stop it, nothing ever will and the next gateway
+        # finds the channel claimed by something nobody can account for.
+        self.an_adapter()
+        self.a_channel()
+        child = self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        # **Waited for by the line the gateway writes, not by the claim** — the same race
+        # `TheScheduleItHosts` records, and it bites harder here. The claim is taken *before* the
+        # adapter is spawned, so `still_running` answers yes for the instant the gateway itself
+        # holds it and there is nothing yet to stop; a case that signalled there raised `Stopped`
+        # inside `_started`, and the gateway went down having taken hold of nothing at all.
+        self.assertTrue(support.waited_until(
+            lambda: "channel discord: started as pid" in self.its_log(), self.PATIENCE),
+            f"the adapter never came up. It said: {self.its_log()}")
+
+        os.kill(child.pid, signal.SIGTERM)
+        self.assertTrue(support.waited_until(lambda: child.poll() is not None, self.PATIENCE))
+
+        self.assertIn("stopped with this gateway", self.its_log())
+        self.assertFalse(hosting.still_running(self.name, "discord"),
+                         "the gateway stopped and left its adapter running with nobody holding it")
+
+
 class TheStopFitsInsideWhatTheJobAllows(unittest.TestCase):
     """The one number this module shares with the layer above it, and cannot import.
 
@@ -739,6 +976,26 @@ class TheStopFitsInsideWhatTheJobAllows(unittest.TestCase):
 
     def test_the_budget_is_not_so_small_that_nothing_can_be_stopped_in_it(self):
         self.assertGreater(host.STOPPING_WITHIN, firing.STOPPING_LEAST)
+
+    def test_every_tenant_that_stops_children_is_given_a_share_rather_than_the_whole_budget(self):
+        # **The arithmetic that reads as correct at every line and takes forty seconds.** Two things
+        # this gateway hosts have children to stop, and handing each the whole of `STOPPING_WITHIN`
+        # spends it twice against an `ExitTimeOut` of twenty-five — after which launchd `SIGKILL`s
+        # the gateway partway through the second one and orphans every child it never reached.
+        #
+        # Counted off the teardown stack rather than asserted as a number, because the way this goes
+        # wrong is a *third* tenant being registered by somebody who never read this file.
+        said = (support.CHECKOUT / "src" / "rundesk" / "gateways" / "host.py").read_text()
+        self.assertEqual(host.STOPPING_SHARES, said.count("held.callback("),
+                         "a tenant was added to the shutdown without the budget being divided "
+                         "again — every share here is now larger than the gateway's whole window")
+
+    def test_each_share_is_still_enough_to_stop_a_child_with(self):
+        # Divided too far is the same failure from the other side: a share below what either tenant
+        # will spend per child is a budget that stopped bounding anything.
+        each = host.STOPPING_WITHIN / host.STOPPING_SHARES
+        self.assertGreater(each, firing.STOPPING_LEAST)
+        self.assertGreater(each, hosting.STOPPING_LEAST)
 
     def test_a_request_to_stop_is_not_something_a_generic_guard_can_swallow(self):
         # `Stopped` is raised from a signal handler, so it lands wherever the interpreter happens to

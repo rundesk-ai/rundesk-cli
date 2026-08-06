@@ -1,9 +1,10 @@
 """The gateway process itself: one agent, one name held, and one exit code that means everything.
 
 This is what launchd starts. It claims the agent's name, writes down what it is, says so every
-fifteen seconds, and stops when it is asked to. What it hosts — adapters, delegated work, the
-subprocesses an agent runs — is not here yet, and when it arrives it arrives as something this
-process hosts rather than as something that changes what this process is.
+fifteen seconds, and stops when it is asked to. What it hosts — the work its schedules start and the
+adapters its channels connect through — arrived as something this process hosts rather than as
+something that changed what this process is: two tenants, the same three seams each, and the loop
+below is the whole of the wiring.
 
 ## The exit code is the whole conversation with launchd
 
@@ -144,6 +145,38 @@ The teardown seam is not a new function — `held`, the `ExitStack` in `run`, is
 anything durable happens and unwound however this process leaves, so a child's stop belongs in it and
 nowhere else. `_serving` is handed it for exactly that.
 
+## Two tenants, and the budget is divided rather than handed to both
+
+`channels.hosting` is the second thing this process hosts, and it is a sibling of `schedules.firing`
+rather than a generalisation of it: the same three seams — `settled` on the way up, `looked` every
+pass, `stopping` on the way out — because that shape is already proven against a supervisor that can
+kill this process at any moment. What differs is what it holds. A firing is a program that answers
+and stops; an adapter is a program that runs for months **and is listened to**, so `hosting` puts a
+thread on each one's output and this loop asks only whether the child is alive.
+
+**Both of them stop children, so both of them spend from the same twenty-five seconds.** Handing
+each the whole of `STOPPING_WITHIN` is arithmetic that reads as correct and takes forty seconds, at
+the end of which launchd has already `SIGKILL`ed this process, called it *languishing*, and orphaned
+every child the second tenant never reached. So the budget is divided — `STOPPING_SHARES` — and each
+tenant divides its share again among its own children, which is the same rule one level down.
+
+**A channel may never stop a gateway starting.** Nothing about channels is in `_may_not_run`: a
+platform that is down, a credential that has expired, an adapter somebody has not installed are all
+conditions a gateway should be *up* and complaining about, and none of them is a reason for an agent
+to have no gateway. Everything in `hosting` and everything in `_told` is guarded with `Exception` —
+never `BaseException`, which would swallow `Stopped`.
+
+## What it says out loud, and what it deliberately does not
+
+Three things reach the one channel an agent marked `notified`, and no others: this gateway came up,
+this gateway is stopping, and a schedule **failed or was stopped**. Not a successful schedule — a
+message per successful nightly job is how somebody learns to ignore the channel, and the one they
+then miss is the one that mattered. `channels.delivery.notice` answers `None` for an agent that
+told nobody anything, which is an ordinary answer and is written down nowhere.
+
+`schedules` may not import `channels`, so what a firing gets is a `firing.Telling` handed in —
+`_Notices` here — and this module is the only place that sees both sides.
+
 ## This may not import `job`
 
 **A process never talks to its own supervisor.** A gateway that could bootstrap, boot out or kick
@@ -163,10 +196,12 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 from rundesk import __version__
 from rundesk.agents import directory, migration
+from rundesk.channels import delivery, hosting
+from rundesk.channels import files as arrivals
 from rundesk.exits import OK
 from rundesk.gateways import standing
 from rundesk.schedules import firing
@@ -205,6 +240,16 @@ KEPT_DAYS = 14
 #: in step, which is the same arrangement `standing` and `directory` already have for the names of a
 #: gateway's own files.
 STOPPING_WITHIN = 20.0
+
+#: How many tenants that stop children share the budget above. **Divided, never handed to both.**
+#:
+#: Two of them — the work this gateway's schedules started, and the adapters its channels are
+#: running — and each divides its own share again among its own children. Giving each the whole of
+#: `STOPPING_WITHIN` is arithmetic that reads as correct at every line and takes forty seconds
+#: against an `ExitTimeOut` of twenty-five: launchd `SIGKILL`s this process partway through the
+#: second tenant, calls it *languishing*, and every child it never reached is orphaned still holding
+#: its lock. A number rather than two literals so that a third tenant is one edit and not a hunt.
+STOPPING_SHARES = 2
 
 #: The signals a supervisor or a person asks this gateway to stop with — turned into `Stopped` while
 #: it is working, and ignored once a stop is already under way. Named once because two functions have
@@ -438,14 +483,24 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
 
     **The loop is written for a process that is still in it in six months.** Everything in it
     happens every time round rather than once on the way up, because a gateway that is never
-    restarted never reaches the way up again: the clock, the beat that says this process is still
-    working, and the sweep that stops one file a day accumulating for as long as the process lives.
-    None of them is allowed to end the gateway — see `_still_working` and `firing.looked` — and none
-    may say the same thing every fifteen seconds either, because a log that grows with the beat is
-    the growth it was meant to bound, arrived at from the other side.
+    restarted never reaches the way up again: the clock, the adapters, the beat that says this
+    process is still working, and the sweep that stops one file a day accumulating for as long as
+    the process lives. None of them is allowed to end the gateway — see `_still_working`,
+    `firing.looked` and `hosting.looked` — and none may say the same thing every fifteen seconds
+    either, because a log that grows with the beat is the growth it was meant to bound, arrived at
+    from the other side.
+
+    **The two tenants are wired side by side and stopped out of the same budget.** `hosting`'s
+    teardown is registered *first*, so the stack unwinds it *last* and the adapters are the final
+    thing this process closes — a notice goes out through one of them, and nothing else here needs
+    them open a moment longer than it needs them.
     """
     _stop_politely()
     where = standing.logs_at(at)
+    # Bound before the `try`, and that is not tidiness. The `except` below says goodbye through
+    # whatever channels are up, and a name that is not bound yet would raise `NameError` out of the
+    # handler for a stop that landed early — a non-zero exit, which is *bring me back*.
+    channels_up = hosting.Watching({}, {}, {})
     try:
         # Inside the `try`, not before it. A stop asked for in the instant between coming up and
         # the first beat is still an orderly stop, and leaving it outside would have this process
@@ -453,30 +508,44 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
         standing.write_record(at, name, __version__)
         logs.note(where, f"gateway up for {name} on {__version__} as pid {os.getpid()}")
         watching = firing.settled(name, where)
+        channels_up = hosting.settled(name, where)
         # Registered on the stack `run` unwinds however this process leaves, which is the one place
-        # a child's stop belongs. The callback reads `watching` as it stands at that moment rather
-        # than as it stands now — it closes over the name, not over this first value.
-        held.callback(lambda: firing.stopping(name, where, watching, STOPPING_WITHIN))
-        # Both start as "nothing has happened yet", and the first sweep is the loop's first pass
+        # a child's stop belongs. Each callback reads its tenant's state as it stands at that moment
+        # rather than as it stands now — they close over the names, not over these first values.
+        # Channels first, so the stack unwinds them last: see the docstring.
+        each = STOPPING_WITHIN / STOPPING_SHARES
+        held.callback(lambda: hosting.stopping(name, where, channels_up, each))
+        held.callback(lambda: firing.stopping(name, where, watching, each))
+        notices = _Notices(name, where, lambda: channels_up)
+        # All three start as "nothing has happened yet", and the first sweep is the loop's first pass
         # rather than a call of its own before it. One call site: a sweep done on the way up as well
         # as in the loop is one that goes on looking right with the loop's half deleted, and the
         # loop's half is the one that matters — a gateway doing its job is one nobody restarts.
-        landing, swept_for = True, ""
+        landing, swept_for, said_up = True, "", False
         while True:
-            watching = firing.looked(name, where, watching)
+            watching = firing.looked(name, where, watching, telling=notices)
+            channels_up = hosting.looked(name, where, channels_up)
+            if not said_up:
+                # **After the first pass through `hosting.looked`, never before it.** An adapter is
+                # what a notice leaves through and `looked` is what starts one, so a gateway that
+                # said this beside the log line above would be speaking into a channel that has
+                # nothing hosting it yet — and `told` would answer `False` to nobody.
+                said_up = True
+                notices.say(f"gateway up for {name} on {__version__} as pid {os.getpid()}")
             time.sleep(standing.BEAT_SECONDS)
             landing = _still_working(at, where, landing)
-            swept_for = _kept_the_days(where, swept_for)
+            swept_for = _kept_the_days(name, where, swept_for)
     except Stopped as why:
         # **Asked once is enough, and from here on another ask may not interrupt anything.** The
         # stack `run` unwinds after this now has real work on it — stopping every child a schedule
-        # started, which is allowed up to `STOPPING_WITHIN` seconds of asking, waiting and telling.
-        # A second `SIGTERM` arriving inside that window would raise `Stopped` again, from a handler
-        # that is still armed, in the middle of the shutdown: `firing.stopping` guards itself with
-        # `suppress(Exception)` and `Stopped` is deliberately not one, so it would escape `run`
-        # entirely, exit non-zero, and be read by `KeepAlive {SuccessfulExit: false}` as *bring it
-        # back* — the endless restart this module's docstring claims is unreachable. Worse, the
-        # children it had not reached yet would be left running with nothing holding them.
+        # started and every adapter a channel is running, which between them are allowed up to
+        # `STOPPING_WITHIN` seconds of asking, waiting and telling. A second `SIGTERM` arriving
+        # inside that window would raise `Stopped` again, from a handler that is still armed, in the
+        # middle of the shutdown: both guard themselves with `suppress(Exception)` and `Stopped` is
+        # deliberately not one, so it would escape `run` entirely, exit non-zero, and be read by
+        # `KeepAlive {SuccessfulExit: false}` as *bring it back* — the endless restart this module's
+        # docstring claims is unreachable. Worse, the children it had not reached yet would be left
+        # running with nothing holding them.
         #
         # So the request is answered once. Ignoring rather than restoring the default, because the
         # default for `SIGTERM` is to end this process where it stands, which would abandon the same
@@ -485,6 +554,10 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
         # The orderly stop, and the only reason this line exists: a gateway that was killed outright
         # writes nothing at all, so the presence of this sentence is how the two are told apart.
         logs.note(where, f"gateway stopping for {name}: {why}")
+        # Said here rather than from the teardown, because it has to leave through an adapter that
+        # is still running and the stack unwinding below is what closes them. Cheap enough not to
+        # count against the budget: it is one line written to a pipe this process already holds.
+        _told(name, where, channels_up, f"gateway stopping for {name}: {why}")
         return OK
 
 
@@ -530,8 +603,12 @@ def _still_working(at: Path, where: Path, landing: bool) -> bool:
     return True
 
 
-def _kept_the_days(where: Path, swept_for: str) -> str:
-    """Sweep this gateway's old day files, once a day. Hands back the day it has now been done for.
+def _kept_the_days(name: str, where: Path, swept_for: str) -> str:
+    """Sweep what this gateway keeps by the day, once a day. Hands back the day it is done for.
+
+    Two things, on the one schedule because they are one decision: this gateway's own day files, and
+    the files that have arrived through this agent's channels. Both gain an entry a day for as long
+    as the process lives, and neither is anything a person asked to keep.
 
     **Once a day rather than once at startup**, because a gateway that is doing its job is one nobody
     restarts: a process up since March would have swept once, in March, and be sitting on a directory
@@ -539,8 +616,8 @@ def _kept_the_days(where: Path, swept_for: str) -> str:
     — the only thing it decides is whether to do the arithmetic again, and a gateway that comes up,
     sweeps, and finds nothing to remove has lost nothing.
 
-    Cheap enough to do this way round: one `strftime` per beat, and a listing of the directory on the
-    one beat a day that crosses midnight.
+    Cheap enough to do this way round: one `strftime` per beat, and a listing of the directories on
+    the one beat a day that crosses midnight.
 
     `swept_for` starts as `""`, which is no day, so the loop's first pass always sweeps — that is
     the sweep on the way up, and it is deliberately not a call of its own before the loop.
@@ -553,7 +630,70 @@ def _kept_the_days(where: Path, swept_for: str) -> str:
     if today != swept_for:
         with contextlib.suppress(OSError):
             logs.swept(where, KEPT_DAYS)
+        _kept_what_arrived(name)
     return today
+
+
+def _kept_what_arrived(name: str) -> None:
+    """Sweep old days of arrivals out of every channel this agent has a directory for. Never raises.
+
+    **Read off the directory rather than off the records**, and that is the whole choice here: a
+    channel somebody disconnected last month still has everything that ever arrived through it
+    standing on disk, and a sweep that asked the database which channels exist would leave exactly
+    those days there for ever. `channels.files.swept` takes the age from the name of the day and
+    leaves anything it cannot read as a date entirely alone, which is what makes a listing safe to
+    hand it.
+    """
+    with contextlib.suppress(Exception):
+        for one in sorted(directory.channels(name).iterdir()):
+            if one.is_dir():
+                arrivals.swept(name, one.name)
+
+
+class _Notices:
+    """Something for `schedules.firing` to say things out loud through. See `_told`.
+
+    A small object rather than a function because the seam is a `Protocol`: `firing` may not import
+    `channels`, so what it asks for is a *shape*, and this is that shape filled in by the one layer
+    allowed to see both sides.
+
+    **What is hosted is asked for each time rather than held.** An adapter that crashed and was
+    started again is a different child with a different pipe, and a channel configured since this was
+    built is one a held value would never have seen — so this closes over a way of asking rather than
+    over an answer, exactly as the teardown callbacks above do.
+    """
+
+    def __init__(self, name: str, where: Path, hosted: Callable[[], hosting.Watching]) -> None:
+        self.name = name
+        self.where = where
+        self.hosted = hosted
+
+    def say(self, saying: str) -> None:
+        _told(self.name, self.where, self.hosted(), saying)
+
+
+def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str) -> None:
+    """Send one notice out through the channel this agent asked to be told things. Never raises.
+
+    **Nothing here may end a gateway**, which is why the whole of it stands inside one guard: a
+    platform that is down, an adapter that is restarting, a record that will not read — none of them
+    is a reason to take down a gateway that is otherwise hosting its agent, and letting one through
+    would exit non-zero into `KeepAlive`, come straight back into the same condition, and become the
+    endless restart this module is arranged to make unreachable. `Exception` and never
+    `BaseException`, so that `Stopped` — which is deliberately not an `Exception` — still lands.
+
+    **Telling nobody is an ordinary answer and not a failure.** `delivery.notice` hands back `None`
+    for an agent that has marked no channel `notified`, which is what somebody who configured none
+    asked for. Nothing is written down about it either: a line per notice saying nobody was told is
+    the same unbounded growth the sweep above exists to prevent, reached from the other side.
+
+    `hosting.told` answers `False` when there is no adapter to send through, and that is left alone
+    for the same reason — a notice is an account of something, never the thing itself.
+    """
+    with contextlib.suppress(Exception):
+        going = delivery.notice(name, saying)
+        if going is not None:
+            hosting.told(name, where, channels_up, going.kind, going.place, going.pieces)
 
 
 def _stop_politely() -> None:

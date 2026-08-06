@@ -45,6 +45,14 @@ job again.
 say* — the gateway that started the work is gone, or the work was ended by a shutdown — and work
 that may well have finished perfectly is never written down as having failed.
 
+## Saying so out loud, without knowing what a channel is
+
+Two of those three words are worth somebody hearing about, and the log is not where anybody hears
+anything. But this layer may not import `channels` — that is the same boundary `gateways` is kept on
+the other side of — so a `Telling` is handed in beside `starting` and `asking`, and the layer that
+may see both fills it in. **`completed` is never told**, deliberately: a notice per successful
+nightly job is how somebody learns to ignore the channel.
+
 ## Nothing here may end a gateway
 
 Every failure in this module is caught and written to the agent's log. A firing that could not be
@@ -192,6 +200,24 @@ class Starting(Protocol):
     """
 
     def start(self, one: due.Schedule, agent: str, holding: int) -> int:
+        ...
+
+
+class Telling(Protocol):
+    """How a gateway says something out loud, to a person rather than to a file. Handed in.
+
+    **The seam exists for the layer rule, not for elegance.** `schedules` may not import `channels`
+    — a schedule is a row in an agent's records and what carries a sentence to a platform is a
+    different question — so a firing that wanted to tell somebody a nightly job had failed would
+    otherwise have had to reach a layer it is not allowed to know about. The same shape as `Starting`
+    and for the same benefit: the whole of this module goes on running with no channel, no adapter
+    and no platform anywhere near a case.
+
+    `None` is an ordinary answer and means nobody is told anything, which is what an agent with no
+    notified channel asked for.
+    """
+
+    def say(self, saying: str) -> None:
         ...
 
 
@@ -421,7 +447,8 @@ def _reckoned(agent: str, where: Path, name: str, watching: Watching) -> None:
 def looked(agent: str, where: Path, watching: Watching,
            moment: Optional[datetime.datetime] = None,
            starting: Optional[Starting] = None,
-           asking: Optional[Starting] = None) -> Watching:
+           asking: Optional[Starting] = None,
+           telling: Optional[Telling] = None) -> Watching:
     """Look at the clock, reap what has finished, and start whatever the time has come for.
 
     **This never ends the caller.** Everything below is guarded, for the reason
@@ -441,11 +468,14 @@ def looked(agent: str, where: Path, watching: Watching,
     `asking` is the seam a provider process arrives at and is `None` in this release. A schedule of
     that kind is claimed, refused in one line, and written down as `failed`, because a schedule
     silently passed over looks exactly like one that is working.
+
+    `telling` is where a firing that went wrong is said out loud, and it reaches `_finished` and
+    nothing else — see there for why a firing that went *right* says nothing.
     """
     now = moment if moment is not None else datetime.datetime.now()
     starting = starting if starting is not None else AProgram()
 
-    watching = _reaped(agent, where, watching)
+    watching = _reaped(agent, where, watching, telling)
     try:
         rows = kept.all(agent)
     except Exception as why:                                    # noqa: BLE001 — records can be
@@ -557,7 +587,8 @@ def _spawned(agent: str, where: Path, watching: Watching, one: due.Schedule, min
     return watching
 
 
-def _reaped(agent: str, where: Path, watching: Watching) -> Watching:
+def _reaped(agent: str, where: Path, watching: Watching,
+            telling: Optional[Telling] = None) -> Watching:
     """Take the status of every firing that has finished, and say what it came to.
 
     A child this process started answers with an exit code. One adopted from a gateway that is gone
@@ -579,11 +610,12 @@ def _reaped(agent: str, where: Path, watching: Watching) -> Watching:
                 code = None
             del watching.running[name]
             files.remove_one(record_of(agent, name))
-            _finished(agent, where, one, code)
+            _finished(agent, where, one, code, telling)
     return watching
 
 
-def _finished(agent: str, where: Path, one: Running, code: Optional[int]) -> None:
+def _finished(agent: str, where: Path, one: Running, code: Optional[int],
+              telling: Optional[Telling] = None) -> None:
     """Write down what one firing came to, in the row and in the log, with what it wrote.
 
     **The time is said as an upper bound, because that is the only honest thing to say about it.**
@@ -592,6 +624,16 @@ def _finished(agent: str, where: Path, one: Running, code: Optional[int]) -> Non
     `/bin/echo` that took milliseconds was reported as having taken fifteen seconds. Somebody sizing
     a backup window would read that and believe it. Saying *under* is true whatever the beat is, and
     on a run of any real length the difference stops mattering.
+
+    **Said out loud only when it went wrong**, and that restraint is the whole of what makes a
+    notified channel worth having: a message for every successful nightly job is how somebody learns
+    to ignore the channel, and the one they then miss is this one. `stopped` is told as well as
+    `failed`, because *nobody can say what it came to* is exactly the answer somebody would want to
+    hear about rather than find later.
+
+    Told **last**, and inside a guard of its own. What became of a firing is written down whatever a
+    platform does with it, and a notice that could not go out may not cost the record that says the
+    work happened.
     """
     took = _how_long(time.monotonic() - one.since)
     if code is None:
@@ -607,6 +649,10 @@ def _finished(agent: str, where: Path, one: Running, code: Optional[int]) -> Non
     for line in _what_it_wrote(output_of(agent, one.name), one.from_byte):
         _note(where, f"  {line}", level)
     _became(agent, where, one.name, outcome)
+    if telling is not None and outcome != kept.COMPLETED:
+        with contextlib.suppress(Exception):                    # a channel that is
+            # down is not a reason to lose a firing, and this module may never end a gateway.
+            telling.say(f"schedule {one.name} {said}")
 
 
 def let_go(agent: str, name: str) -> List[Path]:

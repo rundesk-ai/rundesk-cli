@@ -194,6 +194,13 @@ def checked(kind: str, options: Sequence[str], env: Dict[str, str],
     `env` carries the credential, by name, and nothing from this process's own environment reaches
     the adapter except the handful in `CARRIED`.
 
+    **`RUNDESK_ALLOW` belongs in `env` too, and the caller puts it there.** Who may reach an agent is
+    not only a hosting-time fact: an adapter reports where unprompted things would land by opening
+    that conversation with the first id on the list, so one asked to connect without the list refuses
+    before it has signed in — and a caller that carried only the credential would meet that refusal
+    on every `add`. `channels.hosting` builds the same variable, from the same list, for the
+    long-lived half.
+
     **A program that died without printing an object failed; one that printed `ok: false` refused.**
     Both come back as `ok=False`, and `why` says which, because the sentence is the whole of what a
     person at a terminal can act on.
@@ -208,14 +215,20 @@ def checked(kind: str, options: Sequence[str], env: Dict[str, str],
         return _refused(
             f"the {kind} adapter did not say whether it could connect"
             + (f" — it said: {_the_reason(ran.err)}" if ran.err.strip() else ""))
+    named = [str(one) for one in _a_list(_a_mapping(said.get("secret")).get("env"))]
     if not said.get("ok"):
-        return _refused(str(said.get("why") or f"the {kind} adapter would not connect"))
+        # **The credential's name comes back on a refusal too, and this is what carries it.** An
+        # adapter that cannot connect for want of a token names the variable it looked in — the
+        # Discord one says so in its own docstring — and that name is the whole of how a caller
+        # knows what to ask a person for without holding a list of what any platform wants. Dropped
+        # here, the only refusal `rundesk channels add` could ever answer with was to repeat itself.
+        return _refused(str(said.get("why") or f"the {kind} adapter would not connect"), named)
     return Checked(
         ok=True,
         describes=str(said.get("describes") or kind),
         notify_place=_a_text(said.get("notify_place")),
         settings=json.dumps(said.get("settings") if isinstance(said.get("settings"), dict) else {}),
-        secret_names=[str(one) for one in _a_list(_a_mapping(said.get("secret")).get("env"))],
+        secret_names=named,
         invite=str(said.get("invite") or ""),
         why="")
 
@@ -235,10 +248,15 @@ def talking_to(kind: str, env: Dict[str, str], errors: Path,
                             holding=(holding,))
 
 
-def _refused(why: str) -> Checked:
-    """One shape for every way this can come back no, so no caller has to build it."""
-    return Checked(ok=False, describes="", notify_place=None, settings="{}", secret_names=[],
-                   invite="", why=why)
+def _refused(why: str, named: Optional[List[str]] = None) -> Checked:
+    """One shape for every way this can come back no, so no caller has to build it.
+
+    `named` is whatever credential the adapter said it looked for. Empty for a program that died
+    without answering — there is nothing to have read — and filled in for one that answered no
+    because nothing was set, which is the refusal a caller can actually do something about.
+    """
+    return Checked(ok=False, describes="", notify_place=None, settings="{}",
+                   secret_names=list(named or []), invite="", why=why)
 
 
 def _runnable(at: Path) -> bool:

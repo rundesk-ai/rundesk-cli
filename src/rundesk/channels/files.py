@@ -6,10 +6,18 @@ one question — which files may cross this seam — and splitting them would le
 ## Coming in
 
 **The adapter downloads and rundesk decides where it lands.** The adapter holds the credential and
-rundesk does not; rundesk owns the filesystem and the adapter does not. So the adapter reports what
-it fetched and this writes it down.
+rundesk does not; rundesk owns the filesystem and the adapter does not. So the adapter fetches into
+its own channel directory under a name of no consequence, says where it put each one, and `landed`
+takes it from there into the agent's own account of what arrived — under the day, under the message,
+under a name that is both safe and unused.
 
-Two rules, and the second is the one that bit the previous build:
+**A download that succeeded is not a file that arrived**, and `landed` is where the two are told
+apart: the staged path has to stand inside that channel's own directory, be an ordinary file rather
+than a link or a device, and hold exactly as many bytes as the platform said it would. The previous
+build reported the name a platform declared and the path it meant to write to, so a fetch that half
+happened handed an agent a name it could open with nothing behind it.
+
+Two rules about the name it is given, and the second is the one that bit the previous build:
 
 **A name from a platform is a stranger's text.** Anything outside letters, digits and `-_.` goes, so
 traversal is not something to defend against — a name with no separators in it cannot reach out of
@@ -54,7 +62,7 @@ import shutil
 import stat
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import List, NamedTuple, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from rundesk.agents import directory
 from rundesk.utils import logs
@@ -125,6 +133,81 @@ def written(into: Path, name: str, body: bytes) -> Path:
     at = _somewhere_new(into, plainly(name))
     at.write_bytes(body)
     return at
+
+
+def landed(agent: str, kind: str, message: str, brought: Dict[str, Any],
+           when: Optional[datetime] = None) -> Path:
+    """Take one file the adapter fetched into the agent's own account of what arrived.
+
+    `brought` is the adapter's own record of it, exactly as it crossed the seam: `at` is where the
+    adapter put it, `name` is what the platform called it — a stranger's text, flattened here and
+    nowhere else — and `bytes` is what the platform said it would be.
+
+    **The staged path has to stand inside this channel's own directory.** An adapter is a program
+    rundesk starts, and a buggy one naming `/etc/passwd` would otherwise have rundesk copy it into
+    the agent's reach and then delete it. Contained first, so that everything after it is acting on
+    a file that is the channel's own.
+
+    **What was staged is taken away either way**, because the channel's directory is not a place a
+    file that could not be landed gets to stay: a platform that sends a hundred unreadable files a
+    day would otherwise fill a disk one refusal at a time.
+
+    `Refused` says which it was — reaching outside, not there, not an ordinary file, too big, or not
+    the size it was said to be — because each of those is a different thing to go and look at.
+    """
+    at = Path(str(brought.get("at") or ""))
+    if not at.is_absolute() or any(part in (".", "..") for part in at.parts):
+        raise Refused(f"{at} is not an absolute path to a file the adapter fetched")
+    home = directory.channels(agent) / plainly(kind)
+    try:
+        # Resolved on both sides, the way `_the_root_holding` does it and for the same two reasons:
+        # `/tmp` is `/private/tmp` on this platform, so a lexical comparison refuses every ordinary
+        # path there; and a *directory* staged under a link would otherwise read as contained while
+        # standing somewhere else entirely, which `lstat` below cannot see because a link two steps
+        # up is not the component it is asked about.
+        within, settled = home.resolve(), at.resolve()
+    except OSError as why:
+        raise Refused(f"{at} could not be checked against {kind}'s own directory ({why})") from why
+    if within not in settled.parents:
+        raise Refused(f"{at} did not come from {kind}'s own directory, so it is not a file that "
+                      f"arrived through it")
+    try:
+        return _taken_over(agent, kind, message, at, brought, when)
+    finally:
+        with contextlib.suppress(OSError):
+            at.unlink()
+        if at.parent != home:
+            with contextlib.suppress(OSError):
+                at.parent.rmdir()         # empty only when this was the last of the message's files
+
+
+def _taken_over(agent: str, kind: str, message: str, at: Path, brought: Dict[str, Any],
+                when: Optional[datetime]) -> Path:
+    """Weigh what was staged, write it where the agent will read it, and prove it got there."""
+    try:
+        how = at.lstat()
+    except OSError as why:
+        raise Refused(f"{at} was reported as fetched and is not there ({why})") from why
+    # **`lstat`, so a link is refused rather than followed.** The staged name is the adapter's own,
+    # but this is the one place a program on the far side of a seam names a path on this side, and a
+    # link is how that name would come to mean somewhere else entirely.
+    if not stat.S_ISREG(how.st_mode):
+        raise Refused(f"{at} is not an ordinary file, so nothing arrived under that name")
+    if how.st_size > EACH_AT_MOST:
+        raise Refused(f"{at} is {how.st_size} bytes, and one file may be {EACH_AT_MOST}")
+    said = brought.get("bytes")
+    if isinstance(said, int) and not isinstance(said, bool) and said != how.st_size:
+        # **The download succeeding is not the file arriving.** A fetch cut off part way leaves a
+        # readable file of the wrong length, and the agent is then handed a name it can open and
+        # half of what somebody sent it.
+        raise Refused(f"{at} holds {how.st_size} bytes and was said to hold {said}, so what "
+                      f"arrived is not what was sent")
+    body = at.read_bytes()
+    where = written(arrived_at(agent, kind, message, when), str(brought.get("name") or at.name),
+                    body)
+    if where.stat().st_size != len(body):
+        raise Refused(f"{where} was written and does not hold what was written to it")
+    return where
 
 
 def approved(agent: str, said: str) -> Sending:

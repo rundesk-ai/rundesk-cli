@@ -1,7 +1,7 @@
 # The command surface
 
-Twelve operations, and every one of them works. There is no "coming soon" list: a verb rundesk cannot
-perform is a verb rundesk does not have.
+Thirteen operations, and every one of them works. There is no "coming soon" list: a verb rundesk
+cannot perform is a verb rundesk does not have.
 
 ```sh
 rundesk status                            # the version, where the install is, and every configured value
@@ -24,6 +24,14 @@ rundesk schedules update <agent> <schedule> [--when|--at|--until|--run|--enable|
 rundesk schedules show <agent> <schedule> # everything one was given
 rundesk schedules run <agent> <schedule>  # run one now, in this terminal
 rundesk schedules remove <agent> <schedule>       # take one away
+rundesk channels                          # every agent's channels, and how each one stands
+rundesk channels list <agent>             # one agent's
+rundesk channels add <agent> <adapter> --allow <id> [--notify] [--with '<adapter opts>']
+rundesk channels show <agent> <adapter>   # everything one channel was given
+rundesk channels configure <agent> <adapter> [--allow <id>] [--deny <id>] [--notify]
+rundesk channels test <agent> <adapter>   # connect again, and say what it reached
+rundesk channels remove <agent> <adapter> --confirm       # take one away
+rundesk channels doctor [<agent>]         # what cannot be used, and exactly why
 rundesk backups                           # the copies of what rundesk keeps for you
 rundesk backups save                      # copy what rundesk keeps, now
 rundesk backups restore <backup> --confirm        # put a copy back
@@ -54,8 +62,8 @@ nothing and describes itself.
 
 ## Some flags are required by the verb rather than by argparse
 
-`--provider`, `--confirm`, and naming either a gateway or `--all` are all required, and none of them
-is registered as `required=True`. That is deliberate and it is the same decision every time:
+`--provider`, `--allow`, `--confirm`, and naming either a gateway or `--all` are all required, and
+none of them is registered as `required=True`. That is deliberate and it is the same decision every time:
 argparse's own refusal names a flag and does not say what to type. *"the following arguments are
 required: --provider"* is true and is not an answer, and the person reading it still has to work out
 what a provider is and where the agent's name goes.
@@ -632,6 +640,166 @@ It ran, it finished, or it failed and why — and the last of those carries a bo
 program wrote, so the file is worth opening on its own. Every way a firing does not get that far is
 named rather than left silent, and [`schedules.md`](schedules.md#when-a-schedule-is-not-doing-what-you-expected)
 lists what each of those lines means and what to do about it.
+
+## channels
+
+How an agent is reached, and how it reaches back. A channel belongs to one agent and lives in that
+agent's own records, and the gateway hosting that agent is what runs the program behind it. With no
+sub-verb it lists every channel on the install; with an agent it lists that agent's.
+
+**A channel is a connection, not a place.** Connecting Discord gives an agent *one* channel that
+carries private messages and every room the bot was invited to — there is nothing per-place written
+down, and nothing to name. The channel **is** its adapter, so `rundesk channels add alan discord`
+gives alan a channel called `discord`, and one list of ids says who may reach that agent wherever
+they say it.
+
+```console
+$ rundesk channels
+channels in /Users/you/.rundesk/data/agents
+AGENT  CHANNEL  REACHES                          ALLOWED  TOLD  STANDING
+alan   discord  rundesk#4471, reaching you#0     2        yes   connected (pid 96144)
+cole   discord  colebot#8812, reaching you#0     1        no    not connected
+```
+
+`STANDING` is asked of the kernel through the claim an adapter holds, exactly as `rundesk gateways`
+asks whether a gateway is up, and the record beside it is read only afterwards — a record holds a
+pid, and a pid whose process is gone is a number that now belongs to something else. `cannot tell` is
+a first-class answer there for the same reason it is one in `gateways`.
+
+### channels add
+
+`--allow` is required, is repeatable, and takes the id that platform knows somebody by.
+
+```console
+$ rundesk channels add alan discord --allow 341709...
+the discord adapter needs 1 value before alan can use it
+        DISCORD_BOT_TOKEN   the discord adapter reads its credential from this name
+        > 
+alan is connected to discord
+        reaches   rundesk#4471, reaching you#0
+        allowed   341709...
+        told      no
+        needs     DISCORD_BOT_TOKEN (set)
+        settings  {}
+        can       attach=True, edit=full, max_text=2000, react=True, stream=True, thread=True
+        adapter   /Users/you/.rundesk/app/src/channels/discord
+        keeps     /Users/you/.rundesk/data/agents/alan/channels/discord
+        standing  not connected
+        invite    https://discord.com/oauth2/authorize?client_id=...
+        the bot is not in any server until somebody with permission adds it there
+```
+
+**An empty allow list authorises nobody, never everybody**, so leaving `--allow` off is refused —
+by the verb rather than by argparse, in a sentence ending with the whole command to type. An agent
+connected to a platform with nobody allowed is an agent that answers no one, and a stranger's message
+is dropped in silence rather than answered with a refusal that would confirm somebody is listening.
+
+**Nothing about a channel is written down until the adapter says it reached something.** The program
+is found, asked offline what it can do, and then asked to connect; only an `ok` from that last
+question writes a row. A channel that is misconfigured has to be found out about while somebody is
+standing at a terminal, not at three in the morning when they ask the agent something.
+
+**The credential is read from the terminal and never passed as an argument** — `env` says why at
+length — and it is written down *before* the connection is proven, deliberately: somebody who has
+just pasted a bot token should not have to paste it again because the connection was refused for an
+unrelated reason. `rundesk env unset <name>` empties it.
+
+**The name a credential is kept under is the adapter's own, and it is recorded rather than worked out
+again.** `channels.hosting` hands the adapter each recorded name back with its value under that same
+name, so the recorded name and the name the adapter reads are one fact. It follows that the name is
+not per-agent: two agents connected to one platform name one credential, the prompt says so when a
+value is already kept under it, and a second bot token needs an adapter that reads a different name.
+
+`--with '<adapter opts>'` is anything the adapter itself takes, as one quoted string. Rundesk parses
+none of it and has no list of what any platform wants — what comes back in `settings` is the
+adapter's own normalised account. It is split into words the way a shell would and handed over as a
+list, so nothing in it is globbed, expanded, or read as `;`, `&&` or a redirection; it is a flag
+rather than a bare `--` because argparse matches positionals in contiguous runs, and a flag between
+them makes the most natural spelling of `--` an `unrecognized arguments` error.
+
+`--notify` makes this the channel unprompted things go to. At most one channel per agent may be that,
+and where it writes is what the adapter reported rather than something to go and find: a gateway
+coming up is answering nobody and has no conversation to reply into.
+
+### channels configure
+
+Changes who may reach an agent there, and which channel is the told one. **Naming nothing to change
+is refused rather than reported as a success**, and so is an id named both to allow and to deny.
+
+```console
+$ rundesk channels configure alan discord --allow 220755...
+alan's discord channel changed
+        allowed   341709..., 220755...
+```
+
+An id that was never on the list is refused rather than passed over — *"deny 2207"* aimed at a list
+that never held it is somebody typing the wrong id, and answering "done" would leave them believing
+they had taken away access they had not. Taking the last one away is refused too, because a channel
+with an empty list answers nobody: remove the channel instead.
+
+There is no `--confirm` here. It is on `remove`, and the line between them is the one `skills` draws:
+would somebody want to read this before it happened. Setting a channel up is a credential, an allow
+list and a round trip to a platform, and none of that comes back from a copy of `data/`.
+
+### channels test
+
+Asks the adapter to connect again with what the channel already has, and says what it reached. It
+changes nothing at all, including the record of what it found — a token that was reset in somebody's
+developer portal is the case this exists for, and the answer to that is a sentence at a terminal
+rather than a channel quietly rewritten underneath whoever is reading it.
+
+### channels remove
+
+`--confirm` is required. Without it the command says exactly what it would take and takes none of it,
+and exits non-zero: **a removal that did not happen is a failure.**
+
+```console
+$ rundesk channels remove alan discord
+remove: this would take alan's discord channel
+        take     the connection — alan would no longer be reachable on discord, and 341709... could no longer reach it there
+        keep     /Users/you/.rundesk/data/agents/alan/channels/discord — what arrived through it, and what its adapter wrote
+        keep     DISCORD_BOT_TOKEN — rundesk env forgets nothing here
+        nothing was removed. To go ahead:
+        rundesk channels remove alan discord --confirm
+```
+
+What arrived through the channel stays, and so does the credential. Both are named in the preview
+rather than left to be discovered: a removal that described more than it would do defeats the point
+of describing it, and one that described less would be worse.
+
+### channels doctor
+
+Says what cannot be used and why, names the one command that answers it, and **exits non-zero when
+anything is wrong** — the way `env check` and `skills doctor` do, so a script can gate on it.
+
+```console
+$ rundesk channels doctor
+alan
+  discord  READY        rundesk#4471, reaching you#0
+cole
+  discord  BLOCKED      DISCORD_BOT_TOKEN — nothing this install can read is kept under that name
+  slack    DANGLING     there is no slack adapter on this install — looked in ...
+channels: 2 of 3 cannot be used:
+        rundesk env set DISCORD_BOT_TOKEN
+        rundesk channels remove cole slack --confirm
+```
+
+| Verdict | Means |
+|---|---|
+| `READY` | the adapter is there, its credential is set, and it connected just now |
+| `BLOCKED` | a credential this channel names is not set, so there is nothing to connect with |
+| `UNREACHABLE` | everything is in place and `--check` failed now — the platform said why |
+| `DANGLING` | there is no program behind this channel any more |
+
+**It really connects**, and that is what `UNREACHABLE` costs. A credential that is set and no longer
+accepted is the failure this exists to find, and nothing on this machine can tell that from a working
+one: the adapter has to be asked. A channel whose credential is missing is `BLOCKED` without paying
+for a round trip.
+
+The columns are measured against what is actually there rather than fixed. The findings go to stdout
+and the summary to stderr, so a script can read one and ignore the other — and the findings are
+flushed first, or the summary would appear above what it summarises when both are merged into one
+pipe.
 
 ## backups
 

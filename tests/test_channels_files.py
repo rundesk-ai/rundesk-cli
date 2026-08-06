@@ -83,6 +83,108 @@ class WhatArrivesIsWrittenSafely(Files):
             files.written(self.a_day(), "big.bin", b"x" * (files.EACH_AT_MOST + 1))
 
 
+class WhatTheAdapterFetched(Files):
+    """The inbound half of the seam: what an adapter staged, taken over or refused.
+
+    The adapter is a program on the far side of a pipe, so every one of these is about a path it
+    named and this side did not: where it may stand, what it may be, and whether what is behind it
+    is what the platform said it would be.
+    """
+
+    def staged(self, kind="discord", message="8841", named="0", body=b"one,two\n"):
+        """One file where an adapter would have put it: inside the channel's own directory."""
+        at = directory.channels(self.agent) / kind / "fetched" / message / named
+        at.parent.mkdir(parents=True, exist_ok=True)
+        at.write_bytes(body)
+        return at
+
+    def test_it_lands_under_the_day_and_the_message_with_the_platforms_own_name(self):
+        at = self.staged()
+        where = files.landed(self.agent, "discord", "8841",
+                             {"name": "report.csv", "at": str(at), "bytes": 8},
+                             datetime(2026, 8, 5))
+        self.assertEqual("report.csv", where.name)
+        self.assertEqual("8841", where.parent.name)
+        self.assertEqual("2026-08-05", where.parent.parent.name)
+        self.assertEqual(b"one,two\n", where.read_bytes())
+
+    def test_the_name_a_platform_gave_it_is_flattened_here_and_de_collided_here(self):
+        first = files.landed(self.agent, "discord", "8841",
+                             {"name": "report v2.csv", "at": str(self.staged(named="0")),
+                              "bytes": 8})
+        second = files.landed(self.agent, "discord", "8841",
+                              {"name": "report-v2.csv", "at": str(self.staged(named="1")),
+                               "bytes": 8})
+        self.assertNotEqual(first, second)
+        self.assertNotIn("/", first.name)
+
+    def test_what_was_staged_is_taken_away_once_it_has_landed(self):
+        at = self.staged()
+        files.landed(self.agent, "discord", "8841", {"name": "report.csv", "at": str(at),
+                                                     "bytes": 8})
+        self.assertFalse(at.exists(), "the channel's own directory kept a second copy of it")
+        self.assertFalse(at.parent.exists(), "the message's staging directory was left behind")
+
+    def test_one_that_could_not_be_taken_over_is_still_taken_away(self):
+        # A platform sending a hundred unreadable files a day would otherwise fill a disk one
+        # refusal at a time.
+        at = self.staged(body=b"short")
+        with self.assertRaises(files.Refused):
+            files.landed(self.agent, "discord", "8841", {"name": "report.csv", "at": str(at),
+                                                         "bytes": 4096})
+        self.assertFalse(at.exists())
+
+    def test_a_download_that_did_not_finish_is_not_a_file_that_arrived(self):
+        # A fetch cut off part way leaves a perfectly readable file of the wrong length, and the
+        # agent is then handed a name it can open and half of what somebody sent it.
+        at = self.staged(body=b"the first eight of many")
+        with self.assertRaises(files.Refused) as refused:
+            files.landed(self.agent, "discord", "8841", {"name": "report.csv", "at": str(at),
+                                                         "bytes": 900})
+        self.assertIn("not what was sent", str(refused.exception))
+
+    def test_a_file_from_outside_the_channels_own_directory_is_refused(self):
+        # An adapter is a program rundesk starts, and a buggy one naming somewhere else entirely
+        # would otherwise have rundesk copy it into the agent's reach — and then delete it.
+        elsewhere = self.home / "outside" / "secrets.txt"
+        elsewhere.parent.mkdir(parents=True, exist_ok=True)
+        elsewhere.write_bytes(b"not yours")
+        with self.assertRaises(files.Refused):
+            files.landed(self.agent, "discord", "8841", {"name": "x", "at": str(elsewhere)})
+        self.assertTrue(elsewhere.exists(), "a file it refused to take was removed anyway")
+
+    def test_another_channels_directory_is_outside_this_ones(self):
+        at = self.staged(kind="slack")
+        with self.assertRaises(files.Refused):
+            files.landed(self.agent, "discord", "8841", {"name": "x", "at": str(at)})
+
+    def test_a_link_standing_where_the_staged_file_should_be_is_refused(self):
+        elsewhere = self.home / "outside" / "real.txt"
+        elsewhere.parent.mkdir(parents=True, exist_ok=True)
+        elsewhere.write_bytes(b"somebody else's")
+        pointing = directory.channels(self.agent) / "discord" / "fetched" / "8841" / "0"
+        pointing.parent.mkdir(parents=True, exist_ok=True)
+        pointing.symlink_to(elsewhere)
+        with self.assertRaises(files.Refused):
+            files.landed(self.agent, "discord", "8841", {"name": "x", "at": str(pointing)})
+        self.assertTrue(elsewhere.exists())
+
+    def test_a_relative_path_is_refused_because_it_cannot_be_contained(self):
+        with self.assertRaises(files.Refused):
+            files.landed(self.agent, "discord", "8841", {"name": "x", "at": "fetched/8841/0"})
+
+    def test_one_that_was_never_written_is_refused_rather_than_landed_empty(self):
+        at = directory.channels(self.agent) / "discord" / "fetched" / "8841" / "0"
+        at.parent.mkdir(parents=True, exist_ok=True)
+        with self.assertRaises(files.Refused):
+            files.landed(self.agent, "discord", "8841", {"name": "x", "at": str(at)})
+
+    def test_one_bigger_than_a_message_may_bring_is_refused(self):
+        at = self.staged(body=b"x" * (files.EACH_AT_MOST + 1))
+        with self.assertRaises(files.Refused):
+            files.landed(self.agent, "discord", "8841", {"name": "big.bin", "at": str(at)})
+
+
 class WhatMayBeSent(Files):
 
     def test_a_file_in_the_agents_own_home_is_weighed_and_digested(self):

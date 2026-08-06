@@ -1,11 +1,12 @@
 """A gateway: the process that hosts one agent.
 
 One agent, one process, one name held for as long as that process lives. What a gateway *hosts* is
-the part that grows — its logs today, and later its adapters, the work it delegates and the
-subprocesses it starts. None of that is here yet, and when it arrives it arrives as something the
-gateway hosts rather than as something that changes what a gateway is. That distinction is the whole
-reason this layer is its own package: a host that keeps being rewritten to accommodate its guests is
-a host nobody can say anything true about.
+the part that grows — its own logs, the work its schedules start, the adapters its channels connect
+through, and later the turns it delegates to a provider. Each of those arrived as something the
+gateway hosts rather than as something that changed what a gateway is: the same three seams in the
+same loop, and a shutdown budget divided among them rather than handed to each. That distinction is
+the whole reason this layer is its own package: a host that keeps being rewritten to accommodate its
+guests is a host nobody can say anything true about.
 
 | Module | Answers |
 |---|---|

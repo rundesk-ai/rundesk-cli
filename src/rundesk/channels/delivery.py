@@ -1,4 +1,4 @@
-"""What goes out through a channel, cut to what the platform on the other end will take.
+"""What goes out through a channel: cut to what the platform will take, and vetted if it is a file.
 
 **The cutting is here rather than in each adapter, and that is the whole reason this module
 exists.** The build this replaces held the limit in the adapter — 1900 in Discord's, 3800 in
@@ -13,23 +13,35 @@ is right when that newline is near it and wrong when it is near the start — a 
 thousand characters ending in a short line would be sent as one short message and one enormous one.
 Past `RATHER_THAN_A_STUB` of the way back, the cut is taken at the limit instead.
 
-**A fence that is open at the cut is closed and opened again.** A code block split across two
-messages renders as one broken block and then a page of unformatted text, and the reader cannot tell
-which. Closing and reopening costs a few characters and is the difference between two readable
-messages and two wrong ones.
+**A fence that is open at the cut is closed and opened again — and room is kept for both.** A code
+block split across two messages renders as one broken block and then a page of unformatted text, and
+the reader cannot tell which. Reopening one costs four characters at the start of the next piece and
+closing one costs four at the end of this one, and only the first of those was ever paid for: a
+piece carrying an open block came back four characters past the limit, the adapter refused it
+outright as rundesk having failed to split, and the delivery was dropped with nothing to retry.
 
 **A message is never empty.** A platform refuses one, and the refusal arrives as a failed delivery
 for something nobody needed sent.
 
+## And what a delivery carries besides words
+
+`carried` is the second of the three checks a file passes on its way out — the brain names one,
+**this** contains it and fingerprints it through `channels.files.approved`, and the adapter re-opens
+it with `O_NOFOLLOW` and refuses on any mismatch. The third is not belt-and-braces: between the
+approval and the send a concurrent turn can replace the file, or a directory above it, and only a
+re-open sees that.
+
 May depend on `agents`, `core` and `utils`.
 """
 
-from typing import List, NamedTuple, Optional
+from typing import List, NamedTuple, Optional, Sequence
 
-from rundesk.channels import kept
+from rundesk.channels import files, kept
 
-#: What a fenced block is opened and closed with, and how much room reopening one needs.
+#: What a fenced block is opened and closed with, and what one costs at a cut: the fence itself and
+#: the newline that has to stand beside it, on whichever end of a piece it lands.
 FENCE = "```"
+FENCE_ROOM = len(FENCE) + 1
 
 #: How far back a line boundary may be and still be worth cutting at, as a fraction of the limit.
 #: Nearer the start than this and the cut is taken at the limit: the alternative is one very short
@@ -47,6 +59,19 @@ class Telling(NamedTuple):
     kind: str
     place: str
     pieces: List[str]
+
+
+class Carrying(NamedTuple):
+    """What a delivery may take with it, and what it may not.
+
+    Both halves, because they go to different places: `files` crosses the seam and `refused` is a
+    line in the agent's own log. A caller handed only the first would report a delivery as whole
+    when part of what it was asked to send was quietly left behind — which is the failure this
+    product is built around not committing.
+    """
+
+    files: List["files.Sending"]
+    refused: List[str]
 
 
 def notice(agent: str, saying: str, at_most: int = WHEN_UNSAID) -> Optional[Telling]:
@@ -79,21 +104,89 @@ def split(said: str, at_most: int = WHEN_UNSAID) -> List[str]:
     pieces: List[str] = []
     rest = said
     open_fence = False
-    while len(rest) > at_most:
-        room = at_most - (len(FENCE) + 1 if open_fence else 0)
-        cut = _where_to_cut(rest, room)
-        piece = rest[:cut].rstrip()
-        if open_fence:
-            piece = f"{FENCE}\n{piece}"
+    # **The last piece wears a reopening fence too, and the condition is where that is paid for.**
+    # Measured before it was: a tail exactly `at_most` long, following an open block, came back four
+    # characters over — the same overshoot as the pieces above it, arrived at from the other end.
+    while len(rest) + _reopening(open_fence) > at_most:
+        taking = _how_much(rest, at_most, open_fence)
+        piece = rest[:taking].rstrip()
+        rest = rest[taking:].lstrip("\n")
+        if not piece:
+            continue                       # a cut that landed on nothing but the whitespace at one
+            # end of a line is not a message, and a platform refuses an empty one.
+        piece = _reopened(piece, open_fence)
+        # Asked again of the piece as it now stands rather than taken from `_how_much`: a shorter cut
+        # may not reach the fence that made it shorter, and closing a block that was never opened in
+        # this piece would put a stray fence in front of a reader.
         open_fence = _fence_left_open(piece)
         if open_fence:
             piece = f"{piece}\n{FENCE}"
         pieces.append(piece)
-        rest = rest[cut:].lstrip("\n")
     last = rest.rstrip()
     if last:
-        pieces.append(f"{FENCE}\n{last}" if open_fence else last)
+        pieces.append(_reopened(last, open_fence))
     return pieces or [said[:at_most]]
+
+
+def carried(agent: str, named: Sequence[str]) -> "Carrying":
+    """What of these files a delivery may actually take with it, and a sentence for each it may not.
+
+    **Vetted here and verified again by the adapter, and the second check is not a duplicate of the
+    first.** `files.approved` walks every component with `O_NOFOLLOW` and reports the size and digest
+    of the descriptor it opened; the adapter re-opens the same way and refuses on any mismatch.
+    Between those two moments a concurrent turn can replace the file or a directory above it, and
+    nothing but a re-open sees that.
+
+    **A refusal is an answer and never an exception**, because a delivery carrying four files of
+    which one may not be sent is three files that still have to arrive, plus a line somebody reads.
+    Bounded at `files.PER_MESSAGE` and de-duplicated by path: one file named twice is one file, and a
+    platform would otherwise post it twice.
+    """
+    taking: List[files.Sending] = []
+    refused: List[str] = []
+    seen = set()
+    for one in named:
+        if one in seen:
+            continue
+        seen.add(one)
+        if len(taking) >= files.PER_MESSAGE:
+            refused.append(f"only the first {files.PER_MESSAGE} files of a delivery are sent, so "
+                           f"{one} was left behind")
+            continue
+        try:
+            taking.append(files.approved(agent, one))
+        except (files.Refused, OSError) as why:
+            refused.append(str(why))
+    return Carrying(taking, refused)
+
+
+def _how_much(said: str, at_most: int, open_fence: bool) -> int:
+    """How much of what is left the next piece takes, with room kept for the fences it will wear.
+
+    **Cut twice rather than guessed at.** Whether a piece leaves a block open is only knowable once
+    it has been cut, so the first cut asks the question and the second one pays for the answer.
+    Reserving for a closing fence unconditionally is the alternative and is wrong for the ordinary
+    case: it would make every piece of ordinary prose four characters short of the limit for a fence
+    that is never written.
+
+    Never below one character, so that a limit smaller than a fence still makes progress instead of
+    cutting nothing for ever.
+    """
+    room = max(1, at_most - _reopening(open_fence))
+    taking = _where_to_cut(said, room)
+    if not _fence_left_open(_reopened(said[:taking].rstrip(), open_fence)):
+        return taking
+    return _where_to_cut(said, max(1, room - FENCE_ROOM))
+
+
+def _reopening(open_fence: bool) -> int:
+    """How much room the fence reopening a block costs at the start of a piece, or none."""
+    return FENCE_ROOM if open_fence else 0
+
+
+def _reopened(said: str, open_fence: bool) -> str:
+    """A piece with the block it continues opened again, or exactly as it stands."""
+    return f"{FENCE}\n{said}" if open_fence else said
 
 
 def _where_to_cut(said: str, at_most: int) -> int:

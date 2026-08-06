@@ -27,6 +27,18 @@ a clean exit, a crash, a `SIGKILL`, the machine losing power. That is what lets 
 up after the one that started an adapter know the adapter is still there, and refuse to start a
 second alongside it.
 
+## What crosses the seam, and which side decides it
+
+The thread carries three things inward and this module answers two of them. A message from somebody
+allowed is written down; whatever they attached is taken out of the channel's own directory and put
+where the agent will read it; and the message is marked **seen**, which is the one turn state that
+needs no turn — a message arriving is the whole of the event. Everything else a mark could say is
+what became of a turn, and there is no provider layer here to run one.
+
+Outward, `told` carries words already cut to size by `delivery.split` and files already vetted by
+`delivery.carried`. Neither decision is made here: this is the transport, and a transport that
+decided what a platform would take would be the second copy of a rule.
+
 ## Nothing here may end a gateway
 
 Every failure is caught and written to the agent's log. A channel that cannot start, an adapter that
@@ -48,7 +60,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence
 
 from rundesk.agents import directory
 from rundesk.channels import adapters, arriving, kept
@@ -71,6 +83,44 @@ ERRORS_KEPT = 3
 #: a platform that is refusing us, short enough that an owner does not notice. The number the build
 #: this replaces settled on.
 AGAIN_AFTER = 10.0
+
+#: The exit code an adapter uses for a failure that starting it again cannot fix: a token that has
+#: been revoked, a close code the platform will answer with for ever. `78` is `EX_CONFIG`, which is
+#: what this is, and the number is the whole of the agreement — the two sides of this seam are two
+#: processes and cannot share a constant.
+#:
+#: **Read, and not merely written down.** Logged and then restarted on the flat ten-second hold-off,
+#: a revoked Discord token is a login attempt every ten seconds — about 8,600 a day — which is
+#: exactly the Cloudflare ban of this machine's own address that the adapter's close-code table was
+#: written to avoid. An adapter that has said *this will not come right* is believed.
+WILL_NOT_FIX = 78
+
+#: A hold-off that does not end, which is what `WILL_NOT_FIX` earns. It is a moment far past any
+#: this process will reach rather than a flag of its own, so every reader of `waiting` already
+#: answers correctly and nothing had to learn a second rule.
+#:
+#: It lasts this gateway's lifetime and no longer, and that is the honest bound: what has to change
+#: is the channel's configuration, and the credential a channel is refused for does not live in its
+#: record — so there is nothing here to watch for a change. Putting it right ends with the gateway
+#: being restarted, and a gateway that restarts starts this channel again.
+NEVER_AGAIN = float("inf")
+
+#: What rundesk says a turn is doing. Rundesk decides it; an adapter decides only how it looks.
+#:
+#: **`seen`, `working`, `done`, `stopped`, `failed` — and not `taken`, `running`, `finished`.** Two
+#: vocabularies for one idea stood in this tree: the shipped adapter's marks are keyed on the first
+#: and `docs/research/the-adapter-contracts.md` reproduces the previous build's second. This is the
+#: one both sides of the seam already spoke, and the one whose words say what somebody actually sees
+#: — a message that has been seen, an agent that is working, a turn that is done. The other set
+#: describes the run's own bookkeeping, which is the half that never crosses here. Nothing consumed
+#: either of them, so choosing cost nothing; leaving both standing costs a mark that never appears
+#: and nobody able to say why.
+#:
+#: **Only `seen` has a producer, and that is not an omission.** It is the one state that does not
+#: need a turn: a message arriving is the whole of the event. The other four say what became of a
+#: turn, and there is no provider layer in this build to run one — so they are the adapter's to
+#: render on the day something drives them.
+SEEN = "seen"
 
 #: The least time any one adapter gets to stop, however many there are. A gateway's whole shutdown
 #: is bounded by the job's `ExitTimeOut`, and channels share that budget with schedules — so the
@@ -102,6 +152,12 @@ class Running(NamedTuple):
     listening: Optional[threading.Thread]
     since: float
     mine: bool
+    #: Held while one record is written to this adapter, because **two threads write to it**: the
+    #: gateway's loop delivers and stops, and the thread draining its stdout marks what has just
+    #: arrived. A line half written by one and finished by the other is a line the adapter cannot
+    #: parse, and this seam is newline-delimited JSON — one bad line there is not one bad record.
+    #: `None` on an adapter this process did not start, which is also one it never speaks to.
+    saying: Optional[threading.Lock] = None
 
 
 class Watching(NamedTuple):
@@ -240,7 +296,7 @@ def stopping(agent: str, where: Path, watching: Watching, within: float) -> Watc
     each = max(STOPPING_LEAST, within / len(mine))
     for one in mine:
         with contextlib.suppress(Exception):
-            _asked_to_stop(agent, where, one)
+            _asked_to_stop(where, one)
             stuck = programs.stop(one.pid, gently_for=each * 0.6, firmly_for=each * 0.4)
             _note(where, f"channel {one.kind}: "
                          + (f"would not stop: {stuck}" if stuck else "stopped with this gateway"),
@@ -250,18 +306,28 @@ def stopping(agent: str, where: Path, watching: Watching, within: float) -> Watc
 
 
 def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
-         pieces: List[str]) -> bool:
+         pieces: List[str], sending: Sequence[naming.Sending] = ()) -> bool:
     """Send something to a place through a running adapter. `False` when there is nothing to send it.
 
     `False` rather than an exception: a notice that could not be delivered because the adapter is
     restarting is a fact to write down, not a reason to interrupt whatever produced it.
+
+    `sending` is what `delivery.carried` has already approved, and it goes with the **last** piece:
+    the words describing a file are what a reader wants above it, and a platform hangs an attachment
+    under the message it came with. Files and no words is one record carrying no text, which the
+    adapter takes; neither files nor words is nothing to send, and nothing is what is sent.
     """
     one = watching.running.get(kind)
     if one is None or one.talking is None:
         return False
-    for nth, piece in enumerate(pieces):
-        if not _said_to(agent, where, one, {"do": "deliver", "id": f"{time.time():.6f}-{nth}",
-                                            "place": place, "text": piece}):
+    carrying = [{"name": each.name, "at": str(each.at), "bytes": each.bytes,
+                 "sha256": each.sha256} for each in sending]
+    saying = list(pieces) or ([""] if carrying else [])
+    for nth, piece in enumerate(saying):
+        record = {"do": "deliver", "id": f"{time.time():.6f}-{nth}", "place": place, "text": piece}
+        if carrying and nth == len(saying) - 1:
+            record["files"] = carrying
+        if not _said_to(where, one, record):
             return False
     return True
 
@@ -310,6 +376,11 @@ def _started_what_should_be(agent: str, where: Path, watching: Watching) -> None
         if kind in watching.running:
             continue
         held_off = watching.waiting.get(kind)
+        if held_off == NEVER_AGAIN:
+            # An adapter that exited `WILL_NOT_FIX` said this cannot come right by being started
+            # again. Written out rather than left to the arithmetic below, which happens to answer
+            # correctly for an infinite moment: a reader has to be able to see that it is deliberate.
+            continue
         if held_off is not None and now - held_off < AGAIN_AFTER:
             continue
         try:
@@ -342,43 +413,48 @@ def _started(agent: str, where: Path, kind: str, watching: Watching) -> None:
         # start a second; writing it afterwards would lose the adapter entirely.
         files.write_json(record_of(agent, kind), {"kind": kind, "started_at": logs.stamp(),
                                                   "pid": None})
-        talking = adapters.talking_to(kind, _the_environment(agent, row), errors, held)
+        talking = adapters.talking_to(kind, _the_environment(agent, kind, row), errors, held)
         files.write_json(record_of(agent, kind), {"kind": kind, "started_at": logs.stamp(),
                                                   "pid": talking.pid})
 
+    # Built before the thread and handed to it, so that the one lock guarding writes to this
+    # adapter is the same object on both sides of it. The stored one gains the thread afterwards;
+    # the thread's own copy never reads that field.
+    one = Running(kind=kind, pid=talking.pid, talking=talking, listening=None,
+                  since=time.monotonic(), mine=True, saying=threading.Lock())
     listening = threading.Thread(target=_listened, name=f"channel-{kind}",
-                                 args=(agent, where, kind, talking, row), daemon=True)
+                                 args=(agent, where, one, row), daemon=True)
     listening.start()
-    watching.running[kind] = Running(kind=kind, pid=talking.pid, talking=talking,
-                                     listening=listening, since=time.monotonic(), mine=True)
+    watching.running[kind] = one._replace(listening=listening)
     _note(where, f"channel {kind}: started as pid {talking.pid}")
 
 
-def _listened(agent: str, where: Path, kind: str, talking: programs.Talking,
-              row: Dict[str, Any]) -> None:
+def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any]) -> None:
     """Read everything an adapter says, for as long as it says anything. **Never raises.**
 
     This is the thread the module docstring is about. It cannot fall behind the way the gateway's
     own loop would, because it does nothing but read — and it must not end the process it runs in,
     because a thread that raises takes its traceback nowhere anybody will look.
     """
+    kind = one.kind
     allowed = set()
     with contextlib.suppress(Exception):
         allowed = set(kept.who_may_reach(row))
     try:
-        for line in talking.stdout:
+        for line in one.talking.stdout:
             if len(line) > LINE_AT_MOST:
                 _note(where, f"channel {kind}: said more in one line than is read at once", logs.WARNING)
                 continue
             with contextlib.suppress(Exception):
-                _heard(agent, where, kind, line, allowed)
+                _heard(agent, where, one, line, allowed)
     except Exception as why:                           # noqa: BLE001 — see the module docstring
         with contextlib.suppress(Exception):
             _note(where, f"channel {kind}: this gateway stopped listening to it ({why})", logs.ERROR)
 
 
-def _heard(agent: str, where: Path, kind: str, line: str, allowed: set) -> None:
+def _heard(agent: str, where: Path, one: Running, line: str, allowed: set) -> None:
     """One record an adapter sent. Anything unrecognised is kept quiet rather than refused loudly."""
+    kind = one.kind
     said = line.strip()
     if not said:
         return
@@ -392,7 +468,7 @@ def _heard(agent: str, where: Path, kind: str, line: str, allowed: set) -> None:
 
     saying = record.get("say")
     if saying == "arrived":
-        _arrived(agent, where, kind, record, allowed)
+        _arrived(agent, where, one, record, allowed)
     elif saying == "ready":
         _note(where, f"channel {kind}: connected"
                      + (f" as {record.get('as')}" if record.get("as") else ""))
@@ -405,14 +481,18 @@ def _heard(agent: str, where: Path, kind: str, line: str, allowed: set) -> None:
         _note(where, f"channel {kind}: could not deliver — {record.get('why')}", logs.WARNING)
 
 
-def _arrived(agent: str, where: Path, kind: str, record: Dict[str, Any], allowed: set) -> None:
+def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allowed: set) -> None:
     """One message somebody sent. **Recorded only if they may be answered.**
 
     A stranger's message is never written down, and they are never told anything: replying to say
     somebody is a stranger confirms the agent is listening and spends the owner's tokens doing it.
     Nothing is recorded either, because a record of it is something an agent could later be asked
     to read.
+
+    Then, and only for somebody who may be answered, two things go the other way: whatever they
+    attached is taken in, and the message is marked as seen.
     """
+    kind = one.kind
     who = str(record.get("user") or "")
     if who not in allowed:
         return
@@ -420,6 +500,7 @@ def _arrived(agent: str, where: Path, kind: str, record: Dict[str, Any], allowed
     body = str(record.get("text") or "")
     brought = record.get("attachments")
     brought = brought if isinstance(brought, list) else []
+    external = _a_text(record.get("external_id"))
     if not place:
         return
     if not body and not brought:
@@ -427,20 +508,65 @@ def _arrived(agent: str, where: Path, kind: str, record: Dict[str, Any], allowed
     if brought:
         # **A message that is only a file is still a message.** Requiring text dropped it in total
         # silence — not recorded, not logged, nothing said — for somebody who was on the allow list.
-        #
-        # What is recorded is what arrived, by name. Fetching them is the adapter's, because it
-        # holds the credential, and nothing yet asks it to: `channels.files` has the whole landing
-        # path built and tested and no protocol record reaches it. Until one does, this says what
-        # came rather than pretending nothing did.
-        named = ", ".join(str(one.get("name") or "a file") for one in brought[:naming.PER_MESSAGE])
-        body = f"{body}\n[brought {len(brought)} file(s): {named}]".strip()
-    landed = arriving.recorded(agent, kind, place, who, body,
-                              _a_text(record.get("external_id")))
+        here = _taken_in(agent, where, kind, external or f"{place}-{time.time():.6f}", brought)
+        if not body and not here:
+            _note(where, f"channel {kind}: a message in {place} brought only files that could not "
+                         f"be taken in, so there was nothing to record", logs.WARNING)
+            return
+        body = _also_attached(body, here)
+    landed = arriving.recorded(agent, kind, place, who, body, external)
+    if external:
+        # **The one state a turn is not needed for.** A message arriving is the whole of the event,
+        # so this is said the moment it is written down rather than when something answers it — and
+        # it is said on a redelivery too, because the mark belongs to the message and an adapter
+        # that has just restarted is one that no longer knows it put it up.
+        _said_to(where, one, {"do": "state", "place": place, "external_id": external,
+                              "state": SEEN})
     if landed.fresh:
         # There is no provider, so nothing answers this. Said plainly rather than left to look like
         # something went wrong: a release that receives and cannot reply has to say which it is.
         _note(where, f"channel {kind}: {who} said something in {place} — recorded, and nothing "
                      "answers it yet")
+
+
+def _taken_in(agent: str, where: Path, kind: str, message: str,
+              brought: List[Any]) -> List[Path]:
+    """Take what the adapter fetched into the agent's own account of it. Hands back where each went.
+
+    **Bounded here as well as in the adapter, and the two bounds are not one rule written twice.**
+    The adapter's exists so that it does not spend a platform's bandwidth on files that will not be
+    kept; this one is what actually decides, because an agent's directory is not somewhere a stranger
+    gets to fill and the far side of a seam is not where that is settled.
+
+    A file that could not be taken in is a line in the log and nothing else. It is not named in what
+    the agent reads: a name in that list is a promise there is something behind it.
+    """
+    here: List[Path] = []
+    for said in brought[:naming.PER_MESSAGE]:
+        if not isinstance(said, dict):
+            continue
+        try:
+            here.append(naming.landed(agent, kind, message, said))
+        except (naming.Refused, OSError) as why:
+            _note(where, f"channel {kind}: {why}", logs.WARNING)
+    if len(brought) > naming.PER_MESSAGE:
+        _note(where, f"channel {kind}: a message brought {len(brought)} files and only the first "
+                     f"{naming.PER_MESSAGE} of them were taken in", logs.WARNING)
+    return here
+
+
+def _also_attached(body: str, here: List[Path]) -> str:
+    """What somebody typed, and where what they attached now stands on this machine.
+
+    The shape the previous build settled on, and the reasoning transfers whole: the brain that will
+    open these runs here and holds no credential for that platform, so it is given a path and never
+    a link. Said as a block after what they typed rather than folded into it, so that rundesk's own
+    words and theirs stay told apart.
+    """
+    if not here:
+        return body
+    named = "\n".join(f"- {at.name}: {at}" for at in here)
+    return f"{body}\n\nAttached to this message, on this machine:\n{named}".strip()
 
 
 def _reaped(agent: str, where: Path, watching: Watching) -> None:
@@ -459,6 +585,10 @@ def _reaped(agent: str, where: Path, watching: Watching) -> None:
                          + (f" with code {gone.code}" if gone.code is not None else ""),
                   logs.WARNING)
             _said_on_the_way_out(agent, where, kind)
+            if gone.code == WILL_NOT_FIX:
+                _let_go(agent, where, one, watching)
+                _will_not_come_right(where, watching, kind)
+                continue
         else:
             if still_running(agent, kind):
                 continue
@@ -467,7 +597,7 @@ def _reaped(agent: str, where: Path, watching: Watching) -> None:
         _let_go(agent, where, one, watching)
 
 
-def _asked_to_stop(agent: str, where: Path, one: Running) -> None:
+def _asked_to_stop(where: Path, one: Running) -> None:
     """Ask an adapter to stop through the protocol before it is signalled.
 
     A platform is politer about a connection that says goodbye than one that vanishes, and an
@@ -475,19 +605,26 @@ def _asked_to_stop(agent: str, where: Path, one: Running) -> None:
     the signal follows either way.
     """
     if one.talking is not None:
-        _said_to(agent, where, one, {"do": "stop"})
+        _said_to(where, one, {"do": "stop"})
 
 
-def _said_to(agent: str, where: Path, one: Running, record: Dict[str, Any]) -> bool:
-    """Write one record to an adapter. `False` when it could not be written.
+def _said_to(where: Path, one: Running, record: Dict[str, Any]) -> bool:
+    """Write one record to an adapter, whole. `False` when it could not be written.
+
+    **Under the adapter's own lock**, because the gateway's loop and the thread draining that
+    adapter's stdout both write here — a delivery and the mark on a message that has just arrived —
+    and this seam is newline-delimited JSON, where two half-written lines are not two damaged
+    records but a stream a reader cannot find its place in again.
 
     A broken pipe here is ordinary: the adapter has stopped and this process has not noticed yet.
     """
     if one.talking is None:
         return False
+    holding = one.saying if one.saying is not None else contextlib.nullcontext()
     try:
-        one.talking.stdin.write(json.dumps(record) + "\n")
-        one.talking.stdin.flush()
+        with holding:
+            one.talking.stdin.write(json.dumps(record) + "\n")
+            one.talking.stdin.flush()
         return True
     except (OSError, ValueError):
         with contextlib.suppress(Exception):
@@ -507,6 +644,26 @@ def _let_go(agent: str, where: Path, one: Running, watching: Watching) -> None:
     watching.waiting[one.kind] = time.monotonic()
 
 
+def _will_not_come_right(where: Path, watching: Watching, kind: str) -> None:
+    """Stop starting a channel whose adapter said starting it again cannot help. **Said loudly.**
+
+    `WILL_NOT_FIX` is `EX_CONFIG`, and an adapter answers with it for the failures where trying
+    again *is* the damage: a token that has been revoked, an intent mask a platform will refuse for
+    ever. Held off on the flat ten seconds instead, a revoked Discord token is around 8,600 login
+    attempts a day, which earns this machine's own address a Cloudflare ban.
+
+    Said at `ERROR` and said once, because it is the one channel failure an owner has to act on and
+    nothing here will mention it again — there will be no second attempt to report.
+    """
+    watching.waiting[kind] = NEVER_AGAIN
+    watching.complained[kind] = ""            # the next real complaint is a different sentence
+    _note(where, f"channel {kind}: the adapter exited {WILL_NOT_FIX} (EX_CONFIG), which is how it "
+                 f"says that starting it again cannot help — its credential or its configuration is "
+                 f"what is wrong. This gateway will not start it again; put it right with `rundesk "
+                 f"channels` and restart the gateway. What it said before it stopped is above.",
+          logs.ERROR)
+
+
 def _said_on_the_way_out(agent: str, where: Path, kind: str) -> None:
     """Copy a bounded tail of what an adapter wrote to its error stream into the agent's log.
 
@@ -523,15 +680,22 @@ def _said_on_the_way_out(agent: str, where: Path, kind: str) -> None:
             _note(where, f"channel {kind}: {line.strip()[:SAID_LINE_AT_MOST]}", logs.ERROR)
 
 
-def _the_environment(agent: str, row: Dict[str, Any]) -> Dict[str, str]:
+def _the_environment(agent: str, kind: str, row: Dict[str, Any]) -> Dict[str, str]:
     """What an adapter is started with: who it may answer, its own settings, and its credential.
 
     The credential is fetched by the name the channel recorded, never re-derived — agent names allow
     characters an environment variable does not, and sanitising them collides.
+
+    **`RUNDESK_CHANNEL_HOME` is somewhere to put what it fetches**, and it is the directory this
+    module already keeps that channel's lock and record in. An adapter holds the credential and so
+    is the only thing that can download an attachment; it is handed somewhere to put one rather than
+    left to invent a path, and what it stages there is only ever taken from inside this directory —
+    see `files.landed`, which will not take a file from anywhere else.
     """
     built = {
         "RUNDESK_AGENT": agent,
         "RUNDESK_CHANNEL": str(row.get("kind") or ""),
+        "RUNDESK_CHANNEL_HOME": str(at(agent, kind)),
         "RUNDESK_SETTINGS": str(row.get("settings") or "{}"),
         "RUNDESK_ALLOW": ",".join(kept.who_may_reach(row)),
     }

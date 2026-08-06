@@ -7,11 +7,25 @@ a job registered with `launchd`, the only thing on a Mac that will start a progr
 it back when it dies. The job is what makes a gateway survive a crash, a logout and a reboot; the
 process is what does the work.
 
-What a gateway hosts — adapters, a provider, the subprocesses an agent runs — is not built yet. What
-is built is the part that has to be right before any of that can be trusted: a gateway starts, holds
-its agent's name, says every fifteen seconds that it is still working, stops when it is asked to, and
-can be told apart from one that has died. A provider recorded against an agent is recorded and not
-proven, and starting a gateway does not change that.
+A gateway hosts two things: **the work its schedules start**, and **the adapters its channels
+connect through**. Both hang off the same loop in the same three places — reckoning with what a
+previous gateway left before anything begins, one pass every beat, and a stop on the way out — and
+neither of them may end the gateway hosting it. A schedule that could not run, a platform that is
+down, an adapter nobody installed: each of those is a gateway that is *up* and complaining, never a
+gateway that refuses to start.
+
+A provider is the one thing still not built. A provider recorded against an agent is recorded and
+not proven, and starting a gateway does not change that.
+
+Underneath both is the part that had to be right before either could be trusted: a gateway starts,
+holds its agent's name, says every fifteen seconds that it is still working, stops when it is asked
+to, and can be told apart from one that has died.
+
+**It also says three things out loud**, through the one channel an agent marked as the notified one:
+that it has come up, that it is stopping, and that a schedule failed or was stopped. Not that a
+schedule succeeded — a message per successful nightly job is how somebody learns to ignore the
+channel. An agent with no notified channel says nothing at all, which is what configuring none asks
+for.
 
 The commands are in [`commands.md`](commands.md). This is what is underneath them.
 
@@ -132,6 +146,12 @@ launchd** — after which nothing on the command line says the job was ever ther
 and given the whole of its shutdown window — twenty-five seconds — to finish what it was holding, and
 only then does launchd insist. That is the default because a gateway is holding somebody's work, and
 a stop that does not let it finish is a stop that loses some.
+
+**That window is divided, not spent twice.** Both of the things a gateway hosts have children to
+stop, so each is given a share of the twenty seconds the gateway allows itself and divides its share
+again among its own children. A gateway that gave each of them the whole of it would still be
+stopping when launchd ran out of patience and killed it — which orphans every child it had not
+reached yet, each still holding the lock that says its work is going on.
 
 **`--force` kills it where it stands, first, and then takes the job back.** It is for a gateway that
 *will not go* — one ignoring `SIGTERM`, so that a graceful stop blocks for the whole window — and
