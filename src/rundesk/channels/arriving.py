@@ -28,10 +28,14 @@ from typing import Any, Dict, List, NamedTuple, Optional
 from rundesk.agents import directory, records
 from rundesk.core import config
 
-#: Where a conversation came from. Only these two are reachable today; the vocabulary the column
-#: holds is wider, and step `0003` says why it is stated in full rather than grown later.
+#: Where a conversation came from. The vocabulary the column holds is wider still, and step `0003`
+#: says why it is stated in full rather than grown later.
 FROM_CHANNEL = "channel"
 FROM_SCHEDULE = "schedule"
+
+#: Another named agent handed this agent a bounded task. A conversation of its own, never one a
+#: person is typing into — `recorded_for_a_delegation` says why.
+FROM_AGENT = "agent"
 
 #: Somebody typing. One conversation per agent — asking again is carrying the same exchange on.
 FROM_TERMINAL = "terminal"
@@ -131,6 +135,37 @@ def recorded_for_a_schedule(agent: str, schedule: str, body: str,
     with records.writing(directory.records(agent)) as conn:
         conversation = _conversation(conn, agent, FROM_SCHEDULE, schedule, None, now)
         message, fresh = _message(conn, agent, conversation, BY_RUNDESK, FROM_SCHEDULE,
+                                  _bounded(body), None, now)
+    return Landed(conversation, message, fresh)
+
+
+def recorded_for_a_delegation(agent: str, delegator: str, parent_turn: int, body: str,
+                              when: Optional[datetime] = None) -> Landed:
+    """Write down what another agent asked, in a conversation of its own.
+
+    **This is the one place a gateway writes an agent's store that is not its own**, and it is a
+    *delivery* rather than bookkeeping — the same act the Discord adapter performs when a message
+    arrives. What stays the answering agent's own is everything downstream: it makes the turn, it
+    records it, and it holds no account of somebody else's delegation.
+
+    **Keyed by who asked and which of their turns**, so two delegations from one turn share a
+    conversation and therefore a provider session, and one from a later turn starts its own. That
+    key is constructed by `delegations.kept.source_id_for` and never stored, because a stored id
+    would point into a database the delegator may not follow it into.
+
+    **Never the conversation a person is typing into**, which is what `FROM_AGENT` buys: an answer
+    to another agent turning up in the middle of somebody's exchange is the fault the schedules got
+    a conversation of their own to avoid.
+
+    Written as `BY_AGENT` under the *delegator's* name rather than the answering agent's, so reading
+    the history back tells a colleague's request apart from this agent's own words by a column
+    rather than by a prefix somebody has to parse.
+    """
+    now = _now(when)
+    with records.writing(directory.records(agent)) as conn:
+        conversation = _conversation(conn, agent, FROM_AGENT, f"{delegator}/{parent_turn}",
+                                     None, now)
+        message, fresh = _message(conn, agent, conversation, BY_AGENT, delegator,
                                   _bounded(body), None, now)
     return Landed(conversation, message, fresh)
 

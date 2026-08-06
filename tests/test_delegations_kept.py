@@ -14,6 +14,7 @@ import unittest
 
 import support
 from rundesk.agents import directory, records
+from rundesk.channels import arriving
 from rundesk.core import paths
 from rundesk.delegations import kept
 
@@ -209,6 +210,50 @@ class RecordsThatCannotAnswer(TwoAgents):
             conn.execute("DROP TABLE delegations")
         with self.assertRaises(records.Unreadable):
             kept.every("ava")
+
+
+class DeliveringTheBriefIntoTheOtherAgentsStore(TwoAgents):
+    """The one write a gateway makes to a store that is not its own — and it is a delivery."""
+
+    def test_the_brief_lands_as_a_message_in_a_conversation_of_its_own(self):
+        landed = arriving.recorded_for_a_delegation("bob", "ava", self.turn, "audit the exporter")
+        with records.reading(directory.records("bob")) as conn:
+            said = conn.execute(
+                "SELECT c.source, c.source_id, m.author, m.author_id, m.body"
+                " FROM conversation_messages m JOIN conversations c ON c.id = m.conversation_id"
+                " WHERE m.id = ?", (landed.message,)).fetchone()
+        self.assertEqual(("agent", f"ava/{self.turn}", "agent", "ava", "audit the exporter"),
+                         tuple(said))
+
+    def test_the_key_is_the_one_the_delegator_constructs(self):
+        """Whoever delivers and whoever looks it up later have to agree without keeping a pointer."""
+        landed = arriving.recorded_for_a_delegation("bob", "ava", self.turn, "one")
+        with records.reading(directory.records("bob")) as conn:
+            source_id = conn.execute("SELECT source_id FROM conversations WHERE id = ?",
+                                     (landed.conversation,)).fetchone()[0]
+        self.assertEqual(kept.source_id_for(kept.AGENT, "ava", self.turn, "del-1-aaaa"), source_id)
+
+    def test_two_briefs_from_one_turn_share_a_conversation(self):
+        one = arriving.recorded_for_a_delegation("bob", "ava", self.turn, "one")
+        two = arriving.recorded_for_a_delegation("bob", "ava", self.turn, "two")
+        self.assertEqual(one.conversation, two.conversation)
+
+    def test_one_from_a_later_turn_does_not(self):
+        one = arriving.recorded_for_a_delegation("bob", "ava", self.turn, "one")
+        two = arriving.recorded_for_a_delegation("bob", "ava", self.turn + 1, "two")
+        self.assertNotEqual(one.conversation, two.conversation)
+
+    def test_it_is_never_the_conversation_a_person_is_typing_into(self):
+        typed = arriving.asked_at_a_terminal("bob", "hello")
+        delegated = arriving.recorded_for_a_delegation("bob", "ava", self.turn, "audit it")
+        self.assertNotEqual(typed.conversation, delegated.conversation)
+
+    def test_the_delegator_holds_no_conversation_for_it(self):
+        """Bob's work is bob's. Ava keeps the one row saying she is owed an answer, and no more."""
+        arriving.recorded_for_a_delegation("bob", "ava", self.turn, "audit it")
+        with records.reading(directory.records("ava")) as conn:
+            self.assertEqual([], list(conn.execute(
+                "SELECT 1 FROM conversations WHERE source = 'agent'")))
 
 
 if __name__ == "__main__":
