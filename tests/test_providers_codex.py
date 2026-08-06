@@ -440,6 +440,60 @@ class EveryWayTheBrainSaysItFailed(support.Isolated):
                     self.assertIn(said, protocol.FAILURE_CODES)
 
 
+class AStreamThisSideCannotRead(support.Isolated):
+    """The two ways a stream breaks the *reading* rather than the meaning.
+
+    Every other reader in this product is written against both, and each of them says it was
+    measured somewhere first. The one shipped adapter was written against neither: it read its
+    child with `for line in stdout` and strict decoding, so one byte of a binary file put the
+    reading thread out and left the turn waiting on something that was never coming — silent for
+    the length of rundesk's own window, half an hour, on ordinary tool output.
+    """
+
+    def test_a_byte_that_is_not_text_ends_the_turn_rather_than_stalling_it(self):
+        """A coding agent reads binary files, and what a tool printed comes back inside the
+        stream. The turn must come to *something*, quickly."""
+        said, _got = replayed(self.home,
+                              captured=FAILURES / "a-byte-that-is-not-text.jsonl")
+        self.assertTrue(said, "the adapter said nothing at all")
+        self.assertEqual("done", said[-1]["type"])
+
+    def test_it_still_understands_the_records_around_the_bad_byte(self):
+        """`errors="replace"` rather than a reader that gives up: one unreadable character must not
+        cost every record after it."""
+        said, _got = replayed(self.home, captured=FAILURES / "a-byte-that-is-not-text.jsonl")
+        result = [one for one in said if one.get("type") == "result"]
+        self.assertTrue(result, "the record carrying the bad byte was lost whole")
+        self.assertIn("binary", result[0]["summary"],
+                      "what surrounded the unreadable character went with it")
+        self.assertTrue(said[-1]["ok"])
+
+    def test_a_line_too_long_to_hold_is_dropped_whole_and_the_turn_carries_on(self):
+        """**Half a record is not a smaller record, it is a corrupt one**, and the bound has to be
+        inside the read: a check on how long a line is, made after the whole of it is held, is not
+        a bound at all."""
+        at = self.home / "a-line-that-does-not-fit.jsonl"
+        at.write_text("\n".join([
+            json.dumps({"id": 1, "result": {}}),
+            json.dumps({"id": 2, "result": {"thread": {"id": "t-1"}}}),
+            json.dumps({"id": 3, "result": {}}),
+            # An answer too long to hold. Reported, it would be a `text` record; dropped whole, it
+            # is not — which is the one observable difference between a bound and no bound.
+            json.dumps({"method": "item/completed",
+                        "params": {"threadId": "t-1", "turnId": "u-1",
+                                   "item": {"type": "agentMessage", "id": "m",
+                                            "text": "y" * (1024 * 1024 + 64)}}}),
+            json.dumps({"method": "turn/completed",
+                        "params": {"threadId": "t-1",
+                                   "turn": {"id": "u-1", "status": "completed"}}}),
+        ]) + "\n", encoding="utf-8")
+        said, _got = replayed(self.home, captured=at)
+        self.assertEqual([], [one for one in said if one.get("type") == "text"],
+                         "a line past the bound was reported in pieces or held whole")
+        self.assertEqual("done", said[-1]["type"])
+        self.assertTrue(said[-1]["ok"], "a line nobody could hold ended a turn that was fine")
+
+
 class TheVersionItWasWrittenAgainst(support.Isolated):
     """A fixture nobody can date is a fixture nobody can act on when it goes red."""
 

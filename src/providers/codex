@@ -86,6 +86,10 @@ VERSION_WITHIN = 10.0
 #: policies disagreeing. This covers only the handshake, where a hang has no records to explain it.
 HANDSHAKE_WITHIN = 120.0
 
+#: How much of one line is read at once. Not a limit on what the server may say — only on what is
+#: held while it is being read, which is what makes the bound true rather than aspirational.
+A_LINE_AT_MOST = 1024 * 1024
+
 #: How much of what a tool printed goes in its `result` summary. The whole of it is in the raw
 #: stream; this is what belongs on a line somebody is watching go past.
 A_SUMMARY_AT_MOST = 400
@@ -181,7 +185,13 @@ def one_turn() -> int:
     try:
         server = subprocess.Popen(
             [CODEX, *APP_SERVER], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=None, text=True, bufsize=1, cwd=where, env=os.environ.copy())
+            stderr=None, text=True, bufsize=1, cwd=where, env=os.environ.copy(),
+            # **`errors="replace"`, and it is not tidiness.** A coding agent reads binary files, and
+            # what a tool printed comes back inside `aggregatedOutput` — so one stray byte is a
+            # `UnicodeDecodeError` raised *inside* the read, past every guard a caller can put
+            # around a record. Strict decoding killed the reading thread, nothing set `ended`, and
+            # the turn sat in silence until rundesk's own window ended it half an hour later.
+            errors="replace")
     except OSError as why:
         finished(False, failure_code="crashed",
                  failure_message=f"codex could not be started: {why}")
@@ -260,27 +270,83 @@ class Turn:
         return None
 
     def heard(self):
-        """Every line the server says, forever, on a thread of its own.
+        """Every line the server says, forever, on a thread of its own. **Never raises.**
 
         **Written to the raw stream before it is read**, so a line this release cannot understand is
         still on disk to compare against when somebody asks why records went missing.
+
+        `ended` is set on the way out however this ended, and that is the whole of what keeps `run`
+        from waiting on something that is not coming. A thread that raised on the way past it left
+        the turn silent for the length of rundesk's own window.
         """
-        for line in self.server.stdout:
-            line = line.rstrip("\n")
-            if self.raw is not None:
-                with contextlib.suppress(OSError):
-                    self.raw.write(line + "\n")
-                    self.raw.flush()
-            try:
-                said = json.loads(line)
-            except ValueError:
-                continue
-            if "id" in said and ("result" in said or "error" in said):
-                self.answers[said["id"]] = said
-            elif said.get("method") in LISTENED:
-                with contextlib.suppress(Exception):
-                    self.a_notification(said["method"], said.get("params") or {})
-        self.ended.set()
+        try:
+            for line in self.read_a_line():
+                line = line.rstrip("\n")
+                if self.raw is not None:
+                    with contextlib.suppress(OSError):
+                        self.raw.write(line + "\n")
+                        self.raw.flush()
+                try:
+                    said = json.loads(line)
+                except ValueError:
+                    continue
+                if "id" in said and ("result" in said or "error" in said):
+                    self.answers[said["id"]] = said
+                elif said.get("method") in LISTENED:
+                    with contextlib.suppress(Exception):
+                        self.a_notification(said["method"], said.get("params") or {})
+        except Exception as why:                   # noqa: BLE001 — see the docstring
+            if not self.ended.is_set():
+                self.could_not_read_it(f"reading codex went wrong ({type(why).__name__}: {why})")
+        finally:
+            self.ended.set()
+
+    def read_a_line(self):
+        """Every line the server sends, bounded, and **never a reason for this thread to die**.
+
+        Two things, and each was measured somewhere in this product before it was written here.
+
+        **Bounded.** `for line in stdout` is `readline()` with no size, which pulls until it meets a
+        newline — so a check on how long a line is happens only once the whole of it is held. A
+        server that wrote without ever ending a line took a comparable process from 17 MB to 735 MB
+        before anything refused it. A line past the ceiling is read to its end and dropped whole,
+        because half a record is not a smaller record, it is a corrupt one.
+
+        **Never fatal.** Whatever ends this reading — a decode that still failed, a pipe that broke,
+        a server that fell over — ends the *turn*, said in the one way rundesk can act on. A thread
+        that died without setting `ended` left `run` waiting on something that was never coming, and
+        the turn sat silent until rundesk's own window ended it thirty minutes later.
+        """
+        try:
+            while True:
+                said = self.server.stdout.readline(A_LINE_AT_MOST + 1)
+                if not said:
+                    return
+                if len(said) > A_LINE_AT_MOST and not said.endswith("\n"):
+                    self.thrown_away()
+                    continue
+                yield said
+        except Exception as why:                   # noqa: BLE001 — see the docstring
+            if not self.ended.is_set():
+                self.could_not_read_it(
+                    f"the codex stream could not be read ({type(why).__name__}: {why})")
+        finally:
+            # **Whatever happened, and always.** This is the one thing that lets `run` stop waiting.
+            self.ended.set()
+
+    def thrown_away(self) -> None:
+        """Read the rest of a line already too long, and keep none of it. Bounded on every call, for
+        the reason the caller is: what is being skipped past is by definition a stream writing
+        without ever ending a line."""
+        while True:
+            more = self.server.stdout.readline(A_LINE_AT_MOST + 1)
+            if not more or more.endswith("\n"):
+                return
+
+    def could_not_read_it(self, said: str) -> None:
+        """End the turn because this side could not go on reading it. Said as a `done`, because
+        rundesk reading none at all is a turn nobody can explain."""
+        finished(False, session_id=self.thread_id, failure_code="crashed", failure_message=said)
 
     # ── the turn ──────────────────────────────────────────────────────────────────────────────
 

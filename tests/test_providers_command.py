@@ -15,20 +15,15 @@ because a schedule that cannot be tried by hand is a schedule nobody can debug.
 Run directly: `python3 tests/test_providers_command.py`
 """
 
-import json
 import unittest
 from unittest import mock
 
 import support
-from rundesk.agents import directory, records
+from rundesk.agents import directory
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.providers import adapters, instructions, kept
 from rundesk.schedules import kept as schedules_kept
-
-#: The provider adapter every case here can run. A path, so a case does not depend on where an
-#: install keeps the ones it was given.
-STAND_IN = str(support.CHECKOUT / "tests" / "samples" / "a-stand-in")
 
 #: The smallest legitimate adapter: it answers `--capabilities` and can do nothing.
 SAYS_NOTHING = """#!/bin/sh
@@ -53,12 +48,9 @@ class Providers(support.Isolated):
         at.chmod(0o755 if runnable else 0o644)
         return at
 
-    def an_agent(self, named="cole", provider=STAND_IN):
+    def an_agent(self, named="cole", provider=support.A_STAND_IN):
         directory.made(named, provider)
         return named
-
-    def a_stand_in_that(self, agent, **how):
-        records.stated(directory.records(agent), {"agent_settings": json.dumps(how)})
 
 
 class Listing(Providers):
@@ -217,7 +209,7 @@ class Running(Providers):
         """The number a supervisor reads. A firing recorded as having worked when it did not is
         worse than one recorded as having failed."""
         agent = self.an_agent()
-        self.a_stand_in_that(agent, fail_with="upstream_error")
+        self.a_stand_in_told(agent, fail_with="upstream_error")
         self.a_schedule(agent)
         code, _out, err = self.rundesk("providers", "run", agent, "--schedule", "nightly")
         self.assertEqual(FAILED, code)

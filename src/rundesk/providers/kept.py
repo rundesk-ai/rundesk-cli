@@ -88,6 +88,21 @@ class Refused(Exception):
 # -- one turn --------------------------------------------------------------------------
 
 
+def usage_of_turn(row: Dict[str, Any]) -> protocol.Usage:
+    """What a settled turn cost, as the same object a running one reports.
+
+    **The columns and the fields are the same words**, so this is a lift and never a translation —
+    which is the point: a surface reading a row and a surface reading a live turn were formatting
+    the cost independently, and the one reading the row had never picked up `context_tokens`. The
+    ledger for a turn showed less than the line printed the moment that turn finished.
+    """
+    return protocol.Usage(
+        usage_reported=bool(row["usage_reported"]),
+        **{named: row[named] for named in
+           ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+            "context_tokens", "model_name")})
+
+
 def add_turn(agent: str, values: Dict[str, Any], when: Optional[datetime] = None) -> int:
     """Write down a turn that has been admitted, and hand back its id. **Before the brain starts.**
 

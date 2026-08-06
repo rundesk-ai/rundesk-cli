@@ -29,6 +29,13 @@ Knows nothing about rundesk, and nothing about what a line means.
 
 from typing import IO, Callable, Iterator, NamedTuple, Optional, Tuple, Union
 
+#: How much of one line is read before it is refused, by default. **One number, because it is one
+#: hazard**: the channel drain and the provider drain both feed this reader and a bound retuned on
+#: one side and not the other would give the two adapters different ideas of "too long a line",
+#: which is exactly the split sharing the reader was meant to close. A caller with a reason may
+#: still pass its own — `read` takes it as an argument, and this is only what it should be.
+AT_MOST = 1024 * 1024
+
 #: A line that would not fit, read to its end and kept nowhere.
 TOO_LONG = "too long"
 

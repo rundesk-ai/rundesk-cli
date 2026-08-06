@@ -24,13 +24,15 @@ or a redirection, so a schedule cannot mean one thing when a person tests it and
 gateway runs it. **The program is located when the schedule is added**, so a path that is not there
 is refused where somebody can fix it rather than at two in the morning in a log.
 
-## There is no way to spell a schedule that asks an agent, and that is deliberate
+## A schedule either asks the agent or starts a program, and never both
 
-The records hold that kind, `due` decides it and `firing` has the seam for it — but nothing in this
-release runs a provider, so a schedule of that kind could be added, would be listed with a next-due
-time, and would fail every time the clock reached it. `AGENTS.md` is unambiguous: a verb rundesk
-cannot perform is a verb rundesk does not have. The day there is a provider process this file gains
-two `add_argument` lines and one branch, and nothing else moves.
+`--ask` and `--run`, exactly one of them — the records hold that as a `CHECK` and this says it in
+words, because "one of these two" is the kind of rule a person meets by typing neither.
+
+**An asking schedule gets a conversation of its own**, keyed by its name, so a run at three in the
+morning never lands in the exchange somebody types into. `providers.answering` is what takes that
+turn; nothing here knows how, which is why this file gained two `add_argument` lines and one branch
+and nothing else moved.
 
 ## Running one by hand is a person checking their own work
 

@@ -126,15 +126,12 @@ def capabilities(kind: str, running: Optional[Callable[..., programs.Ran]] = Non
     so every failure here is an empty mapping rather than an exception, and the caller reads a
     missing field as the least capable answer.
 
-    Resolved inside the body rather than bound in the signature: a default bound at definition is
-    decided once, when the module is imported, and nothing can reach past it.
+    How the answer is read is `core.adapters`', because a provider is asked the same question and
+    reads a refusal the same way. What is a *channel's* is that it is asked with nothing of a
+    particular run set — there is no run.
     """
-    ran = (running or programs.run)([str(where(kind)), "--capabilities"],
-                                    CAPABILITIES_WITHIN, env=adapters.environment())
-    if ran.trouble or ran.code != 0:
-        return {}
-    said = adapters.printed_object(ran.out)
-    return said if isinstance(said, dict) else {}
+    return adapters.asked_offline(where(kind), CAPABILITIES_WITHIN, adapters.environment(),
+                                  running)
 
 
 def checked(kind: str, options: Sequence[str], env: Dict[str, str],

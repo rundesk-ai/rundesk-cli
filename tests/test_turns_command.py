@@ -18,15 +18,12 @@ becomes visible before somebody notices an agent behaving oddly.
 Run directly: `python3 tests/test_turns_command.py`
 """
 
-import json
 import unittest
 
 import support
-from rundesk.agents import directory, records
+from rundesk.agents import directory
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.providers import kept
-
-STAND_IN = str(support.CHECKOUT / "tests" / "samples" / "a-stand-in")
 
 
 class Turns(support.Isolated):
@@ -34,10 +31,7 @@ class Turns(support.Isolated):
     def setUp(self):
         super().setUp()
         self.agent = "cole"
-        directory.made(self.agent, STAND_IN)
-
-    def a_stand_in_that(self, **how):
-        records.stated(directory.records(self.agent), {"agent_settings": json.dumps(how)})
+        directory.made(self.agent, support.A_STAND_IN)
 
     def a_turn(self, asked="what changed today?", *more):
         code, _out, err = self.rundesk("ask", self.agent, asked, *more)
@@ -69,7 +63,7 @@ class Listing(Turns):
 
     def test_a_turn_nobody_measured_shows_a_dash_and_never_a_zero(self):
         """A cost nobody reported and a cost of nothing are different answers."""
-        self.a_stand_in_that(crash_without_finishing=True)
+        self.a_stand_in_told(self.agent, crash_without_finishing=True)
         self.a_turn()
         code, out, _err = self.rundesk("turns", self.agent)
         self.assertEqual(OK, code)
@@ -128,7 +122,7 @@ class OneTurnWhole(Turns):
         self.assertIn("bytes", out)
 
     def test_a_turn_that_failed_says_why_and_whether_waiting_will_help(self):
-        self.a_stand_in_that(fail_with="signed_out")
+        self.a_stand_in_told(self.agent, fail_with="signed_out")
         self.a_turn()
         code, out, _err = self.rundesk("turns", self.agent, "1")
         self.assertEqual(OK, code)
@@ -136,7 +130,7 @@ class OneTurnWhole(Turns):
         self.assertIn("will not clear on its own", out)
 
     def test_a_retryable_failure_says_the_other_thing(self):
-        self.a_stand_in_that(fail_with="rate_limited")
+        self.a_stand_in_told(self.agent, fail_with="rate_limited")
         self.a_turn()
         _code, out, _err = self.rundesk("turns", self.agent, "1")
         self.assertIn("later may work", out)
@@ -157,7 +151,7 @@ class TheDriftCounters(Turns):
     def test_a_record_this_release_never_heard_of_is_counted_and_kept(self):
         """**Kept, and shown to nobody.** A line this release cannot read must not vanish quietly —
         that is the difference between visible drift and records silently going missing."""
-        self.a_stand_in_that(say_something_unknown=True)
+        self.a_stand_in_told(self.agent, say_something_unknown=True)
         self.a_turn()
         self.assertGreater(self._counters(1)[0], 0)
         code, out, _err = self.rundesk("turns", self.agent, "1")

@@ -92,6 +92,7 @@ def _one(agent: str, turn: int) -> int:
         ("ended", row["ended_at"] or NOT_SAID),
         ("exit code", NOT_SAID if row["exit_code"] is None else str(row["exit_code"])),
         ("cost", _cost(row)),
+        ("conversation size", _how_big(row)),
         ("instructions", f"{row['instructions_bytes']} bytes, "
                          f"{(row['instructions_sha256'] or '')[:12]}"),
         ("brain said", _said_it_could_do(row)),
@@ -134,14 +135,27 @@ def _became(agent: str, row: Dict[str, Any]) -> str:
 
 
 def _cost(row: Dict[str, Any]) -> str:
-    """What a turn cost, or that nobody said. **Zero and unknown are different answers.**"""
-    if not row["usage_reported"]:
+    """What a turn cost, or that nobody said. **Zero and unknown are different answers.**
+
+    Read off `Usage` rather than off the row's columns by hand, so a quantity added to that object
+    cannot go missing from this surface — which is what happened to `context_tokens`: the line
+    printed the moment a turn finished carried it and the ledger for that same turn did not.
+    """
+    used = kept.usage_of_turn(row)
+    if not used.usage_reported:
         return NOT_SAID
-    each = [f"{row[what]}{short}" for what, short in
-            (("input_tokens", "in"), ("output_tokens", "out"),
-             ("cache_read_tokens", "cr"), ("cache_write_tokens", "cw"))
-            if row[what] is not None]
+    each = [f"{one}{short}" for one, short in
+            ((used.input_tokens, "in"), (used.output_tokens, "out"),
+             (used.cache_read_tokens, "cr"), (used.cache_write_tokens, "cw"))
+            if one is not None]
     return " ".join(each) or "0"
+
+
+def _how_big(row: Dict[str, Any]) -> str:
+    """How big the conversation was when this turn ended. **A level, not a cost** — it goes down
+    when one is compacted, so it is shown apart from the four quantities that are billed."""
+    used = kept.usage_of_turn(row)
+    return f"{used.context_tokens} tokens" if used.context_tokens else NOT_SAID
 
 
 def _said_it_could_do(row: Dict[str, Any]) -> str:

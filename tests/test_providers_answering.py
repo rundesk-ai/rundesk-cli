@@ -41,10 +41,6 @@ from rundesk.utils import programs
 #: so an ordinary run is through in tenths.
 PATIENCE = 30.0
 
-#: The provider adapter every case here runs. A path rather than a name, so the case does not depend
-#: on where an install keeps the ones it was given.
-STAND_IN = str(support.CHECKOUT / "tests" / "samples" / "a-stand-in")
-
 #: A channel adapter that announces one message on its way up and writes down everything rundesk
 #: says back to it. **Everything, whole and unread** — half of what this file proves is what goes
 #: *out* through that pipe: the four marks a turn puts on a message, and the answer.
@@ -77,7 +73,7 @@ class Answering(support.Isolated):
     def setUp(self):
         super().setUp()
         self.agent = "cole"
-        directory.made(self.agent, STAND_IN)
+        directory.made(self.agent, support.A_STAND_IN)
         self.where = directory.logs(self.agent)
         # `paths.code()` answers with the checkout when the scratch root has no installed tree, and
         # a case writing an adapter would then write it into the repository somebody is working in.
@@ -97,10 +93,6 @@ class Answering(support.Isolated):
         for pid in self.pids:
             with contextlib.suppress(OSError):
                 programs.stop(pid, gently_for=0.2, firmly_for=2.0)
-
-    def a_stand_in_that(self, **how):
-        """What the provider adapter should do, said the way an owner's settings reach one."""
-        records.stated(directory.records(self.agent), {"agent_settings": json.dumps(how)})
 
     def a_channel(self, saying="", allowed=("2207",)):
         at = self.adapters / "discord"
@@ -210,12 +202,31 @@ class AMessageOnAChannelIsAnswered(Answering):
                          "a stranger's message reached a brain")
 
 
+class ATurnThatMadeSomethingAndSaidNothing(Answering):
+    """**A file counts as an answer** — `protocol.has_answer` says so, and the turn is `done`.
+
+    The surface that delivers it decided otherwise: it looked only at the reply text, found none,
+    and fell through to the sentence for a turn that failed. So an agent asked for a chart made the
+    chart, the turn succeeded, and the person was sent *"I could not answer that"* with the chart
+    attached to it.
+    """
+
+    def test_the_person_is_not_told_it_failed(self):
+        self.a_stand_in_told(self.agent, made_a_file_and_said_nothing=True)
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        turn = self.waited_for_a_turn()
+        self.assertEqual(kept.DONE, turn["turn_status"])
+        self.assertTrue(self.waited_until(lambda: answering.DONE in self.marks()))
+        self.assertNotIn("could not answer", " ".join(self.delivered()))
+
+
 class WhenTheBrainCouldNotAnswer(Answering):
 
     def test_somebody_waiting_is_told_rather_than_left_in_silence(self):
         """**Silence is the one thing that must not happen.** A person who asked a question and got
         nothing cannot tell a broken agent from a slow one."""
-        self.a_stand_in_that(fail_with="rate_limited")
+        self.a_stand_in_told(self.agent, fail_with="rate_limited")
         self.a_channel(saying=self.a_message_arrived())
         self.hosting_now()
         self.waited_for_a_turn()
@@ -223,7 +234,7 @@ class WhenTheBrainCouldNotAnswer(Answering):
         self.assertIn("rate_limited", " ".join(self.delivered()))
 
     def test_it_says_whether_waiting_will_help_without_naming_a_vendor(self):
-        self.a_stand_in_that(fail_with="signed_out")
+        self.a_stand_in_told(self.agent, fail_with="signed_out")
         self.a_channel(saying=self.a_message_arrived())
         self.hosting_now()
         self.waited_for_a_turn()
@@ -231,7 +242,7 @@ class WhenTheBrainCouldNotAnswer(Answering):
         self.assertIn("will not clear on its own", " ".join(self.delivered()))
 
     def test_the_message_is_marked_failed_and_never_left_working(self):
-        self.a_stand_in_that(fail_with="upstream_error")
+        self.a_stand_in_told(self.agent, fail_with="upstream_error")
         self.a_channel(saying=self.a_message_arrived())
         self.hosting_now()
         self.waited_for_a_turn()
@@ -252,7 +263,7 @@ class TwoTurnsInOneConversation(Answering):
     def test_the_second_is_refused_rather_than_queued_and_says_so_in_the_log(self):
         """The claim is the kernel's, so this competes correctly with a person at a terminal asking
         the same agent with no coordination between the two."""
-        self.a_stand_in_that(silent=True)
+        self.a_stand_in_told(self.agent, silent=True)
         landed = arriving.recorded(self.agent, "discord", "1180", "2207", "the first")
         watching = hosting.Watching({}, {}, {})
         answers = answering.OnAChannel(self.where, lambda: watching)

@@ -18,26 +18,19 @@ from rundesk.agents import directory, records
 from rundesk.channels import arriving
 from rundesk.providers import adapters, kept, protocol, turns
 
-#: The adapter every case here runs. A path rather than a name, so the case does not depend on where
-#: an install keeps the ones it was given.
-STAND_IN = str(support.CHECKOUT / "tests" / "samples" / "a-stand-in")
-
 PATIENCE = 15.0
 
 
 class WithAnAgent(support.Isolated):
     def setUp(self):
         super().setUp()
-        directory.made("ava", STAND_IN)
+        self.agent = "ava"
+        directory.made(self.agent, support.A_STAND_IN)
 
     def asking(self, said: str = "what changed today?", **also) -> turns.Request:
         landed = arriving.recorded("ava", "discord", "ops", "2207", said)
         return turns.Request(agent="ava", prompt=said, conversation=landed.conversation,
                              source=arriving.FROM_CHANNEL, place="ops", **also)
-
-    def a_stand_in_that(self, **how):
-        """What the stand-in should do, said the way an owner's own settings reach an adapter."""
-        records.stated(directory.records("ava"), {"agent_settings": json.dumps(how)})
 
     def run_turn(self, request=None, **also):
         return turns.run(request or self.asking(), **also)
@@ -90,9 +83,19 @@ class ATurnThatAnswers(WithAnAgent):
 
     def test_a_brain_that_names_no_model_does_not_erase_the_one_that_was_asked_for(self):
         """A quiet brain must not take the record of what was asked for away with it."""
-        self.a_stand_in_that(say_nothing_and_finish=True)
+        self.a_stand_in_told(self.agent, say_nothing_and_finish=True)
         got = self.run_turn(self.asking(model_name="something-particular"))
         self.assertEqual(kept.get_turn("ava", got.turn)["model_name"], "something-particular")
+
+    def test_a_prompt_too_long_to_keep_is_cut_and_marked_like_any_other_record(self):
+        """**A prompt is not smaller for being rundesk's own.** Every record read off the brain is
+        bounded; the two rundesk writes itself were not, so a schedule with a long one wrote an
+        unbounded row every time the clock reached it."""
+        got = self.run_turn(self.asking("x" * 20000))
+        sent = [one for one in kept.list_turn_records(self.agent, got.turn)
+                if one["record_type"] == "sent"]
+        self.assertLess(len(sent[0]["event_data"]), 4100)
+        self.assertIn("truncated", sent[0]["event_data"])
 
     def test_what_became_of_the_program_is_kept_apart_from_what_the_brain_said(self):
         self.assertEqual(kept.get_turn("ava", self.run_turn().turn)["exit_code"], 0)
@@ -187,42 +190,42 @@ class WhenTheBrainDoesNotAnswer(WithAnAgent):
     def test_a_turn_that_produced_nothing_is_not_a_turn_that_worked(self):
         """Measured on a live gateway: `done ok:true`, four zero counters, fourteen milliseconds and
         nothing said — recorded as finished, and the question that caused it consumed."""
-        self.a_stand_in_that(say_nothing_and_finish=True)
+        self.a_stand_in_told(self.agent, say_nothing_and_finish=True)
         got = self.run_turn()
         self.assertEqual(got.turn_status, kept.FAILED)
         self.assertEqual(got.failure_message, turns.NOTHING_SAID)
 
     def test_a_brain_that_classified_its_own_failure_has_that_word_recorded(self):
-        self.a_stand_in_that(fail_with=protocol.SIGNED_OUT)
+        self.a_stand_in_told(self.agent, fail_with=protocol.SIGNED_OUT)
         got = self.run_turn()
         self.assertEqual(got.turn_status, kept.FAILED)
         self.assertEqual(got.failure_code, protocol.SIGNED_OUT)
         self.assertEqual(kept.get_turn("ava", got.turn)["failure_code"], protocol.SIGNED_OUT)
 
     def test_a_signed_out_brain_is_not_something_to_try_again(self):
-        self.a_stand_in_that(fail_with=protocol.SIGNED_OUT)
+        self.a_stand_in_told(self.agent, fail_with=protocol.SIGNED_OUT)
         got = self.run_turn()
         self.assertFalse(protocol.is_retryable(got.failure_code))
         self.assertTrue(protocol.needs_human_action(got.failure_code))
 
     def test_a_vendor_that_fell_over_is_something_to_try_again(self):
-        self.a_stand_in_that(fail_with=protocol.UPSTREAM_ERROR)
+        self.a_stand_in_told(self.agent, fail_with=protocol.UPSTREAM_ERROR)
         self.assertTrue(protocol.is_retryable(self.run_turn().failure_code))
 
     def test_a_brain_that_stopped_without_saying_it_had_finished_is_stopped_and_not_done(self):
         """No `done` at all is the shape a killed adapter leaves, and nothing may declare such a turn
         over on the brain's behalf."""
-        self.a_stand_in_that(crash_without_finishing=True)
+        self.a_stand_in_told(self.agent, crash_without_finishing=True)
         got = self.run_turn()
         self.assertEqual(got.turn_status, kept.STOPPED)
         self.assertEqual(got.failure_code, protocol.CRASHED)
 
     def test_what_it_said_went_wrong_reaches_the_turn(self):
-        self.a_stand_in_that(crash_without_finishing=True)
+        self.a_stand_in_told(self.agent, crash_without_finishing=True)
         self.assertIn("fell over", self.run_turn().failure_message)
 
     def test_an_adapter_that_will_not_start_is_a_failure_and_not_a_traceback(self):
-        self.a_stand_in_that(refuse_to_start=True)
+        self.a_stand_in_told(self.agent, refuse_to_start=True)
         got = self.run_turn()
         self.assertIn(got.turn_status, (kept.FAILED, kept.STOPPED))
 
@@ -236,7 +239,7 @@ class WhenTheBrainDoesNotAnswer(WithAnAgent):
 class WhatThisReleaseDidNotUnderstand(WithAnAgent):
     def test_it_is_kept_with_its_own_words_and_counted(self):
         """An adapter may be ahead of rundesk, and a vendor's change has to show as visible drift."""
-        self.a_stand_in_that(say_something_unknown=True)
+        self.a_stand_in_told(self.agent, say_something_unknown=True)
         got = self.run_turn()
         unknown = [one for one in kept.list_turn_records("ava", got.turn)
                    if one["record_type"] == turns.UNKNOWN]
@@ -265,12 +268,12 @@ class CarryingAConversationOn(WithAnAgent):
 
 class SayingSomethingIntoARunningTurn(WithAnAgent):
     def test_a_word_reaches_a_brain_that_said_it_can_be_steered(self):
-        self.a_stand_in_that(steer=True)
+        self.a_stand_in_told(self.agent, steer=True)
         got = self.run_turn(saying=["stop at five"])
         self.assertIn("heard stop at five", got.reply)
 
     def test_what_was_said_mid_turn_is_written_down_before_it_is_sent(self):
-        self.a_stand_in_that(steer=True)
+        self.a_stand_in_told(self.agent, steer=True)
         got = self.run_turn(saying=["stop at five"])
         sent = [json.loads(one["event_data"]) for one in kept.list_turn_records("ava", got.turn)
                 if one["record_type"] == turns.SENT]

@@ -56,18 +56,24 @@ def listened():
 
 threading.Thread(target=listened, daemon=True).start()
 
-with open(os.environ["CAPTURED"], encoding="utf-8") as captured:
+# **Bytes, not text.** A capture may hold a byte that is not valid UTF-8 — a real server relays
+# whatever a tool printed — and a replay that decoded it here would fail on this side instead of
+# handing the adapter under test the thing it has to survive.
+with open(os.environ["CAPTURED"], "rb") as captured:
     for line in captured:
         if not line.strip():
             continue
-        said = json.loads(line)
-        if said.get("id") is not None:
+        try:
+            said = json.loads(line)
+        except ValueError:
+            said = None
+        if isinstance(said, dict) and said.get("id") is not None:
             try:
                 said["id"] = asked.get(timeout=GRACE)
             except queue.Empty:
                 continue
-            line = json.dumps(said) + "\n"
-        sys.stdout.write(line)
-        sys.stdout.flush()
+            line = (json.dumps(said) + "\n").encode()
+        sys.stdout.buffer.write(line)
+        sys.stdout.buffer.flush()
 
 ended.wait()

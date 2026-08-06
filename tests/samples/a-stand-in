@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 
 def say(**it):
@@ -77,6 +78,15 @@ def main():
         sys.stdout.write('{"type": "telepathy", "text": "not a record"}\n')
         sys.stdout.write("this is not json at all\n")
         sys.stdout.flush()
+
+    if how.get("made_a_file_and_said_nothing"):
+        # Something delivered *is* an answer even when nothing was typed about it — which is the
+        # one shape of successful turn that has no reply text to fall back on.
+        made = Path(os.environ.get("RUNDESK_CWD") or ".") / "a-chart.png"
+        made.write_bytes(b"not really a chart")
+        say(type="file", at=str(made), name=made.name)
+        say(type="done", ok=True, session_id="thread-9")
+        return 0
 
     say(type="think", text="reading what was asked", whole=True)
     say(type="tool", id="1", name="Read", did="read")

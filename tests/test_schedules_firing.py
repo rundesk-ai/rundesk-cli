@@ -696,5 +696,21 @@ def _takeable(lock: Path) -> bool:
         os.close(asked)
 
 
+class WritingALineAboutTheWorkIsNotTheWork(Firing):
+    """A gateway loop is not a place to find out that a disk filled.
+
+    Two of this function's three siblings — `channels.hosting._note` and `providers.answering._note`
+    — were written so that a failure to log cannot end anything, and one of them says it is guarded
+    "for the same reason as `firing._note`". This one was the one that was not.
+    """
+
+    def test_a_log_that_cannot_be_written_does_not_stop_a_schedule_from_firing(self):
+        self.given("tick")
+        with mock.patch.object(logs, "note", side_effect=OSError("the disk filled")):
+            after = self.look()
+        self.assertEqual(["tick"], sorted(after.running),
+                         "a schedule was not started because its own log could not be written")
+
+
 if __name__ == "__main__":
     unittest.main()

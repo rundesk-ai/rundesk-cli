@@ -58,7 +58,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, NamedTuple, Op
 
 from rundesk.agents import directory, records
 from rundesk.channels import arriving
-from rundesk.providers import adapters, environment, instructions, kept, protocol
+from rundesk.providers import adapters, environment, instructions, kept, protocol, streaming
 from rundesk.skills import grants
 from rundesk.utils import lines, locking, logs
 
@@ -258,7 +258,10 @@ def _the_brain(request: Request, provider_name: str, told: Dict[str, str], turn:
     said: List[Dict[str, Any]] = []
     speaking = None
     try:
-        kept.add_turn_record(agent, turn, SENT, {"text": request.prompt})
+        # **Bounded like every record read off the brain.** A prompt is not smaller for
+        # being rundesk's own, and a schedule with a long one writes this row every time
+        # the clock reaches it.
+        kept.add_turn_record(agent, turn, SENT, _bounded({"text": request.prompt}))
         if can["steer"]:
             # Held open for as long as the turn lasts, so nothing can mean "the prompt ended" any
             # more — and records rather than plain text, because a brain that reads to the end of its
@@ -295,7 +298,8 @@ def _speaking(agent: str, turn: int, stream, saying) -> Optional[threading.Threa
     def speak() -> None:
         try:
             for word in saying:
-                kept.add_turn_record(agent, turn, SENT, {"text": word, "mid_turn": True})
+                kept.add_turn_record(agent, turn, SENT,
+                                     _bounded({"text": word, "mid_turn": True}))
                 if not stream.say(protocol.build_say_line(word, protocol.STEERING_CONTEXT)):
                     kept.add_turn_record(agent, turn, LOST, {"lost_count": 1,
                                                              "reason": "it had already finished"})
@@ -360,7 +364,14 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
     code = protocol.failure_code(said)
     message = protocol.failure_message(said)
     if stream.stop_reason:
-        status, code = kept.FAILED, protocol.TIMED_OUT
+        # **Which of the two it was, asked of the stream rather than guessed from its prose.** A
+        # turn rundesk gave up waiting on is a timeout and needs a person; one whose pipe could not
+        # be read is a fault in this process, which is closer to a crash and worth another attempt.
+        # Reported alike, an I/O failure reached an owner as "this timed out" and as a word that
+        # says trying again will not help.
+        status = kept.FAILED
+        code = (protocol.CRASHED if stream.stop_code == streaming.COULD_NOT_BE_READ
+                else protocol.TIMED_OUT)
         message = message or stream.stop_reason
     elif brain_said is False or code is not None:
         status = kept.FAILED

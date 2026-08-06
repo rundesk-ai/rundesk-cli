@@ -118,12 +118,19 @@ class OnAChannel:
                 self._marked(agent, kind, place, FAILED)
 
     def _delivered(self, agent: str, kind: str, place: str, got: turns.Outcome) -> None:
-        """The answer, cut to what this platform takes, with whatever the brain made beside it."""
-        said = got.reply.strip() or self._instead(got)
-        if not said:
-            return
+        """The answer, cut to what this platform takes, with whatever the brain made beside it.
+
+        **A turn that worked is never explained.** `protocol.has_answer` counts a file as an answer
+        on purpose — something delivered is an answer even when nothing was typed about it — so a
+        turn asked for a chart, which made the chart and said nothing, is a turn that succeeded. Read
+        off the reply text alone, it fell through to the sentence for a turn that *failed*, and the
+        person was sent "I could not answer that" with the chart attached to it.
+        """
+        said = got.reply.strip() or ("" if got.worked else self._instead(got))
         carrying = delivery.carried(agent, [str(one.get("at")) for one in got.files
                                             if one.get("at")])
+        if not said and not carrying.files:
+            return
         pieces = delivery.split(said, at_most=self._at_most(agent, kind))
         hosting.told(agent, self._where, self._hosted(), kind, place, pieces,
                      sending=carrying.files)

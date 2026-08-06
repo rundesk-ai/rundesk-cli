@@ -41,8 +41,9 @@ from typing import Iterator, List, Optional, Union
 from rundesk.utils import lines, programs
 
 #: How much of one line is read before it is refused. Not a limit on what an adapter may say, only on
-#: what is held at once — see `utils.lines`, which explains why the bound has to be inside the read.
-LINE_AT_MOST = 1024 * 1024
+#: what is held at once — see `utils.lines`, which explains why the bound has to be inside the read
+#: and which holds the number, so a channel and a provider cannot come to disagree about it.
+LINE_AT_MOST = lines.AT_MOST
 
 #: How long an adapter may say nothing at all before this takes it for wedged. Generous on purpose: a
 #: working turn can be quiet for a long time while a single tool call runs, and ending one of those
@@ -70,6 +71,13 @@ LOOKING_AGAIN = 0.5
 #: signalled. Short: this is a program that has already said everything and is tidying up, not a wait
 #: for more work — and what it buys is the exit code, which signalling would consume.
 SETTLING_SECONDS = 2.0
+
+#: The two ways a stream ends badly, told apart because a caller acts differently on each.
+#: **Rundesk gave up waiting** — the silence window or the ceiling — is a turn nobody may retry
+#: without a person deciding to. **It could not be read** is a fault in this process's own reading of
+#: the pipe, which is closer to a crash and is worth another attempt.
+ENDED_BY_RUNDESK = "ended by rundesk"
+COULD_NOT_BE_READ = "could not be read"
 
 #: What a `Gap` from this layer says, as against the two `utils.lines` produces.
 FELL_BEHIND = "fell behind"
@@ -108,10 +116,19 @@ class Stream:
         #: before then would be acting on nothing.
         self.stop_reason: Optional[str] = None
 
-    def _went_wrong(self, why: str) -> None:
+        #: **Which of the three it was**, in the seam's own closed words. `stop_reason` is prose for
+        #: a person and this is the word anything acts on, because there is more than one way for a
+        #: stream to end badly and they are not alike: a stream this gave up waiting on is a
+        #: timeout, and one that could not be *read* is a fault. Reported alike, an I/O failure
+        #: arrived at an owner as "this timed out" — and worse, as one of the words that says
+        #: trying again will not help, which for a transient read failure is the opposite of true.
+        self.stop_code: Optional[str] = None
+
+    def _went_wrong(self, why: str, code: str) -> None:
         """Record why this ended, **once**. The first reason is the one that explains the rest."""
         if self.stop_reason is None:
             self.stop_reason = why
+            self.stop_code = code
 
     # -- reading -----------------------------------------------------------------------
 
@@ -119,7 +136,8 @@ class Stream:
         """Every line the adapter sent, and a `Gap` wherever one was lost. **Never raises.**
 
         Yields until the adapter's output ends, or until it has been quiet too long, or until the
-        ceiling. The last two set `stop_reason` and end the program; the first is the ordinary way a turn
+        ceiling. The last two set `stop_reason` and `stop_code` and end the program; the first is the
+        ordinary way a turn
         finishes and sets nothing.
 
         The reading itself is on another thread, so a caller that spends a fifth of a second on a
@@ -135,7 +153,8 @@ class Stream:
         try:
             while True:
                 if time.monotonic() - began >= self._ceiling:
-                    self._went_wrong(f"it was still running after {self._ceiling:g} seconds")
+                    self._went_wrong(f"it was still running after {self._ceiling:g} seconds",
+                                     ENDED_BY_RUNDESK)
                     return
                 try:
                     said = self._held.get(timeout=LOOKING_AGAIN)
@@ -146,7 +165,8 @@ class Stream:
                         grew = self._errors_grew()
                         heard = time.monotonic()
                     elif time.monotonic() - heard >= self._silence:
-                        self._went_wrong(f"it said nothing for {self._silence:g} seconds")
+                        self._went_wrong(f"it said nothing for {self._silence:g} seconds",
+                                         ENDED_BY_RUNDESK)
                         return
                     continue
                 if said is None:                       # the reader reached the end of the output
@@ -190,7 +210,7 @@ class Stream:
                 # anything: the turn already has the real one, and reporting ours over it turned a
                 # ceiling into "I/O operation on closed file" — the reason nobody could act on
                 # replacing the one they could.
-                self._went_wrong(f"this turn stopped reading it ({why})")
+                self._went_wrong(f"this turn stopped reading it ({why})", COULD_NOT_BE_READ)
         finally:
             # Always, however this ended, or a turn waits out its whole silence window on a stream
             # that is already finished.

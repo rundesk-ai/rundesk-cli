@@ -127,11 +127,12 @@ CARRIED = ("PATH", "HOME", "TMPDIR", "TZ", "LANG", "LC_ALL")
 #: fact about Unix, and this module needs it without needing to know what a gateway is.
 STOPPED_WITH = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 
-#: What this release can say about a schedule that asks an agent rather than naming a program.
+#: What is said about a schedule that asks an agent when nothing was handed in to start one.
 #:
-#: The records hold that kind and the clock decides it exactly as it decides any other, so the
-#: sentence is about the *runner* being absent and says so. A schedule reported as failing for a
-#: reason nobody can act on is worse than one that is refused in words.
+#: **Not the ordinary case.** A running gateway always hands one in, so this is what a caller that
+#: did not — a test, or something driving `looked` by hand — is told. The sentence is about the
+#: *runner* being absent and says so, because a schedule reported as failing for a reason nobody can
+#: act on is worse than one that is refused in words.
 NOT_PROVEN = ("no provider process was handed in, so a schedule that asks an agent cannot be "
               "started here — it is recorded and it is not run")
 
@@ -465,9 +466,12 @@ def looked(agent: str, where: Path, watching: Watching,
     that has been up for a week, and the same minute cannot fire twice across a restart. The build
     this replaces held that in memory and lost it with the process.
 
-    `asking` is the seam a provider process arrives at and is `None` in this release. A schedule of
-    that kind is claimed, refused in one line, and written down as `failed`, because a schedule
-    silently passed over looks exactly like one that is working.
+    `asking` is what starts a schedule that asks an agent, and `gateways.host` hands one in on every
+    beat — so it is `None` only where a caller left it out, which is every case in this suite and
+    nothing in a running gateway. A schedule of that kind with nothing to start it is claimed,
+    refused in one line, and written down as `failed`, because a schedule silently passed over looks
+    exactly like one that is working. **`firing` still knows nothing about a brain**: it starts what
+    it was handed and reaps a pid.
 
     `telling` is where a firing that went wrong is said out loud, and it reaches `_finished` and
     nothing else — see there for why a firing that went *right* says nothing.
@@ -801,9 +805,17 @@ def _note(where: Path, said: str, level: str = logs.INFO) -> None:
     `gateways.host._still_working` guards the same way for the same reason. It is a single function
     here rather than a condition at each call site, because there are a dozen call sites and the one
     that forgot would be the one that ran on the day an agent was removed.
+
+    **And it never raises.** A gateway loop is not a place to find out that a disk filled: writing a
+    line about the work is not the work, and a beat that died complaining about its own logging
+    would take every schedule on the machine with it. Its two siblings — `channels.hosting._note`
+    and `providers.answering._note` — were written this way and this one was not, so one of them
+    said it was guarded "for the same reason as `firing._note`" while `firing._note` was the one
+    that was not.
     """
-    if where.parent.is_dir():
-        logs.note(where, said, level)
+    with contextlib.suppress(Exception):
+        if where.parent.is_dir():
+            logs.note(where, said, level)
 
 
 def _said_once(where: Path, watching: Watching, about: Optional[str], said: str,

@@ -1,0 +1,5 @@
+{"id": 1, "result": {}}
+{"id": 2, "result": {"thread": {"id": "t-1"}, "model": "m-1"}}
+{"id": 3, "result": {}}
+{"method":"item/completed","params":{"threadId":"t-1","turnId":"u-1","item":{"type":"commandExecution","id":"e1","command":"cat a.png","status":"completed","exitCode":0,"aggregatedOutput":"ÿþ binary","commandActions":[{"type":"unknown","command":"cat a.png"}]}}}
+{"method": "turn/completed", "params": {"threadId": "t-1", "turn": {"id": "u-1", "status": "completed", "error": null}}}

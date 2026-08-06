@@ -50,9 +50,10 @@ May depend on `utils`.
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from rundesk.core import paths
+from rundesk.utils import programs
 
 #: What an adapter is started with, from this process's own environment. Everything else is dropped:
 #: an adapter is handed what it needs by name, so a variable it did not ask for is one it cannot come
@@ -158,6 +159,31 @@ def environment(also: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         built["PATH"] = os.pathsep.join([str(packages), built.get("PATH", os.defpath)])
     built.update(also or {})
     return built
+
+
+def asked_offline(at: Path, within: float, env: Dict[str, str],
+                  running: Optional[Callable[..., programs.Ran]] = None) -> Dict[str, Any]:
+    """Ask an adapter what it can do, and read the object it printed. `{}` for every other answer.
+
+    Both kinds of adapter answer this question and both answer it the same way, so how a *refusal*
+    is read lives here rather than twice: an adapter that does not recognise the flag and does
+    something else can do nothing, which is a complete and honest answer and never an error. Every
+    failure — a program that would not start, a non-zero exit, output that is not an object — is an
+    empty mapping, so a caller reads a missing field as the least capable answer and never has to
+    tell "it said no" from "it would not say".
+
+    What each kind *asks with* stays with that kind: a provider is asked with the settings its turn
+    will run under, and a channel is not. That is the difference between the two contracts, and it
+    is the argument rather than the body.
+
+    `running` is resolved inside the body rather than bound in the signature: a default bound at
+    definition is decided once, when the module is imported, and nothing can reach past it.
+    """
+    ran = (running or programs.run)([str(at), "--capabilities"], within, env=env)
+    if ran.trouble or ran.code != 0:
+        return {}
+    said = printed_object(ran.out)
+    return said if isinstance(said, dict) else {}
 
 
 def printed_object(said: str) -> Any:

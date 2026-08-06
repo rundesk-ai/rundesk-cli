@@ -160,15 +160,9 @@ STOPPING_LEAST = 1.0
 ENDING_WITHIN = 5.0
 
 #: How much of a line an adapter sends is read before it is refused. Not a limit on what an adapter
-#: may say, only on what is held at once.
-#:
-#: **Read with a bounded call, and that is the whole of the guarantee.** `for line in stdout` is
-#: `readline()` with no size, which pulls bytes until it meets a newline or the end of the stream —
-#: so a check on the length of what came back happens only once the whole of it is already in
-#: memory. Measured: an adapter that wrote 300MB with no newline took this process from 17MB to
-#: 735MB before anything was refused, and the kernel ended the gateway outright, which logs nothing
-#: anywhere. `stdout.readline(LINE_AT_MOST + 1)` is what makes the sentence above true.
-LINE_AT_MOST = 1024 * 1024
+#: may say, only on what is held at once — `utils.lines` holds the number and the measurement behind
+#: it, and holds them once, because a provider's drain runs against the same hazard.
+LINE_AT_MOST = lines.AT_MOST
 
 #: How much of what an adapter wrote to its error stream is copied into the agent's log when it
 #: stops. The whole of it stays in the file; this is what somebody reading the day's log sees.
@@ -228,9 +222,14 @@ class Running(NamedTuple):
     #: knows an answer has actually landed. That is what puts the ✅ on somebody's message, and it
     #: needs no provider: *answered* is a fact about delivery, not about a turn.
     #:
-    #: A plain dict on an immutable tuple, mutated by both threads under `saying`. **Stated by
-    #: every caller and never defaulted**: a mutable default on a `NamedTuple` is one object
-    #: shared by every instance that leaves it out, so two adapters would answer for each
+    #: A plain dict on an immutable tuple, written by both threads — the loop as it delivers and
+    #: the drain as answers land — and **not under `saying`**, which guards writing a line to the
+    #: adapter and nothing else. Every write here is one `__setitem__` or one `pop`, which is
+    #: indivisible; anything that ever needs to read this and then write it back on the strength of
+    #: what it read has to take a lock, because that pair is not.
+    #:
+    #: **Stated by every caller and never defaulted**: a mutable default on a `NamedTuple` is one
+    #: object shared by every instance that leaves it out, so two adapters would answer for each
     #: other's deliveries. It sits above `saying` because a field with no default must.
     awaiting: Dict[str, str]
 

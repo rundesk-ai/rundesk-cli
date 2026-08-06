@@ -148,7 +148,11 @@ def _failed(why: str, *and_so: str) -> int:
 
 
 def _mistyped(why: str) -> int:
-    """The command line itself was wrong, which argparse's own code is for."""
-    print(f"messages: FAILED — {why}")
+    """The command line itself was wrong, which argparse's own code is for.
+
+    Through `failed` like every other refusal in this product, and only the *code* differs: a
+    message on stdout is a message a shell pipeline swallows into the data it was collecting.
+    """
+    failed(f"messages: FAILED — {why}")
     return USAGE
 

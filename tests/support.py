@@ -15,6 +15,7 @@ the network.
 
 import contextlib
 import io
+import json
 import os
 import shutil
 import sys
@@ -28,10 +29,16 @@ from unittest import mock
 #: The checkout, and the one place the source tree is named. Everything imports through here.
 CHECKOUT = Path(__file__).resolve().parent.parent
 
+#: The provider adapter every suite that needs a brain runs. A path rather than a name, so a case
+#: does not depend on where an install keeps the ones it was given — and **one path**, because six
+#: suites had spelled it out and a sample that moved would have moved in six places or in five.
+A_STAND_IN = str(CHECKOUT / "tests" / "samples" / "a-stand-in")
+
 if str(CHECKOUT / "src") not in sys.path:
     sys.path.insert(0, str(CHECKOUT / "src"))
 
 from rundesk import cli  # noqa: E402  — the insert above is what makes these importable
+from rundesk.agents import directory, records  # noqa: E402
 from rundesk.core import paths  # noqa: E402
 from rundesk.gateways import job  # noqa: E402
 from rundesk.utils import programs  # noqa: E402
@@ -376,6 +383,15 @@ class Isolated(unittest.TestCase):
                 f"this case is not isolated: rundesk resolves {resolved}, not {self.home}")
         if Path.home() in resolved.parents and resolved.name == ".rundesk":
             raise AssertionError(f"this case would work on the owner's own install at {resolved}")
+
+    def a_stand_in_told(self, agent: str, **how) -> None:
+        """Tell the stand-in adapter what to do, the way an owner's own settings reach one.
+
+        Here rather than in each suite because *how* a setting reaches an adapter is a fact about
+        the product — a JSON object in one column — and six copies of it means five that go on
+        agreeing with a shape that has changed.
+        """
+        records.stated(directory.records(agent), {"agent_settings": json.dumps(how)})
 
     def rundesk(self, *argv: str) -> Tuple[int, str, str]:
         """Drive the command inside this case's scratch root.

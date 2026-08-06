@@ -163,12 +163,8 @@ def capabilities(named: str, settings: Optional[str] = None,
     decided once, when the module is imported, and nothing can reach past it.
     """
     told = {"RUNDESK_SETTINGS": settings} if settings else {}
-    ran = (running or programs.run)([str(where(named)), "--capabilities"],
-                                    CAPABILITIES_WITHIN, env=adapters.environment(told))
-    if ran.trouble or ran.code != 0:
-        return {}
-    said = adapters.printed_object(ran.out)
-    return said if isinstance(said, dict) else {}
+    return adapters.asked_offline(where(named), CAPABILITIES_WITHIN,
+                                  adapters.environment(told), running)
 
 
 def talking_to(named: str, env: Dict[str, str], agent: str, conversation: int,

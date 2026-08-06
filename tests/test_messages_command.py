@@ -23,15 +23,13 @@ from rundesk.channels import arriving
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.providers import kept
 
-STAND_IN = str(support.CHECKOUT / "tests" / "samples" / "a-stand-in")
-
 
 class Messages(support.Isolated):
 
     def setUp(self):
         super().setUp()
         self.agent = "cole"
-        directory.made(self.agent, STAND_IN)
+        directory.made(self.agent, support.A_STAND_IN)
 
     def on_a_channel(self, text, place="ops", channel="discord", who="2207"):
         return arriving.recorded(self.agent, channel, place, who, text)
@@ -77,8 +75,13 @@ class Listing(Messages):
         self.assertIn("rundesk agents", err)
 
     def test_a_limit_that_is_not_a_count_is_the_command_line_being_wrong(self):
-        code, _out, _err = self.rundesk("messages", self.agent, "--limit", "0")
+        """**And it is said on stderr.** A refusal on stdout is a refusal a shell pipeline swallows
+        into the data it was collecting — which is what this command did, alone among them, because
+        the case that should have caught it discarded both streams."""
+        code, out, err = self.rundesk("messages", self.agent, "--limit", "0")
         self.assertEqual(USAGE, code)
+        self.assertIn("at least 1", err)
+        self.assertNotIn("FAILED", out)
 
 
 class Narrowing(Messages):

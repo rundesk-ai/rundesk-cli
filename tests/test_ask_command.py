@@ -13,7 +13,6 @@ the same exchange on rather than starting a new one.
 Run directly: `python3 tests/test_ask_command.py`
 """
 
-import json
 import unittest
 
 import support
@@ -22,21 +21,13 @@ from rundesk.channels import arriving
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.providers import kept
 
-#: The provider adapter every case here runs. A path, so a case does not depend on where an install
-#: keeps the ones it was given.
-STAND_IN = str(support.CHECKOUT / "tests" / "samples" / "a-stand-in")
-
 
 class Asking(support.Isolated):
 
     def setUp(self):
         super().setUp()
         self.agent = "cole"
-        directory.made(self.agent, STAND_IN)
-
-    def a_stand_in_that(self, **how):
-        """What the adapter should do, said the way an owner's own settings reach one."""
-        records.stated(directory.records(self.agent), {"agent_settings": json.dumps(how)})
+        directory.made(self.agent, support.A_STAND_IN)
 
     def asked(self, *more):
         return self.rundesk("ask", self.agent, "what changed today?", *more)
@@ -108,29 +99,29 @@ class WhatItShowsWhileItWorks(Asking):
 class WhenItCouldNotAnswer(Asking):
 
     def test_it_exits_non_zero_and_says_what_the_brain_said(self):
-        self.a_stand_in_that(fail_with="rate_limited")
+        self.a_stand_in_told(self.agent, fail_with="rate_limited")
         code, _out, err = self.asked()
         self.assertEqual(FAILED, code)
         self.assertIn("the stand-in was told to fail", err)
 
     def test_it_says_whether_waiting_will_help(self):
-        self.a_stand_in_that(fail_with="rate_limited")
+        self.a_stand_in_told(self.agent, fail_with="rate_limited")
         _code, _out, err = self.asked()
         self.assertIn("later may work", err)
 
     def test_it_says_when_waiting_will_not_help(self):
-        self.a_stand_in_that(fail_with="signed_out")
+        self.a_stand_in_told(self.agent, fail_with="signed_out")
         _code, _out, err = self.asked()
         self.assertIn("will not clear on its own", err)
 
     def test_it_says_where_to_read_what_the_turn_did(self):
-        self.a_stand_in_that(fail_with="upstream_error")
+        self.a_stand_in_told(self.agent, fail_with="upstream_error")
         _code, _out, err = self.asked()
         self.assertIn(f"rundesk turns {self.agent} 1", err)
 
     def test_a_turn_that_ended_with_nothing_said_is_not_a_turn_that_worked(self):
         """Exit zero having said nothing is the failure that looks most like a success."""
-        self.a_stand_in_that(say_nothing_and_finish=True)
+        self.a_stand_in_told(self.agent, say_nothing_and_finish=True)
         code, _out, err = self.asked()
         self.assertEqual(FAILED, code)
         self.assertIn("did not answer", err)
