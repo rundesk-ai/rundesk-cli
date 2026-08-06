@@ -286,8 +286,6 @@ class RemovingACatalog(Skills):
     def test_the_catalog_rundesk_ships_is_refused_before_confirm_is_even_looked_at(self):
         # Asking somebody to confirm something that will then be refused is a worse answer than
         # refusing now.
-        if not catalogs.SHIPPED.is_dir():
-            self.skipTest("this release ships no catalog")
         catalogs.place_bundled()
         for argv in (("skills", "remove", library.BUNDLED),
                      ("skills", "remove", library.BUNDLED, "--confirm")):

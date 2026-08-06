@@ -19,6 +19,7 @@ import support
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.lifecycle import tree
+from rundesk.skills import catalogs, library
 
 #: A launcher that cannot start, for proving an install refuses to report success it did not earn.
 A_LAUNCHER_THAT_WILL_NOT_RUN = """#!/usr/bin/env python3
@@ -66,6 +67,20 @@ class AFreshInstall(Installing):
         self.assertEqual(OK, code, err)
         self.assertTrue((paths.app() / "rundesk").is_file())
         self.assertIn(str(paths.app()), out)
+
+    def test_a_fresh_install_has_the_catalog_this_release_ships(self):
+        # The catalog stands at `src/skills`, and nothing enumerates it: `tree` copies `src/` whole
+        # minus a blocklist, so it rides along by *not being excluded*. That is a guarantee held by
+        # an omission, which is the kind that goes quietly wrong — so it is asserted from the far
+        # end, on an install that really ran, rather than trusted.
+        code, _out, err = self.install()
+        self.assertEqual(OK, code, err)
+        shipped = paths.app() / "src" / catalogs.SHIPPED_IN
+        self.assertTrue((shipped / library.MANIFEST).is_file(),
+                        f"{shipped} was not carried into the release")
+        self.assertTrue((shipped / "managing-rundesk" / library.DECLARED).is_file())
+        self.assertIn(library.BUNDLED, library.known())
+        self.assertTrue(library.held(library.BUNDLED))
 
     def test_it_makes_every_directory_an_install_keeps_things_in(self):
         self.install()

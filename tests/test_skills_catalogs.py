@@ -20,9 +20,10 @@ from pathlib import Path
 from typing import List, Optional
 from unittest import mock
 
-from fixtures_skills import a_published_catalog, a_skill, a_tarball
+from fixtures_skills import a_published_catalog, a_skill, a_tarball, written
 
 import support
+from rundesk.core import paths
 from rundesk.skills import catalogs, library, needs
 from rundesk.utils import archives
 
@@ -413,14 +414,59 @@ class BringingEveryCatalogUpToDate(Catalogs):
 
 
 class TheCatalogRundeskShips(Catalogs):
+    def a_release_shipping(self, *skills: str) -> Path:
+        """Skills standing where a *release* keeps them, rather than where this checkout does.
+
+        One directory per skill and no manifest — the shape `src/skills/` really has, so a case that
+        passes here is a case that would pass against the release.
+        """
+        at = paths.app() / "src" / catalogs.SHIPPED_IN
+        at.mkdir(parents=True, exist_ok=True)
+        written(at / library.MANIFEST, {
+            "schema": library.SCHEMA, "name": library.BUNDLED, "version": "1.0.0",
+            "description": "How to operate this rundesk install."})
+        for one in skills or ("writing-plans",):
+            a_skill(at / one)
+        return at
+
+    def test_where_it_ships_is_answered_on_every_call_and_never_bound_at_import(self):
+        # The whole reason this is a function. A constant would be decided when the module was first
+        # imported — before any suite pointed `RUNDESK_HOME` anywhere, and on a machine that has
+        # rundesk installed `~/.rundesk/app/src` exists, so it would resolve into the owner's live
+        # install and place a catalog out of it.
+        was = catalogs.shipped()
+        self.a_release_shipping()
+        self.assertNotEqual(was, catalogs.shipped())
+        self.assertEqual(paths.app() / "src" / catalogs.SHIPPED_IN, catalogs.shipped())
+
+    def test_it_is_placed_out_of_the_release_that_is_running_rather_than_out_of_the_checkout(self):
+        # `paths.code()` is the one answer to which copy of a release a process is working with. An
+        # install that placed the catalog out of whatever tree happened to be imported from would
+        # hand its agents another release's instructions, which is the exact coupling `BUNDLED`
+        # exists to keep.
+        self.a_release_shipping("operating-the-release")
+        self.assertTrue(catalogs.place_bundled())
+        self.assertEqual(["operating-the-release"],
+                         [one.name for one in library.held(library.BUNDLED)])
+
+    def test_a_release_that_ships_no_catalog_says_so_rather_than_that_a_source_is_wrong(self):
+        # **Which sentence, not merely that there is one.** Without the guard this still refuses —
+        # `source_trouble` calls the directory neither a path nor a repository — and that wording
+        # sends somebody to check what they typed, when nobody typed anything: the release itself is
+        # incomplete. Asserting only that the path appears passed either way, because the path *is*
+        # the source, which is how this case was first written and why it proved nothing.
+        (paths.app() / "src").mkdir(parents=True, exist_ok=True)
+        with self.assertRaises(catalogs.Refused) as refused:
+            catalogs.place_bundled()
+        self.assertIn("this release ships no catalog", str(refused.exception))
+        self.assertIn(str(catalogs.shipped()), str(refused.exception))
+
     def test_it_is_placed_from_the_release_rather_than_from_the_network(self):
         # A machine that cannot reach GitHub finishes installing with skills. The build this
         # replaces finished with none, and nothing said why.
         #
         # Note the signature: there is no `fetching` to pass, so nothing here *can* reach the
         # network however it is called. That is the guarantee rather than a habit.
-        if not catalogs.SHIPPED.is_dir():
-            self.skipTest("this release ships no bundled catalog yet")
         self.assertTrue(catalogs.place_bundled())
         self.assertIn(library.BUNDLED, library.known())
         self.assertTrue(library.held(library.BUNDLED))
@@ -429,11 +475,9 @@ class TheCatalogRundeskShips(Catalogs):
         # Version-coupled: what is in it is how to operate *this* rundesk, so a repository moving on
         # its own schedule must not govern it — a machine on an older release would be handed a
         # newer release's instructions.
-        if not catalogs.SHIPPED.is_dir():
-            self.skipTest("this release ships no bundled catalog yet")
         catalogs.place_bundled()
         self.assertFalse(catalogs.may_be_fetched(library.BUNDLED))
-        self.assertEqual(str(catalogs.SHIPPED),
+        self.assertEqual(str(catalogs.shipped()),
                          library.read(library.BUNDLED).provenance.source)
 
     def test_the_general_catalog_it_depends_on_is_fetched_and_undeletable(self):
@@ -454,8 +498,6 @@ class TheCatalogRundeskShips(Catalogs):
     def test_a_machine_with_no_network_still_gets_the_version_coupled_catalog(self):
         # The honest failure: the general catalog is missing and says so, and the install is not
         # failed by it, because the agent already knows how to operate the thing running it.
-        if not catalogs.SHIPPED.is_dir():
-            self.skipTest("this release ships no bundled catalog yet")
 
         def unreachable(source, _etag, _into):
             raise OSError(f"{source} could not be reached")
@@ -467,8 +509,6 @@ class TheCatalogRundeskShips(Catalogs):
         self.assertNotEqual("", outcomes[library.DEPENDED].why)
 
     def test_placing_it_again_changes_nothing(self):
-        if not catalogs.SHIPPED.is_dir():
-            self.skipTest("this release ships no bundled catalog yet")
         catalogs.place_bundled()
         self.assertFalse(catalogs.place_bundled())
 

@@ -15,6 +15,7 @@ Run directly: `python3 tests/test_skills_bundled.py`
 
 import argparse
 import re
+import shutil
 import unittest
 
 import support
@@ -63,24 +64,36 @@ def verbs_of(parser: argparse.ArgumentParser):
 
 
 class Bundled(support.Isolated):
-    """The catalog standing in this release."""
+    """The skills standing in this release, and the catalog they are installed as."""
 
     def setUp(self) -> None:
         super().setUp()
-        if not catalogs.SHIPPED.is_dir():
-            self.skipTest("this release ships no catalog")
+        # **Not skipped when they are missing.** They are a shipped asset beside `src/providers/`,
+        # which nothing skips over, so a release that lost them goes red here rather than green with
+        # a skip nobody reads — `OK` and `OK (skipped=14)` are the same word in a summary.
         library.where().mkdir(parents=True, exist_ok=True)
-        self.tree = catalogs.SHIPPED
+        # The catalog the release ships: its manifest, and one directory per skill beside it.
+        # Not the shape it is installed in — `place_bundled` puts the skills a level down, into the
+        # `skills/` a catalog on disk keeps them in.
+        self.skills = catalogs.shipped()
+
+    def named(self):
+        """Every skill this release ships, in name order."""
+        return sorted(one.name for one in self.skills.iterdir()
+                      if (one / library.DECLARED).is_file())
 
 
 class WhatIsShipped(Bundled):
     def test_there_is_something_to_check(self):
         # A check that discovers its own work fails when it discovers none: a walk pointed at a
         # directory that had moved would otherwise pass having read nothing.
-        self.assertTrue(library.found(self.tree), f"no skills found under {self.tree}")
+        self.assertTrue(self.named(), f"no skills found under {self.skills}")
 
     def test_the_manifest_is_one_this_release_can_read(self):
-        manifest = library.read_manifest(self.tree)
+        # It stands beside the skills it describes, and is read by the same reader every published
+        # catalog's is — so a manifest this release would refuse from anybody else is one it refuses
+        # from itself, here, rather than on somebody's machine.
+        manifest = library.read_manifest(self.skills)
         self.assertEqual(library.BUNDLED, manifest.name)
         self.assertEqual(library.SCHEMA, manifest.schema)
 
@@ -88,25 +101,25 @@ class WhatIsShipped(Bundled):
         # The reason this catalog exists at all. A skill about writing pull requests does not change
         # when rundesk does, so shipping it here would tie a correction to it to a rundesk release —
         # it belongs in the catalog that is fetched. Everything here is about *this* rundesk.
-        self.assertEqual(["managing-rundesk", "writing-skills"], library.found(self.tree))
+        self.assertEqual(["managing-rundesk", "writing-skills"], self.named())
 
     def test_every_shipped_skill_is_one_a_brain_would_load(self):
         # The same check any other catalog is held to on the way in. Ours is not exempt, and the
         # cost of it being wrong is higher: it is on every machine.
-        for name in library.found(self.tree):
+        for name in self.named():
             with self.subTest(skill=name):
-                self.assertEqual("", library.trouble_with(self.tree / library.INSIDE / name))
+                self.assertEqual("", library.trouble_with(self.skills / name))
 
     def test_every_shipped_skill_declares_its_credentials_readably(self):
-        for name in library.found(self.tree):
+        for name in self.named():
             with self.subTest(skill=name):
-                self.assertEqual("", needs.trouble_with(self.tree / library.INSIDE / name))
+                self.assertEqual("", needs.trouble_with(self.skills / name))
 
     def test_every_command_a_shipped_skill_ships_can_be_run(self):
         # A script that is present and not executable looks exactly like one that works, right up
         # until something tries — and this one would be shipped that way to every machine.
-        for name in library.found(self.tree):
-            for one in needs.ships(self.tree / library.INSIDE / name):
+        for name in self.named():
+            for one in needs.ships(self.skills / name):
                 with self.subTest(skill=name, script=one.shown):
                     self.assertTrue(one.runnable, f"{name}/{one.shown} is not executable")
 
@@ -117,6 +130,28 @@ class WhatIsShipped(Bundled):
         self.assertTrue(catalogs.place_bundled())
         self.assertIn(library.BUNDLED, library.known())
         self.assertTrue(library.held(library.BUNDLED))
+
+    def test_a_skill_edited_in_place_is_put_back_by_the_sweep_every_install_and_update_runs(self):
+        # **Through `refresh`, which is the one path both `rundesk install` and `rundesk update`
+        # take**, rather than through `place_bundled` on its own. The case below drives the direct
+        # call and would stay green if the sweep stopped calling it — which is the way this
+        # guarantee would really be lost, because nobody invokes `place_bundled` by hand.
+        catalogs.refresh()
+        drifted = (library.tree(library.BUNDLED) / library.INSIDE / "managing-rundesk"
+                   / library.DECLARED)
+        was = drifted.read_text(encoding="utf-8")
+        drifted.write_text("---\nname: managing-rundesk\ndescription: edited\n---\n",
+                           encoding="utf-8")
+        # A skill somebody deleted outright is put back too: the whole tree is replaced, so what is
+        # standing afterwards is what the release ships and not what was left of it.
+        gone = library.tree(library.BUNDLED) / library.INSIDE / "writing-skills"
+        shutil.rmtree(gone)
+
+        catalogs.refresh()
+
+        self.assertEqual(was, drifted.read_text(encoding="utf-8"))
+        self.assertTrue((gone / library.DECLARED).is_file())
+        self.assertEqual(self.named(), library.found(library.tree(library.BUNDLED)))
 
     def test_it_is_replaced_out_of_the_release_rather_than_left_as_it_was(self):
         # Version-coupled: an install that moved forward and kept the previous release's copy would
@@ -149,9 +184,8 @@ class WhatAShippedSkillMayClaim(Bundled):
         # nothing set.
         there = verbs_of(cli.build_parser())
         self.assertTrue(there, "the parser answered no verbs at all")
-        for name in library.found(self.tree):
-            said = (self.tree / library.INSIDE / name / library.DECLARED).read_text(
-                encoding="utf-8")
+        for name in self.named():
+            said = (self.skills / name / library.DECLARED).read_text(encoding="utf-8")
             for verb in sorted(set(verbs_named(said))):
                 with self.subTest(skill=name, verb=verb):
                     self.assertIn(verb, there,

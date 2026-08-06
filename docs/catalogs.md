@@ -84,6 +84,35 @@ the site before the token, the way a person would set it up.
 One required file with four fields and one optional file with one field is the whole contract. That is
 the amount somebody can still hold in their head in a year, which is the point.
 
+## The catalog rundesk ships
+
+One catalog does not come from a repository at all. `rundesk` is part of the release, kept as source
+beside the provider and channel adapters, and pre-installed on every machine:
+
+```text
+src/skills/                       in the release — what a checkout holds
+├── manifest.json
+├── managing-rundesk/SKILL.md
+└── writing-skills/SKILL.md
+```
+
+| Where | Whose it is |
+|---|---|
+| `paths.code()/skills/` — an install's `app/src/skills/` | part of the release, replaced whole by an update |
+| `data/skills/rundesk/` | where it is installed to, like any other catalog |
+
+**The skills stand beside the manifest rather than one level down.** A catalog *on disk* keeps its
+skills in a `skills/` directory, and holding that shape in the release would read
+`src/skills/skills/<name>/`. Rundesk puts that level in on the way in, so the directory somebody
+opens lists the skills — and what gets installed still goes through the same validation and the same
+swap a catalog fetched from GitHub gets, because it is not worth having one catalog this product
+reads a special way.
+
+**It is replaced out of the release on every install and every update**, whether or not the release
+moved — so a skill edited in place, or deleted, is put back. It is version-coupled: what is in it is
+how to operate *this* rundesk, and a machine that kept the previous release's copy would be handing
+every agent instructions for a rundesk it is no longer running.
+
 ## Publishing a catalog
 
 A catalog is a repository with `manifest.json` at its root and `skills/` beside it:

@@ -46,9 +46,18 @@ from rundesk.core import paths
 from rundesk.skills import library, needs
 from rundesk.utils import archives, files, locking
 
-#: Where a catalog rundesk ships stands inside the release. Derived from this file rather than from
-#: `paths.program()`, because it is a part of this package and moves with it.
-SHIPPED = Path(__file__).resolve().parent / "bundled"
+#: Where the catalog rundesk ships stands inside the release, under whatever `paths.code()` resolves
+#: to. The same shape `providers.adapters.SHIPPED_IN` and `channels.adapters.SHIPPED_IN` already
+#: have, and for the same reason: what ships with a release is an asset of that release, and
+#: `src/<kind>/` is where this product keeps one.
+#:
+#: **It is a catalog kept as source**: its own `manifest.json`, and one directory per skill standing
+#: directly beside it — `src/skills/<name>/SKILL.md`. A catalog on disk keeps its skills one level
+#: down in a `skills/` directory, and holding that shape here would read `src/skills/skills/<name>/`:
+#: the format showing through in the one place nobody benefits from seeing it. `place_bundled` puts
+#: that level in on the way in, so the directory somebody opens lists the skills and what gets
+#: installed still goes through the same reader as a catalog fetched from GitHub.
+SHIPPED_IN = "skills"
 
 #: Where the general catalog rundesk depends on is fetched from. Not the version-coupled one, which
 #: ships inside the release and is never fetched from anywhere.
@@ -168,6 +177,23 @@ class Brought(NamedTuple):
 
     at: Path
     etag: str
+
+
+def shipped() -> Path:
+    """Where this release's own catalog stands. **Answered on every call, never bound at import.**
+
+    A module-level `paths.code() / SHIPPED_IN` is decided when this module is first imported, which is
+    before any suite has pointed `RUNDESK_HOME` at its scratch root — and on a machine that has
+    rundesk installed, `~/.rundesk/app/src` exists, so the constant would resolve into the owner's
+    live install and `place_bundled` would read a catalog out of it. That is the one-location defect
+    this product was rebuilt to remove, in its smallest possible form.
+
+    Derived from `paths.code()` rather than from `__file__` because the catalog is no longer part of
+    this package: it is a shipped asset beside `src/providers/` and `src/channels/`, and `code()` is
+    the one answer to which copy of a release a process is working with — `app/src` in an install and
+    the running tree's own `src` in a checkout.
+    """
+    return paths.code() / SHIPPED_IN
 
 
 def may_be_fetched(name: str) -> bool:
@@ -428,6 +454,43 @@ def place_mine(saying: Optional[Callable[[str], None]] = None) -> bool:
     return True
 
 
+@contextlib.contextmanager
+def _as_a_catalog(shipped_at: Path) -> Iterator[Path]:
+    """What is at `shipped_at`, laid out the way a published catalog is. Cleaned up on the way out.
+
+    The release keeps its manifest beside the skills it describes; a catalog on disk keeps them one
+    level down. This is that one level, added where the two shapes meet, so neither side has to bend:
+    the source directory stays a list of skills somebody can read, and everything below here goes on
+    treating the shipped catalog exactly as it treats one fetched from GitHub — same validation, same
+    staged swap, same refusals.
+
+    A context manager because what it builds is scaffolding: it exists for the length of one
+    `brought` and must go however that ends. Left to the caller this is a cleanup on three paths out
+    — placed, replaced, refused — and the one that forgets leaves a copy of the shipped skills in
+    `/tmp` per update for ever, which is the failure `brought` already documents avoiding.
+
+    **The manifest is copied rather than composed.** What the catalog calls itself, and what version
+    of these skills an install is on, is the release's to state and belongs beside them — a copy in
+    this module would be a second place to change a description, and the one that got missed would be
+    the one every install shows.
+    """
+    working = Path(tempfile.mkdtemp(prefix="rundesk-shipped-"))
+    try:
+        standing = working / library.BUNDLED
+        (standing / library.INSIDE).mkdir(parents=True)
+        shutil.copy2(shipped_at / library.MANIFEST, standing / library.MANIFEST)
+        # Every directory, and only directories: the manifest is the one file at this level, and
+        # anything else somebody leaves here is not a skill. `symlinks=False`, like every other copy
+        # in this module — a link in a release is a link out of it, and what is installed has to be
+        # the bytes that were reviewed.
+        for one in sorted(shipped_at.iterdir()):
+            if one.is_dir() and not one.is_symlink():
+                shutil.copytree(one, standing / library.INSIDE / one.name, symlinks=False)
+        yield standing
+    finally:
+        shutil.rmtree(working, ignore_errors=True)
+
+
 def place_bundled(saying: Optional[Callable[[str], None]] = None) -> bool:
     """Put the catalog rundesk ships in place if it is not there. `True` when it was placed.
 
@@ -447,10 +510,31 @@ def place_bundled(saying: Optional[Callable[[str], None]] = None) -> bool:
     directory inside this release, so there is no seam to replace and nothing here can reach the
     network however it is called — a machine with no network would otherwise fail at the one step
     that exists to work without one.
+
+    **The catalog shape is put around the skills here rather than kept on disk.** `src/skills/` holds
+    the skills and nothing else, so the directory somebody opens lists what this release ships; a
+    catalog is a manifest beside a `skills/` directory, and keeping that shape in the repository
+    would push every skill a level deeper into `src/skills/skills/<name>/`. Assembling it on the way
+    in costs one copy into a directory that is thrown away, and buys the thing that matters: what is
+    installed goes through `brought` — the same fetch, validation and swap a catalog from GitHub
+    gets — so the one catalog rundesk ships is not the one catalog it reads a special way.
     """
-    if not SHIPPED.is_dir():
-        raise Refused(f"this release ships no catalog at {SHIPPED}")
-    with brought(str(SHIPPED)) as coming:
+    # Asked once and held, so the refusal and the assembly name the same directory. Two calls could
+    # in principle disagree — `paths` is resolved every time — and a refusal naming a path other than
+    # the one that was read is a refusal that sends somebody to look in the wrong place.
+    at = shipped()
+    if not (at / library.MANIFEST).is_file():
+        # Asked here, against the real directory, rather than left to `read_manifest` inside
+        # `brought` — that one would name the scaffolding it was assembled in, which is a path that
+        # is gone by the time anybody reads the message.
+        raise Refused(f"this release ships no catalog at {at}")
+    with _as_a_catalog(at) as source, brought(str(source)) as coming:
+        # **Written down as the directory in the release, never as the scaffolding.** What `brought`
+        # was handed is a temporary directory that is gone by the time anybody reads a listing, and
+        # this source is shown by `rundesk skills catalogs` — recording it would put a path that does
+        # not exist in front of somebody asking where their skills came from. Nothing fetches this
+        # catalog, so the source decides nothing; it is there to be read, and it has to be true.
+        coming = coming._replace(source=str(at))
         if library.BUNDLED not in library.known():
             installed(coming, saying)
             return True
