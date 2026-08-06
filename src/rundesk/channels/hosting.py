@@ -157,6 +157,32 @@ SEEN = "seen"
 #: that has been up for a month.
 IN_FLIGHT_KEPT = 200
 
+#: What somebody may ask an agent to *do* without saying anything to its brain. **Closed, and that
+#: is the whole of its value**: a surface offers gestures, and a gesture whose name is whatever the
+#: caller typed is a command runner with a chat window in front of it. A word absent from here is a
+#: word this gateway does nothing about, however a platform spells it.
+#:
+#: `forget` is the wire word and `new` is what a person is offered — the gesture starts the next
+#: message fresh, and *forget* says what happens to the session while *new* says what they get.
+STOP = "stop"
+FORGET = "forget"
+RESTART = "restart"
+SHUTDOWN = "shutdown"
+CONTROLS = (STOP, FORGET, RESTART, SHUTDOWN)
+
+#: What somebody may *ask*, answered out of what this install already knows and **never by starting
+#: a turn** (R-CH-24). Closed for the same reason as the controls, and read-only for a stronger one:
+#: an answer costs nobody's tokens and reaches somebody who has not been charged for it.
+STATUS = "status"
+VERSION = "version"
+SKILLS = "skills"
+SCHEDULES = "schedules"
+QUERIES = (STATUS, VERSION, SKILLS, SCHEDULES)
+
+#: How many gestures waiting on an answer are held. A person cannot type faster than a handful, and
+#: an adapter that asked and went away would otherwise leave one behind for every question.
+ASKED_KEPT = 64
+
 #: The least time any one adapter gets to stop, however many there are. A gateway's whole shutdown
 #: is bounded by the job's `ExitTimeOut`, and channels share that budget with schedules — so the
 #: share is divided rather than spent per child, and never below this.
@@ -205,6 +231,34 @@ class Answering(Protocol):
         ...
 
     def busy(self, agent: str, conversation: int) -> bool:
+        ...
+
+
+class Steering(Protocol):
+    """What a *gesture* reaches — a person asking for something rather than saying something.
+
+    **A second seam beside `Answering`, and it is a different one on purpose.** A message becomes a
+    turn; a gesture never does. What each of these needs is spread across layers this module may not
+    reach — what a turn is, what a gateway's own state is, what an agent was granted, when its
+    schedules are due — so one object of this shape is handed down from `gateways.host`, which is
+    the one layer that may reach all of them.
+
+    **Answered here and never acted on here.** This module does exactly two things with a gesture:
+    it refuses one from somebody the channel does not allow, and it carries the answer back. What a
+    control *does* and what a query *reads* are decided a layer up, so a channel case stays drivable
+    with no brain, no supervisor and no subprocess anywhere near it.
+
+    Each hands back the words a person is shown, or `""` for a gesture that says nothing back —
+    which is what a control that will be reported by the turn's own outcome does (R-DIS-12).
+    """
+
+    def controlled(self, agent: str, kind: str, place: str, who: str, control: str) -> str:
+        ...
+
+    def asked(self, agent: str, who: str, query: str) -> str:
+        ...
+
+    def configured(self, agent: str, kind: str, place: str, who: str, provider: str) -> str:
         ...
 
 
@@ -262,6 +316,10 @@ class Running(NamedTuple):
     #: `Answering`. Carried on the adapter rather than looked up, because the thread
     #: that reads it is the thread that has to hand a message on.
     answering: Optional[Answering] = None
+    #: What a *gesture* from a person reaches, or `None` where nothing does — see `Steering`.
+    #: Beside `answering` rather than folded into it, because they are two seams: a message becomes
+    #: a turn and a gesture never does, and an install may perfectly well have one and not the other.
+    steering: Optional[Steering] = None
 
     #: Set the moment this adapter says `ready`. **Started is not connected**, and the gap is
     #: seconds: a program is forked, then imports its platform's library, then opens a socket, then
@@ -407,7 +465,8 @@ def settled(agent: str, where: Path, answering: Optional[Answering] = None) -> W
 
 
 def looked(agent: str, where: Path, watching: Watching,
-           answering: Optional[Answering] = None) -> Watching:
+           answering: Optional[Answering] = None,
+           steering: Optional[Steering] = None) -> Watching:
     """One pass: reap what has stopped, and start what should be running and is not.
 
     **Never ends the gateway.** Everything here is guarded, because a platform being down is not a
@@ -416,7 +475,7 @@ def looked(agent: str, where: Path, watching: Watching,
     with contextlib.suppress(Exception):
         _reaped(agent, where, watching)
     with contextlib.suppress(Exception):
-        _started_what_should_be(agent, where, watching, answering)
+        _started_what_should_be(agent, where, watching, answering, steering)
     return watching
 
 
@@ -656,7 +715,8 @@ def _reckoned(agent: str, where: Path, kind: str, watching: Watching) -> None:
 
 
 def _started_what_should_be(agent: str, where: Path, watching: Watching,
-                            answering: Optional[Answering] = None) -> None:
+                            answering: Optional[Answering] = None,
+                            steering: Optional[Steering] = None) -> None:
     """Start an adapter for every configured channel that has not got one."""
     now = time.monotonic()
     for kind in _configured(agent):
@@ -671,7 +731,7 @@ def _started_what_should_be(agent: str, where: Path, watching: Watching,
         if held_off is not None and now - held_off < AGAIN_AFTER:
             continue
         try:
-            _started(agent, where, kind, watching, answering)
+            _started(agent, where, kind, watching, answering, steering)
         except Exception as why:           # noqa: BLE001 — a channel that cannot start is one
             # channel that cannot start, never a gateway that cannot run. But it is **said and held
             # off** rather than suppressed: a bare `suppress` here sent the reason nowhere and
@@ -682,7 +742,8 @@ def _started_what_should_be(agent: str, where: Path, watching: Watching,
 
 
 def _started(agent: str, where: Path, kind: str, watching: Watching,
-             answering: Optional[Answering] = None) -> None:
+             answering: Optional[Answering] = None,
+             steering: Optional[Steering] = None) -> None:
     """Start one adapter, claim its channel, and put a thread on its stream."""
     try:
         row = kept.one(agent, kind)
@@ -708,7 +769,8 @@ def _started(agent: str, where: Path, kind: str, watching: Watching,
     # Built before the thread and handed to it, so that the one lock guarding writes to this
     # adapter is the same object on both sides of it. The stored one gains the thread afterwards;
     # the thread's own copy never reads that field.
-    one = Running(answering=answering, kind=kind, pid=talking.pid, talking=talking,
+    one = Running(answering=answering, steering=steering, kind=kind, pid=talking.pid,
+                  talking=talking,
                   listening=None, connected=threading.Event(),
                   since=time.monotonic(), mine=True, saying=threading.Lock(), awaiting={})
     listening = threading.Thread(target=_listened, name=f"channel-{kind}",
@@ -803,6 +865,57 @@ def _heard(agent: str, where: Path, one: Running, line: str, allowed: set) -> No
     elif saying == "failed":
         _note(where, f"channel {kind}: could not deliver — {record.get('why')}", logs.WARNING)
         one.awaiting.pop(str(record.get("id") or ""), None)
+    elif saying in ("control", "query", "configure"):
+        _gestured(agent, where, one, record, allowed, saying)
+
+
+def _gestured(agent: str, where: Path, one: Running, record: Dict[str, Any],
+              allowed: set, saying: str) -> None:
+    """One gesture somebody made — a control, a question, or a default being changed.
+
+    **Refused here for the same reason a message is, and in silence.** The adapter narrows this
+    first so that a stranger is not shown a spinner for an answer that will never come, but that is
+    to avoid visible work and is never the decision: only this side is trusted, and telling somebody
+    they are a stranger confirms the agent is listening (R-CH-23).
+
+    **A word outside the closed set is nothing this gateway does**, and is dropped rather than
+    passed on. A gesture whose name is whatever the caller typed is a command runner with a chat
+    window in front of it, and the surface is the wrong place to be sure it never becomes one.
+
+    Answered on this thread, which is the one draining this adapter's stdout. That is safe and it is
+    the reason the seam is shaped this way: **a gesture is answered out of what is already known and
+    never by starting a turn** (R-CH-24), so nothing here takes minutes. A control that does take
+    time says so through the turn's own outcome instead and hands back nothing to say.
+    """
+    kind = one.kind
+    who = str(record.get("user") or "")
+    if who not in allowed:
+        return
+    if one.steering is None:
+        _note(where, f"channel {kind}: {who} asked for something, and nothing here answers a "
+                     f"gesture yet")
+        return
+    place = str(record.get("conversation") or "")
+    ref = _a_text(record.get("ref"))
+    try:
+        if saying == "control":
+            control = str(record.get("control") or "")
+            if control not in CONTROLS:
+                return
+            said = one.steering.controlled(agent, kind, place, who, control)
+        elif saying == "query":
+            query = str(record.get("query") or "")
+            if query not in QUERIES:
+                return
+            said = one.steering.asked(agent, who, query)
+        else:
+            provider = str(record.get("provider") or "")
+            said = one.steering.configured(agent, kind, place, who, provider)
+    except Exception as why:                           # noqa: BLE001 — see the module docstring
+        _note(where, f"channel {kind}: {saying} went wrong ({why})", logs.ERROR)
+        said = "That could not be done just now."
+    if ref and said:
+        _said_to(where, one, {"do": "answered", "ref": ref, "text": said})
 
 
 def _delivered(where: Path, one: Running, record: Dict[str, Any]) -> None:
