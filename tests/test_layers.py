@@ -44,6 +44,11 @@ MAY_IMPORT = {
     # it**, so the arithmetic and the store are answerable by a case with no supervisor, no launchd
     # and no child process anywhere near it.
     "schedules": ("agents", "core", "utils"),
+    # `delegations` reaches `agents` because a delegation is a row in one agent's own records, and
+    # keeps the same distance from `providers` that `schedules` keeps from `gateways`: **what has
+    # been handed over is a different question from what runs it**, so the store and the guards are
+    # answerable by a case with no brain and no subprocess anywhere near them.
+    "delegations": ("agents", "core", "utils"),
     # `channels` reaches `agents` for the same reason and keeps the same distance from `gateways`:
     # what a channel *is* — a row in one agent's records, a directory in that agent's own tree — is
     # a different question from what hosts one, and the module that answered both could not be
