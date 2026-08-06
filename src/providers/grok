@@ -491,8 +491,6 @@ class Turn:
 
         if not self.opening_the_conversation():
             return 1
-        # Everything before this point may replay an older turn. From here on it is ours.
-        self.reporting = True
 
         prompt = self.first_thing_rundesk_says()
         if prompt is None:
@@ -500,6 +498,16 @@ class Turn:
                      session_id=self.session_id)
             return 1
 
+        # **Nothing that arrived before this turn's own prompt belongs to this turn.** Carrying a
+        # conversation on replays every update the previous one made — its reply and its
+        # `turn_completed` — so a turn that reported them would say the last answer again and mark
+        # itself finished before it had asked anything.
+        #
+        # Set here, immediately before the asking, rather than when the conversation opened. The
+        # thread reading this brain runs the whole time, so a flag set after a reply is a flag the
+        # reader may already have run past; the moment the prompt goes out is the only boundary
+        # both threads agree on without one of them waiting for the other.
+        self.reporting = True
         self.waited_out_the_turn(self.send("session/prompt", {
             "sessionId": self.session_id,
             "prompt": [{"type": "text", "text": prompt}]}))

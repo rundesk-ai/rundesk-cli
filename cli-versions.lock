@@ -10,3 +10,7 @@
 # adapter  version           captured                                measured
 codex      codex-cli 0.146.0 tests/samples/codex-app-server-0.146.0.jsonl         2026-08-06
 codex      codex-cli 0.146.0 tests/samples/codex-app-server-0.146.0-resumed.jsonl 2026-08-06
+grok       grok 0.2.118      tests/samples/grok-acp-0.2.118.jsonl                 2026-08-06
+grok       grok 0.2.118      tests/samples/grok-acp-0.2.118-resumed.jsonl         2026-08-06
+claude     claude 2.1.223    tests/samples/claude-2.1.223.jsonl                   2026-08-06
+claude     claude 2.1.223    tests/samples/claude-2.1.223-steered.jsonl           2026-08-06
