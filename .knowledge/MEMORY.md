@@ -101,6 +101,13 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   it is yours. `pgrep -f "/private/tmp/rundesk-<n>/tests/"` also finds another agent's gate
   running in a copy of the checkout, which is the ordinary case here; wait it out rather than
   killing it.
+- **A requirement id is only free against `main`, and `doc-lint` refuses a gap.** "namespace `BKP`
+  skips R-BKP-31, R-BKP-32 (a namespace numbers as an unbroken run)" is what you get for numbering
+  around ids an *unmerged* branch already took — so a second open PR cannot leave room for the
+  first, and both end up claiming the same number whatever order they were written in. Read the
+  open PRs' diffs for claimed `R-<AREA>-<n>` rows before adding one, take the next id against
+  `main` anyway, say in the body which other PR collides, and renumber whichever merges second on
+  its rebase.
 - **`unittest` takes one `-k` pattern per flag, and `-k "a or b"` matches nothing while printing
   `Ran 0 tests` and then `OK`.** The `or` form is pytest's, and here it exits zero having run
   nothing at all — which reads exactly like the case you just wrote passing first time. Repeat the
