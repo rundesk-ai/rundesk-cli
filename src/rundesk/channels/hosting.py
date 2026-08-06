@@ -244,6 +244,17 @@ class Running(NamedTuple):
     #: that reads it is the thread that has to hand a message on.
     answering: Optional[Answering] = None
 
+    #: Set the moment this adapter says `ready`. **Started is not connected**, and the gap is
+    #: seconds: a program is forked, then imports its platform's library, then opens a socket, then
+    #: authenticates. Anything written into its input before that reaches a program that cannot yet
+    #: send it — measured on Discord, where a gateway announced itself four seconds before the bot
+    #: had a session and the announcement was never seen by anybody.
+    #:
+    #: An `Event` because two threads need it and only one of them sets it: the drain reading this
+    #: adapter's output knows, and the gateway's own loop is what waits. `None` on an adapter this
+    #: process did not start, which is also one it never speaks to.
+    connected: Optional[threading.Event] = None
+
 
 class Watching(NamedTuple):
     """Every adapter this gateway knows about, and when each was last started.
@@ -436,6 +447,19 @@ def marked(agent: str, where: Path, watching: Watching, kind: str, place: str,
     return False
 
 
+def connected(watching: Watching, kind: str) -> bool:
+    """Whether this adapter has said it reached its platform. **Started is not connected.**
+
+    Asked by anything that would speak into an adapter unprompted, because there is nowhere for a
+    delivery made before this to go: the program is up, its input is being read, and its platform
+    has not authenticated it yet. A message being *answered* cannot hit this — an adapter announces
+    an arrival, so there was a connection to announce it through — which is why this exists for the
+    one thing rundesk says without being asked.
+    """
+    one = watching.running.get(kind)
+    return bool(one is not None and one.connected is not None and one.connected.is_set())
+
+
 def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
          pieces: List[str], sending: Sequence[naming.Sending] = (),
          answering: Optional[str] = None) -> bool:
@@ -578,7 +602,7 @@ def _started(agent: str, where: Path, kind: str, watching: Watching,
     # adapter is the same object on both sides of it. The stored one gains the thread afterwards;
     # the thread's own copy never reads that field.
     one = Running(answering=answering, kind=kind, pid=talking.pid, talking=talking,
-                  listening=None,
+                  listening=None, connected=threading.Event(),
                   since=time.monotonic(), mine=True, saying=threading.Lock(), awaiting={})
     listening = threading.Thread(target=_listened, name=f"channel-{kind}",
                                  args=(agent, where, one, row), daemon=True)
@@ -658,6 +682,8 @@ def _heard(agent: str, where: Path, one: Running, line: str, allowed: set) -> No
     if saying == "arrived":
         _arrived(agent, where, one, record, allowed)
     elif saying == "ready":
+        if one.connected is not None:
+            one.connected.set()
         _note(where, f"channel {kind}: connected"
                      + (f" as {record.get('as')}" if record.get("as") else ""))
     elif saying == "gone":

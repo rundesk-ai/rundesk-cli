@@ -78,6 +78,13 @@ class MessageReference:
         self.fail_if_not_exists = fail_if_not_exists
 
 
+class Status:
+    """The three words this adapter ever sets a bot's dot in the member list to."""
+
+    online = "online"
+    offline = "offline"
+
+
 class Library:
     """The module global the adapter binds `discord.py` to."""
 
@@ -85,6 +92,7 @@ class Library:
     Thread = Thread
     TextChannel = TextChannel
     MessageReference = MessageReference
+    Status = Status
 
 
 class Person:
@@ -140,9 +148,18 @@ class Client:
     def __init__(self, user: Person) -> None:
         self.user = user
         self.places: Dict[int, Messageable] = {}
+        #: Every presence this bot was asked to show, in the order it was asked.
+        self.showed: List[str] = []
+        self.closed = False
 
     def get_partial_messageable(self, place: int) -> Messageable:
         return self.places.setdefault(place, Messageable(place))
+
+    async def change_presence(self, status: str) -> None:
+        self.showed.append(status)
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class Message:
@@ -587,6 +604,41 @@ class WhatIsHeld(Records):
         # Oldest first: the newest conversation is the one still waiting on an answer.
         self.assertIn(str(adapter.LIVE_KEPT + 39), self.reaching.handled)
         self.assertNotIn("0", self.reaching.handled)
+
+
+class WhatTheDotInTheMemberListSays(unittest.TestCase):
+    """A bot's presence is the one place somebody looks to find out whether their agent is up.
+
+    Both halves are set rather than left to the library and the socket, and each for its own reason.
+    """
+
+    def setUp(self):
+        self.old, adapter.discord = adapter.discord, Library
+        self.addCleanup(setattr, adapter, "discord", self.old)
+        self.hosting = adapter.Reaching.__new__(adapter.Reaching)
+        self.hosting.connected = False
+        self.hosting.client = Client(Person(1, bot=True, display_name="Markus"))
+
+    def test_it_goes_green_when_the_socket_comes_up(self):
+        asyncio.run(self.hosting._up())
+        self.assertEqual(["online"], self.hosting.client.showed)
+
+    def test_it_goes_green_again_on_every_resume_and_not_only_the_first(self):
+        """**`Status.online` is only the library's default until something changes it.** A resumed
+        session carries whatever the last one ended on, and after an orderly stop that is `offline`
+        — so a gateway that came back would be green in its own log and grey to everybody else."""
+        asyncio.run(self.hosting._up())
+        asyncio.run(self.hosting._up())
+        self.assertEqual(["online", "online"], self.hosting.client.showed)
+
+    def test_the_ready_record_still_goes_out_when_the_presence_will_not_set(self):
+        """A dot nobody could set is not a channel that failed to connect."""
+        async def refuses(status):
+            raise RuntimeError("Discord would not take it")
+        self.hosting.client.change_presence = refuses
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            asyncio.run(self.hosting._up())
+        self.assertIn('"ready"', printed.getvalue())
 
 
 if __name__ == "__main__":

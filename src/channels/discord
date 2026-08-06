@@ -148,6 +148,11 @@ INTENTS = 38401
 #: because every thread this opens is a public one, and no `EMBED_LINKS` because nothing here builds
 #: an embed — a link in an answer is text either way.
 #:
+#: How long the bot may take to tell Discord it is going offline. A ceiling rather than a wait: the
+#: whole shutdown has to fit inside the gateway's own, and a presence that will not send is worth
+#: giving up on rather than holding a stop open for.
+GOING_OFFLINE_WITHIN = 3.0
+
 #: **A bot already in a server is not granted a permission added here.** What an invite asks for is
 #: granted once, when somebody accepts it, so `open a thread` reaches an existing bot only when it is
 #: sent the invite again — which is why `--check` says so and why a room falls back to being answered
@@ -722,6 +727,14 @@ class Reaching:
         for place in list(self.typing):
             self._typing_stops(place)
         say({"say": "gone", "why": self.trouble or "rundesk asked this to stop"})
+        # **Offline before the socket goes, and it has to be this way round.** Closing alone leaves
+        # Discord to notice a socket that stopped answering, which takes it minutes — so an agent
+        # somebody has just stopped goes on showing green in the member list, which is the one
+        # question that dot is there to answer. Said while there is still a session to say it
+        # through, and suppressed: a presence nobody could set is not a reason to refuse to stop.
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(
+                self.client.change_presence(status=discord.Status.offline), GOING_OFFLINE_WITHIN)
         await _quietly(self.client.close)
         for task in (reading, connected, asked):
             task.cancel()
@@ -774,8 +787,17 @@ class Reaching:
     # -- the connection itself -------------------------------------------------------------
 
     async def _up(self) -> None:
-        """Said on connecting and on resuming, so a quiet agent is not mistaken for a deaf one."""
+        """Said on connecting and on resuming, so a quiet agent is not mistaken for a deaf one.
+
+        **The presence is set rather than left to default**, and on every resume rather than once.
+        A bot's dot in the member list is the one place somebody looks to find out whether their
+        agent is up, and `Status.online` is only discord.py's default *until something changes it* —
+        a resumed session carries whatever the last one ended on, which after an orderly stop is
+        `offline`. Set here, a gateway that came back is green again without anybody doing anything.
+        """
         self.connected = True
+        with contextlib.suppress(Exception):
+            await self.client.change_presence(status=discord.Status.online)
         say({"say": "ready", "as": str(self.client.user)})
 
     async def _down(self) -> None:

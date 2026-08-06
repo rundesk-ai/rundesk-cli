@@ -862,11 +862,15 @@ class TheChannelsItHosts(WithAnAgent):
         self.an_adapter()
         self.a_channel()
         self.a_running_gateway(beat=self.A_SHORT_BEAT)
-        self.assertTrue(support.waited_until(lambda: "gateway up for" in self.was_heard(),
+        self.assertTrue(support.waited_until(lambda: host.CAME_UP in self.was_heard(),
                                              self.PATIENCE),
                         f"nobody was told. It said: {self.its_log()}")
         self.assertIn("1180 ::", self.was_heard(), "it went somewhere other than the told place")
-        self.assertIn(self.name, self.was_heard())
+        # **A colour and a word, and nothing under it.** A version and a process id are what
+        # somebody debugging wants and they are in the log, where debugging is done; on a channel
+        # they are noise arriving in the middle of a conversation.
+        self.assertNotIn(__version__, self.was_heard())
+        self.assertNotIn(str(self.name) + " on", self.was_heard())
 
     def test_an_agent_that_tells_nobody_anything_is_a_gateway_that_says_nothing(self):
         # `delivery.notice` answers `None`, which is an ordinary answer rather than a failure: an
@@ -889,14 +893,14 @@ class TheChannelsItHosts(WithAnAgent):
         self.an_adapter()
         self.a_channel()
         child = self.a_running_gateway(beat=self.A_SHORT_BEAT)
-        self.assertTrue(support.waited_until(lambda: "gateway up for" in self.was_heard(),
+        self.assertTrue(support.waited_until(lambda: host.CAME_UP in self.was_heard(),
                                              self.PATIENCE), self.its_log())
 
         os.kill(child.pid, signal.SIGTERM)
         self.assertTrue(support.waited_until(lambda: child.poll() is not None, self.PATIENCE))
 
         self.assertTrue(support.waited_until(
-            lambda: "gateway stopping for" in self.was_heard(), self.PATIENCE),
+            lambda: host.WENT_DOWN in self.was_heard(), self.PATIENCE),
             f"it went down without telling anybody. It heard: {self.was_heard()}")
         self.assertEqual(OK, child.returncode)
 

@@ -258,6 +258,19 @@ STOPPING_SHARES = 2
 #: not the other is a shutdown that can still be interrupted.
 STOP_ASKED_WITH = (signal.SIGHUP, signal.SIGTERM)
 
+#: What a person is told, on their own channel, when a gateway comes up and when it goes down.
+#:
+#: **One line, and nothing under it.** A version and a process id are what somebody debugging wants
+#: and they are in the log, where debugging is done; on a channel they are noise arriving in the
+#: middle of a conversation. What a person wants here is a colour and a word.
+#:
+#: Kept here rather than written at the two call sites, because the pair have to stay a pair: a
+#: gateway that announces itself in one voice and leaves in another reads as two different products.
+#: The log lines these accompany are deliberately *not* changed to match — a log is read by grep and
+#: a notice is read by a person, and a colour in a log file is noise in the one place it cannot help.
+CAME_UP = "🟢 Gateway online — rundesk is online."
+WENT_DOWN = "🔴 Gateway offline — rundesk has shut down."
+
 
 class Stopped(BaseException):
     """A supervisor, or a person, asked this gateway to stop.
@@ -534,13 +547,18 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
                                      asking=on_a_schedule)
             channels_up = hosting.looked(name, where, channels_up,
                                          answering=on_a_channel)
-            if not said_up:
-                # **After the first pass through `hosting.looked`, never before it.** An adapter is
-                # what a notice leaves through and `looked` is what starts one, so a gateway that
-                # said this beside the log line above would be speaking into a channel that has
-                # nothing hosting it yet — and `told` would answer `False` to nobody.
+            if not said_up and _the_told_channel_is_connected(name, channels_up):
+                # **Once the adapter it leaves through has reached its platform, never merely once
+                # it has been started.** `looked` starts one; starting is a fork, and what follows
+                # it is an import, a socket and an authentication. Said after the first pass, this
+                # went into a Discord bot four seconds before it had a session — accepted by the
+                # pipe, attempted by the adapter, and seen by nobody. The gateway reported itself up
+                # and the one person who had asked to be told heard nothing at all.
+                #
+                # Every beat until it is, so an adapter that takes a while is waited for and one
+                # that never connects simply never says this.
                 said_up = True
-                notices.say(f"gateway up for {name} on {__version__} as pid {os.getpid()}")
+                notices.say(CAME_UP)
             time.sleep(standing.BEAT_SECONDS)
             landing = _still_working(at, where, landing)
             swept_for = _kept_the_days(name, where, swept_for)
@@ -566,7 +584,7 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
         # Said here rather than from the teardown, because it has to leave through an adapter that
         # is still running and the stack unwinding below is what closes them. Cheap enough not to
         # count against the budget: it is one line written to a pipe this process already holds.
-        _told(name, where, channels_up, f"gateway stopping for {name}: {why}")
+        _told(name, where, channels_up, WENT_DOWN)
         return OK
 
 
@@ -679,6 +697,19 @@ class _Notices:
 
     def say(self, saying: str) -> None:
         _told(self.name, self.where, self.hosted(), saying)
+
+
+def _the_told_channel_is_connected(name: str, channels_up: hosting.Watching) -> bool:
+    """Whether the channel this agent asked to be told things through has reached its platform.
+
+    **Telling nobody is ready.** An agent with no notified channel never gets a connection to wait
+    for, so waiting on one would hold the up-notice for ever — and *for ever* is the same silence as
+    the bug this exists to fix, reached from the other side.
+    """
+    with contextlib.suppress(Exception):
+        told = delivery.notice(name, CAME_UP)
+        return told is None or hosting.connected(channels_up, told.kind)
+    return False
 
 
 def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str) -> None:
