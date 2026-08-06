@@ -76,6 +76,7 @@ import signal
 import stat
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
@@ -157,6 +158,13 @@ GOING_OFFLINE_WITHIN = 3.0
 #: granted once, when somebody accepts it, so `open a thread` reaches an existing bot only when it is
 #: sent the invite again — which is why `--check` says so and why a room falls back to being answered
 #: in rather than going quiet.
+#: What the invite asks to be installed *as*. **`applications.commands` is the one that is easy to
+#: miss and impossible to diagnose**: without it every slash command below registers cleanly, syncs
+#: without error, and simply never appears for anybody — there is no refusal anywhere to read. A bot
+#: already in a server was installed under the scopes of the invite that put it there, so **an
+#: existing bot has to be sent this invite again** before a single command shows up.
+SCOPES = ("bot", "applications.commands")
+
 PERMITS = {
     "view a channel": 1 << 10,
     "add a reaction": 1 << 6,
@@ -242,6 +250,49 @@ FETCHED_IN = "fetched"
 #: question of whether they may be answered had been asked.
 BROUGHT_MOST = 10
 BROUGHT_BYTES = 32 * 1024 * 1024
+
+#: The gestures this offers, as Discord's own commands (R-DIS-10). Each is `(name, what it says on
+#: the menu, the word rundesk speaks)`, and **the third is never the first**: `/new` is what a person
+#: is offered and `forget` is what rundesk calls it, because *new* says what they get and *forget*
+#: says what happens to the session. A name here that rundesk does not know is a command that
+#: appears, is pressed, and does nothing — so the suite checks these against rundesk's own list.
+#:
+#: **What each is acknowledged with says only that it was heard**, never what it did. These claimed
+#: an effect before rundesk had been told anything — and rundesk drops a `stop` where no turn is
+#: running, and drops any gesture from somebody the channel does not allow, so the two ordinary
+#: cases ended with a person told something that never happened (R-DIS-12).
+CONTROLS = (
+    ("stop", "Stop the turn running here", "stop"),
+    ("new", "Start a new session — the next message begins fresh", "forget"),
+    ("restart", "Restart this agent's gateway", "restart"),
+    ("shutdown", "Shut this agent's gateway down for good", "shutdown"),
+)
+
+#: The read-only questions (R-DIS-22, R-DIS-36, R-DIS-37). Their names are Discord's; their values
+#: are rundesk's closed vocabulary, so this never becomes a way to run something arbitrary.
+QUERIES = (
+    ("status", "Show this agent's gateway status", "status"),
+    ("version", "Show the rundesk version this agent is running", "version"),
+    ("skills", "List the skills this agent holds", "skills"),
+    ("schedules", "List what this agent still has to run", "schedules"),
+)
+
+#: The one gesture that takes a value, and the one that changes an agent-wide default.
+CONFIGURE = ("provider", "Change which brain answers for this agent")
+
+#: What somebody is told when a gesture is not theirs to make. **Advisory only** — rundesk decides
+#: again and answers a stranger with silence — and it exists so that a deferred question does not
+#: hang for ever for somebody who will correctly never be answered.
+NOT_YOURS = "This command is not available to you."
+
+#: How long a person has to confirm something that cannot be undone, and what they are told. A
+#: gateway shut down from here cannot be started from here: the bot goes offline and there is no
+#: command left. One mistyped slash is the failure this prevents.
+CONFIRM_WITHIN = 30.0
+
+#: How many gestures waiting on an answer are held, so a process that runs for weeks does not keep
+#: one interaction per question ever asked.
+ASKED_KEPT = 64
 
 #: How often the typing indicator is renewed. Discord's lapses in about ten seconds, and an
 #: indicator that has stopped is a turn that looks finished.
@@ -613,7 +664,7 @@ def invited(application_id: Any) -> str:
     for bit in PERMITS.values():
         permissions |= bit
     return (f"https://discord.com/oauth2/authorize?client_id={application_id}"
-            f"&scope=bot&permissions={permissions}")
+            f"&scope={'+'.join(SCOPES)}&permissions={permissions}")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -909,6 +960,16 @@ class Reaching:
         self.growing: Dict[int, Growing] = {}
         #: What is known about a message this has handled, by its id — see `Handled`.
         self.handled: Dict[str, Handled] = {}
+        #: The command tree, built with the client once the vendor library is bound.
+        self.tree: Any = None
+        #: Whether the commands have been offered to Discord. Once per process: a global sync is
+        #: rate-limited hard, and a bot reconnecting through a bad hour must not spend its whole
+        #: allowance re-registering nine commands that have not changed.
+        self.offered = False
+        #: Interactions held open while rundesk reads an answer, by the id that is their `ref`.
+        self.asked: Dict[str, Any] = {}
+        #: When each person was last shown the warning for something that cannot be undone.
+        self.confirming: Dict[str, float] = {}
         #: Whether the note about not being able to open a thread has already been said.
         self.threadless = False
         #: Whether the socket is up, so `gone` and `ready` are said on the change rather than on
@@ -937,6 +998,8 @@ class Reaching:
         self.client.on_resumed = self._up
         self.client.on_disconnect = self._down
         self.client.on_message = self._arrived
+        self.tree = discord.app_commands.CommandTree(self.client)
+        self._offers()
 
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
@@ -1029,6 +1092,7 @@ class Reaching:
         `offline`. Set here, a gateway that came back is green again without anybody doing anything.
         """
         self.connected = True
+        await self._synced()
         with contextlib.suppress(Exception):
             await self.client.change_presence(status=discord.Status.online)
         say({"say": "ready", "as": str(self.client.user)})
@@ -1234,6 +1298,8 @@ class Reaching:
             await self._state(it)
         elif doing == "activity":
             self._doing(it)
+        elif doing == "answered":
+            await self._answered(it)
         elif doing == "stop":
             self.stopping.set()
         else:
@@ -1394,6 +1460,158 @@ class Reaching:
         if standing:
             with contextlib.suppress(Exception):
                 await message.remove_reaction(standing, self.client.user)
+
+    # -- the gestures a person makes, which are Discord's own commands ---------------------
+
+    def _offers(self) -> None:
+        """Register every gesture this offers, described where it is offered (R-DIS-10).
+
+        Built as closures rather than as decorated methods because the vendor library may never
+        have been imported when this file is read — `discord.app_commands` is reached only here,
+        after `the_library()` has bound it.
+        """
+        for name, describes, control in CONTROLS:
+            self.tree.add_command(discord.app_commands.Command(
+                name=name, description=describes, nsfw=False,
+                callback=self._a_control(name, control)))
+        for name, describes, query in QUERIES:
+            self.tree.add_command(discord.app_commands.Command(
+                name=name, description=describes, nsfw=False,
+                callback=self._a_query(query)))
+        self.tree.add_command(discord.app_commands.Command(
+            name=CONFIGURE[0], description=CONFIGURE[1], nsfw=False,
+            callback=self._the_provider()))
+
+    async def _synced(self) -> None:
+        """Offer the commands to Discord. **Global, and once per connection is too often.**
+
+        A global sync is rate-limited hard and takes up to an hour to propagate, so it is done on
+        the first connection of this process and not on every resume — a bot that reconnects
+        forty times in a bad hour would otherwise spend its whole allowance re-registering nine
+        commands that have not changed.
+        """
+        if self.offered:
+            return
+        self.offered = True
+        try:
+            await self.tree.sync()
+        except Exception as why:           # noqa: BLE001 — a platform boundary
+            self.offered = False
+            noted(f"could not offer the commands: {type(why).__name__}: {why}. They will not "
+                  f"appear until this reconnects — and if they never do, check the bot was "
+                  f"invited with the applications.commands scope", "warning")
+
+    def _a_control(self, name: str, control: str):
+        """One gesture that *does* something. Acknowledged at once, and only that it was heard."""
+        async def gestured(interaction: Any) -> None:
+            if not await self._may(interaction):
+                return
+            if control == "shutdown" and not self._confirmed(interaction):
+                await self._said_back(
+                    interaction,
+                    f"⚠️ This stops the gateway for good. Nothing here can start it again — you "
+                    f"will need the machine it runs on. Run **/{name}** again within "
+                    f"{int(CONFIRM_WITHIN)}s to confirm.")
+                return
+            # **Answered inside the three seconds Discord allows, and answered only that it was
+            # heard** (R-DIS-11). What it did comes back as the turn's own outcome or as the
+            # gateway's own goodbye — acknowledging with the running turn's half-written output is
+            # how a half-finished sentence gets published as somebody's reply.
+            await self._said_back(interaction, "…")
+            say({"say": "control", "conversation": str(interaction.channel_id),
+                 "user": str(interaction.user.id), "control": control,
+                 "ref": str(interaction.id)})
+        return gestured
+
+    def _a_query(self, query: str):
+        """One read-only question. Deferred, because rundesk reads records to answer it."""
+        async def gestured(interaction: Any) -> None:
+            if not await self._may(interaction):
+                return
+            if not await self._deferred(interaction):
+                return
+            say({"say": "query", "conversation": str(interaction.channel_id),
+                 "user": str(interaction.user.id), "query": query,
+                 "ref": str(interaction.id)})
+        return gestured
+
+    def _the_provider(self):
+        """The one gesture that takes a value."""
+        async def gestured(interaction: Any, provider: str) -> None:
+            if not await self._may(interaction):
+                return
+            if not await self._deferred(interaction):
+                return
+            say({"say": "configure", "conversation": str(interaction.channel_id),
+                 "user": str(interaction.user.id), "provider": provider,
+                 "ref": str(interaction.id)})
+        gestured.__annotations__ = {"interaction": Any, "provider": str}
+        return discord.app_commands.describe(
+            provider="Which brain answers — a provider name, or a path to one")(gestured)
+
+    async def _may(self, interaction: Any) -> bool:
+        """Whether this gesture is worth reporting at all. **Advisory, and never the decision.**
+
+        Rundesk refuses a stranger again on its own side and answers them with silence, which is the
+        only check that counts. This one exists so a stranger is not left watching a deferred
+        question that will never be answered — and because somebody a channel did not allow once
+        typed `/restart` in a shared room and was told the agent was restarting, which was a promise
+        nothing kept and a confirmation to a stranger that the agent was listening.
+        """
+        if str(interaction.user.id) in self.allow:
+            return True
+        with contextlib.suppress(Exception):
+            await interaction.response.send_message(NOT_YOURS, ephemeral=True)
+        return False
+
+    async def _said_back(self, interaction: Any, said: str) -> bool:
+        """Answer an interaction where it stands, privately. **Never in the room.**"""
+        try:
+            await interaction.response.send_message(said, ephemeral=True)
+            return True
+        except Exception as why:           # noqa: BLE001 — a platform boundary
+            noted(f"could not answer a command: {type(why).__name__}: {why}")
+            return False
+
+    async def _deferred(self, interaction: Any) -> bool:
+        """Hold the interaction open past Discord's three seconds, and remember it by its own id.
+
+        **The id is rundesk's `ref` and comes back on the answer**, so one deferred question is
+        completed by its own answer and never by the next one to arrive.
+        """
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception as why:           # noqa: BLE001 — a platform boundary
+            noted(f"could not hold a command open: {type(why).__name__}: {why}")
+            return False
+        self.asked[str(interaction.id)] = interaction
+        while len(self.asked) > ASKED_KEPT:
+            self.asked.pop(next(iter(self.asked)))
+        return True
+
+    def _confirmed(self, interaction: Any) -> bool:
+        """Whether this is the second press of something that cannot be undone, within the window."""
+        who = str(interaction.user.id)
+        asked_at = self.confirming.get(who)
+        now = time.monotonic()
+        if asked_at is not None and now - asked_at <= CONFIRM_WITHIN:
+            self.confirming.pop(who, None)
+            return True
+        self.confirming[who] = now
+        while len(self.confirming) > ASKED_KEPT:
+            self.confirming.pop(next(iter(self.confirming)))
+        return False
+
+    async def _answered(self, it: Dict[str, Any]) -> None:
+        """What rundesk said about a gesture, put back on the interaction that asked it."""
+        interaction = self.asked.pop(str(it.get("ref") or ""), None)
+        if interaction is None:
+            return
+        said = str(it.get("text") or "")
+        if not said:
+            return
+        with contextlib.suppress(Exception):
+            await interaction.followup.send(said[:MAX_TEXT], ephemeral=True)
 
     # -- the running commentary, which grows in place while it is still the last thing -----
 

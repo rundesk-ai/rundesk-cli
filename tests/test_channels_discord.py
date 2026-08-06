@@ -85,6 +85,49 @@ class Status:
     offline = "offline"
 
 
+class Command:
+    """One registered slash command, holding what it was named and what it runs."""
+
+    def __init__(self, *, name: str, description: str, callback: Any, nsfw: bool = False) -> None:
+        self.name = name
+        self.description = description
+        self.callback = callback
+
+
+class CommandTree:
+    """Where commands are registered before being offered to Discord."""
+
+    def __init__(self, client: Any) -> None:
+        self.client = client
+        self.commands: List[Command] = []
+        self.synced = 0
+        self.attempts = 0
+        self.refuses: Optional[Exception] = None
+
+    def add_command(self, one: Command) -> None:
+        self.commands.append(one)
+
+    async def sync(self, guild: Any = None) -> None:
+        self.attempts += 1
+        if self.refuses is not None:
+            raise self.refuses
+        self.synced += 1
+
+
+class AppCommands:
+    """`discord.app_commands`, as much of it as this file touches."""
+
+    Command = Command
+    CommandTree = CommandTree
+
+    @staticmethod
+    def describe(**_named: str):
+        """Names an argument for the menu. It changes nothing about the function it wraps."""
+        def keeping(one: Any) -> Any:
+            return one
+        return keeping
+
+
 class Library:
     """The module global the adapter binds `discord.py` to."""
 
@@ -93,6 +136,8 @@ class Library:
     TextChannel = TextChannel
     MessageReference = MessageReference
     Status = Status
+    app_commands = AppCommands
+    CommandTree = CommandTree
 
 
 class Person:
@@ -168,6 +213,47 @@ class Messageable:
         self.typed.append(True)
         if self.typing_refuses is not None:
             raise self.typing_refuses
+
+
+class Response:
+    """The one-shot answer Discord allows inside three seconds, and the hold that replaces it."""
+
+    def __init__(self, on: "Interaction") -> None:
+        self.on = on
+
+    async def send_message(self, text: str, ephemeral: bool = False) -> None:
+        self.on.answered.append({"text": text, "ephemeral": ephemeral})
+
+    async def defer(self, ephemeral: bool = False) -> None:
+        self.on.deferred = True
+
+
+class Followup:
+    """What answers an interaction that was held open, once rundesk has read the answer."""
+
+    def __init__(self, on: "Interaction") -> None:
+        self.on = on
+
+    async def send(self, text: str, ephemeral: bool = False) -> None:
+        self.on.followed.append({"text": text, "ephemeral": ephemeral})
+
+
+class Interaction:
+    """One slash command as the adapter reads it. Ids are unique, because they are the `ref`."""
+
+    next_id = 90000
+
+    def __init__(self, named: str, user: Person, place: int) -> None:
+        Interaction.next_id += 1
+        self.id = Interaction.next_id
+        self.named = named
+        self.user = user
+        self.channel_id = place
+        self.answered: List[Dict[str, Any]] = []
+        self.followed: List[Dict[str, Any]] = []
+        self.deferred = False
+        self.response = Response(self)
+        self.followup = Followup(self)
 
 
 class Client:
@@ -850,6 +936,186 @@ class HowLongTheIndicatorRuns(Records):
         self.assertTrue(any("no typing indicator" in one for one in self.noted(records)))
 
 
+class WhatItOffers(unittest.TestCase):
+    """The nine gestures, and the words each speaks. Pure tables — no connection."""
+
+    #: Rundesk's own closed vocabularies, written out rather than imported: this suite imports
+    #: nothing of rundesk's, because the adapter is a program on the far side of a pipe.
+    RUNDESK_CONTROLS = ("stop", "forget", "restart", "shutdown")
+    RUNDESK_QUERIES = ("status", "version", "skills", "schedules")
+
+    def test_every_gesture_speaks_a_word_rundesk_knows(self) -> None:
+        # A name here that rundesk does not know is a command that appears on the menu, is pressed,
+        # and does nothing at all — with no refusal anywhere for anybody to read.
+        self.assertEqual(set(self.RUNDESK_CONTROLS), {one[2] for one in adapter.CONTROLS})
+        self.assertEqual(set(self.RUNDESK_QUERIES), {one[2] for one in adapter.QUERIES})
+
+    def test_the_nine_a_person_is_offered(self) -> None:
+        offered = [one[0] for one in adapter.CONTROLS] + [one[0] for one in adapter.QUERIES]
+        offered.append(adapter.CONFIGURE[0])
+        self.assertEqual(
+            {"stop", "new", "restart", "shutdown", "status", "version", "skills", "schedules",
+             "provider"}, set(offered))
+
+    def test_new_is_what_a_person_sees_and_forget_is_what_rundesk_hears(self) -> None:
+        # *New* says what they get; *forget* says what happens to the session. Two words for one
+        # gesture, and the seam speaks the second.
+        named, _describes, spoken = next(one for one in adapter.CONTROLS if one[0] == "new")
+        self.assertEqual("new", named)
+        self.assertEqual("forget", spoken)
+
+    def test_every_gesture_is_described_where_it_is_offered(self) -> None:
+        # R-DIS-10. A command with no description is one somebody has to already know.
+        for name, describes, _spoken in adapter.CONTROLS + adapter.QUERIES:
+            self.assertTrue(describes.strip(), f"/{name} has nothing to say for itself")
+            self.assertLessEqual(len(describes), 100, f"/{name} is past Discord's own limit")
+        self.assertTrue(adapter.CONFIGURE[1].strip())
+
+    def test_the_invite_asks_to_be_installed_as_a_command_provider(self) -> None:
+        # Without this scope every command registers cleanly, syncs without error, and never
+        # appears — and there is no refusal anywhere to read.
+        self.assertIn("applications.commands", adapter.SCOPES)
+        self.assertIn("scope=bot+applications.commands", adapter.invited(4471))
+
+
+class HowAGestureIsAnswered(Records):
+    """What crosses the seam when somebody presses one, and what comes back."""
+
+    def pressed(self, named: str, who: int = 22, **also: Any) -> List[Dict[str, Any]]:
+        """One command pressed, and the records it put on stdout."""
+        interaction = Interaction(named, Person(who), place=700)
+
+        async def exchange(reaching: Any) -> None:
+            found = self.command(reaching, named)
+            await (found(interaction, **also) if also else found(interaction))
+            self.interaction = interaction
+
+        return self.during(exchange)
+
+    @staticmethod
+    def command(reaching: Any, named: str):
+        for name, _describes, control in adapter.CONTROLS:
+            if name == named:
+                return reaching._a_control(name, control)
+        for name, _describes, query in adapter.QUERIES:
+            if name == named:
+                return reaching._a_query(query)
+        return reaching._the_provider()
+
+    def test_a_control_says_the_word_rundesk_speaks(self) -> None:
+        said = self.only(self.pressed("new"), "control")
+        self.assertEqual("forget", said["control"])
+        self.assertEqual("700", said["conversation"])
+        self.assertEqual("22", said["user"])
+
+    def test_a_control_is_acknowledged_at_once_and_says_only_that_it_was_heard(self) -> None:
+        # R-DIS-11, R-DIS-12. Discord allows three seconds, and what it *did* comes back as the
+        # turn's own outcome — acknowledging with a running turn's half-written output is how a
+        # half-finished sentence gets published as somebody's reply.
+        self.pressed("stop")
+        self.assertTrue(self.interaction.answered, "nothing was said inside Discord's three seconds")
+        self.assertTrue(all(one["ephemeral"] for one in self.interaction.answered))
+
+    def test_a_query_is_held_open_and_named_by_its_own_id(self) -> None:
+        said = self.only(self.pressed("skills"), "query")
+        self.assertEqual("skills", said["query"])
+        self.assertEqual(str(self.interaction.id), said["ref"])
+        self.assertIs(self.interaction.deferred, True)
+        self.assertIn(str(self.interaction.id), self.reaching.asked)
+
+    def test_an_answer_completes_the_interaction_that_asked_it(self) -> None:
+        async def exchange(reaching: Any) -> None:
+            first = Interaction("skills", Person(22), place=700)
+            second = Interaction("status", Person(22), place=700)
+            await reaching._a_query("skills")(first)
+            await reaching._a_query("status")(second)
+            await reaching._told({"do": "answered", "ref": str(second.id), "text": "🟢 online"})
+            self.assertEqual(["🟢 online"], [one["text"] for one in second.followed])
+            self.assertEqual([], first.followed, "the wrong interaction was completed")
+
+        self.during(exchange)
+
+    def test_an_answer_for_a_question_nobody_asked_is_dropped(self) -> None:
+        async def exchange(reaching: Any) -> None:
+            await reaching._told({"do": "answered", "ref": "nobody", "text": "hello"})
+
+        self.during(exchange)
+
+    def test_somebody_this_channel_does_not_allow_is_told_so_and_reports_nothing(self) -> None:
+        # Advisory only — rundesk refuses again in silence. It exists so a stranger is not left
+        # watching a deferred question that will never be answered.
+        records = self.pressed("status", who=9999)
+        self.assertEqual([], [one for one in records if one.get("say") == "query"])
+        self.assertEqual([adapter.NOT_YOURS],
+                         [one["text"] for one in self.interaction.answered])
+
+    def test_shutting_down_asks_once_before_it_does_it(self) -> None:
+        # A one-way door: the bot goes offline and there is no command left to bring it back.
+        first = self.pressed("shutdown")
+        self.assertEqual([], [one for one in first if one.get("say") == "control"],
+                         "a mistyped slash shut the gateway down")
+        self.assertIn("again", self.interaction.answered[0]["text"])
+
+    def test_pressing_it_twice_confirms_it(self) -> None:
+        async def exchange(reaching: Any) -> None:
+            asking = reaching._a_control("shutdown", "shutdown")
+            await asking(Interaction("shutdown", Person(22), place=700))
+            await asking(Interaction("shutdown", Person(22), place=700))
+
+        said = [one for one in self.during(exchange) if one.get("say") == "control"]
+        self.assertEqual(["shutdown"], [one["control"] for one in said])
+
+    def test_one_persons_confirmation_is_not_anothers(self) -> None:
+        async def exchange(reaching: Any) -> None:
+            reaching.allow = ["22", "33"]
+            asking = reaching._a_control("shutdown", "shutdown")
+            await asking(Interaction("shutdown", Person(22), place=700))
+            await asking(Interaction("shutdown", Person(33), place=700))
+
+        said = [one for one in self.during(exchange) if one.get("say") == "control"]
+        self.assertEqual([], said, "one person's warning confirmed another person's shutdown")
+
+    def test_the_provider_gesture_carries_what_was_typed(self) -> None:
+        said = self.only(self.pressed("provider", provider="codex"), "configure")
+        self.assertEqual("codex", said["provider"])
+        self.assertEqual(str(self.interaction.id), said["ref"])
+
+    def test_all_nine_are_registered(self) -> None:
+        async def exchange(reaching: Any) -> None:
+            reaching.tree = adapter.discord.app_commands.CommandTree(self.client)
+            reaching._offers()
+            self.assertEqual(9, len(reaching.tree.commands))
+
+        self.during(exchange)
+
+    def test_they_are_offered_once_and_not_on_every_reconnection(self) -> None:
+        # A global sync is rate-limited hard, and a bot reconnecting through a bad hour would spend
+        # its whole allowance re-registering nine commands that have not changed.
+        async def exchange(reaching: Any) -> None:
+            reaching.tree = adapter.discord.app_commands.CommandTree(self.client)
+            for _ in range(4):
+                await reaching._synced()
+            self.assertEqual(1, reaching.tree.synced)
+
+        self.during(exchange)
+
+    def test_a_sync_that_failed_is_said_and_names_the_scope_to_check(self) -> None:
+        # The failure with no symptom: without `applications.commands` every command registers
+        # cleanly and simply never appears, with no refusal anywhere to read.
+        async def exchange(reaching: Any) -> None:
+            reaching.tree = adapter.discord.app_commands.CommandTree(self.client)
+            reaching.tree.refuses = RuntimeError("Missing Access")
+            await reaching._synced()
+            await reaching._synced()
+            # Tried again rather than given up: a sync refused once is usually a scope somebody is
+            # about to fix, and a bot that never retried would need restarting to offer anything.
+            self.assertEqual(2, reaching.tree.attempts)
+            self.assertEqual(0, reaching.tree.synced)
+
+        records = self.during(exchange)
+        self.assertTrue(any("applications.commands" in one for one in self.noted(records)))
+
+
 class HowTheCommentaryGrows(Records):
     """One message that grows while it is still last, and a fresh one once it is not.
 
@@ -1030,6 +1296,9 @@ class WhatTheDotInTheMemberListSays(unittest.TestCase):
         self.hosting = adapter.Reaching.__new__(adapter.Reaching)
         self.hosting.connected = False
         self.hosting.client = Client(Person(1, bot=True, display_name="Markus"))
+        # Already offered: what is under test here is the dot in the member list, and a command
+        # sync is a separate connection-time errand with a case of its own.
+        self.hosting.offered = True
 
     def test_it_goes_green_when_the_socket_comes_up(self):
         asyncio.run(self.hosting._up())
