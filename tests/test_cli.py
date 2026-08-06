@@ -249,5 +249,21 @@ class WhatEveryCommandShares(support.Isolated):
         self.assertEqual("0", commands.as_written(0))
 
 
+class AStopIsNotACrash(support.Isolated):
+    """Every long verb can be Ctrl-C'd or sent a `SIGTERM`, and both arrive as `KeyboardInterrupt`.
+
+    Left uncaught, somebody who stopped their own turn got twenty lines of traceback ending inside
+    `queue.get` — which reads as a crash, on a command that did exactly what they asked.
+    """
+
+    def test_it_is_said_in_one_line_and_never_as_a_traceback(self):
+        with mock.patch.object(cli, "_the_verb", side_effect=KeyboardInterrupt), \
+                contextlib.redirect_stdout(io.StringIO()) as printed:
+            code = cli.main(["status"], asking=lambda: None)
+        self.assertEqual(FAILED, code)
+        self.assertIn("status: stopped", printed.getvalue())
+        self.assertNotIn("Traceback", printed.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

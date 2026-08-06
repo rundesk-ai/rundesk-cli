@@ -159,9 +159,9 @@ class _Shown:
 def _a_limit(one: Dict[str, Any]) -> str:
     """Account state a brain reported. **News about the account, never about the work** — a turn
     carrying one of these may have succeeded."""
-    left = one.get("left")
+    left = one.get("percent_left")
     resets = one.get("resets_at")
-    return "allowance" + (f": {left} left" if left is not None else "") + (
+    return "allowance" + (f": {left}% left" if left is not None else "") + (
         f", back at {resets}" if resets else "")
 
 

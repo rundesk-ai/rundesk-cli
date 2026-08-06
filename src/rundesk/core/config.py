@@ -279,3 +279,37 @@ def stated_all(values: Dict[str, Any], data: Optional[Path] = None) -> None:
         settled = dict(held[0]) if isinstance(held[0], dict) else dict(INITIAL)
         settled.update(values)
         held[0] = settled
+
+
+def where_the_command_stands() -> List[Path]:
+    """Every directory **this install's own** `rundesk` may stand in, best first.
+
+    Two, because there are two arrangements and a checkout is one of them. An **install** links the
+    command somewhere on a path and records where; a **checkout** has never been installed, so
+    nothing is linked and the launcher beside the code is the only `rundesk` there is.
+
+    One answer in one place, because two callers ask it for two different reasons — an agent running
+    `rundesk` from inside its own turn, and a gateway spawning one for a scheduled turn — and a
+    machine with two installs must not have one of them reach one install and the other the other.
+    That split is recorded one level up as having "silently split the machine in two".
+
+    A configuration that cannot be read is not a reason to refuse anything: the launcher is still
+    where it stands, whether or not anything was ever linked.
+    """
+    standing = []
+    try:
+        linked = read(paths.data()).get("command_link")
+    except Exception:                              # noqa: BLE001 — see the docstring
+        linked = None
+    if linked:
+        standing.append(Path(str(linked)).expanduser().parent)
+    standing.append(paths.program())
+    return standing
+
+
+def the_command() -> str:
+    """The `rundesk` to start, as a path. **This install's, never another one on the machine.**"""
+    for at in where_the_command_stands():
+        if (at / "rundesk").exists():
+            return str(at / "rundesk")
+    return str(paths.program() / "rundesk")

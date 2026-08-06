@@ -384,6 +384,10 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
             "exit_code": gone.code,
             "failure_code": code,
             "failure_message": (message or "")[:AN_EVENT_AT_MOST] or None,
+            # **The model that answered, not the one asked for.** Written at settlement rather
+            # than at admission because only the brain knows which one really ran, and left alone
+            # when it named none so a requested model is not erased by a brain that stayed quiet.
+            **({"model_name": used.model_name} if used.model_name else {}),
             "usage_reported": 1 if used.usage_reported else 0,
             "input_tokens": used.input_tokens, "output_tokens": used.output_tokens,
             "cache_read_tokens": used.cache_read_tokens,

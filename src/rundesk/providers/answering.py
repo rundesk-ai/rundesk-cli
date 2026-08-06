@@ -38,7 +38,7 @@ from typing import Callable, Optional
 from rundesk.agents import directory
 from rundesk.channels import arriving, delivery, hosting
 from rundesk.channels import kept as channels_kept
-from rundesk.core import config, paths
+from rundesk.core import config
 from rundesk.providers import instructions, kept, protocol, turns
 from rundesk.schedules import due, firing
 from rundesk.schedules import kept as schedules_kept
@@ -202,15 +202,11 @@ def for_a_schedule(agent: str, schedule: str, when=None) -> turns.Outcome:
 def the_command() -> str:
     """The `rundesk` a scheduled turn is started with. **This install's, never another's.**
 
-    The one the installer linked onto a PATH if there is one, and otherwise the launcher beside this
-    copy of the code. A machine can have two installs, and a schedule of one starting the other is
-    the split `firing` already records as having "silently split the machine in two" one level up.
+    One line, because the question is `core.config`'s and an agent running `rundesk` from inside its
+    own turn has to reach the same one. Two answers to *where is rundesk* is the split `firing`
+    records as having "silently split the machine in two".
     """
-    with contextlib.suppress(Exception):
-        linked = config.read(paths.data()).get("command_link")
-        if linked and Path(str(linked)).exists():
-            return str(linked)
-    return str(paths.program() / "rundesk")
+    return config.the_command()
 
 
 def _note(where: Path, said: str, level: str = logs.INFO) -> None:

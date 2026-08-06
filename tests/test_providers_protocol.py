@@ -124,16 +124,16 @@ class WhyATurnStopped(support.Isolated):
     def test_a_word_this_release_knows_is_carried(self):
         for word in protocol.FAILURE_CODES:
             with self.subTest(word=word):
-                self.assertEqual(protocol.failure_code([done(ok=False, because=word)]), word)
+                self.assertEqual(protocol.failure_code([done(ok=False, failure_code=word)]), word)
 
     def test_a_word_from_a_newer_release_is_dropped_rather_than_stored(self):
         """One unknown member sitting silently in the column takes away the whole value of a closed
         set, which is that a reader can exhaust it."""
-        self.assertIsNone(protocol.failure_code([done(ok=False, because="quantum_flux")]))
+        self.assertIsNone(protocol.failure_code([done(ok=False, failure_code="quantum_flux")]))
 
     def test_nothing_is_inferred_from_the_prose_beside_it(self):
         """A word guessed from a failure message is wrong on the first vendor that rewords one."""
-        said = [done(ok=False, why="401 Unauthorized: please run the login command")]
+        said = [done(ok=False, failure_message="401 Unauthorized: please run the login command")]
         self.assertIsNone(protocol.failure_code(said))
         self.assertIn("401", protocol.failure_message(said))
 
@@ -178,7 +178,7 @@ class WhetherTheTurnWorked(support.Isolated):
     def test_a_turn_that_said_nothing_at_all_answered_nobody(self):
         """Measured on a live gateway: `done ok:true`, four zero counters, fourteen milliseconds,
         and nothing said — recorded as finished, and the question was consumed."""
-        self.assertFalse(protocol.has_answer([done(), {"type": "usage", "input": 0, "output": 0}]))
+        self.assertFalse(protocol.has_answer([done(), {"type": "usage", "input_tokens": 0, "output_tokens": 0}]))
 
     def test_whitespace_is_not_an_answer(self):
         self.assertFalse(protocol.has_answer([text("   \n  "), done()]))
@@ -193,13 +193,13 @@ class WhetherTheTurnWorked(support.Isolated):
 
 class WhereTheConversationGotTo(support.Isolated):
     def test_the_handle_comes_off_the_record_that_ends_the_turn(self):
-        self.assertEqual(protocol.resume_handle([done(session="thread-9")]), "thread-9")
+        self.assertEqual(protocol.resume_handle([done(session_id="thread-9")]), "thread-9")
 
     def test_an_empty_handle_is_no_handle(self):
-        self.assertIsNone(protocol.resume_handle([done(session="")]))
+        self.assertIsNone(protocol.resume_handle([done(session_id="")]))
 
     def test_a_handle_that_is_not_text_is_no_handle(self):
-        self.assertIsNone(protocol.resume_handle([done(session=17)]))
+        self.assertIsNone(protocol.resume_handle([done(session_id=17)]))
 
 
 class WhatATurnCost(support.Isolated):
@@ -218,38 +218,38 @@ class WhatATurnCost(support.Isolated):
 
     def test_a_quantity_the_brain_could_not_tell_stays_unknown(self):
         """Summing an absent cached figure into zero says it read nothing from the cache."""
-        used = protocol.usage_of([{"type": "usage", "input": 20, "output": 5}, done()])
+        used = protocol.usage_of([{"type": "usage", "input_tokens": 20, "output_tokens": 5}, done()])
         self.assertEqual(used.input_tokens, 20)
         self.assertIsNone(used.cache_read_tokens)
         self.assertIsNone(used.cache_write_tokens)
 
     def test_the_four_billed_quantities_are_never_folded_together(self):
-        used = protocol.usage_of([{"type": "usage", "input": 20, "output": 1510,
-                               "cached": 302567, "written": 17453}, done()])
+        used = protocol.usage_of([{"type": "usage", "input_tokens": 20, "output_tokens": 1510,
+                               "cache_read_tokens": 302567, "cache_write_tokens": 17453}, done()])
         self.assertEqual((used.input_tokens, used.output_tokens, used.cache_read_tokens, used.cache_write_tokens),
                          (20, 1510, 302567, 17453))
 
     def test_quantities_from_several_records_are_summed(self):
-        used = protocol.usage_of([{"type": "usage", "input": 10, "output": 1},
-                              {"type": "usage", "input": 20, "output": 2}, done()])
+        used = protocol.usage_of([{"type": "usage", "input_tokens": 10, "output_tokens": 1},
+                              {"type": "usage", "input_tokens": 20, "output_tokens": 2}, done()])
         self.assertEqual((used.input_tokens, used.output_tokens), (30, 3))
 
     def test_how_big_the_conversation_is_takes_the_last_and_never_the_sum(self):
         """A level, not a quantity — it goes *down* when a conversation is compacted, which no
         running total can, so adding snapshots would invent a number nothing measured."""
-        used = protocol.usage_of([{"type": "usage", "session": 9200},
-                              {"type": "usage", "session": 4100}, done()])
+        used = protocol.usage_of([{"type": "usage", "context_tokens": 9200},
+                              {"type": "usage", "context_tokens": 4100}, done()])
         self.assertEqual(used.context_tokens, 4100)
 
     def test_a_boolean_is_not_a_count(self):
-        used = protocol.usage_of([{"type": "usage", "input": True, "output": 5}, done()])
+        used = protocol.usage_of([{"type": "usage", "input_tokens": True, "output_tokens": 5}, done()])
         self.assertIsNone(used.input_tokens)
         self.assertEqual(used.output_tokens, 5)
 
     def test_only_a_model_that_answered_is_claimed(self):
         """A model requested is not a model measured."""
-        self.assertIsNone(protocol.usage_of([{"type": "usage", "input": 1}, done()]).model_name)
-        self.assertEqual(protocol.usage_of([{"type": "usage", "model": "m-1"}, done()]).model_name, "m-1")
+        self.assertIsNone(protocol.usage_of([{"type": "usage", "input_tokens": 1}, done()]).model_name)
+        self.assertEqual(protocol.usage_of([{"type": "usage", "model_name": "m-1"}, done()]).model_name, "m-1")
 
 
 class AccountStateIsNotAnOutcome(support.Isolated):
@@ -328,7 +328,7 @@ class TheReadingsTakeAnyIterable(support.Isolated):
         for reading in (protocol.brain_said_ok, protocol.failure_code,
                         protocol.failure_message, protocol.resume_handle):
             with self.subTest(reading=reading.__name__):
-                reading(one for one in [done(ok=False, because=protocol.CRASHED, why="fell over")])
+                reading(one for one in [done(ok=False, failure_code=protocol.CRASHED, failure_message="fell over")])
 
 
 if __name__ == "__main__":

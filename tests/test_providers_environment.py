@@ -121,8 +121,30 @@ class ReachingThisInstallsOwnCommand(support.Isolated):
         config.where(paths.data()).write_text("{ this is not json", encoding="utf-8")
         self.assertIn("PATH", built())
 
-    def test_nothing_recorded_leaves_the_inherited_path_alone(self):
-        self.assertIn("PATH", built())
+    def test_nothing_recorded_still_reaches_the_launcher_beside_the_code(self):
+        """A checkout has never been installed, so nothing is linked and the launcher beside the
+        code is the only `rundesk` there is.
+
+        Left out, an agent's own `rundesk messages` answers `command not found` — which is what the
+        first live turn of this release did, with the turn otherwise perfectly healthy and nothing
+        anywhere saying why the agent could not read its own history back.
+        """
+        self.assertIn(str(paths.program()), built()["PATH"].split(":"))
+
+    def test_the_launcher_is_reached_even_when_something_is_recorded(self):
+        """Both, and in that order: a recorded link is the better answer and never the only one."""
+        at = self.home / "bin" / "rundesk"
+        at.parent.mkdir(parents=True)
+        at.write_text("#!/bin/sh\n", encoding="utf-8")
+        config.write_fresh(paths.data())
+        config.stated("command_link", str(at), paths.data())
+        given = built()["PATH"].split(":")
+        self.assertEqual([str(at.parent), str(paths.program())], given[:2])
+
+    def test_the_command_a_scheduled_turn_starts_is_the_same_install(self):
+        """`providers.answering` spawns one and this puts one on a path. **One answer, one place** —
+        two would let a machine with two installs reach a different one from each."""
+        self.assertEqual(str(paths.program() / "rundesk"), config.the_command())
 
 
 class ValuesThatCouldNotBeRead(support.Isolated):

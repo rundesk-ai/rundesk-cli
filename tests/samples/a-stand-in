@@ -62,11 +62,12 @@ def main():
         time.sleep(float(how.get("silent")))
         return 0
     if how.get("say_nothing_and_finish"):
-        say(type="usage", input=0, output=0)
-        say(type="done", ok=True, session="thread-quiet")
+        say(type="usage", input_tokens=0, output_tokens=0)
+        say(type="done", ok=True, session_id="thread-quiet")
         return 0
     if how.get("fail_with"):
-        say(type="done", ok=False, because=how["fail_with"], why="the stand-in was told to fail")
+        say(type="done", ok=False, failure_code=how["fail_with"],
+            failure_message="the stand-in was told to fail")
         return 0
     if how.get("crash_without_finishing"):
         say(type="text", text="half a th")
@@ -90,9 +91,10 @@ def main():
             word = json.loads(line)
             say(type="text", text="heard " + (word.get("text") or "").strip(), whole=True)
 
-    say(type="usage", input=20, output=1510, cached=302567, written=17453,
-        session=9200, model=how.get("model") or "a-stand-in-1")
-    say(type="done", ok=True, session=how.get("session") or "thread-9")
+    say(type="usage", input_tokens=20, output_tokens=1510, cache_read_tokens=302567,
+        cache_write_tokens=17453, context_tokens=9200,
+        model_name=how.get("model") or "a-stand-in-1")
+    say(type="done", ok=True, session_id=how.get("session") or "thread-9")
     return 0
 
 

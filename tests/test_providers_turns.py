@@ -77,6 +77,22 @@ class ATurnThatAnswers(WithAnAgent):
         got = self.run_turn()
         self.assertEqual(got.usage.model_name, "a-stand-in-1")
 
+    def test_the_model_that_answered_reaches_the_records_and_not_only_the_outcome(self):
+        """Read back a month later off the row, which is where anybody looks.
+
+        The column was written once, at admission, from the model *asked for* — so a turn that
+        asked for nothing and was answered by a real model recorded no model at all, and `rundesk
+        turns` showed a dash on a turn whose usage record named one.
+        """
+        row = kept.get_turn("ava", self.run_turn().turn)
+        self.assertEqual(row["model_name"], "a-stand-in-1")
+
+    def test_a_brain_that_names_no_model_does_not_erase_the_one_that_was_asked_for(self):
+        """A quiet brain must not take the record of what was asked for away with it."""
+        self.a_stand_in_that(say_nothing_and_finish=True)
+        got = self.run_turn(self.asking(model_name="something-particular"))
+        self.assertEqual(kept.get_turn("ava", got.turn)["model_name"], "something-particular")
+
     def test_what_became_of_the_program_is_kept_apart_from_what_the_brain_said(self):
         self.assertEqual(kept.get_turn("ava", self.run_turn().turn)["exit_code"], 0)
 

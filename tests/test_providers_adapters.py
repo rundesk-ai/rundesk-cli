@@ -46,9 +46,27 @@ printf '%s\\n' '{"tools": true}'
 
 
 class Adapters(support.Isolated):
+    def setUp(self):
+        super().setUp()
+        # **`paths.code()` answers with the checkout's own `src` until an install exists**, so a
+        # case that did not make one would look for shipped adapters among the *real* ones — and
+        # `known()` would answer with whatever this release happens to ship, which changes the day
+        # one is added. Making `app/src` points it inside the scratch home instead, which is also
+        # what stops a case writing a fixture into the repository somebody is working in.
+        (paths.home() / "app" / "src").mkdir(parents=True, exist_ok=True)
+        self.shipped = paths.code() / adapters.SHIPPED_IN
+        self.assertNotIn(support.CHECKOUT, self.shipped.parents,
+                         "a case was about to write an adapter into the checkout")
+
+    def ships(self, name: str, body: str = "", runnable: bool = True):
+        """An adapter that comes with the release, written where a shipped one is looked for."""
+        return self._an_adapter(self.shipped / name, body, runnable)
+
     def given(self, name: str, body: str = "", runnable: bool = True):
         """An adapter this install has been given, written where one is looked for."""
-        at = paths.data() / adapters.GIVEN_IN / name
+        return self._an_adapter(paths.data() / adapters.GIVEN_IN / name, body, runnable)
+
+    def _an_adapter(self, at, body: str, runnable: bool):
         at.parent.mkdir(parents=True, exist_ok=True)
         at.write_text(body or saying('{"tools": true}'), encoding="utf-8")
         if runnable:
@@ -98,10 +116,18 @@ class FindingOne(Adapters):
         self.assertIn("brain", str(refused.exception))
 
     def test_every_one_this_install_can_run_is_found_by_looking(self):
+        self.ships("shipped-one")
         self.given("one")
         self.given("two")
         self.given("three", runnable=False)
-        self.assertEqual(adapters.known(), ["one", "two"])
+        self.assertEqual(adapters.known(), ["one", "shipped-one", "two"])
+
+    def test_a_bare_name_finds_the_one_that_ships_before_one_this_install_was_given(self):
+        """A release's own adapter is the one somebody gets by typing its name, and an install
+        cannot quietly shadow it."""
+        shipped = self.ships("codex")
+        self.given("codex")
+        self.assertEqual(adapters.where("codex"), shipped)
 
     def test_a_directory_that_is_not_there_yet_is_not_a_failure(self):
         self.assertEqual(adapters.known(), [])

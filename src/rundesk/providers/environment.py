@@ -27,7 +27,7 @@ with nobody re-running anything.
 from pathlib import Path
 from typing import Dict, Mapping, Optional
 
-from rundesk.core import adapters, config, paths, secrets
+from rundesk.core import adapters, config, secrets
 
 #: Where a turn stands, and what stands beside it. The agent's own home, so the brain discovers the
 #: files it lives by because **they are in the directory it is in** — that is the whole mechanism,
@@ -146,15 +146,8 @@ def _reachable(inherited: str) -> str:
     well, because the product had installed itself into a directory it then refused to look in.
     """
     front = []
-    try:
-        linked = config.read(paths.data()).get("command_link")
-    except Exception:                              # noqa: BLE001 — a configuration that cannot be
-        # read is not a reason to refuse a turn. The command is then reachable only if it is already
-        # on the inherited path, which is the behaviour anything else here would fall back to.
-        linked = None
-    if linked:
-        at = Path(str(linked)).expanduser().parent
-        if at.is_dir():
+    for at in config.where_the_command_stands():
+        if at.is_dir() and str(at) not in front:
             front.append(str(at))
     return ":".join([*front, inherited]) if inherited else ":".join(front)
 

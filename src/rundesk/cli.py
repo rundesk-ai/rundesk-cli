@@ -45,7 +45,7 @@ from rundesk.commands.turns import register as register_turns
 from rundesk.commands.uninstall import cmd_uninstall
 from rundesk.commands.update import Fetching, cmd_update
 from rundesk.commands.version import cmd_version
-from rundesk.exits import OK
+from rundesk.exits import FAILED, OK
 from rundesk.gateways import job
 from rundesk.lifecycle import release
 from rundesk.skills.catalogs import Fetching as Refreshing
@@ -183,7 +183,27 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
     _asked_to_stop_politely()
     parser = build_parser()
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        return _the_verb(args, asking, fetching, supervising, refreshing, building, reaching,
+                         parser)
+    except KeyboardInterrupt:
+        # **A stop is a normal way for a command to end, and it must read like one.** Every long
+        # verb — a turn, a restore, an update — can be Ctrl-C'd or sent a `SIGTERM`, and both
+        # arrive here as this. Left uncaught, somebody who stopped their own turn got twenty lines
+        # of traceback ending inside `queue.get`, which reads as a crash; and a supervisor stopping
+        # a scheduled turn wrote the same thing into that schedule's output.
+        #
+        # Caught *here*, at the top, and nowhere lower: what makes a stop safe is that the `finally`
+        # blocks under this ran on the way out, which they have by the time it lands.
+        # `FAILED` and not a fourth code: `exits` says there are three answers and no others, and
+        # a stopped command did not do the work — which is exactly what that code means.
+        print(f"\n{args.command or 'rundesk'}: stopped")
+        return FAILED
 
+
+def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshing, building,
+              reaching, parser: argparse.ArgumentParser) -> int:
+    """Which module answers what was typed. One `if` per verb, in the order `rundesk` lists them."""
     if args.command is None:
         parser.print_help()
         return OK

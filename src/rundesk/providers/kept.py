@@ -62,9 +62,10 @@ ADMITTED = ("conversation_id", "schedule_id", "provider_name", "model_name", "ac
             "instructions_bytes")
 
 #: What may be written when a turn is settled, beside its state.
-SETTLED = ("exit_code", "failure_code", "failure_message", "usage_reported", "input_tokens",
-           "output_tokens", "cache_read_tokens", "cache_write_tokens", "context_tokens",
-           "unknown_records", "lost_records", "raw_offset_start", "raw_offset_end")
+SETTLED = ("model_name", "exit_code", "failure_code", "failure_message", "usage_reported",
+           "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+           "context_tokens", "unknown_records", "lost_records",
+           "raw_offset_start", "raw_offset_end")
 
 #: How many messages a search answers with unless somebody asks for more. Small, because **the agent
 #: is the first caller and every line it reads costs tokens** — a search that answered with fifty

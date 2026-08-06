@@ -14,6 +14,13 @@ things an adapter may say it can do, two postures, and the words for why a turn 
 vocabulary would put every vendor's words into every channel and every reader, which is the thing
 this seam exists to prevent.
 
+**A field is named for what it holds, and the wire name is the column name.** `failure_code`,
+`failure_message`, `session_id`, `input_tokens`, `context_tokens` — the same words an adapter writes
+are the words `turns` stores, so nothing translates between them and a person reading one file can
+read the other. The rule that produced them is that a name must be readable on its own: `because`
+and `why` were two different facts a sentence apart, and `session` meant a resume handle on one
+record and a token count on the next.
+
 **Being closed is also what makes forward compatibility cheap.** A line that will not parse, a line
 that is not an object, and a line of a kind this release has never heard of all come back the same
 way from `understood`: `None`, meaning *keep it, show it to nobody*. The caller keeps the raw line
@@ -274,7 +281,7 @@ def resume_handle(said: Iterable[Dict[str, Any]]) -> Optional[str]:
     """
     for one in _backwards(said):
         if one.get("type") == "done":
-            handle = one.get("session")
+            handle = one.get("session_id")
             return handle if isinstance(handle, str) and handle else None
     return None
 
@@ -287,7 +294,7 @@ def failure_message(said: Iterable[Dict[str, Any]]) -> Optional[str]:
     """
     for one in _backwards(said):
         if one.get("type") == "done":
-            said = one.get("why")
+            said = one.get("failure_message")
             return said if isinstance(said, str) and said else None
     return None
 
@@ -302,7 +309,7 @@ def failure_code(said: Iterable[Dict[str, Any]]) -> Optional[str]:
     """
     for one in _backwards(said):
         if one.get("type") == "done":
-            word = one.get("because")
+            word = one.get("failure_code")
             return word if isinstance(word, str) and word in FAILURE_CODES else None
     return None
 
@@ -326,17 +333,18 @@ def usage_of(said: Iterable[Dict[str, Any]]) -> Usage:
     if not counted:
         return Usage()
     totals = {}
-    for ours, theirs in (("input_tokens", "input"), ("output_tokens", "output"),
-                         ("cache_read_tokens", "cached"), ("cache_write_tokens", "written")):
-        values = [one[theirs] for one in counted if _a_count(one.get(theirs))]
+    # **The wire name and the column name are the same word**, so nothing translates between them
+    # and a reader of one file can read the other. See the module docstring on why they must be.
+    for named in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"):
+        values = [one[named] for one in counted if _a_count(one.get(named))]
         if values:
-            totals[ours] = sum(values)
-    levels = [one["session"] for one in counted if _a_count(one.get("session"))]
+            totals[named] = sum(values)
+    levels = [one["context_tokens"] for one in counted if _a_count(one.get("context_tokens"))]
     if levels:
         totals["context_tokens"] = levels[-1]
     # Only ever what a brain said actually answered. One that names none leaves none claimed, rather
     # than the one that happened to be asked for — a model requested is not a model measured.
-    named = [str(one.get("model")) for one in counted if one.get("model")]
+    named = [str(one.get("model_name")) for one in counted if one.get("model_name")]
     if named:
         totals["model_name"] = named[-1]
     return Usage(usage_reported=True, **totals)

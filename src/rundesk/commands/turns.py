@@ -22,6 +22,7 @@ from rundesk.agents import directory, records
 from rundesk.commands import Subcommands, failed
 from rundesk.exits import OK, USAGE
 from rundesk.providers import adapters, kept, protocol
+from rundesk.providers import turns as running
 from rundesk.utils.terminal import as_table, dim
 
 #: How much of one record's own words is shown on a line. The whole of it is in the records.
@@ -67,7 +68,8 @@ def _listed(agent: str, most: int, conversation) -> int:
         return OK
     print(f"turns {agent} has taken, newest first")
     as_table(("TURN", "WHEN", "WAS", "IN", "COST", "UNKNOWN", "LOST"),
-             [(str(one["id"]), one["created_at"], _became(one), str(one["conversation_id"]),
+             [(str(one["id"]), one["created_at"], _became(agent, one),
+               str(one["conversation_id"]),
                _cost(one), str(one["unknown_records"]), str(one["lost_records"]))
               for one in there])
     return OK
@@ -78,7 +80,7 @@ def _one(agent: str, turn: int) -> int:
     row = kept.get_turn(agent, turn)
     print(f"turn {turn}")
     as_table(("", ""), [
-        ("was", _became(row)),
+        ("was", _became(agent, row)),
         ("conversation", str(row["conversation_id"])),
         ("provider", row["provider_name"]),
         ("model", row["model_name"] or NOT_SAID),
@@ -108,9 +110,24 @@ def _one(agent: str, turn: int) -> int:
     return OK
 
 
-def _became(row: Dict[str, Any]) -> str:
-    """What a turn came to. `working` means nothing has settled it, never that it is running."""
-    return str(row["turn_status"])
+def _became(agent: str, row: Dict[str, Any]) -> str:
+    """What a turn came to, and — while it says `working` — whether anything is still doing it.
+
+    **`working` means nothing settled it, never that it is running.** A turn whose process was
+    `SIGKILL`ed leaves that word behind for ever, because the one thing that would have changed it
+    died with the process. So the second half of the answer is asked of the kernel: the claim on
+    that conversation is held for exactly as long as the turn's adapter tree lives, so a `working`
+    row with nobody holding it is a turn that was killed rather than one in flight.
+
+    Asked only for `working`, because it costs a lock probe and every other word is already final.
+    """
+    became = str(row["turn_status"])
+    if became != kept.WORKING:
+        return became
+    try:
+        return became if running.busy(agent, row["conversation_id"]) else f"{became} (abandoned)"
+    except OSError:
+        return became
 
 
 def _cost(row: Dict[str, Any]) -> str:
