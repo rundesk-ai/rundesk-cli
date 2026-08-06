@@ -27,7 +27,7 @@ with nobody re-running anything.
 from pathlib import Path
 from typing import Dict, Mapping, Optional
 
-from rundesk.core import adapters, config, secrets
+from rundesk.core import adapters, config, paths, secrets
 
 #: Where a turn stands, and what stands beside it. The agent's own home, so the brain discovers the
 #: files it lives by because **they are in the directory it is in** — that is the whole mechanism,
@@ -51,6 +51,31 @@ AGENT = "RUNDESK_AGENT"
 #: or ignores it. Anything that described this as a boundary would be claiming a guarantee nobody
 #: can keep.
 ACCESS_MODE = "RUNDESK_ACCESS_MODE"
+
+#: Which install this turn belongs to. **An agent runs `rundesk` from inside its own turn** — to read
+#: its own history back, or to answer a question about this machine — and without this it reads the
+#: default `~/.rundesk` rather than the install running it. Measured: a turn on a scratch install ran
+#: `rundesk messages` and was told `cody is not an agent on this install` about the agent speaking.
+#:
+#: **Derived from `paths.home()`, never inherited.** This process may have the variable unset and
+#: still resolve `~/.rundesk`, so carrying it through from the environment would carry nothing in the
+#: ordinary case. `schedules.firing` and `gateways.job` already derive it for the two other
+#: environments this product builds — a turn was the third, and it was the one left out.
+#:
+#: `paths.HOME_IS` rather than the string, because a second spelling of the only location this
+#: product reads is the defect `core.paths` exists to have ended, in miniature.
+INSTALL = paths.HOME_IS
+
+#: The `rundesk` to run, as a whole path. **Not a convenience over `PATH` — the thing that works when
+#: `PATH` does not.** One measured brain hands its own shell a `PATH` rebuilt from the owner's login
+#: profile, so the directory `_reachable` puts in front is simply gone by the time an agent types
+#: anything and a bare `rundesk` exits 127 on a healthy install. Environment variables it leaves
+#: alone, so a name carrying the whole path survives where a path entry does not.
+#:
+#: `config.the_command()`, which is already the one answer to which `rundesk` this install means —
+#: two answers is how a machine with two installs comes to reach one from a turn and the other from
+#: a schedule.
+COMMAND = "RUNDESK_COMMAND"
 
 #: Where this agent's skills stand. **Where they are, not which brain looks where** — every measured
 #: brain discovers skills itself and each reads a directory of its own, so what is presented and
@@ -118,6 +143,12 @@ def for_turn(*, agent: str, home: Path, provider_home: Path, skills: Path, turn:
         CWD: str(home),
         PROVIDER_HOME: str(provider_home),
         SKILLS: str(skills),
+        # **Derived here rather than taken as arguments.** Which install is running and where its
+        # command stands are facts of this process, not of the turn — a caller asked for them is a
+        # caller that can leave one out, which is exactly what `schedules.firing` records happening
+        # when this product had several location variables and a job carried the wrong subset.
+        INSTALL: str(paths.home()),
+        COMMAND: config.the_command(),
         RUN: str(turn),
         AGENT: agent,
         ACCESS_MODE: access_mode,

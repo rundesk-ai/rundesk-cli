@@ -29,7 +29,7 @@ class WhatEveryTurnIsTold(support.Isolated):
         said = built()
         for name in (environment.CWD, environment.PROVIDER_HOME, environment.SKILLS,
                      environment.RUN, environment.AGENT, environment.ACCESS_MODE,
-                     environment.CONTINUITY):
+                     environment.CONTINUITY, environment.INSTALL, environment.COMMAND):
             with self.subTest(name=name):
                 self.assertIn(name, said)
                 self.assertTrue(said[name])
@@ -86,7 +86,8 @@ class TheOwnersOwnValues(support.Isolated):
         """The point of asking `name not in said` rather than consulting a list kept here."""
         for name in (environment.CWD, environment.PROVIDER_HOME, environment.SKILLS,
                      environment.RUN, environment.AGENT, environment.ACCESS_MODE,
-                     environment.CONTINUITY, "PATH", "TERM"):
+                     environment.CONTINUITY, environment.INSTALL, environment.COMMAND,
+                     "PATH", "TERM"):
             with self.subTest(name=name):
                 said = built(owners={name: "hijacked"})
                 self.assertNotEqual(said[name], "hijacked")
@@ -140,6 +141,39 @@ class ReachingThisInstallsOwnCommand(support.Isolated):
         config.stated("command_link", str(at), paths.data())
         given = built()["PATH"].split(":")
         self.assertEqual([str(at.parent), str(paths.program())], given[:2])
+
+    def test_a_turn_is_told_which_install_is_running_it(self):
+        """Without it an agent's own `rundesk` reads the default `~/.rundesk` rather than the
+        install it belongs to. Measured live: a turn ran `rundesk messages` and was told the agent
+        speaking was not an agent on this install."""
+        self.assertEqual(str(paths.home()), built()[environment.INSTALL])
+
+    def test_the_install_it_is_told_is_derived_and_never_inherited(self):
+        """This process may have the variable unset and still resolve a root, so carrying it through
+        from the environment would carry nothing in the ordinary case."""
+        os.environ.pop(paths.HOME_IS, None)
+        self.addCleanup(os.environ.__setitem__, paths.HOME_IS, str(self.home))
+        self.assertEqual(str(paths.home()), built()[environment.INSTALL])
+
+    def test_the_command_is_named_absolutely_so_a_brain_that_rebuilds_path_can_still_run_it(self):
+        """`PATH` is not a guarantee. One measured brain hands its shell a `PATH` rebuilt from the
+        owner's login profile, so the directory put in front is gone and a bare `rundesk` exits 127
+        on a healthy install — while the variables it was given arrive intact."""
+        at = self.home / "bin" / "rundesk"
+        at.parent.mkdir(parents=True)
+        at.write_text("#!/bin/sh\n", encoding="utf-8")
+        config.write_fresh(paths.data())
+        config.stated("command_link", str(at), paths.data())
+        said = built()[environment.COMMAND]
+        self.assertEqual(str(at), said)
+        self.assertTrue(Path(said).is_absolute())
+
+    def test_the_path_in_front_is_still_there_beside_the_whole_path(self):
+        """The two are complementary. Two brains inherit the environment and find a bare `rundesk`
+        by `PATH`; this guards a later change that reads the variable as replacing the prepend."""
+        said = built()
+        self.assertIn(str(paths.program()), said["PATH"].split(":"))
+        self.assertTrue(said[environment.COMMAND])
 
     def test_the_command_a_scheduled_turn_starts_is_the_same_install(self):
         """`providers.answering` spawns one and this puts one on a path. **One answer, one place** —

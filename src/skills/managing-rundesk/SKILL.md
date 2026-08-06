@@ -13,6 +13,26 @@ access your owner does. `rundesk --help` is generated from the command itself an
 date — where anything here disagrees with it, the command is right. Nothing else on this machine is
 rundesk, whatever it calls its own jobs.
 
+## The rundesk that is running you
+
+**Run `"$RUNDESK_COMMAND"`, not the bare word.** It is the whole path to the `rundesk` running this
+turn, and it is set every time. Some brains hand your shell a `PATH` rebuilt from the owner's login
+profile, so a bare `rundesk` can be `command not found` on a perfectly healthy install — and a bare
+one that *is* found may belong to a different install on the same machine.
+
+**`$RUNDESK_HOME` is the install you belong to.** Every command reads it, and it is already set for
+you. Never set it, never pass a path around it. If a listing shows agents you do not recognise, or
+tells you that you are not an agent here, you are reading somebody else's install — say so rather
+than working around it.
+
+```sh
+"$RUNDESK_COMMAND" status
+"$RUNDESK_COMMAND" skills list "$RUNDESK_AGENT"
+```
+
+Every command below is written `rundesk …` so it reads. Type `"$RUNDESK_COMMAND" …` instead — the
+same command, reachable whatever your brain did to your `PATH`.
+
 ## Never do these
 
 - **Never stop or restart your own gateway.** It is the process your turn is running inside, so you

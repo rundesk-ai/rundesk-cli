@@ -327,6 +327,8 @@ is left out is unset, never empty** — `${RUNDESK_MODEL:-default}` is written e
 | `RUNDESK_PROVIDER_HOME` | yours, for what you must remember between turns. Named, never made |
 | `RUNDESK_AGENT`, `RUNDESK_RUN` | which agent, and which turn |
 | `RUNDESK_ACCESS_MODE` | `read` or `work`. **A request, not containment** — rundesk enforces nothing and has no way to |
+| `RUNDESK_HOME` | which install this turn belongs to. Every `rundesk` command the agent runs reads it |
+| `RUNDESK_COMMAND` | the whole path to *this* install's `rundesk`. What works when `PATH` does not |
 | `RUNDESK_SKILLS` | where this agent's skills stand. Presenting them is yours |
 | `RUNDESK_CONTINUITY` | `AGENTS.md=rules,MEMORY.md=memory,SOUL.md=identity` — which files the agent lives by, and what changing one is called |
 | `RUNDESK_RAW` | somewhere to append everything the brain said, verbatim. Offered, never required |
@@ -349,8 +351,25 @@ never sent**, because it reads like it works.
 a vendor changing its output shape otherwise shows up as records quietly going missing with nothing
 at all to compare against.
 
-`PATH` carries this install's own command directory in front, so an agent can run `rundesk messages`
-from inside its own turn and reach *this* install.
+**An agent runs `rundesk` from inside its own turn**, and two things make that reach *this* install
+rather than another one — or none.
+
+`PATH` carries this install's own command directory in front, which is enough for a brain that hands
+its shell the environment it was given. `RUNDESK_COMMAND` carries the whole path, which is what works
+when a brain does not: one measured brain rebuilds its shell's `PATH` from the owner's login profile
+before the agent types anything, so the directory in front is gone and a bare `rundesk` exits 127 on
+a perfectly healthy install — while the variables it was handed arrive intact. Both are set, and the
+shipped `managing-rundesk` skill tells an agent to prefer `"$RUNDESK_COMMAND"`.
+
+`RUNDESK_HOME` is what makes the command answer about the right install once it has been found.
+Without it, `rundesk` resolves the default `~/.rundesk`: measured, a turn ran `rundesk messages` and
+was told the agent that was speaking is not an agent on this install. It is **derived from the
+resolved root, never inherited** — this process may have the variable unset and still resolve one —
+the same way `schedules.firing` builds a schedule's environment and `gateways.job` writes a plist.
+
+One consequence worth stating: a value the owner keeps under either of those two names no longer
+reaches a brain, because a name rundesk decides is a name an owner's value may not take. What it did
+before was point an agent's own `rundesk` at a different install, which is the defect this closes.
 
 **A provider is handed every value this install keeps**, merged in after the above and **never over
 a name rundesk decided**. Not scoped per agent, and that is a decision rather than an oversight: a

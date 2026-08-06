@@ -28,8 +28,14 @@ from rundesk.skills import catalogs, library, needs
 _FENCED = re.compile(r"^```.*?^```", re.M | re.S)
 _INLINE = re.compile(r"`([^`\n]+)`")
 
-#: A verb, at the start of what somebody would type.
-_TYPED = re.compile(r"^rundesk (--?[a-z][a-z-]*|[a-z][a-z-]*)", re.M)
+#: A verb, at the start of what somebody would type — spelled either way a skill may write it.
+#:
+#: **`"$RUNDESK_COMMAND"` is read too, and leaving it out would be this check going quietly blind.**
+#: A skill that tells an agent to type the reachable form is telling it to type a verb, and a pattern
+#: that only knew the bare word would go on passing while every command in the skill went unchecked —
+#: which is this guard's own documented failure mode, arrived at by adding a spelling rather than by
+#: removing a rule.
+_TYPED = re.compile(r'^(?:rundesk|"\$RUNDESK_COMMAND") (--?[a-z][a-z-]*|[a-z][a-z-]*)', re.M)
 
 
 def verbs_named(said: str):
@@ -213,6 +219,12 @@ class WhatAShippedSkillMayClaim(Bundled):
         # And prose naming the product is read as prose, whether it opens a line or not.
         self.assertEqual([], verbs_named("rundesk is the thing running you"))
         self.assertEqual([], verbs_named("Nothing else here is rundesk itself, whatever it says"))
+        # **The reachable spelling is read as a command too.** A skill tells an agent to type
+        # `"$RUNDESK_COMMAND" <verb>`, because a bare `rundesk` is not on every brain's path — and a
+        # pattern that only knew the bare word would leave every one of those commands unchecked
+        # while the case above went on passing, which is silence rather than a failure.
+        self.assertEqual(["status"], verbs_named('```sh\n"$RUNDESK_COMMAND" status\n```'))
+        self.assertEqual(["skills"], verbs_named('`"$RUNDESK_COMMAND" skills list alan`'))
 
 
 class WhatTheDocumentationClaims(support.Isolated):
