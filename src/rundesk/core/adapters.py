@@ -86,9 +86,16 @@ def where_the_packages_are() -> Optional[Path]:
     needing one then works only where somebody has put it on the path themselves, and whatever asks
     the adapter a question reports the `ImportError` as the refusal it is rather than pretending
     otherwise.
+
+    **Two arrangements, and a checkout is one of them.** An install keeps its virtualenv beside
+    `app/`; a checkout has no `app/` at all and keeps one beside the code. Looking only in the first
+    is what `paths.code` is written against one level down — and it read here as a shipped adapter
+    reporting that the library it needs "is not installed", on a machine where it plainly was.
     """
-    theirs = paths.app() / ".venv" / "bin"
-    return theirs if theirs.is_dir() else None
+    for theirs in (paths.app() / ".venv" / "bin", paths.program() / ".venv" / "bin"):
+        if theirs.is_dir():
+            return theirs
+    return None
 
 
 def runnable(at: Path) -> bool:

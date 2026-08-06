@@ -9,9 +9,11 @@ Run directly: `python3 tests/test_providers_adapters.py`
 
 import os
 import unittest
+from unittest import mock
 
 import support
 from rundesk.agents import directory
+from rundesk.core import adapters as core_adapters
 from rundesk.core import paths
 from rundesk.providers import adapters
 
@@ -220,6 +222,33 @@ class TheSeamNamesNoVendor(support.Isolated):
             for vendor in ("claude", "anthropic", "codex", "openai", "grok", "gemini"):
                 with self.subTest(module=module.name, vendor=vendor):
                     self.assertNotIn(vendor, said)
+
+
+class WhichInterpreterRunsOne(Adapters):
+    """An adapter is an executable with a shebang of its own, so the interpreter is chosen by
+    putting this install's own `bin` first on `PATH` — never by prepending `python3` to the argv,
+    which would be nonsense for a shell adapter."""
+
+    def test_an_installs_own_packages_go_in_front(self):
+        theirs = paths.app() / ".venv" / "bin"
+        theirs.mkdir(parents=True)
+        self.assertEqual(str(theirs), core_adapters.environment()["PATH"].split(":")[0])
+
+    def test_a_checkout_keeps_its_packages_beside_the_code_and_is_found_there_too(self):
+        """**Two arrangements, and a checkout is one of them.** Looking only where an install keeps
+        them read as the shipped Discord adapter reporting that `discord.py` "is not installed", on
+        a machine where it plainly was — which is a channel nobody can connect and a sentence that
+        sends the reader to fix the wrong thing.
+        """
+        beside = paths.program() / ".venv" / "bin"
+        self.assertTrue(beside.is_dir(), "this checkout has no virtualenv to find")
+        self.assertEqual(str(beside), core_adapters.environment()["PATH"].split(":")[0])
+
+    def test_an_install_with_no_packages_at_all_is_not_a_failure(self):
+        """A machine with no network has a working install and no packages, and an adapter that
+        needs none is unaffected."""
+        with mock.patch.object(paths, "program", return_value=self.home / "nowhere"):
+            self.assertIsNone(core_adapters.where_the_packages_are())
 
 
 if __name__ == "__main__":
