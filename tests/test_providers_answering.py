@@ -30,7 +30,7 @@ import unittest
 
 import support
 from rundesk.agents import directory, records
-from rundesk.channels import arriving, hosting
+from rundesk.channels import arriving, delivery, hosting
 from rundesk.channels import kept as channels_kept
 from rundesk.core import paths
 from rundesk.providers import answering, kept, turns
@@ -142,6 +142,10 @@ class Answering(support.Isolated):
     def delivered(self):
         return [one.get("text") for one in self.what_it_was_told() if one.get("do") == "deliver"]
 
+    def activity(self):
+        """Every broad line the surface was shown while the turn was still running."""
+        return [one for one in self.what_it_was_told() if one.get("do") == "activity"]
+
 
 class AMessageOnAChannelIsAnswered(Answering):
 
@@ -166,6 +170,144 @@ class AMessageOnAChannelIsAnswered(Answering):
         self.assertEqual(1, len([one for one in said if one in (answering.DONE,
                                                                 answering.STOPPED,
                                                                 answering.FAILED)]))
+
+    def test_the_answer_quotes_the_message_that_asked(self):
+        """R-DIS-28. The reply is how a surface tells the one message somebody was waiting for from
+        the running commentary around it — and on Discord it is what draws the platform's own
+        emphasis. Every layer below took an `external_id` and this thread was started without one,
+        so the whole mechanism was built and never fired."""
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: self.delivered()))
+        quoting = [one for one in self.what_it_was_told()
+                   if one.get("do") == "deliver" and one.get("reply_to")]
+        self.assertEqual(1, len(quoting), "the answer did not quote the message that asked")
+        self.assertEqual("8841", quoting[0]["reply_to"])
+
+    def test_the_mark_saying_how_it_ended_goes_on_the_message_that_asked(self):
+        """R-DIS-7, R-DIS-8. Sent without the message to put it on, every state crossed the seam
+        correctly and the adapter had nothing to react to — so a turn was marked 👀 on arrival and
+        never marked again, which reads as an agent that took the message up and forgot it."""
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: answering.DONE in self.marks()))
+        settled = [one for one in self.what_it_was_told()
+                   if one.get("do") == "state" and one.get("state") == answering.DONE]
+        self.assertEqual("8841", settled[0].get("external_id"))
+
+    def test_the_answer_carries_what_the_turn_cost_and_only_the_first_piece_does(self):
+        """R-DIS-17, R-DIS-33. The provider leads, the brain here reports a conversation size so
+        that leads the counts (R-DIS-29), and the clock is always known. Four cost lines on a
+        four-piece answer is the same number said four times."""
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: self.delivered()))
+        deliveries = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertEqual(1, len([one for one in deliveries if one.get("cost")]))
+        cost = deliveries[0]["cost"]
+        # R-CH-28. Named, and never located: this brain is referred to by an absolute path, and the
+        # line it appears on goes into a chat room.
+        self.assertTrue(cost.startswith("a-stand-in ·"), cost)
+        self.assertNotIn("/", cost)
+        self.assertIn("9.2k session", cost)
+        self.assertIn("1.5k output", cost)
+        self.assertIn("elapsed", cost)
+        # Cache writes stay in the turn's own record and never reach a surface.
+        self.assertNotIn("written", cost)
+
+    def test_room_for_the_cost_line_is_taken_out_before_the_words_are_cut(self):
+        """The adapter refuses anything past its own limit outright, as rundesk having failed to
+        split — which loses the delivery rather than trimming it. So the first piece plus the line
+        that will be put above it has to fit, and the arithmetic is done on this side."""
+        # The stand-in echoes what it was asked, so a long question is a long answer.
+        self.a_channel(saying=self.a_message_arrived(text="x" * 3000))
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(
+            lambda: len([one for one in self.what_it_was_told()
+                         if one.get("do") == "deliver"]) > 1), "the answer was never split")
+        first = next(one for one in self.what_it_was_told() if one.get("do") == "deliver")
+        self.assertTrue(first.get("cost"), "the first piece carried no cost line")
+        # What the adapter would build, measured against what it would refuse.
+        self.assertLessEqual(len(first["cost"]) + len("-# ") + 1 + len(first["text"]),
+                             delivery.WHEN_UNSAID)
+
+    def test_what_the_agent_did_is_shown_while_the_turn_is_still_running(self):
+        """R-CH-6, R-DIS-20. The sink existed and had no producer, so a channel saw nothing at all
+        between the message arriving and the answer landing — minutes, on a real turn."""
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: self.activity()))
+        self.assertIn("read", [one.get("did") for one in self.activity()])
+
+    def test_activity_carries_what_it_did_and_never_what_the_tool_was_given(self):
+        """R-CH-13. A command line and a path are somebody's private business, and this is posted
+        into a room. The brain's own name for the tool is not sent either: a commentary reading
+        `commandExecution` is one vendor's identifiers in front of somebody who never asked."""
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: self.activity()))
+        allowed = {"do", "place", "did", "ok", "who"}
+        for one in self.activity():
+            self.assertEqual(set(), set(one) - allowed, f"{sorted(set(one) - allowed)} crossed")
+        # The stand-in's tool is called `Read` and its result summarises `one file`. Neither may
+        # appear anywhere in what the adapter was handed while the turn ran.
+        while_running = [one for one in self.what_it_was_told() if one.get("do") == "activity"]
+        self.assertNotIn("Read", json.dumps(while_running))
+        self.assertNotIn("one file", json.dumps(while_running))
+
+    def test_a_thought_is_shown_as_one_broad_line_and_never_as_the_thought(self):
+        """A thought is the most private thing a brain produces and the least useful to show."""
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: self.activity()))
+        thoughts = [one for one in self.activity() if not one.get("did")]
+        self.assertTrue(thoughts, "the agent thinking was never shown")
+        self.assertNotIn("reading what was asked", json.dumps(self.activity()))
+
+    def test_a_finished_thing_said_mid_turn_is_shown_when_the_next_one_arrives(self):
+        """R-CH-19. The last thing said is the answer, and that is only knowable once there is a
+        next — so each whole remark is posted the moment another proves it was not the end."""
+        self.a_stand_in_told(self.agent, remarks=["checking staging first", "now the database"])
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 3))
+        said = self.delivered()
+        self.assertEqual("checking staging first", said[0])
+        self.assertEqual("now the database", said[1])
+        self.assertIn("You asked:", said[2])
+
+    def test_a_remark_is_plain_and_only_the_answer_is_the_answer(self):
+        """R-CH-19, R-DIS-28. A thread where every line quotes the same message is unreadable, and
+        marking one done for each remark would say the turn finished several times."""
+        self.a_stand_in_told(self.agent, remarks=["one moment"])
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 2))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertEqual("one moment", posted[0]["text"])
+        self.assertNotIn("reply_to", posted[0])
+        self.assertNotIn("cost", posted[0])
+        # And the last one is the answer, carrying both.
+        self.assertEqual("8841", posted[-1]["reply_to"])
+        self.assertTrue(posted[-1].get("cost"))
+
+    def test_a_brain_that_says_one_whole_thing_posts_exactly_one_message(self):
+        """The other half of the same rule. A brain that never says several finished things must not
+        be made chattier by this existing — the held remark is the answer and is never posted twice."""
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: self.delivered()))
+        self.assertEqual(1, len(self.delivered()), self.delivered())
 
     def test_the_answer_is_recorded_as_a_message_carrying_the_turn_that_said_it(self):
         """What was said and what it cost are two questions, and this is the one join between them.

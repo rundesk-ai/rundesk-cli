@@ -140,13 +140,16 @@ NEVER_AGAIN = float("inf")
 #: either of them, so choosing cost nothing; leaving both standing costs a mark that never appears
 #: and nobody able to say why.
 #:
-#: **Two of the five have a producer, and neither needs a turn.** `seen` is a message arriving,
-#: which is the whole of the event. `done` is an answer *landing* — known the moment the adapter
-#: acknowledges a delivery, which is a fact about delivery and not about a turn. The remaining
-#: three say what became of one, and there is no provider in this build to run it, so they are the
-#: adapter's to render on the day something drives them.
+#: **Only `seen` is named here, because only `seen` is this module's.** A message arriving is the
+#: whole of that event and needs no turn behind it. The other four say what became of a turn, and
+#: they belong to the layer that runs one — `providers.answering` names them and `marked()` forwards
+#: whatever it is handed, so there is one source of truth and no constant here to drift out of step
+#: with it.
+#:
+#: `done` was named here once, and produced here too, off the adapter's acknowledgement of a
+#: delivery. See `_delivered` for why that had to stop: a turn that failed delivers a sentence
+#: saying so, and an acknowledgement cannot tell that from an answer.
 SEEN = "seen"
-DONE = "done"
 
 #: The least time any one adapter gets to stop, however many there are. A gateway's whole shutdown
 #: is bounded by the job's `ExitTimeOut`, and channels share that budget with schedules — so the
@@ -447,6 +450,45 @@ def marked(agent: str, where: Path, watching: Watching, kind: str, place: str,
     return False
 
 
+def doing(agent: str, where: Path, watching: Watching, kind: str, place: str,
+          did: str, ok: Optional[bool] = None, who: str = "") -> bool:
+    """One broad thing the agent did, while it is still doing them (R-DIS-20, R-CH-6).
+
+    **What it did, and never what its brain called it** (R-CH-13). Three fields cross and no more:
+    the closed word from `providers.protocol.DID`, whether it came back well, and — for a delegation
+    and nowhere else — the helper's name. What a tool was *given* and what it *answered* never leave
+    this machine, because a command line and a path are somebody's private business and a running
+    commentary is posted into a room. The allowlist is named rather than filtered, so a field some
+    future brain adds is one that stays here until somebody decides otherwise.
+
+    The build this replaces sent the brain's own name for the tool as well, and a commentary read
+    `commandExecution` and `imageGeneration` — one vendor's identifiers, in front of somebody who has
+    never heard of that vendor and never should.
+
+    **An empty `did` is a real answer and not a missing one.** A brain that did something outside the
+    closed set leaves the word out rather than stretching one to fit, and a thought has no word by
+    design — both mean *something happened here and there is no honest name for it*, which a surface
+    renders as its own broad fallback. Sent as a record rather than dropped, because the fact that
+    the agent is working is the thing somebody waiting actually wants.
+
+    **Never raises, and never blocks the turn.** A commentary is fidelity; the answer is the work. A
+    surface that could not be told what the agent was doing is a surface a little behind, and a turn
+    that failed because a chat platform was slow would be a far worse trade (R-CH-12).
+    """
+    one = watching.running.get(kind)
+    if one is None:
+        return False
+    said = {"do": "activity", "place": place, "did": did}
+    if ok is not None:
+        said["ok"] = bool(ok)
+    if who:
+        said["who"] = who
+    with contextlib.suppress(Exception):
+        _said_to(where, one, said)
+        return True
+    return False
+
+
 def connected(watching: Watching, kind: str) -> bool:
     """Whether this adapter has said it reached its platform. **Started is not connected.**
 
@@ -462,19 +504,23 @@ def connected(watching: Watching, kind: str) -> bool:
 
 def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
          pieces: List[str], sending: Sequence[naming.Sending] = (),
-         answering: Optional[str] = None) -> bool:
+         answering: Optional[str] = None, cost: str = "") -> bool:
     """Send something to a place through a running adapter. `False` when there is nothing to send it.
 
     `False` rather than an exception: a notice that could not be delivered because the adapter is
     restarting is a fact to write down, not a reason to interrupt whatever produced it.
 
-    `answering` is the platform's id for the message this replies to, and it does two things.
-    The adapter quotes that message, so an answer in a room reads as an answer rather than as a
-    remark; and when the adapter acknowledges the delivery, that message is marked done. **Left
-    out for running commentary** — thinking and tool activity are not answers, a thread of quoted
-    replies is unreadable, and marking a message done for each of them would say the turn finished
-    several times. The caller decides by setting it or leaving it out, which keeps the decision on
-    this side, where what became of a turn is already known.
+    `answering` is the platform's id for the message this replies to. The adapter quotes that
+    message, so an answer reads as an answer rather than as a remark. **Left out for running
+    commentary** — thinking and tool activity are not answers, and a thread where every line quotes
+    the same message is unreadable. The caller decides by setting it or leaving it out, which keeps
+    the decision on this side, where what became of a turn is already known.
+
+    `cost` is the one line saying what the turn cost, already composed by `delivery.stats`. It goes
+    on the **first** piece with the quote, because it belongs above the answer rather than above the
+    fourth message of one — and it crosses as its own field rather than glued onto the text, so the
+    adapter can put it in whatever quiet register its platform has instead of it arriving as a
+    sentence the agent appears to have written.
 
     `sending` is what `delivery.carried` has already approved, and it goes with the **last** piece:
     the words describing a file are what a reader wants above it, and a platform hangs an attachment
@@ -491,8 +537,11 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
         record = {"do": "deliver", "id": f"{time.time():.6f}-{nth}", "place": place, "text": piece}
         if carrying and nth == len(saying) - 1:
             record["files"] = carrying
-        # The quote goes on the **first** piece only. A long answer split into four is one answer,
-        # and quoting the same message four times is four notifications for one reply.
+        # The quote and the cost go on the **first** piece only. A long answer split into four is one
+        # answer: quoting the same message four times is four notifications for one reply, and four
+        # cost lines is the same number said four times.
+        if nth == 0 and cost:
+            record["cost"] = cost
         if answering and nth == 0:
             record["reply_to"] = answering
             one.awaiting[record["id"]] = answering
@@ -699,20 +748,29 @@ def _heard(agent: str, where: Path, one: Running, line: str, allowed: set) -> No
 
 
 def _delivered(where: Path, one: Running, record: Dict[str, Any]) -> None:
-    """An answer landed, so mark what it answered as done.
+    """An answer landed. Written down, and **never turned into a mark**.
 
-    **This is the only moment this side knows an answer has arrived**, and it is why the ✅ needs no
-    provider: *answered* is a fact about delivery. The four other marks say what became of a turn and
-    have to wait for something that runs one.
+    This used to mark what it answered `done`, on the reasoning that *answered* is a fact about
+    delivery and needs no provider behind it. That was true while nothing ran a turn, and it became
+    wrong the moment something did: **a turn that failed still delivers a sentence saying so**, the
+    adapter acknowledges that delivery like any other, and the message somebody asked from was
+    marked ✅ for an answer that never came. Both producers then raced, and which mark a person saw
+    was decided by whichever record reached the adapter last.
 
-    A delivery nobody was answering — a notice, a piece after the first — has nothing to mark, which
+    So there is one producer of a terminal mark and it is the turn's own outcome — see
+    `providers.answering`, which reads the mark off `turn_status` rather than deciding it again.
+    What is left here is the one thing this moment really knows, which the outcome does not: that
+    the words actually reached the platform. **Success gets a line of its own**, because "it
+    reported nothing" was read as "it worked" for three restarts running in the build this replaces,
+    and the two are only the same thing when success says something.
+
+    A delivery nobody was answering — a notice, a piece after the first — has nothing to say, which
     is the ordinary case and not a failure.
     """
     answered = one.awaiting.pop(str(record.get("id") or ""), None)
     if not answered:
         return
-    _said_to(where, one, {"do": "state", "place": str(record.get("place") or ""),
-                          "external_id": answered, "state": DONE})
+    _note(where, f"channel {one.kind}: the answer to {answered} reached the platform")
 
 
 def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allowed: set) -> None:

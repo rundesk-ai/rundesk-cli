@@ -104,10 +104,21 @@ class Person:
 
 
 class Posted:
-    """What `send` hands back: an id, and the call that produced it, kept for the assertions."""
+    """What `send` hands back: an id, and every edit made to it afterwards.
 
-    def __init__(self, which: int) -> None:
+    The edits are the whole point for a running commentary — a turn that grows one message and a
+    turn that posts eleven are told apart here and nowhere else.
+    """
+
+    def __init__(self, which: int, refuses: Optional[Exception] = None) -> None:
         self.id = which
+        self.edits: List[str] = []
+        self.refuses = refuses
+
+    async def edit(self, content: str) -> None:
+        if self.refuses is not None:
+            raise self.refuses
+        self.edits.append(content)
 
 
 class PartialMessage:
@@ -128,14 +139,24 @@ class Messageable:
     def __init__(self, which: int) -> None:
         self.id = which
         self.sent: List[Dict[str, Any]] = []
+        self.posted: List[Posted] = []
         self.marked: List[Any] = []
         self.unmarked: List[Any] = []
         self.next_id = which * 10
+        #: Handed to every message posted here, so a case can make an edit fail.
+        self.edits_refuse: Optional[Exception] = None
+        #: Set by a case that needs a send to be genuinely *in flight* — the only way to check what
+        #: happens when something else is posted while a write has not come back yet.
+        self.holds: Optional[asyncio.Event] = None
 
     async def send(self, **called: Any) -> Posted:
         self.sent.append(called)
+        if self.holds is not None:
+            await self.holds.wait()
         self.next_id += 1
-        return Posted(self.next_id)
+        made = Posted(self.next_id, refuses=self.edits_refuse)
+        self.posted.append(made)
+        return made
 
     def get_partial_message(self, which: int) -> PartialMessage:
         return PartialMessage(self, which)
@@ -380,7 +401,6 @@ class WhereAMessageIsAnswered(Records):
         self.assertEqual(message.named, [])
         self.assertEqual(arrived["conversation"], "700")
         self.assertEqual(arrived["place"], "dm")
-        self.assertIs(self.reaching.private["700"], True)
 
     def test_a_room_message_that_does_not_name_us_is_not_answered_at_all(self) -> None:
         message = Message(44, TextChannel(500), self.asker, "morning everyone")
@@ -443,7 +463,7 @@ class WhenAThreadIsRefused(Records):
 class WhatADeliveryQuotes(Records):
     """An answer quotes and tints; commentary does neither; and neither ever costs the answer."""
 
-    def delivering(self, known: Optional[Dict[str, Any]] = None, private: bool = False,
+    def delivering(self, known: Optional[Dict[str, Any]] = None,
                    **it: Any) -> Dict[str, Any]:
         """One delivery, into a connection that already knows what `known` says it does."""
         said = {"do": "deliver", "id": "1754431200.1-0", "text": "three files changed"}
@@ -452,8 +472,6 @@ class WhatADeliveryQuotes(Records):
         async def exchange(reaching: Any) -> None:
             for message_id, standing in (known or {}).items():
                 reaching.handled[message_id] = standing
-            if private:
-                reaching.private[str(said["place"])] = True
             await reaching._deliver(said)
 
         records = self.during(exchange)
@@ -492,12 +510,13 @@ class WhatADeliveryQuotes(Records):
         self.assertIsNone(sent["reference"])
         self.assertIs(sent["mention_author"], False)
 
-    def test_a_private_conversation_is_never_quoted(self) -> None:
-        # Two people are here and every message is already theirs: the quote buys no attention and
-        # the ping spends a notification asking for it.
-        sent = self.delivering({"62": self.asked(700)}, private=True, place="700", reply_to="62")
-        self.assertIsNone(sent["reference"])
-        self.assertIs(sent["mention_author"], False)
+    def test_an_answer_in_a_private_conversation_is_quoted_and_tinted(self) -> None:
+        # R-DIS-28. This was dropped on the reasoning that two people alone need no quote — which is
+        # wrong about what the quote is for. The tint separates the answer from the commentary above
+        # it, and in a one-to-one conversation the reply ping is the only thing that draws it.
+        sent = self.delivering({"62": self.asked(700)}, place="700", reply_to="62")
+        self.assertEqual(sent["reference"].message_id, 62)
+        self.assertIs(sent["mention_author"], True)
 
     def test_a_message_this_program_wrote_is_quoted_without_a_ping(self) -> None:
         # Pinging the author of our own message pings the bot, and leaves the person the answer is
@@ -513,6 +532,19 @@ class WhatADeliveryQuotes(Records):
         sent = self.delivering({"64": self.asked(500)}, place="900", reply_to="64")
         self.assertIsNone(sent["reference"])
         self.assertIs(sent["mention_author"], False)
+
+    def test_what_a_turn_cost_stands_above_the_answer_in_small_print(self) -> None:
+        # R-DIS-17. Above, because a long answer pushes anything after it off a phone screen — and in
+        # Discord's own subtext register, so the bookkeeping is visibly not something the agent said.
+        sent = self.delivering(place="500", text="the deploy is green",
+                               cost="codex · 2.2k input · 481 output · 1m elapsed")
+        self.assertEqual("-# codex · 2.2k input · 481 output · 1m elapsed\nthe deploy is green",
+                         sent["content"])
+
+    def test_a_delivery_with_nothing_said_about_cost_is_left_exactly_as_it_was(self) -> None:
+        # A turn whose brain reported nothing is not given a line of empty punctuation.
+        sent = self.delivering(place="500", text="the deploy is green")
+        self.assertEqual("the deploy is green", sent["content"])
 
     def test_what_this_posts_is_remembered_as_its_own(self) -> None:
         self.delivering(place="500")
@@ -584,23 +616,304 @@ class WhereAMarkIsPut(Records):
 
 
 # ---------------------------------------------------------------------------------------------
+# What the agent is doing, while it is still doing it.
+# ---------------------------------------------------------------------------------------------
+
+
+class WhatEachThingReads(unittest.TestCase):
+    """One activity record as one line. Pure text — no connection and no library."""
+
+    #: Every word `providers/protocol.py` defines. Written out rather than imported: this suite
+    #: imports nothing of rundesk's, because the adapter is a program on the far side of a pipe.
+    RUNDESK_DID = ("read", "search", "run", "edit", "list", "make", "delegate",
+                   "memory", "rules", "identity")
+
+    def line(self, **it: Any) -> str:
+        return adapter.activity_line(it)
+
+    def test_every_word_rundesk_can_send_has_a_mark_and_words_of_its_own(self) -> None:
+        # A word absent from either table would silently render as the unknown fallback, so a whole
+        # category of what the agent does would read as "thinking" and nothing would say why.
+        self.assertEqual(set(adapter.DID), set(self.RUNDESK_DID))
+        self.assertEqual(set(adapter.SHOWN), set(self.RUNDESK_DID))
+        self.assertEqual(set(adapter.FAILED), set(self.RUNDESK_DID))
+        for did in self.RUNDESK_DID:
+            self.assertNotIn(adapter.UNKNOWN, self.line(did=did), f"{did} fell back to thinking")
+            self.assertNotIn("thinking", self.line(did=did), f"{did} fell back to thinking")
+
+    def test_the_ten_words_as_a_person_reads_them(self) -> None:
+        self.assertEqual("-# 💻 ran command", self.line(did="run"))
+        self.assertEqual("-# 📖 read file", self.line(did="read"))
+        self.assertEqual("-# ✏️ edited file", self.line(did="edit"))
+        self.assertEqual("-# 🔎 searched", self.line(did="search"))
+        self.assertEqual("-# 📁 listed files", self.line(did="list"))
+        self.assertEqual("-# 🎨 made something", self.line(did="make"))
+        self.assertEqual("-# 🤖 delegated to subagent", self.line(did="delegate"))
+        self.assertEqual("-# 🧠 updated my memory", self.line(did="memory"))
+        self.assertEqual("-# 📜 updated my rules", self.line(did="rules"))
+        self.assertEqual("-# ✨ updated my identity", self.line(did="identity"))
+
+    def test_a_word_this_does_not_know_is_thinking_rather_than_a_guess(self) -> None:
+        # A brain doing something outside the closed set is doing something with no word here yet.
+        # A reader shown nothing is better off than one taught to believe a word that means
+        # something else — and this is the catch-all every provider relies on by omitting `did`.
+        self.assertEqual("-# 💭 thinking", self.line(did="teleported"))
+        self.assertEqual("-# 💭 thinking", self.line())
+        self.assertEqual("-# 💭 thinking", self.line(did=None))
+
+    def test_a_failure_says_what_failed_and_never_why(self) -> None:
+        # A command line or a path may be private, and this is posted into a room. The whole account
+        # stays in the turn's own record (R-DIS-9, R-DIS-20).
+        self.assertEqual("-# ⚠ command failed", self.line(did="run", ok=False))
+        self.assertEqual("-# ⚠ subagent failed", self.line(did="delegate", ok=False))
+        self.assertEqual("-# ⚠ could not update my rules", self.line(did="rules", ok=False))
+        self.assertEqual("-# ⚠ tool failed", self.line(did="teleported", ok=False))
+
+    def test_a_subagent_starting_and_finishing_are_two_different_lines(self) -> None:
+        # A delegation is the one act long enough that its ending is news of its own.
+        self.assertEqual("-# 🤖 delegated to subagent", self.line(did="delegate"))
+        self.assertEqual("-# 🤖 subagent finished", self.line(did="delegate", ok=True))
+
+    def test_a_helper_is_named_without_its_location(self) -> None:
+        self.assertEqual("-# 🤖 delegated to subagent: reviewer",
+                         self.line(did="delegate", who="/Users/someone/agents/reviewer"))
+        self.assertEqual("-# 🤖 subagent finished: reviewer",
+                         self.line(did="delegate", ok=True, who="reviewer"))
+
+    def test_a_name_cannot_end_our_line_and_start_one_of_its_own(self) -> None:
+        # A helper's name is a stranger's text arriving on a line of running commentary.
+        self.assertEqual("-# 🤖 delegated to subagent: bad name",
+                         self.line(did="delegate", who="bad\nname"))
+
+    def test_only_a_delegation_is_ever_named(self) -> None:
+        # Every other word is broad on purpose; a name beside one would be an argument in disguise.
+        self.assertEqual("-# 💻 ran command", self.line(did="run", who="something"))
+
+
+class HowActivityIsCounted(unittest.TestCase):
+    """Adjacent repeats collapse to one line and a count. Pure text."""
+
+    def grouped(self, *lines: Any) -> str:
+        return adapter.rendered(adapter.grouped([], list(lines)))
+
+    def test_one_occurrence_carries_no_count(self) -> None:
+        self.assertEqual("-# 💻 ran command", self.grouped("-# 💻 ran command"))
+
+    def test_consecutive_activity_is_one_line_with_a_count(self) -> None:
+        self.assertEqual("-# 💻 ran command **(x3)**",
+                         self.grouped(*["-# 💻 ran command"] * 3))
+
+    def test_only_consecutive_activity_is_counted(self) -> None:
+        # The order is what a reader is following: read, read, run, read is four things happening
+        # and not two.
+        self.assertEqual("-# 📖 read file **(x2)**\n-# 💻 ran command\n-# 📖 read file",
+                         self.grouped("-# 📖 read file", "-# 📖 read file",
+                                      "-# 💻 ran command", "-# 📖 read file"))
+
+    def test_a_count_grows_across_separate_writes(self) -> None:
+        # A burst split over two flushes is still one run of the same thing.
+        groups = adapter.grouped([], ["-# 💻 ran command", "-# 💻 ran command"])
+        groups = adapter.grouped(groups, ["-# 💻 ran command"])
+        self.assertEqual("-# 💻 ran command **(x3)**", adapter.rendered(groups))
+
+    def test_something_visible_in_between_breaks_a_count(self) -> None:
+        # The `None` barrier. Without it a burst spanning a message the reader has already scrolled
+        # past was counted as one unbroken run.
+        self.assertEqual("-# 💻 ran command\n-# 💻 ran command",
+                         self.grouped("-# 💻 ran command", None, "-# 💻 ran command"))
+
+    def test_named_subagents_still_collapse_under_one_heading(self) -> None:
+        # Listing every name defeats compact counting; once the category repeats it owns the count.
+        self.assertEqual("-# 🤖 delegated to subagent **(x2)**",
+                         self.grouped("-# 🤖 delegated to subagent: one",
+                                      "-# 🤖 delegated to subagent: two"))
+
+    def test_starting_and_finishing_a_subagent_are_not_counted_together(self) -> None:
+        self.assertEqual("-# 🤖 delegated to subagent\n-# 🤖 subagent finished",
+                         self.grouped("-# 🤖 delegated to subagent", "-# 🤖 subagent finished"))
+
+    def test_a_long_commentary_drops_whole_oldest_groups_and_says_so(self) -> None:
+        # Past Discord's own limit every further edit is refused, freezing the commentary at the
+        # moment it got interesting. Whole groups, because half a line with its count sheared off
+        # reads as a different event.
+        many = [f"-# 💻 line {nth}" for nth in range(400)]
+        shown, kept = adapter.bounded(adapter.grouped([], many))
+        self.assertLessEqual(len(shown), adapter.ACTIVITY_CHARS)
+        self.assertTrue(shown.startswith(adapter.CLIPPED))
+        self.assertIn("line 399", shown)
+        self.assertNotIn("line 0\n", shown)
+        self.assertLess(len(kept), len(many))
+
+    def test_one_enormous_group_is_kept_rather_than_dropped_to_nothing(self) -> None:
+        # A commentary showing nothing at all is worse than one showing its most recent line.
+        shown, kept = adapter.bounded([(f"-# 💻 {'x' * 4000}", 1)])
+        self.assertEqual(1, len(kept))
+        self.assertIn("x", shown)
+
+
+class HowTheCommentaryGrows(Records):
+    """One message that grows while it is still last, and a fresh one once it is not.
+
+    `GROW_SECONDS` is pinned to nothing here — the flush is driven directly, because what is being
+    checked is *which message a line lands in*, and waiting out a real clock in a suite buys a slow
+    case rather than a truer one. The pacing that gathers a burst is checked once, separately.
+    """
+
+    async def doing(self, reaching: Any, place: str, *lines: Dict[str, Any]) -> None:
+        for one in lines:
+            reaching._doing({"place": place, **one})
+        held = reaching.growing[int(place)]
+        held.let_go()                      # the timer's job is done by the flush below
+        await reaching._flush(int(place), held)
+
+    def test_activity_grows_one_message_rather_than_posting_many(self) -> None:
+        # A phone that buzzes eleven times to say an agent read a file is worse than one that
+        # buzzes once with the reply.
+        async def exchange(reaching: Any) -> None:
+            await self.doing(reaching, "500", {"did": "run"})
+            await self.doing(reaching, "500", {"did": "run"})
+            await self.doing(reaching, "500", {"did": "read"})
+
+        self.during(exchange)
+        place = self.client.places[500]
+        self.assertEqual(1, len(place.sent), "the commentary posted more than one message")
+        self.assertEqual("-# 💻 ran command", place.sent[0]["content"])
+        self.assertEqual(["-# 💻 ran command **(x2)**",
+                          "-# 💻 ran command **(x2)**\n-# 📖 read file"], place.posted[0].edits)
+
+    def test_a_burst_is_one_write_rather_than_one_each(self) -> None:
+        # `_doing` gathers; a single task started once writes the lot after GROW_SECONDS.
+        async def exchange(reaching: Any) -> None:
+            for _ in range(10):
+                reaching._doing({"place": "500", "did": "run"})
+            self.assertEqual(10, len(reaching.growing[500].pending))
+            held = reaching.growing[500]
+            held.let_go()
+            await reaching._flush(500, held)
+
+        self.during(exchange)
+        place = self.client.places[500]
+        self.assertEqual(1, len(place.sent))
+        self.assertEqual("-# 💻 ran command **(x10)**", place.sent[0]["content"])
+        self.assertEqual([], place.posted[0].edits, "a single burst should need no edit at all")
+
+    def test_something_posted_under_it_starts_a_fresh_commentary(self) -> None:
+        # A message something has been posted under is one the reader has already scrolled past,
+        # and editing it changes history rather than showing progress.
+        async def exchange(reaching: Any) -> None:
+            await self.doing(reaching, "500", {"did": "run"})
+            await reaching._deliver({"do": "deliver", "id": "1", "place": "500", "text": "answer"})
+            await self.doing(reaching, "500", {"did": "run"})
+
+        self.during(exchange)
+        place = self.client.places[500]
+        self.assertEqual(3, len(place.sent), "the second run did not start its own message")
+        self.assertEqual("-# 💻 ran command", place.sent[0]["content"])
+        self.assertEqual("answer", place.sent[1]["content"])
+        self.assertEqual("-# 💻 ran command", place.sent[2]["content"])
+        # And the count restarted rather than carrying across the answer.
+        self.assertNotIn("x2", place.sent[2]["content"])
+
+    def test_somebody_speaking_also_buries_the_commentary(self) -> None:
+        async def exchange(reaching: Any) -> None:
+            await self.doing(reaching, "700", {"did": "run"})
+            self.assertIsNotNone(reaching.growing[700].posted)
+            reaching._no_longer_last(700)
+            self.assertIsNone(reaching.growing[700].posted)
+
+        self.during(exchange)
+
+    def test_activity_waiting_when_it_is_buried_still_lands_and_starts_a_new_count(self) -> None:
+        # It belongs above the visible message but may still be written after it; what follows must
+        # not be counted with what preceded.
+        async def exchange(reaching: Any) -> None:
+            reaching._doing({"place": "500", "did": "run"})
+            reaching._no_longer_last(500)
+            held = reaching.growing[500]
+            held.let_go()
+            reaching._doing({"place": "500", "did": "run"})
+            await reaching._flush(500, held)
+
+        self.during(exchange)
+        sent = self.client.places[500].sent
+        self.assertEqual("-# 💻 ran command\n-# 💻 ran command", sent[0]["content"])
+
+    def test_a_write_still_in_flight_when_it_is_buried_is_not_grown_into(self) -> None:
+        # The generation counter. A post that comes back after something buried the commentary must
+        # be dropped rather than becoming the message the next line is written into.
+        async def exchange(reaching: Any) -> None:
+            where = self.client.get_partial_messageable(500)
+            where.holds = asyncio.Event()
+            held = reaching.growing.setdefault(500, adapter.Growing())
+            held.pending = ["-# 💻 ran command"]
+            flushing = asyncio.ensure_future(reaching._flush(500, held))
+            await asyncio.sleep(0)         # let the write reach Discord and stop there
+            self.assertEqual(1, len(where.sent), "the write never got under way")
+            held.buried()                  # something else is posted while it is still in flight
+            where.holds.set()
+            await flushing
+            self.assertIsNone(held.posted, "a buried commentary was resurrected by a stale write")
+
+        self.during(exchange)
+
+    def test_an_edit_that_fails_starts_a_fresh_message_rather_than_failing_for_ever(self) -> None:
+        # An edit fails because the message is gone or the channel is unreachable, and neither
+        # improves by being asked twice a second for the rest of the turn.
+        async def exchange(reaching: Any) -> None:
+            self.client.places[500] = Messageable(500)
+            self.client.places[500].edits_refuse = RuntimeError("that message is gone")
+            await self.doing(reaching, "500", {"did": "run"})
+            await self.doing(reaching, "500", {"did": "read"})
+            self.assertIsNone(reaching.growing[500].posted)
+            await self.doing(reaching, "500", {"did": "read"})
+
+        records = self.during(exchange)
+        self.assertEqual(2, len(self.client.places[500].sent))
+        self.assertTrue(any("could not grow" in one for one in self.noted(records)))
+
+    def test_an_edit_saying_exactly_what_is_already_there_is_not_sent(self) -> None:
+        async def exchange(reaching: Any) -> None:
+            await self.doing(reaching, "500", {"did": "run"})
+            held = reaching.growing[500]
+            held.pending = []
+            await reaching._flush(500, held)
+
+        self.during(exchange)
+        self.assertEqual([], self.client.places[500].posted[0].edits)
+
+    def test_the_commentary_is_remembered_as_ours_so_an_answer_never_pings_the_bot(self) -> None:
+        async def exchange(reaching: Any) -> None:
+            await self.doing(reaching, "500", {"did": "run"})
+
+        self.during(exchange)
+        posted = self.client.places[500].posted[0]
+        self.assertIs(self.reaching.handled[str(posted.id)].ours, True)
+
+    def test_a_place_this_cannot_parse_is_a_note_rather_than_a_crash(self) -> None:
+        async def exchange(reaching: Any) -> None:
+            reaching._doing({"place": "not-a-snowflake", "did": "run"})
+            self.assertEqual({}, reaching.growing)
+
+        records = self.during(exchange)
+        self.assertTrue(self.noted(records))
+
+
+# ---------------------------------------------------------------------------------------------
 # What is held, for a process that runs for weeks.
 # ---------------------------------------------------------------------------------------------
 
 
 class WhatIsHeld(Records):
-    """Both new maps are bounded, because this process runs for weeks."""
+    """What this holds is bounded, because this process runs for weeks."""
 
     def test_nothing_grows_without_a_bound(self) -> None:
         async def exchange(reaching: Any) -> None:
             for nth in range(adapter.LIVE_KEPT + 40):
                 reaching.handled[str(nth)] = adapter.Handled(place=nth, ours=False)
-                reaching.private[str(nth)] = False
                 reaching._make_room()
 
         self.during(exchange)
         self.assertLessEqual(len(self.reaching.handled), adapter.LIVE_KEPT)
-        self.assertLessEqual(len(self.reaching.private), adapter.LIVE_KEPT)
         # Oldest first: the newest conversation is the one still waiting on an answer.
         self.assertIn(str(adapter.LIVE_KEPT + 39), self.reaching.handled)
         self.assertNotIn("0", self.reaching.handled)

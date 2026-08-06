@@ -54,6 +54,7 @@ import fcntl
 import json
 import os
 import threading
+import time
 from typing import Any, Callable, Dict, Iterable, Iterator, List, NamedTuple, Optional, Tuple
 
 from rundesk.agents import directory, records
@@ -131,6 +132,14 @@ class Outcome(NamedTuple):
     failure_message: Optional[str] = None
     usage: protocol.Usage = protocol.Usage()
     files: Tuple[Dict[str, Any], ...] = ()
+    #: Which brain answered. Named on the outcome as well as in the record, because a surface
+    #: showing what a turn cost has to say which brain it cost it on — read off the turn's own
+    #: resolution rather than asked again, so a surface and the ledger cannot name two.
+    provider_name: str = ""
+    #: How long the turn took, from admission to settled, on a **monotonic** clock. Never a
+    #: difference of wall-clock stamps: those move when the machine's time is corrected, and a turn
+    #: that ran for two minutes across one of those reported a negative duration.
+    elapsed_seconds: Optional[float] = None
 
     @property
     def worked(self) -> bool:
@@ -214,6 +223,10 @@ def _held(request: Request, held: int, watching, saying) -> Outcome:
 
     prompt = instructions.build(trigger=request.trigger, variables=_about(request, provider_name),
                                 additions=request.additions)
+    # **From admitted to settled** (R-DIS-24) — what somebody waiting actually experienced, which
+    # starts here and not when the brain was reached: resolving a provider and building the prompt
+    # are part of the wait. Monotonic, so a clock correction mid-turn cannot make it negative.
+    began = time.monotonic()
     turn = kept.add_turn(agent, {
         "conversation_id": request.conversation,
         "schedule_id": request.schedule_id,
@@ -246,7 +259,7 @@ def _held(request: Request, held: int, watching, saying) -> Outcome:
             preface=prompt.text, owners=environment.owners_own())
         said, stream = _the_brain(request, provider_name, told, turn, held, can, watching, saying)
         settling.update(_became(request, turn, said, stream, can, provider_name,
-                                began_at, _how_big(raw)))
+                                began_at, _how_big(raw), time.monotonic() - began))
     return settling.outcome
 
 
@@ -349,7 +362,8 @@ def _heard(agent: str, turn: int, one, said: List[Dict[str, Any]], watching) -> 
 
 
 def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
-            can: Dict[str, bool], provider_name: str, began_at: int, ended_at: int) -> Dict[str, Any]:
+            can: Dict[str, bool], provider_name: str, began_at: int, ended_at: int,
+            elapsed: Optional[float] = None) -> Dict[str, Any]:
     """What this turn came to, and everything the records keep about it."""
     agent = request.agent
     reply = protocol.reply(said)
@@ -394,7 +408,8 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
         "outcome": Outcome(turn=turn, turn_status=status, reply=reply,
                            last_thought=protocol.last_thought(said), failure_code=code,
                            failure_message=message, usage=used,
-                           files=tuple(protocol.file_records(said))),
+                           files=tuple(protocol.file_records(said)),
+                           provider_name=provider_name, elapsed_seconds=elapsed),
         "values": {
             "exit_code": gone.code,
             "failure_code": code,

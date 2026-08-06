@@ -91,6 +91,12 @@ def main():
     say(type="think", text="reading what was asked", whole=True)
     say(type="tool", id="1", name="Read", did="read")
     say(type="result", id="1", ok=True, summary="one file")
+    # A brain that says several *finished* things as it works, rather than one at the end. Each is
+    # whole, so a surface may show it the moment the next one proves it was not the last.
+    for nth, remark in enumerate(how.get("remarks") or []):
+        say(type="text", text=remark, whole=True)
+        if how.get("also_did"):
+            say(type="tool", id=f"r{nth}", name="Bash", did=how["also_did"])
     say(type="text", text="You asked: " + asked.strip(), whole=True)
 
     if capabilities(how)["steer"]:

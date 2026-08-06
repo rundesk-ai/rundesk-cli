@@ -78,7 +78,7 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 #: The vendor library, bound by `the_library()` at the moment it is first needed.
 #:
@@ -178,9 +178,55 @@ TOKEN_FROM = "DISCORD_BOT_TOKEN"
 #: **These five words are the vocabulary, and `taken`/`running`/`finished` are not.** Both sets
 #: existed: these are what this file has always rendered, and the other three are what the previous
 #: build's published contract said. Rundesk now speaks these — see `channels/hosting.py`, which says
-#: why — so there is one vocabulary and no translation anywhere. Only `seen` is ever sent today,
-#: because it is the one that needs no turn behind it.
+#: why — so there is one vocabulary and no translation anywhere.
 MARKS = {"seen": "👀", "done": "✅", "stopped": "✋", "failed": "⚠️"}
+
+#: What a tool did, in a mark — one per word `providers/protocol.py` defines, and **never keyed on a
+#: brain's own name for a tool**: recognising those would carry one vendor's vocabulary into this
+#: file for ever. A word absent from here would silently show as the fallback, so the suite checks
+#: this covers rundesk's list rather than trusting it to.
+DID = {"read": "📖", "search": "🔎", "run": "💻", "edit": "✏️", "list": "📁",
+       "make": "🎨", "delegate": "🤖",
+       # What the agent changed **of its own**. Marked apart from `edit` because they are apart: a
+       # file the agent was working on and a file the agent lives by are the same pencil and
+       # different news.
+       "memory": "🧠", "rules": "📜", "identity": "✨"}
+
+#: What a word this does not know shows as. A brain doing something outside the closed set is doing
+#: something the vocabulary has no word for yet, so it joins the broad thinking category rather than
+#: being given a label shaped like some vendor's.
+UNKNOWN = "💭"
+
+#: The same words as a person would say them.
+#:
+#: **No articles, and no capitals.** These are read as a column of small print beside a column of
+#: marks, dozens of them in a turn, and at that width "a" is a word carrying nothing — a reader skims
+#: the verb and the noun.
+#:
+#: The last three are said in the first person because those files are the agent's own. "Updated its
+#: memory" reads as a process writing to a store; the agent changed what it will know next time, and
+#: it is the one saying so.
+SHOWN = {"read": "read file", "search": "searched", "run": "ran command",
+         "edit": "edited file", "list": "listed files", "make": "made something",
+         "delegate": "delegated to subagent",
+         "memory": "updated my memory", "rules": "updated my rules",
+         "identity": "updated my identity"}
+
+#: What a failed tool says **without relaying its arguments or its output**. Those stay in the turn's
+#: own record, where the whole account is; a commentary is broad because a command line or a path may
+#: be private and this is posted into a room (R-DIS-9, R-DIS-20).
+FAILED = {"read": "file read failed", "search": "search failed", "run": "command failed",
+          "edit": "file edit failed", "list": "file listing failed",
+          "make": "creation failed", "delegate": "subagent failed",
+          "memory": "could not update my memory", "rules": "could not update my rules",
+          "identity": "could not update my identity"}
+
+#: The two lines a delegation is bracketed by, written once because each is said in three places —
+#: the line itself, the heading a repeat is counted under, and the prefix a name is appended to. A
+#: delegation counted under a heading that no longer matches the line above it is a silent break with
+#: nothing to see in a diff.
+DELEGATED = f"{DID['delegate']} {SHOWN['delegate']}"
+FINISHED_HELPER = f"{DID['delegate']} subagent finished"
 
 #: Where what somebody attached is put on its way through: inside `RUNDESK_CHANNEL_HOME`, which is
 #: this channel's own directory and the only place rundesk will take a file from. Each message gets
@@ -201,6 +247,24 @@ BROUGHT_BYTES = 32 * 1024 * 1024
 #: indicator that has stopped is a turn that looks finished.
 TYPING_SECONDS = 8.0
 
+#: Discord's quiet register: small grey print, and **only at the start of a line**. What the cost
+#: line and every line of running commentary is drawn in, so that the bookkeeping around a turn is
+#: visibly not something the agent said. The trailing space is part of the marker and not spacing.
+SUBTEXT = "-# "
+
+#: How long a burst of activity is gathered before the commentary is written again. **A burst of ten
+#: tools is one edit and not ten**, which is the whole reason this exists: a brain reaches for
+#: several tools in a second, and Discord rate-limits a client that answers each one.
+GROW_SECONDS = 1.2
+
+#: How much commentary one message may hold. Past this, whole oldest groups are dropped and the
+#: message says so — a turn running for an hour would otherwise reach Discord's own limit and every
+#: further edit would be refused, freezing the commentary at the moment it got interesting.
+ACTIVITY_CHARS = 1500
+
+#: What a commentary clipped at the front says instead of what it dropped.
+CLIPPED = f"{SUBTEXT}…"
+
 #: How much of a display name travels. **A display name is a place somebody can write something
 #: shaped like an instruction**, so it is flattened to one line — a newline is how somebody would
 #: end our sentence and start one of their own — and then clipped.
@@ -211,6 +275,11 @@ SAID_MOST = 80
 #: what tells one exchange from another — the rest is the conversation's own to hold. Under the
 #: platform's cap rather than at it, so a name is never refused for a character somebody typed.
 THREAD_NAME_MOST = 80
+
+#: How much of a subagent's name travels onto a commentary line. Rundesk clips it first — this is not
+#: a second copy of that rule but the same guard on this side of a seam, because what arrives here is
+#: still somebody else's text and this file is the one that posts it.
+A_HELPER_AT_MOST = 48
 
 #: What a thread is called when there was nothing to name it from — a message that is only a file.
 #: Plain on purpose: it is a label in somebody else's room, not an announcement.
@@ -372,6 +441,122 @@ def flat(said: Any, most: int = SAID_MOST) -> str:
     """One line, clipped — for a stranger's words on their way into somebody's prompt."""
     whole = " ".join(str(said or "").split())
     return whole if len(whole) <= most else whole[:most - 1] + "…"
+
+
+def _a_helper(said: Any) -> str:
+    """One safe, compact name for a subagent — **the last component, and never the path above it.**
+
+    Rundesk narrows this first, and this is not a second copy of that rule so much as the same guard
+    standing on the side that actually posts. A name is written by whoever wrote the subagent, so it
+    may be an absolute path; putting one into a room publishes the owner's directory layout and their
+    username with it, to everybody who can read the channel. `flat` does the rest — a newline in it
+    would be somebody ending our line and starting one of their own.
+    """
+    named = str(said or "").strip().replace("\\", "/").rsplit("/", 1)[-1]
+    return flat(named, A_HELPER_AT_MOST)
+
+
+def activity_line(it: Dict[str, Any]) -> str:
+    """One thing the agent did, as one line of small print — **broad, and never its details.**
+
+    Three shapes arrive on one record and are told apart by `ok`, which rundesk sets only when there
+    is something to report about how a tool came back:
+
+        no `ok`        it started doing this
+        `ok` is false  it failed
+        `ok` is true   a subagent finished — the one act long enough for its ending to be news
+
+    The brain's own name for the tool never crosses the seam and is not missed. Showing it produced a
+    commentary reading `commandExecution` and `imageGeneration`: one vendor's identifiers, in front
+    of somebody who has never heard of that vendor and never should.
+    """
+    did = str(it.get("did") or "")
+    who = _a_helper(it.get("who")) if did == "delegate" else ""
+    ok = it.get("ok")
+    if ok is False:
+        return f"{SUBTEXT}⚠ {FAILED.get(did, 'tool failed')}"
+    if did == "delegate":
+        heading = FINISHED_HELPER if ok is True else DELEGATED
+        return f"{SUBTEXT}{heading}{': ' + who if who else ''}"
+    return f"{SUBTEXT}{DID.get(did, UNKNOWN)} {SHOWN.get(did, 'thinking')}"
+
+
+def grouped(groups: List[Any], lines: List[Any]) -> List[Any]:
+    """Fold new lines onto the ones already there, **keeping every event as a count.**
+
+    Only lines that are *adjacent and the same* join. A different line closes the group for good, so
+    `read · read · run · read` stays four groups rather than collapsing into two — the order is what
+    a reader is following.
+
+    A `None` in `lines` is a barrier and not a line: something visible was posted at that point, so
+    what comes after it must start a new count even if it matches what came before. Without it, a
+    burst that spanned a message the reader has already scrolled past was counted as one run.
+    """
+    kept = list(groups)
+    may_join = True
+    for line in lines:
+        if line is None:
+            may_join = False
+            continue
+        heading = _heading(line)
+        if may_join and kept and _heading(kept[-1][0]) == heading:
+            # Once a category repeats, its broad wording owns the count: a name is useful on one
+            # helper and listing five of them defeats the point of counting at all.
+            kept[-1] = (heading, kept[-1][1] + 1)
+        else:
+            kept.append((line, 1))
+        may_join = True
+    return kept
+
+
+def _heading(line: str) -> str:
+    """The broad line a repeat is counted under, even where one occurrence showed a name."""
+    for whole in (DELEGATED, FINISHED_HELPER):
+        if line.startswith(f"{SUBTEXT}{whole}"):
+            return f"{SUBTEXT}{whole}"
+    return line
+
+
+def rendered(groups: List[Any]) -> str:
+    """Groups as the commentary a person reads. **One occurrence needs no visual noise.**"""
+    return "\n".join(line if count == 1 else f"{line} **(x{count})**" for line, count in groups)
+
+
+def bounded(groups: List[Any]) -> Tuple[str, List[Any]]:
+    """The commentary cut to one message, by dropping **whole oldest groups** and saying so.
+
+    Whole groups rather than characters: half a line with its count sheared off reads as a different
+    event. The last group is always kept, however long it is, because a commentary showing nothing at
+    all is worse than one showing its most recent line and a mark that there was more.
+    """
+    kept = list(groups)
+    clipped = False
+    while len(kept) > 1:
+        if len((f"{CLIPPED}\n" if clipped else "") + rendered(kept)) <= ACTIVITY_CHARS:
+            break
+        kept.pop(0)
+        clipped = True
+    shown = rendered(kept)
+    return (f"{CLIPPED}\n{shown}" if clipped else shown), kept
+
+
+def _under(text: str, cost: Any) -> str:
+    """The answer with what it cost standing above it, in Discord's own quiet register.
+
+    **Above and never below** (R-DIS-17). A long answer pushes anything after it off a phone screen,
+    and which brain answered and what it cost are worth seeing without scrolling to the end of a
+    thousand words.
+
+    **`SUBTEXT` is why this is rendered here and not composed by rundesk.** `-# ` is Discord's, it
+    only works at the start of a line, and it is what turns a line into small grey print instead of a
+    sentence the agent appears to have said. Another platform has another register or none, so the
+    words cross the seam and the register is put on here.
+
+    Nothing said about the cost leaves the answer exactly as it was — a turn whose brain reported
+    nothing is not given a line of empty punctuation.
+    """
+    said = str(cost or "").strip()
+    return f"{SUBTEXT}{said}\n{text}" if said else text
 
 
 def thread_name(text: Any) -> str:
@@ -658,6 +843,53 @@ class Handled(NamedTuple):
     ours: bool
 
 
+class Growing:
+    """The running commentary in one place: what it says, and whether it may still grow.
+
+    **A commentary grows only while it is the last thing in its conversation** (R-DIS-20). A message
+    something has been posted under is one the reader has already scrolled past, and editing it then
+    changes history rather than showing progress — the new line appears above whatever came after
+    it, where nobody is looking. So anything else being said here puts this down and the next line
+    starts a message of its own.
+    """
+
+    def __init__(self) -> None:
+        #: The message being grown, or `None` when the next line must start a new one.
+        self.posted: Any = None
+        #: Lines seen but not yet written, oldest first. A `None` among them is a barrier: something
+        #: visible was posted at that point and what follows must not be counted with what preceded.
+        self.pending: List[Any] = []
+        #: The groups the posted message is currently showing, as `(line, count)`.
+        self.groups: List[Any] = []
+        #: What that message now says, so an edit that would change nothing is not sent.
+        self.shown = ""
+        #: The task waiting out `GROW_SECONDS` before the next write, so a burst is one write.
+        self.pacing: Optional[asyncio.Task] = None
+        #: Which write is the newest. **A post in flight when something buries the commentary must
+        #: not become the message the next line grows into** — it comes back holding a message that
+        #: is no longer last, and every line after it would be written where nobody is looking. The
+        #: writer compares this number with the one it took before awaiting, and drops its result if
+        #: they differ.
+        self.writes = 0
+
+    def buried(self) -> None:
+        """Something else was said here, so this stops growing and the count starts again."""
+        self.posted = None
+        self.groups = []
+        self.shown = ""
+        if self.pending and self.pending[-1] is not None:
+            # What is already waiting belongs above the message just posted. It may still be written
+            # afterwards, but whatever follows must start a new count rather than joining across it.
+            self.pending.append(None)
+        self.writes += 1
+
+    def let_go(self) -> None:
+        """Stop the pacing task — for a conversation being dropped, or a program shutting down."""
+        if self.pacing is not None:
+            self.pacing.cancel()
+            self.pacing = None
+
+
 class Reaching:
     """The connection, held open for as long as this program runs, and what it is holding.
 
@@ -673,13 +905,10 @@ class Reaching:
         self.marks: Dict[str, str] = {}
         #: The typing indicator being renewed in a place, by that place's own id.
         self.typing: Dict[int, asyncio.Task] = {}
+        #: The running commentary in a place, by that place's own id — see `Growing`.
+        self.growing: Dict[int, Growing] = {}
         #: What is known about a message this has handled, by its id — see `Handled`.
         self.handled: Dict[str, Handled] = {}
-        #: Whether a conversation is one person's own, learned from a message that arrived in it.
-        #: **Asked here and never of Discord**: a direct channel is not in any server's cache, so
-        #: the library cannot tell one from a room it has not been told about, and defaulting the
-        #: unknown to *private* would quietly cost a room the one thing a reply is for.
-        self.private: Dict[str, bool] = {}
         #: Whether the note about not being able to open a thread has already been said.
         self.threadless = False
         #: Whether the socket is up, so `gone` and `ready` are said on the change rather than on
@@ -726,6 +955,10 @@ class Reaching:
 
         for place in list(self.typing):
             self._typing_stops(place)
+        # Every clock this holds, stopped before the socket goes. A pacing task left running would
+        # wake up into a closed client and write its failure across a shutdown that had gone cleanly.
+        for held in self.growing.values():
+            held.let_go()
         say({"say": "gone", "why": self.trouble or "rundesk asked this to stop"})
         # **Offline before the socket goes, and it has to be this way round.** Closing alone leaves
         # Discord to notice a socket that stopped answering, which takes it minutes — so an agent
@@ -863,7 +1096,8 @@ class Reaching:
         # opened a thread is still standing in the room above it, and both the mark rundesk puts on
         # it and any reply that quotes it are addressed by id alone.
         self.handled[str(message.id)] = Handled(place=message.channel.id, ours=False)
-        self.private[str(conversation)] = direct
+        # Somebody spoke here, so the commentary is no longer the last thing in the conversation.
+        self._no_longer_last(conversation)
         self._make_room()
         say({"say": "arrived",
              # **The thread's own id, and never its parent's.** A thread is a conversation of its
@@ -998,6 +1232,8 @@ class Reaching:
             await self._deliver(it)
         elif doing == "state":
             await self._state(it)
+        elif doing == "activity":
+            self._doing(it)
         elif doing == "stop":
             self.stopping.set()
         else:
@@ -1018,6 +1254,7 @@ class Reaching:
         try:
             if not isinstance(text, str):
                 raise Refused("the text to deliver was not text")
+            text = _under(text, it.get("cost"))
             if len(text) > MAX_TEXT:
                 raise Refused(f"{len(text)} characters is past what Discord takes in one message "
                               f"({MAX_TEXT}) — this never re-splits what it is handed, because "
@@ -1055,6 +1292,10 @@ class Reaching:
         # Ours, and remembered as ours: a later delivery told to quote this one must not ping its
         # author, which is this bot.
         self.handled[str(sent.id)] = Handled(place=place, ours=True)
+        # Anything posted here stands under the commentary, so the commentary stops growing. This is
+        # the answer, a remark said mid-turn, or a notice — every one of them a message the reader
+        # scrolls to, and every one of them a reason the next activity line starts somewhere new.
+        self._no_longer_last(place)
         self._make_room()
         say({"say": "delivered", "id": given, "external_id": str(sent.id)})
 
@@ -1070,10 +1311,16 @@ class Reaching:
         on it. Nothing here reads the text and guesses: running commentary carries none and is
         posted plainly, because a thread where every line quotes the same message is unreadable.
 
-        Three ways this comes back with nothing to quote.
+        **A private conversation is quoted too, and this is the correction** (R-DIS-28). It was
+        dropped here on the reasoning that two people are already alone and a quote buys no
+        attention — which reads well and is wrong about what the quote is *for*. The tint is not
+        attention, it is the difference between the answer and the six lines of commentary above it,
+        and in a one-to-one conversation the reply ping is the only thing that draws it at all. An
+        answer that arrives after minutes of working, untinted, under its own running commentary,
+        is the failure this exists to prevent — and it is worst in a DM, where there is nothing else
+        on the screen to tell the two apart.
 
-        **A private conversation.** Two people are here, every message in it is already theirs, and
-        a quote buys no attention while the ping spends a notification asking for it.
+        Two ways this still comes back with nothing to quote.
 
         **A message this program wrote.** Pinging its author pings the bot, and the person the
         answer is for is left untinted — the recorded failure from the build this replaces, where a
@@ -1088,7 +1335,7 @@ class Reaching:
             return None, False
         quoted = an_id(reply_to, "message id")
         known = self.handled.get(str(quoted))
-        if self.private.get(str(place)) or (known is not None and known.place != place):
+        if known is not None and known.place != place:
             return None, False
         # **`fail_if_not_exists=False`, always.** Discord refuses a whole message that quotes one it
         # cannot resolve, and a turn here runs for minutes — the asker deleting their own question
@@ -1148,6 +1395,102 @@ class Reaching:
             with contextlib.suppress(Exception):
                 await message.remove_reaction(standing, self.client.user)
 
+    # -- the running commentary, which grows in place while it is still the last thing -----
+
+    def _doing(self, it: Dict[str, Any]) -> None:
+        """One thing the agent did. Gathered, and written a moment later (R-DIS-20).
+
+        **Not written here.** A brain reaches for several tools in a second, and answering each one
+        with an edit spends a rate limit saying what one edit would have said. So the line joins what
+        is waiting and a single task, started once, writes the lot of them after `GROW_SECONDS`.
+        """
+        try:
+            place = an_id(it.get("place"), "channel id")
+        except Refused as why:
+            noted(str(why))
+            return
+        line = activity_line(it)
+        if not line:
+            return
+        held = self.growing.setdefault(place, Growing())
+        held.pending.append(line)
+        self._make_room()
+        if held.pacing is None or held.pacing.done():
+            held.pacing = asyncio.ensure_future(self._paced(place))
+
+    async def _paced(self, place: int) -> None:
+        """Wait out the burst, write once, and **take responsibility for what arrived meanwhile.**
+
+        A line can arrive while Discord is still accepting the write below. At that moment `_doing`
+        sees this task as live and will not start another, so this one has to look again before it
+        ends — otherwise the last lines of a turn sit in `pending` for ever and the commentary stops
+        one tool short of where the agent actually got to.
+        """
+        await asyncio.sleep(GROW_SECONDS)
+        held = self.growing.get(place)
+        if held is None:
+            return
+        await self._flush(place, held)
+        if held.pending:
+            held.pacing = asyncio.ensure_future(self._paced(place))
+
+    async def _flush(self, place: int, held: Growing) -> None:
+        """Write what has happened since the last time — by growing one message, or starting one.
+
+        **Edited while it is still last, posted fresh once it is not.** The first is what makes a
+        turn read as one thing happening rather than as a wall of notifications; the second is what
+        stops it rewriting a message the reader has already scrolled past.
+
+        A failed edit puts the message down rather than trying it again for the rest of the turn: an
+        edit fails because the message is gone or the channel is unreachable, and neither improves by
+        being asked twice a second.
+        """
+        pending, held.pending = held.pending, []
+        if not pending or self.client is None:
+            return
+        held.groups = grouped(held.groups, pending)
+        saying, held.groups = bounded(held.groups)
+        if saying == held.shown and held.posted is not None:
+            return
+        if held.posted is None:
+            # Which write this is, kept across the await below. Something else may bury the
+            # commentary while this is in flight, and a write that comes back afterwards must not put
+            # the buried message back for the next line to grow into.
+            mine = held.writes = held.writes + 1
+            where = self.client.get_partial_messageable(place)
+            try:
+                sent = await where.send(content=saying)
+            except Exception as why:       # noqa: BLE001 — a platform boundary
+                self._final(why)
+                noted(f"could not say what the agent is doing in {place}: "
+                      f"{type(why).__name__}: {why}")
+                return
+            if mine == held.writes:
+                held.posted, held.shown = sent, saying
+                self.handled[str(sent.id)] = Handled(place=place, ours=True)
+                self._make_room()
+            return
+        try:
+            await held.posted.edit(content=saying)
+        except Exception as why:           # noqa: BLE001 — a platform boundary
+            self._final(why)
+            noted(f"could not grow what the agent is doing in {place}: "
+                  f"{type(why).__name__}: {why}")
+            held.posted = None             # start a fresh one rather than keep failing on this
+            return
+        held.shown = saying
+
+    def _no_longer_last(self, place: int) -> None:
+        """Something visible was said in this place, so the commentary stops growing.
+
+        Called wherever a message that is *not* the commentary is posted, and wherever somebody
+        speaks. Both put something underneath it, and both mean the next thing to show belongs in a
+        message of its own.
+        """
+        held = self.growing.get(place)
+        if held is not None:
+            held.buried()
+
     # -- the typing indicator, which is the only thing here with a clock -------------------
 
     def _typing_starts(self, place: int) -> None:
@@ -1198,10 +1541,12 @@ class Reaching:
             self.marks.pop(next(iter(self.marks)))
         while len(self.typing) > LIVE_KEPT:
             self._typing_stops(next(iter(self.typing)))
+        while len(self.growing) > LIVE_KEPT:
+            # Its pacing task goes with it, for exactly the reason above: a commentary dropped
+            # without cancelling its timer goes on waking up in a conversation nothing is left of.
+            self.growing.pop(next(iter(self.growing))).let_go()
         while len(self.handled) > LIVE_KEPT:
             self.handled.pop(next(iter(self.handled)))
-        while len(self.private) > LIVE_KEPT:
-            self.private.pop(next(iter(self.private)))
 
 
 def _without_our_name(text: Any, ours: Optional[int]) -> str:

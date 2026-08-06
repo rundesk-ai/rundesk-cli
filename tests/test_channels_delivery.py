@@ -109,6 +109,62 @@ class SplittingAroundCode(Splitting):
                                      "the last piece was handed back past the limit")
 
 
+class WhatATurnCost(unittest.TestCase):
+    """The one line that stands above an answer. Arithmetic and wording — no agent, no records."""
+
+    def test_the_whole_line_a_person_reads(self):
+        # R-DIS-17, R-DIS-33, R-DIS-24. The provider leads, then what was billed, then the clock.
+        self.assertEqual(
+            "codex · 2.2k input · 481 output · 78k cached · 1m elapsed",
+            delivery.stats(provider="codex", input_tokens=2151, output_tokens=481,
+                           cached_tokens=78000, elapsed=63))
+
+    def test_a_brain_that_said_how_big_the_conversation_got_leads_with_that(self):
+        # R-DIS-29. A footer is read to decide whether to start fresh, and none of the billed
+        # quantities answers that — fresh input is a handful of tokens on any warm turn.
+        self.assertEqual(
+            "stand-in · 122k session · 837 output · 28s elapsed",
+            delivery.stats(provider="stand-in", input_tokens=2, output_tokens=837,
+                           cached_tokens=121000, context_tokens=122000, elapsed=28))
+
+    def test_cache_writes_are_never_shown(self):
+        # R-DIS-17. They stay in the turn's own record; a fourth number here buys nothing acted on.
+        # There is no parameter for one at all, which is the strongest form of never showing it.
+        self.assertNotIn("written", delivery.stats(provider="codex", input_tokens=10,
+                                                   output_tokens=20, cached_tokens=30, elapsed=1))
+
+    def test_a_small_count_is_not_rounded_into_a_zero(self):
+        # Everything was shown in thousands once, so a thirteen-token answer reported `0k output` —
+        # a measurement, stated plainly, and wrong.
+        self.assertIn("13 output", delivery.stats(output_tokens=13))
+        self.assertNotIn("0k", delivery.stats(output_tokens=13))
+
+    def test_a_count_in_the_millions_is_not_shown_in_thousands(self):
+        # A cache read is counted once per request, so forty of them reported `15425k cached`.
+        self.assertIn("15.4M cached", delivery.stats(cached_tokens=15425000))
+
+    def test_the_thousands_boundary_keeps_one_decimal_and_then_drops_it(self):
+        self.assertIn("1k input", delivery.stats(input_tokens=1000))
+        self.assertIn("2.2k input", delivery.stats(input_tokens=2151))
+        self.assertIn("78k input", delivery.stats(input_tokens=78000))
+
+    def test_elapsed_is_compact_at_seconds_minutes_and_hours(self):
+        self.assertEqual("28s elapsed", delivery.stats(elapsed=28))
+        self.assertEqual("1m elapsed", delivery.stats(elapsed=63))
+        self.assertEqual("2h elapsed", delivery.stats(elapsed=7300))
+
+    def test_a_turn_that_reported_no_cost_says_nothing_about_it(self):
+        # Zero and unknown are different answers, and a row of zeroes is the wrong one.
+        self.assertEqual("codex · 4s elapsed", delivery.stats(provider="codex", elapsed=4))
+
+    def test_nothing_known_at_all_is_no_line_rather_than_an_empty_one(self):
+        self.assertEqual("", delivery.stats())
+
+    def test_a_measured_zero_is_still_reported(self):
+        # The other half of the same rule: a brain that counted and found nothing said so.
+        self.assertIn("0 output", delivery.stats(output_tokens=0))
+
+
 class WhereANoticeGoes(support.Isolated):
 
     def setUp(self):

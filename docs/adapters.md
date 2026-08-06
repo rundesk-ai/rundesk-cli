@@ -258,6 +258,7 @@ behind an adapter, and a record it does not know is not a channel that has gone 
 {"say": "gone", "why": "the socket closed"}
 {"say": "note", "level": "warning", "text": "could not bring in report.csv: HTTPException: 403"}
 {"say": "failed", "id": "1754431200.123456-0", "why": "Discord would not take it: Forbidden"}
+{"say": "delivered", "id": "1754431200.123456-0", "external_id": "9002", "place": "1180"}
 {"say": "arrived", "conversation": "1180", "user": "2207", "text": "what changed today?",
  "external_id": "8841",
  "attachments": [{"name": "report.csv", "at": "/…/channels/discord/fetched/8841/0", "bytes": 8}]}
@@ -268,7 +269,8 @@ behind an adapter, and a record it does not know is not a channel that has gone 
 | `ready` | — | `as` | one `INFO` line in the agent's log: *connected as …* |
 | `gone` | — | `why` | one `WARNING` line. `no reason given` when `why` is absent |
 | `note` | `text` | `level` | one line at that level. `level` is `DEBUG`, `INFO`, `WARNING` or `ERROR`, case-insensitive; anything else becomes `INFO` |
-| `failed` | `why` | `id` | one `WARNING` line: *could not deliver — …*. **`id` is not read**; nothing correlates a failure back to the delivery yet |
+| `failed` | `why` | `id` | one `WARNING` line: *could not deliver — …*. `id` releases what rundesk was holding for that delivery |
+| `delivered` | `id` | `external_id`, `place` | one line saying the answer reached the platform, naming the message it answered. **Never a mark** — see below |
 | `arrived` | `conversation`, `user`, and `text` **or** `attachments` | `external_id` | the message, if that user may be answered |
 
 **Say `ready` when you have the connection and `gone` when you lose it**, once per change and not
@@ -347,21 +349,24 @@ are still not asked for; nothing reads a member list or a presence.
 
 ### What an adapter is told — `do:`
 
-Three, and only three exist today.
+Four, and only four exist today.
 
 ```json
-{"do": "deliver", "id": "1754431200.123456-0", "place": "1180", "text": "Three files changed…"}
+{"do": "deliver", "id": "1754431200.123456-0", "place": "1180", "text": "Three files changed…",
+ "reply_to": "8841", "cost": "codex · 2.2k input · 481 output · 78k cached · 1m elapsed"}
 {"do": "deliver", "id": "1754431200.123456-2", "place": "1180", "text": "here it is",
  "files": [{"name": "chart.png", "at": "/…/agents/alan/home/chart.png", "bytes": 9,
             "sha256": "b1f3…"}]}
 {"do": "state", "place": "1180", "external_id": "8841", "state": "seen"}
+{"do": "activity", "place": "1180", "did": "run"}
 {"do": "stop"}
 ```
 
 | | Fields | |
 |---|---|---|
-| `deliver` | `id`, `place`, `text`, sometimes `files`, sometimes `reply_to` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed` |
+| `deliver` | `id`, `place`, `text`, sometimes `files`, sometimes `reply_to`, sometimes `cost` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed` |
 | `state` | `place`, `external_id`, `state` | show what rundesk says a turn is doing |
+| `activity` | `place`, `did`, sometimes `ok`, sometimes `who` | show what the agent is doing, while it is still doing it |
 | `stop` | — | stop. The signals follow either way |
 
 **A long answer arrives as several `deliver` records, and `files` go with the last of them.** The
@@ -378,15 +383,52 @@ is rundesk's.
 
 The shipped Discord adapter also *tints* the reply, which is the point of it: a message that names
 somebody is drawn by their own client with an amber bar down the side, and a reply draws it by
-pinging the author of the message it quotes. Three cases get the quote dropped — a direct
-conversation, where two people are already reading everything; a message the adapter wrote itself,
-where the ping would reach the bot and leave the person waiting untinted; and a message standing in
-another channel, which happens on the first answer inside a freshly opened thread, because the
-message that asked is still in the room above and a reply does not reach across.
+pinging the author of the message it quotes. **Nothing here builds an embed and nothing sets a
+colour** — the emphasis on an answer is drawn by the reader's own client, and that is the only way to
+get it. Two cases get the quote dropped: a message the adapter wrote itself, where the ping would
+reach the bot and leave the person waiting untinted; and a message standing in another channel, which
+happens on the first answer inside a freshly opened thread, because the message that asked is still
+in the room above and a reply does not reach across. A direct conversation is **not** one of them —
+it was, and that was wrong: the tint is what separates the answer from the commentary above it, and
+in a one-to-one conversation the reply ping is the only thing that draws it at all.
 
 **Build the reference so a deleted message cannot cost you the answer.** Discord refuses an entire
 message that quotes one it can no longer resolve — `fail_if_not_exists=False` there — and a turn runs
 for minutes, which is long enough for somebody to delete their own question.
+
+**`cost` is what the turn cost, composed by rundesk and rendered by you.** It arrives on the same
+piece as `reply_to` and never on a later one — one answer is one answer, and the same number said
+four times is noise. Put it **above** the words: a long answer pushes anything after it off a phone
+screen, and which brain answered and what it cost are worth seeing without scrolling. Show it in
+whatever quiet register your platform has, so it does not read as a sentence the agent wrote — the
+shipped adapter uses Discord's `-# ` subtext. **The words are not yours to change**, and the room it
+needs is already taken out of `max_text` before the text was split, so putting it above what you were
+handed cannot push a piece past the limit.
+
+#### What the agent is doing — `activity`
+
+**Broad, countable, and disposable.** One record per thing the agent did, carrying the closed word and
+nothing else. `did` is one of `read`, `search`, `run`, `edit`, `list`, `make`, `delegate`, `memory`,
+`rules`, `identity` — the same list `providers/protocol.py` defines — or **empty**, which is a real
+answer meaning *something happened and there is no honest name for it*: a brain thinking, or a tool
+outside the closed set. Render an empty one as your own broad fallback rather than dropping it.
+
+`ok` is present only when there is something to say about how it came back: `false` means it failed,
+and `true` appears only for `delegate`, where the ending is news of its own. `who` names a subagent
+and appears nowhere else.
+
+**What a tool was given and what it answered never cross this seam**, and neither does the brain's own
+name for it. A command line and a path are somebody's private business, and this is posted into a
+room. The build this replaces sent the vendor's name too, and a commentary read `commandExecution`
+and `imageGeneration` in front of somebody who had never heard of that vendor.
+
+**Growing one message is yours to decide, and so is when to stop.** The shipped adapter gathers a
+burst for a moment so ten tools are one write, collapses adjacent repeats to `line **(x3)**`, and
+edits one message in place **for as long as that message is still the last thing in the
+conversation** — anything else posted there, or anybody speaking, starts a fresh one, because
+editing a message the reader has already scrolled past changes history rather than showing progress.
+A surface that cannot edit posts instead and is a first-class channel; a surface that wants to show
+none of it shows none of it. Correctness never depends on any of this.
 
 **Anything you do not recognise: say so as a `note` and read on.** One record you could do nothing
 with is not a channel going away.
@@ -404,11 +446,16 @@ what the previous build's contract published and what nothing here speaks.
 | `stopped` | somebody stopped it | ✋ |
 | `failed` | it did not finish | ⚠️ |
 
-**Only `seen` has a producer today.** It is the one state that needs no turn — a message arriving is
-the whole of the event — and it is sent the moment the message is written down, including on a
-redelivery, because the mark belongs to the message and an adapter that has just restarted no longer
-knows it put one up. The other four say what became of a turn: `working` goes up the moment one is
-admitted, and exactly one of `done`, `stopped` or `failed` when it settles.
+**All five have a producer.** `seen` is the one that needs no turn — a message arriving is the whole
+of the event — and it is sent the moment the message is written down, including on a redelivery,
+because the mark belongs to the message and an adapter that has just restarted no longer knows it put
+one up. The other four say what became of a turn: `working` goes up the moment one is admitted, and
+exactly one of `done`, `stopped` or `failed` when it settles.
+
+**A terminal state names the message it belongs to, and `working` does not.** `working` is the place's
+condition rather than one message's — it is a typing indicator, and a second mark there would say a
+turn had been seen twice — so it arrives without an `external_id` and there is nothing to react to.
+The other three always carry one.
 
 **Put the new mark up before taking the old one down.** A message with no mark for a moment reads as
 a turn nobody picked up, and the order is the only thing that decides which of those somebody sees.
@@ -580,33 +627,18 @@ separator in it is used as a path. `~` is expanded.
 Said plainly, because a page that quietly omitted this would be one somebody writes against and then
 cannot explain.
 
-**A turn's activity is not streamed to a channel.** All five states arrive, and the answer arrives —
-a message from somebody allowed is recorded, marked `seen`, answered, and the answer is delivered —
-but what the brain *did* on the way (its thinking, its tool calls, what it cost) is written into the
-turn's own records and is not sent out. `rundesk turns <agent> <turn>` is where that is read. A
-surface that wants to show work as it happens is the next thing this seam grows, and the sink it
-would be fed from already exists.
-
 **What `--capabilities` says is asked for and thrown away.** It is printed once, by `channels add`,
-and there is no column in the `channels` table holding it — so `max_text` is declared and not used,
-and the only thing producing a delivery today is a gateway notice, split at the flat 2000. Two
-docstrings say otherwise (`channels/adapters.py` and `commands/channels.py` both describe it as
-written into the record) and the code does not do it. Declare your real limit anyway — it is what a
-splitter will read on the day there is one — and go on checking the text you are handed, because that
-check is what catches the day the two disagree.
+and there is no column in the `channels` table holding it. `max_text` is the exception and is read —
+out of the channel's `settings`, where a `--check` may put it — so an adapter that reports one there
+is split to it and one that does not gets a flat 2000. Declare your real limit anyway, and go on
+checking the text you are handed, because that check is what catches the day the two disagree.
 
-**Nothing correlates a delivery with what became of it.** `{"say": "delivered", "id": …,
-"external_id": …}` is what the shipped adapter sends after a successful post, and rundesk ignores it —
-along with every other unrecognised `say`. Send it; it costs nothing and it is the shape a reader
-will take. The `id` on a `failed` is ignored the same way, and `retry_after` with it.
-
-**`reply_to` on a `deliver` is fully honoured by the shipped adapter and never sent.** Nothing in
-rundesk produces one today, so no answer is yet quoted or tinted on Discord — the adapter's half is
-built and is waiting for a producer. Send one and it works; until something does, every delivery is
-posted plainly.
-
-**`done`, `stopped` and `failed` have no producer either, so a ✅ never appears.** The adapter renders
-all five states, and only `seen` is ever sent — see the turn states above.
+**A delivery is correlated with what became of it, but never with a mark.** `{"say": "delivered",
+"id": …, "external_id": …}` is read: rundesk writes down that the answer reached the platform, naming
+the message it answered. It does **not** turn into a `done` — it did once, and that was wrong, because
+a turn that failed still delivers a sentence saying so and the acknowledgement cannot tell the two
+apart. What a turn came to is decided by the turn. The `id` on a `failed` is read the same way;
+`retry_after` with it is not.
 
 **`place` and `display` on an `arrived` are read by nothing.** The shipped adapter sends `"place":
 "dm"` or `"room"` and a flattened display name; rundesk keeps neither today.

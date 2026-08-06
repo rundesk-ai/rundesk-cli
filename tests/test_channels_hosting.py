@@ -808,25 +808,36 @@ class TalkingToOne(Hosting):
         self.assertTrue(support.waited_until(
             lambda: self.heard.exists() and "the daily report" in self.heard.read_text(), 5.0))
 
-    def test_an_answer_quotes_what_it_answers_and_marks_it_done(self):
-        # The ✅ the owner asked for, and it needs no provider: *answered* is a fact about delivery,
-        # known the moment the adapter acknowledges it.
+    def test_an_answer_quotes_what_it_answers(self):
+        # R-DIS-28. Which delivery is the answer is rundesk's to say, and it says so with `reply_to`.
         self.an_adapter()
         self.a_channel(told=True)
         watching = self.hosting_now()
         self.assertTrue(hosting.told(self.agent, self.where, watching, "discord", "1180",
                                      ["here is the report"], answering="8841"))
         self.assertTrue(support.waited_until(
-            lambda: any(json.loads(one).get("do") == "state"
+            lambda: any(json.loads(one).get("do") == "deliver"
                         for one in self.told_lines()), 5.0),
-            "no state record followed the delivery")
-        marked = [json.loads(one) for one in self.told_lines()
-                  if json.loads(one).get("do") == "state"]
-        self.assertEqual("done", marked[0]["state"])
-        self.assertEqual("8841", marked[0]["external_id"])
+            "the answer never reached the adapter")
         delivered = [json.loads(one) for one in self.told_lines()
                      if json.loads(one).get("do") == "deliver"]
         self.assertEqual("8841", delivered[0]["reply_to"])
+
+    def test_an_acknowledged_delivery_is_written_down_and_never_marked(self):
+        # A turn that failed still delivers a sentence saying so, and an acknowledgement cannot tell
+        # that from an answer — so marking one ✅ here reported a success it did not earn, and raced
+        # the mark the turn's own outcome puts up. What this moment really knows is written down.
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        hosting.told(self.agent, self.where, watching, "discord", "1180",
+                     ["here is the report"], answering="8841")
+        self.assertTrue(support.waited_until(
+            lambda: "reached the platform" in self.said_in_the_log(), 5.0),
+            "the delivery that landed was never written down")
+        self.assertIn("8841", self.said_in_the_log())
+        for one in self.told_lines():
+            self.assertNotEqual("state", json.loads(one).get("do"))
 
     def test_commentary_neither_quotes_nor_marks_anything(self):
         # Thinking and tool activity are not answers. A thread of quoted replies is unreadable, and

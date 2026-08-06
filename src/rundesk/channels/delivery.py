@@ -87,6 +87,75 @@ def notice(agent: str, saying: str, at_most: int = WHEN_UNSAID) -> Optional[Tell
     return Telling(str(told["kind"]), str(told["notify_place"]), split(saying, at_most))
 
 
+def stats(provider: str = "", input_tokens: Optional[int] = None,
+          output_tokens: Optional[int] = None, cached_tokens: Optional[int] = None,
+          context_tokens: Optional[int] = None, elapsed: Optional[float] = None) -> str:
+    """What a turn cost, as the one line that stands above the answer. `""` when nothing is known.
+
+    **Rendered here and rendered once**, for every platform. What it is *made to look like* is the
+    adapter's — Discord has a subtext register and puts it there, another surface may have nothing of
+    the kind — but which quantities a person is shown, and in what words, is a decision this product
+    makes rather than one each surface makes again (R-DIS-17, R-DIS-33, R-CH-28).
+
+    **The provider leads it** (R-DIS-33), because which brain answered is the first thing somebody
+    wants when an answer reads oddly, and it is the one term that is never a number.
+
+    **Which quantities are shown depends on whether the brain said how big the conversation got**
+    (R-DIS-29). A footer is read to decide one thing — whether to start a fresh conversation — and
+    none of the billed quantities answers it: fresh input is a handful of tokens on any warm turn,
+    and nobody adds three numbers in their head. So a brain that reports a context size leads with
+    that and keeps `output` beside it as the only other thing the turn itself did; a brain that
+    cannot tell gets the useful cost summary instead. Both are the same rule, and it is why the
+    same agent shows two different-looking lines on two different brains.
+
+    **Cache writes are never shown** (R-DIS-17). They stay in the turn's own record, where the whole
+    account is; a fourth number here buys nothing a reader acts on.
+
+    **Absent and zero are different answers**, and every quantity is optional for that reason: a
+    brain that could not tell says nothing about it rather than reporting a measured zero.
+    """
+    parts = [provider] if provider else []
+    slots = ((("session", context_tokens), ("output", output_tokens))
+             if isinstance(context_tokens, int)
+             else (("input", input_tokens), ("output", output_tokens),
+                   ("cached", cached_tokens)))
+    parts.extend(f"{_amount(one)} {what}" for what, one in slots if isinstance(one, int))
+    if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool):
+        parts.append(f"{_duration(elapsed)} elapsed")
+    return " · ".join(parts)
+
+
+def _amount(tokens: int) -> str:
+    """A count somebody can read, **without rounding it into a lie.**
+
+    Everything was shown in thousands once, so a turn that answered in thirteen tokens reported
+    `0k output` — which is a measurement, stated plainly, and wrong. Small numbers are shown as
+    themselves, and only what is genuinely in thousands is abbreviated.
+
+    A cache read is counted once per request, so a turn that made forty of them reported
+    `15425k cached` — a unit nobody carries that far, and one a reader has to divide in their head
+    before it means anything. Thousands stop at a thousand of them. Millions keep a decimal, because
+    rounding one away is half a million tokens, which is a real amount of somebody's money.
+    """
+    if tokens < 1000:
+        return str(tokens)
+    if tokens < 10000:
+        return f"{tokens / 1000:.1f}k".replace(".0k", "k")
+    if round(tokens / 1000) < 1000:
+        return f"{round(tokens / 1000)}k"
+    return f"{tokens / 1000000:.1f}M".replace(".0M", "M")
+
+
+def _duration(seconds: float) -> str:
+    """How long a turn took, compact enough to sit in a line of small print beside four counts."""
+    whole = max(0, int(seconds))
+    if whole < 60:
+        return f"{whole}s"
+    if whole < 3600:
+        return f"{whole // 60}m"
+    return f"{whole // 3600}h"
+
+
 def split(said: str, at_most: int = WHEN_UNSAID) -> List[str]:
     """One piece of text as the several messages a platform will actually accept.
 
