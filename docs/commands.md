@@ -194,7 +194,7 @@ one over what survived.
 
 ### agents add
 
-Makes an agent: its records, `home/`, and `logs/`. `--provider` is required.
+Makes an agent: its records, `home/`, `logs/`, and the files it lives by. `--provider` is required.
 
 ```console
 $ rundesk agents add cole --provider claude
@@ -203,9 +203,17 @@ agent cole added
         home      /Users/you/.rundesk/data/agents/cole/home
         logs      /Users/you/.rundesk/data/agents/cole/logs
         records   /Users/you/.rundesk/data/agents/cole/state.db
+        rules     AGENTS.md, CLAUDE.md, MEMORY.md — how it works, and what it learns
         skill     rundesk/managing-rundesk — how it operates this install
         note      the provider is recorded and not proven — check it with: rundesk providers check
 ```
+
+**Every agent is given the files it lives by**, in its own `home/`: `AGENTS.md` is how it works and
+`MEMORY.md` is what it has learned that is still true, and `CLAUDE.md` is the first of those under
+the name some brains look for first — the same bytes, placed twice. They are the agent's and the
+owner's to edit from that moment: **an update fills in one that is missing and never replaces one
+that is there**, whatever it has been changed to. A release that shipped none says so on this line
+instead, and the next `rundesk update` gives them.
 
 **Every agent is given `rundesk/managing-rundesk`**, which is how it operates the install running
 it — where things are, what its own gateway is doing, which values are set. It is a floor of the

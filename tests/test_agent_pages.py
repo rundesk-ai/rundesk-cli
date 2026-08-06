@@ -9,6 +9,7 @@ Run directly: `python3 tests/test_agent_pages.py`
 """
 
 import unittest
+from unittest import mock
 
 import support
 from rundesk.agents import directory, pages
@@ -114,6 +115,18 @@ class WhatIsNeverReplaced(support.Isolated):
         self.assertNotIn("AGENTS.md", pages.wanted(self.home))
         self.assertEqual([], pages.place(self.home, "ava"))
 
+    def test_a_link_the_owner_made_is_left_alone_even_when_it_points_at_nothing(self):
+        """An owner who linked their rules at a file they keep elsewhere has said where those rules
+        live. Judged by following the link, an unmounted volume makes it read as missing — and the
+        sweep would land a regular file on top of it, losing the link permanently, because that is
+        what every run afterwards would find standing there."""
+        page = self.home / "AGENTS.md"
+        page.unlink()
+        page.symlink_to(self.home / "not-mounted-yet" / "AGENTS.md")
+        self.assertEqual([], pages.wanted(self.home))
+        self.assertEqual([], pages.place(self.home, "ava"))
+        self.assertTrue(page.is_symlink(), "the owner's link was replaced by a file")
+
     def test_only_what_is_missing_comes_back(self):
         (self.home / "MEMORY.md").unlink()
         self.assertEqual(["MEMORY.md"], pages.wanted(self.home))
@@ -169,6 +182,21 @@ class WhenTheReleaseShipsNone(support.Isolated):
         directory.made("ava", "a-stand-in")
         self.assertEqual(sorted(pages.PAGES), pages.wanted(directory.home("ava")))
         self.assertTrue(directory.records("ava").is_file())
+
+    def test_a_home_that_cannot_be_written_makes_no_agent_at_all(self):
+        """**The opposite expectation from the update sweep, and the two are easy to conflate.**
+        The sweep tolerates one home it cannot write because the install is already carried and the
+        other agents must still be reached. Creation may not: `_built` is inside the staging, so an
+        `OSError` there has to come back out and take the staged directory with it. Swallowed, the
+        rename would put a half-populated home under the agent's own name — which is the "half an
+        agent is worse than none" failure the module exists to make impossible.
+        """
+        with mock.patch.object(pages, "place", side_effect=OSError("the disk is full")):
+            with self.assertRaises(OSError):
+                directory.made("ava", "a-stand-in")
+        self.assertEqual([], sorted(paths.agents().iterdir()),
+                         "a staged or renamed directory was left behind")
+        self.assertEqual([], directory.known())
 
     def test_the_command_says_which_are_missing_rather_than_reporting_a_plain_success(self):
         a_release_with_no_pages()

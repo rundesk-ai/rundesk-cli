@@ -113,8 +113,19 @@ def wanted(home: Path) -> List[str]:
     An unreadable entry is **not** a missing one. A file somebody made unreadable is still an answer
     standing there, and writing over it because it could not be read is exactly the "missing and
     unreadable are different" failure this product is built to refuse.
+
+    **Asked with `lexists`, so a link is judged as itself and never as what it points at.** An owner
+    who linked `AGENTS.md` at a file they keep somewhere else has answered where their rules live,
+    and `exists()` calls that link missing for as long as the far end is unreachable — an unmounted
+    volume, a checkout not cloned yet. The sweep would then land a regular file on top of it and the
+    link would be gone for good, because the replacement is what every later run finds.
     """
-    return [name for name in sorted(PAGES) if not (home / name).exists()]
+    return [name for name in sorted(PAGES) if not _stands(home / name)]
+
+
+def _stands(page: Path) -> bool:
+    """Whether anything at all is at this name — a file, a directory, or a link of any health."""
+    return page.exists() or page.is_symlink()
 
 
 def place(home: Path, agent: str, text: Optional[Dict[str, str]] = None) -> List[str]:
@@ -131,7 +142,7 @@ def place(home: Path, agent: str, text: Optional[Dict[str, str]] = None) -> List
     written = []
     for name in sorted(PAGES):
         page = home / name
-        if page.exists():
+        if _stands(page):
             continue
         _laid_down(page, said[PAGES[name]].replace(AGENT, agent))
         written.append(name)
