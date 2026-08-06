@@ -15,6 +15,7 @@ import support
 from rundesk.agents import directory, migration, records
 from rundesk.channels import arriving
 from rundesk.providers import kept, protocol
+from rundesk.schedules import kept as schedules_kept
 from rundesk.utils import scripts
 
 #: Older than anything a sweep keeps, so a case does not have to wait a fortnight.
@@ -56,6 +57,27 @@ class WithAnAgent(support.Isolated):
                  "provider_name": "a-stand-in", "access_mode": protocol.ACCESS_WORK}
         given.update(also)
         return kept.add_turn("ava", given)
+
+    def assertPlanned(self, sql: str, values: tuple, index: str) -> None:
+        """Fail unless SQLite answers this by seeking `index` rather than reading the table.
+
+        **Asked of the planner rather than timed.** A timing on a table with three rows in it proves
+        nothing at all, and one big enough to time is a suite nobody runs; `EXPLAIN QUERY PLAN` is
+        SQLite's own answer to which index it will use, and it is the thing that regresses when
+        somebody trims an index that looked unused.
+
+        **A `SCAN … USING INDEX` is a pass, and that is not a loophole.** Walking a *partial* index
+        end to end is the whole point of one — `idx_turns_working` holds only the turns nothing has
+        settled, so reading all of it reads a handful however long the ledger gets. What fails is a
+        step that reads a table with no index at all, which is what `SCAN` on its own means.
+        """
+        with records.reading(directory.records("ava")) as conn:
+            steps = [str(row[-1]) for row
+                     in conn.execute("EXPLAIN QUERY PLAN " + sql, values)]
+        plan = " / ".join(steps)
+        self.assertIn(index, plan, f"expected {index} to answer this; SQLite said: {plan}")
+        read_whole = [one for one in steps if one.startswith("SCAN") and "USING" not in one]
+        self.assertEqual(read_whole, [], f"this reads a table with no index; SQLite said: {plan}")
 
 
 class AdmittingATurn(WithAnAgent):
@@ -222,6 +244,53 @@ class SweepingWhatTurnsDid(WithAnAgent):
         kept.add_turn_record("ava", turn, "tool", when=LONG_AGO)
         self.assertEqual(kept.sweep_turn_records("ava", keeping_days=0), 0)
         self.assertEqual(len(kept.list_turn_records("ava", turn)), 1)
+
+    def test_the_sweep_seeks_rather_than_scanning_the_largest_table_an_agent_has(self):
+        """`turn_records` is the one table that grows with tool calls, and the sweep is a range over
+        `created_at`. Without an index on it this reads every row an agent has ever written."""
+        self.assertPlanned("DELETE FROM turn_records WHERE created_at < ?",
+                           ("2026-01-01T00:00:00Z",), "idx_turn_records_created")
+
+
+class WhatAGatewayAsksForWhenItComesUp(WithAnAgent):
+    def test_the_turns_nothing_settled_are_sought_and_never_scanned(self):
+        """`turns` is kept for ever, so the index that answers this must hold only the handful
+        nothing has settled rather than growing with the whole ledger."""
+        self.assertPlanned("SELECT * FROM turns WHERE turn_status = ? ORDER BY id",
+                           (kept.WORKING,), "idx_turns_working")
+
+    def test_it_still_finds_only_the_unfinished_ones(self):
+        working = self.a_turn()
+        settled = self.a_turn()
+        kept.finish_turn("ava", settled, kept.DONE)
+        self.assertEqual([one["id"] for one in kept.list_unfinished_turns("ava")], [working])
+
+
+class WhichScheduleRanATurn(WithAnAgent):
+    """The ledger has to go on saying who spent the cost after somebody tidies up.
+
+    `schedule_id` is `ON DELETE SET NULL`, so on its own it forgets — which is exactly what `0003`
+    refused for `conversations.channel`.
+    """
+
+    def a_schedule(self, name: str = "nightly") -> int:
+        schedules_kept.added("ava", name, {"cron": "0 3 * * *", "command": "echo hi"})
+        return int(schedules_kept.one("ava", name)["id"])
+
+    def test_a_turn_keeps_the_name_of_the_schedule_that_ran_it(self):
+        turn = self.a_turn(schedule_id=self.a_schedule(), schedule_name="nightly")
+        self.assertEqual(kept.get_turn("ava", turn)["schedule_name"], "nightly")
+
+    def test_the_name_outlives_the_schedule_and_the_id_does_not(self):
+        turn = self.a_turn(schedule_id=self.a_schedule(), schedule_name="nightly")
+        schedules_kept.forgotten("ava", "nightly")
+        row = kept.get_turn("ava", turn)
+        self.assertIsNone(row["schedule_id"], "the foreign key is ON DELETE SET NULL")
+        self.assertEqual(row["schedule_name"], "nightly",
+                         "the ledger forgot which schedule spent the cost")
+
+    def test_a_turn_nobody_scheduled_says_so_rather_than_naming_something(self):
+        self.assertIsNone(kept.get_turn("ava", self.a_turn())["schedule_name"])
 
 
 class WhereAConversationGotTo(WithAnAgent):

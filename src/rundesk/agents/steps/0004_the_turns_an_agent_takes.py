@@ -10,8 +10,22 @@ serving a verb that does not exist."* Both verbs exist now, so both land here.
 **`turns`** is one row per turn: what it was admitted with, what it came to, and what it cost. It is
 kept for ever — a couple of hundred bytes each, and a cost nobody can look back at is not a ledger.
 
+**`schedule_name` is written beside `schedule_id`, and it is not a duplicate of it.** The foreign key
+is `ON DELETE SET NULL`, so taking a schedule away detaches every turn it ever ran — a ledger that
+forgets who spent the money the moment somebody tidies up. `0003` refused exactly this for
+`conversations.channel`: *which* schedule ran a turn is a fact about the past, and a foreign key
+would lose history in order to keep a constraint tidy. The id stays for the live join; the name is
+what survives. It costs a column and it is already at hand — `providers.turns` derives it for the
+instruction layers at admission, and `providers instructions --turn` was re-deriving it afterwards by
+scanning every schedule, which answered nothing once the schedule was gone.
+
 **`turn_records`** is what a turn *did*, in order. The only table that grows with tool calls, and the
-only one swept.
+only one swept — so it carries an index on `created_at`, because the sweep is a range over that
+column and without one it scans the largest table an agent has.
+
+**The partial index on `working` turns** is what a gateway asks for when it comes up. `turns` is kept
+for ever, so the honest shape is an index that holds only the handful nothing has settled rather than
+one that grows with the ledger.
 
 **`provider_sessions`** is where each conversation got to on each brain, which is the whole of how a
 turn carries on from the last one.
@@ -61,10 +75,12 @@ CREATE TABLE IF NOT EXISTS turns (
   id                  INTEGER PRIMARY KEY,
   conversation_id     INTEGER NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
   schedule_id         INTEGER REFERENCES schedules (id) ON DELETE SET NULL,
+  schedule_name       TEXT,
   provider_name       TEXT NOT NULL,
   model_name          TEXT,
   access_mode         TEXT NOT NULL CHECK (access_mode IN ('read', 'work')),
-  provider_capabilities TEXT NOT NULL DEFAULT '{}',
+  provider_capabilities TEXT NOT NULL DEFAULT '{}'
+                        CHECK (json_valid(provider_capabilities)),
   session_resumed     INTEGER NOT NULL DEFAULT 0 CHECK (session_resumed IN (0, 1)),
   instructions_sha256 TEXT,
   instructions_bytes  INTEGER,
@@ -91,16 +107,20 @@ CREATE INDEX IF NOT EXISTS idx_turns_conversation ON turns (conversation_id, id)
 
 CREATE INDEX IF NOT EXISTS idx_turns_schedule ON turns (schedule_id);
 
+CREATE INDEX IF NOT EXISTS idx_turns_working ON turns (id) WHERE turn_status = 'working';
+
 CREATE TABLE IF NOT EXISTS turn_records (
   id          INTEGER PRIMARY KEY,
   turn_id     INTEGER NOT NULL REFERENCES turns (id) ON DELETE CASCADE,
   record_type TEXT NOT NULL,
-  event_data  TEXT NOT NULL DEFAULT '{}',
+  event_data  TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(event_data)),
   raw_line    TEXT,
   created_at  TEXT NOT NULL
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_turn_records_turn ON turn_records (turn_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_turn_records_created ON turn_records (created_at);
 
 CREATE TABLE IF NOT EXISTS provider_sessions (
   conversation_id  INTEGER NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,

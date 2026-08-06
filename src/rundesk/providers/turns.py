@@ -217,6 +217,10 @@ def _held(request: Request, held: int, watching, saying) -> Outcome:
     turn = kept.add_turn(agent, {
         "conversation_id": request.conversation,
         "schedule_id": request.schedule_id,
+        # **Written beside the id, because the id does not survive the schedule.** The foreign key
+        # is `ON DELETE SET NULL`, so a schedule taken away detaches every turn it ever ran and the
+        # ledger forgets who spent the cost. The name is derived here already for the layers.
+        "schedule_name": _schedule_name(request) or None,
         "provider_name": provider_name,
         "model_name": request.model_name,
         "access_mode": request.access_mode,
@@ -456,13 +460,23 @@ def _about(request: Request, provider_name: str) -> Dict[str, object]:
         "agent_home": str(directory.home(request.agent)),
         "provider_name": provider_name,
         "access_mode": request.access_mode,
-        # **The schedule's name, and nothing else's.** `place` is a Discord room on a channel turn
-        # and the agent's own name at a terminal, and putting either behind a variable called
-        # `schedule_name` is a value that is wrong the day a layer starts reading it — and it is
-        # what `providers instructions --turn` has to re-derive from `schedule_id` afterwards.
-        "schedule_name": request.place if request.schedule_id else "",
+        "schedule_name": _schedule_name(request),
         "conversation_id": request.conversation,
     }
+
+
+def _schedule_name(request: Request) -> str:
+    """What the schedule that caused this turn is called, and nothing when no schedule did.
+
+    **The schedule's name, and nothing else's.** `place` is a Discord room on a channel turn and the
+    agent's own name at a terminal, so putting either behind a name like this is a value that is
+    wrong the day a layer starts reading it.
+
+    Derived in one place because it is now read twice: the layers are handed it for this turn, and
+    the turn's own row keeps it so the ledger still says which schedule ran once that schedule has
+    been taken away. Two derivations of one fact are two things that can come to disagree.
+    """
+    return request.place if request.schedule_id else ""
 
 
 def _as_settings(said: Any) -> Optional[str]:

@@ -57,8 +57,8 @@ TURN_STATUSES = (WORKING, DONE, STOPPED, FAILED)
 #: identity, `state` starts at `working` and is settled by `settled`, and everything about what a
 #: turn *came to* is the records' own account — a caller that could set those could rewrite history
 #: and then read it back as fact.
-ADMITTED = ("conversation_id", "schedule_id", "provider_name", "model_name", "access_mode",
-            "provider_capabilities", "session_resumed", "instructions_sha256",
+ADMITTED = ("conversation_id", "schedule_id", "schedule_name", "provider_name", "model_name",
+            "access_mode", "provider_capabilities", "session_resumed", "instructions_sha256",
             "instructions_bytes")
 
 #: What may be written when a turn is settled, beside its state.

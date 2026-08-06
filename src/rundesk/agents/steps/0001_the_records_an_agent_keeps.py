@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS config (
   agent_provider      TEXT NOT NULL,
   agent_model         TEXT,
   agent_instructions  TEXT,
-  agent_settings      TEXT NOT NULL DEFAULT '{}',
+  agent_settings      TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(agent_settings)),
   owner_name          TEXT,
   last_seen_at        TEXT
 ) STRICT;

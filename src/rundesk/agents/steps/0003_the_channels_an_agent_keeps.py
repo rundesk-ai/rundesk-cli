@@ -32,6 +32,12 @@ column remembers it. Note the failure is `OperationalError: malformed JSON` rath
 failure when the column is handed something that is not JSON at all, so the layer above still
 validates on the way in — this is the floor, not the whole of it.
 
+**And the floor is laid under every JSON column here, not only that one.** `secret_names` and
+`settings` hold JSON in a `TEXT` column exactly as `allowed` does, and a column that is only JSON by
+convention is JSON for as long as everybody who writes it remembers — which is the same argument
+`allowed` already makes, applied where it was not. `json_valid` is the cheap half of it; what the
+shape *means* is still the layer above's to check.
+
 **At most one channel is the notified one**, and a partial unique index says so. Unprompted things
 have exactly one place to go, and *no* place is a legitimate answer, so the index covers only the
 rows that claim it.
@@ -81,8 +87,8 @@ CREATE TABLE IF NOT EXISTS channels (
   describes     TEXT NOT NULL,
   notified      INTEGER NOT NULL DEFAULT 0 CHECK (notified IN (0, 1)),
   notify_place  TEXT,
-  secret_names  TEXT NOT NULL DEFAULT '[]',
-  settings      TEXT NOT NULL DEFAULT '{}',
+  secret_names  TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(secret_names)),
+  settings      TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(settings)),
   allowed       TEXT NOT NULL CHECK (json_array_length(allowed) > 0),
   created_at    TEXT NOT NULL,
   CHECK (notified = 0 OR notify_place IS NOT NULL)

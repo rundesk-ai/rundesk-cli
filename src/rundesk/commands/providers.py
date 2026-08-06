@@ -29,7 +29,6 @@ from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import OK
 from rundesk.providers import adapters, answering, instructions, kept, protocol, turns
-from rundesk.schedules import kept as schedules_kept
 from rundesk.utils.terminal import as_table
 
 TROUBLE = (adapters.NotRunnable, answering.Refused, directory.Refused,
@@ -195,18 +194,12 @@ def _as_that_turn_saw_it(agent: str, row: Dict[str, Any]) -> Dict[str, object]:
     said = dict(_about(agent))
     said.update({"provider_name": row["provider_name"], "access_mode": row["access_mode"],
                  "conversation_id": row["conversation_id"],
-                 "schedule_name": _the_schedule(agent, row["schedule_id"])})
+                 # **Read off the turn, never looked up again.** This scanned every schedule for a
+                 # matching id, which answered nothing at all once that schedule had been taken
+                 # away — so a turn re-read after a tidy-up claimed nobody had scheduled it. The
+                 # turn writes the name down at admission; what that turn saw is on the turn.
+                 "schedule_name": row["schedule_name"] or ""})
     return said
-
-
-def _the_schedule(agent: str, schedule_id: Optional[int]) -> str:
-    """What the schedule that caused a turn is called, or nothing when no schedule did."""
-    if not schedule_id:
-        return ""
-    for one in schedules_kept.all(agent):
-        if one["id"] == schedule_id:
-            return str(one["name"])
-    return ""
 
 
 def _shown(built: instructions.Prompt, only_layers: bool) -> int:
