@@ -215,6 +215,48 @@ def _journalled(conn: sqlite3.Connection) -> None:
             conn.execute("PRAGMA journal_mode=DELETE")
 
 
+def _pushed_as_hard_as_this_journal_needs(conn: sqlite3.Connection) -> None:
+    """How hard a commit is pushed at the disk, **decided from the journal this file is really in**.
+
+    The one connection setting this module had never chosen, which meant it inherited SQLite's
+    `FULL` — and a default nobody chose is a default nobody can change with confidence, which is the
+    same argument the busy timeout above is set explicitly for.
+
+    It is not one answer, and that is why it is asked here rather than written into `_opened`.
+    **`NORMAL` cannot corrupt a database under WAL** — a power cut loses transactions committed
+    since the last checkpoint and nothing more — and it is the setting that makes WAL worth having,
+    because every commit otherwise waits for the platter. **Under the rollback journal the same
+    setting risks the file itself**, so anywhere WAL did not take keeps `FULL`.
+
+    `_journalled` already had to read the mode back rather than assume it, because a home directory
+    on iCloud Drive or an SMB share refuses WAL outright. This reads the same answer for the same
+    reason: what is safe here is a fact about the filesystem underneath, not about what was asked
+    for.
+    """
+    in_wal = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal"
+    conn.execute(f"PRAGMA synchronous = {'NORMAL' if in_wal else 'FULL'}")
+
+
+def _left_tidy(conn: sqlite3.Connection) -> None:
+    """Let SQLite keep its own statistics fresh, after the work and never during it.
+
+    Without statistics the planner guesses, and it guesses about tables that grow without bound —
+    `turn_records` with a tool call in every row, `conversation_messages` with everything anybody
+    has said. `PRAGMA optimize` is the documented habit for exactly this: it looks at what has
+    changed and does the little that is worth doing, which is usually nothing at all.
+
+    **After the commit, and never inside the transaction.** It may run `ANALYZE`, which writes — so
+    inside the block it would be part of somebody's write, and on the failure path it would run
+    against changes that are about to be rolled back.
+
+    Suppressed rather than raised, and that is the whole of its contract: this is a tidy-up after
+    work that has *already committed*, and a caller told their write failed because the statistics
+    could not be refreshed would be told something untrue about the thing they asked for.
+    """
+    with contextlib.suppress(sqlite3.DatabaseError):
+        conn.execute("PRAGMA optimize")
+
+
 def _understood(conn: sqlite3.Connection, at: Path) -> None:
     """Ask the file whether it is a database at all, and say so in this module's words if not.
 
@@ -275,6 +317,7 @@ def writing(at: Path, making: bool = False) -> Iterator[sqlite3.Connection]:
         if fresh:
             _journalled(conn)
         conn.execute("PRAGMA foreign_keys=ON")
+        _pushed_as_hard_as_this_journal_needs(conn)
         _begun(conn)
         try:
             yield conn
@@ -285,6 +328,7 @@ def writing(at: Path, making: bool = False) -> Iterator[sqlite3.Connection]:
                 conn.execute("ROLLBACK")
             raise
         conn.execute("COMMIT")
+        _left_tidy(conn)
 
 
 def read(at: Path) -> Dict[str, Any]:

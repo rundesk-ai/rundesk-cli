@@ -141,6 +141,54 @@ class WhichJournalTheseRecordsAreKeptIn(OneAgentsRecords):
         self.assertIn(said, ("wal", "delete"))
 
 
+class HowHardACommitIsPushedAtTheDisk(OneAgentsRecords):
+    """`NORMAL` is safe under WAL and is not safe under the rollback journal, so it is not one
+    answer — it is read off the journal this file really ended up in."""
+
+    NORMAL, FULL = 1, 2
+
+    def synchronous_of(self) -> int:
+        with records.writing(self.at) as conn:
+            return int(conn.execute("PRAGMA synchronous").fetchone()[0])
+
+    def test_under_wal_a_commit_does_not_wait_for_the_platter(self):
+        self.assertEqual(self.NORMAL, self.synchronous_of())
+
+    def test_under_the_rollback_journal_it_does(self):
+        # The same setting that cannot corrupt a database under WAL risks the file itself here, so
+        # anywhere WAL did not take keeps FULL. Driven by putting the file back on the rollback
+        # journal, which is what a home directory on iCloud Drive or an SMB share leaves.
+        with contextlib.closing(sqlite3.connect(str(self.at))) as conn:
+            conn.execute("PRAGMA journal_mode=DELETE")
+        self.assertEqual(self.FULL, self.synchronous_of())
+
+    def test_a_reader_is_never_asked_the_question(self):
+        """It governs writing, and a reader that set it would be a reader touching the file."""
+        with records.reading(self.at) as conn:
+            conn.execute("PRAGMA synchronous")
+
+
+class KeepingThePlannersStatisticsFresh(OneAgentsRecords):
+    def test_a_write_that_committed_leaves_the_statistics_looked_at(self):
+        """Without this the planner guesses for ever about tables that grow without bound."""
+        with records.writing(self.at) as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS probe (id INTEGER PRIMARY KEY, v TEXT)")
+            conn.executemany("INSERT INTO probe (v) VALUES (?)", [(str(n),) for n in range(200)])
+        with records.writing(self.at) as conn:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_probe_v ON probe (v)")
+        with records.reading(self.at) as conn:
+            self.assertTrue(
+                conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_stat1'").fetchone(),
+                "nothing ever refreshed the statistics, so the planner is guessing")
+
+    def test_a_write_that_was_rolled_back_leaves_nothing_behind(self):
+        """It runs after the commit, so a failed write never reaches it."""
+        with contextlib.suppress(RuntimeError), records.writing(self.at) as conn:
+            conn.execute("UPDATE config SET owner_name = 'x' WHERE id = 1")
+            raise RuntimeError("stopped part way")
+        self.assertIsNone(records.read(self.at)["owner_name"])
+
+
 class WhatStandsBesideTheDatabase(OneAgentsRecords):
 
     def test_it_names_the_database_and_the_two_files_sqlite_keeps_with_it(self):
