@@ -198,12 +198,109 @@ def busy(agent: str, conversation: int) -> bool:
     return False
 
 
+class Words:
+    """Words for a turn that is already running, and whether it will still take one.
+
+    **A caller with something to say cannot hold the conversation's claim** — the turn running in it
+    does — so it needs somewhere to put a word that the turn will read. This is that place, and it
+    is the whole of what one turn publishes about itself while it runs.
+
+    `open` is the part that matters, and it is not a formality. A turn settles while somebody is
+    still typing at it, and the moment it does, a word handed here would be read by nobody. So this
+    says **no** the instant the turn stops taking words, and whoever was speaking finds out in time
+    to do something about it rather than being told it was delivered.
+    """
+
+    def __init__(self) -> None:
+        self.watching = threading.Condition()
+        self.words: List[str] = []
+        self.open = True
+
+    def say(self, word: str) -> bool:
+        """Put one word in. **False when the turn will not read it** — and the caller must act."""
+        with self.watching:
+            if not self.open:
+                return False
+            self.words.append(word)
+            self.watching.notify_all()
+            return True
+
+    def close(self) -> None:
+        """No more words will be read. Said once the turn is over, and never taken back."""
+        with self.watching:
+            self.open = False
+            self.watching.notify_all()
+
+    def each(self):
+        """Every word, as it arrives, until the turn stops taking them."""
+        at = 0
+        while True:
+            with self.watching:
+                self.watching.wait_for(
+                    lambda so_far=at: so_far < len(self.words) or not self.open)
+                if at >= len(self.words):
+                    return
+                word, at = self.words[at], at + 1
+            yield word
+
+
+#: The turns running right now that will still take a word, by the conversation each is running in.
+#: **Only the ones that can be steered are here** — a turn whose brain reads nothing after its
+#: prompt has nothing to publish, and offering one would let a caller believe a word landed.
+#:
+#: In memory and deliberately: this answers *is there a turn in this process to speak to*, and a
+#: turn in another process is not one, however it was written down. What crosses processes is the
+#: lock, which is the kernel's and is what `busy` asks.
+_speaking_to: Dict[tuple, Words] = {}
+_speaking_to_lock = threading.Lock()
+
+
+def also_say(agent: str, conversation: int, word: str) -> bool:
+    """Put a word into the turn already running in this conversation. **False if none took it.**
+
+    False has three causes and one meaning. There may be no turn running here; there may be one
+    whose brain cannot be steered; or there may have been one a moment ago that has since settled.
+    All three mean the same thing to whoever is holding the word — **nobody is going to read it, so
+    it is still yours** — and a caller that treated any of them as delivery would drop a message
+    somebody sent.
+    """
+    with _speaking_to_lock:
+        speaking = _speaking_to.get((agent, conversation))
+    return bool(speaking and speaking.say(word))
+
+
+@contextlib.contextmanager
+def _reachable(agent: str, conversation: int, words: Optional[Words]):
+    """Publish this turn as one that will take a word, for exactly as long as that is true.
+
+    Closed *before* it is taken out of the registry, and both in a `finally`: a turn that vanished
+    from the registry while still open would leave whoever is mid-`say` believing a word landed,
+    and the ordering is the only thing that makes `also_say`'s answer honest.
+    """
+    if words is None:
+        yield
+        return
+    with _speaking_to_lock:
+        _speaking_to[(agent, conversation)] = words
+    try:
+        yield
+    finally:
+        words.close()
+        with _speaking_to_lock:
+            if _speaking_to.get((agent, conversation)) is words:
+                del _speaking_to[(agent, conversation)]
+
+
 def run(request: Request, watching: Optional[Callable[[Dict[str, Any]], None]] = None,
         saying: Optional[Iterable[str]] = None) -> Outcome:
     """Run one turn and write down everything about it. **The claim is taken here.**
 
     `watching` is handed every record the brain reported, as it arrives. `saying` is words to put
     into a turn already running, and reaches a brain only if that brain said it can be steered.
+
+    A caller that passes no `saying` still gets a steerable turn published to `also_say`, so a
+    message arriving on a channel mid-turn reaches the brain that is working on it. A caller that
+    passes its own — the terminal, which has somebody typing — keeps it and is not published.
     """
     with claiming(request.agent, request.conversation) as held:
         return _held(request, held, watching, saying)
@@ -257,7 +354,13 @@ def _held(request: Request, held: int, watching, saying) -> Outcome:
             raw=raw, model=request.model_name or settled.get("model_name"), resume=resume,
             settings=settings,
             preface=prompt.text, owners=environment.owners_own())
-        said, stream = _the_brain(request, provider_name, told, turn, held, can, watching, saying)
+        # **A turn nobody passed words to is still one a channel can speak into.** The words go
+        # somewhere `also_say` can reach for exactly as long as this turn will read them.
+        reachable = Words() if can["steer"] and saying is None else None
+        with _reachable(agent, request.conversation, reachable):
+            said, stream = _the_brain(request, provider_name, told, turn, held, can, watching,
+                                      saying if saying is not None else
+                                      (reachable.each() if reachable else None))
         settling.update(_became(request, turn, said, stream, can, provider_name,
                                 began_at, _how_big(raw), time.monotonic() - began))
     return settling.outcome

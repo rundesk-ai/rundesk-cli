@@ -32,6 +32,7 @@ The answer goes back through what already exists: cut to the platform's own limi
 import contextlib
 import json
 import threading
+import time
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, Optional
 
@@ -76,6 +77,21 @@ TOOLS_KEPT = 200
 #: build this replaces showed a subagent's full provider location in a room. Clipped, flattened, and
 #: reduced to a last component before it goes anywhere.
 A_HELPER_AT_MOST = 48
+
+
+#: How many times a message that found the conversation busy is offered again.
+#:
+#: **Not a retry of something that failed** — nothing failed. It is what a message does when the
+#: turn it tried to join ended in the moment between being refused the claim and being offered as a
+#: word: the way in has closed and the way round has opened, and asking once more takes it. Three,
+#: because each attempt needs the one before it to have genuinely settled, and a conversation that
+#: is busy three times over is one somebody is typing into faster than their agent can answer.
+TRIES = 3
+
+#: How long to wait before offering a refused message again. Long enough for a turn that was
+#: settling to have settled and let go of the claim, short enough that somebody watching a room does
+#: not see their message sit there.
+BEFORE_ASKING_AGAIN = 0.25
 
 
 class Refused(Exception):
@@ -167,19 +183,38 @@ class OnAChannel:
         fired, because this thread was started without it and every layer below defaulted it away.
         """
         try:
-            self._marked(agent, kind, place, WORKING)
-            watching = _Streaming(self, agent, kind, place)
-            got = turns.run(turns.Request(
-                agent=agent, prompt=body, conversation=landed.conversation,
-                trigger=instructions.A_PERSON_ASKED,
-                source=arriving.FROM_CHANNEL, place=place), watching=watching.heard)
-            self._delivered(agent, kind, place, got, external_id, watching.said_already)
-            self._marked(agent, kind, place, AS_A_STATE.get(got.turn_status, FAILED), external_id)
-        except turns.Busy:
-            # Something is already answering in this conversation. Not a failure and not a second
-            # turn: the person will get the answer to what they asked a moment ago.
-            _note(self._where, f"channel {kind}: {place} is already being answered, so this was "
-                               "recorded and not answered again")
+            for again in range(TRIES):
+                try:
+                    self._marked(agent, kind, place, WORKING)
+                    watching = _Streaming(self, agent, kind, place)
+                    got = turns.run(turns.Request(
+                        agent=agent, prompt=body, conversation=landed.conversation,
+                        trigger=instructions.A_PERSON_ASKED,
+                        source=arriving.FROM_CHANNEL, place=place), watching=watching.heard)
+                    self._delivered(agent, kind, place, got, external_id, watching.said_already)
+                    self._marked(agent, kind, place,
+                                 AS_A_STATE.get(got.turn_status, FAILED), external_id)
+                    return
+                except turns.Busy:
+                    if turns.also_say(agent, landed.conversation, body):
+                        # The agent is working and its brain reads while it works, so this reached
+                        # the turn already going rather than waiting behind it. What it says next
+                        # answers both, which is what somebody adding to their own question means.
+                        _note(self._where, f"channel {kind}: {place} is being answered, so this "
+                                           "was said into the turn already running")
+                        return
+                    # **Nobody took it, and that is not the same as nothing to do.** Either this
+                    # brain reads nothing after its prompt, or the turn settled in the moment
+                    # between the claim being refused and the word being offered. Both leave the
+                    # message unanswered and this thread holding it, so it is asked again — the
+                    # turn that was in the way is over or is ending, and the claim is about to be
+                    # free. Bounded, because a conversation somebody is typing into steadily must
+                    # not keep one thread here for ever.
+                    if again + 1 < TRIES:
+                        time.sleep(BEFORE_ASKING_AGAIN)
+            _note(self._where, f"channel {kind}: {place} stayed busy, so this was recorded and "
+                               "not answered", logs.ERROR)
+            self._marked(agent, kind, place, FAILED, external_id)
         except Exception as why:                       # noqa: BLE001 — see the docstring
             _note(self._where, f"channel {kind}: answering {place} went wrong ({why})", logs.ERROR)
             with contextlib.suppress(Exception):

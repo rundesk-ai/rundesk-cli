@@ -421,18 +421,43 @@ class WhenTheBrainCouldNotAnswer(Answering):
 
 class TwoTurnsInOneConversation(Answering):
 
-    def test_the_second_is_refused_rather_than_queued_and_says_so_in_the_log(self):
-        """The claim is the kernel's, so this competes correctly with a person at a terminal asking
-        the same agent with no coordination between the two."""
+    def test_a_message_arriving_mid_turn_is_said_into_the_turn_already_running(self):
+        """**The requirement, and what a person in a room actually means.** Somebody adding to their
+        own question while their agent works is not asking a second question — they are changing the
+        one being answered. The build this replaces recorded the message and answered nobody, and
+        the person was never told: they simply never got a reply to what they said second.
+        """
+        self.a_stand_in_told(self.agent, steer=True, silent="3")
+        landed = arriving.recorded(self.agent, "discord", "1180", "2207", "the first")
+        watching = hosting.Watching({}, {}, {})
+        answers = answering.OnAChannel(self.where, lambda: watching)
+        answers.answer(self.agent, "discord", "1180", "2207", "the first", "8841", landed)
+        self.assertTrue(self.waited_until(lambda: turns.busy(self.agent, landed.conversation)),
+                        "no turn ever started to steer")
+
+        answers.answer(self.agent, "discord", "1180", "2207", "the second", "8842", landed)
+        self.assertTrue(self.waited_until(
+            lambda: "said into the turn already running" in self.said()),
+            "a message that arrived mid-turn reached nobody")
+        # **One turn, not two.** A second turn would answer the same person twice and cost twice.
+        self.assertTrue(self.waited_until(lambda: len(kept.list_turns(self.agent)) == 1))
+
+    def test_a_claim_no_running_turn_will_take_a_word_from_is_asked_again(self):
+        """A conversation can be busy without there being a turn here to speak into — a person at a
+        terminal holds the same claim, and so does a scheduled turn in a process of its own.
+
+        **Nobody took the word, so the message is still unanswered**, and the build this replaces
+        would have stopped there. It is offered again instead, because the way it was refused is
+        also the way it stops being refused: the turn in front of it ends.
+        """
         self.a_stand_in_told(self.agent, silent=True)
         landed = arriving.recorded(self.agent, "discord", "1180", "2207", "the first")
         watching = hosting.Watching({}, {}, {})
         answers = answering.OnAChannel(self.where, lambda: watching)
         with turns.claiming(self.agent, landed.conversation):
             answers.answer(self.agent, "discord", "1180", "2207", "the second", "8842", landed)
-            self.assertTrue(self.waited_until(
-                lambda: "already being answered" in self.said()),
-                "a second turn was started in a conversation somebody was already answering in")
+            self.assertTrue(self.waited_until(lambda: "stayed busy" in self.said()),
+                            "a message nobody could take was neither answered nor reported")
         self.assertEqual([], kept.list_turns(self.agent))
 
     def said(self):
