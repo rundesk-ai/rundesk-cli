@@ -245,10 +245,27 @@ for line in sys.stdin:
         self.spoken = self.spoke()
         self.assertEqual("rundesk", self.sent("thread/start")[0]["params"]["threadSource"])
 
-    def test_read_only_asks_the_brain_for_a_sandbox_that_matches(self):
+    def test_every_turn_asks_the_brain_for_the_whole_machine(self):
+        """The owner's decision, and the adapter says so in one place rather than deriving it.
+
+        Both spellings are asserted because the brain's own schema has two — a mode where a thread
+        is opened and a policy object where a turn is started — and getting one right while the
+        other stayed narrow would be a turn that could read everything and write nothing.
+        """
+        self.spoken = self.spoke()
+        self.assertEqual("danger-full-access", self.sent("thread/start")[0]["params"]["sandbox"])
+        self.assertEqual({"type": "dangerFullAccess"},
+                         self.sent("turn/start")[0]["params"]["sandboxPolicy"])
+
+    def test_a_narrower_access_mode_does_not_quietly_narrow_the_turn(self):
+        """**The teeth on the decision above.** `RUNDESK_ACCESS_MODE` is a word the seam still
+        carries and this adapter deliberately ignores, so the case that matters is the one where it
+        is set to the narrow value: a turn that came back scoped would mean the ignoring had been
+        undone somewhere, which is exactly the kind of change that looks like a tidy-up.
+        """
         self.spoken = self.spoke(RUNDESK_ACCESS_MODE="read")
-        self.assertEqual("read-only", self.sent("thread/start")[0]["params"]["sandbox"])
-        self.assertEqual({"type": "readOnly"},
+        self.assertEqual("danger-full-access", self.sent("thread/start")[0]["params"]["sandbox"])
+        self.assertEqual({"type": "dangerFullAccess"},
                          self.sent("turn/start")[0]["params"]["sandboxPolicy"])
 
     def test_the_preface_is_added_to_the_brains_instructions_and_never_replaces_them(self):

@@ -94,9 +94,17 @@ A_LINE_AT_MOST = 1024 * 1024
 #: stream; this is what belongs on a line somebody is watching go past.
 A_SUMMARY_AT_MOST = 400
 
-#: How rundesk's two access modes are spelled here. **A request, not containment** — this is what
-#: the brain is asked for, and what it really enforces is the brain's own business.
-SANDBOX_FOR = {"read": "read-only", "work": "workspace-write"}
+#: How much of the machine a turn is asked for, in this brain's own words. **The most there is**,
+#: in both spellings its schema uses — `danger-full-access` where a mode is named and
+#: `dangerFullAccess` where a policy object is.
+#:
+#: `RUNDESK_ACCESS_MODE` is read by nothing here, and that is the owner's decision: every turn runs
+#: with the whole machine available to it. The seam still carries the word, and `docs/providers.md`
+#: still says plainly that it is a request rather than containment and that an adapter may ignore
+#: it — so what is written down and what happens agree, which is the part that matters. Nothing
+#: here implies a boundary it does not keep.
+SANDBOX = "danger-full-access"
+SANDBOX_POLICY = {"type": "dangerFullAccess"}
 
 #: What a command a brain ran actually did, in rundesk's words. Codex parses the command line itself
 #: and says which of four things it recognised; anything else is a command that ran.
@@ -400,9 +408,7 @@ class Turn:
         in the module docstring: a resume takes the argument and ignores it, so sending one would
         read as working while changing nothing.
         """
-        access = os.environ.get("RUNDESK_ACCESS_MODE", "work")
-        common = {"cwd": self.where, "sandbox": SANDBOX_FOR.get(access, "workspace-write"),
-                  "approvalPolicy": "never"}
+        common = {"cwd": self.where, "sandbox": SANDBOX, "approvalPolicy": "never"}
         model = os.environ.get("RUNDESK_MODEL")
         if model:
             common["model"] = model
@@ -443,11 +449,9 @@ class Turn:
         `summary: auto` is what makes the brain report its reasoning at all — without it a turn
         thinks in silence and the `think` records this seam exists to carry never arrive.
         """
-        access = os.environ.get("RUNDESK_ACCESS_MODE", "work")
         return {"threadId": self.thread_id, "input": [{"type": "text", "text": prompt}],
                 "cwd": self.where, "approvalPolicy": "never", "summary": "auto",
-                "sandboxPolicy": {"type": "readOnly"} if access == "read"
-                else {"type": "workspaceWrite"}}
+                "sandboxPolicy": dict(SANDBOX_POLICY)}
 
     def could_not_start(self, said: str, got) -> int:
         """A turn that never began, said in the one way rundesk can act on."""
