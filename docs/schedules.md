@@ -113,6 +113,40 @@ The other side of the same rule is that a gateway going down **does** take its w
 the window the supervisor allows before it kills the gateway outright. Work started in a session of
 its own is outside the supervisor's reach, so if the gateway does not stop it, nothing will.
 
+## What a run says on a surface, and the two messages it is allowed
+
+A schedule that **asks the agent** reports where the agent is told things — the one channel marked
+`notified`, at its `notify_place`. Two messages, and never a third:
+
+| When | What goes out |
+|---|---|
+| the run starts | `💻 Working on '<schedule>' — I will report back when it is done.` |
+| the run ends | what the agent answered, **as a reply to that notice** |
+
+**The notice exists so the report has somewhere to land.** Without it, work that began at six in the
+morning first shows itself as an answer arriving twenty minutes later beside answers to other
+questions, tied to nothing. Rundesk keeps whatever the platform called the notice and quotes it at the
+end, so the two read as one exchange.
+
+**A schedule that starts a program says neither**, and that is the same rule rather than an exception:
+a program has no answer to report, so promising to report back is a promise rundesk would not be
+keeping. One that *fails* is still said out loud, exactly as before.
+
+**Nothing between the two ever reaches the surface.** A scheduled turn runs in a process of its own
+which holds no channel, so its working notes have nothing to be posted through — the whole run is in
+the agent's records and in `<schedule>.out`, and the report is the only thing a person is shown. That
+is a property of where the work runs, not a filter anybody has to maintain.
+
+**A run that could not announce still reports.** A gateway that has just come up fires a schedule due
+in that same minute before its adapters have finished connecting, so there was nobody to tell that the
+run had begun; its answer still goes out, standing on its own rather than under a notice. The same is
+true of an agent with no notified channel — nothing is said at either end, which is what somebody who
+configured no channel asked for.
+
+**A gateway that came up after the one which started the work still reports.** Both facts the report
+needs — that this run owes one, and the notice it goes under — are written beside the firing before
+the work starts, so they outlive the process that announced.
+
 ## What is not built
 
 A schedule asks the agent with `--ask` or starts a program with `--run`, and exactly one of the two —
@@ -126,5 +160,7 @@ testing a schedule must not be how you stop it happening.
 
 What is still not built: a schedule carries `provider_name` and `model_name` columns that nothing
 writes. A schedule runs on the agent's own brain, and a way to override that per schedule is a verb
-nobody has asked for. Channels are the same — a schedule carries where it would report, and nothing
-reads it yet.
+nobody has asked for. The `channel` and `channel_place_id` columns are the same — **where a run
+reports is the agent's notified channel and is not stated per schedule**, so those two are still
+written by nothing. A schedule that reports somewhere of its own is a verb nobody has asked for
+either, and the columns are what it would be built on.

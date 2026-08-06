@@ -326,6 +326,26 @@ class Showing(Scheduling):
         _code, out, _ = self.rundesk("schedules", "show", self.agent, "nightly")
         self.assertIn("not yet", out)
 
+    def test_a_schedule_that_asks_the_agent_shows_what_it_asks(self):
+        """It read `run  not yet` for every schedule of this kind — naming the other column and
+        saying the schedule did nothing. The prompt is the whole of what such a schedule *is*: an
+        owner cannot otherwise confirm what runs at nine in the morning, and an agent asked which
+        schedule somebody meant cannot tell one from another."""
+        code, _out, err = self.rundesk("schedules", "add", self.agent, "client-update",
+                                       "--when", "0 9 * * 1-5",
+                                       "--ask", "Post the weekday client update.")
+        self.assertEqual(OK, code, err)
+        _code, out, _ = self.rundesk("schedules", "show", self.agent, "client-update")
+        self.assertIn("Post the weekday client update.", out)
+        self.assertNotIn("run       not yet", out)
+
+    def test_a_schedule_that_starts_a_program_still_shows_the_program(self):
+        """One of the two, never both — which is what the records hold as a `CHECK`."""
+        self.given()
+        _code, out, _ = self.rundesk("schedules", "show", self.agent, "nightly")
+        self.assertIn(f"{THERE} hello", out)
+        self.assertNotIn("ask ", out)
+
     def test_showing_a_schedule_changes_nothing(self):
         self.given()
         before = self.row()

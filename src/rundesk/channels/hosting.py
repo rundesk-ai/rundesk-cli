@@ -306,6 +306,24 @@ class Running(NamedTuple):
     #: other's deliveries. It sits above `saying` because a field with no default must.
     awaiting: Dict[str, str]
 
+    #: What the platform called each message rundesk posted, by rundesk's own id for that delivery.
+    #: Written by the drain as each acknowledgement arrives, and read by whoever has to quote a
+    #: message rundesk itself sent.
+    #:
+    #: **The one thing rundesk cannot otherwise know.** `awaiting` records the id of the message a
+    #: delivery *answers*, which is a value this side already had; this is the id of the message the
+    #: delivery *became*, which only the platform can say. Without it nothing rundesk posts can ever
+    #: be replied to — a schedule that says it has begun could not put its report under that notice,
+    #: and the two would stand in a room unconnected.
+    #:
+    #: **Written by the drain thread alone**, which is not a detail `awaiting` shares: that one is
+    #: written by both the loop as it delivers and the drain as answers land. One writer is what makes
+    #: the eviction below safe here without further thought. Bounded by the same `_make_room` and to
+    #: the same count, because the condition it guards against is the same one — an adapter that never
+    #: acknowledges a delivery, in a gateway that has been up for a month. Read from the loop with one
+    #: `.get`, which is indivisible.
+    posted: Dict[str, str]
+
     #: Held while one record is written to this adapter, because **two threads write to it**: the
     #: gateway's loop delivers and stops, and the thread draining its stdout marks what has just
     #: arrived. A line half written by one and finished by the other is a line the adapter cannot
@@ -580,7 +598,7 @@ def connected(watching: Watching, kind: str) -> bool:
 def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
          pieces: List[str], sending: Sequence[naming.Sending] = (),
          answering: Optional[str] = None, cost: str = "",
-         landed_within: float = 0.0) -> bool:
+         landed_within: float = 0.0, noting: Optional[List[str]] = None) -> bool:
     """Send something to a place through a running adapter. `False` when there is nothing to send it.
 
     `False` rather than an exception: a notice that could not be delivered because the adapter is
@@ -612,6 +630,11 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
     the words describing a file are what a reader wants above it, and a platform hangs an attachment
     under the message it came with. Files and no words is one record carrying no text, which the
     adapter takes; neither files nor words is nothing to send, and nothing is what is sent.
+
+    `noting` is a list this appends every delivery id it wrote to, in order, for the one caller that
+    has to find out what the platform then called them — see `announced`. A list handed in rather
+    than a second return value, because every other caller wants the answer this already gives:
+    whether the words were written at all.
     """
     one = watching.running.get(kind)
     if one is None or one.talking is None:
@@ -637,9 +660,57 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
             one.awaiting.pop(record["id"], None)
             return False
         written.append(record["id"])
+        if noting is not None:
+            noting.append(record["id"])
     if landed_within > 0:
         _landed(one, written, landed_within)
     return True
+
+
+def announced(agent: str, where: Path, watching: Watching, kind: str, place: str,
+              pieces: List[str], within: float) -> Optional[str]:
+    """Say something, and hand back the platform's own id for the **first** message of it.
+
+    `None` when nobody can say.
+
+    **For something that will be answered later.** An ordinary notice is written and walked away
+    from, because nothing ever refers to it again; this is for the one that does — a schedule saying
+    it has begun, whose report has to arrive underneath that message rather than loose in the room
+    twenty minutes later, anchored to nothing.
+
+    So this waits, where `told` does not: the id crosses the seam on the adapter's acknowledgement,
+    which is a platform round trip away, and a caller that did not wait would always be told `None`.
+
+    **`None` is an ordinary answer and has three causes, all of them survivable**: the adapter is not
+    up, it never acknowledged inside `within`, or it acknowledged without an id — a platform that has
+    no ids, or an adapter that does not pass one. Every one of them means *this cannot be quoted*,
+    and the caller's business is to go on and post its report unanchored rather than to fail. That is
+    why they are one answer rather than three: nothing downstream does anything different about them.
+
+    **Already-split pieces, and the first one is what is handed back.** What comes in is what
+    `delivery.split` produced, sent as the several messages a platform will accept — never rejoined,
+    which would hand the adapter a text past its limit and have the whole delivery refused as rundesk
+    having failed to split. A reader replying to something rundesk said means the message they can
+    see the top of, so the first piece is the one worth quoting, exactly as `told` puts a quote on
+    the first piece and no other.
+
+    **The wait is `told`'s own**, and that is not a shortcut. `_delivered` writes what the platform
+    called a delivery **before** it takes that delivery out of `awaiting`, and `landed_within` is
+    exactly a wait for `awaiting` to empty — so by the moment `told` answers, `posted` holds whatever
+    it is ever going to hold for these ids. A second poll loop here would be the same deadline and
+    the same tenth of a second written twice, and the two would drift the day either was tuned.
+    """
+    one = watching.running.get(kind)
+    if one is None:
+        return None
+    written: List[str] = []
+    if not told(agent, where, watching, kind, place, pieces, noting=written,
+                landed_within=within):
+        return None
+    # One indivisible read of a dict two threads share, which is the only safe operation on it.
+    # Nothing was acknowledged, or it was acknowledged with no id: both are `None`, and the caller
+    # does the same thing about either — see above.
+    return one.posted.get(written[0]) if written else None
 
 
 def _landed(one: Running, written: List[str], within: float) -> bool:
@@ -701,7 +772,7 @@ def _reckoned(agent: str, where: Path, kind: str, watching: Watching) -> None:
         said = _read_record(agent, kind)
         watching.running[kind] = Running(
             kind=kind, pid=programs.a_pid(said.get("pid")) or 0, talking=None, listening=None,
-            since=time.monotonic(), mine=False, awaiting={})
+            since=time.monotonic(), mine=False, awaiting={}, posted={})
         # What happens to it is said by the line after this one and never promised by this one:
         # ending it needs a pid the claim has vouched for, and the case where there is not one is
         # exactly the case somebody has to be told about honestly. See `_may_be_signalled`.
@@ -772,7 +843,8 @@ def _started(agent: str, where: Path, kind: str, watching: Watching,
     one = Running(answering=answering, steering=steering, kind=kind, pid=talking.pid,
                   talking=talking,
                   listening=None, connected=threading.Event(),
-                  since=time.monotonic(), mine=True, saying=threading.Lock(), awaiting={})
+                  since=time.monotonic(), mine=True, saying=threading.Lock(), awaiting={},
+                  posted={})
     listening = threading.Thread(target=_listened, name=f"channel-{kind}",
                                  args=(agent, where, one, row), daemon=True)
     listening.start()
@@ -937,8 +1009,19 @@ def _delivered(where: Path, one: Running, record: Dict[str, Any]) -> None:
 
     A delivery nobody was answering — a notice, a piece after the first — has nothing to say, which
     is the ordinary case and not a failure.
+
+    **What the platform called this message is kept**, and it is kept for every delivery rather than
+    only for an answer. This is the only moment rundesk ever learns it: the id crosses the seam once,
+    here, and a caller that has to quote something rundesk itself posted — a schedule putting its
+    report under the notice that said it had begun — has nowhere else to get it. Written before the
+    line below returns, because the ordinary case returns early.
     """
-    answered = one.awaiting.pop(str(record.get("id") or ""), None)
+    given = str(record.get("id") or "")
+    became = str(record.get("external_id") or "")
+    if given and became:
+        one.posted[given] = became
+        _make_room(one.posted)
+    answered = one.awaiting.pop(given, None)
     if answered is None or not answered:
         # Nothing was waiting on this id, or it answered nobody — a notice, a remark, a piece after
         # the first. Taking it out of `awaiting` above is the whole of what this moment owes: that

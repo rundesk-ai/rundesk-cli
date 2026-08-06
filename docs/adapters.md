@@ -270,7 +270,7 @@ behind an adapter, and a record it does not know is not a channel that has gone 
 | `gone` | — | `why` | one `WARNING` line. `no reason given` when `why` is absent |
 | `note` | `text` | `level` | one line at that level. `level` is `DEBUG`, `INFO`, `WARNING` or `ERROR`, case-insensitive; anything else becomes `INFO` |
 | `failed` | `why` | `id` | one `WARNING` line: *could not deliver — …*. `id` releases what rundesk was holding for that delivery |
-| `delivered` | `id` | `external_id`, `place` | one line saying the answer reached the platform, naming the message it answered. **Never a mark** — see below |
+| `delivered` | `id` | `external_id`, `place` | one line saying the answer reached the platform, naming the message it answered, and **`external_id` is kept** — see below. **Never a mark** |
 | `arrived` | `conversation`, `user`, and `text` **or** `attachments` | `external_id` | the message, if that user may be answered |
 
 **Say `ready` when you have the connection and `gone` when you lose it**, once per change and not
@@ -639,6 +639,13 @@ the message it answered. It does **not** turn into a `done` — it did once, and
 a turn that failed still delivers a sentence saying so and the acknowledgement cannot tell the two
 apart. What a turn came to is decided by the turn. The `id` on a `failed` is read the same way;
 `retry_after` with it is not.
+
+**`external_id` on a `delivered` is worth passing, and this is the only moment rundesk can learn
+it.** It is what the *platform* called the message you just posted, and rundesk keeps it against its
+own `id` for that delivery — so something rundesk sent can later be replied to. A schedule that says
+`💻 Working on…` puts its report under that notice twenty minutes later by quoting exactly this. An
+adapter that acknowledges without one is a whole adapter and nothing fails: the report is then posted
+on its own rather than as a reply, which is the honest outcome for a platform that has no ids.
 
 **`place` and `display` on an `arrived` are read by nothing.** The shipped adapter sends `"place":
 "dm"` or `"room"` and a flattened display name; rundesk keeps neither today.

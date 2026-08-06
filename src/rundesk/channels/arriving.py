@@ -185,6 +185,49 @@ def messages(agent: str, conversation: int, most: int = 50) -> List[Dict[str, An
     return [dict(row) for row in reversed(found)]
 
 
+def last_answer(agent: str, source: str, place: str, after: str = "") -> str:
+    """The last thing the agent itself said in one conversation. `""` where it has said nothing.
+
+    **What a scheduled run came to, read back by the layer that reports it.** A schedule's turn runs
+    in a process of its own, which holds no channel and cannot post anything; the gateway that
+    reaped it holds the channels and never saw a word of the answer. This is where the two meet —
+    the answer is already written down, keyed by the conversation the run had.
+
+    **Only what the agent said**, never what rundesk said on its behalf: the schedule's own prompt is
+    written into the same conversation as `rundesk`, and a report that posted that back would be
+    quoting the question as though it were the answer.
+
+    **`after` is what makes this *this run's* answer, and leaving it out is a real defect rather than
+    a loose end.** Every firing of one schedule shares a single conversation — it is keyed by the
+    schedule's name and nothing else — and a turn writes a message only when it actually produced
+    words. So a schedule that answered on Monday and failed on Tuesday without saying anything has,
+    on Tuesday, exactly one agent message in its conversation: Monday's. Read without a bound, that
+    is posted under Tuesday's notice as though it were Tuesday's report, and the failure is never
+    mentioned at all — an answer nobody earned, reported as fact, which is the failure this product
+    is built around refusing. Bounded by the moment the firing began, only what was said after the
+    run started can be the run's.
+
+    A moment in `core.config.MOMENT`, which is what these records keep and why a plain string
+    comparison is the whole of the test. `""` means unbounded and is for a caller that genuinely
+    wants the latest, whatever run it came from.
+
+    `""` for a run that produced nothing is an ordinary answer and not a failure — a turn that failed
+    on its way to the brain has an outcome worth reporting and no words of its own. The caller says
+    what happened instead of falling silent.
+    """
+    since = " AND m.created_at >= ?" if after else ""
+    values = (source, place, BY_AGENT) + ((after,) if after else ())
+    with records.reading(directory.records(agent)) as conn:
+        found = _rows(conn, agent,
+                      "SELECT m.body FROM conversation_messages m"
+                      " JOIN conversations c ON c.id = m.conversation_id"
+                      " WHERE c.source = ? AND c.source_id = ? AND m.author = ?"
+                      f"{since}"
+                      " ORDER BY m.id DESC LIMIT 1",
+                      values).fetchone()
+    return str(found[0]) if found is not None else ""
+
+
 def standing_in(agent: str, place: str) -> Optional[int]:
     """The conversation a place already has, or `None` where nothing has been said in it yet.
 

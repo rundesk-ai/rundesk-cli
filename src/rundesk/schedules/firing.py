@@ -76,7 +76,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Protocol
 
 from rundesk.agents import directory
-from rundesk.core import paths
+from rundesk.core import config, paths
 from rundesk.schedules import due, kept
 from rundesk.utils import files, locking, logs, programs
 
@@ -136,6 +136,30 @@ STOPPED_WITH = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 NOT_PROVEN = ("no provider process was handed in, so a schedule that asks an agent cannot be "
               "started here — it is recorded and it is not run")
 
+#: What is said where a schedule reports, the moment its run begins. **Rundesk's own bookkeeping and
+#: never the agent's prose**: an owner cannot otherwise tell that work started at six in the morning,
+#: and the first sign of it is a report arriving twenty minutes later beside answers to other
+#: questions, with nothing tying the two together.
+#:
+#: **Only a schedule that asks an agent says this.** A program has no report to anchor, so the
+#: promise to report back is one rundesk would not be keeping — see `_spawned`.
+STARTING = "💻 Working on '{named}' — I will report back when it is done."
+
+#: How long one notice is waited on before its run is left unanchored. It is one platform round trip,
+#: and what is bought by waiting is every later message about this run standing underneath it. A run
+#: that is about to take twenty minutes can afford it; nothing is lost when it expires, because a
+#: report that could not be anchored is still posted — see `Telling.reported`.
+ANNOUNCED_WITHIN = 5.0
+
+#: How long **one pass** may spend waiting on notices, however many schedules came due in the same
+#: minute. The per-notice bound above is not enough on its own: these waits happen one after another
+#: on the thread running the gateway's loop, so without this, five schedules due together would hold
+#: the loop for five times the bound — pushing back the channel adapters serviced later in the same
+#: pass and the beat written at the end of it. `gateways.standing` calls a gateway wedged after
+#: forty-five seconds without one, and a healthy gateway must never be able to talk itself into
+#: looking like that.
+ANNOUNCING_AT_MOST = 10.0
+
 
 class Occupied(Exception):
     """What this schedule started last time is still running, so a second one may not begin.
@@ -164,6 +188,23 @@ class Running(NamedTuple):
 
     `from_byte` is where in `<name>.out` this run's output begins, so the lines copied into the log
     are this run's and not the whole history of the file.
+
+    `announced` is what the platform called the notice that said this run had begun, or `None` where
+    nothing was said — no channel, nothing up, or a schedule that names a program and therefore
+    promises no report. It is what the report at the end quotes, and it is carried here **and** in
+    the record on disk so that a gateway which came up after the one that announced still puts the
+    outcome under the notice a person is looking at.
+
+    `asks` is whether this schedule asks the agent rather than starting a program, and it is what
+    decides whether the end of the run is reported at all. Carried rather than looked up again: the
+    row can be edited, or taken away entirely, while the work is still going — and what a firing
+    promised when it began is a fact about *that* firing.
+
+    `began` is the moment this firing started, in the shape the agent's records keep moments in. It
+    is what tells **this** run's answer from the one before it: every firing of a schedule shares one
+    conversation, and a run that failed without saying anything would otherwise report the last run's
+    answer as its own. Carried and written to disk for the same reason `announced` is — the gateway
+    that reports may not be the one that started the work.
     """
 
     name: str
@@ -172,6 +213,9 @@ class Running(NamedTuple):
     mine: bool
     from_byte: int
     since: float
+    asks: bool = False
+    began: str = ""
+    announced: Optional[str] = None
 
 
 class Watching(NamedTuple):
@@ -216,9 +260,31 @@ class Telling(Protocol):
 
     `None` is an ordinary answer and means nobody is told anything, which is what an agent with no
     notified channel asked for.
+
+    Three verbs, because a schedule says three different kinds of thing and only one of them is a
+    bare remark:
+
+    **`say`** is a line nobody will refer to again — a firing that went wrong on a schedule that
+    never announced itself.
+
+    **`announced`** says work has begun and hands back whatever the platform called that message, or
+    `None` where nothing was said. That handle is the whole point of it: what comes back twenty
+    minutes later has to arrive underneath it.
+
+    **`reported`** is what the run came to, put under that notice. It is given the schedule's name
+    rather than the words, because **what the agent actually answered is not something this layer can
+    read** — the answer is in the agent's records and reaching them is `providers`' business, which
+    `schedules` may not import. So the layer that may see both looks it up.
     """
 
     def say(self, saying: str) -> None:
+        ...
+
+    def announced(self, saying: str, within: float) -> Optional[str]:
+        ...
+
+    def reported(self, schedule: str, answering: Optional[str], became: str,
+                 began: str) -> None:
         ...
 
 
@@ -437,7 +503,13 @@ def _reckoned(agent: str, where: Path, name: str, watching: Watching) -> None:
                          "be read", logs.WARNING)
         watching.running[name] = Running(
             name=name, pid=programs.a_pid(said.get("pid")), fired_for=str(said.get("fired_for") or ""),
-            mine=False, from_byte=_a_size(said.get("from_byte")), since=time.monotonic())
+            mine=False, from_byte=_a_size(said.get("from_byte")), since=time.monotonic(),
+            # Both carried over from the record, so the outcome still lands under the notice a
+            # person is looking at — the gateway that announced this run is gone, and the notice is
+            # not. `asks` too: what a firing promised when it began is a fact about that firing, and
+            # the row it was read from can have been edited or removed since.
+            asks=bool(said.get("asks")), began=str(said.get("began") or ""),
+            announced=str(said.get("announced") or "") or None)
         return
     _note(where, f"schedule {name} was interrupted: the gateway that started it is gone, so "
                      "what it came to cannot be read", logs.WARNING)
@@ -497,15 +569,20 @@ def looked(agent: str, where: Path, watching: Watching,
         if minute is not None:
             already[one.name] = minute
 
+    # **One announcing budget for the whole pass**, decided here because this is the only place
+    # that knows how many schedules are about to fire. See `ANNOUNCING_AT_MOST`.
+    announcing_until = time.monotonic() + ANNOUNCING_AT_MOST
     for one in due.due(wanted, now, already):
         with contextlib.suppress(Exception):                    # see the docstring.
-            watching = _fired(agent, where, watching, one, now, starting, asking)
+            watching = _fired(agent, where, watching, one, now, starting, asking, telling,
+                              announcing_until)
     return watching
 
 
 def _fired(agent: str, where: Path, watching: Watching, one: due.Schedule,
            now: datetime.datetime, starting: Starting,
-           asking: Optional[Starting]) -> Watching:
+           asking: Optional[Starting], telling: Optional[Telling] = None,
+           announcing_until: float = 0.0) -> Watching:
     """Start one schedule that is due, in the order the guarantees require.
 
     1. **Take the lock**, because that is what says the last one has finished. Refused → say so, and
@@ -530,7 +607,8 @@ def _fired(agent: str, where: Path, watching: Watching, one: due.Schedule,
                 _note(where, f"schedule {one.name} cannot be started: {NOT_PROVEN}", logs.ERROR)
                 _became(agent, where, one.name, kept.FAILED)
                 return watching
-            return _spawned(agent, where, watching, one, minute, held, run_by)
+            return _spawned(agent, where, watching, one, minute, held, run_by, telling,
+                            announcing_until)
     except Occupied:
         _note(where, f"schedule {one.name} skipped: what it started last time is still running",
                   logs.WARNING)
@@ -539,8 +617,14 @@ def _fired(agent: str, where: Path, watching: Watching, one: due.Schedule,
 
 
 def _spawned(agent: str, where: Path, watching: Watching, one: due.Schedule, minute: str,
-             held: int, run_by: Starting) -> Watching:
+             held: int, run_by: Starting, telling: Optional[Telling] = None,
+             announcing_until: float = 0.0) -> Watching:
     """Write the firing down, start it, and take hold of it. The lock is already claimed."""
+    # **Asked once and carried**, rather than re-derived at each of the three places below. It is
+    # one rule — *does this schedule ask the agent* — and three readings of it are three things to
+    # keep in step the day the rule grows a case.
+    asks = not one.command
+    began = config.moment_of()
     output = output_of(agent, one.name)
     output.parent.mkdir(parents=True, exist_ok=True)
     with contextlib.suppress(OSError):
@@ -548,7 +632,7 @@ def _spawned(agent: str, where: Path, watching: Watching, one: due.Schedule, min
     from_byte = output.stat().st_size if output.is_file() else 0
 
     said = {"schedule": one.name, "fired_for": minute, "from_byte": from_byte,
-            "started_at": logs.stamp(), "pid": None}
+            "started_at": logs.stamp(), "pid": None, "asks": asks, "began": began}
     # Before the spawn, without the pid, which does not exist yet — see the module docstring on the
     # one `os.replace` of window this leaves, and why the other order is worse.
     files.write_json(record_of(agent, one.name), said)
@@ -573,7 +657,7 @@ def _spawned(agent: str, where: Path, watching: Watching, one: due.Schedule, min
             if pid is not None:
                 watching.running[one.name] = Running(
                     name=one.name, pid=pid, fired_for=minute, mine=True, from_byte=from_byte,
-                    since=time.monotonic())
+                    since=time.monotonic(), asks=asks, began=began)
 
     if trouble is not None:
         # A program that was never on the machine has no exit code, and reporting one would say it
@@ -584,11 +668,47 @@ def _spawned(agent: str, where: Path, watching: Watching, one: due.Schedule, min
         return watching
 
     said["pid"] = pid
+    # **Announced after the spawn and never before it.** A firing refused because the last one is
+    # still going would otherwise have said work had begun that never did — and the notice standing
+    # in the room belongs to the run still in flight, whose own report is still coming.
+    #
+    # **And this leaves a second window of exactly the same shape as the pid's**, named here for the
+    # same reason: a gateway killed between the notice going out and the record being written again
+    # leaves a posted notice whose handle is on no disk, so the next gateway adopts the firing with
+    # nothing to anchor to and reports unanchored. That is the documented, survivable outcome rather
+    # than a lost run — worse than anchored, far better than silent — and it is the cheaper end of
+    # the trade: writing the record first would mean recording a notice that may never be posted.
+    #
+    # **Only a schedule that asks an agent.** A program has no answer to report, so `💻 Working on…`
+    # for one is a promise rundesk does not keep.
+    if telling is not None and asks:
+        with contextlib.suppress(Exception):                    # a channel that is down
+            # is not a reason to lose a firing, and this module may never end a gateway.
+            # What is left of this pass's budget, never more than one notice's share of it. At
+            # zero the notice still goes out and is simply not waited for: writing it costs a line
+            # on a pipe, and an unanchored report is the documented, survivable outcome.
+            handle = telling.announced(
+                STARTING.format(named=one.name),
+                max(0.0, min(ANNOUNCED_WITHIN, announcing_until - time.monotonic())))
+            if handle:
+                said["announced"] = handle
+                watching.running[one.name] = watching.running[one.name]._replace(announced=handle)
     with contextlib.suppress(OSError):
         files.write_json(record_of(agent, one.name), said)
-    _note(where, f"schedule {one.name} started as pid {pid}: "
-                 f"{' '.join(argv_of(one.command or ''))}")
+    _note(where, f"schedule {one.name} started as pid {pid}: {_what_it_starts(one)}")
     return watching
+
+
+def _what_it_starts(one: due.Schedule) -> str:
+    """What this schedule set going, for the log line that says it began.
+
+    **A schedule asks an agent or starts a program**, and the line said `started as pid 41207: ` with
+    nothing after the colon for every one of the first kind — the argv of a `command` that is `None`
+    is no words at all. What a run was for is the whole of why anybody reads that line.
+    """
+    if one.command:
+        return " ".join(argv_of(one.command))
+    return f"asking {one.name}"
 
 
 def _reaped(agent: str, where: Path, watching: Watching,
@@ -629,11 +749,20 @@ def _finished(agent: str, where: Path, one: Running, code: Optional[int],
     a backup window would read that and believe it. Saying *under* is true whatever the beat is, and
     on a run of any real length the difference stops mattering.
 
-    **Said out loud only when it went wrong**, and that restraint is the whole of what makes a
-    notified channel worth having: a message for every successful nightly job is how somebody learns
-    to ignore the channel, and the one they then miss is this one. `stopped` is told as well as
-    `failed`, because *nobody can say what it came to* is exactly the answer somebody would want to
-    hear about rather than find later.
+    **A run that announced itself is always answered, whatever it came to.** It has said `💻 Working
+    on…` where somebody can see it, and leaving that standing with nothing under it is a promise
+    rundesk made and did not keep — which reads exactly like an agent that hung. So a firing that
+    announced reports through `reported`, on all three outcomes, and the notice it quotes is the one
+    it put up itself.
+
+    **A run that announced nothing is said out loud only when it went wrong**, and that restraint is
+    the whole of what makes a notified channel worth having: a message for every successful nightly
+    job is how somebody learns to ignore the channel, and the one they then miss is this one.
+    `stopped` is told as well as `failed`, because *nobody can say what it came to* is exactly the
+    answer somebody would want to hear about rather than find later.
+
+    The two are one rule and not two: **something is said exactly where somebody is already waiting
+    for it, or where something went wrong.** A quiet success nobody was told about stays quiet.
 
     Told **last**, and inside a guard of its own. What became of a firing is written down whatever a
     platform does with it, and a notice that could not go out may not cost the record that says the
@@ -653,9 +782,19 @@ def _finished(agent: str, where: Path, one: Running, code: Optional[int],
     for line in _what_it_wrote(output_of(agent, one.name), one.from_byte):
         _note(where, f"  {line}", level)
     _became(agent, where, one.name, outcome)
-    if telling is not None and outcome != kept.DONE:
-        with contextlib.suppress(Exception):                    # a channel that is
-            # down is not a reason to lose a firing, and this module may never end a gateway.
+    if telling is None:
+        return
+    with contextlib.suppress(Exception):                        # a channel that is
+        # down is not a reason to lose a firing, and this module may never end a gateway.
+        if one.asks:
+            # **Reported whether or not it announced**, and that is not a detail. A gateway that has
+            # just come up fires a schedule due in that same minute before its adapters have
+            # finished connecting, so there was nobody to tell that the run had begun — and a rule
+            # that reported only what it had announced would swallow that run's answer entirely.
+            # Anchored where there is a notice to anchor to, and standing on its own where there is
+            # not, which is worse than anchored and far better than silent.
+            telling.reported(one.name, one.announced, outcome, one.began)
+        elif outcome != kept.DONE:
             telling.say(f"schedule {one.name} {said}")
 
 

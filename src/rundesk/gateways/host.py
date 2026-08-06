@@ -200,7 +200,7 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 from rundesk import __version__
 from rundesk.agents import directory, migration
-from rundesk.channels import delivery, hosting
+from rundesk.channels import arriving, delivery, hosting
 from rundesk.channels import files as arrivals
 from rundesk.core import config, paths
 from rundesk.exits import OK
@@ -793,6 +793,53 @@ class _Notices:
     def say(self, saying: str) -> None:
         _told(self.name, self.where, self.hosted(), saying)
 
+    def announced(self, saying: str, within: float) -> Optional[str]:
+        """Say that a run has begun, and hand back what the platform called that message.
+
+        `None` where nothing was said or nothing can be quoted — no notified channel, no adapter up,
+        or a platform whose adapter passes no ids. Every one of those means the report will stand on
+        its own, which is worse than anchored and far better than silent.
+        """
+        try:
+            going = delivery.notice(self.name, saying)
+            if going is None:
+                return None
+            return hosting.announced(self.name, self.where, self.hosted(), going.kind, going.place,
+                                     going.pieces, within)
+        except Exception:                          # noqa: BLE001 — see `_told`
+            return None
+
+    def reported(self, schedule: str, answering: Optional[str], became: str,
+                 began: str) -> None:
+        """Put what a scheduled run came to underneath the notice that said it had begun.
+
+        **The answer, and the outcome only where there is no answer.** What an owner wants at six in
+        the morning is what the agent found, not that a process exited zero — so a run that produced
+        words reports the words. A run that produced none still owes a reply to its own notice, and
+        what it has to say is what became of it.
+
+        **`began` is what makes it this run's answer**, and it is not an optimisation. Every firing
+        of one schedule shares a single conversation, and a turn writes a message only when it really
+        produced words — so a schedule that answered yesterday and failed today without saying
+        anything has one agent message in its conversation, yesterday's. Read unbounded, that would
+        be posted under today's notice as today's report, and today's failure would never be
+        mentioned: an answer nobody earned, reported as fact. See `arriving.last_answer`.
+
+        **The activity between the two is never posted, and nothing here suppresses it.** A scheduled
+        turn runs in a process of its own that holds no channel, so there is nothing for it to post
+        through: the whole of the run is in the agent's records and its log, and this one message is
+        the only thing that reaches a person. That is a property of where the work runs rather than a
+        filter somebody has to maintain.
+        """
+        try:
+            said = arriving.last_answer(self.name, arriving.FROM_SCHEDULE, schedule, after=began)
+        except Exception:                          # noqa: BLE001 — records that will not read are
+            # not a reason to lose the report: the run happened and its outcome is still worth
+            # saying. See `_told`, which guards the delivery itself the same way.
+            said = ""
+        _told(self.name, self.where, self.hosted(),
+              said.strip() or f"schedule {schedule} {became}", answering=answering)
+
 
 def _told_what_changed(name: str, where: Path, channels_up: hosting.Watching,
                        knew: Optional[Tuple[str, ...]]) -> Optional[Tuple[str, ...]]:
@@ -884,7 +931,7 @@ def _the_told_channel_is_connected(name: str, channels_up: hosting.Watching) -> 
 
 
 def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
-          landed_within: float = 0.0) -> str:
+          landed_within: float = 0.0, answering: Optional[str] = None) -> str:
     """Send one notice out through the channel this agent asked to be told things. Never raises.
 
     Answers which of **three** things happened, because a caller that has to decide whether to write
@@ -907,6 +954,12 @@ def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
 
     `hosting.told` answers `False` when there is no adapter to send through, and that is left alone
     for the same reason — a notice is an account of something, never the thing itself.
+
+    `answering` is the platform's id of a message this one goes underneath, for the caller that has
+    one — a schedule's report, put below the notice that said the run had begun. Passed through
+    rather than left to that caller to call `hosting.told` itself, because what would be duplicated
+    is this function's three-state answer and the `Exception`-and-never-`BaseException` rule above,
+    and a rule worth a paragraph is a rule that must have one home.
     """
     # `try`/`except` rather than `suppress`, only so there is somewhere to answer from. The rule is
     # unchanged and is the one that matters: `Exception` and never `BaseException`, so that `Stopped`
@@ -916,7 +969,7 @@ def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
         if going is None:
             return TELLS_NOBODY
         if hosting.told(name, where, channels_up, going.kind, going.place, going.pieces,
-                        landed_within=landed_within):
+                        landed_within=landed_within, answering=answering):
             return TOLD
     except Exception:                              # noqa: BLE001 — see the docstring
         return NOT_YET

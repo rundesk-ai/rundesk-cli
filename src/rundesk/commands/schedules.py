@@ -365,7 +365,8 @@ def _described(agent: str, name: str) -> int:
 
     now = _now()
     print(f"        when      {as_written(row.get('cron') or row.get('run_at'))}")
-    print(f"        run       {as_written(row.get('command'))}")
+    for line in _what_it_does(row):
+        print(line)
     print(f"        until     {as_written(row.get('expire_at'))}")
     print(f"        enabled   {as_written(bool(row.get('enabled')))}")
     try:
@@ -377,6 +378,23 @@ def _described(agent: str, name: str) -> int:
     print(f"        logs      {directory.logs(agent)}")
     print(f"        output    {firing.output_of(agent, name)}")
     return OK
+
+
+def _what_it_does(row: Dict[str, Any]) -> List[str]:
+    """The one line saying what this schedule sets going — a program, or a question.
+
+    **A schedule does exactly one of the two**, which the records hold as a `CHECK`, so exactly one
+    line is shown. Every schedule that asks an agent read `run  not yet` before this: the prompt is
+    the whole of what such a schedule *is*, and the readout named the other column and said the
+    schedule did nothing. An owner cannot confirm what runs at nine in the morning, and an agent
+    asked which schedule somebody meant cannot tell one from another.
+
+    Named `ask` rather than `run`, because that is the flag it is written with and changed with.
+    """
+    asked = (row.get("prompt") or "").strip()
+    if asked:
+        return [f"        ask       {asked}"]
+    return [f"        run       {as_written(row.get('command'))}"]
 
 
 def _asks_the_agent(agent: str, name: str) -> bool:

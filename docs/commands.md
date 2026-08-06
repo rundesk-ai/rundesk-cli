@@ -19,8 +19,8 @@ rundesk gateways logs <agent> [-n <lines>]  # what one gateway has been saying
 rundesk gateways run <agent>              # be the gateway, in this terminal
 rundesk schedules                         # everything every agent starts because the time came
 rundesk schedules list <agent>            # one agent's
-rundesk schedules add <agent> <schedule> --run '<program>' --when '<cron>' | --at <moment>
-rundesk schedules update <agent> <schedule> [--when|--at|--until|--run|--enable|--disable]
+rundesk schedules add <agent> <schedule> --run '<program>' | --ask '<prompt>'  --when '<cron>' | --at <moment>
+rundesk schedules update <agent> <schedule> [--when|--at|--until|--run|--ask|--enable|--disable]
 rundesk schedules show <agent> <schedule> # everything one was given
 rundesk schedules run <agent> <schedule>  # run one now, in this terminal
 rundesk schedules remove <agent> <schedule>       # take one away
@@ -628,6 +628,26 @@ schedules: FAILED — /usr/local/bin/backup.sh is not a program on this machine 
 `--until <moment>` is when it is finished: after it, the schedule never runs again, however often its
 time comes round. `--disabled` keeps it and does not run it.
 
+**`--ask '<prompt>'` instead of `--run`, never as well as it.** A schedule either starts a program or
+asks the agent, and the records hold that as a `CHECK`:
+
+```console
+$ rundesk schedules add cole weekday-client-update --when '0 9 * * 1-5' --ask 'Post the weekday client update.'
+schedule weekday-client-update added for cole
+        when      0 9 * * 1-5
+        ask       Post the weekday client update.
+        until     not yet
+        enabled   yes
+        next      2026-08-07 09:00
+        last      never ran
+```
+
+A schedule that asks the agent gets **its own conversation**, keyed by its name, so a run at three in
+the morning never lands in the exchange somebody types into. It reports where the agent is told
+things — one message when it starts and its answer when it ends, and nothing in between.
+[`schedules.md`](schedules.md#what-a-run-says-on-a-surface-and-the-two-messages-it-is-allowed) is what
+that looks like and what happens when there is nowhere to say it.
+
 ### schedules update
 
 Changes one in place, keeping every record of what it has already done. **Only what is named moves**,
@@ -931,14 +951,22 @@ exactly that.
 ```console
 $ rundesk messages ava --search invoice
 2 ava said or was told holding 'invoice'
-WHEN                  WHO   WHERE    IN  SAID
-2026-08-06T13:11:29Z  user  slack    2   [invoice] again, different room
-2026-08-06T13:11:29Z  user  discord  1   the [invoice] bug is in the parser
+WHEN                  WHO   WHERE            IN  SAID
+2026-08-06T13:11:29Z  user  slack D072X      2   [invoice] again, different room
+2026-08-06T13:11:29Z  user  discord dm-4471  1   the [invoice] bug is in the parser
 ```
 
 One bounded line each, because every line the agent reads costs tokens and a listing that answered
 with fifty whole messages would spend a turn's budget on finding out what the turn was about.
 `--full` prints bodies. `IN` is the conversation, which is what `--conversation` takes.
+
+**`WHERE` says what carried it *and* which exchange on that thing**, and the second half is not
+decoration. A private message and a public room are both `discord`, and two schedules are both
+`schedule` — so an agent reading its own history back could not tell what it had been told in
+confidence from what it had said in front of a room, and one asked *how did the client update go*
+got a listing in which nothing said which schedule any line came from. The second word is the
+platform's own name for the place, or the schedule's own name, and it is what
+`rundesk schedules show` is typed with.
 
 Four ways to narrow and they compose: `--search` for words, `--channel` for where it was said,
 `--source` for what kind of thing started it, `--conversation` for one exchange, and `--since` for a

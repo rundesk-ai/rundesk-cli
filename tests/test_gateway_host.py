@@ -36,7 +36,7 @@ from rundesk.agents import directory, records
 from rundesk.channels import arriving, hosting
 from rundesk.channels import files as arrivals
 from rundesk.channels import kept as channels
-from rundesk.core import paths
+from rundesk.core import config, paths
 from rundesk.exits import OK
 from rundesk.gateways import host, job, standing
 from rundesk.providers import kept as turns_kept
@@ -1266,6 +1266,224 @@ class TheProcessNeverTalksToItsSupervisor(unittest.TestCase):
     def test_it_never_reaches_for_launchctl_either(self):
         said = (support.CHECKOUT / "src" / "rundesk" / "gateways" / "host.py").read_text()
         self.assertNotIn("launchctl", said)
+
+
+#: One that answers a delivery the way a real platform's adapter does — with what the platform then
+#: called the message — and writes down whether rundesk asked it to be posted as a reply. Both are
+#: needed here: the acknowledgement is the only moment rundesk can learn the id, and the `reply_to`
+#: is the whole of what makes a report arrive underneath the notice rather than loose in a room.
+AN_ADAPTER_THAT_NAMES_WHAT_IT_POSTED = """#!/usr/bin/env python3
+import json, os, signal, sys
+if "--capabilities" in sys.argv:
+    print(json.dumps({"stream": True, "max_text": 2000})); raise SystemExit(0)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+settings = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
+print(json.dumps({"say": "ready", "as": "a-bot"}), flush=True)
+posted = 0
+for line in sys.stdin:
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    if record.get("do") == "stop":
+        break
+    if record.get("do") == "deliver":
+        posted += 1
+        named = "msg-%d" % posted
+        with open(settings["heard"], "a") as writing:
+            writing.write(json.dumps({"place": record.get("place", ""),
+                                      "text": record.get("text", ""),
+                                      "reply_to": record.get("reply_to"),
+                                      "external_id": named}) + "\\n")
+        print(json.dumps({"say": "delivered", "id": record.get("id"),
+                          "external_id": named}), flush=True)
+"""
+
+
+class WhatAScheduledRunSaysOnASurface(TheChannelsItHosts):
+    """R-SCH-46. The clock's work, reaching the place its owner already looks.
+
+    Work that ran at three in the morning is no use in an account nobody opens until they think to.
+    So a run that somebody will be shown the answer to says when it begins, and its report arrives
+    underneath that notice — one message at the start, one at the end, and nothing in between.
+    """
+
+    def a_stand_in_brain(self) -> str:
+        """A real provider adapter on this install, so a scheduled turn genuinely answers."""
+        where = paths.code() / "providers"
+        where.mkdir(parents=True, exist_ok=True)
+        at = where / "standin"
+        at.write_text(Path(support.A_STAND_IN).read_text(encoding="utf-8"), encoding="utf-8")
+        at.chmod(0o755)
+        records.stated(directory.records(self.name), {"provider_name": "standin"})
+        return "standin"
+
+    def what_was_posted(self) -> List[dict]:
+        """Every delivery the adapter really took, as objects, oldest first."""
+        if not self.heard.exists():
+            return []
+        return [json.loads(one) for one in self.heard.read_text(encoding="utf-8").splitlines()
+                if one.strip()]
+
+    def of_a_schedule(self) -> List[dict]:
+        """Only what was posted about the schedule, so the gateway's own hello is not counted."""
+        return [one for one in self.what_was_posted()
+                if host.CAME_UP not in one["text"] and host.WENT_DOWN not in one["text"]]
+
+    def a_gateway_running_one_schedule(self, prompt: str = "Post the weekday client update."):
+        """A gateway whose channel is **already connected** before its schedule comes due.
+
+        The order is the case's whole setup and not a convenience. A schedule is read off the
+        records on every beat, so adding the row after the adapter has said `ready` is what puts the
+        run in the ordinary condition — a gateway that has been up for a while. Added before, the
+        first beat fires it while the adapter is still importing its platform's library, and what
+        this class is about would be tested against a gateway that had nobody to talk to.
+        """
+        self.an_adapter(body=AN_ADAPTER_THAT_NAMES_WHAT_IT_POSTED)
+        self.a_channel()
+        self.a_stand_in_brain()
+        child = self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(
+            lambda: "channel discord: connected" in self.its_log(), self.PATIENCE),
+            f"the adapter never connected. It said: {self.its_log()}")
+        kept.added(self.name, "weekday-client-update", {"cron": "* * * * *", "prompt": prompt})
+        return child
+
+    def test_it_says_it_has_begun_the_moment_the_run_starts(self):
+        self.a_gateway_running_one_schedule()
+        self.assertTrue(support.waited_until(
+            lambda: any("Working on 'weekday-client-update'" in one["text"]
+                        for one in self.of_a_schedule()), self.PATIENCE),
+            f"nobody was told the run had begun. It heard: {self.what_was_posted()}. "
+            f"It said: {self.its_log()}")
+
+    def test_the_words_are_the_ones_rundesk_promises(self):
+        self.a_gateway_running_one_schedule()
+        self.assertTrue(support.waited_until(lambda: len(self.of_a_schedule()) >= 1,
+                                             self.PATIENCE), self.its_log())
+        self.assertEqual("💻 Working on 'weekday-client-update' — I will report back when it "
+                         "is done.", self.of_a_schedule()[0]["text"])
+
+    def test_the_answer_comes_back_as_a_reply_to_that_notice(self):
+        """The whole point of announcing through a seam that answers: a report arriving twenty
+        minutes later beside answers to other questions, anchored to nothing, is worse than none."""
+        self.a_gateway_running_one_schedule()
+        self.assertTrue(support.waited_until(lambda: len(self.of_a_schedule()) >= 2,
+                                             self.PATIENCE),
+            f"the run never reported. It heard: {self.what_was_posted()}. "
+            f"It said: {self.its_log()}")
+        began, reported = self.of_a_schedule()[0], self.of_a_schedule()[1]
+        self.assertEqual(began["external_id"], reported["reply_to"],
+                         "the report did not quote the notice that said the run had begun")
+
+    def test_what_is_reported_is_what_the_agent_answered(self):
+        """Not that a process exited zero. What an owner wants at six in the morning is what the
+        agent found."""
+        self.a_gateway_running_one_schedule()
+        self.assertTrue(support.waited_until(lambda: len(self.of_a_schedule()) >= 2,
+                                             self.PATIENCE), self.its_log())
+        said = self.of_a_schedule()[1]["text"]
+        self.assertIn("Post the weekday client update.", said,
+                      f"the report was not the agent's own answer: {said!r}")
+
+    def test_a_run_posts_only_a_notice_and_a_report_and_never_its_activity(self):
+        """A scheduled turn runs in a process of its own that holds no channel, so there is nothing
+        for its working notes to be posted through. The property is where the work runs rather than
+        a filter somebody has to maintain — and this is what proves it stays that way.
+
+        **Asserted as a shape rather than as a count.** This schedule is due every minute, so a run
+        can begin while the case is still looking; counting messages would then go red for a gateway
+        behaving perfectly. What must hold however many times it fires is that every single thing
+        reaching the surface is either a notice or an answer to one — never a line about a tool that
+        was run, a file that was read, or a thought.
+        """
+        self.a_gateway_running_one_schedule()
+        self.assertTrue(support.waited_until(lambda: len(self.of_a_schedule()) >= 2,
+                                             self.PATIENCE), self.its_log())
+        self.assertTrue(support.waited_until(
+            lambda: "schedule weekday-client-update completed" in self.its_log(), self.PATIENCE),
+            f"the run never finished. It said: {self.its_log()}")
+        self.several_beats()
+
+        notices = {one["external_id"] for one in self.of_a_schedule()
+                   if one["text"].startswith("💻 Working on")}
+        self.assertTrue(notices, "nothing ever said a run had begun")
+        for one in self.of_a_schedule():
+            with self.subTest(said=one["text"][:40]):
+                self.assertTrue(one["external_id"] in notices or one["reply_to"] in notices,
+                                f"something that was neither a notice nor an answer to one "
+                                f"reached the surface: {one['text']!r}")
+
+    def test_it_all_lands_in_the_place_the_agent_is_told_things(self):
+        self.a_gateway_running_one_schedule()
+        self.assertTrue(support.waited_until(lambda: len(self.of_a_schedule()) >= 2,
+                                             self.PATIENCE), self.its_log())
+        self.assertEqual({"1180"}, {one["place"] for one in self.of_a_schedule()})
+
+    def test_a_run_that_failed_never_reports_the_last_run_s_answer_as_its_own(self):
+        """**The real `_Notices`, against a real database.** A schedule that answered on Monday and
+        failed on Tuesday without saying anything has one agent message in its conversation —
+        Monday's, because every firing shares the conversation and a turn writes only when it really
+        produced words. Reported unbounded, Monday's report goes out under Tuesday's notice and
+        Tuesday's failure is never mentioned: an answer nobody earned, reported as fact."""
+        self.an_adapter(body=AN_ADAPTER_THAT_NAMES_WHAT_IT_POSTED)
+        self.a_channel()
+        monday = datetime.datetime(2026, 8, 3, 9, 0, tzinfo=datetime.timezone.utc)
+        arriving.said_by_agent(self.name, arriving.FROM_SCHEDULE, "nightly",
+                               "Monday's report: all clear.", when=monday)
+        logs_at = standing.logs_at(self.at)
+        watching = hosting.looked(self.name, logs_at, hosting.Watching({}, {}, {}))
+        self.addCleanup(hosting.stopping, self.name, logs_at, watching, 4.0)
+        self.assertTrue(support.waited_until(
+            lambda: hosting.connected(watching, "discord"), self.PATIENCE))
+
+        notices = host._Notices(self.name, logs_at, lambda: watching)
+        notices.reported("nightly", "msg-1", "failed",
+                         config.moment_of(datetime.datetime(2026, 8, 4, 9, 0,
+                                                            tzinfo=datetime.timezone.utc)))
+
+        self.assertTrue(support.waited_until(lambda: len(self.what_was_posted()) >= 1,
+                                             self.PATIENCE), "nothing was reported at all")
+        said = self.what_was_posted()[-1]["text"]
+        self.assertNotIn("Monday's report", said,
+                         "a failed run reported an earlier run's answer as its own")
+        self.assertIn("failed", said)
+
+    def test_a_run_that_did_answer_reports_that_answer(self):
+        """The bound may not be so tight that a run's own answer falls outside it — the case above
+        would pass just as well against a `reported` that never reads the records at all."""
+        self.an_adapter(body=AN_ADAPTER_THAT_NAMES_WHAT_IT_POSTED)
+        self.a_channel()
+        began = datetime.datetime(2026, 8, 4, 9, 0, tzinfo=datetime.timezone.utc)
+        arriving.said_by_agent(self.name, arriving.FROM_SCHEDULE, "nightly", "Tuesday's report.",
+                               when=datetime.datetime(2026, 8, 4, 9, 5,
+                                                      tzinfo=datetime.timezone.utc))
+        logs_at = standing.logs_at(self.at)
+        watching = hosting.looked(self.name, logs_at, hosting.Watching({}, {}, {}))
+        self.addCleanup(hosting.stopping, self.name, logs_at, watching, 4.0)
+        self.assertTrue(support.waited_until(
+            lambda: hosting.connected(watching, "discord"), self.PATIENCE))
+
+        host._Notices(self.name, logs_at, lambda: watching).reported(
+            "nightly", "msg-1", "done", config.moment_of(began))
+
+        self.assertTrue(support.waited_until(lambda: len(self.what_was_posted()) >= 1,
+                                             self.PATIENCE), "nothing was reported at all")
+        self.assertIn("Tuesday's report.", self.what_was_posted()[-1]["text"])
+
+    def test_a_schedule_that_starts_a_program_says_neither(self):
+        """It has no answer to report, so promising to report back is a promise rundesk does not
+        keep — and a successful program stays as quiet as it always did."""
+        self.an_adapter(body=AN_ADAPTER_THAT_NAMES_WHAT_IT_POSTED)
+        self.a_channel()
+        kept.added(self.name, "tick", {"cron": "* * * * *", "command": "/bin/echo it worked"})
+        self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(
+            lambda: "schedule tick completed" in self.its_log(), self.PATIENCE),
+            f"the schedule never ran, so its silence proves nothing. It said: {self.its_log()}")
+        self.several_beats()
+        self.assertEqual([], self.of_a_schedule(),
+                         f"a program schedule reached the surface: {self.of_a_schedule()}")
 
 
 if __name__ == "__main__":

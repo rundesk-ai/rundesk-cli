@@ -179,5 +179,37 @@ class WhatATurnSaid(Messages):
         self.assertIn("agent", out)
 
 
+class WhichExchangeALineCameFrom(Messages):
+    """Not only what carried it. A private message and a public room both read `discord`, and two
+    schedules both read `schedule` — so an agent reading its own history back could not tell what it
+    had been told in confidence from what it had said in front of a room, and one asked *how did the
+    client update go* got a listing in which nothing said which schedule any line came from.
+    """
+
+    def test_a_private_message_and_a_public_room_are_told_apart(self):
+        self.on_a_channel("the totals are off by a cent", place="dm-777")
+        self.on_a_channel("can you look at the deploy script?", place="thread-1180")
+        _code, out, _err = self.rundesk("messages", self.agent)
+        self.assertIn("dm-777", out)
+        self.assertIn("thread-1180", out)
+
+    def test_one_schedule_is_told_from_another(self):
+        self.for_a_schedule("post the weekday client update", schedule="weekday-client-update")
+        self.for_a_schedule("run the nightly backup", schedule="nightly-backup")
+        _code, out, _err = self.rundesk("messages", self.agent, "--source", "schedule")
+        self.assertIn("weekday-client-update", out)
+        self.assertIn("nightly-backup", out)
+
+    def test_what_carried_it_is_still_said_beside_which_exchange(self):
+        self.on_a_channel("hello", place="dm-777", channel="discord")
+        _code, out, _err = self.rundesk("messages", self.agent)
+        self.assertIn("discord dm-777", out)
+
+    def test_a_whole_message_says_where_it_was_said_too(self):
+        self.on_a_channel("hello", place="dm-777", channel="discord")
+        _code, out, _err = self.rundesk("messages", self.agent, "--full")
+        self.assertIn("discord dm-777", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,7 @@ import fcntl
 import os
 import shutil
 import signal
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -710,6 +711,232 @@ class WritingALineAboutTheWorkIsNotTheWork(Firing):
             after = self.look()
         self.assertEqual(["tick"], sorted(after.running),
                          "a schedule was not started because its own log could not be written")
+
+
+class ATelling:
+    """A stand-in of `firing.Telling`'s shape, which writes down what it was asked to say.
+
+    The whole seam, filled in by a case rather than by a gateway: `firing` may not import `channels`,
+    so what these cases drive is the same shape `gateways.host._Notices` really is — and none of them
+    needs a platform, an adapter or a channel record to do it.
+    """
+
+    def __init__(self, handle="9002"):
+        self.handle = handle
+        self.remarks = []
+        self.announced_saying = []
+        self.waited = []
+        self.reports = []
+
+    def say(self, saying):
+        self.remarks.append(saying)
+
+    def announced(self, saying, within):
+        self.announced_saying.append(saying)
+        self.waited.append(within)
+        return self.handle
+
+    def reported(self, schedule, answering, became, began):
+        self.reports.append((schedule, answering, became))
+
+
+class SayingAScheduleHasBegun(Firing):
+    """R-SCH-46. A run somebody will be shown the answer to says so when it starts.
+
+    An owner cannot otherwise tell that work began at six in the morning: the first sign of it is a
+    report arriving twenty minutes later beside answers to other questions, tied to nothing.
+    """
+
+    def an_asking_schedule(self, name="review", **also):
+        kept.added(self.agent, name, dict({"cron": "* * * * *", "prompt": "review the queue"},
+                                          **also))
+        return name
+
+    def a_runner(self, argv=(SAYS_SOMETHING, "ok")):
+        class ATurn:
+            def start(self, one, agent, holding):
+                return programs.start(list(argv), log=firing.output_of(agent, one.name),
+                                      holding=(holding,))
+        return ATurn()
+
+    def test_a_schedule_that_asks_the_agent_says_it_has_begun(self):
+        self.an_asking_schedule()
+        telling = ATelling()
+        self.look(asking=self.a_runner(), telling=telling)
+        self.assertEqual(["💻 Working on 'review' — I will report back when it is done."],
+                         telling.announced_saying)
+
+    def test_a_schedule_that_starts_a_program_says_nothing(self):
+        """A program has no report to anchor, so promising to report back is a promise rundesk does
+        not keep."""
+        self.given("tick")
+        telling = ATelling()
+        self.look(telling=telling)
+        self.assertEqual([], telling.announced_saying)
+
+    def test_what_the_platform_called_the_notice_is_kept_on_the_firing(self):
+        """It is the whole reason for announcing through a seam that answers rather than one that
+        returns nothing: the report twenty minutes later has to quote this."""
+        self.an_asking_schedule()
+        after = self.look(asking=self.a_runner(), telling=ATelling(handle="8841"))
+        self.assertEqual("8841", after.running["review"].announced)
+
+    def test_it_is_written_into_the_record_so_a_later_gateway_still_anchors_the_report(self):
+        """The gateway that announced can be gone by the time the work ends. The notice is not."""
+        self.an_asking_schedule()
+        self.look(asking=self.a_runner(NEVER_ENDS.split()), telling=ATelling(handle="8841"))
+        said = records_of_the_firing(self, "review")
+        self.assertEqual("8841", said.get("announced"))
+
+    def test_a_gateway_that_came_up_after_the_one_that_started_it_still_reports(self):
+        """Everything the report needs is read back off the record: that this run owes one at all,
+        and the notice it goes under. The gateway that announced is gone; the notice is not."""
+        self.an_asking_schedule()
+        self.look(asking=self.a_runner(NEVER_ENDS.split()), telling=ATelling(handle="8841"))
+        adopted = firing.settled(self.agent, self.where)
+        self.assertTrue(adopted.running["review"].asks,
+                        "an adopted firing forgot that it owes somebody a report")
+        self.assertEqual("8841", adopted.running["review"].announced)
+
+    def test_a_firing_refused_because_the_last_one_is_still_going_says_nothing(self):
+        """It would be saying work had begun that never did — and the notice standing in the room
+        belongs to the run still in flight, whose own report is still coming."""
+        self.an_asking_schedule()
+        at = datetime.datetime(2026, 8, 5, 9, 0)
+        self.look(at=at, asking=self.a_runner(NEVER_ENDS.split()), telling=ATelling())
+        telling = ATelling()
+        self.look(at=datetime.datetime(2026, 8, 5, 9, 1), asking=self.a_runner(),
+                  telling=telling, watching=firing.Watching({}, {}))
+        self.assertEqual([], telling.announced_saying)
+
+    def test_the_waiting_is_bounded_across_every_schedule_due_in_one_minute(self):
+        """These waits happen one after another on the thread running the gateway's loop. Bounded
+        only per notice, several schedules due together would hold the loop for that many times the
+        bound — pushing back the adapters serviced later in the same pass and the beat written at the
+        end of it, and `gateways.standing` calls a gateway wedged after forty-five seconds without
+        one.
+
+        **The stand-in really waits**, because the guarantee is about time this pass spends and not
+        about the numbers it hands out. One that answered instantly would measure nothing: the budget
+        is spent by waiting, so a fake that never waits never spends it.
+        """
+        class WaitsLikeAPlatform(ATelling):
+            def announced(self, saying, within):
+                self.waited.append(within)
+                time.sleep(within)               # what a platform that never acknowledges costs
+                return None
+
+        for nth in range(6):
+            self.an_asking_schedule(f"review-{nth}")
+        telling = WaitsLikeAPlatform()
+        began = time.monotonic()
+        self.look(asking=self.a_runner(), telling=telling)
+        spent = time.monotonic() - began
+
+        self.assertEqual(6, len(telling.waited), "not every schedule announced")
+        self.assertLess(spent, firing.ANNOUNCING_AT_MOST + firing.ANNOUNCED_WITHIN,
+                        f"one pass spent {spent:.1f}s waiting on notices, and six schedules due "
+                        f"together must not be able to hold the loop that long")
+        self.assertTrue(all(one <= firing.ANNOUNCED_WITHIN for one in telling.waited))
+        self.assertEqual(0.0, telling.waited[-1],
+                         "the last of six was still offered time after the budget was gone")
+
+    def test_a_notice_still_goes_out_once_the_pass_has_no_waiting_left(self):
+        """The budget is a bound on *waiting*, never on saying. Writing a notice costs a line on a
+        pipe, and a report that could not be anchored is still posted."""
+        for nth in range(6):
+            self.an_asking_schedule(f"review-{nth}")
+        telling = ATelling()
+        self.look(asking=self.a_runner(), telling=telling)
+        self.assertEqual(6, len(telling.announced_saying))
+
+    def test_a_channel_that_will_not_take_the_notice_does_not_cost_the_firing(self):
+        """Nothing a schedule says out loud may end a gateway or lose a run."""
+        self.an_asking_schedule()
+
+        class Refuses(ATelling):
+            def announced(self, saying, within):
+                raise OSError("the platform is down")
+
+        after = self.look(asking=self.a_runner(), telling=Refuses())
+        self.assertEqual(["review"], sorted(after.running))
+
+    def test_the_line_in_the_log_says_what_an_asking_schedule_started(self):
+        """It read `started as pid 41207: ` with nothing after the colon, for every schedule of this
+        kind — the argv of a command that is `None` is no words at all."""
+        self.an_asking_schedule()
+        self.look(asking=self.a_runner(), telling=ATelling())
+        self.assertIn("started as pid", self.said())
+        self.assertNotRegex(self.said(), r"started as pid \d+: *\n")
+
+
+class ReportingWhatAScheduleCameTo(Firing):
+    """R-SCH-46. A run that said it had begun is answered, whatever it came to.
+
+    Leaving `💻 Working on…` standing with nothing under it is a promise rundesk made and did not
+    keep, and it reads exactly like an agent that hung.
+    """
+
+    def a_finished_firing(self, outcome_code, announced="9002", name="review", asks=True):
+        """One firing, already over, reckoned with as `_reaped` would."""
+        kept.added(self.agent, name, {"cron": "* * * * *", "prompt": "review the queue"}
+                   if asks else {"cron": "* * * * *", "command": "/bin/echo hello"})
+        one = firing.Running(name=name, pid=None, fired_for="2026-08-05T09:00", mine=True,
+                             from_byte=0, since=0.0, asks=asks, announced=announced)
+        telling = ATelling()
+        firing._finished(self.agent, self.where, one, outcome_code, telling)
+        return telling
+
+    def test_a_run_that_announced_reports_when_it_went_well(self):
+        telling = self.a_finished_firing(0)
+        self.assertEqual([("review", "9002", "done")], telling.reports)
+
+    def test_a_run_that_announced_reports_when_it_failed(self):
+        """It owes a reply to its own notice, and a failure is the one somebody most needs."""
+        telling = self.a_finished_firing(3)
+        self.assertEqual([("review", "9002", "failed")], telling.reports)
+
+    def test_a_run_that_announced_reports_when_nobody_can_say_what_it_came_to(self):
+        telling = self.a_finished_firing(None)
+        self.assertEqual([("review", "9002", "stopped")], telling.reports)
+
+    def test_a_run_that_could_not_announce_still_reports_its_answer(self):
+        """A gateway that has just come up fires a schedule due in that same minute before its
+        adapters have finished connecting, so there was nobody to tell that the run had begun. A
+        rule that reported only what it had announced would swallow that run's answer entirely."""
+        telling = self.a_finished_firing(0, announced=None)
+        self.assertEqual([("review", None, "done")], telling.reports)
+
+    def test_a_program_that_went_well_stays_quiet(self):
+        """A message for every successful nightly job is how somebody learns to ignore the channel,
+        and the one they then miss is the one that mattered."""
+        telling = self.a_finished_firing(0, announced=None, name="tick", asks=False)
+        self.assertEqual([], telling.reports)
+        self.assertEqual([], telling.remarks)
+
+    def test_a_program_that_failed_is_still_said_out_loud(self):
+        telling = self.a_finished_firing(3, announced=None, name="tick", asks=False)
+        self.assertEqual([], telling.reports)
+        self.assertEqual(1, len(telling.remarks))
+        self.assertIn("failed with exit 3", telling.remarks[0])
+
+    def test_a_report_that_will_not_go_out_does_not_cost_the_record_of_what_happened(self):
+        kept.added(self.agent, "review", {"cron": "* * * * *", "prompt": "review the queue"})
+        one = firing.Running(name="review", pid=None, fired_for="2026-08-05T09:00", mine=True,
+                             from_byte=0, since=0.0, announced="9002")
+
+        class Refuses(ATelling):
+            def reported(self, schedule, answering, became, began):
+                raise OSError("the platform is down")
+
+        firing._finished(self.agent, self.where, one, 0, Refuses())
+        self.assertEqual(kept.DONE, self.outcome_of("review"))
+
+
+def records_of_the_firing(case, name):
+    """What is written beside a firing while it runs, as the record on disk really holds it."""
+    import json
+    return json.loads(firing.record_of(case.agent, name).read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

@@ -122,10 +122,23 @@ def _and_how(agent: str, searched: str) -> str:
 
 
 def _where(one: Dict[str, Any]) -> str:
-    """Which channel it was said on, or which kind of thing started it."""
-    if one.get("channel"):
-        return f" ({one['channel']})"
-    return f" ({one['source']})" if one.get("source") else ""
+    """Where it was said: what carried it, and which exchange on that thing.
+
+    **Both halves, because the first on its own answers the wrong question.** A private message and a
+    public room both read `discord`, and two schedules both read `schedule` — so an agent asked *how
+    did the client update go* got a listing in which nothing said which schedule any line came from,
+    and one reading its own history back could not tell what it had been told in confidence from what
+    it had said in front of a room. The exchange's own id is what tells them apart, it is already
+    read back with every row, and it was being dropped on the floor here.
+
+    **Never rewritten into something prettier.** It is the platform's own word for a place, or the
+    schedule's own name, and it is what `--conversation` and `rundesk schedules show` are typed with:
+    a surface that showed a different word could not be matched back to anything.
+    """
+    carried, which = one.get("channel") or one.get("source"), one.get("source_id")
+    if not carried:
+        return ""
+    return f" ({carried} {which})" if which else f" ({carried})"
 
 
 def _briefly(one: Dict[str, Any]) -> str:

@@ -1201,5 +1201,85 @@ class StoppingThem(Hosting):
                                               hosting.Watching({}, {}, {}), 4.0).running)
 
 
+#: One that takes a delivery and acknowledges it without ever saying what the platform called it.
+#: A real answer from a platform with no ids of its own, and from an adapter that passes none.
+AN_ADAPTER_THAT_NAMES_NOTHING = """#!/usr/bin/env python3
+import json, os, sys
+if "--capabilities" in sys.argv:
+    print(json.dumps({"stream": True, "max_text": 2000})); raise SystemExit(0)
+settings = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
+print(json.dumps({"say": "ready", "as": "a-bot"}), flush=True)
+for line in sys.stdin:
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    with open(settings["told"], "a") as writing:
+        writing.write(line if line.endswith("\\n") else line + "\\n")
+    if record.get("do") == "stop":
+        break
+    if record.get("do") == "deliver":
+        print(json.dumps({"say": "delivered", "id": record.get("id")}), flush=True)
+"""
+
+
+class WhatThePlatformCalledWhatWeSent(Hosting):
+    """The one fact only the platform can supply, and the only moment rundesk can learn it.
+
+    `awaiting` records the id of the message a delivery *answers*, which this side already had. This
+    is the id the delivery *became* — and without it nothing rundesk posts can ever be replied to, so
+    a schedule that says it has begun could not put its report under that notice.
+    """
+
+    def a_connected_channel(self, body=AN_ADAPTER):
+        self.an_adapter(body=body)
+        self.a_channel()
+        watching = self.hosting_now()
+        self.assertTrue(support.waited_until(
+            lambda: hosting.connected(watching, "discord"), 5.0), "the adapter never connected")
+        return watching
+
+    def test_the_id_of_a_message_rundesk_posted_is_kept(self):
+        watching = self.a_connected_channel()
+        became = hosting.announced(self.agent, self.where, watching, "discord", "1180",
+                                   ["💻 Working on 'review'"], within=5.0)
+        self.assertEqual("8841", became)
+
+    def test_an_adapter_that_names_nothing_is_an_ordinary_answer_and_not_a_failure(self):
+        """A platform with no ids of its own means *this cannot be quoted*, which the caller goes on
+        from — it posts its report unanchored rather than failing."""
+        watching = self.a_connected_channel(body=AN_ADAPTER_THAT_NAMES_NOTHING)
+        self.assertIsNone(hosting.announced(self.agent, self.where, watching, "discord", "1180",
+                                            ["💻 Working on 'review'"], within=1.0))
+
+    def test_nothing_up_to_say_it_through_is_the_same_ordinary_answer(self):
+        self.assertIsNone(hosting.announced(self.agent, self.where,
+                                            hosting.Watching({}, {}, {}), "discord", "1180",
+                                            ["anything"], within=0.5))
+
+    def test_told_says_which_deliveries_it_wrote_for_a_caller_that_has_to_ask_again(self):
+        watching = self.a_connected_channel()
+        written = []
+        self.assertTrue(hosting.told(self.agent, self.where, watching, "discord", "1180",
+                                     ["one", "two"], noting=written))
+        self.assertEqual(2, len(written))
+        # Waited for rather than read at once: the adapter writes down what it was handed on its own
+        # thread, and what is being proved is that the ids match — not how fast a pipe drains.
+        self.assertTrue(support.waited_until(
+            lambda: len([one for one in self.what_it_was_told()
+                         if one.get("do") == "deliver"]) == 2, 5.0))
+        self.assertEqual([one["id"] for one in self.what_it_was_told()
+                          if one.get("do") == "deliver"], written)
+
+    def test_a_delivery_that_answered_nobody_still_has_its_id_kept(self):
+        """Asked of every delivery and not only of an answer: a notice is exactly the kind of
+        message that gets replied to later, and it answers nobody itself."""
+        watching = self.a_connected_channel()
+        hosting.announced(self.agent, self.where, watching, "discord", "1180", ["a notice"],
+                          within=5.0)
+        one = watching.running["discord"]
+        self.assertIn("8841", one.posted.values())
+
+
 if __name__ == "__main__":
     unittest.main()
