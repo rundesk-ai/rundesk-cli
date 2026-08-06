@@ -1,3 +1,10 @@
+# An adapter is an executable with a shebang and no `.py`, so a directory scan skips it — and the
+# gate everybody runs is a directory scan. Named on the command line it was checked; named in the
+# gate it was invisible, so the one adapter that ships was unlinted and unparsed and a syntax error
+# in it would have gone green. Measured: `ruff check src tests` saw 109 files and none of them was
+# `src/channels/discord`.
+extend-include = ["src/channels/*"]
+
 # How this code is written, in the one place a machine can check it.
 #
 # Its own file rather than a `pyproject.toml`, deliberately: rundesk has no build step and nothing to
