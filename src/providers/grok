@@ -30,18 +30,18 @@ see is an agent nobody can supervise.
 Probed against `grok 0.2.118` on 2026-08-06, because the notes this was written from describe
 0.2.111 and every one of these is a thing a release moves:
 
-- **Three flags on the command line lie, and each shipped as a live bug once.**
-  `--permission-mode dontAsk` is accepted and silently ignored: an agent holding every write tool
-  was denied all of them, wrote nothing, explained itself in prose, and *the turn reported success*.
-  `--tools`, `--allow` and `--deny` are headless-only; `agent stdio` takes them in silence and hands
-  the turn all of its built-ins. `--sandbox` is a no-op here — under `read-only` it created files.
-  **What actually scopes a turn is `session/new._meta.agentProfile`**, and nothing else does.
+- **`--permission-mode bypassPermissions` is the one that applies.** `dontAsk` is accepted and
+  silently ignored — it shipped once, and an agent holding every write tool was then denied all of
+  them, wrote nothing, explained itself in prose, and *the turn reported success*. Without a mode
+  that applies, a headless turn reaching any tool ends as `cancelled` with exit 0, because there is
+  nobody at a terminal to approve it.
 
-- **The profile holds.** A `read` turn asked to run a shell command answered `NO SUCH TOOL` and
-  called nothing: `injectDefaultTools: false` makes `tools` an allowlist rather than an addition,
-  and `search_tool`/`use_tool` survive that allowlist and have to be named to `disallowedTools`
-  because they are the route an owner's own MCP servers are reachable through. This machine's
-  session loaded 92 MCP tools from the owner's configuration, which is what that guards against.
+- **`--tools`, `--allow`, `--deny` and `--sandbox` do nothing here.** All four are headless-only or
+  inert: `agent stdio` takes them in silence and hands the turn every built-in anyway, and
+  `--sandbox read-only` was measured creating files. None is passed, because a flag that reads like
+  a guarantee and enforces nothing is worse than no flag at all. The only thing that ever scoped a
+  turn on this brain was `session/new._meta.agentProfile`, and this adapter deliberately sends none
+  — see `opening` on why every turn gets the whole tool set.
 
 - **`inputTokens` already contains `cachedReadTokens`.** One turn made two model requests of 6,156
   and 172 fresh input against 6,144 cache reads, and reported `inputTokens: 12472` — which is
@@ -193,67 +193,21 @@ def the_version() -> str:
 
 # ── What a turn is asked for ──────────────────────────────────────────────────────────────────
 
-def access_mode_for(named) -> str:
-    """Which access mode this turn runs under, given what the seam said.
-
-    **A mode this adapter has no answer for fails closed, to `read`**, and says so. The two failures
-    are not equal: falling closed costs a turn some tools and announces it, while falling open hands
-    a full tool set to a turn whose narrower intent was merely misspelled — silently, and on an
-    unattended schedule.
-    """
-    if named in ALLOWED_FOR or named == "work":
-        return named
-    if named:
-        went_wrong(f"this turn asked for an access mode this adapter does not know ({named}), "
-                   f"so it was given the narrower one")
-    return "read"
-
-
-def scoped(access_mode: str):
-    """The agent a conversation is opened as, or `None` — which is how `work` says *every built-in*.
-
-    **This is the whole of how an access mode is honoured on this brain.** Nothing on the command
-    line reaches an ACP turn; the three flags that look as though they would are the traps named in
-    the module docstring. A conversation resolves its agent definition when it is made, and this is
-    where a client hands one over.
-
-    Pure and side-effect free, so the exact object crossing the seam is readable without starting
-    anything — which is what holds the two silent traps to what was measured rather than to what
-    somebody remembered.
-
-    **Its one drift signal is on stderr and nowhere else.** A profile this brain cannot parse is not
-    refused: the conversation is created, quietly gets the default agent — which is every tool there
-    is — and the only thing said is one line, `Failed to parse _meta.agentProfile JSON object,
-    falling back to default agent`. `noticed` below watches for exactly that.
-    """
-    if access_mode not in ALLOWED_FOR:
-        return None
-    return {
-        "name": f"rundesk-{access_mode}",
-        "description": f"A rundesk turn admitted to {access_mode} only.",
-        # Added to what this brain was built with, never in place of it. The neighbouring trap on
-        # another brain — an instruction field that silently replaced the vendor's own prompt and
-        # left the model looking broken — is the same shape one field along.
-        "promptMode": "extend",
-        "injectDefaultTools": False,
-        "tools": list(ALLOWED_FOR[access_mode]),
-        "disallowedTools": list(BESIDES),
-    }
-
-
 def opening(model) -> list:
     """Everything after the program's name, and why each part of it is there.
 
-    **The access mode is deliberately not an argument.** Nothing this command line can carry scopes
-    an ACP turn, so a parameter here would read like a boundary and be none.
+    **`RUNDESK_ACCESS_MODE` is read by nothing here, and that is the owner's decision.** Every turn
+    runs with this brain's whole tool set. The seam still carries the word — `docs/providers.md`
+    says plainly that it is a request rather than containment and that an adapter may ignore it —
+    so what is written down and what happens agree, which is the part that matters. Nothing here
+    implies a boundary it does not keep.
     """
     argv = [
         "--no-auto-update",
         # Not a preference. Without it this brain answers from conversations it was never handed.
         "--no-memory",
         # Headless means nobody is at a terminal to approve a tool. Without this, a turn that
-        # reaches one ends as `cancelled` with exit 0 — a working mode that cannot read a file.
-        # What the turn may *touch* is decided by `scoped`, because nothing here reaches ACP.
+        # reaches one ends as `cancelled` with exit 0 — an agent that cannot even read a file.
         "--permission-mode", "bypassPermissions",
     ]
     if model:
@@ -591,21 +545,16 @@ class Turn:
     def opening_the_conversation(self) -> bool:
         """`session/load` when rundesk gave a handle, and `session/new` when it did not.
 
-        **The access mode is sent both times, and the preface only on the new one.** They are
-        different kinds of fact: an access mode is the owner's answer about the machine *now*, so an
-        agent narrowed to `read` after a working conversation was opened must not carry that
-        conversation's tool set for as long as it is resumed — measured, and it holds on a load.
-        Standing instructions bind when a conversation is created and a resumed one already has the
-        ones it was opened with, so re-sending them would be words nobody reads.
+        **The preface goes on the new one and never on the load.** Standing instructions bind when a
+        conversation is created, so a resumed one already has the ones it was opened with and
+        re-sending them would be words nobody reads. No agent profile is sent either way: a
+        conversation opened as no agent of ours gets this brain's whole tool set, which is what the
+        owner asked every turn to have.
         """
-        access_mode = access_mode_for(os.environ.get("RUNDESK_ACCESS_MODE"))
-        profile = scoped(access_mode)
         params = {"cwd": self.where, "mcpServers": []}
         resume = os.environ.get("RUNDESK_RESUME")
         if resume:
             params["sessionId"] = str(resume)
-            if profile:
-                params["_meta"] = {"agentProfile": profile}
             got = self.waited_for(self.send("session/load", params), HANDSHAKE_WITHIN)
             if got is None or "error" in got:
                 self.could_not_start("grok would not carry the conversation on", got)
@@ -613,17 +562,12 @@ class Turn:
             self.session_id = str(resume)
             return True
 
-        meta = {}
         preface = (os.environ.get("RUNDESK_PREFACE") or "").strip()
         if preface:
             # Appends to what this brain was built with. The field that *replaces* its instructions
             # is deliberately never used: an argument that deletes the brain and leaves a paragraph
             # reports nothing and merely behaves oddly, which is what gets blamed on the model.
-            meta["rules"] = preface
-        if profile:
-            meta["agentProfile"] = profile
-        if meta:
-            params["_meta"] = meta
+            params["_meta"] = {"rules": preface}
         got = self.waited_for(self.send("session/new", params), HANDSHAKE_WITHIN)
         if got is None or "error" in got:
             self.could_not_start("grok would not open a conversation", got)
