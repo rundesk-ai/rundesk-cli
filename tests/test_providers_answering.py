@@ -27,6 +27,7 @@ Run directly: `python3 tests/test_providers_answering.py`
 import contextlib
 import json
 import unittest
+from pathlib import Path
 
 import support
 from rundesk.agents import directory, records
@@ -378,6 +379,82 @@ class AMessageOnAChannelIsAnswered(Answering):
         self.assertEqual("✋ Nothing is running here.",
                          gestures.controlled(self.agent, "discord", "1180", "2207",
                                              answering_hosting.STOP))
+
+    def a_provider(self, named="other"):
+        """A second brain this install really has, so a change of provider has somewhere to go."""
+        where = paths.code() / "providers"
+        where.mkdir(parents=True, exist_ok=True)
+        at = where / named
+        at.write_text(Path(support.A_STAND_IN).read_text(encoding="utf-8"), encoding="utf-8")
+        at.chmod(0o755)
+        return named
+
+    def a_gesture(self, watching=None):
+        return answering.Gestures(self.where, lambda: watching or hosting.Watching({}, {}, {}),
+                                  lambda word: None, lambda agent: "online")
+
+    def test_changing_the_brain_writes_it_down_for_every_turn_after(self):
+        """R-CH-26. A provider is an agent-wide default, so this is what the *next* turn resolves —
+        in this conversation, on every other channel, and for every schedule."""
+        self.a_channel(allowed=("2207",))
+        other = self.a_provider()
+        said = self.a_gesture().configured(self.agent, "discord", "1180", "2207", other)
+        self.assertIn(other, said)
+        self.assertEqual(other, records.read(directory.records(self.agent))["provider_name"])
+
+    def test_a_brain_this_install_does_not_have_is_refused_before_anything_is_written(self):
+        """A default nothing stands behind is an agent whose every turn fails from the next message
+        on, and the person who typed it would be the last to find out."""
+        self.a_channel(allowed=("2207",))
+        was = records.read(directory.records(self.agent))["provider_name"]
+        said = self.a_gesture().configured(self.agent, "discord", "1180", "2207", "nonesuch")
+        self.assertIn("no brain called", said)
+        self.assertEqual(was, records.read(directory.records(self.agent))["provider_name"],
+                         "a brain that does not exist was written down anyway")
+
+    def test_a_shared_channel_cannot_change_what_the_agent_is_for_everybody(self):
+        """Being on a shared room's allow list is authority to speak to the agent there, and it is
+        not authority to change what the agent *is* for every other channel and schedule."""
+        self.a_channel(allowed=("2207", "9999"))
+        was = records.read(directory.records(self.agent))["provider_name"]
+        said = self.a_gesture().configured(self.agent, "discord", "1180", "2207",
+                                           self.a_provider())
+        self.assertIn("one person", said)
+        self.assertEqual(was, records.read(directory.records(self.agent))["provider_name"])
+
+    def test_somebody_who_is_not_the_one_allowed_cannot_change_it(self):
+        self.a_channel(allowed=("2207",))
+        was = records.read(directory.records(self.agent))["provider_name"]
+        said = self.a_gesture().configured(self.agent, "discord", "1180", "9999",
+                                           self.a_provider())
+        self.assertIn("one person", said)
+        self.assertEqual(was, records.read(directory.records(self.agent))["provider_name"])
+
+    def test_naming_nothing_says_what_to_type(self):
+        self.a_channel(allowed=("2207",))
+        self.assertIn("/provider",
+                      self.a_gesture().configured(self.agent, "discord", "1180", "2207", "  "))
+
+    def test_the_brain_it_already_answers_on_is_said_rather_than_written_again(self):
+        self.a_channel(allowed=("2207",))
+        was = records.read(directory.records(self.agent))["provider_name"]
+        said = self.a_gesture().configured(self.agent, "discord", "1180", "2207", was)
+        self.assertIn("already", said)
+
+    def test_moving_to_another_brain_leaves_the_old_conversation_where_it_was(self):
+        """A handle is kept per conversation **and per brain**, so moving is fresh without anything
+        being deleted — and moving back finds the old conversation exactly where it was left."""
+        self.a_channel(allowed=("2207",))
+        conversation = arriving.recorded(self.agent, "discord", "1180", "2207", "hello").conversation
+        kept.save_session(self.agent, conversation, support.A_STAND_IN, "thread-old")
+
+        other = self.a_provider()
+        self.a_gesture().configured(self.agent, "discord", "1180", "2207", other)
+
+        self.assertIsNone(kept.get_session(self.agent, conversation, other),
+                          "the new brain inherited a handle that was not its own")
+        self.assertEqual("thread-old", kept.get_session(self.agent, conversation,
+                                                        support.A_STAND_IN))
 
     def test_the_answer_is_recorded_as_a_message_carrying_the_turn_that_said_it(self):
         """What was said and what it cost are two questions, and this is the one join between them.

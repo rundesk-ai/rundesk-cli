@@ -38,11 +38,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, Optional
 
 from rundesk import __version__
-from rundesk.agents import directory
+from rundesk.agents import directory, records
 from rundesk.channels import arriving, delivery, hosting
 from rundesk.channels import kept as channels_kept
 from rundesk.core import config
-from rundesk.providers import instructions, kept, protocol, turns
+from rundesk.providers import adapters, instructions, kept, protocol, turns
 from rundesk.schedules import due, firing
 from rundesk.schedules import kept as schedules_kept
 from rundesk.skills import grants
@@ -494,7 +494,49 @@ class Gestures:
         return ""
 
     def configured(self, agent: str, kind: str, place: str, who: str, provider: str) -> str:
-        return "Changing the provider is not built yet."
+        """Change which brain answers for this agent (R-CH-26, R-DIS-25).
+
+        **Only where the channel allows exactly one person, and only that person.** A provider is an
+        agent-wide default: it decides what every conversation, every other channel and every
+        schedule this agent has will run on. Being on a shared room's allow list is authority to
+        speak to the agent there, and it is not authority to change what the agent *is* for
+        everybody — so the narrower question is asked here rather than reusing the one that let
+        somebody in.
+
+        **The session takes care of itself.** A handle is kept per conversation *and per brain*, so
+        a conversation that moves to a different provider has no handle on it and starts fresh
+        without anything being deleted. Nothing is thrown away either: moving back finds the old
+        conversation exactly where it was left.
+        """
+        wanted = provider.strip()
+        if not wanted:
+            return "Say which brain — for example **/provider codex**."
+        allowed = self._only_one(agent, kind)
+        if allowed is None or allowed != who:
+            return ("Changing the brain is an agent-wide decision, so it can only be done on a "
+                    "channel that one person uses.")
+        try:
+            adapters.where(wanted)
+        except Exception:                              # noqa: BLE001 — see below
+            # **Refused before anything is written**, and named against what this install has. A
+            # default nothing stands behind is an agent whose every turn fails from the next message
+            # on, and the person who typed it would be the last to find out.
+            known = ", ".join(f"**{one}**" for one in adapters.known()) or "none"
+            return f"There is no brain called **{wanted}**. This install has: {known}."
+        settled = records.read(directory.records(agent))
+        if str(settled.get("provider_name") or "") == wanted:
+            return f"**{agent}** already answers on **{wanted}**."
+        records.stated(directory.records(agent), {"provider_name": wanted})
+        return (f"🧠 **{agent}** now answers on **{wanted}**. This conversation starts fresh on it — "
+                f"and whatever it had on the old brain is still there if you move back.")
+
+    def _only_one(self, agent: str, kind: str) -> Optional[str]:
+        """The single person this channel allows, or `None` where it allows any other number."""
+        with contextlib.suppress(Exception):
+            allowed = channels_kept.who_may_reach(channels_kept.one(agent, kind))
+            if len(allowed) == 1:
+                return str(allowed[0])
+        return None
 
     def _forgotten(self, agent: str, place: str) -> str:
         """Start this conversation fresh, so the next message begins a new session (R-CH-10).
