@@ -555,6 +555,97 @@ class EveryWayTheTurnCanEnd(support.Isolated):
         self.assertEqual(0, got.returncode)
 
 
+class WhenItIsSteeredMidTurn(support.Isolated):
+    """A word that arrives while the brain is working, and what becomes of the ask it replaced.
+
+    **Written rather than captured, and that is a real limit worth stating.** The other cases here
+    replay a stream a real grok produced, which is what makes them evidence about the vendor rather
+    than about a fixture. This one cannot: a steer is caused by a `session/cancel` that carries no
+    request id, so the ordering a capture would have to be released in is not one the replay can
+    reconstruct from the capture alone. What is proved here is the *mapping* — that a cancelled ask
+    is not this turn's ending, and that what it cost is still billed. That the sequence works
+    against the vendor was driven live against a real account, and the ask-order it produces is
+    pinned by `test_a_word_arriving_mid_turn_stops_the_ask_before_replacing_it`.
+    """
+
+    #: A brain that behaves the way the real one was measured to: an ask runs until it is
+    #: cancelled, a cancel settles it as `cancelled`, and a later ask is answered on its own.
+    BRAIN = """#!/usr/bin/env python3
+import json, sys
+
+asks = []
+for line in sys.stdin:
+    try:
+        said = json.loads(line)
+    except ValueError:
+        continue
+    method, which = said.get("method"), said.get("id")
+    def out(one):
+        print(json.dumps(one), flush=True)
+    def update(**u):
+        out({"jsonrpc": "2.0", "method": "session/update",
+             "params": {"sessionId": "s-1", "update": u, "_meta": {"totalTokens": 900}}})
+    if method == "initialize":
+        out({"jsonrpc": "2.0", "id": which, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        out({"jsonrpc": "2.0", "id": which, "result": {"sessionId": "s-1"}})
+    elif method == "session/prompt":
+        asks.append(which)
+        if len(asks) == 1:
+            update(sessionUpdate="agent_message_chunk",
+                   content={"type": "text", "text": "counting"})
+        else:
+            update(sessionUpdate="agent_message_chunk",
+                   content={"type": "text", "text": "STEERED"})
+            update(sessionUpdate="turn_completed", stop_reason="end_turn",
+                   usage={"inputTokens": 40, "outputTokens": 6})
+            out({"jsonrpc": "2.0", "id": which, "result": {"stopReason": "end_turn"}})
+    elif method == "session/cancel":
+        update(sessionUpdate="turn_completed", stop_reason="cancelled",
+               usage={"inputTokens": 100, "outputTokens": 20})
+        out({"jsonrpc": "2.0", "id": asks[0], "result": {"stopReason": "cancelled"}})
+"""
+
+    def setUp(self):
+        super().setUp()
+        where = self.home / "cwd"
+        where.mkdir(parents=True, exist_ok=True)
+        instead = self.home / "bin"
+        instead.mkdir(parents=True, exist_ok=True)
+        (instead / "grok").write_text(self.BRAIN, encoding="utf-8")
+        (instead / "grok").chmod(0o755)
+        self.got = subprocess.run(
+            [str(ADAPTER)],
+            input="".join(json.dumps(one) + "\n" for one in (
+                {"type": "say", "text": "count to thirty"},
+                {"type": "say", "text": "stop, say STEERED", "context": "mid-turn"})),
+            capture_output=True, text=True, timeout=PATIENCE, check=False,
+            env={"PATH": f"{instead}:/usr/bin:/bin", "RUNDESK_CWD": str(where),
+                 "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1"})
+        self.said = [json.loads(one) for one in self.got.stdout.splitlines() if one.strip()]
+
+    def test_the_word_that_arrived_mid_turn_reached_the_brain_inside_the_same_turn(self):
+        self.assertIn("STEERED", "".join(one["text"] for one in only(self.said, "text")))
+
+    def test_it_is_still_one_turn_and_one_ending(self):
+        """**A cancelled ask settles like any other.** Reporting it would end the turn before the
+        replacement had been asked, and the owner would be told their agent was cancelled."""
+        self.assertEqual(1, len(only(self.said, "done")), "one turn ended more than once")
+        self.assertTrue(self.said[-1]["ok"])
+
+    def test_a_stopped_ask_is_not_reported_as_a_turn_that_failed(self):
+        self.assertNotIn("failure_code", self.said[-1])
+        self.assertEqual(0, self.got.returncode)
+
+    def test_what_the_stopped_ask_cost_is_still_billed(self):
+        """20 output tokens were spent before the cancel and 6 after it. Dropping the first would
+        under-report every steered turn, and the owner was charged for both."""
+        counted = only(self.said, "usage")
+        self.assertEqual(1, len(counted), "one turn was billed twice")
+        self.assertEqual(26, counted[0]["output_tokens"])
+        self.assertEqual(140, counted[0]["input_tokens"])
+
+
 class TheVersionItWasWrittenAgainst(support.Isolated):
     """A capture with no version beside it is a fixture nobody can act on."""
 
