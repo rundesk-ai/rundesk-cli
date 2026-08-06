@@ -103,6 +103,22 @@ class FindingTheProgram(Adapters):
         made = self.an_adapter("thing", among=elsewhere)
         self.assertEqual(made, adapters.where(str(made)))
 
+    def test_the_spelling_everybody_tries_first_works(self):
+        # `Path("./quiet")` normalises to `quiet` — the separator that chose this branch is gone —
+        # and a bare name handed to Popen is looked for on PATH, so the refusal used to read
+        # "No such file or directory" about a program standing right there.
+        elsewhere = self.home / "work"
+        elsewhere.mkdir()
+        made = self.an_adapter("quiet", among=elsewhere)
+        here = os.getcwd()
+        os.chdir(str(elsewhere))
+        self.addCleanup(os.chdir, here)
+        for said in ("./quiet", "quiet/../quiet"):
+            with self.subTest(said=said):
+                self.assertEqual(made.resolve(), adapters.where(said))
+                self.assertEqual({"stream": True, "max_text": 2000},
+                                 adapters.capabilities(said))
+
     def test_a_name_nothing_stands_under_says_where_it_looked(self):
         with self.assertRaises(adapters.NotRunnable) as refused:
             adapters.where("nowhere")

@@ -138,7 +138,11 @@ def where(kind: str) -> Path:
     somebody gets by typing its name, and an install cannot quietly shadow it.
     """
     if os.sep in kind or (os.altsep and os.altsep in kind):
-        at = Path(kind).expanduser()
+        # **Resolved, and that is not tidiness.** `Path("./quiet")` normalises to `quiet` — the
+        # separator that got us into this branch is gone — and a bare name handed to `Popen` is
+        # looked for on `PATH`, so the refusal reads `No such file or directory: 'quiet'` about a
+        # program standing right there. `./name` is the first spelling anybody tries.
+        at = Path(kind).expanduser().resolve()
         if _runnable(at):
             return at
         raise NotRunnable(f"{at} is not a program that can be run")

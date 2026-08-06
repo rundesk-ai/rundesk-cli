@@ -12,6 +12,7 @@ anyone learns from it is not to trust the rest.
 | [commands.md](./commands.md) | Every operation the command offers, and what each guarantees |
 | [catalogs.md](./catalogs.md) | Writing a skill, and publishing a catalog of them |
 | [gateways.md](./gateways.md) | What a gateway is, and every state one can get stuck in |
+| [adapters.md](./adapters.md) | Writing the program behind a channel: the three invocations, and every record |
 | [schedules.md](./schedules.md) | What a schedule is, and every state one can get stuck in |
 | [time.md](./time.md) | The three clocks, and which one answers what |
 | [development.md](./development.md) | Running and testing a checkout without installing it |

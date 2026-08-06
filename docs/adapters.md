@@ -1,0 +1,611 @@
+# Writing a channel adapter
+
+**This is what ships.** Every claim on this page was read out of the code as it stands: where it
+states a field, a bound or an exit code, it is because `src/rundesk/channels/`, the one working
+adapter in `src/channels/discord`, and the suites in `tests/` say so. Where the code and its own
+docstrings disagree, the code is what is written here and the disagreement is named.
+
+[`research/the-adapter-contracts.md`](research/the-adapter-contracts.md) reproduces the contract the
+*previous* build published, and is a correct record of that. It is not a description of this one: the
+record kinds are different, the turn states are different, the key is `say:`/`do:` and not `type:`,
+and half of what it describes does not exist here. Write against that page and you produce something
+this gateway cannot talk to. This page supersedes it.
+
+[`gateways.md`](gateways.md) is what hosts an adapter, [`commands.md`](commands.md#channels) is how a
+person connects one, and [`layout.md`](layout.md) is where an install keeps things.
+
+## An adapter is a program, never a plugin
+
+Three things follow from that and they are worth naming together.
+
+**Rundesk does not load somebody else's code into the gateway hosting every other agent.** One
+channel that raised on import would take an agent's whole gateway with it.
+
+**An adapter author is not obliged to write Python.** The seam is a pipe carrying newline-delimited
+JSON. The example at the bottom of this page is `/bin/sh`.
+
+**A vendor library lives on the far side of the seam and never enters the gateway.** Reaching Discord
+needs `discord.py`; rundesk's own code imports nothing outside the standard library. The only reason
+those two facts are compatible is that the import happens in a different process.
+
+### Where one stands
+
+| Where | Whose it is |
+|---|---|
+| `paths.code()/channels/<name>` — an install's `app/src/channels/` | part of the release, replaced whole by an update |
+| `data/adapters/<name>` | this install's own; never touched by an update |
+| any path with a separator in it | yours, right now, wherever you are writing it |
+
+**A bare name resolves among the shipped ones first and then among the given ones**; anything with a
+separator is used as a path and is expanded for `~`. So `discord` is the adapter that ships,
+`my-thing` is one somebody dropped into `data/adapters/`, and
+`/Users/me/work/thing` is one being written this afternoon and installed nowhere.
+
+The order is deliberate: a release's own adapter is the one somebody gets by typing its name, and an
+install cannot quietly shadow it.
+
+**Found by looking rather than listed.** There is no registry — `adapters.known()` reads the two
+directories. A registry beside a directory of programs is two things to keep in step, and when they
+drift one says the adapter is known while the other cannot produce it, so a channel is offered and
+then cannot start.
+
+**It has to be a file and it has to be executable**, and those are asked separately: somebody told
+"not there" about a program that is there without its executable bit goes looking in the wrong place
+entirely. `chmod +x` and give it a shebang.
+
+### Which interpreter runs it
+
+**Decided by rundesk and handed over on `PATH`. Never discovered by the adapter.**
+
+If the install has built its virtualenv, `app/.venv/bin` is put on the front of `PATH` — so
+`#!/usr/bin/env python3` in your shebang resolves to the install's own interpreter, a shell adapter
+is unaffected, and neither had to be told anything. It goes on `PATH` rather than in front of the
+argv because an adapter is an executable with a shebang of its own, and running a shell script
+through `python3` is nonsense.
+
+The build this replaces had each adapter find that virtualenv by counting parent directories. The
+count was wrong for a whole release and nothing failed until somebody added a channel. **Do not count
+directories, and do not go looking for rundesk.** Import what you need by name and let the failure be
+an `ImportError` you can report in a sentence.
+
+The virtualenv can be absent — a machine with no network has a working install and no packages — so
+an adapter with a dependency answers `--check` with the `ImportError` as the refusal it is, rather
+than pretending otherwise.
+
+## The three invocations
+
+| | Bounded | What it is |
+|---|---|---|
+| `--capabilities` | 60 s | what you can do — offline, no account, the same answer every time |
+| `--check` | 300 s | sign in, and report what you reached |
+| `serve` | not bounded | hold the connection open for as long as the agent is up |
+
+**Match them exactly rather than searching argv.** An adapter that took a mistyped `--check` for a
+request for its capabilities would answer a question nobody asked and look as though it worked.
+Anything that is not one of the three: say so on stderr and exit non-zero.
+
+**Nothing from rundesk's own environment reaches you except a named handful.** `PATH`, `HOME`,
+`TMPDIR`, `TZ`, `LANG`, `LC_ALL` are carried through if they are set; `TERM` is set to `dumb`,
+because nothing here is a terminal and nothing may draw on one. Everything else is dropped. A
+variable you did not ask for is one you cannot come to depend on by accident — and the thing most
+likely to be in a gateway's environment is a credential belonging to a different agent.
+
+### `--capabilities`
+
+**argv:** exactly `--capabilities`, and nothing after it.
+
+**Environment:** the handful above, and nothing else. No credential, no allow list, no settings.
+
+**stdin:** `/dev/null`, here and on `--check` both. Only `serve` gets one it can read.
+
+**Print:** one JSON object. Read as the whole of stdout parsed as JSON, and failing that as the last
+non-blank line — so a program that printed a warning before its answer has still answered.
+
+**Exit code:** read. Non-zero is `{}`. So is a program that did not start, one that did not finish in
+sixty seconds, and one that printed something that is not an object.
+
+**`{}` is a whole answer and never an error.** Every missing field is read as the least capable
+answer, so an adapter that does not recognise the flag and does something else can do nothing — which
+is complete, and is not a refusal. Nothing is retried and nothing is refused for it.
+
+Asked offline and with no account, so that **a fidelity difference is a fact rather than a guess**:
+an adapter that cannot edit a message is told apart from one that can and did not.
+
+```json
+{"stream": true, "edit": "full", "react": true, "thread": true, "attach": true, "max_text": 2000}
+```
+
+That is the shipped Discord adapter's answer, and it is a fair template. **Be honest about what is in
+it**, and know what it costs today: rundesk asks the question, prints the answer on the `can` line of
+`channels add`, and **keeps none of it** — the `channels` table has no column for it, so `channels
+show` has nothing to show and nothing anywhere reads a key. See
+[what is not built yet](#what-is-not-built-yet).
+
+### `--check`
+
+**argv:** `--check`, followed by whatever the owner typed after `--with`, split the way a shell would
+word-split it and carried through exactly. **Rundesk parses none of it and holds no list of what any
+platform needs.** It never reaches a shell, so nothing in it is globbed, expanded, or read as `;`,
+`&&` or a redirection.
+
+**Environment:** the handful, plus `RUNDESK_ALLOW`, plus each credential the adapter named, under the
+name the adapter named it.
+
+**`RUNDESK_ALLOW` is set here and not only at hosting time**, and it is not decoration: an adapter
+that reports where unprompted things would land does it by opening a private conversation with the
+first id on the list, so one asked to connect without the list refuses before it has signed in.
+
+**Print:** one JSON object, read the same way as above.
+
+**Exit code:** not read. `adapters.checked` reads whether the program started and finished, and then
+the object; it never looks at the code. **Exit `0` anyway, including for `ok: false`** — a refusal is
+an answer, `--capabilities` on the same program *is* judged by its code, and one convention across
+all three invocations is one nobody has to remember.
+
+The distinction that matters is the other one: **a program that died without printing an object
+failed; one that printed `ok: false` refused.** Both reach the caller as `ok=False`, and `why` is the
+sentence that says which — and it is the whole of what a person standing at a terminal can act on.
+Say what was wrong, not that something was.
+
+**Nothing about a channel is written down until this says `ok`.** An agent whose channel is
+misconfigured has to find that out while somebody is at a terminal, not at three in the morning when
+they ask it something.
+
+```json
+{"ok": true,
+ "describes": "rundesk#4471, reaching you#0",
+ "notify_place": "1180",
+ "settings": {},
+ "secret": {"env": ["DISCORD_BOT_TOKEN"]},
+ "invite": "https://discord.com/oauth2/authorize?client_id=…&scope=bot&permissions=…"}
+```
+
+```json
+{"ok": false, "why": "there is no bot token — nothing set DISCORD_BOT_TOKEN",
+ "secret": {"env": ["DISCORD_BOT_TOKEN"]}}
+```
+
+| Field | | What it is for |
+|---|---|---|
+| `ok` | required | whether the channel may be written down at all. Anything falsy is a refusal |
+| `why` | on a refusal | the sentence a person acts on. Without one they are told only that the adapter would not connect |
+| `describes` | optional | one line naming what was reached, for somebody deciding whether it is the right thing. Falls back to the adapter's name |
+| `notify_place` | optional | where unprompted things would land. **Required in practice if the channel is ever to take `--notify`** — a gateway coming up is answering nobody and has no conversation to reply into. Said-nothing and said-empty are kept apart |
+| `settings` | optional | your own normalised account of the options, handed back verbatim as `RUNDESK_SETTINGS` when you are hosted. Anything that is not an object is recorded as `{}` |
+| `secret` | optional | `{"env": [...]}` — the names you read credentials from. A single name as a bare string is accepted as a list of one |
+| `invite` | optional | printed after a successful `add`, for a platform where the bot has to be sent somewhere |
+
+**Say what you understood, not what you were told.** `settings` is what an owner will still be running
+on in a year, so normalise here; the words that produced it are deliberately not kept and are never
+replayed by `channels test`.
+
+**The credential name comes back on a refusal too, and that is the whole of how rundesk knows what to
+ask for.** `channels add` asks once with the allow list and no credential; an adapter that answers
+`ok: false` **and names the variable it looked in** gets a prompt, and then a second `--check` with
+the value set. Drop the name from the refusal and the only thing `add` can answer with is to repeat
+itself.
+
+**The name is yours and is recorded exactly as it arrives.** Rundesk hands it back at hosting time
+under that same name, so the recorded name and the name you look in are one fact. It follows that it
+is not per-agent: two agents on one platform name one credential. An adapter that wants a second
+token is an adapter that reads a different name.
+
+### `serve`
+
+**argv:** exactly `serve`.
+
+**Environment:** the handful, plus:
+
+| | |
+|---|---|
+| `RUNDESK_AGENT` | whose channel this is |
+| `RUNDESK_CHANNEL` | the platform, which is also the channel's name |
+| `RUNDESK_CHANNEL_HOME` | this channel's own directory — somewhere to put what you fetch |
+| `RUNDESK_SETTINGS` | the object your own `--check` returned, as JSON text. `{}` if you returned nothing |
+| `RUNDESK_ALLOW` | who may reach this agent here, comma separated |
+| each name from `secret.env` | its value, out of the install's sealed store |
+
+**stdin** is a pipe and is readable: records come in, one JSON object per line. **stdout** is a pipe
+and is drained continuously by a thread of the gateway's — records go out the same way. **stderr** is
+appended to `stderr.log` in this channel's directory, which the gateway rotates.
+
+**The channel's claim is a `flock` this process holds and passes down to you.** It lives exactly as
+long as you and everything you start, and the kernel drops it however that ends — a clean exit, a
+crash, a `SIGKILL`, the machine losing power. That is what lets a gateway which came up after the one
+that started you know you are still there and refuse to start a second adapter beside you. You never
+ask about it and never touch it.
+
+**Exit codes:**
+
+| | |
+|---|---|
+| `78` (`EX_CONFIG`) | *starting me again cannot help.* Nothing starts this channel again for the life of this gateway |
+| anything else, **including `0`** | held off ten seconds and started again |
+
+`78` is the whole of the agreement, because the two sides of this seam are two processes and cannot
+share a constant. Use it for a revoked token, an intent mask a platform will refuse for ever, a close
+code that is not going to change. **It is read and not merely written down:** logged and restarted on
+the flat ten-second hold-off, a revoked Discord token is a login attempt every ten seconds — about
+8,600 a day — which is the Cloudflare ban of the machine's own address that the adapter's close-code
+table exists to avoid.
+
+**You are asked to stop before you are signalled.** `{"do": "stop"}` comes down stdin, and then
+`SIGTERM` to your whole process group with `SIGKILL` behind it. **The default disposition for
+`SIGTERM` is to die where you stand**, so an adapter that wants its goodbye and its cleanup to run
+handles the signal — the shipped one does, and had to: the goodbye and every last write were simply
+never reached before it did.
+
+## The record vocabulary
+
+One JSON object per line, both ways. Nothing is nested inside anything and nothing spans lines.
+
+### What an adapter says — `say:`
+
+Five are recognised. **Anything else is ignored in silence**, which is deliberate: rundesk may be
+behind an adapter, and a record it does not know is not a channel that has gone wrong.
+
+```json
+{"say": "ready", "as": "rundesk#4471"}
+{"say": "gone", "why": "the socket closed"}
+{"say": "note", "level": "warning", "text": "could not bring in report.csv: HTTPException: 403"}
+{"say": "failed", "id": "1754431200.123456-0", "why": "Discord would not take it: Forbidden"}
+{"say": "arrived", "conversation": "1180", "user": "2207", "text": "what changed today?",
+ "external_id": "8841",
+ "attachments": [{"name": "report.csv", "at": "/…/channels/discord/fetched/8841/0", "bytes": 8}]}
+```
+
+| | Required | Optional | What rundesk does with it |
+|---|---|---|---|
+| `ready` | — | `as` | one `INFO` line in the agent's log: *connected as …* |
+| `gone` | — | `why` | one `WARNING` line. `no reason given` when `why` is absent |
+| `note` | `text` | `level` | one line at that level. `level` is `DEBUG`, `INFO`, `WARNING` or `ERROR`, case-insensitive; anything else becomes `INFO` |
+| `failed` | `why` | `id` | one `WARNING` line: *could not deliver — …*. **`id` is not read**; nothing correlates a failure back to the delivery yet |
+| `arrived` | `conversation`, `user`, and `text` **or** `attachments` | `external_id` | the message, if that user may be answered |
+
+**Say `ready` when you have the connection and `gone` when you lose it**, once per change and not
+once per reconnection attempt behind it — that is how somebody tells a quiet agent from a deaf one.
+
+`note` is for something an owner should know **that you have words for**. Anything you have no words
+for goes to stderr; see [the rules](#the-rules-that-will-bite).
+
+#### `arrived`, in detail
+
+| Field | | |
+|---|---|---|
+| `conversation` | required, non-empty | whatever the platform calls one exchange — a thread, a room, a chat, a phone number. Rundesk never parses it and never shows it. The one thing that matters is that the same exchange produces the same string every time. A message with an empty one is dropped |
+| `user` | required | the id that platform knows somebody by. **Checked against the allow list before anything else happens** |
+| `text` | required unless `attachments` | what was said. Clipped at 64 KiB rather than refused |
+| `attachments` | required unless `text` | what they attached, already fetched onto this machine — see below |
+| `external_id` | optional | the platform's own id for this message. **Without it there is no redelivery guard and no `seen` mark** |
+
+**A message that is only a file is still a message.** Neither text nor attachments is nothing, and
+nothing is recorded.
+
+**`external_id` is worth passing.** With it, a redelivery — which every chat platform does — costs
+nothing the second time, because the message lands once. Without it, two identical lines are two
+things somebody said. The previous build had the column and the index and no adapter ever passed an
+id through the seam, so the guard was correct and prevented nothing.
+
+Each entry of `attachments`:
+
+| | | |
+|---|---|---|
+| `at` | required | absolute path to what you fetched. **Must stand inside `RUNDESK_CHANNEL_HOME`**, must be an ordinary file, and must not be reached through a relative step |
+| `name` | optional | what the platform called it — a stranger's text, flattened by rundesk and nowhere else. Falls back to the basename of `at` |
+| `bytes` | optional | what the platform said it would be. Checked against the file's real size, and a mismatch is refused |
+
+**Rundesk takes each one from there** into the agent's own account of what arrived — under the day,
+under the message, under a name that is both safe and unused — and **removes what you staged either
+way**, whether it was taken or refused. A file you fetch is a file rundesk removes. Do not clean up
+after yourself and do not report a path you have not written.
+
+The shipped adapter writes into `$RUNDESK_CHANNEL_HOME/fetched/<message id>/<n>` and names each file
+by its position, because the platform's name is flattened and made unused in exactly one place and
+that place is not the adapter.
+
+### What an adapter is told — `do:`
+
+Three, and only three exist today.
+
+```json
+{"do": "deliver", "id": "1754431200.123456-0", "place": "1180", "text": "Three files changed…"}
+{"do": "deliver", "id": "1754431200.123456-2", "place": "1180", "text": "here it is",
+ "files": [{"name": "chart.png", "at": "/…/agents/alan/home/chart.png", "bytes": 9,
+            "sha256": "b1f3…"}]}
+{"do": "state", "place": "1180", "external_id": "8841", "state": "seen"}
+{"do": "stop"}
+```
+
+| | Fields | |
+|---|---|---|
+| `deliver` | `id`, `place`, `text`, sometimes `files` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed` |
+| `state` | `place`, `external_id`, `state` | show what rundesk says a turn is doing |
+| `stop` | — | stop. The signals follow either way |
+
+**A long answer arrives as several `deliver` records, and `files` go with the last of them.** The
+words describing a file are what a reader wants above it, and a platform hangs an attachment under
+the message it came with. A record carrying `files` and an empty `text` is one to take; a record with
+neither is never sent.
+
+**Anything you do not recognise: say so as a `note` and read on.** One record you could do nothing
+with is not a channel going away.
+
+#### The turn states
+
+**`seen`, `working`, `done`, `stopped`, `failed`** — and not `taken`, `running`, `finished`, which is
+what the previous build's contract published and what nothing here speaks.
+
+| | What it means | How the shipped adapter renders it |
+|---|---|---|
+| `seen` | the message has been written down | 👀 on the message named by `external_id` |
+| `working` | the agent is working | a typing indicator in `place`, renewed on the adapter's own clock |
+| `done` | the turn finished | ✅ |
+| `stopped` | somebody stopped it | ✋ |
+| `failed` | it did not finish | ⚠️ |
+
+**Only `seen` has a producer today.** It is the one state that needs no turn — a message arriving is
+the whole of the event — and it is sent the moment the message is written down, including on a
+redelivery, because the mark belongs to the message and an adapter that has just restarted no longer
+knows it put one up. The other four say what became of a turn, and there is no provider layer in this
+build to run one. Implement them and expect silence; see
+[what is not built yet](#what-is-not-built-yet).
+
+**Put the new mark up before taking the old one down.** A message with no mark for a moment reads as
+a turn nobody picked up, and the order is the only thing that decides which of those somebody sees.
+If the new one will not go up, the old one staying is the failure to prefer.
+
+## The rules that will bite
+
+**Authorization is rundesk's, and a stranger gets silence.** You report who spoke; whether they may
+be answered is decided against the channel's own record and nothing you send changes it. A message
+from anybody else is never written down, never answered, and never logged — replying to say somebody
+is a stranger confirms the agent is listening and spends the owner's tokens doing it. **`RUNDESK_ALLOW`
+is not the authorization.** Read it only to avoid working for nothing: reacting, opening a thread or
+downloading three hundred megabytes for somebody who can never be answered is waste at best, and in a
+room full of people it is an agent visibly attending to a stranger it is about to ignore. Never show
+the list to anybody. It is read once, when you are started — a `channels configure --allow` reaches
+you when the gateway next starts your adapter, not before.
+
+**Rundesk decides what state a turn is in; you decide only how it looks.** An adapter working out on
+its own when a message had been seen would be re-implementing the turn, and two surfaces would
+eventually disagree about the same run with the run's own account matching neither.
+
+**Splitting is core's job. Do not re-split.** The text on a `deliver` is already inside what the
+platform takes. **Check it and refuse it if it is not** — a text past your limit is rundesk having
+failed to split, and cutting it quietly would report as whole a delivery that was not. The previous
+build held the limit in each adapter, and the two drifted: Slack found that cutting at the last
+newline could put a single completion line in a message of its own carrying the mention, and fixed
+it; Discord still had the original rule. One copy of a rule cannot drift from itself.
+
+**A file going out is verified twice and the second check is yours.** Rundesk resolves the path,
+contains it to a root that agent may send from, opens every component with `O_NOFOLLOW` and reports
+the size and digest of the descriptor it opened. **Re-open it the same way, stream it into a snapshot,
+compare both against `bytes` and `sha256`, and send the snapshot rather than the path.** Between the
+approval and the send a concurrent turn can replace the file — or replace a directory above it with a
+link to somewhere else — and only a re-open sees that. Refuse the whole delivery on any mismatch:
+posting the words and quietly leaving the file behind reports a delivery that did not happen the way
+it was asked for, and nothing downstream could tell.
+
+**The interpreter arrives on `PATH`. Never count directories.** Covered above; it cost the previous
+build a whole release.
+
+**Never a credential on a command line, and never one in `settings`.** A command line is readable
+through the process list and lands in a shell's history. `settings` is written into the channel's
+record, so a token put there is a token in a file that outlives the connection. One environment
+variable, named by you in `secret.env`, and no fallback file — a second place to look is a second
+thing that can silently be the wrong one.
+
+**stdout is a protocol; stderr is for what you have no words for.** One traceback across stdout is a
+line no reader can parse in the middle of a stream it is parsing. Anything worth an owner's attention
+that you *do* have words for is a `note`, which is a line a reader parses like every other line.
+Nothing else may go to stdout — no library that prints, no progress bar, no `print` you left in.
+
+**Flush every line as you write it.** stdout is a pipe, and a pipe is block-buffered by default: an
+adapter that buffers is one whose `ready` sits unseen until a block's worth has piled up behind it.
+The answer to one message must not wait behind the answer to the next. `print(…, flush=True)` in
+Python; in `/bin/sh` the `printf` builtin writes straight through, which is why the example below
+needs nothing.
+
+**End your lines.** A run of more than a megabyte with no newline in it is read to its end and thrown
+away, and a warning is written once. Measured before it was bounded: an adapter that wrote 300MB
+without a newline took the gateway from 17MB to 735MB of resident memory, after which the kernel
+ended the gateway outright, which logs nothing anywhere.
+
+**Bound your own read too.** Rundesk's records are small, and a reader with no ceiling is the same
+defect facing the other way.
+
+**Keep what you hold bounded.** You run for months. A map with an entry per conversation and no way
+out of it is a leak that shows first on the machine that has been up longest, and a background task
+dropped without being cancelled goes on running for the rest of the process's life.
+
+**Nothing you write down is the only copy.** The agent's own records hold what was asked and what
+came back. An adapter keeping its own account becomes the only place something was said, and it goes
+when the platform's history does.
+
+## Every bound and number
+
+Rundesk's, unless the last column says otherwise.
+
+| | | What it protects |
+|---|--:|---|
+| ceiling on `--capabilities` | 60 s | the one place an unvetted program runs before anything is written down. The answer needs no network and no account, so a minute is already generous |
+| ceiling on `--check` | 300 s | it signs in to somebody else's service over somebody else's network — and a person is standing at a terminal waiting for it |
+| ceiling on `serve` | none | a program that will still be here in six months |
+| one line read from an adapter | 1 MiB | what is held at once, never what may be said. Past it with no newline, the run is discarded |
+| a message body written down | 64 KiB | a stranger's text arriving on somebody else's schedule. Clipped, not refused |
+| attachments taken from one message | 10 | an agent's directory is not somewhere a stranger gets to fill |
+| one attachment | 32 MiB | the same, by size |
+| days of arrivals kept | 60 | swept whole days at a time, once a day, age taken from the directory's name and never from a modification time a restore would have reset |
+| an attachment's name | 120 chars, `A-Za-z0-9._-` only | kept from the *end* — an extension is worth more than the start of a sentence somebody used as a filename. Everything else becomes `-`, which makes traversal impossible rather than merely refused |
+| files one delivery may carry | 10 | de-duplicated by path first: one file named twice is one file, and a platform would post it twice |
+| a message rundesk splits to | 2000 chars | what a platform is assumed to take when nothing said otherwise. Small enough to be safe everywhere |
+| hold-off before an adapter is started again | 10 s | long enough not to hammer a platform that is refusing us, short enough that an owner does not notice |
+| hold-off after exit `78` | this gateway's lifetime | what has to change is the channel's configuration, and putting that right ends with the gateway being restarted |
+| stopping one adapter, on shutdown | the gateway's share, divided, never below 1 s | the whole shutdown has to fit inside the job's `ExitTimeOut`, and channels share that budget with schedules |
+| stopping one adapter, mid-life | 5 s | the loop is held for the whole of it and the beat is fifteen seconds — and it is enough for a `SIGTERM` to be answered before the `SIGKILL` behind it |
+| `stderr.log` | 256 KiB, 3 kept | moved aside when the adapter is started. A channel that reconnects noisily for a week must not fill a disk, and the beginning of the trouble is the part worth keeping |
+| an adapter's last words copied into the agent's log | 20 lines, 500 chars each | the whole of it stays in the file; a megabyte of traceback would roll the rest of the day off the end of what somebody came to read |
+| a display name carried into a prompt | 80 chars, one line | *the adapter's.* A display name is somewhere somebody can write something shaped like an instruction, and a newline is how they would end our sentence and start their own |
+| what one message may bring in | 10 files, 32 MiB each | *the adapter's*, and not a second copy of rundesk's — it exists so the adapter does not spend a platform's bandwidth on files that will be refused a moment later |
+
+## The smallest adapter that is not a lie
+
+Complete, and it runs. It reaches no platform and says so.
+
+```sh
+#!/bin/sh
+# quiet — an adapter that reaches no platform and is honest about it.
+set -eu
+
+case "${1-}" in
+--capabilities)
+    # Every field left out is read as the least capable answer, so `{}` is a whole adapter.
+    printf '%s\n' '{"max_text": 2000}'
+    exit 0
+    ;;
+--check)
+    shift                                  # whatever the owner typed after --with is now "$@"
+    if [ -z "${RUNDESK_ALLOW-}" ]; then
+        # A refusal, not a failure: it prints an object and exits 0, and `why` is the whole of
+        # what a person at a terminal can act on.
+        printf '%s\n' '{"ok": false, "why": "nothing said who may reach this agent"}'
+        exit 0
+    fi
+    printf '%s\n' '{"ok": true, "describes": "nothing at all — this reaches no platform", "notify_place": "nowhere", "settings": {}, "secret": {"env": []}}'
+    exit 0
+    ;;
+serve)
+    printf '%s\n' '{"say": "ready", "as": "quiet"}'
+    while IFS= read -r line; do
+        case "$line" in
+        *'"do": "stop"'*) break ;;
+        *'"do": "deliver"'*)
+            printf '%s\n' '{"say": "note", "level": "info", "text": "a delivery went nowhere"}'
+            ;;
+        esac
+    done
+    printf '%s\n' '{"say": "gone", "why": "rundesk asked this to stop"}'
+    exit 0
+    ;;
+esac
+
+printf 'quiet: %s is not one of --capabilities, --check [options] or serve\n' "${*:-nothing}" >&2
+exit 2
+```
+
+It is honest in the four ways that matter: it declares only what it can do, it refuses rather than
+pretending when it has not been told who may reach the agent, it answers every invocation the seam
+asks for, and it never claims to have delivered anything. Matching `"do"` with a shell `case` is fine
+for this and is not fine for a real one — a real adapter parses each line as JSON.
+
+**Put it somewhere and point rundesk at it:**
+
+```sh
+chmod +x ~/work/quiet
+rundesk channels add alan ~/work/quiet --allow 341709...
+```
+
+The separator matters: a bare name is looked for among the installed adapters, and anything with a
+separator in it is used as a path. `~` is expanded.
+
+> **`./quiet` on its own does not work today**, and the failure is confusing rather than loud:
+> `Path("./quiet")` normalises to `quiet`, which then has no separator left in it by the time the
+> program is started, so it is looked for on `PATH` and the refusal reads *"the ./quiet adapter did
+> not start: [Errno 2] No such file or directory: 'quiet'"*. An absolute path works, and so does any
+> relative path with a directory component that survives normalising — `ad/quiet`, `../ad/quiet`.
+> Named here because it is exactly the spelling somebody reaches for first.
+
+## What is not built yet
+
+Said plainly, because a page that quietly omitted this would be one somebody writes against and then
+cannot explain.
+
+**There is no provider layer.** Nothing runs a turn, so **nothing produces `working`, `done`,
+`stopped` or `failed`**, and there is no streamed thinking, no tool activity, no usage and no answer.
+A message from somebody allowed is recorded, marked `seen`, and answered by nothing — and the
+gateway's log says exactly that, rather than leaving it looking as though something went wrong.
+Implement the other four states and expect them to be silent for now.
+
+**What `--capabilities` says is asked for and thrown away.** It is printed once, by `channels add`,
+and there is no column in the `channels` table holding it — so `max_text` is declared and not used,
+and the only thing producing a delivery today is a gateway notice, split at the flat 2000. Two
+docstrings say otherwise (`channels/adapters.py` and `commands/channels.py` both describe it as
+written into the record) and the code does not do it. Declare your real limit anyway — it is what a
+splitter will read on the day there is one — and go on checking the text you are handed, because that
+check is what catches the day the two disagree.
+
+**Nothing correlates a delivery with what became of it.** `{"say": "delivered", "id": …,
+"external_id": …}` is what the shipped adapter sends after a successful post, and rundesk ignores it —
+along with every other unrecognised `say`. Send it; it costs nothing and it is the shape a reader
+will take. The `id` on a `failed` is ignored the same way, and `retry_after` with it.
+
+**`reply_to` on a `deliver` is understood by the shipped adapter and never sent.** Nothing in rundesk
+produces one.
+
+**`place` and `display` on an `arrived` are read by nothing.** The shipped adapter sends `"place":
+"dm"` or `"room"` and a flattened display name; rundesk keeps neither today.
+
+**There are no `control`, `query` or `configure` records**, and no `query-result`. Those are the
+previous build's contract, are named here only because somebody will arrive from that page looking
+for them, and nothing in this build sends or answers one.
+
+**Nothing downloads on rundesk's side.** The adapter holds the credential and rundesk does not; the
+adapter fetches, and rundesk decides where it lands. The previous build's page has that the other way
+round on the way out and is right about the way in.
+
+## How to check your adapter
+
+**By hand, which is most of it.** Both questions are ordinary programs answering on stdout:
+
+```sh
+./quiet --capabilities
+RUNDESK_ALLOW=341709... ./quiet --check
+RUNDESK_ALLOW=341709... MY_TOKEN=… ./quiet --check --room 9930
+./quiet nonsense; echo $?          # 2, and the complaint on stderr
+```
+
+Read what comes back with `python3 -m json.tool` if you want it checked as JSON. Then the three things
+that are easy to get wrong and invisible from a successful run:
+
+- **stdout carries the object and nothing else.** `./quiet --check >/dev/null` should show you every
+  line you meant to put on stderr, and no others.
+- **`ok: false` still exits `0`.** `echo $?` after a refusal.
+- **`serve` flushes.** `./quiet serve | cat` should print `ready` immediately, not when the process
+  ends.
+
+**Then through rundesk.** Against a scratch root, never `~/.rundesk`:
+
+```sh
+export RUNDESK_HOME=/tmp/scratch-rundesk
+rundesk agents add alan --provider anthropic
+rundesk channels add alan ~/work/quiet --allow 341709...
+rundesk channels show alan ~/work/quiet
+rundesk channels test alan ~/work/quiet    # connect again; changes nothing
+rundesk channels doctor
+```
+
+The channel is addressed afterwards by exactly the string that was typed, so use one spelling. From
+a checkout, `./dev --home /tmp/scratch-rundesk channels …` does the same thing and refuses to point
+at the real install.
+
+`channels add` prints what it wrote down. The `can` line is your `--capabilities` answer, printed
+there once and kept nowhere, so it is the only place you will ever see it; `keeps` is the directory
+that becomes your `RUNDESK_CHANNEL_HOME`; `standing` is asked of the kernel through the claim.
+
+**`rundesk channels doctor` really connects**, exits non-zero when anything is wrong, and answers in
+one of four words:
+
+| | What it says about your adapter |
+|---|---|
+| `READY` | it is there, its credential is set, and `--check` came back `ok` just now |
+| `BLOCKED` | a name in your `secret.env` has no value on this install. No round trip was paid |
+| `UNREACHABLE` | everything is in place and your `--check` said no. The `why` you wrote is the line printed |
+| `DANGLING` | there is no program at that name any more — moved, renamed, or its executable bit lost |
+
+**And `serve` is only ever exercised by a gateway.** `rundesk gateways run <agent>` hosts one in the
+foreground; what your adapter says lands in that agent's day log in `data/agents/<name>/logs/`, and
+what it wrote to stderr lands in `data/agents/<name>/channels/<kind>/stderr.log` — where `<kind>` is
+the channel's name flattened the way a filename is, so a path-form adapter gets a long one. Watch
+both. The
+first pass of the loop is where a channel that cannot start says so, and it says it once rather than
+every fifteen seconds.
