@@ -96,7 +96,7 @@ class WhatItSays(Streaming):
     def test_a_program_that_says_nothing_ends_the_stream(self):
         one = self.given("pass")
         self.assertEqual(list(one.records()), [])
-        self.assertIsNone(one.trouble)
+        self.assertIsNone(one.stop_reason)
 
     def test_a_slow_reader_still_receives_everything(self):
         """The thread reads ahead so a turn that spends a fifth of a second on a record — which a
@@ -120,7 +120,7 @@ class WhenItGoesQuiet(Streaming):
         one = self.given(GOES_QUIET.format(for_seconds=30), silence=0.6)
         got = list(one.records())
         self.assertEqual(got, ["first\n"])
-        self.assertIn("said nothing", one.trouble)
+        self.assertIn("said nothing", one.stop_reason)
 
     def test_ending_a_quiet_program_does_not_wait_for_it_to_finish(self):
         """The defect this was written for was a hang, and only a clock can see it.
@@ -144,7 +144,7 @@ class WhenItGoesQuiet(Streaming):
         one = self.given(ONLY_COMPLAINS.format(many=12, every=0.1), silence=0.6)
         began = time.monotonic()
         self.assertEqual(list(one.records()), [])
-        self.assertIsNone(one.trouble,
+        self.assertIsNone(one.stop_reason,
                           "a program writing to stderr throughout was taken for wedged")
         self.assertGreater(time.monotonic() - began, 0.6,
                            "the program ended before the silence window had even elapsed")
@@ -154,7 +154,7 @@ class WhenItGoesQuiet(Streaming):
         one = self.given(KEEPS_TALKING, silence=30.0, ceiling=0.7)
         got = list(one.records())
         self.assertTrue(got)
-        self.assertIn("still running", one.trouble)
+        self.assertIn("still running", one.stop_reason)
 
 
 class SayingSomethingToIt(Streaming):
@@ -200,8 +200,8 @@ class WhenTheTurnCannotKeepUp(Streaming):
         gaps = [said for said in got if isinstance(said, lines.Gap)]
         said = [one for one in got if isinstance(one, str)]
         self.assertTrue(gaps, "400 lines into a queue of 2 lost nothing, which cannot be true")
-        self.assertEqual(gaps[0].why, streaming.FELL_BEHIND)
-        self.assertGreater(gaps[0].lost, 0)
+        self.assertEqual(gaps[0].reason, streaming.FELL_BEHIND)
+        self.assertGreater(gaps[0].lost_count, 0)
         self.assertLess(len(said), 400, "nothing was lost, so the queue was waited on")
 
     def test_what_survived_still_arrives_in_the_order_it_was_said(self):

@@ -74,9 +74,9 @@ CAPABILITIES = ("tools", "resume", "model", "usage", "steer")
 #: because a posture nobody can act on is not worth carrying: an adapter maps these onto whatever
 #: its own brain understands, or ignores them. **rundesk enforces neither** — it has no way to, and
 #: pretending otherwise would be worse than saying so.
-READ = "read"
-WORK = "work"
-POSTURES = (READ, WORK)
+ACCESS_READ = "read"
+ACCESS_WORK = "work"
+ACCESS_MODES = (ACCESS_READ, ACCESS_WORK)
 
 #: What rundesk sends a brain that can be steered. One kind, because there is one thing to say to a
 #: running brain: more words.
@@ -118,12 +118,12 @@ CANCELLED = "cancelled"                   # somebody stopped it, or the gateway 
 TIMED_OUT = "timed_out"                   # rundesk ended it: silent too long, or past the ceiling
 CRASHED = "crashed"                       # the adapter or its brain fell over
 
-BECAUSE = (SIGNED_OUT, NO_ACCESS, NO_CREDIT, USAGE_EXHAUSTED, RATE_LIMITED, CONTEXT_EXCEEDED,
+FAILURE_CODES = (SIGNED_OUT, NO_ACCESS, NO_CREDIT, USAGE_EXHAUSTED, RATE_LIMITED, CONTEXT_EXCEEDED,
            UPSTREAM_ERROR, OFFLINE, REFUSED, CANCELLED, TIMED_OUT, CRASHED)
 
 #: The words rundesk may write on its own account, because they are about what rundesk did or saw
 #: rather than about what the brain decided. Everything else in `BECAUSE` has to come from the brain.
-OBSERVED_HERE = (CANCELLED, TIMED_OUT, CRASHED)
+OBSERVED_BY_RUNDESK = (CANCELLED, TIMED_OUT, CRASHED)
 
 #: The words where trying the same turn again could reasonably work, once. Everything absent from
 #: this needs a person: a login to run, a card to add, a conversation to start fresh, or a decision
@@ -132,32 +132,32 @@ OBSERVED_HERE = (CANCELLED, TIMED_OUT, CRASHED)
 #: **This is a classification and never a policy.** Nothing here retries anything; what this answers
 #: is the only question a caller asks about one of these words, so that the answer is in one place
 #: rather than re-derived — differently — at each call site.
-WORTH_TRYING_AGAIN = (RATE_LIMITED, UPSTREAM_ERROR, OFFLINE, CRASHED)
+RETRYABLE_FAILURE_CODES = (RATE_LIMITED, UPSTREAM_ERROR, OFFLINE, CRASHED)
 
 
-def worth_trying_again(because: Optional[str]) -> bool:
+def is_retryable(failure_code: Optional[str]) -> bool:
     """Whether this is a turn the same request could survive later. Unknown or absent is **no**.
 
     The safe way round: a word this release does not know might mean "your card was declined", and
     answering yes to that is how a product bills somebody twice for a turn nobody can run.
     """
-    return because in WORTH_TRYING_AGAIN
+    return failure_code in RETRYABLE_FAILURE_CODES
 
 
-def needs_a_person(because: Optional[str]) -> bool:
+def needs_human_action(failure_code: Optional[str]) -> bool:
     """Whether nothing will change until somebody does something about it.
 
     What this is for is saying so *once* rather than every time: an agent whose brain is signed out
     fails identically on every message until a person logs in, and a surface that could not tell
     that apart from a transient failure would say the same thing all day.
     """
-    return because in (SIGNED_OUT, NO_ACCESS, NO_CREDIT)
+    return failure_code in (SIGNED_OUT, NO_ACCESS, NO_CREDIT)
 
 
 # ── Reading what an adapter said ──────────────────────────────────────────────────────────────
 
 
-def understood(said: str) -> Optional[Dict[str, Any]]:
+def parse_record(said: str) -> Optional[Dict[str, Any]]:
     """One line, as one of the records this release knows — or `None` if it is not one.
 
     **Nothing is refused here and nothing raises.** A line that will not parse, a line that is not an
@@ -175,7 +175,7 @@ def understood(said: str) -> Optional[Dict[str, Any]]:
     return it if it.get("type") in RECORDS else None
 
 
-def spoken(text: str, context: str = "") -> str:
+def build_say_line(text: str, context: str = "") -> str:
     """One thing said *to* a brain, as the line it reads.
 
     Records rather than plain text, and only for an adapter that said it can be steered: its input
@@ -192,7 +192,7 @@ def spoken(text: str, context: str = "") -> str:
     return json.dumps(record) + "\n"
 
 
-def claimed(said: Any) -> Dict[str, bool]:
+def parse_capabilities(said: Any) -> Dict[str, bool]:
     """What an adapter says it can do, as an answer to every question rather than some.
 
     Absent is no, so a brain that says nothing is not asked to have anything. Read from whatever came
@@ -210,7 +210,7 @@ def claimed(said: Any) -> Dict[str, bool]:
 # that proving them costs a list of dicts and nothing else.
 
 
-class Cost(NamedTuple):
+class Usage(NamedTuple):
     """What a turn cost, or that nobody said what it cost.
 
     `reported` is the field to read first. **Zero and unknown are different answers**, and a spend
@@ -224,16 +224,16 @@ class Cost(NamedTuple):
     out, and it goes **down** when a conversation is compacted, which no total can.
     """
 
-    reported: bool = False
-    fresh: Optional[int] = None
-    output: Optional[int] = None
-    cache_read: Optional[int] = None
-    cache_write: Optional[int] = None
-    context: Optional[int] = None
-    model: Optional[str] = None
+    usage_reported: bool = False
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cache_read_tokens: Optional[int] = None
+    cache_write_tokens: Optional[int] = None
+    context_tokens: Optional[int] = None
+    model_name: Optional[str] = None
 
 
-def finished(said: Iterable[Dict[str, Any]]) -> Optional[bool]:
+def brain_said_ok(said: Iterable[Dict[str, Any]]) -> Optional[bool]:
     """Whether the brain said the turn worked, or said nothing about it at all.
 
     Three answers, and the third is the one that matters: **no `done` record at all** is the shape a
@@ -245,7 +245,7 @@ def finished(said: Iterable[Dict[str, Any]]) -> Optional[bool]:
     return None
 
 
-def answered(said: Iterable[Dict[str, Any]]) -> bool:
+def has_answer(said: Iterable[Dict[str, Any]]) -> bool:
     """Whether whoever asked got anything back at all.
 
     **A program exiting well is not an answer.** Measured on a live gateway: a resumed session
@@ -279,7 +279,7 @@ def resume_handle(said: Iterable[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
-def why(said: Iterable[Dict[str, Any]]) -> Optional[str]:
+def failure_message(said: Iterable[Dict[str, Any]]) -> Optional[str]:
     """What the brain said went wrong, in its own words — the prose a person reads.
 
     Taken off the record that ends the turn rather than from the error stream, because a turn that
@@ -287,12 +287,12 @@ def why(said: Iterable[Dict[str, Any]]) -> Optional[str]:
     """
     for one in _backwards(said):
         if one.get("type") == "done":
-            said_why = one.get("why")
-            return said_why if isinstance(said_why, str) and said_why else None
+            said = one.get("why")
+            return said if isinstance(said, str) and said else None
     return None
 
 
-def because(said: Iterable[Dict[str, Any]]) -> Optional[str]:
+def failure_code(said: Iterable[Dict[str, Any]]) -> Optional[str]:
     """Which of the closed words the brain gave for stopping, if it gave one at all.
 
     A word this release does not know is **dropped rather than stored**. The whole value of a closed
@@ -303,11 +303,11 @@ def because(said: Iterable[Dict[str, Any]]) -> Optional[str]:
     for one in _backwards(said):
         if one.get("type") == "done":
             word = one.get("because")
-            return word if isinstance(word, str) and word in BECAUSE else None
+            return word if isinstance(word, str) and word in FAILURE_CODES else None
     return None
 
 
-def cost(said: Iterable[Dict[str, Any]]) -> Cost:
+def usage_of(said: Iterable[Dict[str, Any]]) -> Usage:
     """What this turn cost, or that nobody said.
 
     What a brain reported is recorded as reported and never adjusted: the arithmetic that turns a
@@ -324,25 +324,25 @@ def cost(said: Iterable[Dict[str, Any]]) -> Cost:
     """
     counted = [one for one in said if one.get("type") == "usage"]
     if not counted:
-        return Cost()
+        return Usage()
     totals = {}
-    for ours, theirs in (("fresh", "input"), ("output", "output"),
-                         ("cache_read", "cached"), ("cache_write", "written")):
+    for ours, theirs in (("input_tokens", "input"), ("output_tokens", "output"),
+                         ("cache_read_tokens", "cached"), ("cache_write_tokens", "written")):
         values = [one[theirs] for one in counted if _a_count(one.get(theirs))]
         if values:
             totals[ours] = sum(values)
     levels = [one["session"] for one in counted if _a_count(one.get("session"))]
     if levels:
-        totals["context"] = levels[-1]
+        totals["context_tokens"] = levels[-1]
     # Only ever what a brain said actually answered. One that names none leaves none claimed, rather
     # than the one that happened to be asked for — a model requested is not a model measured.
     named = [str(one.get("model")) for one in counted if one.get("model")]
     if named:
-        totals["model"] = named[-1]
-    return Cost(reported=True, **totals)
+        totals["model_name"] = named[-1]
+    return Usage(usage_reported=True, **totals)
 
 
-def files(said: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def file_records(said: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Everything the brain said it made, in the order it said so.
 
     Named by the brain and never guessed at: what a tool printed is not a promise that a file exists,
@@ -351,7 +351,7 @@ def files(said: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [one for one in said if one.get("type") == "file"]
 
 
-def limits(said: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def limit_records(said: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Every piece of account state the brain reported — what is left, and when it comes back.
 
     Kept apart from the turn's outcome on purpose: **a turn carrying one of these may have
@@ -419,7 +419,7 @@ def reply(said: Iterable[Dict[str, Any]]) -> str:
     return "\n\n".join(thoughts(said))
 
 
-def closing(said: Iterable[Dict[str, Any]]) -> str:
+def last_thought(said: Iterable[Dict[str, Any]]) -> str:
     """The last whole thing the brain said — what a turn nobody watched answers with.
 
     **Decided after the turn is over, which is the only moment it is a fact.** A brain cannot mark

@@ -31,7 +31,7 @@ May depend on `agents`, `core` and `utils`.
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
 from rundesk.agents import directory, records
@@ -310,4 +310,4 @@ def _why_the_records_refused(agent: str, kind: str, why: sqlite3.IntegrityError)
 
 def _now(when: Optional[datetime] = None) -> str:
     """A moment this product keeps for a machine to compare, in the one shape it keeps them in."""
-    return (when or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime(config.MOMENT)
+    return config.moment_of(when)

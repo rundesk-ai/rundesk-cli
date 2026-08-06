@@ -52,8 +52,8 @@ class Gap(NamedTuple):
     which layer a loss came from in order to report it honestly.
     """
 
-    lost: int
-    why: str
+    lost_count: int
+    reason: str
 
 
 def read(stream: IO[str], at_most: int) -> Iterator[Union[str, Gap]]:
@@ -101,7 +101,7 @@ def read(stream: IO[str], at_most: int) -> Iterator[Union[str, Gap]]:
         yield pending
 
 
-def _one_more_lost(pending: Optional[Gap], why: str) -> Tuple[Optional[Gap], Gap]:
+def _one_more_lost(pending: Optional[Gap], reason: str) -> Tuple[Optional[Gap], Gap]:
     """One more line lost: the gap that is now finished, and the one still being accumulated.
 
     Two kinds never merge. `TOO_LONG` and `UNTERMINATED` are different news, and a reader shown one
@@ -114,10 +114,10 @@ def _one_more_lost(pending: Optional[Gap], why: str) -> Tuple[Optional[Gap], Gap
     which is why this hands back a pair rather than a single gap.
     """
     if pending is None:
-        return None, Gap(1, why)
-    if pending.why == why:
-        return None, Gap(pending.lost + 1, why)
-    return pending, Gap(1, why)
+        return None, Gap(1, reason)
+    if pending.reason == reason:
+        return None, Gap(pending.lost_count + 1, reason)
+    return pending, Gap(1, reason)
 
 
 def _discarded(stream: IO[str], at_most: int) -> None:

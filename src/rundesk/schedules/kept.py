@@ -34,7 +34,7 @@ May depend on `agents`, `core` and `utils`.
 """
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from rundesk.agents import directory, records
@@ -282,4 +282,4 @@ def _now(when: Optional[datetime] = None) -> str:
     `migrations` rows use — the same constant rather than the same literal typed again, which is
     what `agents.migration._now` says about its own.
     """
-    return (when or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime(config.MOMENT)
+    return config.moment_of(when)

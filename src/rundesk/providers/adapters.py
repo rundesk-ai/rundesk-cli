@@ -52,17 +52,6 @@ GIVEN_IN = "providers"
 #: or broken hangs every ask with nothing written down anywhere.
 CAPABILITIES_WITHIN = 60.0
 
-#: What a provider's own directory is called inside an agent's tree. One per (agent, provider), and
-#: **named to the adapter, never made by rundesk**: pointed at a directory that exists, a real brain
-#: does not merely keep a sign-in there — it builds its whole state tree, to tens of megabytes an
-#: agent. What the adapter does inside it is the adapter's business.
-PROVIDERS = "providers"
-
-#: Where a turn's own things stand inside an agent's tree, one directory per conversation. Named here
-#: because `errors_of` is what hands the path to a running adapter, and a second place naming it is a
-#: second thing to keep in step.
-CONVERSATIONS = "conversations"
-
 #: What a conversation's directory holds. The lock is the claim on it — one turn at a time — and the
 #: two files are appended across turns and rotated, rather than written one per turn: an agent taking
 #: fifty turns a day would otherwise leave seventy-odd thousand files a year.
@@ -117,12 +106,12 @@ def home(agent: str, named: str) -> Path:
     directory builds its whole state tree in it, and whether it should is the adapter's decision and
     not rundesk's.
     """
-    return directory.where(agent) / PROVIDERS / key(named)
+    return directory.providers(agent) / key(named)
 
 
 def conversation_at(agent: str, conversation: int) -> Path:
     """The directory one exchange keeps its claim and its two appended files in."""
-    return directory.where(agent) / CONVERSATIONS / str(conversation)
+    return directory.conversations(agent) / str(conversation)
 
 
 def lock_of(agent: str, conversation: int) -> Path:

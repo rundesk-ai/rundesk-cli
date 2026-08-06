@@ -52,69 +52,69 @@ class ReadingOneLine(support.Isolated):
     """Nothing an adapter emits may break a turn, and nothing unknown may be shown to anybody."""
 
     def test_a_record_this_release_knows_comes_back(self):
-        self.assertEqual(protocol.understood('{"type": "done", "ok": true}'),
+        self.assertEqual(protocol.parse_record('{"type": "done", "ok": true}'),
                          {"type": "done", "ok": True})
 
     def test_a_line_that_is_not_json_is_kept_and_shown_to_nobody(self):
-        self.assertIsNone(protocol.understood("this is not a record"))
+        self.assertIsNone(protocol.parse_record("this is not a record"))
 
     def test_a_line_that_is_json_but_not_an_object_is_not_a_record(self):
         for said in ("[1, 2, 3]", '"a string"', "42", "null"):
             with self.subTest(said=said):
-                self.assertIsNone(protocol.understood(said))
+                self.assertIsNone(protocol.parse_record(said))
 
     def test_a_kind_this_release_has_never_heard_of_is_not_a_record(self):
         """An adapter may be ahead of this release, and must not have to wait for one."""
-        self.assertIsNone(protocol.understood('{"type": "telepathy", "text": "hello"}'))
+        self.assertIsNone(protocol.parse_record('{"type": "telepathy", "text": "hello"}'))
 
     def test_a_record_with_no_kind_at_all_is_not_one(self):
-        self.assertIsNone(protocol.understood('{"text": "hello"}'))
+        self.assertIsNone(protocol.parse_record('{"text": "hello"}'))
 
     def test_nothing_it_is_given_raises(self):
         for said in ("", "   ", "{", "{}", '{"type": null}', "\x00"):
             with self.subTest(said=said):
-                protocol.understood(said)
+                protocol.parse_record(said)
 
 
 class SayingSomethingToARunningBrain(support.Isolated):
     def test_it_is_one_line_however_many_the_text_has(self):
-        said = protocol.spoken("first\nsecond\nthird")
+        said = protocol.build_say_line("first\nsecond\nthird")
         self.assertEqual(said.count("\n"), 1)
         self.assertTrue(said.endswith("\n"))
 
     def test_the_text_survives_the_encoding(self):
-        self.assertEqual(json.loads(protocol.spoken("first\nsecond"))["text"], "first\nsecond")
+        self.assertEqual(json.loads(protocol.build_say_line("first\nsecond"))["text"], "first\nsecond")
 
     def test_rundesks_own_context_is_carried_apart_from_the_persons_words(self):
         """Concatenating them would alter what the person is recorded as having said."""
-        record = json.loads(protocol.spoken("stop at five", protocol.STEERING_CONTEXT))
+        record = json.loads(protocol.build_say_line("stop at five", protocol.STEERING_CONTEXT))
         self.assertEqual(record["text"], "stop at five")
         self.assertEqual(record["context"], protocol.STEERING_CONTEXT)
 
     def test_no_context_leaves_the_field_out_rather_than_empty(self):
-        self.assertNotIn("context", json.loads(protocol.spoken("stop at five")))
+        self.assertNotIn("context", json.loads(protocol.build_say_line("stop at five")))
 
 
 class WhatAnAdapterSaysItCanDo(support.Isolated):
     def test_absent_is_no_for_every_one_of_them(self):
-        self.assertEqual(protocol.claimed({}),
+        self.assertEqual(protocol.parse_capabilities({}),
                          dict.fromkeys(protocol.CAPABILITIES, False))
 
     def test_an_answer_that_is_not_an_object_can_do_nothing(self):
         for said in (None, "yes", 7, ["tools"]):
             with self.subTest(said=said):
-                self.assertEqual(protocol.claimed(said),
+                self.assertEqual(protocol.parse_capabilities(said),
                                  dict.fromkeys(protocol.CAPABILITIES, False))
 
     def test_every_question_is_answered_even_when_only_some_were_asked(self):
-        got = protocol.claimed({"tools": True, "steer": True})
+        got = protocol.parse_capabilities({"tools": True, "steer": True})
         self.assertEqual(set(got), set(protocol.CAPABILITIES))
         self.assertTrue(got["tools"])
         self.assertFalse(got["resume"])
 
     def test_anything_else_it_said_is_ignored_rather_than_refused(self):
         """An adapter reporting its own vendor version is answering a question we did not ask."""
-        got = protocol.claimed({"tools": True, "version": "1.2.3"})
+        got = protocol.parse_capabilities({"tools": True, "version": "1.2.3"})
         self.assertNotIn("version", got)
 
 
@@ -122,73 +122,73 @@ class WhyATurnStopped(support.Isolated):
     """Auth, allowance, rate, context, the vendor's own fault, and ours."""
 
     def test_a_word_this_release_knows_is_carried(self):
-        for word in protocol.BECAUSE:
+        for word in protocol.FAILURE_CODES:
             with self.subTest(word=word):
-                self.assertEqual(protocol.because([done(ok=False, because=word)]), word)
+                self.assertEqual(protocol.failure_code([done(ok=False, because=word)]), word)
 
     def test_a_word_from_a_newer_release_is_dropped_rather_than_stored(self):
         """One unknown member sitting silently in the column takes away the whole value of a closed
         set, which is that a reader can exhaust it."""
-        self.assertIsNone(protocol.because([done(ok=False, because="quantum_flux")]))
+        self.assertIsNone(protocol.failure_code([done(ok=False, because="quantum_flux")]))
 
     def test_nothing_is_inferred_from_the_prose_beside_it(self):
         """A word guessed from a failure message is wrong on the first vendor that rewords one."""
         said = [done(ok=False, why="401 Unauthorized: please run the login command")]
-        self.assertIsNone(protocol.because(said))
-        self.assertIn("401", protocol.why(said))
+        self.assertIsNone(protocol.failure_code(said))
+        self.assertIn("401", protocol.failure_message(said))
 
     def test_the_words_rundesk_may_write_itself_are_only_about_what_it_saw(self):
-        for word in protocol.OBSERVED_HERE:
+        for word in protocol.OBSERVED_BY_RUNDESK:
             with self.subTest(word=word):
-                self.assertIn(word, protocol.BECAUSE)
-        self.assertNotIn(protocol.SIGNED_OUT, protocol.OBSERVED_HERE)
-        self.assertNotIn(protocol.RATE_LIMITED, protocol.OBSERVED_HERE)
+                self.assertIn(word, protocol.FAILURE_CODES)
+        self.assertNotIn(protocol.SIGNED_OUT, protocol.OBSERVED_BY_RUNDESK)
+        self.assertNotIn(protocol.RATE_LIMITED, protocol.OBSERVED_BY_RUNDESK)
 
     def test_only_the_transient_ones_are_worth_trying_again(self):
         again = {protocol.RATE_LIMITED, protocol.UPSTREAM_ERROR,
                  protocol.OFFLINE, protocol.CRASHED}
-        for word in protocol.BECAUSE:
+        for word in protocol.FAILURE_CODES:
             with self.subTest(word=word):
-                self.assertEqual(protocol.worth_trying_again(word), word in again)
+                self.assertEqual(protocol.is_retryable(word), word in again)
 
     def test_an_unknown_word_is_never_worth_trying_again(self):
         """The safe way round: it might mean the card was declined."""
-        self.assertFalse(protocol.worth_trying_again("quantum_flux"))
-        self.assertFalse(protocol.worth_trying_again(None))
+        self.assertFalse(protocol.is_retryable("quantum_flux"))
+        self.assertFalse(protocol.is_retryable(None))
 
     def test_the_ones_a_person_has_to_settle_are_named(self):
         for word in (protocol.SIGNED_OUT, protocol.NO_ACCESS, protocol.NO_CREDIT):
             with self.subTest(word=word):
-                self.assertTrue(protocol.needs_a_person(word))
-                self.assertFalse(protocol.worth_trying_again(word))
+                self.assertTrue(protocol.needs_human_action(word))
+                self.assertFalse(protocol.is_retryable(word))
 
     def test_being_rate_limited_is_not_something_a_person_settles(self):
-        self.assertFalse(protocol.needs_a_person(protocol.RATE_LIMITED))
+        self.assertFalse(protocol.needs_human_action(protocol.RATE_LIMITED))
 
 
 class WhetherTheTurnWorked(support.Isolated):
     def test_no_done_record_at_all_is_a_third_answer(self):
         """The shape a killed adapter leaves. Nothing may declare such a turn over on its behalf."""
-        self.assertIsNone(protocol.finished([text("half a thought")]))
+        self.assertIsNone(protocol.brain_said_ok([text("half a thought")]))
 
     def test_a_brain_that_said_no_is_told_apart_from_one_that_said_nothing(self):
-        self.assertIs(protocol.finished([done(ok=False)]), False)
-        self.assertIs(protocol.finished([done(ok=True)]), True)
+        self.assertIs(protocol.brain_said_ok([done(ok=False)]), False)
+        self.assertIs(protocol.brain_said_ok([done(ok=True)]), True)
 
     def test_a_turn_that_said_nothing_at_all_answered_nobody(self):
         """Measured on a live gateway: `done ok:true`, four zero counters, fourteen milliseconds,
         and nothing said — recorded as finished, and the question was consumed."""
-        self.assertFalse(protocol.answered([done(), {"type": "usage", "input": 0, "output": 0}]))
+        self.assertFalse(protocol.has_answer([done(), {"type": "usage", "input": 0, "output": 0}]))
 
     def test_whitespace_is_not_an_answer(self):
-        self.assertFalse(protocol.answered([text("   \n  "), done()]))
+        self.assertFalse(protocol.has_answer([text("   \n  "), done()]))
 
     def test_a_file_is_an_answer_even_with_nothing_typed_about_it(self):
-        self.assertTrue(protocol.answered([{"type": "file", "at": "/tmp/chart.png"}, done()]))
+        self.assertTrue(protocol.has_answer([{"type": "file", "at": "/tmp/chart.png"}, done()]))
 
     def test_a_tool_call_is_not_an_answer(self):
         """Reading a file and thinking about it is work nobody receives."""
-        self.assertFalse(protocol.answered([{"type": "tool", "id": "1", "did": "read"}, done()]))
+        self.assertFalse(protocol.has_answer([{"type": "tool", "id": "1", "did": "read"}, done()]))
 
 
 class WhereTheConversationGotTo(support.Isolated):
@@ -206,59 +206,59 @@ class WhatATurnCost(support.Isolated):
     def test_no_usage_record_is_not_a_cost_of_nothing(self):
         """Zero and unknown are different answers, and a spend limit reading the first for the
         second would never fire."""
-        cost = protocol.cost([done()])
-        self.assertFalse(cost.reported)
-        self.assertIsNone(cost.fresh)
-        self.assertIsNone(cost.output)
+        used = protocol.usage_of([done()])
+        self.assertFalse(used.usage_reported)
+        self.assertIsNone(used.input_tokens)
+        self.assertIsNone(used.output_tokens)
 
     def test_a_usage_record_with_no_numbers_still_counts_as_reported(self):
-        cost = protocol.cost([{"type": "usage"}, done()])
-        self.assertTrue(cost.reported)
-        self.assertIsNone(cost.fresh)
+        used = protocol.usage_of([{"type": "usage"}, done()])
+        self.assertTrue(used.usage_reported)
+        self.assertIsNone(used.input_tokens)
 
     def test_a_quantity_the_brain_could_not_tell_stays_unknown(self):
         """Summing an absent cached figure into zero says it read nothing from the cache."""
-        cost = protocol.cost([{"type": "usage", "input": 20, "output": 5}, done()])
-        self.assertEqual(cost.fresh, 20)
-        self.assertIsNone(cost.cache_read)
-        self.assertIsNone(cost.cache_write)
+        used = protocol.usage_of([{"type": "usage", "input": 20, "output": 5}, done()])
+        self.assertEqual(used.input_tokens, 20)
+        self.assertIsNone(used.cache_read_tokens)
+        self.assertIsNone(used.cache_write_tokens)
 
     def test_the_four_billed_quantities_are_never_folded_together(self):
-        cost = protocol.cost([{"type": "usage", "input": 20, "output": 1510,
+        used = protocol.usage_of([{"type": "usage", "input": 20, "output": 1510,
                                "cached": 302567, "written": 17453}, done()])
-        self.assertEqual((cost.fresh, cost.output, cost.cache_read, cost.cache_write),
+        self.assertEqual((used.input_tokens, used.output_tokens, used.cache_read_tokens, used.cache_write_tokens),
                          (20, 1510, 302567, 17453))
 
     def test_quantities_from_several_records_are_summed(self):
-        cost = protocol.cost([{"type": "usage", "input": 10, "output": 1},
+        used = protocol.usage_of([{"type": "usage", "input": 10, "output": 1},
                               {"type": "usage", "input": 20, "output": 2}, done()])
-        self.assertEqual((cost.fresh, cost.output), (30, 3))
+        self.assertEqual((used.input_tokens, used.output_tokens), (30, 3))
 
     def test_how_big_the_conversation_is_takes_the_last_and_never_the_sum(self):
         """A level, not a quantity — it goes *down* when a conversation is compacted, which no
         running total can, so adding snapshots would invent a number nothing measured."""
-        cost = protocol.cost([{"type": "usage", "session": 9200},
+        used = protocol.usage_of([{"type": "usage", "session": 9200},
                               {"type": "usage", "session": 4100}, done()])
-        self.assertEqual(cost.context, 4100)
+        self.assertEqual(used.context_tokens, 4100)
 
     def test_a_boolean_is_not_a_count(self):
-        cost = protocol.cost([{"type": "usage", "input": True, "output": 5}, done()])
-        self.assertIsNone(cost.fresh)
-        self.assertEqual(cost.output, 5)
+        used = protocol.usage_of([{"type": "usage", "input": True, "output": 5}, done()])
+        self.assertIsNone(used.input_tokens)
+        self.assertEqual(used.output_tokens, 5)
 
     def test_only_a_model_that_answered_is_claimed(self):
         """A model requested is not a model measured."""
-        self.assertIsNone(protocol.cost([{"type": "usage", "input": 1}, done()]).model)
-        self.assertEqual(protocol.cost([{"type": "usage", "model": "m-1"}, done()]).model, "m-1")
+        self.assertIsNone(protocol.usage_of([{"type": "usage", "input": 1}, done()]).model_name)
+        self.assertEqual(protocol.usage_of([{"type": "usage", "model": "m-1"}, done()]).model_name, "m-1")
 
 
 class AccountStateIsNotAnOutcome(support.Isolated):
     def test_a_limit_is_carried_without_failing_the_turn(self):
         """A turn carrying one of these may have succeeded — it is news about the account."""
         said = [{"type": "limit", "left": 12, "resets_at": "2026-08-06T00:00:00Z"}, done()]
-        self.assertEqual(len(protocol.limits(said)), 1)
-        self.assertIs(protocol.finished(said), True)
-        self.assertIsNone(protocol.because(said))
+        self.assertEqual(len(protocol.limit_records(said)), 1)
+        self.assertIs(protocol.brain_said_ok(said), True)
+        self.assertIsNone(protocol.failure_code(said))
 
 
 class SplittingWhatTheBrainSaid(support.Isolated):
@@ -297,10 +297,10 @@ class SplittingWhatTheBrainSaid(support.Isolated):
     def test_the_closing_thought_is_the_last_one_and_not_the_whole_turn(self):
         said = [text("Looking at the logs."), {"type": "tool", "id": "1", "did": "read"},
                 text("Three files changed.")]
-        self.assertEqual(protocol.closing(said), "Three files changed.")
+        self.assertEqual(protocol.last_thought(said), "Three files changed.")
 
     def test_a_turn_that_said_nothing_closes_on_nothing(self):
-        self.assertEqual(protocol.closing([done()]), "")
+        self.assertEqual(protocol.last_thought([done()]), "")
 
     def test_blank_lines_inside_a_thought_are_the_brains_and_are_kept(self):
         said = [text("first para\n\nsecond para", whole=True)]
@@ -318,15 +318,15 @@ class WhatTheBrainMade(support.Isolated):
         """What a tool printed is not a promise that a file exists."""
         said = [{"type": "tool", "id": "1", "did": "make"},
                 {"type": "file", "at": "/tmp/chart.png", "name": "chart.png"}, done()]
-        self.assertEqual([one["name"] for one in protocol.files(said)], ["chart.png"])
+        self.assertEqual([one["name"] for one in protocol.file_records(said)], ["chart.png"])
 
 
 class TheReadingsTakeAnyIterable(support.Isolated):
     def test_a_generator_does_not_raise_on_the_readings_that_look_backwards(self):
         """Reversing a generator raises, and it would raise only on the path where a turn had
         already gone wrong."""
-        for reading in (protocol.finished, protocol.because, protocol.why,
-                        protocol.resume_handle):
+        for reading in (protocol.brain_said_ok, protocol.failure_code,
+                        protocol.failure_message, protocol.resume_handle):
             with self.subTest(reading=reading.__name__):
                 reading(one for one in [done(ok=False, because=protocol.CRASHED, why="fell over")])
 

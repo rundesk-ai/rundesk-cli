@@ -19,7 +19,7 @@ def built(**also):
     """One turn's environment, with everything a caller must supply already filled in."""
     said = {"agent": "ava", "home": Path("/agents/ava/home"),
             "provider_home": Path("/agents/ava/providers/mine"),
-            "skills": Path("/agents/ava/home/skills"), "turn": 7, "posture": protocol.WORK}
+            "skills": Path("/agents/ava/home/skills"), "turn": 7, "access_mode": protocol.ACCESS_WORK}
     said.update(also)
     return environment.for_turn(**said)
 
@@ -28,7 +28,7 @@ class WhatEveryTurnIsTold(support.Isolated):
     def test_the_ones_that_are_always_there(self):
         said = built()
         for name in (environment.CWD, environment.PROVIDER_HOME, environment.SKILLS,
-                     environment.RUN, environment.AGENT, environment.POSTURE,
+                     environment.RUN, environment.AGENT, environment.ACCESS_MODE,
                      environment.CONTINUITY):
             with self.subTest(name=name):
                 self.assertIn(name, said)
@@ -85,7 +85,7 @@ class TheOwnersOwnValues(support.Isolated):
     def test_a_name_added_to_the_interface_is_protected_from_the_moment_it_lands(self):
         """The point of asking `name not in said` rather than consulting a list kept here."""
         for name in (environment.CWD, environment.PROVIDER_HOME, environment.SKILLS,
-                     environment.RUN, environment.AGENT, environment.POSTURE,
+                     environment.RUN, environment.AGENT, environment.ACCESS_MODE,
                      environment.CONTINUITY, "PATH", "TERM"):
             with self.subTest(name=name):
                 said = built(owners={name: "hijacked"})

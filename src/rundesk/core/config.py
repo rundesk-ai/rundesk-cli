@@ -20,7 +20,7 @@ nothing already stated** — a release that starts offering a setting must reach
 it, and an owner who turned something off must find it still off afterwards.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -37,6 +37,12 @@ INITIAL = {
     # Keeping this copy of rundesk current.
     "update_enabled": True,
     "update_time": "03:00",
+
+    # How many days of what a turn *did* to keep. Not how long a conversation is kept, and not how
+    # long a turn's own row is kept: what was said is the owner's history and a turn's cost is the
+    # ledger, and both stay. This is the one table that grows with tool calls, and a fortnight after
+    # the fact it has been read if it was ever going to be.
+    "turn_records_days": 14,
 
     # How far this install has been carried. Written by the migration runner, never by hand.
     "migration": None,
@@ -63,6 +69,7 @@ WANTED = {
     "backup_retention": "how many copies to keep, a whole number of at least 1",
     "update_enabled": "yes or no",
     "update_time": "a time of day as HH:MM, such as 03:00",
+    "turn_records_days": "how many days of what a turn did to keep, a whole number of at least 1",
 }
 
 _YES = ("yes", "true", "on", "1")
@@ -104,6 +111,24 @@ Stuck = files.Stuck
 #: And not `lifecycle.backups.WHEN`, which is deliberately this with dashes, because that one has to
 #: be a filename and a colon is not one everywhere.
 MOMENT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def moment_of(when: Optional[datetime] = None, days_ago: int = 0) -> str:
+    """One moment, as everything this product stores writes them: UTC, to the second.
+
+    Here rather than in each store because there were four copies of it — `channels.kept`,
+    `channels.arriving`, `schedules.kept` and now the turns — and four copies of a format string is
+    four things that can come to disagree about what a stored moment looks like. When they do, the
+    symptom is a range query that silently matches nothing.
+
+    `days_ago` is for a sweep asking what "older than a fortnight" means. Subtracted from the same
+    clock the moment is taken on, so the two cannot drift apart between the reading and the
+    arithmetic.
+    """
+    at = (when or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if days_ago:
+        at = at - timedelta(days=days_ago)
+    return at.strftime(MOMENT)
 
 
 def moved(when: Optional[datetime] = None, data: Optional[Path] = None) -> str:

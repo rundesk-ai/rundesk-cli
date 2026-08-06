@@ -115,7 +115,8 @@ STEPS = Path(__file__).resolve().parent / "steps"
 #: Today the rest of an agent is `state.db` and `home/`, and `home/` is a few kilobytes of markdown,
 #: so copying it aside costs nothing and makes the promise true. That is the trade now; this tuple
 #: is what keeps it true later.
-NOT_PUT_BACK = (directory.LOGS, directory.SCHEDULES, directory.CHANNELS)
+NOT_PUT_BACK = (directory.LOGS, directory.SCHEDULES, directory.CHANNELS,
+                directory.PROVIDERS, directory.CONVERSATIONS)
 
 #: What the copy of an agent's things is called while that agent is being carried. `utils.files`'
 #: staging convention, so every walk over a directory already skips it, and **inside the agent's own

@@ -91,6 +91,17 @@ SCHEDULES = "schedules"
 CHANNELS = "channels"
 
 #: The note the install writes into `data/agents/`, and therefore a name no agent may have.
+#: Where each (agent, provider) keeps whatever it keeps between turns — a sign-in, session files, a
+#: running total it subtracts against. **Named to the adapter and never made by rundesk**: a real
+#: brain pointed at a directory does not merely keep a sign-in there, it builds its whole state tree,
+#: to tens of megabytes an agent.
+PROVIDERS = "providers"
+
+#: Where each exchange keeps its claim and the two files appended across its turns. One directory per
+#: conversation rather than per turn: an agent taking fifty turns a day would otherwise leave seventy
+#: thousand files a year, which is an accumulation rather than a layout.
+CONVERSATIONS = "conversations"
+
 NOTE = "README.md"
 
 _HOME_NOTE = """# home/
@@ -177,6 +188,16 @@ def channels(name: str) -> Path:
     no channels configured should not carry an empty directory saying it might have.
     """
     return where(name) / CHANNELS
+
+
+def providers(name: str) -> Path:
+    """Where this agent's brains keep what they keep. Made by whatever first writes into it."""
+    return where(name) / PROVIDERS
+
+
+def conversations(name: str) -> Path:
+    """Where this agent's exchanges keep their claims and their streams."""
+    return where(name) / CONVERSATIONS
 
 
 def gateway_lock(name: str) -> Path:
@@ -407,6 +428,8 @@ def _forgotten(name: str) -> List[Path]:
     gone.extend(_removed(logs(name)))
     gone.extend(_removed(schedules(name)))
     gone.extend(_removed(channels(name)))
+    gone.extend(_removed(providers(name)))
+    gone.extend(_removed(conversations(name)))
     gone.extend(_removed(gateway_record(name)))
     gone.extend(_removed(gateway_lock(name)))
     try:

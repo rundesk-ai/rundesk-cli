@@ -50,7 +50,7 @@ AGENT = "RUNDESK_AGENT"
 #: rundesk enforces nothing and has no way to; an adapter maps it onto whatever its brain really has,
 #: or ignores it. Anything that described this as a boundary would be claiming a guarantee nobody
 #: can keep.
-POSTURE = "RUNDESK_POSTURE"
+ACCESS_MODE = "RUNDESK_ACCESS_MODE"
 
 #: Where this agent's skills stand. **Where they are, not which brain looks where** — every measured
 #: brain discovers skills itself and each reads a directory of its own, so what is presented and
@@ -102,7 +102,7 @@ LIVES_BY = {
 
 
 def for_turn(*, agent: str, home: Path, provider_home: Path, skills: Path, turn: int,
-             posture: str, raw: Optional[Path] = None, model: Optional[str] = None,
+             access_mode: str, raw: Optional[Path] = None, model: Optional[str] = None,
              resume: Optional[str] = None, settings: Optional[str] = None,
              preface: str = "", owners: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
     """Everything an adapter is told about this turn.
@@ -120,7 +120,7 @@ def for_turn(*, agent: str, home: Path, provider_home: Path, skills: Path, turn:
         SKILLS: str(skills),
         RUN: str(turn),
         AGENT: agent,
-        POSTURE: posture,
+        ACCESS_MODE: access_mode,
         CONTINUITY: ",".join(f"{name}={verb}" for name, verb in sorted(LIVES_BY.items())),
     })
     # **Absent rather than empty**, each of them. See the module docstring.

@@ -103,14 +103,15 @@ class Stream:
         self._stopped = False
         self._ending = False
         self._became: Optional[programs.Collected] = None
-        #: Why this stream ended, when it was not the program's own doing. Read after `records` has
-        #: run out — a caller that acted on the reason before then would be acting on nothing.
-        self.trouble: Optional[str] = None
+        #: Why this stream ended, when it was not the program's own doing — and `None` when the
+        #: adapter simply finished. Read after `records` has run out: a caller acting on it
+        #: before then would be acting on nothing.
+        self.stop_reason: Optional[str] = None
 
     def _went_wrong(self, why: str) -> None:
         """Record why this ended, **once**. The first reason is the one that explains the rest."""
-        if self.trouble is None:
-            self.trouble = why
+        if self.stop_reason is None:
+            self.stop_reason = why
 
     # -- reading -----------------------------------------------------------------------
 
@@ -118,7 +119,7 @@ class Stream:
         """Every line the adapter sent, and a `Gap` wherever one was lost. **Never raises.**
 
         Yields until the adapter's output ends, or until it has been quiet too long, or until the
-        ceiling. The last two set `trouble` and end the program; the first is the ordinary way a turn
+        ceiling. The last two set `stop_reason` and end the program; the first is the ordinary way a turn
         finishes and sets nothing.
 
         The reading itself is on another thread, so a caller that spends a fifth of a second on a
@@ -157,14 +158,14 @@ class Stream:
                     # drops happen at its tail, so everything still in it was put there before
                     # anything was lost — a gap yielded first would say the loss happened earlier
                     # than it did, and where a loss happened is the whole of what a gap says.
-                    lost, self._lost = self._lost, 0
-                    yield lines.Gap(lost, FELL_BEHIND)
+                    lost_count, self._lost = self._lost, 0
+                    yield lines.Gap(lost_count, FELL_BEHIND)
         finally:
             # **Nothing to settle for when we are the ones ending it.** A stream that ran out
             # normally may be a program a moment from leaving on its own, and waiting buys its exit
             # code. One we cut off for going quiet or overrunning is by definition not about to
             # leave, so the same wait buys nothing and spends the shutdown budget on it.
-            self.stop(settling_for=0.0 if self.trouble else SETTLING_SECONDS)
+            self.stop(settling_for=0.0 if self.stop_reason else SETTLING_SECONDS)
 
     def _read(self) -> None:
         """Pull lines off the adapter as fast as it produces them. **Never raises, ever.**
