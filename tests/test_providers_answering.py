@@ -43,6 +43,17 @@ from rundesk.utils import programs
 #: so an ordinary run is through in tenths.
 PATIENCE = 30.0
 
+#: How long a case waits to be sure something is **not** going to happen.
+#:
+#: **Kept apart from `PATIENCE`, because a negative spends its ceiling in full every single time.**
+#: `PATIENCE` is generous precisely because it is never reached; used to prove an absence it is
+#: reached always, and one case proving a stranger started no turn cost thirty seconds of every run
+#: of this suite — eleven per cent of the whole test wall clock, for one assertion.
+#:
+#: Twenty times what the positive cases beside it take, which is the margin that matters: they are
+#: the measure of how long a turn takes to start when it is going to, and they settle in tenths.
+NOT_GOING_TO_HAPPEN = 2.0
+
 #: A channel adapter that announces one message on its way up and writes down everything rundesk
 #: says back to it. **Everything, whole and unread** — half of what this file proves is what goes
 #: *out* through that pipe: the four marks a turn puts on a message, and the answer.
@@ -126,8 +137,14 @@ class Answering(support.Isolated):
         return [json.loads(line) for line in self.told.read_text(encoding="utf-8").splitlines()
                 if line.strip()]
 
-    def waited_until(self, whether):
-        return support.waited_until(whether, PATIENCE)
+    def waited_until(self, whether, patience=PATIENCE):
+        """Wait for something to become true, up to a ceiling.
+
+        The ceiling is an argument because **proving an absence spends it in full**: a case waiting
+        for something that is never going to happen wants `NOT_GOING_TO_HAPPEN`, not the generous
+        one that costs nothing only because it is never reached.
+        """
+        return support.waited_until(whether, patience)
 
     def waited_for_a_turn(self, which=1):
         """Wait until this many turns have settled, then hand back the last of them."""
@@ -491,8 +508,9 @@ class AMessageOnAChannelIsAnswered(Answering):
         self.a_channel(allowed=("2207",),
                        saying=self.a_message_arrived(user="9999", text="let me in"))
         self.hosting_now()
-        self.assertFalse(self.waited_until(lambda: kept.list_turns(self.agent), ),
-                         "a stranger's message reached a brain")
+        self.assertFalse(
+            self.waited_until(lambda: kept.list_turns(self.agent), NOT_GOING_TO_HAPPEN),
+            "a stranger's message reached a brain")
 
 
 class ATurnThatMadeSomethingAndSaidNothing(Answering):

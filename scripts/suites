@@ -10,12 +10,21 @@ directory that had since moved, matched zero files, and printed `parse OK`; the 
 syntax check and nothing anywhere went red. A check that ran nothing has proved nothing, and must say
 so in the one way anybody reads — its exit code.
 
+**Suites run several at a time**, each in an interpreter of its own, because that is what a suite
+already is: `support.Isolated` gives every case a scratch root of its own and every guard in
+`tests/support.py` — the scrubbed environment, the stand-in supervisor, the closed network — is
+per-process, so running eight interpreters is the same isolation eight times rather than a weaker
+one shared. Measured on sixteen cores: 274 seconds sequential, 48 concurrent.
+
     python3 scripts/suites          # every suite
     python3 scripts/suites -q       # only the failures and the summary
+    python3 scripts/suites -1       # one at a time, for a suite that only fails under load
 """
 
+import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -23,7 +32,24 @@ TESTS = ROOT / "tests"
 
 #: A suite that hangs has failed, whatever it would have printed. Generous, because the ceiling is
 #: there to end a wedged run rather than to measure anything.
+#:
+#: **It is a ceiling on a suite under load**, which is what makes the generosity load-bearing rather
+#: than decorative: a suite sharing the machine with seven others really does take longer, and one
+#: measured three times its own sequential length at sixteen workers.
 PATIENCE_SECONDS = 300
+
+#: How many suites are in flight at once.
+#:
+#: **Threads and never processes.** All this runner does is wait on `subprocess.run`, which holds no
+#: lock while it waits — so a thread costs nothing here and a process pool would add a fork and a
+#: pickle for each one to do the identical thing.
+#:
+#: **Fewer than there are cores, on purpose.** A suite is not one process: it starts gateways,
+#: adapters and whole `rundesk` commands of its own, so one worker per core oversubscribes the
+#: machine and every suite slows down together. Measured, sixteen workers finished *later* than
+#: eight and stretched the longest suite by half — and a ceiling reached because the machine was
+#: busy is a failure nobody can reproduce.
+AT_ONCE = min(8, os.cpu_count() or 4)
 
 
 def found():
@@ -31,29 +57,43 @@ def found():
     return sorted(TESTS.glob("test_*.py"))
 
 
+def ran(suite):
+    """One suite, in an interpreter of its own. Hands back whether it passed and what it said.
+
+    Never prints. **Several of these are in flight at once**, and a function that wrote as it went
+    would interleave two suites' output line by line into something nobody can read.
+    """
+    try:
+        # `stdin` is closed on purpose. A command reading standard input because it is "not a
+        # terminal" blocks on an open pipe with nothing in it, which never ends and names
+        # nothing when it happens.
+        ended = subprocess.run(
+            [sys.executable, str(suite)],
+            cwd=str(ROOT), stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=PATIENCE_SECONDS)
+        return ended.returncode == 0, ended.stdout + ended.stderr
+    except subprocess.TimeoutExpired:
+        return False, f"exceeded {PATIENCE_SECONDS} seconds"
+
+
 def main(argv):
-    quiet = "-q" in argv
+    quiet, one_at_a_time = "-q" in argv, "-1" in argv
     suites = found()
     if not suites:
+        # **In front of the pool, and it stays there.** A pool handed nothing to do finishes
+        # perfectly happily, so a check that had drifted below this line would report a clean run
+        # over an empty discovery — which is the exact failure this script exists to have caught.
         print(f"suites: FAILED — no suite found in {TESTS}", file=sys.stderr)
         print("        a run that discovered nothing has proved nothing", file=sys.stderr)
         return 1
 
-    failed = []
-    for suite in suites:
-        try:
-            # `stdin` is closed on purpose. A command reading standard input because it is "not a
-            # terminal" blocks on an open pipe with nothing in it, which never ends and names
-            # nothing when it happens.
-            ended = subprocess.run(
-                [sys.executable, str(suite)],
-                cwd=str(ROOT), stdin=subprocess.DEVNULL,
-                capture_output=True, text=True, timeout=PATIENCE_SECONDS)
-            ok = ended.returncode == 0
-            said = ended.stdout + ended.stderr
-        except subprocess.TimeoutExpired:
-            ok, said = False, f"exceeded {PATIENCE_SECONDS} seconds"
+    with ThreadPoolExecutor(max_workers=1 if one_at_a_time else AT_ONCE) as pool:
+        # `map` rather than `as_completed`: this report is read down the page and diffed against the
+        # last one, so its order is the order suites were found in, whatever finishes first.
+        got = list(pool.map(ran, suites))
 
+    failed = []
+    for suite, (ok, said) in zip(suites, got):
         print(f"{'ok  ' if ok else 'FAIL'} {suite.name}")
         if not ok:
             failed.append(suite.name)
