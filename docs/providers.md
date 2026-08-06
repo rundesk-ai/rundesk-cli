@@ -80,7 +80,9 @@ slice of the raw stream sits.
 
 **`turn_records`** — one row per thing that happened, in the order it happened. Swept at
 `turn_records_days` (default 14) because it is diagnostic and it is the only table that grows with
-tool calls. What an agent *said* is not in here — see below.
+tool calls. The sweep runs once a day inside a gateway, on the same pass that sweeps the day files
+and what arrived through a channel, and it says in the log how many rows went. What an agent *said*
+is not in here — see below.
 
 **`provider_sessions`** — where a conversation got to on a brain, keyed by `(conversation,
 provider)`. Opaque to rundesk and never parsed.

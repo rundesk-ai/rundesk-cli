@@ -926,6 +926,12 @@ Four ways to narrow and they compose: `--search` for words, `--channel` for wher
 `--source` for what kind of thing started it, `--conversation` for one exchange, and `--since` for a
 day. With no words at all it is the conversation read back, newest first.
 
+**`--search` takes words, and only words.** Whatever you type is matched as the words themselves, so
+`C++`, `it's fine` and `50%` all mean what they look like. There is no query syntax to learn and none
+to get wrong: `AND` is the word *and*, a bare `"` is a quote mark, and several words means a message
+holding all of them. This is why there are no operators — the alternative was a search that answered
+an apostrophe with an error about the agent's records.
+
 **An empty answer says what was looked for**, so "nothing matched" is readable apart from "you
 narrowed it to nothing":
 
