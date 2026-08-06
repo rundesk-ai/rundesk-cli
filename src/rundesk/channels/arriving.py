@@ -33,6 +33,9 @@ from rundesk.core import config
 FROM_CHANNEL = "channel"
 FROM_SCHEDULE = "schedule"
 
+#: Somebody typing. One conversation per agent — asking again is carrying the same exchange on.
+FROM_TERMINAL = "terminal"
+
 #: Who said a thing. `rundesk` is the product speaking for itself — a gateway coming up, a schedule
 #: that failed — and is deliberately neither the agent nor a person, because a reader of the history
 #: has to be able to tell what the agent said from what was said on its behalf.
@@ -91,6 +94,48 @@ def said_by_rundesk(agent: str, channel: str, place: str, body: str,
     return Landed(conversation, message, fresh)
 
 
+def asked_at_a_terminal(agent: str, body: str, when: Optional[datetime] = None) -> Landed:
+    """Write down something somebody typed at a terminal, in this agent's terminal conversation.
+
+    **One conversation per agent, not one per command.** Asking again at a terminal is carrying the
+    same exchange on — which is what a person means by asking again — so the place is the agent's own
+    name and the same row is found every time.
+
+    No `external_id`: a terminal has no message ids of its own, and two identical questions typed
+    twice are two questions rather than one asked twice.
+    """
+    now = _now(when)
+    with records.writing(directory.records(agent)) as conn:
+        conversation = _conversation(conn, agent, FROM_TERMINAL, agent, None, now)
+        message, fresh = _message(conn, agent, conversation, BY_USER, FROM_TERMINAL,
+                                  _bounded(body), None, now)
+    return Landed(conversation, message, fresh)
+
+
+def said_by_agent(agent: str, source: str, place: str, body: str, turn: Optional[int] = None,
+                  external_id: Optional[str] = None,
+                  when: Optional[datetime] = None) -> Landed:
+    """Write down what the agent itself answered, in the conversation it answered in.
+
+    The other half of `recorded`, and the one `BY_AGENT` was defined for. Kept beside what people
+    said rather than in a log of its own, because a conversation read back has to read as a
+    conversation — and because this is what a search over what was said actually searches.
+
+    **One message for the whole answer, not one per fragment.** A brain writes its reply a piece at a
+    time; a row per piece is a history nobody can read back and a search that matches half a
+    sentence. Whoever calls this has already joined them.
+
+    `turn` is the turn that produced it, so what a turn said and what it did are readable together.
+    """
+    now = _now(when)
+    with records.writing(directory.records(agent)) as conn:
+        conversation = _conversation(conn, agent, source, place,
+                                     place if source == FROM_CHANNEL else None, now)
+        message, fresh = _message(conn, agent, conversation, BY_AGENT, agent,
+                                  _bounded(body), external_id, now, turn=turn)
+    return Landed(conversation, message, fresh)
+
+
 def conversations(agent: str) -> List[Dict[str, Any]]:
     """Every conversation this agent has, newest first."""
     with records.reading(directory.records(agent)) as conn:
@@ -133,7 +178,8 @@ def _conversation(conn: sqlite3.Connection, agent: str, source: str, source_id: 
 
 
 def _message(conn: sqlite3.Connection, agent: str, conversation: int, author: str,
-             author_id: str, body: str, external_id: Optional[str], now: str) -> tuple:
+             author_id: str, body: str, external_id: Optional[str], now: str,
+             turn: Optional[int] = None) -> tuple:
     """Write one message down, or find the one already there. Hands back `(id, fresh)`.
 
     The same insert-then-read shape and for the same reason, with one difference worth naming: a
@@ -143,7 +189,7 @@ def _message(conn: sqlite3.Connection, agent: str, conversation: int, author: st
     """
     said = _rows(conn, agent,
                  "INSERT INTO conversation_messages (conversation_id, author, author_id, body,"
-                 " external_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+                 " external_id, created_at, turn_id) VALUES (?, ?, ?, ?, ?, ?, ?)"
                  # **The `WHERE` is not optional and is not decoration.** The index behind this is
                  # partial, and SQLite matches an `ON CONFLICT` target to an index by its columns
                  # *and* its predicate — without it the statement is refused outright with "does not
@@ -152,7 +198,7 @@ def _message(conn: sqlite3.Connection, agent: str, conversation: int, author: st
                  # therefore conflicts with nothing, which is why every such message is fresh.
                  " ON CONFLICT (conversation_id, external_id) WHERE external_id IS NOT NULL"
                  " DO NOTHING",
-                 (conversation, author, author_id, body, external_id, now))
+                 (conversation, author, author_id, body, external_id, now, turn))
     if said.rowcount:
         return int(said.lastrowid), True
     found = _rows(conn, agent,

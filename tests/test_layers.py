@@ -52,10 +52,15 @@ MAY_IMPORT = {
     # `providers` reaches `channels` because a turn's answer is a message in the store `arriving`
     # already owns, cut to the platform's limit by `delivery` and vetted by `files` — three things
     # with one home each, and a second copy of any of them is a second answer that can disagree.
-    # **The traffic goes one way only**: `channels` may not reach here, so `hosting` is handed an
-    # object exactly as `firing` is handed a `Starting`, and every channel case stays drivable by a
-    # test with no brain, no adapter and no subprocess anywhere near it.
-    "providers": ("channels", "agents", "core", "utils"),
+    # It reaches `skills` for one thing: **where an agent's granted skills stand**, which a turn has
+    # to tell an adapter and which is `skills`' own to know. Every measured brain discovers skills
+    # for itself and each reads a directory of its own, so what is presented and where is the
+    # adapter's business — but *where they are* is not something a provider may guess at, and a
+    # second copy of that path is a second thing to keep in step with the grants that make it.
+    # **The traffic goes one way only**: neither `channels` nor `skills` may reach here, so `hosting`
+    # is handed an object exactly as `firing` is handed a `Starting`, and every channel case stays
+    # drivable by a test with no brain, no adapter and no subprocess anywhere near it.
+    "providers": ("skills", "channels", "agents", "core", "utils"),
     # And `gateways` reaches `schedules` rather than the other way round, because the gateway is
     # what turns "this is due" into work that has started. It is the only long-lived process this
     # product has, so it is the only thing that can hold a child and reap it.

@@ -18,6 +18,8 @@ from typing import Callable, List, Optional
 from rundesk.commands import Subcommands
 from rundesk.commands.agents import cmd_agents
 from rundesk.commands.agents import register as register_agents
+from rundesk.commands.ask import cmd_ask
+from rundesk.commands.ask import register as register_ask
 from rundesk.commands.backups import cmd_backups
 from rundesk.commands.backups import register as register_backups
 from rundesk.commands.channels import Reaching, cmd_channels
@@ -101,6 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_gateways(sub)
     register_backups(sub)
     register_env(sub)
+    register_ask(sub)
     register_messages(sub)
     register_providers(sub)
     register_schedules(sub)
@@ -193,6 +196,8 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
         return cmd_backups(args, _gateways(supervising))
     if args.command == "env":
         return cmd_env(args)
+    if args.command == "ask":
+        return cmd_ask(args)
     if args.command == "messages":
         return cmd_messages(args)
     if args.command == "providers":

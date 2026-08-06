@@ -139,9 +139,16 @@ def errors_of(agent: str, conversation: int) -> Path:
     return conversation_at(agent, conversation) / ERRORS
 
 
-def capabilities(named: str,
+def capabilities(named: str, settings: Optional[str] = None,
                  running: Optional[Callable[..., programs.Ran]] = None) -> Dict[str, Any]:
     """What this brain says it can do. `{}` when it would not say, which is a whole answer.
+
+    **Asked with the same settings the turn will be run with**, and that is not a detail. An adapter
+    may legitimately answer differently depending on how its owner configured it — one transport of a
+    brain can be steered and another cannot, and which is in use is a setting. Asked without them,
+    the answer describes an adapter nobody is about to start: rundesk read `steer: false`, sent the
+    prompt as plain text, and the adapter — started *with* the settings — was waiting for a record
+    and could not parse a word of it. The turn died before it began.
 
     **Asked rather than assumed, and never guessed from a name.** An adapter that does not recognise
     the flag and does something else can do nothing, which is complete and honest and not an error —
@@ -155,8 +162,9 @@ def capabilities(named: str,
     Resolved inside the body rather than bound in the signature: a default bound at definition is
     decided once, when the module is imported, and nothing can reach past it.
     """
+    told = {"RUNDESK_SETTINGS": settings} if settings else {}
     ran = (running or programs.run)([str(where(named)), "--capabilities"],
-                                    CAPABILITIES_WITHIN, env=adapters.environment())
+                                    CAPABILITIES_WITHIN, env=adapters.environment(told))
     if ran.trouble or ran.code != 0:
         return {}
     said = adapters.printed_object(ran.out)
