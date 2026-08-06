@@ -31,6 +31,7 @@ import unittest
 import support
 from rundesk.agents import directory, records
 from rundesk.channels import arriving, delivery, hosting
+from rundesk.channels import hosting as answering_hosting
 from rundesk.channels import kept as channels_kept
 from rundesk.core import paths
 from rundesk.providers import answering, kept, turns
@@ -145,6 +146,12 @@ class Answering(support.Isolated):
     def activity(self):
         """Every broad line the surface was shown while the turn was still running."""
         return [one for one in self.what_it_was_told() if one.get("do") == "activity"]
+
+    def a_turn_is_running(self):
+        """Whether a turn holds the claim in the channel's conversation. Looked up each time: the
+        conversation does not exist until the first message in it has been written down."""
+        found = arriving.standing_in(self.agent, "1180")
+        return found is not None and turns.busy(self.agent, found)
 
 
 class AMessageOnAChannelIsAnswered(Answering):
@@ -327,6 +334,50 @@ class AMessageOnAChannelIsAnswered(Answering):
         self.waited_for_a_turn()
         self.assertTrue(self.waited_until(lambda: self.delivered()))
         self.assertEqual(1, len(self.delivered()), self.delivered())
+
+    def test_a_turn_can_be_stopped_from_the_conversation_it_is_running_in(self):
+        """R-CH-9. The brain and everything it started go, and the turn settles as `stopped` — which
+        is the word the surface renders as ✋. Written by the same code that settles every other
+        turn, so there is no second path that could disagree about what happened."""
+        self.a_stand_in_told(self.agent, silent=30)
+        self.a_channel(saying=self.a_message_arrived())
+        watching = self.hosting_now()
+        gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
+                                      lambda agent: "online")
+        self.assertTrue(self.waited_until(self.a_turn_is_running),
+                        "no turn was ever running to stop")
+
+        said = gestures.controlled(self.agent, "discord", "1180", "2207", answering_hosting.STOP)
+
+        self.assertEqual("✋ Stopped.", said)
+        turn = self.waited_for_a_turn()
+        self.assertEqual(kept.STOPPED, turn["turn_status"])
+        self.assertTrue(self.waited_until(lambda: answering.STOPPED in self.marks()))
+
+    def test_a_turn_somebody_stopped_is_never_apologised_for(self):
+        """The sentence for a turn that produced nothing exists because silence leaves a person
+        unable to tell a broken agent from a slow one. Somebody who just pressed `/stop` knows
+        exactly which this is, and the apology reads as a fault they caused."""
+        self.a_stand_in_told(self.agent, silent=30)
+        self.a_channel(saying=self.a_message_arrived())
+        watching = self.hosting_now()
+        gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
+                                      lambda agent: "online")
+        self.assertTrue(self.waited_until(self.a_turn_is_running))
+
+        gestures.controlled(self.agent, "discord", "1180", "2207", answering_hosting.STOP)
+
+        self.waited_for_a_turn()
+        self.assertNotIn("could not answer", " ".join(self.delivered()))
+
+    def test_stopping_where_nothing_is_running_says_so(self):
+        self.a_channel()
+        watching = self.hosting_now()
+        gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
+                                      lambda agent: "online")
+        self.assertEqual("✋ Nothing is running here.",
+                         gestures.controlled(self.agent, "discord", "1180", "2207",
+                                             answering_hosting.STOP))
 
     def test_the_answer_is_recorded_as_a_message_carrying_the_turn_that_said_it(self):
         """What was said and what it cost are two questions, and this is the one join between them.

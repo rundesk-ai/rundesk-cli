@@ -1008,13 +1008,21 @@ class HowAGestureIsAnswered(Records):
         self.assertEqual("700", said["conversation"])
         self.assertEqual("22", said["user"])
 
-    def test_a_control_is_acknowledged_at_once_and_says_only_that_it_was_heard(self) -> None:
-        # R-DIS-11, R-DIS-12. Discord allows three seconds, and what it *did* comes back as the
-        # turn's own outcome — acknowledging with a running turn's half-written output is how a
-        # half-finished sentence gets published as somebody's reply.
-        self.pressed("stop")
-        self.assertTrue(self.interaction.answered, "nothing was said inside Discord's three seconds")
-        self.assertTrue(all(one["ephemeral"] for one in self.interaction.answered))
+    def test_a_control_is_held_open_and_completed_by_what_rundesk_says(self) -> None:
+        # R-DIS-11. Answered on the spot, the only thing there is to say is *heard* — so somebody
+        # who pressed `/stop` where nothing was running was left looking at a placeholder while the
+        # sentence telling them so was thrown away for want of anywhere to put it.
+        async def exchange(reaching: Any) -> None:
+            interaction = Interaction("stop", Person(22), place=700)
+            await reaching._a_control("stop", "stop")(interaction)
+            self.assertIs(interaction.deferred, True, "Discord's three seconds were not answered")
+            await reaching._told({"do": "answered", "ref": str(interaction.id),
+                                  "text": "✋ Nothing is running here."})
+            self.assertEqual(["✋ Nothing is running here."],
+                             [one["text"] for one in interaction.followed])
+            self.assertTrue(all(one["ephemeral"] for one in interaction.followed))
+
+        self.during(exchange)
 
     def test_a_query_is_held_open_and_named_by_its_own_id(self) -> None:
         said = self.only(self.pressed("skills"), "query")

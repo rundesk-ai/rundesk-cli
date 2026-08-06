@@ -246,7 +246,12 @@ class OnAChannel:
         the last thought are the same thing when there was only ever one.
         """
         whole = got.last_thought if said_already and got.last_thought.strip() else got.reply
-        said = whole.strip() or ("" if got.worked else self._instead(got))
+        # **A turn somebody stopped is never apologised for.** The sentence for a turn that produced
+        # nothing exists because silence leaves a person unable to tell a broken agent from a slow
+        # one — and somebody who has just pressed `/stop` knows exactly which this is. Told "I could
+        # not answer that" for doing what they asked, the apology reads as a fault they caused.
+        excused = got.worked or got.turn_status == kept.STOPPED
+        said = whole.strip() or ("" if excused else self._instead(got))
         carrying = delivery.carried(agent, [str(one.get("at")) for one in got.files
                                             if one.get("at")])
         if not said and not carrying.files:
@@ -513,7 +518,11 @@ class Gestures:
         found = arriving.standing_in(agent, place)
         if found is None or not turns.busy(agent, found):
             return "✋ Nothing is running here."
-        return "✋ Stopping is not built yet."
+        if turns.stop(agent, found):
+            return "✋ Stopped."
+        # Busy, and not by anything this process is running — a scheduled turn takes a process of
+        # its own. Said as what it is rather than as a failure, because trying again will not help.
+        return "✋ Something is running here, but not something I can stop from a conversation."
 
 
 def _what_it_holds(agent: str) -> str:

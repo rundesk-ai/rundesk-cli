@@ -255,6 +255,89 @@ _speaking_to: Dict[tuple, Words] = {}
 _speaking_to_lock = threading.Lock()
 
 
+#: The brains running right now **in this process**, by the conversation each is answering. What
+#: `stop` reaches for, and the reason it is a registry rather than a pid written down: a pid in a
+#: file is a number that gets reused, and the one thing that must never happen here is somebody
+#: pressing `/stop` and signalling a stranger's program.
+#:
+#: In memory for the same reason `_speaking_to` is, and with the same consequence: a **scheduled**
+#: turn runs in a process of its own and is not in here, so stopping one is not something this
+#: answers. That is the honest boundary rather than a gap — a person pressing `/stop` in a
+#: conversation is stopping the turn they are watching, and that turn is this process's.
+class Ours:
+    """One turn this process is running, and whether somebody has asked for it to end.
+
+    **A holder rather than the brain itself, because the claim is taken before the brain exists.**
+    A turn resolves a provider, builds its instructions and writes itself down before anything is
+    started — a second or so on a cold agent — and a `/stop` pressed in that window found nothing to
+    signal and told the person, truthfully but uselessly, that this was not a turn it could stop.
+    So the turn is published the moment it is claimed, the brain is filled in when it starts, and a
+    stop asked for in between is *remembered* and acted on the instant there is something to act on.
+    """
+
+    def __init__(self) -> None:
+        self.stream: Optional["streaming.Stream"] = None
+        self.asked = False
+
+    def ends(self) -> None:
+        """Stop the brain now, or as soon as there is one. Safe to call more than once."""
+        self.asked = True
+        if self.stream is not None:
+            with contextlib.suppress(Exception):
+                self.stream.stop()
+
+    def began(self, stream: "streaming.Stream") -> None:
+        """The brain is up. If a stop was asked for while it was starting, it goes straight away."""
+        self.stream = stream
+        if self.asked:
+            with contextlib.suppress(Exception):
+                stream.stop()
+
+
+_running: Dict[tuple, Ours] = {}
+_running_lock = threading.Lock()
+
+
+def stop(agent: str, conversation: int) -> bool:
+    """End the turn running in this conversation. `False` when there was none of ours to end.
+
+    **The brain and everything it started.** `Stream.stop` signals the process *group*, which is
+    what makes this honest: a brain runs editors, search tools and language servers, and signalling
+    only the child we can see would leave every one of them behind, still working, on a turn
+    somebody has been told is over.
+
+    What becomes of the turn is not decided here and deliberately. The brain goes, its stream ends
+    with no `done` on it, and `_became` reads that as a turn nobody could call finished — `STOPPED`,
+    which is the word the surface renders as ✋. So the account of a stopped turn is written by the
+    same code that writes every other one, and there is no second path that could disagree with it.
+    """
+    with _running_lock:
+        running = _running.get((agent, conversation))
+    if running is None:
+        return False
+    running.ends()
+    return True
+
+
+@contextlib.contextmanager
+def _stoppable(agent: str, conversation: int) -> Iterator[Ours]:
+    """Publish this turn as one this process can end, for exactly as long as that is true.
+
+    Taken out in a `finally` and only if it is still ours, which is the same care `_reachable`
+    takes: a turn that finished while somebody was pressing `/stop` must not have the *next* turn
+    in that conversation stopped by an entry it left behind.
+    """
+    ours = Ours()
+    with _running_lock:
+        _running[(agent, conversation)] = ours
+    try:
+        yield ours
+    finally:
+        with _running_lock:
+            if _running.get((agent, conversation)) is ours:
+                del _running[(agent, conversation)]
+
+
 def also_say(agent: str, conversation: int, word: str) -> bool:
     """Put a word into the turn already running in this conversation. **False if none took it.**
 
@@ -303,10 +386,15 @@ def run(request: Request, watching: Optional[Callable[[Dict[str, Any]], None]] =
     passes its own — the terminal, which has somebody typing — keeps it and is not published.
     """
     with claiming(request.agent, request.conversation) as held:
-        return _held(request, held, watching, saying)
+        # **Published as ours from the moment the claim is taken, not from when the brain starts.**
+        # Resolving a provider and composing instructions is a second or so on a cold agent, and a
+        # `/stop` pressed in that window found nothing to signal.
+        with _stoppable(request.agent, request.conversation) as ours:
+            return _held(request, held, watching, saying, ours)
 
 
-def _held(request: Request, held: int, watching, saying) -> Outcome:
+def _held(request: Request, held: int, watching, saying,
+          ours: Optional[Ours] = None) -> Outcome:
     """One turn, with the conversation already claimed."""
     agent = request.agent
     # **Resolved before anything is written down.** A provider nothing stands behind is a turn that
@@ -360,7 +448,7 @@ def _held(request: Request, held: int, watching, saying) -> Outcome:
         with _reachable(agent, request.conversation, reachable):
             said, stream = _the_brain(request, provider_name, told, turn, held, can, watching,
                                       saying if saying is not None else
-                                      (reachable.each() if reachable else None), reachable)
+                                      (reachable.each() if reachable else None), reachable, ours)
         settling.update(_became(request, turn, said, stream, can, provider_name,
                                 began_at, _how_big(raw), time.monotonic() - began))
     return settling.outcome
@@ -368,7 +456,8 @@ def _held(request: Request, held: int, watching, saying) -> Outcome:
 
 def _the_brain(request: Request, provider_name: str, told: Dict[str, str], turn: int, held: int,
                can: Dict[str, bool], watching, saying,
-               reachable: Optional[Words] = None) -> Tuple[List[Dict[str, Any]], Any]:
+               reachable: Optional[Words] = None,
+               ours: Optional[Ours] = None) -> Tuple[List[Dict[str, Any]], Any]:
     """Start the adapter, feed it the turn, and write down every record it answers with.
 
     **What is sent is written before it is sent.** A word put into a turn that the account does not
@@ -393,6 +482,10 @@ def _the_brain(request: Request, provider_name: str, told: Dict[str, str], turn:
             # Told there is no more coming, so a brain that reads its input to the end can answer.
             stream.say(request.prompt)
             stream.no_more()
+        if ours is not None:
+            # The brain is up, so what a stop would signal now exists. A stop asked for while it was
+            # starting is remembered by the holder and takes effect here, on this line.
+            ours.began(stream)
         for one in stream.records():
             _heard(agent, turn, one, said, watching)
     finally:

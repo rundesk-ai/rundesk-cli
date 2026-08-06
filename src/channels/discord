@@ -1513,11 +1513,17 @@ class Reaching:
                     f"will need the machine it runs on. Run **/{name}** again within "
                     f"{int(CONFIRM_WITHIN)}s to confirm.")
                 return
-            # **Answered inside the three seconds Discord allows, and answered only that it was
-            # heard** (R-DIS-11). What it did comes back as the turn's own outcome or as the
-            # gateway's own goodbye — acknowledging with the running turn's half-written output is
-            # how a half-finished sentence gets published as somebody's reply.
-            await self._said_back(interaction, "…")
+            # **Held open inside the three seconds Discord allows, then completed by what rundesk
+            # says about it** (R-DIS-11). Answered on the spot instead, the only thing there is to
+            # say is *heard* — and a person who pressed `/stop` where nothing was running, or `/new`
+            # in a conversation that had none, was left looking at that for ever while the sentence
+            # telling them so was thrown away for want of anywhere to put it.
+            #
+            # What it *did* still never comes from here (R-DIS-12): rundesk answers what was
+            # **asked** — that nothing was running, that the next message starts fresh — and what a
+            # turn came to arrives as that turn's own outcome.
+            if not await self._deferred(interaction):
+                return
             say({"say": "control", "conversation": str(interaction.channel_id),
                  "user": str(interaction.user.id), "control": control,
                  "ref": str(interaction.id)})
