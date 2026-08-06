@@ -14,6 +14,7 @@ checks that mechanically, because a rule of this kind stops being true quietly.
 | Module | Answers |
 |---|---|
 | `protocol` | what an adapter may say, and what a turn's records add up to |
+| `streaming` | one adapter that is running: the records off it, the words to it, and ending it |
 
 May depend on `channels`, `agents`, `core` and `utils`. It reaches `channels` because a turn's answer
 becomes a message, is cut to a platform's limit and has its files vetted — all of which already have
