@@ -333,9 +333,20 @@ never sent**, because it reads like it works.
 a vendor changing its output shape otherwise shows up as records quietly going missing with nothing
 at all to compare against.
 
-The owner's own kept values are merged in, and **never over a name rundesk decided**. `PATH` carries
-this install's own command directory in front, so an agent can run `rundesk messages` from inside its
-own turn and reach *this* install.
+`PATH` carries this install's own command directory in front, so an agent can run `rundesk messages`
+from inside its own turn and reach *this* install.
+
+**A provider is handed every value this install keeps**, merged in after the above and **never over
+a name rundesk decided**. Not scoped per agent, and that is a decision rather than an oversight: a
+channel adapter names the secrets it may have because it is a program reaching one platform on the
+owner's behalf, while a brain running under `work` access already reads the owner's files and runs
+their shell. An allowlist in front of it would be a boundary that is not one — the brain could read
+the same values off disk a moment later — so rundesk says plainly what it does instead of implying a
+containment it cannot keep.
+
+What follows from that is worth being clear about: **an agent's brain can see every credential this
+install holds**, including ones belonging to channels and to other providers. Run a brain you are
+willing to trust with them, and keep out of `rundesk env` anything you are not.
 
 ### The bounds
 

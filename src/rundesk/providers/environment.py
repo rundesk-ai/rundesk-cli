@@ -170,6 +170,13 @@ def _also_the_owners(said: Dict[str, str], owners: Optional[Mapping[str, str]]) 
 def owners_own() -> Dict[str, str]:
     """Every value this install keeps, for handing to a turn. **Never printed, never logged.**
 
+    **Every one of them, and not scoped per agent.** A channel names the secrets it may have,
+    because it is a program reaching one platform on the owner's behalf; a brain under `work` access
+    already reads the owner's files and runs their shell, so an allowlist here would be a boundary
+    that is not one — the same values are on disk a moment later. Decided by the owner, recorded
+    here and in `docs/providers.md`, and said plainly rather than implied: an agent's brain can see
+    every credential this install holds, including another provider's and a channel's.
+
     Produced once per turn by whoever admits it, and passed in — asking twice is two prompts in front
     of whoever keeps a vault that wants one, and a brain restarted mid-turn must be started with what
     the first one had rather than with whatever the vault says a minute later.
