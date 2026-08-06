@@ -27,6 +27,7 @@ Run directly: `python3 tests/test_channels_hosting.py`
 """
 
 import contextlib
+import fcntl
 import json
 import os
 import signal
@@ -128,6 +129,69 @@ for line in sys.stdin:
     if record.get("do") == "deliver":
         with open(settings["heard"], "a") as writing:
             writing.write(record.get("text", "") + "\\n")
+"""
+
+#: One that says more in one line than is ever read at once, **and never ends the line**. The whole
+#: of the first defect this file was written for: `for line in stdout` is `readline()` with no size,
+#: so nothing is refused until the entire run is already in memory — measured at 735MB of resident
+#: memory for a 300MB run, after which the kernel ends the gateway and nothing is logged anywhere.
+#:
+#: It writes and then waits, so there is no newline coming: a reader that is not bounded has
+#: nothing to say and never will.
+A_SHOUTING_ADAPTER = """#!/usr/bin/env python3
+import json, sys
+print(json.dumps({"say": "ready"}), flush=True)
+sys.stdout.write("x" * (3 * 1024 * 1024))
+sys.stdout.flush()
+for line in sys.stdin:
+    if '"stop"' in line:
+        break
+"""
+
+#: The same, three times over and each run ended, then something worth hearing. For the *second*
+#: half of it: a program in this state produces a line per megabyte, so the complaint is said once,
+#: and what follows a discarded run is still heard.
+A_SHOUTING_ADAPTER_THAT_GOES_ON = """#!/usr/bin/env python3
+import json, sys
+print(json.dumps({"say": "ready"}), flush=True)
+for _ in range(3):
+    sys.stdout.write("x" * (2 * 1024 * 1024) + "\\n")
+    sys.stdout.flush()
+print(json.dumps({"say": "note", "level": "info", "text": "I said the whole of it"}), flush=True)
+for line in sys.stdin:
+    if '"stop"' in line:
+        break
+"""
+
+#: One that writes a byte that is not text at all, and then goes on speaking the protocol. A real
+#: adapter reaches this by relaying somebody's message from a platform that is not as strict about
+#: encoding as it claims, and one byte used to be the permanent end of the channel: the
+#: `UnicodeDecodeError` is raised *inside* the read, past the guard around one record, so the thread
+#: ended for good while the adapter went on holding its claim and receiving messages.
+AN_ADAPTER_THAT_SAYS_SOMETHING_UNDECODABLE = """#!/usr/bin/env python3
+import json, sys
+print(json.dumps({"say": "ready"}), flush=True)
+sys.stdout.buffer.write(b'{"say": "note", "text": "\\xff\\xfe not text"}\\n')
+sys.stdout.buffer.flush()
+print(json.dumps({"say": "note", "level": "info", "text": "still listening"}), flush=True)
+for line in sys.stdin:
+    if '"stop"' in line:
+        break
+"""
+
+#: One that stops saying anything and goes on running, which is what an adapter whose reader has
+#: gone looks like from outside: the claim is still held, `programs.collected` never sees it exit,
+#: and nothing arrives through it ever again.
+#: `os.close(1)` as well as closing the stream, because the two are not the same thing: CPython
+#: builds the standard streams over a `FileIO` with `closefd=False`, so closing `sys.stdout` flushes
+#: and closes the wrapper and leaves the descriptor — and the reader on the far side goes on
+#: waiting, which is a slower version of the very state this case is about.
+AN_ADAPTER_THAT_CLOSES_ITS_MOUTH = """#!/usr/bin/env python3
+import json, os, sys, time
+print(json.dumps({"say": "ready"}), flush=True)
+sys.stdout.close()
+os.close(1)
+time.sleep(600)
 """
 
 #: One that will not start at all.
@@ -422,6 +486,168 @@ class ListeningToOne(Hosting):
             "deadlock a thread per adapter exists to make unreachable")
 
 
+class HowMuchOfALineIsHeld(Hosting):
+    """A line is read a bounded amount at a time, which is what `LINE_AT_MOST` claims to promise.
+
+    It did not. `for line in stdout` is `TextIOWrapper.readline()` with no size, which pulls bytes
+    until it meets a newline or the end of the stream; the length was checked afterwards, by which
+    time the whole of it was already held. An adapter writing 300MB with no newline took this
+    process from 17MB to 735MB, the kernel ended the gateway outright — which logs nothing anywhere,
+    because a `SIGKILL` lets no code run — launchd brought it back, and the channel did it again.
+    """
+
+    def test_a_line_that_never_ends_is_refused_while_it_is_still_arriving(self):
+        # **The whole of the fix, and the only assertion that can see it.** The adapter writes three
+        # megabytes and no newline, ever: with an unbounded read there is nothing to say and never
+        # will be — the reader sits inside one `readline` holding everything that has arrived, which
+        # is exactly the growth being refused. A bounded read has an answer within a megabyte.
+        self.an_adapter(body=A_SHOUTING_ADAPTER)
+        self.a_channel()
+        self.hosting_now()
+        self.assertTrue(support.waited_until(
+            lambda: "said more in one line than is read at once" in self.said_in_the_log(),
+            PATIENCE),
+            "an adapter writing without ever ending a line was never refused, so what it is saying "
+            "is being held in this process")
+
+    def test_it_is_said_once_and_what_follows_is_still_heard(self):
+        # Two things one case can prove and neither is the same as the last one. A program in this
+        # state produces a line per megabyte, so a complaint per line is the unbounded growth
+        # arriving in the log instead of in memory. And the run that was thrown away has to be
+        # thrown away *whole*: what is left of it is not a record, and the tail of a discarded line
+        # read as one would be a warning per megabyte by the other road.
+        self.an_adapter(body=A_SHOUTING_ADAPTER_THAT_GOES_ON)
+        self.a_channel()
+        self.hosting_now()
+        self.assertTrue(support.waited_until(
+            lambda: "I said the whole of it" in self.said_in_the_log(), PATIENCE),
+            f"what an adapter said after an over-long line went nowhere. It said: "
+            f"{self.said_in_the_log()[-500:]}")
+
+        said = self.said_in_the_log()
+        self.assertEqual(1, said.count("said more in one line"),
+                         "an adapter that never ends a line was complained about once per line, "
+                         "which is the growth this bound exists to prevent")
+        self.assertNotIn("said something that is not a record", said,
+                         "part of a discarded line was read as a record of its own")
+
+
+class WhenItSaysSomethingThatIsNotText(Hosting):
+
+    def test_one_byte_that_is_not_text_is_not_the_end_of_the_channel(self):
+        # **Raised inside the read, so the guard around one record cannot catch it.** It escaped
+        # the loop, the outer handler wrote one line, and the thread ended for good — while the
+        # adapter went on holding its claim, so nothing reaped it, nothing restarted it, and
+        # `channels list` went on printing `connected (pid N)` for a channel receiving nothing.
+        self.an_adapter(body=AN_ADAPTER_THAT_SAYS_SOMETHING_UNDECODABLE)
+        self.a_channel()
+        self.hosting_now()
+        self.assertTrue(support.waited_until(
+            lambda: "still listening" in self.said_in_the_log(), PATIENCE),
+            f"a single byte that is not text ended the channel. It said: "
+            f"{self.said_in_the_log()[-500:]}")
+        self.assertNotIn("stopped listening to it", self.said_in_the_log())
+
+
+class WhenNothingIsReadingIt(Hosting):
+    """An adapter that is running is not an adapter that is working.
+
+    `hosting` was written as a sibling of `schedules.firing` and took its policy that adopted work
+    is never signalled — right for a firing, which is bounded work that finishes on its own, and
+    wrong for a program that *runs for months and is listened to*. What it left was an adapter
+    nothing could end: no thread reading it, its claim held, every gateway after it adopting it
+    again, and `gateways stop`, `gateways restart`, `channels remove` and `agents remove` all
+    reporting success over a program still connected to a platform.
+    """
+
+    def test_one_that_stopped_saying_anything_is_ended_and_started_again(self):
+        # The claim is still held, so `programs.collected` never sees it exit and nothing here would
+        # ever restart it — a channel that reads as connected and receives nothing for as long as
+        # the gateway lives.
+        self.an_adapter(body=AN_ADAPTER_THAT_CLOSES_ITS_MOUTH)
+        self.a_channel()
+        watching = self.hosting_now()
+        was = watching.running["discord"].pid
+        self.assertTrue(support.waited_until(
+            lambda: not watching.running["discord"].listening.is_alive(), PATIENCE),
+            "the adapter never stopped being read, so there is nothing to notice")
+
+        self.assertTrue(support.waited_until(
+            lambda: "discord" not in self.looked_again(watching).running, PATIENCE),
+            f"an adapter nothing was reading was left running. It said: {self.said_in_the_log()}")
+
+        self.assertFalse(programs.alive(was), "it was let go of and never stopped")
+        self.assertIn("nothing was reading it", self.said_in_the_log())
+        watching.waiting["discord"] = time.monotonic() - hosting.AGAIN_AFTER - 1
+        self.looked_again(watching)
+        self.assertIn("discord", watching.running, "nothing took the place of the one that was "
+                                                   "ended, so the channel is down for good")
+
+    def test_an_adopted_one_is_ended_because_nothing_here_can_read_it(self):
+        # Its stdout is a pipe whose only reader died with the gateway that made it, so every
+        # message it receives goes nowhere. Adopted first — nothing may start a second adapter
+        # beside one holding the claim — and ended on the very next pass.
+        self.an_adapter()
+        self.a_channel()
+        first = self.hosting_now()
+        support.waited_until(lambda: hosting.still_running(self.agent, "discord"), PATIENCE)
+
+        was = first.running["discord"].pid
+        fresh = hosting.settled(self.agent, self.where)
+        self.started.append(fresh)
+        self.remember(fresh)
+        self.assertIn("discord", fresh.running, "a live adapter was not seen at all")
+        self.assertFalse(fresh.running["discord"].mine)
+
+        self.looked_again(fresh)
+
+        self.assertNotIn("discord", fresh.running,
+                         "an adapter nothing could read was hosted as though it were working")
+        self.assertFalse(programs.alive(was),
+                         "the adapter this gateway could not read was left running")
+        fresh.waiting["discord"] = time.monotonic() - hosting.AGAIN_AFTER - 1
+        self.looked_again(fresh)
+        self.assertIn("discord", fresh.running, "the channel was ended and never started again")
+        self.assertTrue(fresh.running["discord"].mine)
+        self.assertNotEqual(was, fresh.running["discord"].pid)
+
+    def test_one_whose_process_was_never_written_down_is_said_rather_than_signalled(self):
+        # The one state with no command behind it: a gateway killed between claiming a channel and
+        # writing down the pid leaves a live adapter nothing can name. Signalling the number in the
+        # record anyway is how a stranger's program is ended, so it is refused — and said, because
+        # the honest report of a state nothing can resolve is the state and not silence.
+        self.a_channel()
+        self.a_claim_nobody_will_let_go_of()
+        hosting.record_of(self.agent, "discord").write_text('{"pid": null}', encoding="utf-8")
+
+        watching = hosting.settled(self.agent, self.where)
+        hosting.looked(self.agent, self.where, watching)
+
+        self.assertIn("nothing recorded which process it is", self.said_in_the_log())
+        self.assertIn("discord", watching.running,
+                      "a second adapter would have been started beside one still holding the claim")
+        self.assertTrue(hosting.still_running(self.agent, "discord"))
+
+    def a_claim_nobody_will_let_go_of(self):
+        """This case's own `flock` on a channel's lock, standing in for an adapter nothing can name.
+
+        A real lock rather than a stand-in, because the whole discipline being proved is that the
+        kernel is what says somebody is there. Let go by a cleanup registered the moment it is held,
+        which is `firing`'s rule: a case that fails while taking something must still give it back.
+        """
+        at = hosting.lock_of(self.agent, "discord")
+        at.parent.mkdir(parents=True, exist_ok=True)
+        held = os.open(str(at), os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(self.let_go_of, held)
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return held
+
+    @staticmethod
+    def let_go_of(held):
+        with contextlib.suppress(OSError):
+            os.close(held)
+
+
 class WhatWasAttached(Hosting):
     """The adapter fetches, because it holds the credential; rundesk decides where it lands.
 
@@ -637,17 +863,28 @@ class WhatAPreviousGatewayLeft(Hosting):
         self.assertFalse(fresh.running["discord"].mine,
                          "an adapter this process did not start was claimed as its own")
 
-    def test_an_adopted_one_is_not_stopped_with_this_gateway(self):
-        # Its group is not one this process may signal, and a pid whose leader has been collected
-        # no longer resolves to a group — signalling it would reach whatever now holds that number.
+    def test_an_adopted_one_is_stopped_with_this_gateway(self):
+        # **This asserted the opposite, and asserting it is what kept the defect.** `stopping`
+        # filtered to `one.mine`, so an adapter adopted from a gateway that is gone was skipped on
+        # that shutdown and on every shutdown after it — each new gateway adopting it again, nothing
+        # anywhere signalling it, and `gateways stop`, `gateways restart`, `channels remove` and
+        # `agents remove` all reporting success over a program still connected as this agent. The
+        # claim is a `flock` held by that very process, so the kernel is what vouches for the pid
+        # before anything is signalled, which is the same discipline `gateways.standing` keeps.
         self.an_adapter()
         self.a_channel()
-        first = self.hosting_now()
-        support.waited_until(lambda: hosting.still_running(self.agent, "discord"), 5.0)
+        self.hosting_now()
+        support.waited_until(lambda: hosting.still_running(self.agent, "discord"), PATIENCE)
         fresh = hosting.settled(self.agent, self.where)
-        hosting.stopping(self.agent, self.where, fresh, 2.0)
-        self.assertTrue(hosting.still_running(self.agent, "discord"))
-        hosting.stopping(self.agent, self.where, first, 4.0)
+        self.started.append(fresh)
+
+        hosting.stopping(self.agent, self.where, fresh, 4.0)
+
+        self.assertTrue(support.waited_until(
+            lambda: not hosting.still_running(self.agent, "discord"), PATIENCE),
+            "an adapter this gateway adopted was left running by the shutdown, and nothing else "
+            "will ever signal it")
+        self.assertIn("stopped with this gateway", self.said_in_the_log())
 
     def test_a_record_left_by_an_adapter_that_is_gone_is_cleared(self):
         self.a_channel()

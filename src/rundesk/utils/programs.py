@@ -301,6 +301,13 @@ def talking(argv: Sequence[str], errors: Path, where: Optional[Path] = None,
     Line buffered, so a line written here leaves this process when it is written rather than when
     some block fills — the answer to a message must not be waiting behind the answer to the next.
 
+    **A byte that is not text is a bad character and never the end of the conversation.** Decoding
+    is `errors="replace"`, because the alternative is `UnicodeDecodeError` raised *inside* the read
+    — not from anything the caller wrote, and so not catchable per record — which ends whatever was
+    draining this pipe while the program on the far side goes on running and holding whatever it
+    holds. One invalid byte is a thing a long-lived program will eventually emit; permanently
+    deafening its reader is not a proportionate answer to it.
+
     `holding` are descriptors the child keeps open, for the reason `start` gives: a `flock` belongs
     to the open file description, so one taken here and passed down is held for exactly as long as
     the child and everything it starts, and the kernel drops it however they end. The caller closes
@@ -323,6 +330,10 @@ def _talking(argv: Sequence[str], errors: Path, where: Optional[Path],
             stdout=subprocess.PIPE,
             stderr=complaining,
             text=True,
+            # See `talking`: a `UnicodeDecodeError` here is raised inside the read itself, where the
+            # caller's own guard around one record cannot reach it — so a single invalid byte ends
+            # the drain for good while the program goes on running.
+            errors="replace",
             # Line buffered, which `text=True` is what makes meaningful. Without it a line written
             # to a program sits in this process until a block's worth has piled up behind it.
             bufsize=1,

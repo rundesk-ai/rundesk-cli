@@ -27,6 +27,30 @@ a clean exit, a crash, a `SIGKILL`, the machine losing power. That is what lets 
 up after the one that started an adapter know the adapter is still there, and refuse to start a
 second alongside it.
 
+## An adapter nothing is reading is not connected, and is ended
+
+**This is where `firing`'s policy does not transfer, and copying it was a defect.** A firing is
+bounded work that finishes on its own, so an adopted one is left to finish and never signalled. An
+adapter runs for months and is *listened to* — so an adopted one is a program nothing is reading,
+with its stdout going to a pipe whose only reader died with the gateway that made it. It receives
+messages and records none of them, and `channels list` calls it `connected` because the claim is
+still held. Left alone it stays that way for ever: every fresh gateway adopts it again, and no
+command anywhere ends it.
+
+So the rule here is the opposite of `firing`'s and is written positively:
+
+> **An adapter this gateway is not reading is ended, whatever started it.**
+
+That covers both ways of arriving at one — adopted from a gateway that is gone, and one whose
+listening thread has stopped while the child runs on — and it is what makes `connected` an honest
+word: within one beat, a channel nothing is reading has had its claim dropped and a fresh adapter
+that *is* being read started in its place, on the ordinary hold-off.
+
+**An adopted adapter is safe to signal, and the discipline is `gateways.standing`'s.** The claim is
+a `flock` held by that very process, so a lock the kernel still says is taken is proof somebody is
+there — and only then is the recorded pid read, and only if `programs.a_pid` will have it. A pid
+read off a claim nobody holds is a number that now belongs to something else.
+
 ## What crosses the seam, and which side decides it
 
 The thread carries three things inward and this module answers two of them. A message from somebody
@@ -60,7 +84,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Sequence
+from typing import IO, Any, Dict, List, NamedTuple, Optional, Sequence
 
 from rundesk.agents import directory
 from rundesk.channels import adapters, arriving, kept
@@ -127,9 +151,21 @@ SEEN = "seen"
 #: share is divided rather than spent per child, and never below this.
 STOPPING_LEAST = 1.0
 
+#: How long ending one adapter mid-life may take, which is not spent out of the shutdown budget:
+#: this is a gateway that is *working*, taking away a child nothing is reading so that a fresh one
+#: can be started. Short, because the loop is held for the whole of it and the beat is fifteen
+#: seconds — and enough for a `SIGTERM` to be answered before the `SIGKILL` behind it.
+ENDING_WITHIN = 5.0
+
 #: How much of a line an adapter sends is read before it is refused. Not a limit on what an adapter
-#: may say, only on what is held at once — a program that never writes a newline cannot grow this
-#: process without bound.
+#: may say, only on what is held at once.
+#:
+#: **Read with a bounded call, and that is the whole of the guarantee.** `for line in stdout` is
+#: `readline()` with no size, which pulls bytes until it meets a newline or the end of the stream —
+#: so a check on the length of what came back happens only once the whole of it is already in
+#: memory. Measured: an adapter that wrote 300MB with no newline took this process from 17MB to
+#: 735MB before anything was refused, and the kernel ended the gateway outright, which logs nothing
+#: anywhere. `stdout.readline(LINE_AT_MOST + 1)` is what makes the sentence above true.
 LINE_AT_MOST = 1024 * 1024
 
 #: How much of what an adapter wrote to its error stream is copied into the agent's log when it
@@ -142,8 +178,18 @@ class Running(NamedTuple):
     """One adapter this gateway is hosting.
 
     `mine` is the field to read first, and it means *this* process started it. An adapter adopted
-    from a previous gateway is not ours to reap — a status belongs to the parent — and not ours to
-    stop, because its group is not one this process may signal on the way out.
+    from a previous gateway is not ours to **reap** — a status belongs to the parent, so the kernel
+    is asked about its claim instead.
+
+    **It is ours to stop, though, and that is not the same question.** Reaping needs to be the
+    parent; signalling needs only a process that is certainly there, which the claim proves and
+    `programs.a_pid` bounds. Read as *not ours to stop* this left an adopted adapter that nothing
+    could ever end: skipped by every shutdown, re-adopted by every gateway after it, and unreachable
+    from `gateways stop`, `channels remove` and `agents remove` alike.
+
+    `listening` is the other field that decides something. It is the thread draining this adapter's
+    stdout, and `None` — or a thread that has ended — means nothing in this process is reading it.
+    See the module docstring: an adapter nothing is reading is ended rather than left connected.
     """
 
     kind: str
@@ -229,6 +275,30 @@ def still_running(agent: str, kind: str) -> bool:
     return False
 
 
+def in_flight(agent: str) -> List[str]:
+    """Every channel of this agent's with an adapter still connected, by name. Asked of the kernel.
+
+    **For whoever is about to take something away from underneath it.** Removing an agent unlinks
+    this whole tree, and unlinking a lock somebody is holding hands the name away: a later channel
+    of the same name claims a *fresh* inode and locks that, while the adapter still holding the old
+    one goes on running and answering as this agent. `agents remove` is the caller, and it needs to
+    know before it acts rather than after.
+
+    Read off the lock files rather than off the records, and that is the point of it: a removal has
+    to be able to ask this even when the database is unreadable, and an adapter that is connected is
+    connected whether or not anything can still say what it was configured with.
+
+    `firing.in_flight` is the same function one tenant over, and deliberately not generalised with
+    it: what a channel keeps is a directory per channel and what a schedule keeps is a suffixed name
+    beside its siblings, so the two share a sentence and no code.
+    """
+    try:
+        kinds = sorted(one.name for one in directory.channels(agent).iterdir() if one.is_dir())
+    except OSError:
+        return []
+    return [kind for kind in kinds if still_running(agent, kind)]
+
+
 @contextlib.contextmanager
 def claiming(agent: str, kind: str):
     """Hold this channel's claim for the length of the block, yielding the descriptor to pass down.
@@ -281,27 +351,25 @@ def looked(agent: str, where: Path, watching: Watching) -> Watching:
 
 
 def stopping(agent: str, where: Path, watching: Watching, within: float) -> Watching:
-    """Stop every adapter this gateway started, inside `within` seconds all told.
+    """Stop every adapter this gateway is hosting, inside `within` seconds all told.
 
     **The budget is divided, never spent per child.** A gateway's whole shutdown has to fit inside
     the job's `ExitTimeOut`, and schedules are spending from the same window.
 
-    Only the ones this process started. An adopted adapter is left to finish: its group is not one
-    this process may signal, and a pid whose leader has been collected no longer resolves to a
-    group — signalling it would reach whatever now holds that number.
+    **Every one of them, including an adopted one, which gets a share like any other.** This filtered
+    to `one.mine` and it was the defect that left an adapter nobody could stop: adopted on one
+    shutdown, skipped, adopted again by the next gateway, and skipped again — with `gateways stop`,
+    `gateways restart`, `channels remove` and `agents remove` all reporting success over a program
+    still running and still holding the channel's claim. `_ended` is where the discipline for
+    signalling one lives; nothing here signals a pid the claim has not already vouched for.
     """
-    mine = [one for one in watching.running.values() if one.mine and one.pid]
-    if not mine:
+    hosted = list(watching.running.values())
+    if not hosted:
         return watching
-    each = max(STOPPING_LEAST, within / len(mine))
-    for one in mine:
+    each = max(STOPPING_LEAST, within / len(hosted))
+    for one in hosted:
         with contextlib.suppress(Exception):
-            _asked_to_stop(where, one)
-            stuck = programs.stop(one.pid, gently_for=each * 0.6, firmly_for=each * 0.4)
-            _note(where, f"channel {one.kind}: "
-                         + (f"would not stop: {stuck}" if stuck else "stopped with this gateway"),
-                  logs.WARNING if stuck else logs.INFO)
-            _let_go(agent, where, one, watching)
+            _ended(agent, where, one, watching, each, "stopped with this gateway")
     return watching
 
 
@@ -354,14 +422,23 @@ def _configured(agent: str) -> List[str]:
 
 
 def _reckoned(agent: str, where: Path, kind: str, watching: Watching) -> None:
-    """Settle one channel a previous gateway may have left running."""
+    """Settle one channel a previous gateway may have left running.
+
+    An adapter still holding its claim is taken hold of here so that nothing starts a second one
+    beside it, and **ended on the first pass of the loop** rather than in this function: nothing in
+    this process is reading it, and `_reaped` is the one place that decides what happens to an
+    adapter nobody is listening to. See the module docstring.
+    """
     if still_running(agent, kind):
         said = _read_record(agent, kind)
         watching.running[kind] = Running(
             kind=kind, pid=programs.a_pid(said.get("pid")) or 0, talking=None, listening=None,
             since=time.monotonic(), mine=False)
-        _note(where, f"channel {kind}: adopted from a gateway that is gone — it is still connected, "
-                     "so nothing new was started for it", logs.WARNING)
+        # What happens to it is said by the line after this one and never promised by this one:
+        # ending it needs a pid the claim has vouched for, and the case where there is not one is
+        # exactly the case somebody has to be told about honestly. See `_may_be_signalled`.
+        _note(where, f"channel {kind}: adopted from a gateway that is gone, and nothing in this "
+                     "gateway is reading it", logs.WARNING)
         return
     if record_of(agent, kind).is_file():
         _note(where, f"channel {kind}: the adapter a previous gateway started is gone",
@@ -435,21 +512,56 @@ def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any]) -> Non
     This is the thread the module docstring is about. It cannot fall behind the way the gateway's
     own loop would, because it does nothing but read — and it must not end the process it runs in,
     because a thread that raises takes its traceback nowhere anybody will look.
+
+    **Read a bounded amount at a time**, which is what `LINE_AT_MOST` promises and what an unbounded
+    `for line in stdout` cannot deliver: the check on the length of a line ran only once the whole
+    line was already held, so an adapter that never writes a newline grew this process until the
+    kernel ended the gateway. A run that reaches the cap with no newline in it is read to its end
+    and thrown away, and said **once** — a program in that state produces a line per megabyte and
+    the log is not where that belongs.
+
+    **A thread that ends here is not the end of the channel.** Whatever this could not go on reading
+    is said in the log, and the loop ends the adapter on its next pass and starts one it can read —
+    see `_reaped`. Before that, one byte of invalid UTF-8 was a `UnicodeDecodeError` raised inside
+    the read itself, past the per-record guard below, and the channel was deaf until somebody
+    noticed. `utils.programs.talking` decodes with `errors="replace"` so that is a bad character
+    now, and this half is what answers for every other way a pipe can end.
     """
     kind = one.kind
     allowed = set()
     with contextlib.suppress(Exception):
         allowed = set(kept.who_may_reach(row))
+    said_too_much = False
     try:
-        for line in one.talking.stdout:
-            if len(line) > LINE_AT_MOST:
-                _note(where, f"channel {kind}: said more in one line than is read at once", logs.WARNING)
+        while True:
+            line = one.talking.stdout.readline(LINE_AT_MOST + 1)
+            if not line:
+                return
+            if len(line) > LINE_AT_MOST and not line.endswith("\n"):
+                if not said_too_much:
+                    said_too_much = True
+                    _note(where, f"channel {kind}: said more in one line than is read at once, so "
+                                 "what it is saying is being thrown away", logs.WARNING)
+                _thrown_away(one.talking.stdout)
                 continue
             with contextlib.suppress(Exception):
                 _heard(agent, where, one, line, allowed)
     except Exception as why:                           # noqa: BLE001 — see the module docstring
         with contextlib.suppress(Exception):
             _note(where, f"channel {kind}: this gateway stopped listening to it ({why})", logs.ERROR)
+
+
+def _thrown_away(reading: IO[str]) -> None:
+    """Read the rest of a line that was already too long, and keep none of it.
+
+    Bounded on every call for the reason the caller is: what is being skipped past is by definition
+    a program writing without ever ending a line, so anything here that read *to* the newline in one
+    go would be the same unbounded read under another name.
+    """
+    while True:
+        more = reading.readline(LINE_AT_MOST + 1)
+        if not more or more.endswith("\n"):
+            return
 
 
 def _heard(agent: str, where: Path, one: Running, line: str, allowed: set) -> None:
@@ -570,7 +682,14 @@ def _also_attached(body: str, here: List[Path]) -> str:
 
 
 def _reaped(agent: str, where: Path, watching: Watching) -> None:
-    """Take the status of any adapter that has stopped, and let go of what it held."""
+    """Take the status of any adapter that has stopped, end any nothing is reading, and let go.
+
+    **The second of those is the one that is easy to leave out.** An adapter that is *running* is
+    not an adapter that is working: one adopted from a gateway that is gone has no reader at all,
+    and one whose thread has ended has lost the reader it had — and both go on holding the claim, so
+    nothing reaps them, nothing restarts them, and a listing calls them connected for as long as the
+    gateway lives. See the module docstring.
+    """
     for kind, one in list(watching.running.items()):
       # One bad adapter may not stop the others being reaped. `still_running` deliberately
       # re-raises anything that is not ordinary contention, so a permissions failure on one
@@ -580,6 +699,7 @@ def _reaped(agent: str, where: Path, watching: Watching) -> None:
         if one.mine and one.pid:
             gone = programs.collected(one.pid)
             if not gone.over:
+                _ended_if_nobody_is_reading(agent, where, one, watching)
                 continue
             _note(where, f"channel {kind}: the adapter stopped"
                          + (f" with code {gone.code}" if gone.code is not None else ""),
@@ -591,10 +711,88 @@ def _reaped(agent: str, where: Path, watching: Watching) -> None:
                 continue
         else:
             if still_running(agent, kind):
+                _ended_if_nobody_is_reading(agent, where, one, watching)
                 continue
             _note(where, f"channel {kind}: the adapter a previous gateway started is gone",
                   logs.WARNING)
         _let_go(agent, where, one, watching)
+
+
+def _ended_if_nobody_is_reading(agent: str, where: Path, one: Running,
+                                watching: Watching) -> None:
+    """End an adapter that is running with nothing in this process draining it.
+
+    Two ways to arrive here and one answer to both, because what is wrong with them is the same
+    thing: **the messages it is receiving are going nowhere.** An adopted adapter was never read by
+    this process at all — its stdout is a pipe whose only reader died with the gateway that made it
+    — and one whose thread has ended has stopped being read part way through its life.
+
+    Ended rather than reported, because a report is not a fix and nothing else would ever come to
+    apply one: `programs.collected` never sees it exit, so `_reaped` never restarts it, and every
+    gateway after this one adopts it again. Letting go of it is what puts a fresh adapter — one this
+    gateway is reading — in its place on the ordinary hold-off.
+    """
+    if one.listening is not None and one.listening.is_alive():
+        return
+    _ended(agent, where, one, watching, ENDING_WITHIN,
+           "ended, because nothing was reading it — another is started once the hold-off has passed")
+
+
+def _ended(agent: str, where: Path, one: Running, watching: Watching, within: float,
+           said: str) -> bool:
+    """Stop one adapter and let go of what it held. `False` when it is still there.
+
+    **Signalled only once something has vouched for the pid**, which is `_may_be_signalled`, and
+    asked through the protocol first, which is `_asked_to_stop`.
+
+    **What would not stop is kept rather than forgotten**, and that is the half worth saying. Letting
+    go of an adapter that is still running removes the record naming its pid, so the next gateway
+    adopts a live child it cannot name and therefore cannot end — the state that no command resolves,
+    arrived at by tidying up. Kept in `running` for the same reason: nothing may start a second
+    adapter beside one that is still holding the claim.
+    """
+    if not _may_be_signalled(agent, where, one, watching):
+        return False
+    _asked_to_stop(where, one)
+    stuck = programs.stop(one.pid, gently_for=within * 0.6, firmly_for=within * 0.4)
+    if stuck:
+        _said_once(where, watching, one.kind, f"channel {one.kind}: would not stop: {stuck}")
+        return False
+    _note(where, f"channel {one.kind}: {said}")
+    _let_go(agent, where, one, watching)
+    return True
+
+
+def _may_be_signalled(agent: str, where: Path, one: Running, watching: Watching) -> bool:
+    """Whether this adapter's recorded id is one this gateway may safely signal.
+
+    **The claim first, the pid only after** — `gateways.standing`'s rule, and the whole reason an
+    adopted adapter is stoppable at all: a `flock` the kernel still says is taken is held by the
+    process holding it, so something is certainly there. A pid read off a claim nobody holds is a
+    number that now belongs to something else, and signalling it reaches a stranger's program.
+
+    **The claim is not re-asked for one this process started, and that is not the check being
+    skipped.** A child of this process cannot have its number reused while its status is uncollected,
+    and `utils.programs` holds the wrapper until it is reaped — so ownership is already the proof the
+    claim would be standing in for. The asymmetry is the two ways of knowing the same thing, not two
+    standards.
+
+    `programs.a_pid` is the other half: `0` is this process's own group and `1` is the machine's
+    init, so a record that lost its pid — written by a gateway killed in the instant between
+    claiming and spawning — is refused rather than turned into a signal at whatever that number now
+    means. That leaves an adapter this gateway cannot end, which is said out loud in the one place
+    somebody can act on it, because the honest report of a state with no command behind it is the
+    state, not silence.
+    """
+    if not one.mine and not still_running(agent, one.kind):
+        return False                      # nobody holds the claim: it is already over
+    if programs.a_pid(one.pid) is None:
+        _said_once(where, watching, one.kind,
+                   f"channel {one.kind}: nothing recorded which process it is, so this gateway "
+                   f"cannot stop it — its claim is {lock_of(agent, one.kind)}, and until whatever "
+                   "holds that ends, no adapter is started for this channel")
+        return False
+    return True
 
 
 def _asked_to_stop(where: Path, one: Running) -> None:

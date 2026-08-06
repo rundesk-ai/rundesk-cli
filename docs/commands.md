@@ -271,9 +271,9 @@ afterwards brings it back.
 
 What it takes is named one thing at a time and never swept, and the agent's own directory goes only
 if it is then empty — anything you left in there is kept, along with the directory holding it, and
-the command says so. The lock and the record a gateway leaves in that directory are named too, and
-only when they are there: describing a removal larger than the one that would happen defeats the
-point of describing it.
+the command says so. What its channels keep, what its schedules keep, and the lock and record a
+gateway leaves in that directory are named too, each only when it is there: describing a removal
+larger than the one that would happen defeats the point of describing it.
 
 **A removal is refused while a gateway is running for that agent**, and this is the check the whole
 confirmation exists to protect. Removing an agent out from under a live gateway leaves a program
@@ -292,6 +292,27 @@ Asked of the kernel through the same lock `rundesk gateways` reads, so a gateway
 outright is not mistaken for one that is up. Its third answer is kept as a third answer here too:
 an agent nobody can *ask* about is not an agent that is safe to remove, and it is refused in the
 same breath rather than treated as free.
+
+**And refused while any of its work or any of its channels is still running**, which is the same
+question asked of the other two things that hold a lock of their own. A schedule run by hand and an
+adapter adopted from a gateway that is gone both hold only their own lock and never `gateway.lock`,
+so an agent with no gateway anywhere can still have a program running as it — and this removal takes
+the directory that lock stands in. Unlinking a lock while something holds it hands the name away: a
+later agent of the same name claims a fresh inode and locks that, while the original is still
+running against the old one.
+
+```console
+$ rundesk agents remove cole --confirm
+agents: FAILED — cole is still connected: discord — removing it now would take the lock that adapter is holding, and a channel of the same name later would connect a second one beside it
+        see what is connected with: rundesk channels list cole
+        nothing was removed
+```
+
+Both are asked of the kernel through the lock files rather than of the records, so they are still
+answerable when an agent's database cannot be read — which is one of the states somebody removes an
+agent in. A claim nobody can *ask* about is refused in the same breath as one that is held, for the
+reason the gateway's own third answer is: reporting an agent nobody can ask about as free is how a
+live program comes to be orphaned by a removal.
 
 It is checked below the confirmation rather than above it, which looks like the wrong way round and
 is not. A description of a removal describes what would be taken; this decides whether it may happen
@@ -665,6 +686,26 @@ cole   discord  colebot#8812, reaching you#0     1        no    not connected
 asks whether a gateway is up, and the record beside it is read only afterwards — a record holds a
 pid, and a pid whose process is gone is a number that now belongs to something else. `cannot tell` is
 a first-class answer there for the same reason it is one in `gateways`.
+
+**`connected` means somebody is reading it, and the gateway is what keeps that true.** An adapter
+runs for months and is listened to, so one that nothing is draining is receiving messages and
+recording none of them — which is what a gateway killed outright leaves behind, and what an adapter
+whose reader stopped becomes. A gateway ends any adapter it is not reading, on the beat, and starts
+one it *is* reading in its place after the usual hold-off; the log says so in both halves:
+
+```console
+$ rundesk gateways logs alan -n 4
+[…] WARNING: channel discord: adopted from a gateway that is gone, and nothing in this gateway is reading it
+[…] INFO:    channel discord: ended, because nothing was reading it — another is started once the hold-off has passed
+[…] INFO:    channel discord: started as pid 91586
+[…] INFO:    channel discord: connected as rundesk#4471
+```
+
+An adapter is only ever signalled once the kernel has said its claim is still held — a pid read off
+a claim nobody holds is a number that now belongs to something else. There is one state left over:
+a gateway killed in the instant between claiming a channel and writing down the pid leaves an
+adapter nothing can name, and that one is said in the log with the path of the claim it is holding,
+because a state nothing here can resolve is a state to report and not to be silent about.
 
 ### channels add
 

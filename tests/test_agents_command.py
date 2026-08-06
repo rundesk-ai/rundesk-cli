@@ -13,12 +13,15 @@ Run directly: `python3 tests/test_agents_command.py`
 """
 
 import fcntl
+import json
 import os
 import unittest
 from unittest import mock
 
 import support
 from rundesk.agents import directory
+from rundesk.channels import hosting
+from rundesk.channels import kept as channels
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.schedules import firing, kept
@@ -288,6 +291,83 @@ class Removing(support.Isolated):
         self.assertIn("has work still running: slow", err)
         self.assertIn("nothing was removed", err)
         self.assertTrue((paths.agents() / "cole").is_dir(), "the agent was taken away anyway")
+
+    def a_channel_that_is_connected(self, kind="discord"):
+        """A real `flock` on a channel's lock, taken the way an adapter takes it: and held.
+
+        The kernel is what the guard asks, so a stand-in would prove nothing — and an adapter's
+        claim really is a descriptor somebody is holding, which is why it survives the gateway that
+        started it. Let go by a cleanup registered the moment it is held.
+        """
+        channels.added("cole", kind, {"describes": kind, "allowed": json.dumps(["2207"]),
+                                      "settings": "{}"})
+        at = hosting.lock_of("cole", kind)
+        at.parent.mkdir(parents=True, exist_ok=True)
+        held = os.open(at, os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, held)
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return kind
+
+    def test_it_refuses_while_an_adapter_of_that_agents_is_still_connected(self):
+        # **The third way an agent can have a program running.** An adapter holds its channel's own
+        # lock and never `gateway.lock`, and one adopted from a gateway that is gone outlives every
+        # gateway there has been — so an agent that reads as free to both checks above can still be
+        # connected to a platform. Removing it here unlinks `channels/` including that held lock,
+        # which hands the name away: a later agent and channel of the same names then claim a fresh
+        # inode and lock that, while the original adapter goes on answering as this agent.
+        #
+        # Watched go the other way round with the check taken out: the removal exits `0`, names
+        # every path it took, and the lock somebody is still holding is one of them.
+        self.a_channel_that_is_connected()
+
+        code, _out, err = self.rundesk("agents", "remove", "cole", "--confirm")
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("is still connected: discord", err)
+        self.assertIn("nothing was removed", err)
+        self.assertTrue((paths.agents() / "cole").is_dir(), "the agent was taken away anyway")
+        self.assertTrue(hosting.lock_of("cole", "discord").exists(),
+                        "the lock an adapter was holding was unlinked, which hands the name away")
+
+    def test_a_channel_nobody_can_ask_about_is_refused_rather_than_read_as_free(self):
+        # The third answer, kept as a third answer. `hosting.still_running` re-raises anything that
+        # is not ordinary contention — a permission problem, a filesystem that will not lock — and
+        # reading that as "nothing is connected" is how a live adapter gets orphaned by a removal.
+        channels.added("cole", "discord", {"describes": "discord",
+                                           "allowed": json.dumps(["2207"]), "settings": "{}"})
+        hosting.at("cole", "discord").mkdir(parents=True, exist_ok=True)
+
+        with mock.patch.object(hosting, "still_running",
+                               side_effect=OSError("this filesystem will not lock")):
+            code, _out, err = self.rundesk("agents", "remove", "cole", "--confirm")
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("nobody can tell whether cole is still connected", err)
+        self.assertIn("this filesystem will not lock", err)
+        self.assertTrue((paths.agents() / "cole").is_dir(), "the agent was taken away anyway")
+
+    def test_it_goes_ahead_once_nothing_is_connected(self):
+        # The refusal is about an adapter that is running and not about having channels at all: a
+        # channel whose adapter is not hosted is a row and a directory, and neither holds anything.
+        channels.added("cole", "discord", {"describes": "discord",
+                                           "allowed": json.dumps(["2207"]), "settings": "{}"})
+        code, _out, err = self.rundesk("agents", "remove", "cole", "--confirm")
+        self.assertEqual(OK, code, err)
+
+    def test_what_it_would_take_names_the_channels_directory(self):
+        # Everything that ever arrived through a channel is inside it, and `forgotten` really takes
+        # it — so a preview that left it out would describe a smaller removal than the one about to
+        # happen, which is the one thing that list exists not to do.
+        channels.added("cole", "discord", {"describes": "discord",
+                                           "allowed": json.dumps(["2207"]), "settings": "{}"})
+        # What a channel that has been hosted leaves standing: the row is in the records and the
+        # directory is on disk, and it is the directory this removal takes.
+        hosting.at("cole", "discord").mkdir(parents=True, exist_ok=True)
+
+        _code, _out, err = self.rundesk("agents", "remove", "cole")
+
+        self.assertIn(str(directory.where("cole") / directory.CHANNELS), err)
+        self.assertIn("what arrived through each", err)
 
     def test_it_goes_ahead_once_that_work_has_finished(self):
         # The refusal is about work in flight and not about having schedules at all.

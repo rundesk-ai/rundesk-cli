@@ -20,11 +20,12 @@ a prompt in a script is a command that hangs, and one that assumes yes with no t
 than no prompt at all. It takes an agent's whole memory, which is the thing here that no backup of
 `data/` taken afterwards can bring back.
 
-**And it refuses while a gateway is running for that agent**, which is a check that can only be
-made here: `agents/` sits below `gateways/` and may not import it, so the layer that removes an
-agent cannot ask, and `directory.forgotten` says as much in its own docstring. Removing one out
-from under a running gateway leaves a program hosting an agent that no longer exists — and launchd
-puts it straight back when it dies, because the job outlives the records.
+**And it refuses while anything is running for that agent**, which is a check that can only be
+made here: `agents/` sits below `gateways/`, `schedules/` and `channels/` and may not import any of
+them, so the layer that removes an agent cannot ask, and `directory.forgotten` says as much in its
+own docstring. Three things to ask about and one reason behind all three — a gateway hosting an
+agent that no longer exists, a firing whose lock this removal would hand away, and an adapter still
+connected to a platform as an agent that is gone.
 """
 
 import argparse
@@ -33,6 +34,7 @@ import sys
 from typing import List, Optional
 
 from rundesk.agents import directory, migration, records
+from rundesk.channels import hosting
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK
@@ -257,6 +259,16 @@ def _forgotten(name: str, confirming: bool) -> int:
         return _failed(working, f"see what it is doing with: rundesk schedules list {name}",
                        "nothing was removed")
 
+    # And whether any of its *channels* has an adapter connected, which is the same question again
+    # about the other thing a gateway hosts. An adapter holds its channel's lock and never
+    # `gateway.lock`, and one adopted from a gateway that is gone outlives every gateway there has
+    # been — so an agent that reads as free to both checks above can still have a program connected
+    # to a platform as it. See `_its_channels_are_running`.
+    connected = _its_channels_are_running(name)
+    if connected:
+        return _failed(connected, f"see what is connected with: rundesk channels list {name}",
+                       "nothing was removed")
+
     at = paths.agents() / name
     try:
         gone = directory.forgotten(name)
@@ -323,6 +335,13 @@ def _needs_confirming(name: str) -> int:
         print(f"        take   {len(held)} skill grant(s) — {', '.join(held)}; the skills "
               "themselves stay in the library", file=sys.stderr)
     print(f"        take   {at / directory.LOGS}", file=sys.stderr)
+    if (at / directory.CHANNELS).is_dir():
+        # Named for the reason the schedules line below is, and only when it is there: `forgotten`
+        # really does take this directory, and everything that ever arrived through a channel is
+        # inside it — a preview that left it out would describe a smaller removal than the one
+        # about to happen.
+        print(f"        take   {at / directory.CHANNELS} — every channel it is reached on, what "
+              "arrived through each, and what their adapters wrote", file=sys.stderr)
     scheduled = _what_it_has_scheduled(name)
     if scheduled:
         # Named because `directory.forgotten` really does take this directory, and a preview that
@@ -391,6 +410,44 @@ def _its_schedules_are_running(name: str) -> str:
     return (f"{name} has work still running: {', '.join(working)} — removing it now would take the "
             "lock that work is holding, and a schedule of the same name later would start a second "
             "copy beside it")
+
+
+def _its_channels_are_running(name: str) -> str:
+    """Why this agent may not be taken away yet because it is still connected, or `""` when it may.
+
+    **An adapter holds its channel's own lock, never `gateway.lock`**, so an agent with no gateway
+    anywhere reads as free to `_its_gateway_is_up` and can still have a program connected to a
+    platform as it — an adopted one outlives every gateway there has been. This removal takes
+    `channels/` with everything else, and unlinking a lock while something holds it hands the name
+    away, so a later agent and channel of the same names claim a *fresh* inode and lock that, while
+    the original adapter is still holding the old one. Two adapters connected as one agent, both
+    answering the people on its allow list, which is the single thing the whole locking design
+    exists to prevent.
+
+    Asked of the kernel through the lock files rather than of the records, so it is still answerable
+    when the database cannot be read — which is one of the states somebody removes an agent in.
+
+    **A claim nobody can ask about is refused, not read as free**, which is `_its_gateway_is_up`'s
+    third answer kept as a third answer here too. `hosting.still_running` deliberately re-raises
+    anything that is not ordinary contention — a permission problem, a filesystem that will not lock
+    — and treating that as "nothing is connected" is exactly how a live adapter comes to be orphaned
+    by a removal. A channels directory that cannot be *listed* is the other thing and is not this
+    one: `hosting.in_flight` answers nothing for it, and `directory.forgotten` will raise about the
+    same directory in a moment with a sentence about what it could not take.
+    """
+    try:
+        connected = hosting.in_flight(name)
+    except directory.Refused:
+        # A name that reaches outside where agents are kept. `forgotten` refuses the same name a
+        # moment later and says so in words about the name rather than about a lock.
+        return ""
+    except OSError as why:
+        return (f"nobody can tell whether {name} is still connected — {why}")
+    if not connected:
+        return ""
+    return (f"{name} is still connected: {', '.join(connected)} — removing it now would take the "
+            "lock that adapter is holding, and a channel of the same name later would connect a "
+            "second one beside it")
 
 
 def _provider_trouble(said: Optional[str], typed: str) -> str:
