@@ -9,4 +9,5 @@ every other module, so it may never depend on one of them.
 | `paths` | where an install keeps everything — one root, everything derived downward |
 | `secrets` | the values this install keeps for what it talks to, sealed and never shown whole |
 | `config` | what this install is configured with, and how far it has been carried |
+| `adapters` | finding the programs that stand outside rundesk, and reading what one printed |
 """

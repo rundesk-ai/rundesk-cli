@@ -58,12 +58,30 @@ May depend on `agents`, `core` and `utils`.
 """
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence
 
-from rundesk.core import paths
+from rundesk.core import adapters
 from rundesk.utils import programs
+
+#: Finding a program, what it is started with, and reading what it printed are the same questions
+#: for a provider adapter, so they live in `core.adapters` and this names only what is a channel's.
+#: Re-exported rather than aliased at each call site: `NotRunnable` is in `commands.channels`'s
+#: `TROUBLE` tuple as `adapters.NotRunnable`, and a caught kind is part of this module's surface.
+NotRunnable = adapters.NotRunnable
+CARRIED = adapters.CARRIED
+where_the_packages_are = adapters.where_the_packages_are
+
+
+def where(kind: str):
+    """The program behind this channel kind. See `core.adapters.where`."""
+    return adapters.where(kind, SHIPPED_IN, GIVEN_IN)
+
+
+def known():
+    """Every channel adapter this install can run. See `core.adapters.known`."""
+    return adapters.known(SHIPPED_IN, GIVEN_IN)
+
 
 #: Where the adapters that ship stand, under whatever `paths.code()` resolves to, and where the ones
 #: an install has been given stand. Two places and no third: one is part of the release and is
@@ -80,19 +98,6 @@ CAPABILITIES_WITHIN = 60.0
 #: How long `--check` may take. Longer, because it signs in to somebody else's service over somebody
 #: else's network — and still finite, because a person is standing at a terminal waiting for it.
 CHECK_WITHIN = 300.0
-
-#: What is carried into an adapter's environment from this one. Everything else is dropped: an
-#: adapter is handed what it needs by name, so a variable it did not ask for is one it cannot come
-#: to depend on by accident.
-CARRIED = ("PATH", "HOME", "TMPDIR", "TZ", "LANG", "LC_ALL")
-
-
-class NotRunnable(Exception):
-    """No program stands behind this channel, said with where it was looked for.
-
-    Named apart from `Refused` because the answer is different: a channel whose adapter is missing
-    is a channel that cannot start until something is installed, not one somebody configured wrongly.
-    """
 
 
 class Checked(NamedTuple):
@@ -113,60 +118,6 @@ class Checked(NamedTuple):
     why: str
 
 
-def where_the_packages_are() -> Optional[Path]:
-    """The install's own virtualenv, or `None` when it has not got one.
-
-    **This goes on the front of `PATH` and is never prepended to the argv.** An adapter is an
-    executable with a shebang of its own — it may be a shell script, and running one through
-    `python3` is nonsense — so the interpreter is chosen by what `#!/usr/bin/env python3` resolves
-    to, which is a thing rundesk decides and the adapter never has to.
-
-    Decided here rather than by the adapter, for the reason the module docstring gives: the previous
-    build let each adapter count parent directories to find its virtualenv, the count was wrong for
-    a whole release, and nothing failed until somebody added a channel.
-    """
-    theirs = paths.app() / ".venv" / "bin"
-    return theirs if theirs.is_dir() else None
-
-
-def where(kind: str) -> Path:
-    """The program behind `kind`. `NotRunnable` when there is not one, saying where it was looked for.
-
-    Anything with a separator is a path and is used as one, so an adapter being written right now
-    needs nothing installed anywhere. A bare name is looked for among the ones that ship and then
-    among the ones this install has been given, in that order — a release's own adapter is the one
-    somebody gets by typing its name, and an install cannot quietly shadow it.
-    """
-    if os.sep in kind or (os.altsep and os.altsep in kind):
-        # **Resolved, and that is not tidiness.** `Path("./quiet")` normalises to `quiet` — the
-        # separator that got us into this branch is gone — and a bare name handed to `Popen` is
-        # looked for on `PATH`, so the refusal reads `No such file or directory: 'quiet'` about a
-        # program standing right there. `./name` is the first spelling anybody tries.
-        at = Path(kind).expanduser().resolve()
-        if _runnable(at):
-            return at
-        raise NotRunnable(f"{at} is not a program that can be run")
-
-    looked = [paths.code() / SHIPPED_IN / kind, paths.data() / GIVEN_IN / kind]
-    for at in looked:
-        if _runnable(at):
-            return at
-    raise NotRunnable(
-        f"there is no {kind} adapter on this install — looked in "
-        + " and ".join(str(one.parent) for one in looked))
-
-
-def known() -> List[str]:
-    """Every adapter this install can run, in name order, found by looking rather than listed."""
-    found = set()
-    for at in (paths.code() / SHIPPED_IN, paths.data() / GIVEN_IN):
-        try:
-            found.update(one.name for one in at.iterdir() if _runnable(one))
-        except OSError:
-            continue                      # a directory that is not there yet is not a failure
-    return sorted(found)
-
-
 def capabilities(kind: str, running: Optional[Callable[..., programs.Ran]] = None) -> Dict[str, Any]:
     """What this adapter says it can do. `{}` when it would not say, which is a whole answer.
 
@@ -179,10 +130,10 @@ def capabilities(kind: str, running: Optional[Callable[..., programs.Ran]] = Non
     decided once, when the module is imported, and nothing can reach past it.
     """
     ran = (running or programs.run)([str(where(kind)), "--capabilities"],
-                                    CAPABILITIES_WITHIN, env=_environment())
+                                    CAPABILITIES_WITHIN, env=adapters.environment())
     if ran.trouble or ran.code != 0:
         return {}
-    said = _one_object(ran.out)
+    said = adapters.printed_object(ran.out)
     return said if isinstance(said, dict) else {}
 
 
@@ -211,15 +162,15 @@ def checked(kind: str, options: Sequence[str], env: Dict[str, str],
     """
     ran = (running or programs.run)(
         [str(where(kind)), "--check", *options],
-        CHECK_WITHIN, env=_environment(env))
+        CHECK_WITHIN, env=adapters.environment(env))
     if ran.trouble:
         return _refused(f"the {kind} adapter {ran.trouble}")
-    said = _one_object(ran.out)
+    said = adapters.printed_object(ran.out)
     if not isinstance(said, dict):
         return _refused(
             f"the {kind} adapter did not say whether it could connect"
-            + (f" — it said: {_the_reason(ran.err)}" if ran.err.strip() else ""))
-    named = [str(one) for one in _a_list(_a_mapping(said.get("secret")).get("env"))]
+            + (f" — it said: {adapters.last_said(ran.err)}" if ran.err.strip() else ""))
+    named = [str(one) for one in adapters.as_list(adapters.as_mapping(said.get("secret")).get("env"))]
     if not said.get("ok"):
         # **The credential's name comes back on a refusal too, and this is what carries it.** An
         # adapter that cannot connect for want of a token names the variable it looked in — the
@@ -230,7 +181,7 @@ def checked(kind: str, options: Sequence[str], env: Dict[str, str],
     return Checked(
         ok=True,
         describes=str(said.get("describes") or kind),
-        notify_place=_a_text(said.get("notify_place")),
+        notify_place=adapters.as_text(said.get("notify_place")),
         settings=json.dumps(said.get("settings") if isinstance(said.get("settings"), dict) else {}),
         secret_names=named,
         invite=str(said.get("invite") or ""),
@@ -248,7 +199,7 @@ def talking_to(kind: str, env: Dict[str, str], errors: Path,
     `channels.hosting`, which takes it. **Whatever calls this must drain `stdout` continuously**;
     `utils.programs.talking` says what happens to anything that does not.
     """
-    return programs.talking([str(where(kind)), "serve"], errors, env=_environment(env),
+    return programs.talking([str(where(kind)), "serve"], errors, env=adapters.environment(env),
                             holding=(holding,))
 
 
@@ -263,95 +214,8 @@ def _refused(why: str, named: Optional[List[str]] = None) -> Checked:
                    secret_names=list(named or []), invite="", why=why)
 
 
-def _runnable(at: Path) -> bool:
-    """Whether this is a file somebody could actually run.
-
-    Both halves asked, because they fail differently and a caller told "not there" about a program
-    that is there and not executable goes looking in the wrong place entirely.
-    """
-    try:
-        return at.is_file() and os.access(str(at), os.X_OK)
-    except OSError:
-        return False
 
 
-def _environment(also: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-    """What an adapter is started with: a named handful, plus whatever it was given.
-
-    Built rather than inherited. An adapter that could read this process's whole environment is one
-    that comes to depend on something nobody meant to hand it — and the thing most likely to be in
-    there is a credential belonging to a different agent.
-    """
-    built = {name: os.environ[name] for name in CARRIED if name in os.environ}
-    built["TERM"] = "dumb"                # nothing here is a terminal, and nothing may draw on one
-    packages = where_the_packages_are()
-    if packages is not None:
-        # In front, so `#!/usr/bin/env python3` resolves to the install's own interpreter and the
-        # adapter never has to work out where its packages live. See `where_the_packages_are`.
-        built["PATH"] = os.pathsep.join([str(packages), built.get("PATH", os.defpath)])
-    built.update(also or {})
-    return built
 
 
-def _one_object(said: str) -> Any:
-    """The JSON object an adapter printed, or `None`.
 
-    **The last non-blank line, not the whole of standard output.** A program that printed a warning
-    before its answer has still answered, and reading the whole stream would throw away a perfectly
-    good reply because something upstream was chatty.
-    """
-    whole = said.strip()
-    if not whole:
-        return None
-    try:
-        return json.loads(whole)
-    except ValueError:
-        pass
-    for line in reversed(said.splitlines()):
-        if line.strip():
-            try:
-                return json.loads(line)
-            except ValueError:
-                return None
-    return None
-
-
-def _the_reason(said: str) -> str:
-    """The last thing a program said before it stopped, for putting in a sentence.
-
-    Bounded, because this ends up in a message somebody reads: a program that wrote a megabyte of
-    traceback would otherwise fill the screen with the least useful part of it.
-    """
-    lines = [line.strip() for line in said.splitlines() if line.strip()]
-    return lines[-1][:200] if lines else ""
-
-
-def _a_list(said: Any) -> List[Any]:
-    """Whatever an adapter said, as a list — one thing said alone is a list of one.
-
-    An adapter that needs a single credential naming it as a string rather than as a list of one is
-    not making a mistake, and refusing it would be this side being pedantic about a shape it can see
-    through. Slack needs two, so the list is the real shape and this is the courtesy.
-    """
-    if said is None:
-        return []
-    return list(said) if isinstance(said, (list, tuple)) else [said]
-
-
-def _a_mapping(said: Any) -> Dict[str, Any]:
-    """Whatever an adapter said, as a mapping — `{}` when it said something else entirely.
-
-    `said.get("secret", {})` is not this: a default applies only when the key is *absent*, so an
-    adapter answering `"secret": "A_TOKEN"` handed a string to `.get` and raised `AttributeError`
-    out of the one function whose whole job is to turn an unvetted program's output into an answer.
-    """
-    return said if isinstance(said, dict) else {}
-
-
-def _a_text(said: Any) -> Optional[str]:
-    """A value an adapter reported, as text, or `None` when it said nothing at all.
-
-    Said-nothing and said-empty are different answers, and collapsing them here would make a channel
-    that reported no place look like one that reported an empty one.
-    """
-    return None if said is None else str(said)

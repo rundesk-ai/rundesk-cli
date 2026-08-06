@@ -14,6 +14,8 @@ checks that mechanically, because a rule of this kind stops being true quietly.
 | Module | Answers |
 |---|---|
 | `protocol` | what an adapter may say, and what a turn's records add up to |
+| `adapters` | the program behind a provider: finding it, asking what it can do, starting one |
+| `environment` | everything an adapter is told about one turn, and the whole of it |
 | `streaming` | one adapter that is running: the records off it, the words to it, and ending it |
 
 May depend on `channels`, `agents`, `core` and `utils`. It reaches `channels` because a turn's answer
