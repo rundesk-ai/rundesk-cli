@@ -1,0 +1,1058 @@
+#!/usr/bin/env python3
+"""Claude Code, as an agent thinks with it.
+
+Everything about this brain is in this file and nowhere else. A flag, a session id, the shape of a
+control request, the fact that its final line re-adds the whole prompt once per request it made —
+none of it appears anywhere under `src/rundesk/`, nothing there imports this, and nothing here
+imports rundesk. The seam is a pipe carrying newline-delimited records, and it is what lets a
+product that names no vendor reach one.
+
+**rundesk runs the vendor's own published CLI, as the owner, through the interface the vendor
+documents.** `claude -p` with a streaming input and a streaming output is that interface. No
+credential is read, copied or moved; the owner signs in with `claude login` and this never learns
+how that worked — see `the_environment` for the one variable this deliberately does *not* set.
+
+Two invocations, sharing almost nothing:
+
+    --capabilities   what this can do — offline, no account, the same answer every time
+    (no argument)    one turn: the prompt arrives as records on stdin, records come back on stdout
+
+## What was measured rather than assumed
+
+Probed against `claude 2.1.223` on 2026-08-06, because the notes this was written from describe
+2.1.219 and every one of these is a thing a release moves:
+
+- **The reply arrives twice, not three times.** Without `--include-partial-messages` there are no
+  `stream_event` lines at all: what the agent said arrives once as whole `assistant` blocks and
+  again inside `result.result`. The blocks are what is reported, marked `whole`, and the final
+  restatement is dropped. The notes describing a third copy were taken with a flag this adapter
+  does not pass, which is worth knowing before somebody adds it back to "fix" a capture.
+
+- **`result.usage` is a bill, not a turn.** A prompt is re-sent on every request a turn makes, so
+  the final line counts it once per request: a turn of two requests reported 40,328 cache reads
+  where the conversation it ended on was 25,046. The three input quantities are therefore read off
+  the **last `assistant` line**, which is the size the turn actually reached. **Output stays the
+  total from `result`**, because output is the one quantity never sent twice.
+
+- **Four quantities, four slots, none of them added together.** Fresh input, cache writes and cache
+  reads bill at three different rates. A measured turn: 2 fresh, 125 written, 25,046 read.
+
+- **`modelUsage` names two models** — a small one runs beside the one that was asked for — so which
+  model answered is read off `system/init` and never off the usage block.
+
+- **There is no percentage in the allowance event.** `rate_limit_event.rate_limit_info` carries a
+  status, a window name and a reset time and no number at all, so `percent_left` is left out rather
+  than invented. A figure nobody measured is a figure somebody plans around.
+
+- **Steering works, and it is not "write to stdin".** Merely sending another message queues a
+  *second turn* — measured, two `result` lines. What stops the running one is a control request on
+  the same pipe, and the sequence is: interrupt, wait for the acknowledgement, **wait for the
+  interrupted `result` to drain**, then send the replacement. See `Control`.
+
+- **`tool_result_meta` is now null.** The build this replaces told a tool cancelled by an interrupt
+  from one that genuinely failed by reading `non_execution_kind` out of that field. At 2.1.223 the
+  field is not there, so the only thing that distinguishes the two is that an interrupt is pending
+  — which is what `an_interrupted_tool` uses, and why it is deliberately narrow.
+
+- **A lost conversation is announced on stderr and nowhere else.** The `result` line says
+  `error_during_execution`, which is the *same* thing an interrupted turn says; the words `no
+  conversation found` appear only on the error stream. Both readings are needed to tell them apart.
+
+## What this deliberately does not report
+
+**No `file` records.** This brain reports a file it *touched*, never one it made for a person. A
+`file` record is what gets attached to a message on a channel, so guessing here would mail somebody
+their own repository.
+"""
+
+import contextlib
+import json
+import os
+import subprocess
+import sys
+import threading
+import time
+import uuid
+
+#: The program, and the surface. Both formats are streaming: the output so records arrive while the
+#: turn runs, and the input because a turn that can be steered must be able to be sent to.
+CLAUDE = "claude"
+STREAMING = ("-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose")
+
+#: How long `claude --version` may take when `--capabilities` is asked. A local exec with no network
+#: in it; a machine where that takes longer has something else wrong.
+VERSION_WITHIN = 10.0
+
+#: How long a control request may go unanswered. Not a turn timeout — rundesk owns the silence
+#: window and the ceiling, and duplicating them here would mean two policies disagreeing.
+CONTROL_WITHIN = 120.0
+
+#: How long to wait for rundesk to say the first thing. Its prompt is written as soon as the adapter
+#: starts, so this only ever expires when nothing is coming.
+THE_PROMPT_WITHIN = 60.0
+
+#: How long to wait for a thread to finish once the turn is over, and for the brain to end.
+GOING_WITHIN = 5.0
+
+#: How often anything here looks again at something another thread will set.
+WATCHING_EVERY = 0.01
+
+#: How much of one line is read at once. Not a limit on what the brain may say — only on what is
+#: held while it is being read, which is what makes the bound true rather than aspirational.
+A_LINE_AT_MOST = 1024 * 1024
+
+#: How much of what a tool printed goes in its `result` summary, and how many of the brain's last
+#: complaints are kept to explain a turn that stopped without saying why.
+A_SUMMARY_AT_MOST = 400
+TROUBLE_KEPT = 20
+
+#: What a tool this brain offers actually did, in rundesk's words. Deliberately not the whole list:
+#: an unknown tool still gets a `tool` record with **no** `did`, so a tool added next release is
+#: never handed a meaning somebody guessed.
+#:
+#: **Delegation is `Agent` here and `Task` on the permission surface.** Both names are real, in
+#: different places. Renaming either to match the other looks like a tidy-up and silently breaks it.
+DID_FOR = {
+    "Read": "read", "NotebookRead": "read",
+    "Glob": "list", "LS": "list",
+    "Grep": "search", "WebSearch": "search", "WebFetch": "search", "ToolSearch": "search",
+    "Bash": "run", "BashOutput": "run",
+    "Edit": "edit", "Write": "edit", "NotebookEdit": "edit",
+    "Agent": "delegate", "Task": "delegate",
+}
+
+#: Which of a tool's arguments names the file it changed. Read rather than guessed at, so an `edit`
+#: can be told from an agent rewriting what it lives by — see `what_it_changed`.
+EDITED_AT = ("file_path", "notebook_path")
+
+#: What this brain says when the conversation it was asked to carry on no longer exists. **On the
+#: error stream only** — its `result` line says `error_during_execution`, which is also what an
+#: interrupted turn says, so this phrase is the only thing that tells the two apart.
+GONE = "no conversation found"
+
+#: What this brain says when nothing is signed in. Kept apart from the rest because being signed out
+#: arrives as an ordinary failed turn rather than on the error stream.
+LOGGED_OUT = ("not logged in", "please run /login", "invalid api key", "unauthorized")
+
+#: Which of the closed words each way of failing means, matched against the prose on the failed
+#: `result` line. **This is the only place this brain puts a reason** — a turn stopped by a limit
+#: arrives as an ordinary failure with no field saying which kind it was.
+#:
+#: Matching prose is the weaker kind of evidence and is treated as such: an unrecognised failure
+#: leaves the word out entirely and keeps the message. The phrases are narrow for that reason — a
+#: loose one costs a wrong word in a total, which is worse than an absent one because nothing can
+#: see it.
+FAILURE_FOR = (
+    (("rate limit", "rate_limit", "too many requests", "overloaded"), "rate_limited"),
+    (("usage limit", "usage_limit", "quota", "allowance"), "usage_exhausted"),
+    (("credit balance", "insufficient credit", "out of credit"), "no_credit"),
+    (LOGGED_OUT, "signed_out"),
+    (("does not have access", "not entitled", "model not found"), "no_access"),
+    (("prompt is too long", "context low", "exceeds the context", "context window"),
+     "context_exceeded"),
+    (("internal server error", "bad gateway", "service unavailable"), "upstream_error"),
+    (("fetch failed", "getaddrinfo", "enotfound", "econnrefused", "network error"), "offline"),
+)
+
+
+def main() -> int:
+    if "--capabilities" in sys.argv[1:]:
+        say(what_this_can_do())
+        return 0
+    return one_turn()
+
+
+# ── What this can do ──────────────────────────────────────────────────────────────────────────
+
+def what_this_can_do() -> dict:
+    """Asked offline, with no account and no network, and the same answer every time.
+
+    `steer` is the only one that changes how a turn is *run* rather than what is recorded of it, and
+    it is claimed because the whole sequence was driven against this version: interrupt, wait for
+    the acknowledgement, wait for the interrupted result, send the replacement, and the turn ends on
+    the word the replacement asked for.
+
+    The version is volunteered beside the five: rundesk keeps whatever an adapter says here against
+    every turn, so a vendor upgrade that changes behaviour is visible in the record afterwards
+    rather than being a thing somebody has to remember.
+    """
+    can = {"tools": True, "resume": True, "model": True, "usage": True, "steer": True}
+    version = the_version()
+    if version:
+        can["claude_cli"] = version
+    return can
+
+
+def the_version() -> str:
+    """What `claude --version` says, or nothing. **Never a reason to fail** — a version this could
+    not read does not change what the adapter can do."""
+    try:
+        got = subprocess.run([CLAUDE, "--version"], capture_output=True, text=True,
+                             timeout=VERSION_WITHIN, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return got.stdout.strip().splitlines()[0] if got.stdout.strip() else ""
+
+
+# ── What a turn is started with ───────────────────────────────────────────────────────────────
+
+def opening(session: str, resume) -> list:
+    """Everything after the program's name, and why each part of it is there.
+
+    Pure and side-effect free, so the whole command line is readable without starting anything.
+
+    **The prompt never goes on the command line.** Every process on the machine can read one, and
+    this brain's tool flags are variadic besides — one of them swallows a trailing positional and
+    reports the mistake against the wrong argument.
+
+    **`RUNDESK_ACCESS_MODE` is read by nothing here, and that is the owner's decision.** Every turn
+    runs with the whole machine available to it. The seam still carries the word, and
+    `docs/providers.md` still says plainly that it is a request rather than containment and that an
+    adapter may ignore it — so what is written down and what happens agree.
+    """
+    argv = [*STREAMING, "--dangerously-skip-permissions"]
+    # A conversation this process is carrying on already has an id; a new one is given the id this
+    # adapter minted, so the handle exists before the first byte rather than being learned from a
+    # line that may never arrive.
+    argv += ["--resume", str(resume)] if resume else ["--session-id", session]
+    model = os.environ.get("RUNDESK_MODEL")
+    if model:
+        argv += ["--model", model]
+    preface = (os.environ.get("RUNDESK_PREFACE") or "").strip()
+    if preface:
+        # **Appended, never the flag that replaces.** The replacing one takes about 6,100 tokens of
+        # this brain's own instructions with it: nothing reports that, the tools keep working, and
+        # the turn merely behaves differently — which is the failure that gets blamed on the model.
+        argv += ["--append-system-prompt", preface]
+    return argv
+
+
+def the_environment() -> dict:
+    """What the brain is started with.
+
+    **`USER` is put back, and it is not cosmetic.** This brain looks its login up in the machine's
+    keychain under that name, and rundesk builds an adapter's environment from a named handful that
+    does not include it — so without this, a signed-in machine reports itself signed out and every
+    turn fails telling the owner to run a login they have already run. Bisected to this one name.
+
+    **`CLAUDE_CONFIG_DIR` is deliberately never set.** Measured: setting it does not *redirect* a
+    login, it *removes* one — pointing it at the owner's own configuration directory reported
+    `loggedIn: false`. So an adapter that gave each agent a private one would be an adapter that
+    demands a separate `claude login` per agent, and the alternative — copying a credential into it
+    — is the one thing this must never do. Not setting a variable copies nothing, which is why
+    `RUNDESK_PROVIDER_HOME` is named to this adapter and left unused.
+    """
+    env = os.environ.copy()
+    with contextlib.suppress(Exception):
+        import getpass
+        env.setdefault("USER", getpass.getuser())
+    return env
+
+
+# ── One turn ──────────────────────────────────────────────────────────────────────────────────
+
+def one_turn() -> int:
+    """One turn, however many times the brain has to be started to take it.
+
+    **A turn always ends with a `done`**, whatever went wrong, because rundesk reading no `done` at
+    all is a turn nobody can explain. The one exception is a process killed outright, which is
+    rundesk's own to classify and the only case it can classify correctly.
+
+    A conversation this brain has forgotten is the one failure worth retrying here, and it can only
+    be retried by starting again: the handle is dead, so the turn begins a new conversation and
+    `Words` replays everything rundesk has said so far into it — including any steering that
+    arrived while the first attempt was running, which would otherwise be lost between two
+    processes.
+    """
+    where = os.environ.get("RUNDESK_CWD") or os.getcwd()
+    raw = os.environ.get("RUNDESK_RAW")
+    present_the_skills(where)
+
+    words = Words(sys.stdin)
+    if words.first(THE_PROMPT_WITHIN) is None:
+        finished(False, failure_code="crashed", failure_message="rundesk sent no prompt")
+        return 1
+
+    resume = os.environ.get("RUNDESK_RESUME") or None
+    session = str(resume) if resume else str(uuid.uuid4())
+    for again in (False, True):
+        turn = Turn(where, raw, words, session, resume)
+        try:
+            code = turn.run()
+        except Exception as why:                   # noqa: BLE001 — a turn that dies silently is a
+            # turn rundesk can only call `crashed` with nothing to read. Whatever this was, it said.
+            finished(False, failure_code="crashed",
+                     failure_message=f"the claude adapter went wrong: {type(why).__name__}: {why}")
+            return 1
+        finally:
+            turn.take_the_brain_away()
+        if turn.the_conversation_was_gone and not again:
+            went_wrong(f"claude no longer has conversation {session}; starting a new one and "
+                       f"asking again")
+            resume, session = None, str(uuid.uuid4())
+            continue
+        return code
+    return code
+
+
+class Turn:
+    """One attempt at one turn: one brain started, read, spoken to, and ended."""
+
+    def __init__(self, where: str, raw, words, session: str, resume):
+        self.where = where
+        self.words = words
+        self.session = session
+        self.resume = resume
+        # Held open for the length of the attempt: a file reopened per line is a turn that spends
+        # its time on `open` rather than on work.
+        self.raw = open(raw, "a", encoding="utf-8") if raw else None
+        self.brain = None
+        self.control = Control()
+        self.ended = threading.Event()
+        self.trouble = []
+
+        #: Whether the one record that ends a turn has been said. Rundesk reading none at all is a
+        #: turn nobody can explain, so this is what makes "always one" true rather than intended.
+        self.said_done = False
+
+        #: Whether *this side* is what went wrong, as against the brain reporting a failure it
+        #: handled correctly. The exit code says what became of the program and nothing else.
+        self.could_not_go_on = False
+
+        #: Whether this brain has forgotten the conversation it was asked to carry on. Read after
+        #: the process has gone, because the two halves of the evidence arrive on two streams.
+        self.the_conversation_was_gone = False
+
+        #: What the turn ended *on*: the usage block of the last message that was not a delegated
+        #: agent's. See `the_bill` — this is a size, and the final line is a bill.
+        self.ended_on = None
+        self.model_name = None
+        self.allowance = None
+
+        #: The terminal pair, held rather than said, until the process has gone and it is known
+        #: whether the conversation was merely lost. Saying it first would report a failure that
+        #: this adapter is about to succeed at.
+        self.holding = None
+
+    # ── the wire ──────────────────────────────────────────────────────────────────────────────
+
+    def run(self) -> int:
+        self.brain = subprocess.Popen(
+            [CLAUDE, *opening(self.session, self.resume)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1, cwd=self.where, env=the_environment(),
+            # **`errors="replace"`, and it is not tidiness.** A coding agent reads binary files and
+            # what a tool printed comes back inside a `tool_result`, so one stray byte is a
+            # `UnicodeDecodeError` raised *inside* the read, past every guard a caller can put
+            # around a record. Strict decoding kills the reading thread, nothing ends the turn, and
+            # it sits in silence until rundesk's own window ends it half an hour later.
+            errors="replace")
+
+        threading.Thread(target=self.noticed, name="claude-err", daemon=True).start()
+        feeding = threading.Thread(target=self.what_rundesk_says, name="claude-in", daemon=True)
+        feeding.start()
+        self.heard()
+
+        # Everything is in now: the process has closed its output, and the error stream is what says
+        # whether the conversation was merely lost.
+        self.brain.wait()
+        self.words.wake()
+        feeding.join(timeout=GOING_WITHIN)
+        if self.holding is not None and self.a_lost_conversation():
+            self.the_conversation_was_gone = True
+            return 1
+        self.let_go_of_the_ending()
+        if not self.said_done:
+            self.could_not_read_it(why_it_stopped(self.trouble, self.brain.returncode))
+        return 1 if self.could_not_go_on else 0
+
+    def heard(self) -> None:
+        """Every line the brain says, for as long as it says anything. **Never raises.**
+
+        **Written to the raw stream before it is read**, so a line this release cannot understand is
+        still on disk to compare against when somebody asks why records went missing.
+
+        The one guard is at the end and covers every way this can stop, because only one of them —
+        the turn completing — has said what became of the turn.
+        """
+        try:
+            for line in self.read_a_line():
+                line = line.rstrip("\n")
+                if self.raw is not None:
+                    with contextlib.suppress(OSError):
+                        self.raw.write(line + "\n")
+                        self.raw.flush()
+                try:
+                    said = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(said, dict):
+                    with contextlib.suppress(Exception):
+                        self.a_line(said)
+        except Exception as why:                   # noqa: BLE001 — see the docstring
+            self.could_not_read_it(f"reading claude went wrong ({type(why).__name__}: {why})")
+        finally:
+            self.ended.set()
+
+    def read_a_line(self):
+        """Every line the brain sends, **bounded**, and never half of one.
+
+        `for line in stdout` is `readline()` with no size, which pulls until it meets a newline — so
+        a check on how long a line is happens only once the whole of it is held. A comparable
+        process went from 17 MB to 735 MB on a program that wrote without ever ending a line.
+
+        **Half a record is not a smaller record, it is a corrupt one**, and nothing downstream could
+        tell that apart from the brain talking nonsense, so an over-long line is read to its end and
+        dropped whole.
+        """
+        while True:
+            said = self.brain.stdout.readline(A_LINE_AT_MOST + 1)
+            if not said:
+                return
+            if not said.endswith("\n"):
+                if len(said) > A_LINE_AT_MOST:
+                    self.thrown_away()
+                    continue
+                return
+            yield said
+
+    def thrown_away(self) -> None:
+        """Read the rest of a line already too long, and keep none of it. Bounded on every call, for
+        the reason the caller is: what is being skipped past is by definition a stream writing
+        without ever ending a line."""
+        while True:
+            more = self.brain.stdout.readline(A_LINE_AT_MOST + 1)
+            if not more or more.endswith("\n"):
+                return
+
+    def noticed(self) -> None:
+        """Everything the brain says went wrong, passed straight on and the tail of it kept.
+
+        **Drained for the brain's whole life, in its own thread.** A second pipe with nothing
+        reading it fills its buffer and stops the program dead, which presents half an hour later as
+        a brain that simply went silent and sends you looking anywhere but here.
+        """
+        with contextlib.suppress(Exception):
+            for line in self.brain.stderr:
+                went_wrong(line.rstrip())
+                self.trouble.append(line.strip())
+                del self.trouble[:-TROUBLE_KEPT]
+
+    def what_rundesk_says(self) -> None:
+        """Everything rundesk says, in order, as this brain takes it.
+
+        The first word is the prompt and goes straight in. **Every later word has to stop the turn
+        first**: sending one to a brain already working merely queues a second turn, measured as two
+        `result` lines where the owner asked for one. So the sequence is interrupt, wait for the
+        acknowledgement, wait for the interrupted result to drain, and only then send.
+        """
+        with contextlib.suppress(Exception):
+            self.control.request(self.brain.stdin, "initialize")
+            for at, word in enumerate(self.words.each(self.ended)):
+                if at and not self.control.request(self.brain.stdin, "interrupt"):
+                    went_wrong("claude did not accept the interrupt, so this word was not sent")
+                    continue
+                write_to(self.brain.stdin, a_user_message(word))
+
+    def could_not_read_it(self, said: str) -> None:
+        """End the turn because *this side* could not go on. Said as a `done`, because rundesk
+        reading none at all is a turn nobody can explain — and remembered, because the exit code
+        says what became of the **program** and this is the program going wrong."""
+        self.could_not_go_on = True
+        self.the_turn_ended()
+        finished(False, failure_code="crashed", failure_message=one_line(said))
+
+    def the_turn_ended(self) -> None:
+        """Say that the record which ends a turn is about to be said, **once**."""
+        self.said_done = True
+
+    def a_lost_conversation(self) -> bool:
+        """Whether this brain has forgotten the conversation, rather than the turn having failed.
+
+        **Both halves are needed and they arrive on different streams.** The `result` line says
+        `error_during_execution`, which is exactly what an interrupted turn says; the words are only
+        ever on the error stream. Reading either alone would either retry every interrupted turn or
+        never retry a lost one.
+        """
+        if not self.resume:
+            return False
+        _, ending = self.holding
+        return not ending.get("ok") and GONE in " ".join(self.trouble).lower()
+
+    def let_go_of_the_ending(self) -> None:
+        """Say the pair that was held back, now that it is known the conversation still exists."""
+        if self.holding is None:
+            return
+        counted, ending = self.holding
+        self.holding = None
+        if counted:
+            say(counted)
+        self.the_turn_ended()
+        say(ending)
+
+    def take_the_brain_away(self) -> None:
+        """End the brain, whatever happened. A brain left running is a brain nobody will reap."""
+        if self.brain is not None:
+            with contextlib.suppress(Exception):
+                if self.brain.stdin and not self.brain.stdin.closed:
+                    self.brain.stdin.close()
+            with contextlib.suppress(Exception):
+                self.brain.wait(timeout=GOING_WITHIN)
+            with contextlib.suppress(Exception):
+                self.brain.terminate()
+                self.brain.wait(timeout=GOING_WITHIN)
+            with contextlib.suppress(Exception):
+                self.brain.kill()
+        if self.raw is not None:
+            with contextlib.suppress(OSError):
+                self.raw.close()
+
+    # ── what the brain said ───────────────────────────────────────────────────────────────────
+
+    def a_line(self, said: dict) -> None:
+        """One line of this brain's stream, as the records rundesk understands — or as none.
+
+        Everything not named here is dropped deliberately and kept in the raw stream, which is what
+        keeps a vendor adding a line kind from breaking a turn.
+        """
+        if self.control.heard(said):
+            return
+        kind = said.get("type")
+        if kind == "system" and said.get("subtype") == "init":
+            self.model_name = said.get("model") or self.model_name
+        elif kind == "assistant":
+            self.what_it_said(said)
+        elif kind == "user":
+            self.what_a_tool_gave_back(said)
+        elif kind == "rate_limit_event":
+            self.an_allowance(said.get("rate_limit_info") or {})
+        elif kind == "result":
+            self.that_is_the_turn(said)
+
+    def what_it_said(self, said: dict) -> None:
+        """What the brain said and what it reached for, off the line that carries both whole."""
+        message = said.get("message") or {}
+        # Where the turn got to, kept as a size and never added up. This line carries the whole
+        # message again each time it grows, so the last to arrive is the size the turn ended at. A
+        # delegated agent's line is its own conversation, which `parent_tool_use_id` is how this
+        # brain says — counting it would bill a subagent's prompt against its parent.
+        counted = message.get("usage")
+        if isinstance(counted, dict) and said.get("parent_tool_use_id") is None:
+            self.ended_on = counted
+        for block in message.get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            what = block.get("type")
+            if what == "text" and str(block.get("text") or "").strip():
+                # `whole`, because this is a finished thought and not a piece of one — which is what
+                # lets a surface show each thing as it is said rather than all of it at the end.
+                say({"type": "text", "text": str(block["text"]), "whole": True})
+            elif what == "thinking" and str(block.get("thinking") or "").strip():
+                say({"type": "think", "text": str(block["thinking"]), "whole": True})
+            elif what == "tool_use":
+                self.a_tool(block)
+
+    def a_tool(self, block: dict) -> None:
+        """A tool starting, named the way a person would look it up."""
+        record = {"type": "tool", "id": str(block.get("id") or ""),
+                  "name": str(block.get("name") or "")}
+        did = DID_FOR.get(record["name"])
+        if did == "edit":
+            did = what_it_changed(block.get("input")) or did
+        if did:
+            record["did"] = did
+        if did == "delegate":
+            inputs = block.get("input") if isinstance(block.get("input"), dict) else {}
+            who = str(inputs.get("subagent_type") or "").strip()
+            if who:
+                record["who"] = who
+        say(record)
+
+    def what_a_tool_gave_back(self, said: dict) -> None:
+        """What each tool came to, paired to its call by the id this brain minted."""
+        for block in (said.get("message") or {}).get("content") or []:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            if block.get("is_error") and self.control.interrupting():
+                # **The one thing an interrupt looks like from here.** Stopping an in-flight tool
+                # makes this brain emit an ordinary-looking failed result for it, and the field that
+                # used to mark it as a cancellation is no longer sent. So the only evidence is that
+                # an interrupt is pending — which is why this is narrow: outside a steer, a failed
+                # tool is reported as the failure it is.
+                continue
+            say({"type": "result", "id": str(block.get("tool_use_id") or ""),
+                 "ok": not block.get("is_error"),
+                 "summary": one_line(what_it_reported(block.get("content")))})
+
+    def an_allowance(self, info: dict) -> None:
+        """News about the account, never about the work. A turn carrying one may have succeeded.
+
+        **No percentage is claimed, because this brain reports none.** Its allowance object carries
+        a status, a window name and a reset time, and nothing that is a number of anything — so the
+        record says when the window comes back and stays quiet about how much is left. Said only
+        when it changed, because one arrives on every request and the same figure twice is not news.
+        """
+        record = {"type": "limit"}
+        resets = info.get("resetsAt")
+        if a_count(resets):
+            record["resets_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(resets))
+        if len(record) > 1 and record != self.allowance:
+            self.allowance = record
+            say(record)
+
+    def that_is_the_turn(self, said: dict) -> None:
+        """The line that ends a turn — of which there may be more than one, and only one is it.
+
+        An interrupted turn ends with a `result` of its own. It is not this turn's ending: it is the
+        part of the work that was stopped, so its cost is accumulated onto the real ending and the
+        line itself is swallowed. Anything else would report a turn the owner steered as a turn that
+        failed.
+        """
+        if self.control.interrupted():
+            self.control.counted(said)
+            return
+        said = self.control.with_usage(said)
+        counted = self.the_bill(said)
+        ok = not said.get("is_error")
+        ending = {"type": "done", "ok": ok}
+        if ok:
+            # **The handle only when the turn worked.** This adapter mints the id before the first
+            # byte, so a conversation whose turn failed may never have been created — and handing
+            # one back would poison every turn after it with `No conversation found`.
+            ending["session_id"] = self.session
+        else:
+            message = str(said.get("result") or said.get("subtype") or "the turn failed")
+            ending["failure_message"] = one_line(message)
+            word = a_failure_word(message)
+            if word:
+                ending["failure_code"] = word
+        # Held rather than said: if the conversation was merely lost, this attempt is about to be
+        # made again and reporting a failure now would be reporting one rundesk is about to fix.
+        self.holding = (counted, ending)
+        self.no_more_words()
+
+    def no_more_words(self) -> None:
+        """The turn is over, so close the brain's input and let it go.
+
+        **A brain that can be steered does not end on its own.** Its input is held open for the
+        whole turn — that is what steering *is* — so it sits waiting for another word after it has
+        answered, and the thread reading its output waits for a stream that will not close. Each
+        waits for the other, and the turn hangs until rundesk's silence window ends it half an hour
+        later with nothing written down. Closing the input here is the only thing that ends it, and
+        it is safe precisely because the turn is over: there is nothing left anybody could send.
+        """
+        self.ended.set()
+        self.words.wake()
+        with contextlib.suppress(Exception):
+            if self.brain.stdin and not self.brain.stdin.closed:
+                self.brain.stdin.close()
+
+    def the_bill(self, said: dict):
+        """What this turn cost, and **only what was actually measured**.
+
+        **The input side is where the turn ended, and the final line is a bill.** A prompt is sent
+        again on every request a turn makes, so this line's cache reads are that prefix counted once
+        per request — a measured turn of two requests reported 40,328 against a conversation of
+        25,046, and a longer one reported fifteen million. Nobody can read that as anything about a
+        turn. **Output stays this line's total**, because output is the one quantity never sent
+        twice: every token is generated once.
+
+        `context_tokens` puts the three input pieces back together, which is not a sum across
+        requests but the reassembly of the one prompt they describe. That is a level: it goes *down*
+        after a compaction, which is the behaviour a gauge must have and a total cannot.
+        """
+        counted = said.get("usage") or {}
+        at_end = self.ended_on if isinstance(self.ended_on, dict) else counted
+        record = {"type": "usage"}
+        for ours, theirs, where in (
+                ("input_tokens", "input_tokens", at_end),
+                ("cache_read_tokens", "cache_read_input_tokens", at_end),
+                ("cache_write_tokens", "cache_creation_input_tokens", at_end),
+                ("output_tokens", "output_tokens", counted)):
+            if a_count(where.get(theirs)):
+                record[ours] = where[theirs]
+        pieces = [at_end.get(one) for one in
+                  ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")]
+        if any(a_count(one) for one in pieces):
+            record["context_tokens"] = sum(one for one in pieces if a_count(one))
+        # Which model *answered*, off the line that names one. Never off the usage block: that names
+        # two, because a smaller model runs beside the one that was asked for.
+        if self.model_name:
+            record["model_name"] = str(self.model_name)
+        return record if len(record) > 1 else None
+
+
+# ── Steering ──────────────────────────────────────────────────────────────────────────────────
+
+class Control:
+    """This brain's own small two-way control protocol, on the same pipe as everything else.
+
+    **Ordinary input queues.** Sending a second message to a brain that is working does not steer
+    it, it asks for another turn — measured, and the owner gets two answers to one question. What
+    stops the running turn is a control request, and the sequence has three steps rather than one:
+    the acknowledgement says the interrupt was *accepted*, and the interrupted `result` says it has
+    actually *drained*. A replacement sent between those two is merely queued behind the thing it
+    was meant to replace.
+    """
+
+    def __init__(self):
+        self.watching = threading.Condition()
+        self.asked = 0
+        self.answers = {}
+        self.usage = {}
+
+        #: How many `result` lines are still owed by requests that steering stopped. Counted rather
+        #: than flagged because a second steer can arrive before the first has drained.
+        self.owed = 0
+
+    def request(self, stream, subtype: str) -> bool:
+        """One control request, and whether the brain accepted it."""
+        with self.watching:
+            self.asked += 1
+            which = f"rundesk_{self.asked}"
+            self.answers[which] = None
+            if subtype == "interrupt":
+                # **Marked before writing.** The brain may finish the interrupted request before its
+                # acknowledgement reaches the thread reading its output.
+                self.owed += 1
+        asking = {"subtype": subtype}
+        if subtype == "initialize":
+            asking["hooks"] = None
+        try:
+            write_to(stream, {"type": "control_request", "request_id": which, "request": asking})
+        except (OSError, ValueError):
+            with self.watching:
+                self.answers.pop(which, None)
+                self.no_longer_owed(subtype)
+            return False
+        with self.watching:
+            answered = self.watching.wait_for(lambda: self.answers.get(which) is not None,
+                                              timeout=CONTROL_WITHIN)
+            response = self.answers.pop(which, None)
+            accepted = bool(answered and response and response.get("subtype") == "success")
+            if not accepted:
+                # The result may have raced the failed acknowledgement and taken this mark already.
+                self.no_longer_owed(subtype)
+            elif subtype == "interrupt":
+                accepted = self.watching.wait_for(lambda: self.owed == 0, timeout=CONTROL_WITHIN)
+            return accepted
+
+    def no_longer_owed(self, subtype: str) -> None:
+        """Give back an interrupt's mark. **Never below zero** — a negative count is truthy, and one
+        would make every later result look as though steering had stopped it."""
+        if subtype == "interrupt" and self.owed > 0:
+            self.owed -= 1
+
+    def heard(self, one: dict) -> bool:
+        """Take one control response, and say whether this line was one."""
+        if one.get("type") != "control_response":
+            return False
+        response = one.get("response")
+        if isinstance(response, dict):
+            with self.watching:
+                which = response.get("request_id")
+                if which in self.answers:
+                    self.answers[which] = response
+                    self.watching.notify_all()
+        return True
+
+    def interrupted(self) -> bool:
+        """Whether this `result` is the ending of a request steering deliberately stopped."""
+        with self.watching:
+            if self.owed <= 0:
+                return False
+            self.owed -= 1
+            self.watching.notify_all()
+            return True
+
+    def interrupting(self) -> bool:
+        """Whether an interrupt is in flight, so what arrives now may be its doing."""
+        with self.watching:
+            return self.owed > 0
+
+    def counted(self, one: dict) -> None:
+        """Add one stopped request's cost to this turn's. Work done before a steer is work the owner
+        is still billed for, so dropping it would under-report every steered turn."""
+        for name, value in (one.get("usage") or {}).items():
+            if a_count(value):
+                self.usage[name] = self.usage.get(name, 0) + value
+
+    def with_usage(self, one: dict) -> dict:
+        """The final ending, carrying everything the stopped requests cost as well as its own."""
+        if not self.usage:
+            return one
+        self.counted(one)
+        return {**one, "usage": dict(self.usage)}
+
+
+class Words:
+    """Everything rundesk says, kept, because a turn may have to be asked again.
+
+    One thread owns rundesk's input for the adapter's whole life, while a *brain* may be started
+    more than once — a conversation this brain has forgotten is retried as a new one. Each attempt
+    reads from the beginning, so the prompt and any steering that arrived while the first attempt
+    was running are replayed into the second rather than lost between two processes.
+    """
+
+    def __init__(self, stream):
+        self.words = []
+        self.closed = False
+        self.watching = threading.Condition()
+        threading.Thread(target=self.read, args=(stream,), name="rundesk-in", daemon=True).start()
+
+    def read(self, stream) -> None:
+        try:
+            for line in stream:
+                word = what_rundesk_said(line)
+                if word is None:
+                    continue
+                with self.watching:
+                    self.words.append(word)
+                    self.watching.notify_all()
+        except Exception:                          # noqa: BLE001 — rundesk's input ending badly is
+            pass                                   # the same as it ending: there are no more words.
+        finally:
+            with self.watching:
+                self.closed = True
+                self.watching.notify_all()
+
+    def first(self, within: float):
+        """The prompt. `None` when rundesk said nothing at all before giving up on it."""
+        with self.watching:
+            self.watching.wait_for(lambda: self.words or self.closed, timeout=within)
+            return self.words[0] if self.words else None
+
+    def each(self, stopping: threading.Event):
+        """Every word, from the first, until the turn ends or rundesk stops speaking."""
+        at = 0
+        while True:
+            with self.watching:
+                # `so_far=at` binds where the loop is *now*. A plain closure over `at` reads it when
+                # the condition is evaluated, on another thread, after this loop has moved on — so
+                # a word could be waited past and never yielded.
+                self.watching.wait_for(
+                    lambda so_far=at: so_far < len(self.words) or self.closed or stopping.is_set())
+                if stopping.is_set() or at >= len(self.words):
+                    return
+                word, at = self.words[at], at + 1
+            yield word
+
+    def wake(self) -> None:
+        """Let go of anything waiting here, because the thing it was waiting for has happened."""
+        with self.watching:
+            self.watching.notify_all()
+
+
+def what_rundesk_said(line: str):
+    """One record from rundesk, as the words to send — or `None` if it was not one.
+
+    An adapter that declares `steer` is only ever sent records, so a line that is not one is a
+    contract this side cannot honour and is better dropped visibly than guessed at.
+    """
+    try:
+        one = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(one, dict) or one.get("type") != "say":
+        return None
+    return (str(one.get("text") or ""), str(one.get("context") or ""))
+
+
+def a_user_message(word) -> dict:
+    """One thing rundesk said, in the shape this brain reads it.
+
+    rundesk's own words go **first and marked**, so a brain reads them as framing rather than as
+    something the person tacked on — and so what the person actually said is unaltered beneath it.
+    """
+    text, context = word
+    said = f"[rundesk] {context}\n\n{text}" if context else text
+    return {"type": "user", "parent_tool_use_id": None, "session_id": "",
+            "message": {"role": "user", "content": said}}
+
+
+# ── Reading one line ──────────────────────────────────────────────────────────────────────────
+
+def what_it_changed(inputs) -> str:
+    """Which of the files an agent lives by this just changed, when that is what it changed.
+
+    What an agent keeps of its own is what it *is* between turns, so one of those being rewritten is
+    different news from a working file being rewritten — and both arrive as the same `edit`. Which
+    files they are is not this adapter's to know: `RUNDESK_CONTINUITY` names them, so renaming one
+    is a change in one place rather than a verb that quietly stops being reported.
+
+    **Matched on where the file stands, never on what it is called.** Every checkout on the machine
+    has an `AGENTS.md`, and an agent editing one in a repository has not rewritten its own rules —
+    saying it did is worse than the plain `edit` it would otherwise get, because it is untrue. What
+    qualifies is the resolved path standing directly in the agent's own directory, resolved on both
+    sides so a linked home is still the same home.
+
+    **The path itself never leaves this function.** What crosses the seam is one word, which is what
+    lets a surface say what changed without being told where anything lives.
+    """
+    if not isinstance(inputs, dict):
+        return ""
+    lives_by = what_the_agent_lives_by()
+    if not lives_by:
+        return ""
+    where = os.path.realpath(os.environ.get("RUNDESK_CWD") or os.getcwd())
+    for named in EDITED_AT:
+        at = inputs.get(named)
+        if not isinstance(at, str) or not at.strip():
+            continue
+        at = os.path.realpath(os.path.join(where, at))
+        if os.path.dirname(at) == where:
+            return lives_by.get(os.path.basename(at), "")
+    return ""
+
+
+def what_it_reported(content) -> str:
+    """A bounded account of what a tool came to, for a line somebody is watching go past."""
+    if isinstance(content, list):
+        return " ".join(str(one.get("text") or "") for one in content
+                        if isinstance(one, dict) and one.get("type") == "text")
+    if isinstance(content, (dict, list)):
+        with contextlib.suppress(TypeError, ValueError):
+            return json.dumps(content, sort_keys=True)
+    return str(content or "")
+
+
+def a_failure_word(said: str):
+    """Which of the closed words this failure is, or none at all.
+
+    **Nothing is guessed.** A failure whose prose matches nothing here is reported with its message
+    and no word, because a word inferred from wording is a word that is wrong on the first release
+    that rewords one — and a wrong word in a column nothing can audit is worse than an absent one.
+    """
+    lowered = str(said).lower()
+    for phrases, word in FAILURE_FOR:
+        if any(one in lowered for one in phrases):
+            return word
+    return None
+
+
+def why_it_stopped(trouble: list, code) -> str:
+    """Why a brain that never finished its turn stopped, in the best words there are."""
+    for line in reversed(trouble):
+        if line.strip():
+            return line.strip()
+    return f"claude stopped without finishing the turn (exit {code})"
+
+
+def what_the_agent_lives_by() -> dict:
+    """`NAME=verb` pairs, as rundesk names them. Read rather than held, so a file renamed there does
+    not silently stop being reported here."""
+    said = {}
+    for pair in (os.environ.get("RUNDESK_CONTINUITY") or "").split(","):
+        name, _, verb = pair.partition("=")
+        if name.strip() and verb.strip():
+            said[name.strip()] = verb.strip()
+    return said
+
+
+# ── The skills an agent was granted ───────────────────────────────────────────────────────────
+
+#: Where this brain looks for skills, relative to the directory a turn stands in. **Measured, not
+#: read off any documentation** — one canary planted per candidate directory, each declaring its own
+#: unguessable code, with file tools denied so the answer could only have come from the skill index.
+#: This brain reads `.claude/skills` and only that.
+SKILLS_ROOT = os.path.join(".claude", "skills")
+
+
+def present_the_skills(where: str) -> None:
+    """Stand this agent's granted skills where this brain will find them.
+
+    Links rather than copies, so an owner editing the library edits what every agent holding that
+    skill reads, with nothing to re-run.
+
+    **Never a link to the whole directory.** That would make a path this vendor owns an alias for
+    the library itself — so its own skill installer would write into the source of truth, and
+    anything aimed at this directory would destroy it.
+
+    Idempotent, and the pruning is deliberately narrow: an entry goes only when it is a link *this*
+    put there whose skill is no longer granted. **Ours is decided by where it points, not by it
+    being broken** — an owner may hand-place a link here to a skill of their own, and a target
+    briefly away, on an unmounted drive or mid-move, looks exactly like a grant that was revoked.
+    Deleting on dangling alone took those.
+    """
+    granted = os.environ.get("RUNDESK_SKILLS")
+    standing = []
+    if granted and os.path.isdir(granted):
+        standing = sorted(one for one in os.listdir(granted) if not one.startswith("."))
+    root = os.path.join(where, SKILLS_ROOT)
+    # Nothing granted and nothing placed before: make no directory at all. An agent with no skills
+    # should not have a vendor's directory in its home to explain.
+    if not standing and not os.path.isdir(root):
+        return
+    try:
+        os.makedirs(root, exist_ok=True)
+        for name in standing:
+            link = os.path.join(root, name)
+            target = os.path.relpath(os.path.join(granted, name), root)
+            if os.path.islink(link):
+                if os.readlink(link) == target:
+                    continue
+                os.unlink(link)
+            elif os.path.exists(link):
+                continue                       # somebody else's, and not ours to replace
+            os.symlink(target, link)
+        for name in os.listdir(root):
+            link = os.path.join(root, name)
+            if not os.path.islink(link) or os.path.exists(link):
+                continue
+            points_at = os.readlink(link)
+            if not os.path.isabs(points_at):
+                points_at = os.path.normpath(os.path.join(root, points_at))
+            if granted and os.path.commonpath(
+                    [os.path.abspath(granted), points_at]) == os.path.abspath(granted):
+                os.unlink(link)                # granted once, revoked since
+    except (OSError, ValueError) as gone:
+        # A turn without its skills is a whole turn. Say so and carry on rather than failing one
+        # over what is, at worst, a brain that is less well informed.
+        went_wrong(f"this agent's skills could not be presented: {gone}")
+
+
+# ── Saying it ─────────────────────────────────────────────────────────────────────────────────
+
+def write_to(stream, one: dict) -> None:
+    """One line to the brain, flushed."""
+    stream.write(json.dumps(one) + "\n")
+    stream.flush()
+
+
+def one_line(said: str) -> str:
+    """A thing to put on a line somebody reads: no newlines, and bounded."""
+    said = " ".join(str(said).split())
+    return said if len(said) <= A_SUMMARY_AT_MOST else said[:A_SUMMARY_AT_MOST - 1] + "…"
+
+
+def a_count(value) -> bool:
+    """Whether this is a number of things. `True` is an `int` to Python and is not a count."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def finished(ok: bool, session_id=None, failure_code=None, failure_message=None) -> None:
+    """The record that ends a turn. Exactly one is said, and one always is."""
+    record = {"type": "done", "ok": bool(ok)}
+    for name, value in (("session_id", session_id), ("failure_code", failure_code),
+                        ("failure_message", failure_message)):
+        if value:
+            record[name] = value
+    say(record)
+
+
+def say(record: dict) -> None:
+    """One record to rundesk, flushed, because a record held in a buffer is a record nobody saw."""
+    with contextlib.suppress(OSError, ValueError):
+        sys.stdout.write(json.dumps(record) + "\n")
+        sys.stdout.flush()
+
+
+def went_wrong(said: str) -> None:
+    """Something for whoever is reading this turn, on the stream that is the adapter's own."""
+    with contextlib.suppress(OSError, ValueError):
+        sys.stderr.write(said.rstrip() + "\n")
+        sys.stderr.flush()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
