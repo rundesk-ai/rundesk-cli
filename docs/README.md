@@ -16,6 +16,7 @@ anyone learns from it is not to trust the rest.
 | [schedules.md](./schedules.md) | What a schedule is, and every state one can get stuck in |
 | [time.md](./time.md) | The three clocks, and which one answers what |
 | [development.md](./development.md) | Running and testing a checkout without installing it |
+| [requirements/](./requirements/) | What the previous build promised, and how much of it this one owes |
 | [research/](./research/) | What was found out, kept where it can be read after the thing that taught it is gone |
 
 `commands.md` lists what rundesk can do and nothing else. There is no operation on that page that
