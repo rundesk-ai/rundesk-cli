@@ -1,164 +1,122 @@
 ---
 name: writing-skills
-description: Write, review or fix a skill so a brain actually triggers it and uses it correctly. Use when asked to add a skill, capture a repeated procedure so it does not have to be explained again, publish a catalog of skills, work out why a skill is never triggered or is triggered for the wrong thing, or when a skill needs a credential — even if nobody says the word "skill".
+description: Creates, revises, reviews, debugs, or publishes provider-neutral skills for rundesk. Use when asked to capture a repeatable workflow, add or improve a SKILL.md, fix triggering or token use, add scripts, references, assets, or credentials, troubleshoot an unusable skill, or share skills through a catalog — even when the request does not call the result a skill.
 ---
 
 # Writing skills
 
-A skill is a directory holding a `SKILL.md`. Every brain rundesk runs already reads that format, so
-nothing here is rundesk's invention and a skill you write works outside rundesk too.
+Build the smallest skill that changes how an agent performs a repeatable task.
 
-## Where a skill goes
+## Choose where it belongs
 
-Your own skills stand in the `local` catalog, one directory each, directly inside it:
+Put a private skill in the install's `local` catalog. Rundesk has no create verb; make the directory
+and `SKILL.md` directly.
 
-```text
-<library>/local/
-├── manifest.json          rundesk wrote this; leave it alone
-├── my-thing/SKILL.md      yours
-└── another-thing/SKILL.md yours
-```
-
-**Ask where the library is rather than writing the path down** — an install can be pointed anywhere,
-so a path that is right on this machine is wrong on the next one. The first line of
-`"$RUNDESK_COMMAND" skills` says it.
+Ask rundesk where the library is. Never derive it from `RUNDESK_HOME` or write an absolute path into
+the skill. Replace the example name before running this:
 
 ```sh
-"$RUNDESK_COMMAND" skills                      # prints the library, and everything in it
-mkdir -p <library>/local/<name>
-$EDITOR <library>/local/<name>/SKILL.md
-"$RUNDESK_COMMAND" skills grant <agent> local/<name>
+skill_name=release-notes
+skill_library=$("$RUNDESK_COMMAND" skills | sed -n '1s/^skills in //p')
+test -n "$skill_library" || exit 1
+mkdir -p "$skill_library/local/$skill_name"
 ```
 
-**Writing the file is not enough for an agent to have it.** A skill in the library is available to be
-granted; an agent uses only what it has been granted, which is why the last line is there. Give it to
-yourself and it is yours from your *next* turn — your environment was built when this turn started.
-`"$RUNDESK_COMMAND" skills list <agent>` says what an agent holds, and `skills doctor` says why one
-of them cannot be used.
+Write `<library printed above>/local/release-notes/SKILL.md`, then grant it. Use `$RUNDESK_AGENT` for
+the agent taking this turn, or name another agent when the request does:
 
-`local` is flat because nothing fetches into it, and nothing rundesk does removes it. Every other
-catalog keeps its skills a level down, under `app/skills/`, so that a re-fetch can replace the whole
-tree in one move — which is exactly why **anything you edit inside one of those is replaced the next
-time that catalog is checked**. The repository is the source of truth there. To change such a skill,
-change it where it is published, or copy it into `local` under a new name.
+```sh
+"$RUNDESK_COMMAND" skills grant "$RUNDESK_AGENT" local/release-notes
+```
 
-## The shape
+Writing the file only makes it available. Granting makes it discoverable, starting with the agent's
+next turn because the current turn's environment is already built.
+
+Read `references/publishing.md` before creating a skill meant for other installs. Published skills
+belong in a catalog repository, not in `local`.
+
+## Use only the shape the task needs
 
 ```text
 <name>/
-├── SKILL.md          required: what this is, and when to reach for it
-├── rundesk.json      optional: the credentials it needs
-├── scripts/          optional: commands it ships — executable, standard library only
-├── references/       optional: depth read only when it is needed
-└── assets/           optional: templates and files used in output
+├── SKILL.md          required: triggering and core procedure
+├── rundesk.json      optional: required environment values
+├── scripts/          optional: deterministic or repeated commands
+├── references/       optional: detail read only in named situations
+└── assets/           optional: files copied or used in output
 ```
 
-**Everything but `SKILL.md` is optional and most skills have none of it.** This very skill is an
-example of two of them: the file you are reading is the whole of how to write a skill, and
-`references/integrations.md` beside it is the part only somebody writing an integration ever needs.
-That is the split to copy — the skill itself holds what every reader needs on every use, and a
-reference holds what one reader needs occasionally.
+Do not create an optional directory until it has content. Do not add a `README.md`, changelog,
+installation guide, or an account of how the skill was made.
 
-`name` and `description` are the only frontmatter to use. Other fields exist, they differ between
-brains, and one brain silently dropping a skill over a key another accepts is not worth the trouble.
+Read `references/integrations.md` before adding `rundesk.json` or a script that reaches an external
+service.
+
+## Write the metadata first
+
+Use only `name` and `description` in the frontmatter.
+
+- Make `name` match its directory. Use at most 64 characters: lowercase letters, digits, and single
+  hyphens.
+- Make `description` say what the skill does and every real situation that should trigger it.
+- Describe user intent, not only words a user might type. Most requests will not say the skill's
+  name.
+- Keep the description within 1024 characters and as short as complete coverage allows. Every agent
+  holding the skill pays for it on every turn.
+- Put all trigger guidance in the description. The body is unavailable until after triggering.
 
 ```markdown
 ---
 name: release-notes
-description: How this team writes release notes. Use when asked to draft, review or edit release notes, when a version is being tagged, or when deciding what a change should say to somebody who did not make it.
+description: Drafts and reviews release notes for this team. Use when preparing a release, tagging a version, or explaining shipped changes to people who did not build them.
 ---
 ```
 
-## The description is the whole triggering mechanism
+## Write only what changes behavior
 
-**Nothing below the frontmatter is read until the skill has already been triggered**, so a "when to
-use this" section in the body cannot help decide anything. Everything about when to reach for it goes
-in the description.
+Use imperative steps and lead with the action. Assume the reader can reason, edit files, and use
+ordinary tools.
 
-- Third person, and pushy. Say what it does, then every situation it applies to.
-- Name the situations somebody would be in, not the words they would use. Most people asking for the
-  thing your skill does will never say its name.
-- 1024 characters is the limit and is enforced. A hundred to two hundred words is the useful range.
-- End with the escape hatch the good ones have: *"— even if nobody says the word X."*
+- Keep the core workflow, defaults, and non-obvious gotchas in `SKILL.md`.
+- Give one good default. Offer choices only when the task truly requires a decision.
+- Use exact commands or scripts for fragile operations; use concise judgment rules where several
+  approaches are valid.
+- Explain the failure a constraint prevents instead of adding unexplained `ALWAYS` or `NEVER` rules.
+- Introduce every reference by when to read it, and link it directly from `SKILL.md`.
+- State each fact once. Do not repeat a reference in the body.
+- Remove general background, process history, dated claims, and anything already loaded from the
+  agent's rules or the repository.
 
-## The body
+Treat 500 lines as a ceiling, not a target. If the body grows, keep universally needed procedure and
+gotchas in it; move conditional detail one level down into a reference.
 
-Under 500 lines, and under is not a target to approach. Once triggered it stays in context for the
-rest of the conversation, so every line is a recurring cost paid on every turn afterwards.
+## Budget the context
 
-- Imperative and verb first. "To do X, do Y" — not "you should".
-- **Assume a capable reader.** Only write what it would get wrong without you. If a competent person
-  would do the right thing unprompted, cut it.
-- **The most valuable thing you can write is the gotcha** — the environment-specific fact that
-  defeats a reasonable assumption. Rows that look deleted and are not. One id spelled three ways. A
-  health check that answers while the database is down. These go in the body, never in a reference,
-  because a reader may not recognise the moment to go and look.
-- Give a default rather than a menu. A skill that lists four options has moved the decision back to
-  the reader.
-- Explain why. Writing ALWAYS or NEVER in capitals is usually a sign the reason is missing.
-- Introduce a reference by **when to read it**: "Read `references/api-errors.md` if the API answers
-  anything but 200" — never "see references/ for details". Keep them one level deep.
-- Say something once. A fact in both the body and a reference is a fact with two places to be wrong.
+| Part | When it costs tokens | Keep there |
+|---|---|---|
+| `description` | every turn | the shortest complete trigger |
+| `SKILL.md` body | when the provider loads it after triggering | core procedure, defaults, gotchas |
+| `references/` | only when read | conditional detail and larger examples |
+| `scripts/` | output enters context | deterministic work with bounded plain-text output |
+| `assets/` | only when used | templates and output material, not instructions |
 
-## Reaching something outside this machine
-
-**Advanced, and most skills need none of it.** A skill that tells an agent how to do something needs
-no credentials, ships no commands, and stops at the sections above.
-
-If yours has to sign in to an API, a ticket tracker or a deploy service, **read
-`references/integrations.md`**. It covers the whole of it: declaring what you need in `rundesk.json`
-and why the reason against each name matters, how a script you ship reads those values, how an owner
-with three accounts gets profiles for free, and what `doctor` says when it is not working.
-
-Two rules are worth knowing before you decide to go there, because they change what you write:
-
-- **Never put a credential in a skill.** You name the variable; the owner places it with
-  `"$RUNDESK_COMMAND" env set <NAME>`, at their own terminal, where nothing writes it down.
-- **A value placed now reaches the next turn, not this one.** The environment was built when the turn
-  started.
-
-## What never goes in a skill
-
-- `README.md`, `CHANGELOG.md`, installation notes, or any account of how the skill was written.
-- Credentials, tokens, or anything only true on one machine — including absolute paths.
-- Anything the reader already loads every turn. A copy is the same words paid for twice and a second
-  place to be wrong.
-- Dated claims nothing will come back and correct.
-
-## Publishing a catalog
-
-A catalog is a repository with a `manifest.json` at its root and a `skills/` directory beside it.
-Which skills it holds is **found** rather than listed — every directory under `skills/` with a
-`SKILL.md` in it — so there is no list to keep in step with the directory.
-
-```json
-{
-  "schema": 1,
-  "name": "acme-skills",
-  "version": "1.2.0",
-  "description": "Skills for working on Acme's systems."
-}
-```
-
-```sh
-rundesk skills install https://github.com/acme/acme-skills            # says what it would do
-rundesk skills install https://github.com/acme/acme-skills --confirm
-```
-
-A local directory is a valid source too, which is how you try a catalog before publishing it.
+Prefer a short example over another paragraph. Make scripts emit only what the agent needs next;
+verbose JSON and unbounded listings spend the context the script was meant to save.
 
 ## Prove it works
 
-**Test with a fresh reader that does not know it is being tested.** Ask for the outcome — "using the
-skill at `<path>`, do X" — never "review this skill". Give it the raw material rather than your
-conclusions, and never show it the answer you expect.
+Check the skill through the same surface an agent uses:
 
-Run the same task **without** the skill first. If the result is the same, the skill is not earning
-the context it costs, and the honest thing is to delete it.
+1. Confirm the directory name, frontmatter name, and description limits agree.
+2. Grant the skill if the target agent does not already hold it, then run:
 
-Three checks before it is finished:
+   ```sh
+   "$RUNDESK_COMMAND" skills list "$RUNDESK_AGENT"
+   "$RUNDESK_COMMAND" skills doctor "$RUNDESK_AGENT"
+   ```
 
-- `rundesk skills doctor` says nothing about it.
-- A brain triggered it from a request that never used its name.
-- Every script it ships is executable. A script that is present and not executable looks exactly like
-  one that works, right up until something tries.
+3. Run every shipped script with representative input and confirm it is executable.
+4. Use a fresh turn to request the outcome without naming the skill. Confirm the description triggers
+   it and the instructions change the result.
+5. For a substantial skill, compare that result with a fresh baseline that does not hold the skill.
+   If the result is materially the same, remove instructions that are not earning their token cost.
