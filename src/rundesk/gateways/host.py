@@ -272,6 +272,13 @@ STOP_ASKED_WITH = (signal.SIGHUP, signal.SIGTERM)
 CAME_UP = "🟢 Gateway online — rundesk is online."
 WENT_DOWN = "🔴 Gateway offline — rundesk has shut down."
 
+#: How long the goodbye may take to reach a platform before this stops waiting for it and gets on
+#: with stopping. **Spent out of `STOPPING_WITHIN`, not beside it** — one platform round trip against
+#: the twenty seconds the stop below is allowed, which leaves the shutdown inside the job's own
+#: `ExitTimeOut` with room to spare. A goodbye nobody could deliver is not worth holding a stop open
+#: for; a goodbye nobody waited for is the one that never arrives.
+GOODBYE_WITHIN = 3.0
+
 
 class Stopped(BaseException):
     """A supervisor, or a person, asked this gateway to stop.
@@ -583,9 +590,16 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
         # writes nothing at all, so the presence of this sentence is how the two are told apart.
         logs.note(where, f"gateway stopping for {name}: {why}")
         # Said here rather than from the teardown, because it has to leave through an adapter that
-        # is still running and the stack unwinding below is what closes them. Cheap enough not to
-        # count against the budget: it is one line written to a pipe this process already holds.
-        _told(name, where, channels_up, WENT_DOWN)
+        # is still running and the stack unwinding below is what closes them.
+        #
+        # **And waited for, which is the whole of the fix.** Writing this to a pipe is not the same
+        # as a platform having it, and what happens next is the unwinding below asking every adapter
+        # to stop and then signalling it — so the record was written, the adapter was signalled
+        # before it had read the line, and its post was cancelled where it stood. Measured against a
+        # real Discord bot: the owner was told the gateway came up and never that it went away, with
+        # nothing in any log to say so. Bounded, and out of a budget that has room for it: this is
+        # one round trip against the `STOPPING_WITHIN` seconds the stop below is allowed.
+        _told(name, where, channels_up, WENT_DOWN, landed_within=GOODBYE_WITHIN)
         return OK
 
 
@@ -741,7 +755,8 @@ def _the_told_channel_is_connected(name: str, channels_up: hosting.Watching) -> 
     return False
 
 
-def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str) -> None:
+def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
+          landed_within: float = 0.0) -> None:
     """Send one notice out through the channel this agent asked to be told things. Never raises.
 
     **Nothing here may end a gateway**, which is why the whole of it stands inside one guard: a
@@ -762,7 +777,8 @@ def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str) ->
     with contextlib.suppress(Exception):
         going = delivery.notice(name, saying)
         if going is not None:
-            hosting.told(name, where, channels_up, going.kind, going.place, going.pieces)
+            hosting.told(name, where, channels_up, going.kind, going.place, going.pieces,
+                         landed_within=landed_within)
 
 
 def _stop_politely() -> None:

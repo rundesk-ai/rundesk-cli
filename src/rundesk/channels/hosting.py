@@ -151,6 +151,12 @@ NEVER_AGAIN = float("inf")
 #: saying so, and an acknowledgement cannot tell that from an answer.
 SEEN = "seen"
 
+#: How many deliveries one adapter may have in flight before the oldest is forgotten. Nothing here
+#: needs them for long — an acknowledgement takes a round trip — and the bound is what stops an
+#: adapter that never acknowledges one from leaving an entry behind for every delivery in a gateway
+#: that has been up for a month.
+IN_FLIGHT_KEPT = 200
+
 #: The least time any one adapter gets to stop, however many there are. A gateway's whole shutdown
 #: is bounded by the job's `ExitTimeOut`, and channels share that budget with schedules — so the
 #: share is divided rather than spent per child, and never below this.
@@ -188,10 +194,17 @@ class Answering(Protocol):
 
     `landed` says whether this message was **fresh**. A redelivery is the same message arriving
     twice, and answering it twice is the failure this exists to prevent.
+
+    `busy` is asked before a message is marked, and it is the one question this module cannot answer
+    for itself: whether a turn is already running in that conversation. What a turn *is* lives a
+    layer up, so the question is published here and answered there.
     """
 
     def answer(self, agent: str, kind: str, place: str, who: str, body: str,
                external_id: Optional[str], landed: arriving.Landed) -> None:
+        ...
+
+    def busy(self, agent: str, conversation: int) -> bool:
         ...
 
 
@@ -219,11 +232,14 @@ class Running(NamedTuple):
     listening: Optional[threading.Thread]
     since: float
     mine: bool
-    #: What each delivery still in flight is an answer to: the delivery's own id, against the
-    #: platform's id for the message being answered. Written when the delivery goes out and read
-    #: when the adapter acknowledges it, which is the moment — and the only moment — this side
-    #: knows an answer has actually landed. That is what puts the ✅ on somebody's message, and it
-    #: needs no provider: *answered* is a fact about delivery, not about a turn.
+    #: Every delivery still in flight, by its own id, against the platform's id for the message it
+    #: answers — or `""` for one that answers nothing, which is a notice or a remark. Written when
+    #: the delivery goes out and removed when the adapter acknowledges it, which is the moment, and
+    #: the only moment, this side knows something has actually reached the platform.
+    #:
+    #: **Every delivery is entered and not only an answer**, because *has this landed yet* is a
+    #: question about the writing rather than about the words: the gateway's goodbye is the one
+    #: record that has to be waited for, and it answers nobody.
     #:
     #: A plain dict on an immutable tuple, written by both threads — the loop as it delivers and
     #: the drain as answers land — and **not under `saying`**, which guards writing a line to the
@@ -504,11 +520,22 @@ def connected(watching: Watching, kind: str) -> bool:
 
 def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
          pieces: List[str], sending: Sequence[naming.Sending] = (),
-         answering: Optional[str] = None, cost: str = "") -> bool:
+         answering: Optional[str] = None, cost: str = "",
+         landed_within: float = 0.0) -> bool:
     """Send something to a place through a running adapter. `False` when there is nothing to send it.
 
     `False` rather than an exception: a notice that could not be delivered because the adapter is
     restarting is a fact to write down, not a reason to interrupt whatever produced it.
+
+    **`landed_within` is what makes the difference between written and delivered**, and it is for the
+    one caller that cannot afford to confuse them. Writing a record to a pipe takes microseconds and
+    posting it to a platform takes a round trip, so a caller that writes and walks away is fine for
+    anything with a gateway still standing behind it — and wrong for the goodbye, where what happens
+    next is this gateway stopping the adapter and signalling it. Measured against a real Discord bot:
+    the notice was written, the adapter was signalled before it had read the line, and the owner was
+    told their gateway had come up and never that it went away. Given seconds, this waits for that
+    adapter to say the words reached the platform. `0.0` keeps the old behaviour, which is what every
+    other caller wants.
 
     `answering` is the platform's id for the message this replies to. The adapter quotes that
     message, so an answer reads as an answer rather than as a remark. **Left out for running
@@ -533,6 +560,7 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
     carrying = [{"name": each.name, "at": str(each.at), "bytes": each.bytes,
                  "sha256": each.sha256} for each in sending]
     saying = list(pieces) or ([""] if carrying else [])
+    written = []
     for nth, piece in enumerate(saying):
         record = {"do": "deliver", "id": f"{time.time():.6f}-{nth}", "place": place, "text": piece}
         if carrying and nth == len(saying) - 1:
@@ -544,11 +572,41 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
             record["cost"] = cost
         if answering and nth == 0:
             record["reply_to"] = answering
-            one.awaiting[record["id"]] = answering
+        one.awaiting[record["id"]] = answering if answering and nth == 0 else ""
+        _make_room(one.awaiting)
         if not _said_to(where, one, record):
             one.awaiting.pop(record["id"], None)
             return False
+        written.append(record["id"])
+    if landed_within > 0:
+        _landed(one, written, landed_within)
     return True
+
+
+def _landed(one: Running, written: List[str], within: float) -> bool:
+    """Wait for an adapter to say these deliveries reached its platform. `False` when it did not.
+
+    **The drain thread is what answers this**, by taking each id out of `awaiting` as the adapter
+    acknowledges it — so this only has to watch, and watching is all it does: nothing here writes,
+    and a caller that gave up waiting has still sent what it sent.
+
+    Polled rather than waited on an event, because what is being watched is a dict two threads share
+    and the only safe operations on it are the indivisible ones. A tenth of a second is far below a
+    platform round trip and far above the cost of asking.
+    """
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        if not any(one.awaiting.get(each) is not None for each in written):
+            return True
+        time.sleep(0.1)
+    return not any(one.awaiting.get(each) is not None for each in written)
+
+
+def _make_room(awaiting: Dict[str, str]) -> None:
+    """Keep what is held bounded. **A gateway runs for weeks**, and an adapter that never
+    acknowledges a delivery would otherwise leave one entry behind for every one it was sent."""
+    while len(awaiting) > IN_FLIGHT_KEPT:
+        awaiting.pop(next(iter(awaiting)), None)
 
 
 def _said_once(where: Path, watching: Watching, kind: str, said: str) -> None:
@@ -768,7 +826,10 @@ def _delivered(where: Path, one: Running, record: Dict[str, Any]) -> None:
     is the ordinary case and not a failure.
     """
     answered = one.awaiting.pop(str(record.get("id") or ""), None)
-    if not answered:
+    if answered is None or not answered:
+        # Nothing was waiting on this id, or it answered nobody — a notice, a remark, a piece after
+        # the first. Taking it out of `awaiting` above is the whole of what this moment owes: that
+        # is what `told` watches when something is waiting for the words to land.
         return
     _note(where, f"channel {one.kind}: the answer to {answered} reached the platform")
 
@@ -807,11 +868,11 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allo
             return
         body = _also_attached(body, here)
     landed = arriving.recorded(agent, kind, place, who, body, external)
-    if external:
-        # **The one state a turn is not needed for.** A message arriving is the whole of the event,
-        # so this is said the moment it is written down rather than when something answers it — and
-        # it is said on a redelivery too, because the mark belongs to the message and an adapter
-        # that has just restarted is one that no longer knows it put it up.
+    if external and not _joining_one(agent, one, landed):
+        # **The mark belongs to the message that starts a turn, and to no other.** Said the moment it
+        # is written down rather than when something answers it — a message arriving is the whole of
+        # that event — and said on a redelivery too, because the mark belongs to the message and an
+        # adapter that has just restarted no longer knows it put one up.
         _said_to(where, one, {"do": "state", "place": place, "external_id": external,
                               "state": SEEN})
     if not landed.fresh:
@@ -828,6 +889,29 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allo
     # **Handed on, never run here.** This is the thread reading one adapter's output, and a turn
     # takes minutes — see `Answering`.
     one.answering.answer(agent, kind, place, who, body, external, landed)
+
+
+def _joining_one(agent: str, one: Running, landed: arriving.Landed) -> bool:
+    """Whether this message joins a turn already running rather than starting one of its own.
+
+    **A mark says a message was taken up, so a message that starts nothing does not get one.**
+    Somebody typing again while their agent is working is carrying on the same exchange — measured
+    against a real gateway: the follow-up was marked 👀, no turn ever began for it, and the mark it
+    was given is the only one it will ever have. A message left wearing 👀 for good reads as an
+    agent that noticed somebody and then forgot them, which is worse than no mark at all.
+
+    Asked of whatever answers, because **this module cannot answer it**: what a turn is and whether
+    one is running live a layer up, and `channels` may not reach `providers`.
+
+    `False` when nothing answers here at all — there is no turn to join, so a message that arrived
+    is a message that was seen — and `False` when the question itself fails, because a mark that
+    might be wrong is a better failure than a person who was never acknowledged.
+    """
+    if one.answering is None:
+        return False
+    with contextlib.suppress(Exception):
+        return bool(one.answering.busy(agent, landed.conversation))
+    return False
 
 
 def _taken_in(agent: str, where: Path, kind: str, message: str,

@@ -243,6 +243,27 @@ def _leads_its_own_group(pid: int) -> bool:
         return False
 
 
+class _AnsweringStub:
+    """The `Answering` shape, so a case can say what a turn is doing without running one.
+
+    A stand-in rather than the real thing on purpose: `channels` may not reach `providers`, so what
+    this module does with the answers it gets has to be provable with nothing of that layer present.
+    """
+
+    def __init__(self, busy=False):
+        #: `True`, `False`, or an exception to raise — the third being a question nobody can answer.
+        self._busy = busy
+        self.answered = []
+
+    def answer(self, agent, kind, place, who, body, external_id, landed):
+        self.answered.append((place, body, external_id))
+
+    def busy(self, agent, conversation):
+        if isinstance(self._busy, BaseException):
+            raise self._busy
+        return self._busy
+
+
 class Hosting(support.Isolated):
 
     def setUp(self):
@@ -783,6 +804,46 @@ class MarkingWhatArrived(Hosting):
         support.waited_until(lambda: "connected" in self.said_in_the_log(), PATIENCE)
         self.assertEqual([], [one for one in self.what_it_was_told()
                               if one.get("do") == "state"])
+
+    def test_a_message_joining_a_running_turn_is_not_marked(self):
+        # **A mark says a message was taken up.** Measured against a real gateway: somebody typed
+        # again while their agent was working, the follow-up was marked 👀, no turn ever began for
+        # it, and that 👀 is the only mark it will ever have — which reads as an agent that noticed
+        # somebody and then forgot them.
+        answering = _AnsweringStub(busy=True)
+        self.an_adapter()
+        self.a_channel(saying=self.a_message_arrived(external_id="8842"))
+        hosting.looked(self.agent, self.where, hosting.Watching({}, {}, {}), answering=answering)
+        self.assertTrue(support.waited_until(lambda: answering.answered, PATIENCE),
+                        f"the message never reached what answers. It said: {self.said_in_the_log()}")
+        time.sleep(0.5)
+        self.assertEqual([], [one for one in self.what_it_was_told()
+                              if one.get("do") == "state"],
+                         "a message that started no turn was marked as seen")
+
+    def test_a_message_that_starts_a_turn_is_still_marked(self):
+        # The other half of the same rule, so that skipping the mark cannot quietly become never
+        # putting one up.
+        answering = _AnsweringStub(busy=False)
+        self.an_adapter()
+        self.a_channel(saying=self.a_message_arrived())
+        hosting.looked(self.agent, self.where, hosting.Watching({}, {}, {}), answering=answering)
+        self.assertTrue(support.waited_until(
+            lambda: any(one.get("do") == "state" for one in self.what_it_was_told()), PATIENCE),
+            f"nothing was ever sent to mark it. It said: {self.said_in_the_log()}")
+        marked = next(one for one in self.what_it_was_told() if one.get("do") == "state")
+        self.assertEqual(hosting.SEEN, marked["state"])
+        self.assertEqual("8841", marked["external_id"])
+
+    def test_a_question_that_cannot_be_answered_still_marks_the_message(self):
+        # A mark that might be wrong is a better failure than a person who was never acknowledged.
+        answering = _AnsweringStub(busy=RuntimeError("nobody can say"))
+        self.an_adapter()
+        self.a_channel(saying=self.a_message_arrived())
+        hosting.looked(self.agent, self.where, hosting.Watching({}, {}, {}), answering=answering)
+        self.assertTrue(support.waited_until(
+            lambda: any(one.get("do") == "state" for one in self.what_it_was_told()), PATIENCE),
+            f"a question that failed cost somebody their mark. It said: {self.said_in_the_log()}")
 
     def test_a_message_with_no_id_of_its_own_is_not_marked(self):
         # There is nothing on that platform to put a mark on, and a `state` naming no message is a

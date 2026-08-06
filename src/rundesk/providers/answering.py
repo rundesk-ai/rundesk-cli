@@ -114,6 +114,18 @@ class OnAChannel:
         """What the gateway is watching **now** — asked again every time, never held."""
         return self._hosted()
 
+    def busy(self, agent: str, conversation: int) -> bool:
+        """Whether a turn is already running in this conversation. **Asked of the kernel.**
+
+        `hosting` publishes this question and cannot answer it — what a turn is lives here. It is
+        asked before a message is marked, so that somebody typing again while their agent works is
+        not given a mark for a turn that will never begin.
+
+        `turns.busy` probes with a *shared* lock rather than an exclusive one, so two of these asked
+        at the same moment do not each read the other as a running turn.
+        """
+        return turns.busy(agent, conversation)
+
     def remark(self, agent: str, kind: str, place: str, said: str) -> None:
         """One finished thing the agent said mid-turn, posted on its own (R-CH-19).
 
