@@ -43,6 +43,7 @@ Two rules for a page here:
 | [`2026-08-05-the-old-builds-provider-system.md`](2026-08-05-the-old-builds-provider-system.md) | the previous build's six provider modules end to end, and every incident each one cost |
 | [`2026-08-05-how-other-gateways-run-a-provider.md`](2026-08-05-how-other-gateways-run-a-provider.md) | OpenClaw and Hermes on supervising a provider process, and the two shapes to refuse |
 | [`2026-08-05-designing-the-provider-system.md`](2026-08-05-designing-the-provider-system.md) | what is settled about providers, the terms-of-service position, and the nine-phase route — a proposal, not a description |
+| [`2026-08-06-what-moved-since-the-brains-were-researched.md`](2026-08-06-what-moved-since-the-brains-were-researched.md) | what the carried-over brain notes get wrong at the versions that ship, re-probed rather than assumed |
 
 ## Carried over intact
 

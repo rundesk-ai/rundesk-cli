@@ -1,8 +1,22 @@
 # The provider layer, and writing a provider adapter
 
 **This is what ships.** Every claim on this page was read out of the code as it stands: where it
-states a field, a bound or an exit code, it is because `src/rundesk/providers/`, the one working
-adapter in `src/providers/codex`, and the suites in `tests/` say so.
+states a field, a bound or an exit code, it is because `src/rundesk/providers/`, the working adapters
+in `src/providers/`, and the suites in `tests/` say so.
+
+**Three brains ship**, and each was driven against the version named in
+[`cli-versions.lock`](../cli-versions.lock) rather than against notes about an older one:
+
+| Adapter | Reaches it by | Can be steered |
+|---|---|---|
+| `codex` | `codex app-server`, JSON-RPC over a pipe | yes |
+| `claude` | `claude -p`, streaming JSON both ways | yes |
+| `grok` | `grok agent stdio`, the Agent Client Protocol | no — nothing in that protocol was measured to take more words into a turn already running |
+
+**Every turn runs with the whole machine available to it**, on all three. `RUNDESK_ACCESS_MODE` is
+still carried and is still what this page says it is below — a request rather than containment, which
+an adapter may map onto its brain or ignore — and all three ignore it. That is the owner's decision,
+written here so that what is documented and what happens are the same thing.
 
 A **provider** is a brain — a vendor's own command-line tool, driven headlessly. A **provider
 adapter** is the program rundesk runs to reach one. Nothing under `src/rundesk/` names a vendor, and
@@ -401,7 +415,8 @@ rules:
   (`signed_out`) and say what to run.
 - **Drive only documented headless surfaces**, and never defeat a rate limit.
 - **Never let a test reach a vendor.** Capture a real stream, commit it, and replay it — see
-  `tests/samples/codex-app-server-0.146.0.jsonl` and `cli-versions.lock`.
+  `tests/samples/codex-app-server-0.146.0.jsonl`, `tests/samples/claude-2.1.223.jsonl`,
+  `tests/samples/grok-acp-0.2.118.jsonl` and `cli-versions.lock`.
 
 ---
 
@@ -442,9 +457,29 @@ than that it cost nothing.
 
 ### Proving it without a vendor
 
-Capture what your brain really said during one turn, scrub any real paths out of it, commit it, and
-replay it through your adapter. `tests/test_providers_codex.py` is the worked example, and
-`tests/samples/a-captured-brain` replays a capture the way a real server would.
+Capture what your brain really said during one turn, scrub out anything naming a machine or an owner,
+commit it, and replay it through your adapter. `tests/test_providers_codex.py` is the worked example.
+
+**Three stand-ins ship, and which one fits is decided by how your brain is spoken to** rather than by
+which vendor it is. Reuse one where it fits and write a fourth where none does — a shared fixture
+that has to branch on vendor is worse than two that do not.
+
+| Stand-in | For a brain that | Releases a capture |
+|---|---|---|
+| `a-captured-brain` | answers requests, and whose notifications follow the request that caused them | on each reply, everything since the last one |
+| `an-acp-brain` | answers requests, and whose notifications are caused by a *later* request than the reply they sit behind | only once the request that causes them arrives |
+| `a-streaming-brain` | is told things and answers, with no request ids at all | one turn per thing it is told |
+
+The difference between the first two is not cosmetic. Releasing a run of notifications before the
+request that caused it is an ordering no real server produces, and a fixture that produces one
+teaches an adapter to survive something that never happens — or hides something that does. It hid
+exactly one: an adapter deciding what belonged to its turn on a different thread from the one reading
+had a race, and only the early release made it visible.
+
+**A brain that can be steered does not end on its own.** Its input is held open for the whole turn,
+which is what steering *is*, so it waits for another word after it has answered while your reader
+waits for a stream that will not close. Close its input when the turn ends, or the turn hangs until
+rundesk's silence window ends it half an hour later with nothing written down.
 
 **A capture of a turn that started from nothing cannot prove usage arithmetic** — a turn that begins
 at zero reports the same numbers whether a baseline is subtracted or ignored. Capture a second turn

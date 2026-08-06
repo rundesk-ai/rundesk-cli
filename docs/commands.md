@@ -855,6 +855,9 @@ $ rundesk providers
 providers in /Users/you/.rundesk/app/src/providers and /Users/you/.rundesk/data/providers
 PROVIDER    PROGRAM
 a-stand-in  /Users/you/.rundesk/data/providers/a-stand-in
+claude      /Users/you/.rundesk/app/src/providers/claude
+codex       /Users/you/.rundesk/app/src/providers/codex
+grok        /Users/you/.rundesk/app/src/providers/grok
 ```
 
 A bare name resolves among the ones that ship and then among the ones this install has been given, in
