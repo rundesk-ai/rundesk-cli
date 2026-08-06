@@ -33,6 +33,12 @@ CAPTURED = support.CHECKOUT / "tests" / "samples" / "codex-app-server-0.146.0.js
 #: the baseline is subtracted or ignored — so the case that would over-report every turn of every
 #: resumed conversation needs a capture that did not start from nothing.
 RESUMED = support.CHECKOUT / "tests" / "samples" / "codex-app-server-0.146.0-resumed.jsonl"
+
+#: One stream per way the vendor's own schema says a turn can fail. **Not captures** — provoking a
+#: revoked credential or a spent allowance means abusing an account, and a test that reached a
+#: vendor is refused here anyway. Each is the vendor's documented error name in the vendor's
+#: documented shape, so what is proved is the mapping and not the wording of a message.
+FAILURES = support.CHECKOUT / "tests" / "samples" / "codex-failures"
 A_BRAIN = support.CHECKOUT / "tests" / "samples" / "a-captured-brain"
 
 #: How long the adapter may take to translate a capture. It does no waiting of its own here, so this
@@ -360,6 +366,78 @@ class ATurnOnAConversationThatHadAlreadyCost(support.Isolated):
         has already finished is refused rather than quietly starting a new one."""
         self.assertEqual(1, len(self.of_type("done")))
         self.assertEqual("HALTED", self.of_type("text")[-1]["text"])
+
+
+class EveryWayTheBrainSaysItFailed(support.Isolated):
+    """The closed word for each of the vendor's own, and **never one guessed from the prose**.
+
+    A word inferred from a failure message is a word that is wrong on the first vendor that rewords
+    one — and the whole value of a closed set is that a person reading a failure does not have to
+    know a vendor's error strings to know whether to wait or to act.
+    """
+
+    def done_of(self, named):
+        said, got = replayed(self.home, captured=FAILURES / f"{named}.jsonl")
+        self.assertTrue(said, f"{named} produced no records at all")
+        self.assertEqual("done", said[-1]["type"], f"{named} did not end with a done")
+        return said[-1], got
+
+    def test_each_of_the_brains_own_names_becomes_the_right_closed_word(self):
+        for named, wanted in (("unauthorized", "signed_out"),
+                              ("usage-limit", "usage_exhausted"),
+                              ("session-budget", "usage_exhausted"),
+                              ("context-window", "context_exceeded"),
+                              ("server-overloaded", "rate_limited"),
+                              ("internal-server-error", "upstream_error"),
+                              ("cyber-policy", "refused"),
+                              ("sandbox", "no_access"),
+                              ("offline", "offline"),
+                              ("stream-disconnected", "upstream_error")):
+            with self.subTest(named=named):
+                done, _got = self.done_of(named)
+                self.assertFalse(done["ok"])
+                self.assertEqual(wanted, done["failure_code"])
+
+    def test_the_status_behind_a_failed_connection_is_more_specific_than_the_kind(self):
+        """A 401 on a failed connection is a credential and not a network, and a 402 is a card.
+        Reporting either as `offline` would tell somebody to wait for something that will not
+        change on its own."""
+        for named, wanted in (("unauthorized-by-status", "signed_out"),
+                              ("no-credit-by-status", "no_credit"),
+                              ("rate-limited-by-status", "rate_limited")):
+            with self.subTest(named=named):
+                self.assertEqual(wanted, self.done_of(named)[0]["failure_code"])
+
+    def test_a_name_this_release_has_never_heard_of_carries_no_word_and_keeps_the_message(self):
+        """**A word left out is better than a wrong one.** A vendor inventing a failure mode must
+        not have it filed under the nearest fit, because a reader can exhaust a closed set and
+        cannot exhaust one with a wrong member in it."""
+        done, _got = self.done_of("one-nobody-has-heard-of")
+        self.assertFalse(done["ok"])
+        self.assertNotIn("failure_code", done)
+        self.assertEqual("the vendor said no", done["failure_message"])
+
+    def test_a_turn_the_brain_is_going_to_retry_itself_has_not_failed(self):
+        """`willRetry` means the brain is handling it. A turn recorded as failed because of a blip
+        it recovered from is an account of the work that is untrue."""
+        done, _got = self.done_of("retried-and-then-worked")
+        self.assertTrue(done["ok"])
+        self.assertNotIn("failure_code", done)
+
+    def test_a_turn_somebody_stopped_is_cancelled_and_not_an_error(self):
+        done, _got = self.done_of("interrupted")
+        self.assertFalse(done["ok"])
+        self.assertEqual("cancelled", done["failure_code"])
+
+    def test_every_word_it_can_produce_is_one_rundesk_knows(self):
+        """The seam drops a word it does not know, so an adapter inventing one reports nothing at
+        all. Checked against the closed set rather than against a copy of it kept here."""
+        from rundesk.providers import protocol
+        for named in sorted(one.stem for one in FAILURES.iterdir()):
+            with self.subTest(named=named):
+                said = self.done_of(named)[0].get("failure_code")
+                if said is not None:
+                    self.assertIn(said, protocol.FAILURE_CODES)
 
 
 class TheVersionItWasWrittenAgainst(support.Isolated):
