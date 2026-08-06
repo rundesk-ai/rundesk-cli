@@ -438,7 +438,7 @@ def stale(grant: Grant) -> bool:
         # this directory here, so it is read as something the owner made — and remaking it would be
         # overwriting work this cannot prove is its own. The same reasoning as the narrow pruning.
         return False
-    source = library.where() / grant.catalog / library.TREE / library.INSIDE / grant.skill
+    source = library.inside(grant.catalog) / grant.skill
     if not (source / library.DECLARED).is_file():
         # Dangling, which is a different answer and a different sentence. Reporting it out of date
         # would send somebody to a command that cannot help — there is nothing to remake it from.
@@ -512,7 +512,7 @@ def refreshed(saying: Optional[Callable[[str], None]] = None) -> List[str]:
             for one in held(agent):
                 if not stale(one):
                     continue
-                source = library.where() / one.catalog / library.TREE / library.INSIDE / one.skill
+                source = library.inside(one.catalog) / one.skill
                 _copied(library.read_skill(one.catalog, source), one.at)
                 remade.append(f"{agent}/{one.name}")
                 said(f"made {one.name} again for {agent}, from {one.catalog}")
@@ -595,12 +595,18 @@ def _pointed_at(at: Path) -> Tuple[str, str]:
     """
     settled = _linked_at(at)
     try:
-        inside = settled.relative_to(Path(os.path.normpath(str(library.where()))))
+        below = settled.relative_to(Path(os.path.normpath(str(library.where()))))
     except ValueError:
         return "", ""
-    parts = inside.parts
+    parts = below.parts
+    # **Both shapes, because the library holds both.** A fetched catalog keeps its skills under
+    # `<catalog>/app/skills/`, and `local` is flat — see `library.inside`. Matched against what that
+    # catalog really is rather than against a length, so a link into `local` cannot be read as a
+    # four-part path that happens to be short and a fetched catalog cannot be read as flat.
     if len(parts) == 4 and parts[1] == library.TREE and parts[2] == library.INSIDE:
         return parts[0], parts[3]
+    if len(parts) == 2 and parts[0] == library.MINE:
+        return parts[0], parts[1]
     return "", ""
 
 

@@ -115,7 +115,8 @@ data/skills/
       skills/managing-rundesk/SKILL.md
   rundesk-skills/           fetched from GitHub — the general catalog rundesk depends on
   local/                    yours. Never fetched, never removed by rundesk
-    app/skills/my-thing/SKILL.md
+    manifest.json
+    my-thing/SKILL.md       flat — no app/, because nothing ever swaps this one
 ```
 
 **`app/manifest.json` is what makes the directory a catalog**, the same way `state.db` makes a

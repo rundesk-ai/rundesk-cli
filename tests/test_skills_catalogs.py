@@ -374,7 +374,11 @@ class TheCatalogYourOwnSkillsStandIn(Catalogs):
         # where to put a skill of their own finds a directory rather than having to know to make one.
         self.assertTrue(catalogs.place_mine())
         self.assertEqual([library.MINE], library.known())
-        self.assertTrue((library.tree(library.MINE) / library.INSIDE).is_dir())
+        # Flat: the owner writes a skill by hand, so the path they type is the short one and
+        # there is no `app/` — nothing fetches into `local`, so nothing swaps its tree.
+        self.assertTrue(library.inside(library.MINE).is_dir())
+        self.assertEqual(library.stands(library.MINE), library.inside(library.MINE))
+        self.assertFalse((library.stands(library.MINE) / library.TREE).exists())
 
     def test_making_it_again_changes_nothing(self):
         catalogs.place_mine()
@@ -382,7 +386,7 @@ class TheCatalogYourOwnSkillsStandIn(Catalogs):
 
     def test_a_skill_written_into_it_by_hand_is_found(self):
         catalogs.place_mine()
-        a_skill(library.tree(library.MINE) / library.INSIDE / "my-thing")
+        a_skill(library.inside(library.MINE) / "my-thing")
         self.assertEqual(["my-thing"], [one.name for one in library.held(library.MINE)])
 
 

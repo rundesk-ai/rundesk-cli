@@ -102,7 +102,7 @@ class GivingAnAgentASkill(Grants):
         working.mkdir(parents=True)
         (working / library.DECLARED).write_text(
             "---\nname: my-thing\ndescription: Mine. Use when mine.\n---\n", encoding="utf-8")
-        (library.tree(library.MINE) / library.INSIDE / "my-thing").symlink_to(working)
+        (library.inside(library.MINE) / "my-thing").symlink_to(working)
 
         held = self.grant("alan", f"{library.MINE}/my-thing")
         self.assertEqual((library.MINE, "my-thing"), (held.catalog, held.skill))

@@ -10,20 +10,37 @@ nothing here is rundesk's invention and a skill you write works outside rundesk 
 
 ## Where a skill goes
 
-Your own skills stand in the `local` catalog. Ask where the library is rather than writing a path
-down — an install can be pointed anywhere:
+Your own skills stand in the `local` catalog, one directory each, directly inside it:
 
-```sh
-rundesk skills                       # prints the library and everything in it
-mkdir -p <library>/local/app/skills/<name>
-$EDITOR <library>/local/app/skills/<name>/SKILL.md
-rundesk skills grant <agent> local/<name>
+```text
+<library>/local/
+├── manifest.json          rundesk wrote this; leave it alone
+├── my-thing/SKILL.md      yours
+└── another-thing/SKILL.md yours
 ```
 
-Nothing fetches into `local` and nothing rundesk does removes it. Skills that came from a catalog are
-a different matter: **anything you edit inside one is replaced the next time that catalog is
-checked**, because the repository is the source of truth. To change one, change it where it is
-published — or copy it into `local` under a new name.
+**Ask where the library is rather than writing the path down** — an install can be pointed anywhere,
+so a path that is right on this machine is wrong on the next one. The first line of
+`"$RUNDESK_COMMAND" skills` says it.
+
+```sh
+"$RUNDESK_COMMAND" skills                      # prints the library, and everything in it
+mkdir -p <library>/local/<name>
+$EDITOR <library>/local/<name>/SKILL.md
+"$RUNDESK_COMMAND" skills grant <agent> local/<name>
+```
+
+**Writing the file is not enough for an agent to have it.** A skill in the library is available to be
+granted; an agent uses only what it has been granted, which is why the last line is there. Give it to
+yourself and it is yours from your *next* turn — your environment was built when this turn started.
+`"$RUNDESK_COMMAND" skills list <agent>` says what an agent holds, and `skills doctor` says why one
+of them cannot be used.
+
+`local` is flat because nothing fetches into it, and nothing rundesk does removes it. Every other
+catalog keeps its skills a level down, under `app/skills/`, so that a re-fetch can replace the whole
+tree in one move — which is exactly why **anything you edit inside one of those is replaced the next
+time that catalog is checked**. The repository is the source of truth there. To change such a skill,
+change it where it is published, or copy it into `local` under a new name.
 
 ## The shape
 
@@ -31,10 +48,16 @@ published — or copy it into `local` under a new name.
 <name>/
 ├── SKILL.md          required: what this is, and when to reach for it
 ├── rundesk.json      optional: the credentials it needs
-├── scripts/          optional: commands it ships
-├── references/       optional: material read only when it is needed
+├── scripts/          optional: commands it ships — executable, standard library only
+├── references/       optional: depth read only when it is needed
 └── assets/           optional: templates and files used in output
 ```
+
+**Everything but `SKILL.md` is optional and most skills have none of it.** This very skill is an
+example of two of them: the file you are reading is the whole of how to write a skill, and
+`references/integrations.md` beside it is the part only somebody writing an integration ever needs.
+That is the split to copy — the skill itself holds what every reader needs on every use, and a
+reference holds what one reader needs occasionally.
 
 `name` and `description` are the only frontmatter to use. Other fields exist, they differ between
 brains, and one brain silently dropping a skill over a key another accepts is not worth the trouble.
@@ -77,32 +100,22 @@ rest of the conversation, so every line is a recurring cost paid on every turn a
   anything but 200" — never "see references/ for details". Keep them one level deep.
 - Say something once. A fact in both the body and a reference is a fact with two places to be wrong.
 
-## Credentials
+## Reaching something outside this machine
 
-A skill that talks to something outside this machine says what it needs, in `rundesk.json` beside the
-`SKILL.md`. One key, and a reason against every name:
+**Advanced, and most skills need none of it.** A skill that tells an agent how to do something needs
+no credentials, ships no commands, and stops at the sections above.
 
-```json
-{
-  "needs": {
-    "JIRA_BASE_URL": "your Jira site, e.g. https://acme.atlassian.net",
-    "JIRA_EMAIL": "the account the token belongs to",
-    "JIRA_API_TOKEN": "an API token from id.atlassian.com"
-  }
-}
-```
+If yours has to sign in to an API, a ticket tracker or a deploy service, **read
+`references/integrations.md`**. It covers the whole of it: declaring what you need in `rundesk.json`
+and why the reason against each name matters, how a script you ship reads those values, how an owner
+with three accounts gets profiles for free, and what `doctor` says when it is not working.
 
-The reason is not decoration. It is what somebody reads when `rundesk skills doctor` tells them the
-value is missing, and it is the only thing that says where to go and get one.
+Two rules are worth knowing before you decide to go there, because they change what you write:
 
-**Never put a credential in a skill.** Name the variable and let the owner place it:
-`rundesk env set JIRA_API_TOKEN`.
-
-**More than one account is ordinary and needs nothing from you.** An owner with three Jira sites sets
-`JIRA_API_TOKEN__ACME`, `JIRA_API_TOKEN__BETA` and so on, and rundesk finds those profiles from the
-names you declared. Declare the plain names and say in the body that a profile may be named; a
-profile carries all of its own values or it is reported incomplete, so nothing you write has to
-handle a half-configured one.
+- **Never put a credential in a skill.** You name the variable; the owner places it with
+  `"$RUNDESK_COMMAND" env set <NAME>`, at their own terminal, where nothing writes it down.
+- **A value placed now reaches the next turn, not this one.** The environment was built when the turn
+  started.
 
 ## What never goes in a skill
 

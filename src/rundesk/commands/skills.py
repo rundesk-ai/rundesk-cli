@@ -256,7 +256,7 @@ def _catalogs() -> int:
         print("        none yet — install one with: rundesk skills install <repository>")
         return OK
     as_table(("CATALOG", "VERSION", "SKILLS", "SOURCE"),
-             [(one.name, one.manifest.version, str(len(library.found(one.at / library.TREE))),
+             [(one.name, one.manifest.version, str(len(library.found(library.inside(one.name)))),
                _came_from(one)) for one in every])
     return OK
 
@@ -373,7 +373,7 @@ def _would_update(name: str, fetching: Optional[catalogs.Fetching]) -> int:
         settled = library.read(name)
         if settled.provenance is None or not catalogs.may_be_fetched(name):
             return _failed(f"{name} is not fetched from anywhere, so there is nothing to check")
-        holding = library.found(settled.at / library.TREE)
+        holding = library.found(library.inside(name))
         with catalogs.brought(settled.provenance.source, settled.provenance.etag,
                               fetching) as coming:
             # **Asked of `catalogs.brings_a_change` rather than worked out here**, so a preview
@@ -426,7 +426,7 @@ def _removed(name: str, confirm: bool) -> int:
         # refused is a worse answer than refusing now.
         return _failed(stays)
 
-    holding = library.found(settled.at / library.TREE)
+    holding = library.found(library.inside(name))
     if not confirm:
         return _would_remove(name, settled, holding)
     try:
@@ -536,7 +536,12 @@ def _revoked(agent: str, name: str) -> int:
 
     print(f"{agent} no longer holds {name}")
     if went.address:
-        print(f"        it came from {went.address}, and is still in the library")
+        # **Asked of the grant rather than assumed.** A revoke is exactly what somebody is told to
+        # do about a `DANGLING` grant — the skill is already gone from the library, which is why the
+        # grant pointed at nothing — and saying it is "still in the library" there sends them to look
+        # for something that is not there, in the one case the command was reached for on purpose.
+        print(f"        it came from {went.address}, and is still in the library" if went.resolves
+              else f"        it came from {went.address}, which is no longer in the library")
     return OK
 
 

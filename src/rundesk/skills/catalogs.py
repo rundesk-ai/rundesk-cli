@@ -316,7 +316,7 @@ def installed(coming: Coming, saying: Optional[Callable[[str], None]] = None) ->
 
     with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
         at = library.stands(name)
-        if (at / library.TREE / library.MANIFEST).is_file():
+        if library.manifest_at(name).is_file():
             raise Refused(f"{name} is already installed — rundesk skills update {name} checks it "
                           "for changes")
         at.parent.mkdir(parents=True, exist_ok=True)
@@ -370,7 +370,7 @@ def update(name: str, fetching: Optional[Fetching] = None,
                       f"checked — rundesk skills remove {name} --confirm and install it again")
 
     was = library.read_manifest(settled.at / library.TREE)
-    holding = library.found(settled.at / library.TREE)
+    holding = library.found(library.inside(name))
     said = saying or (lambda _line: None)
     # Both ways of finding nothing to do end in the same sentence and the same answer, so each is
     # written once here rather than spelled out at both of them.
@@ -415,7 +415,7 @@ def remove(name: str) -> List[str]:
     settled = library.read(name)
     if not may_be_removed(name):
         raise Refused(_why_it_stays(name))
-    holding = library.found(settled.at / library.TREE)
+    holding = library.found(library.inside(name))
     with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
         going = files.outgoing_of(settled.at)
         files.discard(going)
@@ -445,10 +445,10 @@ def place_mine(saying: Optional[Callable[[str], None]] = None) -> bool:
     finds a directory rather than having to know to create one.
     """
     at = library.stands(library.MINE)
-    manifest = at / library.TREE / library.MANIFEST
+    manifest = library.manifest_at(library.MINE)
     if manifest.is_file():
         return False
-    (at / library.TREE / library.INSIDE).mkdir(parents=True, exist_ok=True)
+    at.mkdir(parents=True, exist_ok=True)
     files.write_json(manifest, dict(MINE_MANIFEST))
     (saying or (lambda _line: None))(f"made {at}")
     return True
@@ -710,7 +710,7 @@ def _checked(tree: Path, name: str) -> List[str]:
     refused here too: a repository pointed at the wrong branch installs silently otherwise, and the
     symptom arrives days later as an agent that does not know something.
     """
-    holding = library.found(tree)
+    holding = library.found(tree / library.INSIDE)
     if not holding:
         raise Refused(f"{name} declares no skills — there is nothing under "
                       f"{library.INSIDE}/ holding a {library.DECLARED}")

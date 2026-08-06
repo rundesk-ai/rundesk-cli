@@ -9,7 +9,8 @@
             writing-plans/
               SKILL.md          what makes the directory a skill
       local/                    the owner's own, never fetched and never removed by rundesk
-        app/skills/my-thing/SKILL.md
+        manifest.json           written by the install
+        my-thing/SKILL.md       flat: no app/, because nothing ever swaps this one
 
 ## Everything is in a catalog
 
@@ -23,10 +24,12 @@ ordinary. The collision moves to the one place it is unavoidable — a single ag
 directories under one name, because a brain finds a skill by its directory name — and `grants` is
 where that is answered.
 
-**The owner's own skills are a catalog too**, called `local`. Not a special case standing beside the
-catalogs with its own rules, but the same shape with nothing fetching into it: one walker, one
-address format, one answer to where a skill is. What makes it different is written down in one place,
-`catalogs.may_be_fetched`, rather than spread across every function that walks the library.
+**The owner's own skills are a catalog too**, called `local` — same address format, same walker, same
+everything a caller sees. It differs on disk in one way: it is **flat**. `app/` exists so a fetched
+tree can be replaced in one rename with `catalog.json` standing beside it; `local` is fetched from
+nowhere and never swapped, so that level would be ceremony in the one catalog a person writes into by
+hand. `library.inside` is where that lives, beside `catalogs.may_be_fetched`, which already holds the
+same knowledge about the same catalog — rather than spread across every function that walks here.
 
 ## What makes a directory a catalog, and a directory a skill
 
@@ -256,6 +259,35 @@ def tree(name: str) -> Path:
     return stands(name) / TREE
 
 
+def inside(name: str) -> Path:
+    """Where this catalog's skills stand.
+
+    **Asked rather than spelled, because `local` is flat and every other catalog is not.** A fetched
+    catalog keeps its tree under `app/` so that one rename replaces the whole of it and `catalog.json`
+    — where it came from, and the `ETag` that makes the next check cheap — stands *beside* the thing
+    being replaced rather than inside it. `local` is fetched from nowhere, has no provenance and is
+    never swapped, so both of those levels would be ceremony: the owner writes a skill by hand, and
+    `data/skills/local/<skill>/SKILL.md` is the path they should have to type.
+
+    One function, beside `catalogs.may_be_fetched`, which already holds the same knowledge for the
+    same catalog. The alternative is this condition written out at each of the eight places that walk
+    a catalog, which is how the two shapes would come to disagree.
+    """
+    at = stands(name)
+    return at if name == MINE else at / TREE / INSIDE
+
+
+def manifest_at(name: str) -> Path:
+    """Where this catalog's manifest stands. Flat for `local`, inside the tree for the rest.
+
+    The companion to `inside`, and separate from it because a manifest is not a skill: for a fetched
+    catalog it is *inside* the tree a swap replaces, since it is the author's file and moves with
+    their skills.
+    """
+    at = stands(name)
+    return (at if name == MINE else at / TREE) / MANIFEST
+
+
 def name_trouble(said: str) -> str:
     """Why `said` may not be a catalog name, or `""` when it may.
 
@@ -440,7 +472,12 @@ def read_skill(catalog: str, at: Path) -> Skill:
 
 
 def found(at: Path) -> List[str]:
-    """The names of the skills inside the catalog tree at `at`, in name order.
+    """The names of the skills standing in the directory `at`, in name order.
+
+    **The directory the skills are in, not the catalog above them** — `library.inside(name)` for an
+    installed catalog, and `<tree>/skills` for one that has been fetched and not installed yet.
+    Asked that way because `local` is flat and the others are not, and a walker that derived the
+    path itself would have to know which.
 
     Every directory holding a `SKILL.md`, and nothing else. A directory that is not a skill is passed
     over in silence rather than refused: a catalog may reasonably ship a `docs/` or a `.github/`
@@ -450,10 +487,9 @@ def found(at: Path) -> List[str]:
     make a broken skill indistinguishable from one nobody wrote. `trouble_with` is what says why, and
     the caller that installs a catalog is the one that has to care.
     """
-    inside = at / INSIDE
-    if not inside.is_dir():
+    if not at.is_dir():
         return []
-    return sorted(one.name for one in inside.iterdir()
+    return sorted(one.name for one in at.iterdir()
                   if one.is_dir() and not files.staged(one.name) and (one / DECLARED).is_file())
 
 
@@ -470,16 +506,16 @@ def known() -> List[str]:
         return []
     return sorted(one.name for one in library.iterdir()
                   if one.is_dir() and not one.is_symlink() and not files.staged(one.name)
-                  and (one / TREE / MANIFEST).is_file())
+                  and manifest_at(one.name).is_file())
 
 
 def read(name: str) -> Catalog:
     """The catalog called `name`. Refused when there is not one."""
     at = stands(name)
-    if not (at / TREE / MANIFEST).is_file():
+    if not manifest_at(name).is_file():
         raise Refused(f"there is no catalog called {name} — rundesk skills catalogs says what "
                       "there is")
-    return Catalog(name, at, read_manifest(at / TREE), read_provenance(at))
+    return Catalog(name, at, read_manifest(manifest_at(name).parent), read_provenance(at))
 
 
 def catalogs() -> List[Catalog]:
@@ -505,11 +541,11 @@ def held(name: str) -> List[Skill]:
     be read is left out of `catalogs`: this is a listing. What is wrong with it is `trouble_with`'s
     answer, said at install time and again by `doctor`.
     """
-    at = tree(name)
+    at = inside(name)
     settled = []
     for one in found(at):
         try:
-            settled.append(read_skill(name, at / INSIDE / one))
+            settled.append(read_skill(name, at / one))
         except Refused:
             continue
     return settled
@@ -534,7 +570,7 @@ def look_up(address: str) -> Skill:
         raise Refused(f"{address!r} is not {ADDRESS}{_also_in(address)}")
     if not catalog or not name or "/" in name:
         raise Refused(f"{address!r} is not {ADDRESS}")
-    at = tree(catalog) / INSIDE / name
+    at = inside(catalog) / name
     trouble = skill_trouble(name)
     if trouble:
         raise Refused(trouble)

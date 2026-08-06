@@ -166,7 +166,7 @@ class WhatIsShipped(Bundled):
 
         self.assertEqual(was, drifted.read_text(encoding="utf-8"))
         self.assertTrue((gone / library.DECLARED).is_file())
-        self.assertEqual(self.named(), library.found(library.tree(library.BUNDLED)))
+        self.assertEqual(self.named(), library.found(library.inside(library.BUNDLED)))
 
     def test_it_is_replaced_out_of_the_release_rather_than_left_as_it_was(self):
         # Version-coupled: an install that moved forward and kept the previous release's copy would

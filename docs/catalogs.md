@@ -8,15 +8,18 @@ the unit it grants to an agent.
 
 ## Writing one of your own
 
-Your own skills stand in the `local` catalog, which the install makes and rundesk never fetches into.
+Your own skills stand in the `local` catalog, which the install makes and rundesk never fetches
+into. It is **flat** — one directory per skill, straight inside it — because nothing is ever fetched
+or swapped there, so the `app/skills/` a published catalog needs would be two levels of ceremony in
+the one catalog somebody writes into by hand.
 Ask where the library is rather than writing a path down — an install can be pointed anywhere:
 
 ```sh
 rundesk skills                    # prints the library, and everything in it
 library=$(rundesk skills | head -1 | sed 's/^skills in //')
 
-mkdir -p "$library/local/app/skills/release-notes"
-$EDITOR "$library/local/app/skills/release-notes/SKILL.md"
+mkdir -p "$library/local/release-notes"
+$EDITOR "$library/local/release-notes/SKILL.md"
 rundesk skills grant alan local/release-notes
 ```
 

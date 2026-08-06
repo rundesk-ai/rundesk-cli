@@ -13,6 +13,7 @@ Run directly: `python3 tests/test_skills_command.py`
 """
 
 import os
+import shutil
 import unittest
 from pathlib import Path
 from typing import List, Optional
@@ -397,6 +398,20 @@ class GrantingAndRevoking(Skills):
         self.assertEqual(0, code)
         self.assertIn("no longer holds writing-plans", out)
         self.assertIn("still in the library", out)
+
+    def test_revoking_a_dangling_grant_does_not_claim_the_skill_is_still_there(self):
+        # The one case `revoke` is reached for on purpose: `doctor` names it as the fix for a
+        # `DANGLING` grant, which is dangling *because* the skill has already gone from the library.
+        # Saying it is still there sends somebody to look for something that is not.
+        self.rundesk("skills", "grant", "alan", "acme/writing-plans")
+        shutil.rmtree(library.inside("acme") / "writing-plans")
+
+        code, out, _err = self.rundesk("skills", "revoke", "alan", "writing-plans")
+
+        self.assertEqual(0, code)
+        self.assertIn("no longer holds writing-plans", out)
+        self.assertIn("no longer in the library", out)
+        self.assertNotIn("still in the library", out)
 
     def test_revoking_twice_is_refused_the_second_time(self):
         self.rundesk("skills", "grant", "alan", "acme/writing-plans")

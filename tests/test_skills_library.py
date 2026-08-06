@@ -168,30 +168,30 @@ class WhichSkillsACatalogHolds(Library):
         # name is three places that can disagree, and every disagreement was a catalog that
         # installed and then behaved as though a skill were not there.
         at = self.given(skills=("writing-plans", "filing-issues"))
-        self.assertEqual(["filing-issues", "writing-plans"], library.found(at / library.TREE))
+        self.assertEqual(["filing-issues", "writing-plans"], library.found(at / library.TREE / library.INSIDE))
 
     def test_a_directory_that_is_not_a_skill_is_passed_over_rather_than_refused(self):
         # A catalog may ship docs beside its skills, and a walk that objected would refuse most
         # real repositories.
         at = self.given()
         (at / library.TREE / library.INSIDE / "notes").mkdir()
-        self.assertEqual(["writing-plans"], library.found(at / library.TREE))
+        self.assertEqual(["writing-plans"], library.found(at / library.TREE / library.INSIDE))
 
     def test_a_half_written_skill_is_never_offered(self):
         at = self.given()
         a_skill(at / library.TREE / library.INSIDE / ".coming.incoming")
-        self.assertEqual(["writing-plans"], library.found(at / library.TREE))
+        self.assertEqual(["writing-plans"], library.found(at / library.TREE / library.INSIDE))
 
     def test_a_catalog_with_no_skills_at_all_finds_none(self):
         at = self.given(skills=())
-        self.assertEqual([], library.found(at / library.TREE))
+        self.assertEqual([], library.found(at / library.TREE / library.INSIDE))
 
     def test_a_broken_skill_is_found_but_not_held(self):
         # Found, so that something can say what is wrong with it. Not held, because held answers a
         # listing and a listing that offered it would offer something no brain will load.
         at = self.given()
         a_skill(at / library.TREE / library.INSIDE / "broken", name="mismatched")
-        self.assertEqual(["broken", "writing-plans"], library.found(at / library.TREE))
+        self.assertEqual(["broken", "writing-plans"], library.found(at / library.TREE / library.INSIDE))
         self.assertEqual(["writing-plans"], [one.name for one in library.held("acme")])
 
 
