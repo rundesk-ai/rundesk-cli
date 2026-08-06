@@ -360,14 +360,15 @@ def _held(request: Request, held: int, watching, saying) -> Outcome:
         with _reachable(agent, request.conversation, reachable):
             said, stream = _the_brain(request, provider_name, told, turn, held, can, watching,
                                       saying if saying is not None else
-                                      (reachable.each() if reachable else None))
+                                      (reachable.each() if reachable else None), reachable)
         settling.update(_became(request, turn, said, stream, can, provider_name,
                                 began_at, _how_big(raw), time.monotonic() - began))
     return settling.outcome
 
 
 def _the_brain(request: Request, provider_name: str, told: Dict[str, str], turn: int, held: int,
-               can: Dict[str, bool], watching, saying) -> Tuple[List[Dict[str, Any]], Any]:
+               can: Dict[str, bool], watching, saying,
+               reachable: Optional[Words] = None) -> Tuple[List[Dict[str, Any]], Any]:
     """Start the adapter, feed it the turn, and write down every record it answers with.
 
     **What is sent is written before it is sent.** A word put into a turn that the account does not
@@ -395,6 +396,17 @@ def _the_brain(request: Request, provider_name: str, told: Dict[str, str], turn:
         for one in stream.records():
             _heard(agent, turn, one, said, watching)
     finally:
+        # **Nothing may be taken from here on, and this is the first thing teardown does.**
+        # `stream.stop()` below stops accepting writes as its own first act and can then spend
+        # several seconds ending a brain that has gone quiet. Left open across that, this turn is
+        # still published as one that will take a word — so a message arriving on a channel is
+        # accepted, reported to the person as said into the running turn, and then refused by the
+        # stream and written down as lost. The person is never told, and nothing asks again.
+        #
+        # Closing here also ends `each()`, which is what lets the join below actually finish rather
+        # than time out against a feeder still waiting for a word that is never coming.
+        if reachable is not None:
+            reachable.close()
         if speaking is not None:
             speaking.join(timeout=1.0)
         stream.stop()
