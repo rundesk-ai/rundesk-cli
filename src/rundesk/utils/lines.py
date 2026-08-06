@@ -27,7 +27,7 @@ here because "a megabyte" would otherwise read as a promise about memory that it
 Knows nothing about rundesk, and nothing about what a line means.
 """
 
-from typing import IO, Iterator, NamedTuple, Optional, Tuple, Union
+from typing import IO, Callable, Iterator, NamedTuple, Optional, Tuple, Union
 
 #: A line that would not fit, read to its end and kept nowhere.
 TOO_LONG = "too long"
@@ -46,7 +46,7 @@ class Gap(NamedTuple):
     surrounds it can still be made sense of — lines are not independent, and text arrives in pieces
     meant to be joined.
 
-    `why` is one of the two words above when this came from `read`. Anything further down the chain
+    `reason` is one of the two words above when this came from `read`. Anything further down the chain
     that loses something of its own — a queue that overflowed, a receiver that would not take one —
     makes its own `Gap` with its own word, so whoever is reading a stream of these never has to know
     which layer a loss came from in order to report it honestly.
@@ -56,7 +56,8 @@ class Gap(NamedTuple):
     reason: str
 
 
-def read(stream: IO[str], at_most: int) -> Iterator[Union[str, Gap]]:
+def read(stream: IO[str], at_most: int,
+         noticing: Optional[Callable[[str], None]] = None) -> Iterator[Union[str, Gap]]:
     """Every whole line the stream has, and a `Gap` wherever one could not be given whole.
 
     Lines keep their newline, exactly as `readline` gives them, so a caller writing them somewhere
@@ -70,6 +71,13 @@ def read(stream: IO[str], at_most: int) -> Iterator[Union[str, Gap]]:
     say-it-once state lives in one place instead of in every reader that has to remember to be
     careful.
 
+    **`noticing` is called the moment a loss is detected, before the rest of that line is read
+    past.** A gap can only be yielded between lines, so a program writing one endless line yields
+    nothing at all — bounded in memory, and completely silent about why nothing is arriving. That is
+    the state somebody is most likely to be staring at, so a caller that wants to say so while it is
+    still happening is handed the reason as it happens rather than after it stops. Anything it
+    raises is the caller's own to answer for and is not caught here.
+
     Ends when the stream does. It never raises for anything the *program* did; a stream that fails at
     the operating-system level still raises, because that is the caller's process to answer for and
     not something to be quietly turned into an empty result.
@@ -80,8 +88,12 @@ def read(stream: IO[str], at_most: int) -> Iterator[Union[str, Gap]]:
         if not said:
             break
         if len(said) > at_most and not said.endswith("\n"):
-            # It did not fit. Read past the rest of it so the framing survives — one enormous line
-            # must not cost every line after it — and say so where it happened.
+            # It did not fit. Said *now* — reading past the rest of it may never return, and a
+            # caller that only heard about this afterwards would hear nothing at all.
+            if noticing is not None:
+                noticing(TOO_LONG)
+            # Read past the rest so the framing survives: one enormous line must not cost every
+            # line after it.
             _discarded(stream, at_most)
             finished, pending = _one_more_lost(pending, TOO_LONG)
             if finished is not None:
@@ -89,6 +101,8 @@ def read(stream: IO[str], at_most: int) -> Iterator[Union[str, Gap]]:
             continue
         if not said.endswith("\n"):
             # The stream ended mid-line. Nothing more is coming, so this is the last thing to say.
+            if noticing is not None:
+                noticing(UNTERMINATED)
             finished, pending = _one_more_lost(pending, UNTERMINATED)
             if finished is not None:
                 yield finished

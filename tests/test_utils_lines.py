@@ -99,5 +99,42 @@ class AStreamThatStopsMidLine(support.Isolated):
         self.assertEqual(everything("one\n"), ["one\n"])
 
 
+class SayingSoWhileItIsStillHappening(support.Isolated):
+    """A gap can only be yielded between lines, and a program writing one endless line never
+    reaches the next line.
+
+    So the reader is bounded in memory and **completely silent about why nothing is arriving**,
+    which is the state somebody is most likely to be staring at. `noticing` is what a caller uses to
+    say so while it is still happening rather than after it stops.
+    """
+
+    def test_it_is_told_the_moment_a_line_is_refused_and_not_after_it_is_drained(self):
+        heard = []
+
+        class OneEndlessLine:
+            """A stream whose line never ends. Reading past it never returns, which is the point."""
+
+            def __init__(self):
+                self.reads = 0
+
+            def readline(self, at_most):
+                self.reads += 1
+                if self.reads > 3:
+                    raise AssertionError("the reader read past the refusal without saying anything")
+                return "x" * at_most
+
+        with self.assertRaises(AssertionError):
+            list(lines.read(OneEndlessLine(), AT_MOST, noticing=heard.append))
+        self.assertEqual([lines.TOO_LONG], heard)
+
+    def test_it_is_told_when_a_stream_stops_mid_line(self):
+        heard = []
+        list(lines.read(io.StringIO("one\ntwo"), AT_MOST, noticing=heard.append))
+        self.assertEqual([lines.UNTERMINATED], heard)
+
+    def test_a_caller_that_wants_none_of_it_is_the_ordinary_case(self):
+        self.assertEqual(["one\n"], everything("one\n"))
+
+
 if __name__ == "__main__":
     unittest.main()

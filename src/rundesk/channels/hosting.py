@@ -84,13 +84,13 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import IO, Any, Dict, List, NamedTuple, Optional, Protocol, Sequence
+from typing import Any, Dict, List, NamedTuple, Optional, Protocol, Sequence
 
 from rundesk.agents import directory
 from rundesk.channels import adapters, arriving, kept
 from rundesk.channels import files as naming
 from rundesk.core import secrets
-from rundesk.utils import files, locking, logs, programs
+from rundesk.utils import files, lines, locking, logs, programs
 
 #: What one channel keeps beside itself, inside its own directory.
 LOCK = "lock"
@@ -595,12 +595,11 @@ def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any]) -> Non
     own loop would, because it does nothing but read — and it must not end the process it runs in,
     because a thread that raises takes its traceback nowhere anybody will look.
 
-    **Read a bounded amount at a time**, which is what `LINE_AT_MOST` promises and what an unbounded
+    **Read a bounded amount at a time**, which is `utils.lines`' whole subject and what an unbounded
     `for line in stdout` cannot deliver: the check on the length of a line ran only once the whole
     line was already held, so an adapter that never writes a newline grew this process until the
-    kernel ended the gateway. A run that reaches the cap with no newline in it is read to its end
-    and thrown away, and said **once** — a program in that state produces a line per megabyte and
-    the log is not where that belongs.
+    kernel ended the gateway. That reader is shared with the one draining a provider, because the
+    hazard is the same on both and a second copy of it is a second copy to get wrong.
 
     **A thread that ends here is not the end of the channel.** Whatever this could not go on reading
     is said in the log, and the loop ends the adapter on its next pass and starts one it can read —
@@ -613,37 +612,33 @@ def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any]) -> Non
     allowed = set()
     with contextlib.suppress(Exception):
         allowed = set(kept.who_may_reach(row))
-    said_too_much = False
+    complained = set()
+
+    def lost(reason: str) -> None:
+        """Say a line could not be read whole — **once**, while it is still arriving.
+
+        Once per kind of loss and not once per line: a program in this state produces a line per
+        megabyte, and the log is not where that belongs. Said as it happens rather than off the gap
+        that follows it, because an adapter writing one endless line never reaches a gap at all —
+        it is bounded in memory and otherwise completely silent, which is the state somebody is
+        most likely to be staring at.
+        """
+        if reason in complained:
+            return
+        complained.add(reason)
+        with contextlib.suppress(Exception):
+            _note(where, f"channel {kind}: said more in one line than is read at once ({reason}), "
+                         "so what it is saying is being thrown away", logs.WARNING)
+
     try:
-        while True:
-            line = one.talking.stdout.readline(LINE_AT_MOST + 1)
-            if not line:
-                return
-            if len(line) > LINE_AT_MOST and not line.endswith("\n"):
-                if not said_too_much:
-                    said_too_much = True
-                    _note(where, f"channel {kind}: said more in one line than is read at once, so "
-                                 "what it is saying is being thrown away", logs.WARNING)
-                _thrown_away(one.talking.stdout)
+        for said in lines.read(one.talking.stdout, LINE_AT_MOST, noticing=lost):
+            if isinstance(said, lines.Gap):
                 continue
             with contextlib.suppress(Exception):
-                _heard(agent, where, one, line, allowed)
+                _heard(agent, where, one, said, allowed)
     except Exception as why:                           # noqa: BLE001 — see the module docstring
         with contextlib.suppress(Exception):
             _note(where, f"channel {kind}: this gateway stopped listening to it ({why})", logs.ERROR)
-
-
-def _thrown_away(reading: IO[str]) -> None:
-    """Read the rest of a line that was already too long, and keep none of it.
-
-    Bounded on every call for the reason the caller is: what is being skipped past is by definition
-    a program writing without ever ending a line, so anything here that read *to* the newline in one
-    go would be the same unbounded read under another name.
-    """
-    while True:
-        more = reading.readline(LINE_AT_MOST + 1)
-        if not more or more.endswith("\n"):
-            return
 
 
 def _heard(agent: str, where: Path, one: Running, line: str, allowed: set) -> None:
