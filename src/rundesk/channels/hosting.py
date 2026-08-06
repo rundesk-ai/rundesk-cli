@@ -541,7 +541,7 @@ def _started_what_should_be(agent: str, where: Path, watching: Watching,
         if held_off is not None and now - held_off < AGAIN_AFTER:
             continue
         try:
-            _started(agent, where, kind, watching)
+            _started(agent, where, kind, watching, answering)
         except Exception as why:           # noqa: BLE001 — a channel that cannot start is one
             # channel that cannot start, never a gateway that cannot run. But it is **said and held
             # off** rather than suppressed: a bare `suppress` here sent the reason nowhere and
