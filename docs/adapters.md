@@ -11,6 +11,11 @@ record kinds are different, the turn states are different, the key is `say:`/`do
 and half of what it describes does not exist here. Write against that page and you produce something
 this gateway cannot talk to. This page supersedes it.
 
+[`providers.md`](providers.md) is the **other** seam — the one a brain is reached through. The two
+are deliberately the same shape and are not the same contract: a channel adapter's records are keyed
+`say:`/`do:` and a provider adapter's by `type:`, and the two kinds of adapter do not share a
+namespace on disk.
+
 [`gateways.md`](gateways.md) is what hosts an adapter, [`commands.md`](commands.md#channels) is how a
 person connects one, and [`layout.md`](layout.md) is where an install keeps things.
 
