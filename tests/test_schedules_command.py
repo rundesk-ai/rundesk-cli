@@ -25,13 +25,22 @@ THERE = "/bin/echo"
 NOT_THERE = "/no/such/program"
 
 
+#: The provider these agents are recorded against. **A name nothing stands behind, and it has to
+#: stay one.** This file used to say `claude`, which was a name for nothing right up until an adapter
+#: of that name shipped — and then the one case here that really runs a turn stopped being refused,
+#: started a real brain, reached a real account and took fifty-one seconds to fail differently. A
+#: placeholder that names a thing somebody might one day build is a placeholder with an expiry date
+#: on it, so this one says what it is for.
+NO_SUCH_BRAIN = "no-brain-stands-behind-this"
+
+
 class Scheduling(support.Isolated):
     """An install with one real agent in it."""
 
     def setUp(self):
         super().setUp()
         self.agent = "cole"
-        directory.made(self.agent, "claude")
+        directory.made(self.agent, NO_SUCH_BRAIN)
 
     def given(self, name="nightly", *more):
         """One schedule, added the way a person adds one."""
@@ -63,7 +72,7 @@ class Listing(Scheduling):
         self.assertIn(str(self.home), out)
 
     def test_a_bare_schedules_lists_every_agents_with_the_agent_named(self):
-        directory.made("alan", "claude")
+        directory.made("alan", NO_SUCH_BRAIN)
         self.given("nightly")
         self.rundesk("schedules", "add", "alan", "morning",
                      "--when", "0 9 * * *", "--run", THERE)
@@ -74,7 +83,7 @@ class Listing(Scheduling):
         self.assertIn("alan", out)
 
     def test_listing_one_agent_shows_that_agents_and_no_other(self):
-        directory.made("alan", "claude")
+        directory.made("alan", NO_SUCH_BRAIN)
         self.given("nightly")
         self.rundesk("schedules", "add", "alan", "morning",
                      "--when", "0 9 * * *", "--run", THERE)
