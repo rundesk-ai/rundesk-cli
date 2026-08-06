@@ -44,23 +44,30 @@ from rundesk.utils import files
 #: The table, named once.
 TABLE = "schedules"
 
-#: What a firing came to, and the only three words this column may hold. `completed` is the work
-#: ran and said it was happy; `failed` is it ran and said it was not, or never started at all; and
-#: `stopped` is that nobody can say, because whatever was watching went away first. The third is not
-#: a kind of failure — a gateway killed mid-run leaves work that may well have finished, and calling
-#: that a failure is a claim nothing here can back.
-COMPLETED = "completed"
+#: What a firing came to, and the only three words this column may hold. `done` is the work ran and
+#: said it was happy; `failed` is it ran and said it was not, or never started at all; and `stopped`
+#: is that nobody can say, because whatever was watching went away first. The third is not a kind of
+#: failure — a gateway killed mid-run leaves work that may well have finished, and calling that a
+#: failure is a claim nothing here can back.
+#:
+#: **`done` rather than `completed`, and the word is not this module's to pick.** `seen`, `working`,
+#: `done`, `stopped` and `failed` are the states an adapter renders, written down in `docs/adapters.md`
+#: with the note that they are *not* `taken`, `running`, `finished` — a published vocabulary somebody
+#: else's program is built against. `turns.turn_status` already speaks it. A firing's outcome never
+#: leaves this machine, so nothing forced the two apart except that they were written months apart,
+#: and one product saying `done` in one place and `completed` in another is one word too many.
+DONE = "done"
 FAILED = "failed"
 STOPPED = "stopped"
-OUTCOMES = (COMPLETED, FAILED, STOPPED)
+OUTCOMES = (DONE, FAILED, STOPPED)
 
 #: What a caller may set through `added` and `changed`, and nothing else. Narrower than the table on
 #: purpose: `id` is the row's identity, `name` is how a schedule is found rather than something to
 #: overwrite in place, and `created_at`, `last_outcome`, `last_run_at` and `last_fired_for` are the
 #: records' own account of what has happened — a caller that could set those could rewrite history
 #: and then read it back as fact.
-SETTABLE = ("enabled", "cron", "run_at", "expire_at", "agent_provider", "agent_model",
-            "agent_prompt", "command", "channel", "channel_place_id")
+SETTABLE = ("enabled", "cron", "run_at", "expire_at", "provider_name", "model_name",
+            "prompt", "command", "channel", "channel_place_id")
 
 
 class Refused(Exception):

@@ -297,10 +297,10 @@ class Updating(Scheduling):
     def test_a_change_keeps_every_record_of_what_the_schedule_has_already_done(self):
         self.given()
         kept.claimed(self.agent, "nightly", "2026-08-05 02:00")
-        kept.became(self.agent, "nightly", kept.COMPLETED)
+        kept.became(self.agent, "nightly", kept.DONE)
         self.rundesk("schedules", "update", self.agent, "nightly", "--when", "0 3 * * *")
         self.assertEqual("2026-08-05 02:00", self.row()["last_fired_for"])
-        self.assertEqual(kept.COMPLETED, self.row()["last_outcome"])
+        self.assertEqual(kept.DONE, self.row()["last_outcome"])
 
 
 class Showing(Scheduling):
@@ -371,7 +371,7 @@ class RunningOneByHand(Scheduling):
     def test_running_by_hand_writes_down_what_became_of_it_because_it_did_run(self):
         self.given()
         self.rundesk("schedules", "run", self.agent, "nightly")
-        self.assertEqual(kept.COMPLETED, self.row()["last_outcome"])
+        self.assertEqual(kept.DONE, self.row()["last_outcome"])
 
     def test_a_schedule_that_is_not_there_says_so(self):
         code, _out, err = self.rundesk("schedules", "run", self.agent, "missing")
@@ -476,7 +476,7 @@ class AScheduleThatAsksTheAgent(Scheduling):
         self.assertIn("--run", err)
 
     def test_the_two_the_records_hold_and_nothing_yet_sets_stay_off_the_parser(self):
-        """`agent_provider` and `agent_model` are columns nothing writes: a schedule runs on the
+        """`provider_name` and `model_name` are columns nothing writes: a schedule runs on the
         agent's own brain, and a way to override it per schedule is a verb nobody has asked for."""
         for flag in ("--provider", "--model"):
             with self.subTest(flag=flag):
@@ -488,7 +488,7 @@ class AScheduleThatAsksTheAgent(Scheduling):
     def test_one_written_straight_into_the_records_is_still_listed_and_shown(self):
         # The store holds the kind, so a listing has to be able to read one — and it has to say the
         # honest thing about it rather than crash on a row it did not expect.
-        kept.added(self.agent, "review", {"cron": "0 9 * * *", "agent_prompt": "review the queue"})
+        kept.added(self.agent, "review", {"cron": "0 9 * * *", "prompt": "review the queue"})
         code, out, _ = self.rundesk("schedules", "list", self.agent)
         self.assertEqual(OK, code)
         self.assertIn("review", out)
@@ -503,7 +503,7 @@ class AScheduleThatAsksTheAgent(Scheduling):
         point: it is refused for a reason about *this agent's brain*, and no longer for the reason
         that rundesk has no providers at all.
         """
-        kept.added(self.agent, "review", {"cron": "0 9 * * *", "agent_prompt": "review the queue"})
+        kept.added(self.agent, "review", {"cron": "0 9 * * *", "prompt": "review the queue"})
         code, _out, err = self.rundesk("schedules", "run", self.agent, "review")
         self.assertEqual(FAILED, code)
         self.assertNotIn("nothing in this release runs a provider", err)

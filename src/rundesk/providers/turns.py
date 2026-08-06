@@ -206,7 +206,7 @@ def _held(request: Request, held: int, watching, saying) -> Outcome:
     # **Resolved before anything is written down.** A provider nothing stands behind is a turn that
     # cannot start, and a row saying one was admitted would be a record of something that never was.
     settled = records.read(directory.records(agent))
-    provider_name = str(settled.get("agent_provider") or "")
+    provider_name = str(settled.get("provider_name") or "")
     adapters.where(provider_name)
     settings = _as_settings(settled.get("agent_settings"))
     can = protocol.parse_capabilities(adapters.capabilities(provider_name, settings))
@@ -241,7 +241,7 @@ def _held(request: Request, held: int, watching, saying) -> Outcome:
             agent=agent, home=directory.home(agent),
             provider_home=adapters.home(agent, provider_name),
             skills=grants.where(agent), turn=turn, access_mode=request.access_mode,
-            raw=raw, model=request.model_name or settled.get("agent_model"), resume=resume,
+            raw=raw, model=request.model_name or settled.get("model_name"), resume=resume,
             settings=settings,
             preface=prompt.text, owners=environment.owners_own())
         said, stream = _the_brain(request, provider_name, told, turn, held, can, watching, saying)

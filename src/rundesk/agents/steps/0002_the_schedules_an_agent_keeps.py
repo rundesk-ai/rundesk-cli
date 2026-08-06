@@ -23,10 +23,16 @@ and `created_at` are records of something that happened, are compared and sorted
 `core.config.MOMENT` like every other record this product keeps. `last_fired_for` is the odd one and
 deliberately so: it is compared against a minute the cron fields produced, and those are local.
 
-**The provider columns are carried and nothing writes them yet.** No release runs a provider, so no
-command can spell `agent_prompt` — but the store, the clock and the firing path all handle that kind
-already, and a column added later is a second migration for every agent on every machine. They are
-here so that the day a provider process lands, nothing about an agent's records has to move.
+**The provider columns are what a schedule asks an agent**, and they are named for the thing rather
+than for who reads them: `provider_name` and `model_name` are the same fact `config` and `turns`
+keep, and one fact spelled three ways is three things to grep for. They were carried here before
+anything wrote them, on the argument that a column added later is a second migration for every agent
+on every machine — and the release that runs a provider has since arrived and writes them.
+
+**`last_outcome` speaks the states an adapter renders.** `done`, not `completed`: `docs/adapters.md`
+publishes `seen`, `working`, `done`, `stopped`, `failed` and says plainly that they are not `taken`,
+`running`, `finished`. `turns.turn_status` already speaks it, and a firing's outcome is the same
+question asked of a different kind of work.
 """
 
 import sqlite3
@@ -41,19 +47,19 @@ CREATE TABLE IF NOT EXISTS schedules (
   cron             TEXT,
   run_at           TEXT,
   expire_at        TEXT,
-  agent_provider   TEXT,
-  agent_model      TEXT,
-  agent_prompt     TEXT,
+  provider_name   TEXT,
+  model_name      TEXT,
+  prompt     TEXT,
   command          TEXT,
   channel          TEXT,
   channel_place_id TEXT,
   last_outcome     TEXT CHECK (last_outcome IS NULL OR
-                               last_outcome IN ('stopped', 'failed', 'completed')),
+                               last_outcome IN ('stopped', 'failed', 'done')),
   last_run_at      TEXT,
   last_fired_for   TEXT,
   created_at       TEXT NOT NULL,
   CHECK ((cron IS NULL) <> (run_at IS NULL)),
-  CHECK ((command IS NULL) <> (agent_prompt IS NULL))
+  CHECK ((command IS NULL) <> (prompt IS NULL))
 ) STRICT;
 """
 

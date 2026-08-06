@@ -124,7 +124,7 @@ and left its prompt and its answer in the middle of it.
 `rundesk schedules run` takes either kind by hand, and neither uses up the minute it next falls due —
 testing a schedule must not be how you stop it happening.
 
-What is still not built: a schedule carries `agent_provider` and `agent_model` columns that nothing
+What is still not built: a schedule carries `provider_name` and `model_name` columns that nothing
 writes. A schedule runs on the agent's own brain, and a way to override that per schedule is a verb
 nobody has asked for. Channels are the same — a schedule carries where it would report, and nothing
 reads it yet.

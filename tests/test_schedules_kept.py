@@ -85,12 +85,12 @@ class WhatIsWrittenDown(Keeping):
     def test_a_schedule_that_asks_an_agent_stores_and_reads_back_whole(self):
         # The kind no command can spell in this release. The store handles it, which is what makes
         # the provider process a thing to plug in rather than a thing to migrate for.
-        kept.added(self.agent, "review", {"cron": "0 9 * * *", "agent_prompt": "review the queue",
-                                          "agent_provider": "claude", "agent_model": "opus"})
+        kept.added(self.agent, "review", {"cron": "0 9 * * *", "prompt": "review the queue",
+                                          "provider_name": "claude", "model_name": "opus"})
         one = kept.one(self.agent, "review")
-        self.assertEqual("review the queue", one["agent_prompt"])
-        self.assertEqual("claude", one["agent_provider"])
-        self.assertEqual("opus", one["agent_model"])
+        self.assertEqual("review the queue", one["prompt"])
+        self.assertEqual("claude", one["provider_name"])
+        self.assertEqual("opus", one["model_name"])
         self.assertIsNone(one["command"])
 
 
@@ -111,7 +111,7 @@ class WhatTheRecordsRefuse(Keeping):
     def test_a_schedule_naming_both_a_program_and_a_prompt_cannot_be_written(self):
         with self.assertRaises(kept.Refused):
             kept.added(self.agent, "both", {"cron": "0 9 * * *", "command": "/bin/echo hi",
-                                            "agent_prompt": "and also this"})
+                                            "prompt": "and also this"})
         self.assertEqual([], self.rows())
 
     def test_a_schedule_naming_nothing_to_run_cannot_be_written(self):
@@ -163,12 +163,12 @@ class ChangingOneInPlace(Keeping):
     def test_a_schedule_is_changed_and_keeps_what_it_has_already_done(self):
         self.given()
         kept.claimed(self.agent, "nightly", "2026-08-05 02:00")
-        kept.became(self.agent, "nightly", kept.COMPLETED)
+        kept.became(self.agent, "nightly", kept.DONE)
         kept.changed(self.agent, "nightly", {"cron": "0 3 * * *"})
         one = kept.one(self.agent, "nightly")
         self.assertEqual("0 3 * * *", one["cron"])
         self.assertEqual("2026-08-05 02:00", one["last_fired_for"])
-        self.assertEqual(kept.COMPLETED, one["last_outcome"])
+        self.assertEqual(kept.DONE, one["last_outcome"])
 
     def test_only_what_is_named_moves(self):
         self.given("nightly", cron="0 2 * * *", command="/bin/echo hello", expire_at="2027-01-01T00:00")
@@ -255,10 +255,10 @@ class WhatAFiringWritesDown(Keeping):
 
     def test_what_a_firing_came_to_is_written_with_when_it_was_over(self):
         self.given()
-        kept.became(self.agent, "nightly", kept.COMPLETED,
+        kept.became(self.agent, "nightly", kept.DONE,
                     datetime(2026, 8, 5, 2, 4, 12, tzinfo=timezone.utc))
         one = kept.one(self.agent, "nightly")
-        self.assertEqual(kept.COMPLETED, one["last_outcome"])
+        self.assertEqual(kept.DONE, one["last_outcome"])
         self.assertEqual("2026-08-05T02:04:12Z", one["last_run_at"])
 
     def test_a_schedule_taken_away_mid_run_is_passed_over_rather_than_raised_about(self):

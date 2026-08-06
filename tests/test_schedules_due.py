@@ -29,8 +29,8 @@ def a_row(**also):
     spells out the column names the way SQLite would.
     """
     row = {"name": "nightly", "enabled": 1, "cron": "* * * * *", "run_at": None,
-           "expire_at": None, "command": "/bin/echo hello", "agent_prompt": None,
-           "agent_provider": None, "agent_model": None, "channel": None,
+           "expire_at": None, "command": "/bin/echo hello", "prompt": None,
+           "provider_name": None, "model_name": None, "channel": None,
            "channel_place_id": None, "last_fired_for": None}
     row.update(also)
     return row
@@ -118,9 +118,9 @@ class WhatASchedulesSays(support.Isolated):
 
     def test_a_schedule_that_names_what_to_start_two_ways_is_refused_and_so_is_one_that_names_neither(self):
         with self.assertRaisesRegex(due.NotASchedule, "says both"):
-            a_schedule(command="/bin/echo hi", agent_prompt="review the queue")
+            a_schedule(command="/bin/echo hi", prompt="review the queue")
         with self.assertRaisesRegex(due.NotASchedule, "says neither"):
-            a_schedule(command=None, agent_prompt=None)
+            a_schedule(command=None, prompt=None)
 
     def test_a_column_of_nothing_but_space_says_nothing(self):
         # `--ask "$UNSET"` writes a run of spaces, and a schedule that says it asks something and
@@ -144,7 +144,7 @@ class WhatASchedulesSays(support.Isolated):
     def test_what_a_schedule_names_is_carried_and_never_read(self):
         # The whole point of the design: `due` decides *when*, and the kind of work is somebody
         # else's branch. So a schedule asking an agent is understood exactly as one naming a program.
-        one = a_schedule(command=None, agent_prompt="review the queue", agent_provider="claude")
+        one = a_schedule(command=None, prompt="review the queue", provider_name="claude")
         self.assertEqual("review the queue", one.prompt)
         self.assertEqual("claude", one.provider)
         self.assertTrue(due.due_at(one, datetime(2026, 8, 5, 9, 0)))

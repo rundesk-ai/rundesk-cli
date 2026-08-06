@@ -163,7 +163,7 @@ def understood(row: Dict[str, Any]) -> Schedule:
             + ("and this says both" if cron else "and this says neither"))
 
     command = _said(row.get("command"))
-    prompt = _said(row.get("agent_prompt"))
+    prompt = _said(row.get("prompt"))
     if bool(command) == bool(prompt):
         raise NotASchedule(
             "a schedule starts a program, or asks an agent — "
@@ -179,8 +179,8 @@ def understood(row: Dict[str, Any]) -> Schedule:
         enabled=_switched(row.get("enabled", True)),
         command=command or None,
         prompt=prompt or None,
-        provider=_said(row.get("agent_provider")) or None,
-        model=_said(row.get("agent_model")) or None,
+        provider=_said(row.get("provider_name")) or None,
+        model=_said(row.get("model_name")) or None,
         channel=_said(row.get("channel")) or None,
         place=_said(row.get("channel_place_id")) or None,
         fired_for=_said(row.get("last_fired_for")) or None,

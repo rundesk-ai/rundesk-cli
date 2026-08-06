@@ -230,7 +230,7 @@ class WhenTheBrainDoesNotAnswer(WithAnAgent):
         self.assertIn(got.turn_status, (kept.FAILED, kept.STOPPED))
 
     def test_a_provider_nothing_stands_behind_is_refused_before_anything_is_written(self):
-        records.stated(directory.records("ava"), {"agent_provider": "nothing-here"})
+        records.stated(directory.records("ava"), {"provider_name": "nothing-here"})
         with self.assertRaises(turns.NotRunnable):
             self.run_turn()
         self.assertEqual(kept.list_turns("ava"), [])

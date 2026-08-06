@@ -251,7 +251,7 @@ class WhenTheBrainCouldNotAnswer(Answering):
     def test_an_adapter_that_is_not_there_does_not_leave_the_message_working(self):
         """The turn cannot even begin, and that is exactly when a mark is most likely to be missed."""
         records.stated(directory.records(self.agent),
-                       {"agent_provider": "nothing-stands-here"})
+                       {"provider_name": "nothing-stands-here"})
         self.a_channel(saying=self.a_message_arrived())
         self.hosting_now()
         self.assertTrue(self.waited_until(lambda: answering.FAILED in self.marks()),
@@ -283,7 +283,7 @@ class AScheduleThatAsksTheAgent(Answering):
 
     def a_schedule(self, name="nightly", prompt="what happened overnight?", **also):
         schedules_kept.added(self.agent, name, dict(
-            {"cron": "* * * * *", "agent_prompt": prompt}, **also))
+            {"cron": "* * * * *", "prompt": prompt}, **also))
         return name
 
     def test_it_gets_a_conversation_of_its_own_and_never_the_terminal_one(self):

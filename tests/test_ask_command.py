@@ -127,7 +127,7 @@ class WhenItCouldNotAnswer(Asking):
         self.assertIn("did not answer", err)
 
     def test_an_adapter_that_will_not_start_says_so_before_anything_is_written(self):
-        records.stated(directory.records(self.agent), {"agent_provider": "nothing-stands-here"})
+        records.stated(directory.records(self.agent), {"provider_name": "nothing-stands-here"})
         code, _out, err = self.asked()
         self.assertEqual(FAILED, code)
         self.assertIn("looked in", err)

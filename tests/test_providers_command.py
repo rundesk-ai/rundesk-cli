@@ -178,7 +178,7 @@ class Running(Providers):
     """`providers run` — one scheduled turn, taken here. What a firing starts."""
 
     def a_schedule(self, agent, name="nightly", prompt="what happened overnight?", **also):
-        schedules_kept.added(agent, name, dict({"cron": "* * * * *", "agent_prompt": prompt},
+        schedules_kept.added(agent, name, dict({"cron": "* * * * *", "prompt": prompt},
                                                **also))
         return name
 

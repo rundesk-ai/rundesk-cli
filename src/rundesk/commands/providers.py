@@ -246,7 +246,7 @@ def _about(agent: str) -> Dict[str, object]:
     return {
         "agent_name": agent,
         "agent_home": str(directory.home(agent)),
-        "provider_name": said.get("agent_provider") or "",
+        "provider_name": said.get("provider_name") or "",
         "access_mode": protocol.ACCESS_WORK,
         "schedule_name": "<the schedule>",
         "conversation_id": "<id>",

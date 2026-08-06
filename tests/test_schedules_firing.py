@@ -223,7 +223,7 @@ class WhatBecameOfIt(Firing):
         self.given("tick")
         self.watching = self.look(watching=self.watching)
         self.assertTrue(self.waited_for_an_outcome("tick"), self.said())
-        self.assertEqual(kept.COMPLETED, self.outcome_of("tick"))
+        self.assertEqual(kept.DONE, self.outcome_of("tick"))
 
     def test_a_program_that_disagreed_is_failed_with_its_exit_code(self):
         self.given("bad", command=FAILS)
@@ -482,7 +482,7 @@ class GoingDown(Firing):
 
         firing.stopping(self.agent, self.where, watching, within=10.0)
 
-        self.assertEqual(kept.COMPLETED, self.outcome_of("tick"))
+        self.assertEqual(kept.DONE, self.outcome_of("tick"))
         self.assertEqual({}, watching.running)
         self.assertNotIn("was stopped with this gateway", self.said())
         self.assertNotIn("would not stop", self.said())
@@ -510,8 +510,8 @@ class AScheduleThatAsksTheAgent(Firing):
     """A schedule that asks an agent, which this release records and cannot run."""
 
     def a_prompt_schedule(self, name="review"):
-        kept.added(self.agent, name, {"cron": "* * * * *", "agent_prompt": "review the queue",
-                                      "agent_provider": "claude"})
+        kept.added(self.agent, name, {"cron": "* * * * *", "prompt": "review the queue",
+                                      "provider_name": "claude"})
         return name
 
     def test_the_clock_decides_it_exactly_as_it_decides_any_other(self):
@@ -539,7 +539,7 @@ class AScheduleThatAsksTheAgent(Firing):
                                       env={}, holding=(holding,))
 
         Starts.log_at = self.home / "asked.out"
-        self.given("review", command=None, agent_prompt="what changed?")
+        self.given("review", command=None, prompt="what changed?")
         self.look(asking=Starts())
         self.assertEqual(started, ["review"])
 

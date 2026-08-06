@@ -25,8 +25,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS config (
   id                  INTEGER PRIMARY KEY CHECK (id = 1),
   agent_name          TEXT NOT NULL,
-  agent_provider      TEXT NOT NULL,
-  agent_model         TEXT,
+  provider_name      TEXT NOT NULL,
+  model_name         TEXT,
   agent_instructions  TEXT,
   agent_settings      TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(agent_settings)),
   owner_name          TEXT,

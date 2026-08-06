@@ -375,7 +375,7 @@ def _built(name: str, provider: str, agents: Path, migration: Any) -> Path:
         if gone_wrong:
             raise Refused(f"{name} could not be made: {gone_wrong}")
         migration.stamp_without_running(building / RECORDS)
-        stated(building / RECORDS, {"agent_name": name, "agent_provider": provider})
+        stated(building / RECORDS, {"agent_name": name, "provider_name": provider})
         at = agents / name
         os.replace(building, at)
     except BaseException:

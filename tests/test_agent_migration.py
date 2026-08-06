@@ -180,7 +180,7 @@ class Steps(support.Isolated):
         self.a_directory_for(name)
         self.assertIsNone(migration.carry_one(name, self.steps))
         records.stated(directory.records(name),
-                       {"agent_name": name, "agent_provider": "anthropic"})
+                       {"agent_name": name, "provider_name": "anthropic"})
         return directory.where(name)
 
     def recorded(self, name: str) -> List[str]:

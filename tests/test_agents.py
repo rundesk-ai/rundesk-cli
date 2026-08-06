@@ -256,7 +256,7 @@ class TwoMakesOfOneNameAtOnce(Agents):
 
         kept = records.read(directory.records("dup"))
         self.assertEqual("dup", kept["agent_name"])
-        self.assertIn(kept["agent_provider"], ("anthropic", "openai"))
+        self.assertIn(kept["provider_name"], ("anthropic", "openai"))
         self.assertEqual([], [one for one in paths.agents().iterdir() if files.staged(one.name)],
                          "a staged directory was left behind")
 
@@ -284,7 +284,7 @@ class MakingAnAgent(Agents):
     def test_the_configuration_row_holds_the_name_and_the_provider(self):
         settled = records.read(directory.records("cole"))
         self.assertEqual("cole", settled["agent_name"])
-        self.assertEqual("anthropic", settled["agent_provider"])
+        self.assertEqual("anthropic", settled["provider_name"])
 
     def test_the_first_step_is_recorded_as_having_run(self):
         # Recorded because it really ran: the schema is built by the migration runner and never by
@@ -540,7 +540,7 @@ class WhatTheReleaseShips(Agents):
         directory.made("cole", "anthropic")
         with self.assertRaises(sqlite3.IntegrityError):
             with records.writing(directory.records("cole")) as conn:
-                conn.execute("INSERT INTO config (id, agent_name, agent_provider) "
+                conn.execute("INSERT INTO config (id, agent_name, provider_name) "
                              "VALUES (2, 'other', 'openai')")
 
     def test_a_column_that_says_text_holds_text_and_nothing_else(self):
@@ -548,7 +548,7 @@ class WhatTheReleaseShips(Agents):
         # conversion that grows to cope can never be removed.
         directory.made("cole", "anthropic")
         with self.assertRaises(sqlite3.IntegrityError):
-            records.stated(directory.records("cole"), {"agent_model": b"not text"})
+            records.stated(directory.records("cole"), {"model_name": b"not text"})
 
 
 if __name__ == "__main__":

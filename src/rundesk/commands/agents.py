@@ -164,7 +164,7 @@ def _provider_of(name: str) -> str:
     agent is simply missing, and what they do next is make a new one over it.
     """
     try:
-        return str(records.read(directory.records(name))["agent_provider"])
+        return str(records.read(directory.records(name))["provider_name"])
     except records.NotThere:
         return "? — its records are not there"
     except (directory.Refused, records.Unreadable, OSError, sqlite3.Error, KeyError):
@@ -222,7 +222,7 @@ def _configured(name: str, provider: Optional[str]) -> int:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was changed")
 
     try:
-        records.stated(directory.records(name), {"agent_provider": provider})
+        records.stated(directory.records(name), {"provider_name": provider})
     except TROUBLE as why:
         return _failed(str(why), "nothing was changed")
 

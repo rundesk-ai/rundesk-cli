@@ -125,8 +125,8 @@ class WhichJournalTheseRecordsAreKeptIn(OneAgentsRecords):
         # whoever else has it open, and a live downgrade is a change made behind their back.
         with contextlib.closing(sqlite3.connect(str(self.at))) as conn:
             conn.execute("PRAGMA journal_mode=DELETE")
-        records.stated(self.at, {"agent_model": "a-model"})
-        self.assertEqual("a-model", records.read(self.at)["agent_model"])
+        records.stated(self.at, {"model_name": "a-model"})
+        self.assertEqual("a-model", records.read(self.at)["model_name"])
         with records.reading(self.at) as conn:
             self.assertEqual("delete", conn.execute("PRAGMA journal_mode").fetchone()[0].lower())
 
@@ -208,24 +208,24 @@ class WhatStandsBesideTheDatabase(OneAgentsRecords):
 class StatingWhatAnAgentIs(OneAgentsRecords):
 
     def test_one_value_is_set_and_every_other_left_as_it_was(self):
-        records.stated(self.at, {"agent_model": "a-model"})
+        records.stated(self.at, {"model_name": "a-model"})
         settled = records.read(self.at)
-        self.assertEqual("a-model", settled["agent_model"])
+        self.assertEqual("a-model", settled["model_name"])
         self.assertEqual("cole", settled["agent_name"])
 
     def test_several_are_set_together(self):
-        records.stated(self.at, {"agent_model": "a-model", "owner_name": "somebody"})
+        records.stated(self.at, {"model_name": "a-model", "owner_name": "somebody"})
         settled = records.read(self.at)
-        self.assertEqual("a-model", settled["agent_model"])
+        self.assertEqual("a-model", settled["model_name"])
         self.assertEqual("somebody", settled["owner_name"])
 
     def test_naming_a_column_the_table_does_not_have_changes_none_of_them(self):
         # The same rule as `configure`: half of what was meant is not a smaller change, it is a
         # different one that nobody typed.
         with self.assertRaises(records.Refused) as refused:
-            records.stated(self.at, {"agent_model": "a-model", "whatever_this_is": True})
+            records.stated(self.at, {"model_name": "a-model", "whatever_this_is": True})
         self.assertIn("whatever_this_is", str(refused.exception))
-        self.assertIsNone(records.read(self.at)["agent_model"], "a refused change was half applied")
+        self.assertIsNone(records.read(self.at)["model_name"], "a refused change was half applied")
 
     def test_the_column_that_holds_the_table_to_one_row_is_not_something_anybody_states(self):
         with self.assertRaises(records.Refused):
@@ -240,13 +240,13 @@ class StatingWhatAnAgentIs(OneAgentsRecords):
         # contents. This is the path `made` takes on a database a step built a moment ago.
         with records.writing(self.at) as conn:
             conn.execute("DELETE FROM config")
-        records.stated(self.at, {"agent_name": "nina", "agent_provider": "openai"})
+        records.stated(self.at, {"agent_name": "nina", "provider_name": "openai"})
         self.assertEqual("nina", records.read(self.at)["agent_name"])
 
     def test_stating_over_records_that_cannot_be_read_is_refused(self):
         self.at.write_text("prose", encoding="utf-8")
         with self.assertRaises(records.Unreadable):
-            records.stated(self.at, {"agent_model": "a-model"})
+            records.stated(self.at, {"model_name": "a-model"})
 
 
 class WhenSomethingGoesWrongPartWayThrough(OneAgentsRecords):
@@ -281,8 +281,8 @@ class WhenSomethingGoesWrongPartWayThrough(OneAgentsRecords):
                 conn.execute("UPDATE config SET agent_name = 'someone else' WHERE id = 1")
                 raise RuntimeError("something went wrong")
         records.BUSY_SECONDS = 0
-        records.stated(self.at, {"agent_model": "a-model"})       # refused if a lock were held
-        self.assertEqual("a-model", records.read(self.at)["agent_model"])
+        records.stated(self.at, {"model_name": "a-model"})       # refused if a lock were held
+        self.assertEqual("a-model", records.read(self.at)["model_name"])
 
     def test_every_connection_is_let_go_of_on_every_path(self):
         # Counted, not inferred. "The next write still works" proves nothing here: a connection
@@ -305,7 +305,7 @@ class WhenSomethingGoesWrongPartWayThrough(OneAgentsRecords):
         held = self.open_handles()
         for _ in range(15):
             with self.assertRaises(records.Unreadable):
-                records.stated(self.prose, {"agent_model": "a-model"})
+                records.stated(self.prose, {"model_name": "a-model"})
         self.assertLess(self.open_handles(), held + 5, "connections were left open")
 
 
@@ -325,11 +325,11 @@ class TwoWritersAtOnce(OneAgentsRecords):
         first.start()
         self.addCleanup(first.join)
         held.wait(5)
-        records.stated(self.at, {"agent_model": "second"})        # waits, then lands
+        records.stated(self.at, {"model_name": "second"})        # waits, then lands
         first.join()
         settled = records.read(self.at)
         self.assertEqual("first", settled["owner_name"])
-        self.assertEqual("second", settled["agent_model"])
+        self.assertEqual("second", settled["model_name"])
 
     def test_with_neither_a_timeout_nor_a_second_attempt_the_writer_is_refused_at_once(self):
         # Which is what the two of them are for. Without either, SQLite does not wait at all: the
@@ -340,7 +340,7 @@ class TwoWritersAtOnce(OneAgentsRecords):
         records.BUSY_SECONDS, records.TRIES = 0, 1
         with records.writing(self.at):
             with self.assertRaises(sqlite3.OperationalError) as refused:
-                records.stated(self.at, {"agent_model": "a-model"})
+                records.stated(self.at, {"model_name": "a-model"})
         self.assertIn("locked", str(refused.exception))
 
     def test_a_writer_asks_again_after_the_timeout_rather_than_giving_up(self):
@@ -363,9 +363,9 @@ class TwoWritersAtOnce(OneAgentsRecords):
         first.start()
         self.addCleanup(first.join)
         held.wait(5)
-        records.stated(self.at, {"agent_model": "second"})
+        records.stated(self.at, {"model_name": "second"})
         first.join()
-        self.assertEqual("second", records.read(self.at)["agent_model"])
+        self.assertEqual("second", records.read(self.at)["model_name"])
 
     def test_a_writer_waits_out_the_busy_timeout_even_with_no_second_attempt(self):
         # The timeout on its own, with the asking-again switched off. The two cover each other, so
@@ -384,9 +384,9 @@ class TwoWritersAtOnce(OneAgentsRecords):
         first.start()
         self.addCleanup(first.join)
         held.wait(5)
-        records.stated(self.at, {"agent_model": "second"})
+        records.stated(self.at, {"model_name": "second"})
         first.join()
-        self.assertEqual("second", records.read(self.at)["agent_model"])
+        self.assertEqual("second", records.read(self.at)["model_name"])
 
     def test_the_ceiling_is_the_one_this_module_names_and_not_the_bindings(self):
         # Python's binding waits five seconds unless it is told otherwise, and five seconds nobody
@@ -409,7 +409,7 @@ class TwoWritersAtOnce(OneAgentsRecords):
         held.wait(5)
         started = time.monotonic()
         with self.assertRaises(sqlite3.OperationalError):
-            records.stated(self.at, {"agent_model": "a-model"})
+            records.stated(self.at, {"model_name": "a-model"})
         self.assertLess(time.monotonic() - started, 1.0, "it waited out the binding's own ceiling")
 
     def test_a_refusal_that_is_not_the_lock_is_raised_at_once(self):
@@ -446,7 +446,7 @@ class TwoWritersAtOnce(OneAgentsRecords):
         def writing(said: str) -> None:
             try:
                 for _ in range(15):
-                    records.stated(self.at, {"agent_model": said, "owner_name": said})
+                    records.stated(self.at, {"model_name": said, "owner_name": said})
             except BaseException as why:                # noqa: BLE001 — carried to the assertion
                 trouble.append(why)
 
@@ -459,7 +459,7 @@ class TwoWritersAtOnce(OneAgentsRecords):
         settled = records.read(self.at)
         # Whichever went last, both columns are that writer's: a half-applied write would leave
         # one column from each.
-        self.assertEqual(settled["agent_model"], settled["owner_name"])
+        self.assertEqual(settled["model_name"], settled["owner_name"])
 
 
 if __name__ == "__main__":

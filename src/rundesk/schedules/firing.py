@@ -644,7 +644,7 @@ def _finished(agent: str, where: Path, one: Running, code: Optional[int],
         outcome, level = kept.STOPPED, logs.WARNING
         said = f"stopped within {took} — nobody can say what it came to"
     elif code == 0:
-        outcome, level = kept.COMPLETED, logs.INFO
+        outcome, level = kept.DONE, logs.INFO
         said = f"completed in under {took}"
     else:
         outcome, level = kept.FAILED, logs.ERROR
@@ -653,7 +653,7 @@ def _finished(agent: str, where: Path, one: Running, code: Optional[int],
     for line in _what_it_wrote(output_of(agent, one.name), one.from_byte):
         _note(where, f"  {line}", level)
     _became(agent, where, one.name, outcome)
-    if telling is not None and outcome != kept.COMPLETED:
+    if telling is not None and outcome != kept.DONE:
         with contextlib.suppress(Exception):                    # a channel that is
             # down is not a reason to lose a firing, and this module may never end a gateway.
             telling.say(f"schedule {one.name} {said}")
@@ -768,14 +768,14 @@ def by_hand(agent: str, name: str, waiting: float, where: Optional[Path] = None,
                            where=directory.home(agent), env=the_environment())
         _kept_what_it_wrote(output, ran)
 
-    outcome = kept.COMPLETED if (ran.trouble is None and ran.code == 0) else kept.FAILED
+    outcome = kept.DONE if (ran.trouble is None and ran.code == 0) else kept.FAILED
     with contextlib.suppress(Exception):                        # the run happened,
         # and failing to write down what it came to is not a reason to lose what it said.
         kept.became(agent, name, outcome, moment)
         if where is not None:
             became = ran.trouble or f"exit {ran.code}"
             _note(where, f"schedule {name} run by hand {outcome}: {became}",
-                      logs.INFO if outcome == kept.COMPLETED else logs.ERROR)
+                      logs.INFO if outcome == kept.DONE else logs.ERROR)
     return ran
 
 

@@ -261,7 +261,7 @@ def _added(args: argparse.Namespace) -> int:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was added")
 
     values = {"cron": args.when, "run_at": args.at, "expire_at": args.until,
-              "command": args.program, "agent_prompt": args.prompt,
+              "command": args.program, "prompt": args.prompt,
               "enabled": 0 if args.disabled else 1}
     try:
         # Understood before it is written, so a cron nobody can parse is refused where it was typed
@@ -293,7 +293,7 @@ def _changed(args: argparse.Namespace) -> int:
         return _mistyped(f"{args.schedule} starts a program or asks the agent, never both",
                          "say --run or --ask, not the two of them", "nothing was changed")
     if args.prompt is not None:
-        values["agent_prompt"] = args.prompt
+        values["prompt"] = args.prompt
         values["command"] = None
     if args.when is not None:
         # **One replaces the other.** A schedule states a repeating time or one moment, so setting
@@ -382,7 +382,7 @@ def _described(agent: str, name: str) -> int:
 def _asks_the_agent(agent: str, name: str) -> bool:
     """Whether this schedule asks the agent rather than naming a program to start."""
     with contextlib.suppress(Exception):
-        return bool((kept.one(agent, name).get("agent_prompt") or "").strip())
+        return bool((kept.one(agent, name).get("prompt") or "").strip())
     return False
 
 
