@@ -65,15 +65,30 @@ def _note(gateways, name: str, said: str, whose=None) -> int:
     return 1
 
 
+def _what_failed(why: BaseException) -> str:
+    """What went wrong, as somebody reads it: the kind of failure, and what it said.
+
+    The kind is kept because an errno on its own does not say what class of thing to do
+    about it, and some failures carry no message at all.
+    """
+    said = str(why)
+    return f"{type(why).__name__}: {said}" if said else type(why).__name__
+
+
 def _answered_within(patience: float, work, called: str) -> tuple:
     """Do something that may block inside the operating system, and give up on it.
 
-    Returns `(True, what it gave back)`, or `(False, None)` when it did not answer in
-    time or failed. **The bound belongs to every command that touches the directory, not
-    only to health (R-BKP-29).** `status` grew this guard first, for a backup directory
-    symlinked into cloud storage that blocks in `opendir` forever; `backups` then sat on
-    the identical call with no bound at all, which is the one command that cannot answer
-    without it.
+    Returns `(True, what it gave back, None)`; `(False, None, what failed)` when the work
+    raised; and `(False, None, None)` when nothing came back inside the bound. **Those
+    last two are different situations and never share one answer (R-BKP-31)** — a
+    directory that refuses outright returns instantly, so reporting it as one that
+    exceeded the bound tells an owner to wait out or move something that will never be
+    fixed by either, and throwing the cause away leaves nothing that names the real one.
+
+    **The bound belongs to every command that touches the directory, not only to health
+    (R-BKP-29).** `status` grew this guard first, for a backup directory symlinked into
+    cloud storage that blocks in `opendir` forever; `backups` then sat on the identical
+    call with no bound at all, which is the one command that cannot answer without it.
 
     A Python thread cannot interrupt an operating-system `opendir`, but a daemon does not
     keep this one-shot CLI process alive: the blocked call is abandoned with the process
@@ -83,15 +98,15 @@ def _answered_within(patience: float, work, called: str) -> tuple:
 
     def carry() -> None:
         try:
-            answered.put((True, work()))
-        except BaseException:                           # pragma: no cover - defensive boundary
-            answered.put((False, None))
+            answered.put((True, work(), None))
+        except BaseException as why:                    # a boundary: carried back, never swallowed
+            answered.put((False, None, _what_failed(why)))
 
     threading.Thread(target=carry, name=called, daemon=True).start()
     try:
         return answered.get(timeout=patience)
     except queue.Empty:
-        return (False, None)
+        return (False, None, None)
 
 
 def cmd_not_available(name: str, act: str | None = None) -> int:

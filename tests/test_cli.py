@@ -2566,6 +2566,61 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
         self.assertNotIn("no backups", said,
                          "a directory that did not answer was reported as holding none")
 
+    def test_a_backup_directory_that_refuses_is_named_by_what_it_refused_with(self):
+        """R-BKP-31 — reported (#321): a directory that raised immediately took the same
+        answer a directory that never came back takes, so the listing told an owner that a
+        command which returned in a fraction of a second had exceeded a twenty-second
+        bound, and threw the cause away. One of the two is waited out or moved; the other
+        is a permission to put back, and nothing said which had happened.
+
+        The two R-BKP-29 cases above drive an `every` that *blocks*, so they pass whether
+        or not a raising one is told apart from it. This one drives it raising."""
+        real_every = backup_commands.backups.every
+
+        def refused(_where):
+            raise PermissionError(13, "Permission denied")
+
+        backup_commands.backups.every = refused
+        try:
+            code, said = drive(["backups"])
+        finally:
+            backup_commands.backups.every = real_every
+        self.assertEqual(1, code, "a directory that refused was reported as success")
+        self.assertIn(str(_TEST_BACKUP_DIR), said, "it did not name the directory")
+        self.assertIn("PermissionError", said, "it did not say what the directory did")
+        self.assertNotIn("did not answer within", said,
+                         "an instant refusal was reported as the bound being exceeded")
+
+    def test_a_prune_that_fails_is_reported_by_its_cause_rather_than_the_bound(self):
+        """R-BKP-31 — the daily job's stderr is the only place a failing prune is ever
+        seen, and it held the same twenty-second warning six times while the copies it was
+        meant to remove were never removed. The backup itself is already written and still
+        succeeds either way (R-BKP-29)."""
+        real_take = backup_commands.backups.take
+        real_manifest = backup_commands.backups.manifest_of
+        real_prune = backup_commands.backups.prune
+        took = _TEST_BACKUP_DIR / "rundesk-data-2026-01-01-000000Z.zip"
+        took.write_bytes(b"not read by this case")
+
+        def refused(_where, _keep_last, note=None):
+            raise PermissionError(13, "Permission denied")
+
+        backup_commands.backups.take = lambda _data, _into, note=None: took
+        backup_commands.backups.manifest_of = lambda _at: {"records": {}}
+        backup_commands.backups.prune = refused
+        try:
+            code, said = drive(["backups", "add"])
+        finally:
+            backup_commands.backups.take = real_take
+            backup_commands.backups.manifest_of = real_manifest
+            backup_commands.backups.prune = real_prune
+            took.unlink()
+        self.assertEqual(0, code, "the copy was written, so the command succeeded")
+        self.assertIn("took a backup", said)
+        self.assertIn("PermissionError", said, "it did not say why nothing was pruned")
+        self.assertNotIn("did not answer within", said,
+                         "a prune that refused was reported as the bound being exceeded")
+
     def test_agents_lists_simultaneous_turns_without_prompts_or_arguments(self):
         """R-AGW-13 — concurrent conversations are distinct and only safe identity is shown."""
         agents = FakeAgents(made=["ava"])

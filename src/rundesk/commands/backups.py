@@ -29,6 +29,18 @@ from rundesk.commands import _answered_within, _as_table, _out_loud, cmd_not_ava
 BACKUP_PATIENCE = 20.0
 
 
+def _how_it_failed(where, why: str | None, doing: str) -> str:
+    """Why a bounded reading of the backup directory came back with nothing (R-BKP-31).
+
+    A directory that refuses and one that never comes back are two different failures
+    wearing one bound, and only one of them is fixed by waiting or by moving the
+    directory. Whichever it was, the directory is named, because an owner reading this
+    may not know where their copies are kept.
+    """
+    return (f"{where} could not be {doing}: {why}" if why else
+            f"{where} did not answer within {BACKUP_PATIENCE:.0f}s")
+
+
 def cmd_backups(args: argparse.Namespace, gateways, machine, agents) -> int:
     """Copies of everything this install keeps: what there is, taking one, putting one back.
 
@@ -208,15 +220,14 @@ def _take_a_backup() -> int:
     # safe, so a directory that stops answering costs the tidying and never the backup
     # itself, and the command says which of the two happened (R-BKP-29).
     keep_last = config.backups()["keep_last"]
-    reached, gone = _answered_within(
+    reached, gone, why = _answered_within(
         BACKUP_PATIENCE,
         lambda: backups.prune(backups_home(), keep_last, note=_out_loud),
         "rundesk-backups-prune",
     )
     if not reached:
-        print(f"        WARNING: {backups_home()} did not answer within "
-              f"{BACKUP_PATIENCE:.0f}s, so older copies were left as they are",
-              file=sys.stderr)
+        print(f"        WARNING: {_how_it_failed(backups_home(), why, 'tidied')}, so "
+              f"older copies were left as they are", file=sys.stderr)
     elif gone:
         print(f"        {len(gone)} beyond the last {keep_last} were removed")
     return 0
@@ -239,13 +250,13 @@ def _list_backups() -> int:
             one.why if not one.readable else None,
         ) for one, said in ((one, one.said or {}) for one in backups.every(where))]
 
-    reached, rows = _answered_within(BACKUP_PATIENCE, describe, "rundesk-backups-list")
+    reached, rows, why = _answered_within(BACKUP_PATIENCE, describe, "rundesk-backups-list")
     if not reached:
         # Named, and never answered with the empty listing. "There are no backups" and
         # "the place they are kept did not answer" send an owner somewhere completely
         # different, and only one of them means their agents are unprotected (R-BKP-29).
-        print(f"backups: FAILED — {where} did not answer within "
-              f"{BACKUP_PATIENCE:.0f}s, so what is kept there is unknown", file=sys.stderr)
+        print(f"backups: FAILED — {_how_it_failed(where, why, 'read')}, so what is kept "
+              f"there is unknown", file=sys.stderr)
         return 1
     if not rows:
         print("no backups")

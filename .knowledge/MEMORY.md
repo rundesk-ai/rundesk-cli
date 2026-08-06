@@ -101,6 +101,11 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   it is yours. `pgrep -f "/private/tmp/rundesk-<n>/tests/"` also finds another agent's gate
   running in a copy of the checkout, which is the ordinary case here; wait it out rather than
   killing it.
+- **`unittest` takes one `-k` pattern per flag, and `-k "a or b"` matches nothing while printing
+  `Ran 0 tests` and then `OK`.** The `or` form is pytest's, and here it exits zero having run
+  nothing at all — which reads exactly like the case you just wrote passing first time. Repeat the
+  flag instead (`tests/test_cli.py -k refuses -k prune`), and read the `Ran N tests` line before
+  believing any green run.
 - **Only `tests/test_install.py:38` copies the *checkout*; every other `copytree` in that file
   copies `REPO`.** So whatever that one line lets through is carried by all eighteen of them, and
   whatever it excludes is excluded everywhere. Untracked `ui/` and `site/` trees (~100 MB) beside

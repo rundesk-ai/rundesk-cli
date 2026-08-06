@@ -72,7 +72,10 @@ def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
 
 def _how_backups_stand(machine) -> str:
     """Whether daily copies run and how many exist, without waiting forever (R-BKP-28)."""
-    reached, count_kept = _answered_within(
+    # Health has one cell to say this in, and `unavailable` is already true of a directory
+    # that refused as much as of one that never answered — what it refused with is what
+    # `rundesk backups` is for, and is named there (R-BKP-31).
+    reached, count_kept, _why = _answered_within(
         BACKUP_STATUS_PATIENCE,
         lambda: len(backups.every(backups_home())),
         "rundesk-backup-status",
