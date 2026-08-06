@@ -76,4 +76,10 @@ with open(os.environ["CAPTURED"], "rb") as captured:
         sys.stdout.buffer.write(line)
         sys.stdout.buffer.flush()
 
+if os.environ.get("THEN_DIE"):
+    # A server that fell over: it stops mid-record and its pipe closes, which is what the reader
+    # on the other side actually sees. Staying alive instead would test a *wedged* server, which
+    # is a different thing and is rundesk's silence window to answer, not the adapter's.
+    raise SystemExit(1)
+
 ended.wait()

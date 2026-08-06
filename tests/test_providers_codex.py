@@ -377,7 +377,9 @@ class EveryWayTheBrainSaysItFailed(support.Isolated):
     """
 
     def done_of(self, named):
-        said, got = replayed(self.home, captured=FAILURES / f"{named}.jsonl")
+        # **The brain exits when it has said its piece**, which is what a server that reported a
+        # fatal error actually does — and what makes the adapter's own last guard reachable.
+        said, got = replayed(self.home, captured=FAILURES / f"{named}.jsonl", THEN_DIE="1")
         self.assertTrue(said, f"{named} produced no records at all")
         self.assertEqual("done", said[-1]["type"], f"{named} did not end with a done")
         return said[-1], got
@@ -467,6 +469,52 @@ class AStreamThisSideCannotRead(support.Isolated):
         self.assertIn("binary", result[0]["summary"],
                       "what surrounded the unreadable character went with it")
         self.assertTrue(said[-1]["ok"])
+
+    def test_a_server_that_died_mid_record_still_ends_the_turn_in_words(self):
+        """A crash or an OOM kill leaves half a record on the pipe with no newline after it.
+
+        **Half a record is not a smaller record.** Handed on as though it were whole it is a
+        corrupt one — and the parse that then fails is swallowed, so the turn goes quiet with
+        nothing anywhere saying why. Rundesk can only call that `crashed` from the *absence* of a
+        `done`, which is exactly the answer this adapter is supposed to save it from having to
+        guess at.
+        """
+        said, got = replayed(self.home, THEN_DIE="1",
+                             captured=FAILURES / "a-server-that-died-mid-record.jsonl")
+        self.assertTrue(said, "the adapter said nothing at all")
+        self.assertEqual("done", said[-1]["type"])
+        self.assertFalse(said[-1]["ok"])
+        self.assertNotEqual(0, got.returncode,
+                            "the adapter exited well having never said what became of the turn")
+
+    def test_a_server_that_simply_stopped_is_said_rather_than_reported_as_success(self):
+        """**The likeliest crash of all**, and the one an earlier guard missed: the child exits or
+        is killed before it completes a turn. Its pipe closes, which is not an exception — so a
+        guard written only around the exceptions never fired, and rundesk was handed an adapter
+        that exited cleanly having said nothing at all. That is the failure that looks most like a
+        success, and this contract refuses it.
+        """
+        said, got = replayed(self.home, THEN_DIE="1",
+                             captured=FAILURES / "a-server-that-just-stopped.jsonl")
+        self.assertTrue(said, "the adapter exited having said nothing at all")
+        self.assertEqual("done", said[-1]["type"])
+        self.assertEqual("crashed", said[-1]["failure_code"])
+        self.assertNotEqual(0, got.returncode)
+
+    def test_a_record_with_no_terminator_after_it_is_not_treated_as_whole(self):
+        """**Nothing can tell a complete record missing its newline from a truncated one that still
+        parses.** So neither is handed on — the cost is losing a record that happened to be intact,
+        and the alternative is reading half of one as though it were all of it, which nothing
+        downstream could tell from the server talking nonsense.
+
+        The record dropped here is the one that would have said the turn completed, so the turn
+        comes back `crashed` rather than as a success nobody actually saw.
+        """
+        said, _got = replayed(self.home, THEN_DIE="1",
+                              captured=FAILURES / "a-record-with-no-terminator.jsonl")
+        self.assertEqual("done", said[-1]["type"])
+        self.assertFalse(said[-1]["ok"],
+                         "a line with no terminator after it was read as a whole record")
 
     def test_a_line_too_long_to_hold_is_dropped_whole_and_the_turn_carries_on(self):
         """**Half a record is not a smaller record, it is a corrupt one**, and the bound has to be
