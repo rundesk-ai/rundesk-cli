@@ -28,6 +28,7 @@ import time
 import unittest
 from pathlib import Path
 from typing import List, Optional, Tuple
+from unittest import mock
 
 import support
 from rundesk import __version__
@@ -40,6 +41,7 @@ from rundesk.exits import OK
 from rundesk.gateways import host, job, standing
 from rundesk.providers import kept as turns_kept
 from rundesk.schedules import firing, kept
+from rundesk.skills import catalogs, grants, library
 from rundesk.utils import logs, programs
 
 #: How a gateway is started here: the same handoff the job's shim performs, so what these cases run
@@ -1011,6 +1013,190 @@ class TheChannelsItHosts(WithAnAgent):
         self.assertIn("stopped with this gateway", self.its_log())
         self.assertFalse(hosting.still_running(self.name, "discord"),
                          "the gateway stopped and left its adapter running with nobody holding it")
+
+    def a_grant(self, name: str) -> Path:
+        """A skill standing in this agent's own directory. Made by hand, because what the loop
+        watches is the directory and not the command that usually writes it — which is the whole
+        reason it watches rather than being told."""
+        stands = grants.where(self.name) / name
+        stands.mkdir(parents=True, exist_ok=True)
+        (stands / library.DECLARED).write_text(
+            f"---\nname: {name}\ndescription: Something. Use when something.\n---\n",
+            encoding="utf-8")
+        return stands
+
+    def test_a_skill_the_agent_gained_is_told_through_the_channel_that_is_told_things(self):
+        self.an_adapter()
+        self.a_channel()
+        self.a_grant("jira")                       # held before it starts, so the first look is quiet
+        child = self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(lambda: host.CAME_UP in self.was_heard(),
+                                             self.PATIENCE))
+
+        self.a_grant("writing-plans")
+
+        self.assertTrue(
+            support.waited_until(
+                lambda: "🧩 Skill granted — `writing-plans`" in self.was_heard(), self.PATIENCE),
+            f"nothing was said about it. It heard: {self.was_heard()}")
+        self.assertIn("1180 ::", self.was_heard())
+        self.assertIsNone(child.poll(), "the gateway went down saying it")
+
+    def test_a_skill_the_agent_lost_is_told_the_same_way(self):
+        self.an_adapter()
+        self.a_channel()
+        self.a_grant("jira")
+        self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(lambda: host.CAME_UP in self.was_heard(),
+                                             self.PATIENCE))
+
+        shutil.rmtree(grants.where(self.name) / "jira")
+
+        self.assertTrue(
+            support.waited_until(lambda: "🗑️ Skill revoked — `jira`" in self.was_heard(),
+                                 self.PATIENCE),
+            f"nothing was said about it. It heard: {self.was_heard()}")
+
+    def test_a_first_look_after_an_upgrade_announces_nothing(self):
+        # Two grants already standing and nothing written down: the gateway comes up, says so, and
+        # says nothing whatever about skills the agent has held all along.
+        self.an_adapter()
+        self.a_channel()
+        self.a_grant("jira")
+        self.a_grant("writing-plans")
+
+        child = self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(lambda: host.CAME_UP in self.was_heard(),
+                                             self.PATIENCE))
+        self.several_beats()
+
+        self.assertNotIn("Skill", self.was_heard())
+        self.assertIsNone(child.poll())
+
+    def test_a_change_is_told_once_however_many_beats_pass(self):
+        # The rule this loop shares with every other one here: none of them may say the same thing
+        # every fifteen seconds.
+        self.an_adapter()
+        self.a_channel()
+        self.a_grant("jira")
+        self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(lambda: host.CAME_UP in self.was_heard(),
+                                             self.PATIENCE))
+        self.a_grant("writing-plans")
+        self.assertTrue(support.waited_until(
+            lambda: "writing-plans" in self.was_heard(), self.PATIENCE))
+
+        self.several_beats()
+
+        self.assertEqual(1, self.was_heard().count("🧩 Skill granted — `writing-plans`"))
+
+    def test_an_agent_that_tells_nobody_anything_hears_nothing_about_its_skills(self):
+        self.an_adapter()
+        self.a_channel(told=False)
+        self.a_grant("jira")
+        child = self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.several_beats()
+
+        self.a_grant("writing-plans")
+        self.several_beats()
+
+        self.assertEqual("", self.was_heard())
+        self.assertIsNone(child.poll(), "the gateway went down over having nobody to tell")
+
+
+class WhatItMayDo(WithAnAgent):
+    """The loop that says when this agent gains or loses a skill.
+
+    Driven directly, the way `_kept_the_days` is: what these prove is the carrier and the file, and
+    a real gateway is the wrong instrument for "and then it wrote nothing".
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.where = standing.logs_at(self.at)
+        library.where().mkdir(parents=True, exist_ok=True)
+        catalogs.place_bundled()
+
+    def a_channel(self) -> None:
+        """A channel this agent is told things through, with no adapter running for it."""
+        channels.added(self.name, "discord", {
+            "describes": "discord", "allowed": json.dumps(["2207"])})
+        channels.telling(self.name, "discord", "1180")
+
+    def a_skill(self, name: str) -> None:
+        """A grant standing in the agent's own directory, made the way every grant is."""
+        source = library.tree(library.BUNDLED) / library.INSIDE / library.REQUIRED_SKILL
+        stands = grants.where(self.name)
+        stands.mkdir(parents=True, exist_ok=True)
+        (stands / name).symlink_to(os.path.relpath(source, stands))
+
+    def look(self, knew=None):
+        return host._told_what_changed(self.name, self.where, hosting.Watching({}, {}, {}), knew)
+
+    def test_a_first_look_says_nothing_at_all(self):
+        # Otherwise the one startup after an upgrade announces every skill the agent already holds
+        # as newly gained — a paragraph of noise in somebody's chat for no change at all.
+        #
+        # **Asserted on whether anything was *said*, not on what came back.** Both answers are the
+        # same tuple, so a case reading only the carrier cannot tell a quiet first look from one that
+        # announced everything — which is how this case was first written and why it proved nothing.
+        self.a_skill("jira")
+        with mock.patch.object(host, "_told", return_value=host.TOLD) as told:
+            self.assertEqual(("jira",), self.look())
+        told.assert_not_called()
+
+    def test_a_skill_granted_and_revoked_between_two_looks_leaves_nothing_to_say(self):
+        # Worked out afresh against what was last *said*, never accumulated.
+        self.assertEqual(("jira",), self.look(("jira",)))
+
+    def test_the_lines_it_composes_name_the_skill_and_say_which_way_it_went(self):
+        self.assertEqual(["🧩 Skill granted — `b`", "🗑️ Skill revoked — `a`"],
+                         host._what_changed(("a",), ("b",)))
+
+    def test_several_changes_at_once_are_one_message(self):
+        # A catalog update that retires six skills is one change to what this agent can do, not six
+        # notifications.
+        said = host._what_changed(("a", "b"), ("c", "d", "e"))
+        self.assertEqual(5, len(said))
+        self.assertTrue(said[0].startswith("🧩"), "gains are not first")
+
+    def test_a_change_waits_for_a_surface_rather_than_being_lost(self):
+        # A notified channel with no adapter up. Nothing is offered to it at all, and nothing is
+        # written down, so the change is still owed after a restart.
+        #
+        # **The gate is asked before `_told`, and that is the point being pinned.** `hosting.told`
+        # answers `False` only when there is no child; an adapter that has been started and has not
+        # authenticated takes the write into its pipe and answers `True`, so a change offered before
+        # the gate is a change nobody ever sees and the record says it was told.
+        self.a_channel()
+        self.a_skill("jira")
+        with mock.patch.object(host, "_told", return_value=host.TOLD) as told:
+            self.assertEqual((), self.look(()),
+                             "a change nobody could be told was carried forward as said")
+        told.assert_not_called()
+
+    def test_an_agent_that_tells_nobody_anything_still_tracks_what_it_may_do(self):
+        # There is no channel and there never will be until somebody marks one, so the baseline
+        # tracks quietly — otherwise an owner who adds a channel in November is greeted by every
+        # grant they made since March.
+        self.a_skill("jira")
+        self.assertEqual(("jira",), self.look(()))
+
+    def test_a_home_that_is_not_there_is_not_an_agent_that_lost_every_skill(self):
+        # Absent is not empty. And the write must not put the directory back: `files.write_json`
+        # makes the directory it writes into.
+        shutil.rmtree(grants.where(self.name), ignore_errors=True)
+        self.assertEqual(("jira",), self.look(("jira",)))
+        self.assertFalse(grants.where(self.name).exists(), "it put the agent's directory back")
+
+    def test_grants_that_cannot_be_read_change_nothing_and_never_raise(self):
+        # Nothing in this loop may exit non-zero: launchd would bring the gateway straight back into
+        # the same condition.
+        support.not_as_root(self)
+        self.a_skill("jira")
+        grants.where(self.name).chmod(0o000)
+        self.addCleanup(grants.where(self.name).chmod, 0o755)
+        self.assertEqual(("jira",), self.look(("jira",)))
 
 
 class TheStopFitsInsideWhatTheJobAllows(unittest.TestCase):

@@ -68,7 +68,17 @@ MAY_IMPORT = {
     # And `gateways` reaches `schedules` rather than the other way round, because the gateway is
     # what turns "this is due" into work that has started. It is the only long-lived process this
     # product has, so it is the only thing that can hold a child and reap it.
-    "gateways": ("providers", "channels", "schedules", "agents", "core", "utils"),
+    # It reaches `skills` for one thing: **what an agent may do right now**, so it can say when that
+    # changes. A grant is an entry in the agent's own directory and nothing reports itself when one
+    # appears — a command, a catalog update that retires one, a catalog removal, a link somebody made
+    # by hand, and a change made while this process was not running are five ways in and only one of
+    # them could ever have told a gateway. So the directory is watched, and `grants.held` is the one
+    # answer to what is in it: it is what decides that a dotfile is not a grant and that a copy being
+    # staged under `.<name>.incoming` is not one either. A listing written in this layer instead
+    # would announce a half-copied alias as granted and revoke it a second later. The traffic goes
+    # one way only — `skills` may not reach here, so a grant is still something that can be made,
+    # listed and revoked by code that has never heard of a gateway.
+    "gateways": ("skills", "providers", "channels", "schedules", "agents", "core", "utils"),
     "lifecycle": ("agents", "core", "utils"),
     # `skills` reaches `agents` because a grant is a directory entry inside an agent's own home and
     # there is nowhere else to ask where that is. The traffic goes one way only: `agents` may not
@@ -224,6 +234,20 @@ class TheTreePointsOneWay(support.Isolated):
                                 f"nothing in commands/skills.py catches grants.{name} — it is "
                                 "neither in TROUBLE nor given an `except` of its own, so any verb "
                                 "reaching it crashes instead of refusing")
+
+    def test_only_the_gateway_process_itself_reaches_the_skills_layer(self):
+        # The table is per package, so letting `host` watch what an agent may do lets `standing` and
+        # `job` reach `skills` too — and neither should. `standing` is what every command asks about
+        # liveness through, and `job` is what hands a gateway to launchd; a skill has nothing to do
+        # with either, and an import there would make "is this gateway up" a question that reads a
+        # catalog. The edge was opened for one loop, and this is what keeps it that wide.
+        for one in modules_of("gateways"):
+            if one.name == "host.py":
+                continue
+            with self.subTest(module=one.name):
+                self.assertNotIn("rundesk.skills", imports(one),
+                                 f"gateways/{one.name} reaches the skills layer — that edge was "
+                                 "opened for host.py's own loop and nothing else")
 
     def test_the_agents_verb_catches_every_kind_granting_a_skill_can_raise(self):
         # `agents add` gives a new agent the skill it operates this install with, which puts a
