@@ -98,23 +98,8 @@ def _said(agent: str, got: turns.Outcome, quiet: bool) -> int:
         return OK
     return _failed(
         f"{agent} did not answer — {got.failure_message or got.turn_status}",
-        *_what_to_do_about(got),
+        *([protocol.what_to_do_about(got.failure_code)] if got.failure_code else []),
         f"what it did:  rundesk turns {agent} {got.turn}")
-
-
-def _what_to_do_about(got: turns.Outcome) -> tuple:
-    """The one line that says whether this is worth trying again, and who has to do something.
-
-    The whole point of a closed vocabulary: a person reading a failure should not have to know a
-    vendor's error strings to know whether to wait or to act.
-    """
-    if got.failure_code is None:
-        return ()
-    if protocol.needs_human_action(got.failure_code):
-        return (f"this will not clear on its own ({got.failure_code})",)
-    if protocol.is_retryable(got.failure_code):
-        return (f"the same question later may work ({got.failure_code})",)
-    return (f"the brain said: {got.failure_code}",)
 
 
 def _cost(got: turns.Outcome) -> str:

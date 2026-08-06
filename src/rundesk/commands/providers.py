@@ -20,14 +20,16 @@ to `providers.instructions`.
 """
 
 import argparse
+import contextlib
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from rundesk.agents import directory, records
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import OK
-from rundesk.providers import adapters, answering, instructions, protocol, turns
+from rundesk.providers import adapters, answering, instructions, kept, protocol, turns
+from rundesk.schedules import kept as schedules_kept
 from rundesk.utils.terminal import as_table
 
 TROUBLE = (adapters.NotRunnable, answering.Refused, directory.Refused,
@@ -59,6 +61,8 @@ def register(sub: Subcommands) -> None:
                       help="which situation to render (default: a person asking)")
     said.add_argument("--layers", action="store_true",
                       help="show only the byte breakdown, not the prompt itself")
+    said.add_argument("--turn", metavar="<turn>", type=int,
+                      help="re-compose what a past turn was sent, and say whether it still matches")
 
     taking = what.add_parser("run", help="take one scheduled turn here — what a firing starts")
     taking.add_argument("agent", metavar="<agent>")
@@ -75,7 +79,8 @@ def cmd_providers(args: argparse.Namespace) -> int:
         if what == "check":
             return _checked(args.provider)
         if what == "instructions":
-            return _instructions(getattr(args, "agent", None), args.trigger, args.layers)
+            return _instructions(getattr(args, "agent", None), args.trigger, args.layers,
+                                 args.turn)
         if what == "run":
             return _took_a_turn(args.agent, args.schedule)
     except TROUBLE as why:
@@ -122,14 +127,89 @@ def _besides_what_was_asked(said: Dict[str, Any]) -> Dict[str, Any]:
     return {one: said[one] for one in said if one not in protocol.CAPABILITIES}
 
 
-def _instructions(agent: str, trigger: str, only_layers: bool) -> int:
+def _instructions(agent: str, trigger: str, only_layers: bool,
+                  turn: Optional[int] = None) -> int:
     """What a brain would read, and what each layer of it costs.
 
     An agent is optional: with one, the layers are filled in as that agent's turn would fill them;
     without, the placeholders are left standing, which is how somebody reads the shape of a layer
     without needing an install with an agent in it.
     """
-    built = instructions.build(trigger=trigger, variables=_about(agent))
+    # **Every refusal in this product ends with what to type**, and a name that is not an agent is
+    # the one somebody most often reaches by a typo — asked here, the way `ask` and `turns` ask it.
+    trouble = directory.not_an_agent(agent) if agent else ""
+    if trouble:
+        return _failed(trouble, "see what there is with: rundesk agents")
+    if turn is not None:
+        if not agent:
+            return _failed("a turn belongs to an agent, so say which one",
+                           "rundesk providers instructions <agent> --turn <turn>")
+        return _what_a_turn_was_sent(agent, turn, only_layers)
+    return _shown(instructions.build(trigger=trigger, variables=_about(agent)), only_layers)
+
+
+def _what_a_turn_was_sent(agent: str, turn: int, only_layers: bool) -> int:
+    """Re-compose what a past turn was sent, and say whether this release still composes it.
+
+    **Nothing stores the prompt.** A fingerprint and a byte count are kept instead, and the words
+    are re-derived from the inputs that produced them — every one of which is on the turn or on the
+    record written beside it. That is a better audit than a stored blob and forty bytes instead of
+    five kilobytes: a stored copy survives a change to the composer, and this one *detects* it.
+
+    So a match prints the prompt, and a mismatch says so plainly rather than showing today's words
+    as though they were the ones that turn was sent.
+    """
+    row = kept.get_turn(agent, turn)
+    built = instructions.build(trigger=_the_situation_it_ran_in(agent, turn),
+                               variables=_as_that_turn_saw_it(agent, row))
+    print(f"turn {turn}, {row['created_at']}")
+    if built.sha256 != row["instructions_sha256"]:
+        print(f"\nthis release composes a different prompt for these inputs "
+              f"({built.sha256[:12]} against the recorded {(row['instructions_sha256'] or '')[:12]}"
+              f", {built.total_bytes} bytes against {row['instructions_bytes']}) — what is below is "
+              f"today's words and not the ones that turn was sent")
+        print()
+        return _shown(built, only_layers)
+    print(f"unchanged since it ran, {row['instructions_sha256'][:12]}\n")
+    return _shown(built, only_layers)
+
+
+def _the_situation_it_ran_in(agent: str, turn: int) -> str:
+    """Which situation that turn was composed for, off the record written beside it.
+
+    Read from the layers rather than kept as a column of its own: the situation *is* the layer that
+    is not the core, so a column would be the same fact written down twice and free to disagree.
+    """
+    for one in kept.list_turn_records(agent, turn):
+        if one["record_type"] != "instructions":
+            continue
+        with contextlib.suppress(ValueError, TypeError, KeyError):
+            for layer in json.loads(one["event_data"])["layers"]:
+                if layer["name"] in instructions.TRIGGERS:
+                    return str(layer["name"])
+    return instructions.A_PERSON_ASKED
+
+
+def _as_that_turn_saw_it(agent: str, row: Dict[str, Any]) -> Dict[str, object]:
+    """The variables as they stood for that turn, off the turn's own columns."""
+    said = dict(_about(agent))
+    said.update({"provider_name": row["provider_name"], "access_mode": row["access_mode"],
+                 "conversation_id": row["conversation_id"],
+                 "schedule_name": _the_schedule(agent, row["schedule_id"])})
+    return said
+
+
+def _the_schedule(agent: str, schedule_id: Optional[int]) -> str:
+    """What the schedule that caused a turn is called, or nothing when no schedule did."""
+    if not schedule_id:
+        return ""
+    for one in schedules_kept.all(agent):
+        if one["id"] == schedule_id:
+            return str(one["name"])
+    return ""
+
+
+def _shown(built: instructions.Prompt, only_layers: bool) -> int:
     if not only_layers:
         print(built.text)
         print()
@@ -154,8 +234,11 @@ def _took_a_turn(agent: str, schedule: str) -> int:
                       + (f" — {got.failure_message}" if got.failure_message else ""))
     if got.worked:
         return OK
+    # **The closed word as well as the prose.** This is the unattended path — nobody was watching
+    # — so the one thing its owner needs from it the next morning is whether waiting will help.
     return _failed(f"{agent} did not answer the schedule {schedule} — "
                    f"{got.failure_message or got.turn_status}",
+                   *([protocol.what_to_do_about(got.failure_code)] if got.failure_code else []),
                    f"what it did:  rundesk turns {agent} {got.turn}")
 
 

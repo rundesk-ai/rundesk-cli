@@ -445,7 +445,11 @@ def _about(request: Request, provider_name: str) -> Dict[str, object]:
         "agent_home": str(directory.home(request.agent)),
         "provider_name": provider_name,
         "access_mode": request.access_mode,
-        "schedule_name": request.place or "",
+        # **The schedule's name, and nothing else's.** `place` is a Discord room on a channel turn
+        # and the agent's own name at a terminal, and putting either behind a variable called
+        # `schedule_name` is a value that is wrong the day a layer starts reading it — and it is
+        # what `providers instructions --turn` has to re-derive from `schedule_id` afterwards.
+        "schedule_name": request.place if request.schedule_id else "",
         "conversation_id": request.conversation,
     }
 

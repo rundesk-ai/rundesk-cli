@@ -91,6 +91,10 @@ def main():
             word = json.loads(line)
             say(type="text", text="heard " + (word.get("text") or "").strip(), whole=True)
 
+    # Account state, which is news about the account and never about the work — a turn carrying one
+    # may have succeeded, so it is said on the way to a `done` that says `ok`.
+    say(type="limit", percent_left=73, resets_at="2026-08-08T03:33:24Z")
+
     say(type="usage", input_tokens=20, output_tokens=1510, cache_read_tokens=302567,
         cache_write_tokens=17453, context_tokens=9200,
         model_name=how.get("model") or "a-stand-in-1")

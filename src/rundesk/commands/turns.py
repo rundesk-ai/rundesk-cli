@@ -16,7 +16,7 @@ oddly.
 
 import argparse
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from rundesk.agents import directory, records
 from rundesk.commands import Subcommands, failed
@@ -48,7 +48,9 @@ def register(sub: Subcommands) -> None:
 def cmd_turns(args: argparse.Namespace) -> int:
     """A `Namespace` in, an exit code out."""
     if args.limit < 1:
-        print("turns: FAILED — --limit is how many to list, so it is at least 1")
+        # Through `failed`, like every other refusal in this product: a message on stdout is a
+        # message a shell pipeline swallows into the data it was collecting.
+        _failed("--limit is how many to list, so it is at least 1")
         return USAGE
     trouble = directory.not_an_agent(args.agent)
     if trouble:
@@ -97,8 +99,9 @@ def _one(agent: str, turn: int) -> int:
     if row["failure_code"] or row["failure_message"]:
         print()
         print(f"why it did not answer:  {row['failure_message'] or row['failure_code']}")
-        for line in _what_to_do_about(row["failure_code"]):
-            print(dim(f"        {line}"))
+        said = protocol.what_to_do_about(row["failure_code"])
+        if said:
+            print(dim(f"        {said}"))
 
     did = kept.list_turn_records(agent, turn)
     if did:
@@ -154,17 +157,6 @@ def _said_it_could_do(row: Dict[str, Any]) -> str:
     can = [one for one in protocol.CAPABILITIES if said.get(one)]
     extra = [f"{one}={said[one]}" for one in sorted(said) if one not in protocol.CAPABILITIES]
     return ", ".join([*can, *extra]) or "nothing"
-
-
-def _what_to_do_about(failure_code) -> List[str]:
-    """Whether waiting will help, or whether somebody has to act."""
-    if not failure_code:
-        return []
-    if protocol.needs_human_action(failure_code):
-        return [f"this will not clear on its own ({failure_code})"]
-    if protocol.is_retryable(failure_code):
-        return [f"the same turn later may work ({failure_code})"]
-    return [f"the brain said: {failure_code}"]
 
 
 def _briefly(one: Dict[str, Any]) -> str:

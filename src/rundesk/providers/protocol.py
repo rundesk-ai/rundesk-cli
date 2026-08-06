@@ -164,6 +164,25 @@ def needs_human_action(failure_code: Optional[str]) -> bool:
 # ── Reading what an adapter said ──────────────────────────────────────────────────────────────
 
 
+def what_to_do_about(failure_code: Optional[str]) -> str:
+    """The one line that says whether this is worth trying again, or whether somebody has to act.
+
+    **The whole point of a closed vocabulary reaching a person.** Somebody reading a failure should
+    not have to know a vendor's error strings to know whether to wait — so the sentence is derived
+    from the word rather than from the prose beside it, and it is derived *here*, once, because
+    three surfaces asked the same question and two of them had already worded it differently.
+
+    Empty when there is no word at all, which is a turn that failed without the brain saying why.
+    """
+    if not failure_code:
+        return ""
+    if needs_human_action(failure_code):
+        return f"this will not clear on its own ({failure_code})"
+    if is_retryable(failure_code):
+        return f"the same request later may work ({failure_code})"
+    return f"the brain said: {failure_code}"
+
+
 def parse_record(said: str) -> Optional[Dict[str, Any]]:
     """One line, as one of the records this release knows — or `None` if it is not one.
 

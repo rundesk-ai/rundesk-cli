@@ -53,7 +53,8 @@ class ATurnThatAnswers(WithAnAgent):
     def test_what_it_did_is_written_in_the_order_it_happened(self):
         got = self.run_turn()
         said = [one["record_type"] for one in kept.list_turn_records("ava", got.turn)]
-        self.assertEqual(said, ["instructions", "sent", "think", "tool", "result", "usage", "done"])
+        self.assertEqual(said, ["instructions", "sent", "think", "tool", "result", "limit",
+                                "usage", "done"])
 
     def test_what_it_said_is_one_message_and_never_one_record_per_fragment(self):
         """A row per fragment is a history nobody can read back and a search matching half a
