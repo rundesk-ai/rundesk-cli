@@ -175,6 +175,36 @@ def source_shown(catalog: str, copied: bool) -> str:
     return f"{catalog} (--as)" if copied else catalog
 
 
+def may_be_revoked(name: str) -> bool:
+    """Whether `rundesk skills revoke` may take the grant standing under this name away.
+
+    One may not. The skill an agent operates this install with is a floor of the product rather than
+    a choice made at grant time — the same standing `catalogs.may_be_removed` gives the three
+    catalogs that cannot be taken away, and asked here for the same reason: one place holds the rule,
+    rather than every verb that could break it holding a copy.
+
+    **Keyed on the name the grant stands under, not on where it came from.** What has to be true is
+    that every agent's own directory holds something called `managing-rundesk` that a brain will
+    load — a brain finds a skill by its directory name and knows nothing about catalogs. So a copy of
+    some other catalog's `managing-rundesk` granted `--as helper` is revocable like anything else,
+    and whatever stands under the required name is not, whoever put it there.
+    """
+    return name != library.REQUIRED_SKILL
+
+
+def what_stays(name: str) -> str:
+    """Why this grant cannot be taken away, or `""` when it can.
+
+    The words are here rather than at the caller, exactly as `catalogs.what_stays` keeps them: the
+    verb that refuses and anything that previews a removal have to say the same sentence, and two
+    wordings of one rule are two rules.
+    """
+    if may_be_revoked(name):
+        return ""
+    return (f"{name} is how an agent operates the install running it — every agent holds it, and it "
+            "cannot be taken away")
+
+
 def where(agent: str) -> Path:
     """Where this agent's grants stand."""
     return directory.home(agent) / INSIDE
@@ -253,6 +283,13 @@ def revoked(agent: str, name: str) -> Grant:
         if standing is None:
             raise Refused(
                 f"{agent} does not hold {name} — rundesk skills list {agent} says what it has")
+        # **Inside the lock, and after the lookup, in that order.** Inside, so every caller of this
+        # function is protected rather than only the verb somebody typed. After, because "you do not
+        # hold it" and "you may not take it away" are different answers and the first is true first:
+        # an agent that never had it must not be told the thing it does not have is undeletable.
+        stays = what_stays(name)
+        if stays:
+            raise Refused(stays)
         files.remove_one(standing.at)
     _presented_after(agent, name)
     return standing
@@ -413,6 +450,38 @@ def stale(grant: Grant) -> bool:
     return kept != library.digest(source)
 
 
+def _everybody_holds_what_they_must(said: Callable[[str], None]) -> None:
+    """Give the skill every agent holds to any agent standing without it. **Caller holds the lock.**
+
+    **Silent when the library does not hold it, and that is not a hole.** A release whose own catalog
+    no longer ships `managing-rundesk` has moved the floor, and there is nothing here to grant:
+    raising would turn every `rundesk update` on such a release into a reported failure with no
+    repair anybody could perform. What stops a release shipping a floor it does not satisfy is a case
+    in `tests/test_skills_bundled.py`, which goes red before the release is cut rather than on every
+    machine after it.
+
+    **A name already standing is left exactly as it is.** Somebody may have put their own directory
+    there, or a copy granted `--as`; this fills an absence and never replaces an answer, which is the
+    same narrowness the pruning keeps.
+
+    Written directly rather than through `granted`, which presents as its last act — the presenting
+    loop below is where every agent is presented once, and doing it per grant here would take a
+    second lock inside this sweep's own for no benefit.
+    """
+    try:
+        skill = library.look_up(library.REQUIRED)
+    except (library.Refused, OSError):
+        return
+    for agent in directory.known():
+        at = where(agent)
+        standing = at / library.REQUIRED_SKILL
+        if standing.is_symlink() or standing.exists():
+            continue
+        at.mkdir(parents=True, exist_ok=True)
+        standing.symlink_to(os.path.relpath(skill.at, at))
+        said(f"gave {agent} {library.REQUIRED}, which every agent holds")
+
+
 def refreshed(saying: Optional[Callable[[str], None]] = None) -> List[str]:
     """Make every copied grant again where its source has moved, and present every agent's. Returns
     the copies remade.
@@ -427,12 +496,18 @@ def refreshed(saying: Optional[Callable[[str], None]] = None) -> List[str]:
     be refused on its own and leave a grant no provider can find. Repairing that belongs to the sweep
     that already runs on every update — put at each caller instead, `rundesk update` would repair it
     and `rundesk skills update` would not, while `doctor` named only the first.
+
+    **Giving out the skill every agent holds is here for exactly that reason too.** An agent made by
+    a release before the rule existed, and an agent whose grant somebody removed by hand, are both
+    repaired by the thing that already runs on every update rather than by a step somebody has to
+    remember to run.
     """
     said = saying or (lambda _line: None)
     remade = []
     # One lock across the whole sweep rather than one per copy. This runs on every update, over every
     # agent, and a caller holding it for the duration is a caller nothing can interleave with.
     with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        _everybody_holds_what_they_must(said)
         for agent in directory.known():
             for one in held(agent):
                 if not stale(one):

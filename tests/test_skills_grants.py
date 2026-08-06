@@ -717,5 +717,74 @@ class WhichRootsHoldSomethingOfTheirOwn(Grants):
         self.assertEqual([], grants.taken(grants.holding("alan", "writing-plans")))
 
 
+class TheSkillEveryAgentHolds(Grants):
+    """`rundesk/managing-rundesk` is a floor of the product, not a choice made at grant time."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        catalogs.place_bundled()
+
+    def test_it_cannot_be_revoked_and_nothing_is_taken(self):
+        # An agent that cannot operate the install running it answers questions about this machine
+        # by guessing, and the failure is invisible — it reads as a model being unhelpful.
+        grants.refreshed()
+        with self.assertRaises(grants.Refused) as refused:
+            grants.revoked("alan", library.REQUIRED_SKILL)
+        self.assertIn("cannot be taken away", str(refused.exception))
+        # Still standing, and still where every brain looks — a refusal that had already removed
+        # the link would be the worst of both.
+        self.assertIsNotNone(grants.holding("alan", library.REQUIRED_SKILL))
+        self.assertTrue(self.vendor("alan", ".claude/skills", library.REQUIRED_SKILL).is_symlink())
+
+    def test_a_skill_of_that_name_from_another_catalog_is_still_revocable(self):
+        # Keyed on the name the grant stands under, not on where it came from — but an alias is a
+        # name of its own, and nothing about the floor makes somebody else's copy undeletable.
+        self.a_catalog("other", skills=(library.REQUIRED_SKILL,))
+        self.grant("alan", f"other/{library.REQUIRED_SKILL}", alias="helper")
+        self.assertEqual("helper", grants.revoked("alan", "helper").name)
+
+    def test_an_agent_that_does_not_hold_it_is_told_that_first(self):
+        # "You do not hold it" and "you may not take it away" are different answers, and the first
+        # is true first: an agent that never had it must not be told it is undeletable.
+        with self.assertRaises(grants.Refused) as refused:
+            grants.revoked("alan", library.REQUIRED_SKILL)
+        self.assertIn("does not hold", str(refused.exception))
+
+    def test_the_sweep_gives_it_to_an_agent_standing_without_it(self):
+        # An agent made by a release before this rule existed, and one whose grant somebody removed
+        # by hand, are both repaired by the thing that already runs on every update.
+        said = []
+        grants.refreshed(said.append)
+        self.assertIsNotNone(grants.holding("alan", library.REQUIRED_SKILL))
+        self.assertTrue(any(library.REQUIRED in one for one in said))
+        # And linked where a brain looks, in the same sweep rather than one update later.
+        for root in grants.VENDOR_ROOTS:
+            with self.subTest(root=root):
+                self.assertTrue(self.vendor("alan", root, library.REQUIRED_SKILL).is_symlink())
+
+    def test_the_sweep_says_nothing_the_second_time(self):
+        grants.refreshed()
+        said = []
+        grants.refreshed(said.append)
+        self.assertEqual([], [one for one in said if library.REQUIRED in one])
+
+    def test_a_name_somebody_else_put_there_is_left_alone(self):
+        # Fills an absence, never replaces an answer — the same narrowness the pruning keeps.
+        theirs = grants.where("alan") / library.REQUIRED_SKILL
+        theirs.mkdir(parents=True)
+        (theirs / library.DECLARED).write_text("mine\n", encoding="utf-8")
+        grants.refreshed()
+        self.assertEqual("mine\n", (theirs / library.DECLARED).read_text(encoding="utf-8"))
+
+    def test_a_release_whose_catalog_no_longer_holds_it_is_not_an_error(self):
+        # A release that moved the floor has nothing here to grant. Raising would turn every
+        # `rundesk update` on it into a reported failure with no repair anybody could perform.
+        shutil.rmtree(library.tree(library.BUNDLED) / library.INSIDE / library.REQUIRED_SKILL)
+        said = []
+        grants.refreshed(said.append)
+        self.assertEqual([], [one for one in said if library.REQUIRED in one])
+        self.assertIsNone(grants.holding("alan", library.REQUIRED_SKILL))
+
+
 if __name__ == "__main__":
     unittest.main()

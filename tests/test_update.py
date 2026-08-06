@@ -34,6 +34,7 @@ from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import standing
 from rundesk.lifecycle import backups, migration, release, tree
+from rundesk.skills import grants, library
 
 A_STEP = '''
 from pathlib import Path
@@ -488,6 +489,20 @@ class CarryingTheAgentsForward(Updating):
         self.assertTrue(self.carried("alpha"), "the release's agent step never ran for alpha")
         self.assertTrue(self.carried("beta"), "the release's agent step never ran for beta")
         self.assertIn("carrying alpha to 9999_x", out)
+
+    def test_an_agent_made_before_the_rule_is_given_the_skill_every_agent_holds(self):
+        # `directory.made` grants nothing — the floor is given by the command layer, which an agent
+        # from an earlier release never went through, and by the sweep, which is this. Driven
+        # through the whole command rather than against `grants.refreshed`, because the seam being
+        # proved is that `rundesk update` reaches it at all.
+        self.an_agent("alpha")
+        self.assertIsNone(grants.holding("alpha", library.REQUIRED_SKILL))
+
+        code, _out, err = self.update(archive=self.an_archive())
+
+        self.assertEqual(OK, code, err)
+        self.assertIsNotNone(grants.holding("alpha", library.REQUIRED_SKILL),
+                             "the update did not give alpha the skill every agent holds")
 
     def test_how_far_each_agent_got_is_recorded_in_its_own_records(self):
         self.an_agent("alpha")

@@ -203,8 +203,15 @@ agent cole added
         home      /Users/you/.rundesk/data/agents/cole/home
         logs      /Users/you/.rundesk/data/agents/cole/logs
         records   /Users/you/.rundesk/data/agents/cole/state.db
+        skill     rundesk/managing-rundesk — how it operates this install
         note      the provider is recorded and not proven — check it with: rundesk providers check
 ```
+
+**Every agent is given `rundesk/managing-rundesk`**, which is how it operates the install running
+it — where things are, what its own gateway is doing, which values are set. It is a floor of the
+product rather than a choice: `rundesk skills revoke` will not take it away, and `rundesk update`
+gives it back to any agent standing without one. An install whose catalogs have not been placed yet
+says so on this line instead, and the next `rundesk update` grants it.
 
 **The provider is recorded and it is not proven**, and the command says so every time —
 adding an agent runs no adapter, asks nothing what it can do and finds out about no
@@ -1160,7 +1167,9 @@ who typed the wrong one types the other verb.
 ### Two catalogs cannot be removed
 
 `rundesk` ships inside the release and is replaced out of it on every update — it is how an agent
-operates *this* version, so it is never fetched and never removable. `rundesk-skills` is the general
+operates *this* version, so it is never fetched and never removable. One skill in it,
+`managing-rundesk`, is a floor every agent holds: `revoke` refuses it, and `rundesk update` gives it
+back to an agent standing without one. `rundesk-skills` is the general
 catalog rundesk depends on, fetched like any other and equally undeletable. `local` is yours and
 rundesk never touches it. [`layout.md`](layout.md) says why the first two are separate.
 

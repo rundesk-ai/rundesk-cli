@@ -614,8 +614,12 @@ def _why_it_stays(name: str) -> str:
         return (f"{name} is where your own skills stand — removing it would delete work rundesk "
                 "did not write")
     if name == library.BUNDLED:
+        # Says "all but one", because one of the skills in here is a floor every agent holds and
+        # `grants.what_stays` refuses to take it away. Sending somebody to a revoke that will then be
+        # refused is the same false advice as offering a removal that cannot happen.
         return (f"{name} ships inside this release and depends on its version, so it is not "
-                "removable — revoke the skills you do not want instead")
+                f"removable — revoke the skills you do not want instead, all but "
+                f"{library.REQUIRED_SKILL}, which every agent holds")
     return (f"{name} is a catalog rundesk depends on and is not removable — revoke the skills you "
             "do not want instead")
 

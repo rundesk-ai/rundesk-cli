@@ -25,6 +25,7 @@ from rundesk.channels import kept as channels
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.schedules import firing, kept
+from rundesk.skills import catalogs, grants, library
 
 
 class Listing(support.Isolated):
@@ -105,6 +106,29 @@ class Adding(support.Isolated):
         self.assertIn("claude", out)
         for one in ("home", "logs", "state.db"):
             self.assertIn(one, out, f"the line naming {one} is not there")
+
+    def test_it_is_given_the_skill_it_operates_this_install_with(self):
+        # Shipped, undeletable as a catalog, and held by nobody was the state this closes: an agent
+        # that cannot operate the install running it answers questions about this machine by
+        # guessing, and that reads as a model being unhelpful rather than as a skill nobody granted.
+        catalogs.place_bundled()
+        code, out, _ = self.rundesk("agents", "add", "cole", "--provider", "claude")
+        self.assertEqual(OK, code)
+        self.assertIn(library.REQUIRED, out)
+        self.assertIsNotNone(grants.holding("cole", library.REQUIRED_SKILL))
+        # And where a brain looks, not merely in the agent's own directory.
+        self.assertTrue((directory.home("cole") / ".claude" / "skills"
+                         / library.REQUIRED_SKILL).is_symlink())
+
+    def test_an_install_with_no_catalog_still_makes_the_agent_and_says_what_gives_it_one(self):
+        # The grant is best-effort and may never fail the agent. An install whose catalogs have not
+        # been placed yet has no such skill to grant, and refusing to make an agent over that would
+        # be refusing the thing that always works because of the thing that sometimes does not.
+        code, out, _ = self.rundesk("agents", "add", "cole", "--provider", "claude")
+        self.assertEqual(OK, code)
+        self.assertIn("agent cole added", out)
+        self.assertTrue(directory.records("cole").is_file())
+        self.assertIn("rundesk update", out)
 
     def test_what_was_made_is_really_there_afterwards(self):
         self.rundesk("agents", "add", "cole", "--provider", "claude")

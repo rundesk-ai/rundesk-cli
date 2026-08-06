@@ -225,6 +225,32 @@ class TheTreePointsOneWay(support.Isolated):
                                 "neither in TROUBLE nor given an `except` of its own, so any verb "
                                 "reaching it crashes instead of refusing")
 
+    def test_the_agents_verb_catches_every_kind_granting_a_skill_can_raise(self):
+        # `agents add` gives a new agent the skill it operates this install with, which puts a
+        # second layer's exceptions in front of a verb whose own `TROUBLE` names none of them. The
+        # guard above reads only `commands/skills.py`, so it would never have seen this — and the
+        # failure is the same silent one: the agent is already made and renamed into place by then,
+        # so an unguarded kind reaches a person as a traceback out of a command that succeeded.
+        said = (WHERE / "commands" / "agents.py").read_text(encoding="utf-8")
+        granting = said.split("GRANTING_TROUBLE = (")[1].split(")")[0]
+        # **That the tuple is caught, not merely written.** Measured: replacing the `except` with a
+        # narrower one left this case green, because a list of names nothing catches reads exactly
+        # like a list of names something does.
+        self.assertIn("except GRANTING_TROUBLE", said,
+                      "GRANTING_TROUBLE is declared and nothing catches it")
+        for name in ("library.Refused", "grants.Refused", "grants.NotPresented",
+                     "grants.HalfCopied"):
+            with self.subTest(kind=name):
+                caught = (name in granting) or (f"except {name}" in said)
+                self.assertTrue(caught,
+                                f"nothing in commands/agents.py catches {name} — giving a new "
+                                "agent its skill can raise it, and the agent exists by then")
+        # And it stays out of what fails the verb: a grant that could not be made must never report
+        # that nothing happened, which sends somebody to make an agent that is already there.
+        trouble = said.split("TROUBLE = (")[1].split(")")[0]
+        self.assertNotIn("grants.", trouble)
+        self.assertNotIn("library.", trouble)
+
     def test_every_kind_the_schedules_layer_raises_is_caught_by_the_command_layer(self):
         # The same rule `skills` is held to, and it is here because the same thing already went
         # wrong there: a kind kept out of `TROUBLE` so a verb could answer it separately is a kind

@@ -109,6 +109,15 @@ class WhatIsShipped(Bundled):
         # it belongs in the catalog that is fetched. Everything here is about *this* rundesk.
         self.assertEqual(["managing-rundesk", "writing-skills"], self.named())
 
+    def test_it_holds_the_skill_every_agent_is_required_to_have(self):
+        # **This release must not ship a floor it does not satisfy.** Every agent is given
+        # `library.REQUIRED` when it is made and again on every update; a release whose own catalog
+        # stopped holding it would strip the grant from every agent, quietly, and the reconciliation
+        # is deliberately silent about a skill it cannot find — because the alternative is every
+        # `rundesk update` on that release reporting a failure nobody can repair. This is where that
+        # is caught instead: once, before the release is cut.
+        self.assertIn(library.REQUIRED_SKILL, self.named())
+
     def test_every_shipped_skill_is_one_a_brain_would_load(self):
         # The same check any other catalog is held to on the way in. Ours is not exempt, and the
         # cost of it being wrong is higher: it is on every machine.

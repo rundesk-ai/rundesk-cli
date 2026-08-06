@@ -76,6 +76,23 @@ DEPENDED = "rundesk-skills"
 #: The catalog an owner's own skills stand in. Nothing fetches into it and nothing removes it.
 MINE = "local"
 
+#: The skill every agent on this install holds, by the name it stands under in that agent's own
+#: `skills/` directory — which is the name a brain indexes it by and the name a revoke is keyed on.
+#:
+#: **A floor of the product rather than a setting**, the same standing the three catalogs nobody may
+#: remove already have. An agent that cannot operate the install running it answers questions about
+#: this machine by guessing, and the failure is invisible: it reads as a model being unhelpful rather
+#: than as a skill nobody granted.
+#:
+#: Not a list. One skill is what this rule is for, and a list of names kept somewhere is a second
+#: thing to hold in step with the library — a name in it that no catalog holds would be a rule that
+#: silently never fires, which is what this whole product is written against.
+REQUIRED_SKILL = "managing-rundesk"
+
+#: The same skill as an address, which is the only thing `look_up` takes and the only spelling
+#: somebody can copy off a refusal. Derived rather than written out, so the catalog is named once.
+REQUIRED = f"{BUNDLED}/{REQUIRED_SKILL}"
+
 #: The catalog's own tree, exactly as it was fetched. Everything rundesk writes about a catalog
 #: stands *beside* this rather than inside it, so a re-fetch can replace the whole of it at once.
 TREE = "app"

@@ -40,7 +40,7 @@ from rundesk.core import paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job, standing
 from rundesk.schedules import firing, kept
-from rundesk.skills import grants
+from rundesk.skills import grants, library
 from rundesk.utils import locking
 from rundesk.utils.terminal import as_table
 
@@ -71,6 +71,16 @@ NO_JOB_EVER = ("this name cannot be a launchd label, so no job can ever be place
 #: and a traceback is not an answer somebody can act on.
 TROUBLE = (directory.Refused, records.NotThere, records.Unreadable, records.Refused,
            migration.Ahead, migration.Broken, locking.Stuck, OSError, sqlite3.Error)
+
+#: Everything giving a new agent the skill it operates this install with can be stopped by.
+#:
+#: **Kept apart from `TROUBLE`, which fails the verb.** By the time this runs the agent has been
+#: built and renamed into place, so a failure here may not report that nothing happened — that sends
+#: somebody to make an agent that already exists. Spelled out rather than folded in, because
+#: `TROUBLE` names no kind the skills layer raises and an unguarded grant would reach a person as a
+#: traceback out of a command that had already succeeded.
+GRANTING_TROUBLE = (library.Refused, grants.Refused, grants.NotPresented, grants.HalfCopied,
+                    locking.Stuck, OSError)
 
 
 def register(sub: Subcommands) -> None:
@@ -171,6 +181,33 @@ def _provider_of(name: str) -> str:
         return "? — its records cannot be read"
 
 
+def _the_skill_every_agent_holds(agent: str) -> str:
+    """Give a new agent the skill it operates this install with. Hands back the line to print.
+
+    **Here rather than in `agents/`**, because `agents` may not reach `skills` — an agent stays
+    something that can be made, carried and taken away by code that has never heard of a skill, and
+    the layer table says presenting a new agent's skills is done here. This is that seam.
+
+    **After the agent has been made, so the grant cannot un-make it.** The directory has been renamed
+    into place and the install lock is free by then, so the two writes are ordered rather than nested.
+
+    **Best-effort, and it may never fail the agent.** An install whose catalog has not been placed
+    yet — a checkout, a scratch root, an install interrupted before its catalogs were checked — has
+    no such skill to grant, and refusing to make an agent over that would be refusing the thing that
+    always works because of the thing that sometimes does not. So it answers a sentence naming
+    `rundesk update`, which is the sweep that grants it. The same reasoning as reading what a skill
+    needs only after the grant has landed.
+
+    **Always a line, never silence.** An install that quietly stopped granting the floor is a feature
+    that silently never fires, which is the failure this product is written against.
+    """
+    try:
+        held = grants.granted(agent, library.look_up(library.REQUIRED))
+    except GRANTING_TROUBLE as why:
+        return f"note      it has no {library.REQUIRED} yet ({why}) — rundesk update gives it"
+    return f"skill     {held.catalog}/{held.skill} — how it operates this install"
+
+
 def _made(name: str, provider: Optional[str]) -> int:
     """Make an agent, and say what was made — one named thing at a time.
 
@@ -193,6 +230,7 @@ def _made(name: str, provider: Optional[str]) -> int:
     print(f"        home      {at / directory.HOME}")
     print(f"        logs      {at / directory.LOGS}")
     print(f"        records   {at / directory.RECORDS}")
+    print(f"        {_the_skill_every_agent_holds(name)}")
     if job.name_trouble(name):
         print(f"        note      {NO_JOB_EVER}")
     print(f"        note      {NOT_PROVEN}")
