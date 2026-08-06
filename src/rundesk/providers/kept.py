@@ -277,6 +277,20 @@ def delete_session(agent: str, conversation: int, provider_name: str) -> None:
               (conversation, provider_name))
 
 
+def forget_sessions(agent: str, conversation: int) -> int:
+    """Throw away where this conversation got to **on every brain**. Hands back how many went.
+
+    Every brain rather than the one configured now, because *start fresh* is a thing somebody asks
+    of the conversation and not of a provider: an agent whose brain was changed last week still has
+    the old one's handle sitting here, and leaving it would have a conversation somebody was told
+    was fresh resume the moment its provider was changed back.
+    """
+    with records.writing(directory.records(agent)) as conn:
+        gone = _rows(conn, agent, f"DELETE FROM {SESSIONS} WHERE conversation_id = ?",
+                     (conversation,))
+        return int(gone.rowcount if gone.rowcount and gone.rowcount > 0 else 0)
+
+
 # -- finding what was said -------------------------------------------------------------
 
 

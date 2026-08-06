@@ -196,7 +196,7 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import Callable, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from rundesk import __version__
 from rundesk.agents import directory, migration
@@ -278,6 +278,17 @@ WENT_DOWN = "🔴 Gateway offline — rundesk has shut down."
 #: `ExitTimeOut` with room to spare. A goodbye nobody could deliver is not worth holding a stop open
 #: for; a goodbye nobody waited for is the one that never arrives.
 GOODBYE_WITHIN = 3.0
+
+#: What a gateway asked to restart exits with. **Any non-zero number would do and the number is not
+#: the point** — `KeepAlive {SuccessfulExit: false}` reads *anything but zero* as *bring me back* —
+#: but it is named rather than written as a literal so that a reader of the exit finds the word
+#: `restart` rather than a `1` shared with every crash there has ever been.
+COME_BACK = 70
+
+#: What a person is told on the way out, and it depends on why. A gateway going for good and one
+#: going for ten seconds are the same event to this process and are not the same news to somebody
+#: watching a room: told the second as the first, they go and start it by hand for nothing.
+WENT_DOWN_TO_COME_BACK = "🔁 Gateway restarting — back in a moment."
 
 
 class Stopped(BaseException):
@@ -523,6 +534,11 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
     # whatever channels are up, and a name that is not bound yet would raise `NameError` out of the
     # handler for a stop that landed early — a non-zero exit, which is *bring me back*.
     channels_up = hosting.Watching({}, {}, {})
+    # Bound out here for the same reason, and read by the handler below to choose the exit code:
+    # **a restart and a shutdown leave by the same door and must not leave the same way.** Empty is
+    # a stop nobody asked for from a channel, which is every other stop there is.
+    asked_for: List[str] = []
+    up_at = datetime.datetime.now(datetime.timezone.utc)
     try:
         # Inside the `try`, not before it. A stop asked for in the instant between coming up and
         # the first beat is still an orderly stop, and leaving it outside would have this process
@@ -545,6 +561,13 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
         held.callback(lambda: hosting.stopping(name, where, channels_up, each))
         held.callback(lambda: firing.stopping(name, where, watching, each))
         notices = _Notices(name, where, lambda: channels_up)
+        # **What a gesture asked for, held rather than acted on where it was heard.** A control
+        # arrives on the thread draining an adapter's stdout; a gateway torn down from there would
+        # unwind this stack out from under the loop that owns it. So the word is written into a box
+        # the loop reads on its next pass, which is where every other way of stopping already is.
+        gestures = answering.Gestures(where, lambda: channels_up,
+                                      lambda word: _asked_from_a_channel(asked_for, word),
+                                      lambda agent: _how_it_stands(agent, up_at))
         # All three start as "nothing has happened yet", and the first sweep is the loop's first pass
         # rather than a call of its own before it. One call site: a sweep done on the way up as well
         # as in the loop is one that goes on looking right with the loop's half deleted, and the
@@ -554,7 +577,7 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
             watching = firing.looked(name, where, watching, telling=notices,
                                      asking=on_a_schedule)
             channels_up = hosting.looked(name, where, channels_up,
-                                         answering=on_a_channel)
+                                         answering=on_a_channel, steering=gestures)
             if not said_up and _the_told_channel_is_connected(name, channels_up):
                 # **Once the adapter it leaves through has reached its platform, never merely once
                 # it has been started.** `looked` starts one; starting is a fork, and what follows
@@ -599,7 +622,15 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
         # real Discord bot: the owner was told the gateway came up and never that it went away, with
         # nothing in any log to say so. Bounded, and out of a budget that has room for it: this is
         # one round trip against the `STOPPING_WITHIN` seconds the stop below is allowed.
-        _told(name, where, channels_up, WENT_DOWN, landed_within=GOODBYE_WITHIN)
+        _told(name, where, channels_up, going_away(asked_for), landed_within=GOODBYE_WITHIN)
+        # **A restart leaves by exiting, and that is not this process talking to its supervisor.**
+        # It cannot place, boot out or kick its own job — that would put the decision to keep a
+        # gateway running inside the thing being kept running — but ending is not asking anybody for
+        # anything. Under `KeepAlive {SuccessfulExit: false}` a non-zero exit *is* the request, and
+        # launchd answers it. A gateway with no job behind it simply stops, and `_restarting` says
+        # so to the person who asked rather than promising a return that nothing would make.
+        if asked_for and asked_for[0] == hosting.RESTART:
+            return COME_BACK
         return OK
 
 
@@ -779,6 +810,54 @@ def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
         if going is not None:
             hosting.told(name, where, channels_up, going.kind, going.place, going.pieces,
                          landed_within=landed_within)
+
+
+def going_away(asked_for: List[str]) -> str:
+    """Which goodbye this is. A restart says so, so nobody goes and starts it by hand for nothing."""
+    return (WENT_DOWN_TO_COME_BACK if asked_for and asked_for[0] == hosting.RESTART
+            else WENT_DOWN)
+
+
+def _asked_from_a_channel(asked_for: List[str], word: str) -> None:
+    """Somebody asked this gateway to end, from a channel. Write it down and ask this process.
+
+    **Signalled rather than polled, and it is this process signalling itself.** The word arrives on
+    the thread draining an adapter's stdout, and a gateway torn down from there would unwind the
+    loop's own stack out from under it — so what has to happen is that the *main* thread learns of
+    it. A signal is exactly that mechanism and is already wired: `_stop_politely` turns one into
+    `Stopped`, which unwinds through every `finally` this process has and writes the line that tells
+    an orderly stop from a killing. Polling the loop instead would work and would take up to a beat —
+    fifteen seconds of somebody watching nothing happen after being told it would.
+    """
+    if asked_for:
+        return                             # already going; a second ask changes nothing
+    asked_for.append(word)
+    with contextlib.suppress(Exception):
+        os.kill(os.getpid(), signal.SIGTERM)
+
+
+def _how_it_stands(agent: str, up_at: datetime.datetime) -> str:
+    """What `/status` says. **Answered by the gateway itself, which is what makes it short.**
+
+    Whether it is running is never the interesting part — the question reached it, so it is. What
+    somebody actually wants is which version is running and how long it has been, which is the pair
+    that tells a gateway brought back four times in an hour from one that has been up since Tuesday.
+    """
+    for_how_long = datetime.datetime.now(datetime.timezone.utc) - up_at
+    return (f"🟢 **{agent}** is online — rundesk {__version__}, "
+            f"up {_for_how_long(for_how_long)}, pid {os.getpid()}")
+
+
+def _for_how_long(since: datetime.timedelta) -> str:
+    """A duration somebody reads at a glance, in the largest unit that is not a lie."""
+    whole = max(0, int(since.total_seconds()))
+    if whole < 60:
+        return f"{whole}s"
+    if whole < 3600:
+        return f"{whole // 60}m"
+    if whole < 86400:
+        return f"{whole // 3600}h"
+    return f"{whole // 86400}d"
 
 
 def _stop_politely() -> None:

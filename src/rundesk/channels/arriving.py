@@ -185,6 +185,25 @@ def messages(agent: str, conversation: int, most: int = 50) -> List[Dict[str, An
     return [dict(row) for row in reversed(found)]
 
 
+def standing_in(agent: str, place: str) -> Optional[int]:
+    """The conversation a place already has, or `None` where nothing has been said in it yet.
+
+    **A read that never writes**, which is what tells it apart from `_conversation` below. A gesture
+    is not something said — somebody asking to start fresh in a room nobody has ever spoken in has
+    nothing to forget, and making a conversation to answer that would put a row in the records for an
+    exchange that never happened.
+
+    Keyed exactly as `recorded` keys it, on the place alone: which channel it arrived through is a
+    column beside it rather than part of its name, and a lookup that spelled the key differently
+    would answer `None` for every conversation that exists.
+    """
+    with records.reading(directory.records(agent)) as conn:
+        found = _rows(conn, agent,
+                      "SELECT id FROM conversations WHERE source = ? AND source_id = ?",
+                      (FROM_CHANNEL, place)).fetchone()
+    return int(found[0]) if found is not None else None
+
+
 def _conversation(conn: sqlite3.Connection, agent: str, source: str, source_id: str,
                   channel: Optional[str], now: str) -> int:
     """The id of the conversation this belongs to, making it if this is the first thing in it.

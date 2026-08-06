@@ -30,12 +30,14 @@ The answer goes back through what already exists: cut to the platform's own limi
 """
 
 import contextlib
+import datetime
 import json
 import threading
 import time
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, Optional
 
+from rundesk import __version__
 from rundesk.agents import directory
 from rundesk.channels import arriving, delivery, hosting
 from rundesk.channels import kept as channels_kept
@@ -43,6 +45,7 @@ from rundesk.core import config
 from rundesk.providers import instructions, kept, protocol, turns
 from rundesk.schedules import due, firing
 from rundesk.schedules import kept as schedules_kept
+from rundesk.skills import grants
 from rundesk.utils import logs, programs
 
 #: What rundesk says a turn is doing, in the words the channel layer already renders. `seen` is not
@@ -436,6 +439,122 @@ class _Streaming:
         self._tools[given] = {"did": did, "who": who}
         while len(self._tools) > TOOLS_KEPT:
             self._tools.pop(next(iter(self._tools)))
+
+
+class Gestures:
+    """What a gesture from a person reaches — `hosting.Steering`, filled in (R-CAD-17, R-CAD-18).
+
+    **Here rather than in `gateways`, and the layer table is why.** What a gesture needs is a turn's
+    claim, a conversation's session, an agent's granted skills and its schedules — and `gateways` may
+    reach none of `skills`. This package may reach all of them, so all but two of these are answered
+    here and the two that are genuinely the *gateway's* are handed in: what its own state is, and how
+    to ask it to end. A gesture is never a turn (R-CH-24), so nothing here takes minutes and it is
+    safe to answer on the thread draining an adapter.
+
+    Every answer is the words a person is shown, and `""` means *say nothing back* — which is what a
+    control reported by the turn's own outcome does (R-DIS-12).
+    """
+
+    def __init__(self, where: Path, hosted: Callable[[], hosting.Watching],
+                 wanted: Callable[[str], None], standing: Callable[[str], str]) -> None:
+        self._where = where
+        self._hosted = hosted
+        #: How a gateway is asked to end. It cannot be ended from here: this runs on the thread
+        #: draining an adapter's stdout, and a gateway torn down from there would unwind the stack
+        #: out from under the loop that owns it.
+        self._wanted = wanted
+        #: What `/status` says. The gateway's own, because only it knows what it is.
+        self._standing = standing
+
+    def controlled(self, agent: str, kind: str, place: str, who: str, control: str) -> str:
+        if control == hosting.FORGET:
+            return self._forgotten(agent, place)
+        if control == hosting.STOP:
+            return self._stopped(agent, place)
+        # **Announced before it happens, because the thing that would report it afterwards is the
+        # thing going away.**
+        self._wanted(control)
+        return ("♻️ Restarting — I'll be back in a moment." if control == hosting.RESTART
+                else "🛑 Shutting down. Nothing here can start me again.")
+
+    def asked(self, agent: str, who: str, query: str) -> str:
+        if query == hosting.STATUS:
+            return self._standing(agent)
+        if query == hosting.VERSION:
+            return f"rundesk {__version__}"
+        if query == hosting.SKILLS:
+            return _what_it_holds(agent)
+        if query == hosting.SCHEDULES:
+            return _what_is_coming(agent)
+        return ""
+
+    def configured(self, agent: str, kind: str, place: str, who: str, provider: str) -> str:
+        return "Changing the provider is not built yet."
+
+    def _forgotten(self, agent: str, place: str) -> str:
+        """Start this conversation fresh, so the next message begins a new session (R-CH-10).
+
+        **The session goes and the turn running is not touched.** A turn already going writes down
+        where it got to when it ends, and that lands *after* this — so forgetting mid-turn was undone
+        a few seconds later by the very turn it deliberately did not interrupt. Said to the person
+        instead, because what they asked for still happens, to the next message.
+        """
+        found = arriving.standing_in(agent, place)
+        if found is None:
+            return "🧹 Nothing said here yet — the next message starts fresh anyway."
+        kept.forget_sessions(agent, found)
+        if turns.busy(agent, found):
+            return ("🧹 The next message starts fresh. A turn is still running, and what it says "
+                    "will be the last of the old conversation.")
+        return "🧹 Started fresh. The next message begins a new session."
+
+    def _stopped(self, agent: str, place: str) -> str:
+        """End the turn running in this conversation (R-CH-9)."""
+        found = arriving.standing_in(agent, place)
+        if found is None or not turns.busy(agent, found):
+            return "✋ Nothing is running here."
+        return "✋ Stopping is not built yet."
+
+
+def _what_it_holds(agent: str) -> str:
+    """The skills this agent was granted, one to a line and sorted (R-DIS-36).
+
+    **This agent's, and never the library's.** What an install *has* is a different question from
+    what this agent may use, and answering the first here would list somebody else's tools in
+    somebody's room.
+    """
+    try:
+        held = sorted(one.name for one in grants.held(agent))
+    except Exception as why:                           # noqa: BLE001 — an inspection boundary
+        return f"I could not read my skills ({type(why).__name__})."
+    if not held:
+        return f"**{agent}** holds no skills."
+    return "\n".join([f"**{agent} holds {len(held)} skill{'s' if len(held) != 1 else ''}:**"]
+                     + [f"- {one}" for one in held])
+
+
+def _what_is_coming(agent: str) -> str:
+    """The schedules that can still run, soonest first (R-DIS-37).
+
+    **What can still run**, rather than everything ever written down: one whose moment has gone is
+    not something anybody is deciding about, and a list carrying them would bury the two that matter
+    under a year of history. One nobody could understand is named rather than dropped, because a
+    schedule missing from a list reads as a schedule that is not there.
+    """
+    try:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        read, trouble = due.read(schedules_kept.all(agent))
+        coming = [one for one in read if not due.expired(one, now)]
+        coming.sort(key=lambda one: (due.next_after(one, now) is None,
+                                     due.next_after(one, now) or now))
+    except Exception as why:                           # noqa: BLE001 — an inspection boundary
+        return f"I could not read my schedules ({type(why).__name__})."
+    if not coming and not trouble:
+        return f"**{agent}** has nothing left to run."
+    said = [f"**{agent} has {len(coming)} schedule{'s' if len(coming) != 1 else ''}:**"]
+    said += [f"- {one.name} — {due.describe(one, now)}" for one in coming]
+    said += [f"- {name} — could not be read" for name, _why in trouble]
+    return "\n".join(said)
 
 
 class OnASchedule:
