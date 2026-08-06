@@ -107,6 +107,15 @@ A_SUMMARY_AT_MOST = 400
 #: How long to wait for the brain to end after its input is closed, at each of two steps.
 GOING_WITHIN = 5.0
 
+#: How long a cancel may take to settle the ask it stopped. Not a turn timeout — rundesk owns the
+#: silence window and the ceiling. This bounds only the gap between asking the brain to stop and it
+#: having stopped, where a replacement sent too early queues behind the thing it was replacing.
+CANCEL_WITHIN = 120.0
+
+#: How long to wait for rundesk to say the first thing. Its prompt is written as soon as the adapter
+#: starts, so this only ever expires when nothing is coming.
+THE_PROMPT_WITHIN = 60.0
+
 #: How often anything here looks again at something another thread will set. Small enough that a
 #: turn does not sit finished for a noticeable moment, large enough that waiting costs nothing.
 WATCHING_EVERY = 0.01
@@ -173,7 +182,7 @@ def what_this_can_do() -> dict:
     every turn, so a vendor upgrade that changes behaviour is visible in the record afterwards
     rather than being a thing somebody has to remember.
     """
-    can = {"tools": True, "resume": True, "model": True, "usage": True, "steer": False}
+    can = {"tools": True, "resume": True, "model": True, "usage": True, "steer": True}
     version = the_version()
     if version:
         can["grok_cli"] = version
@@ -283,6 +292,11 @@ class Turn:
         self.said_done = False
         self.finishing = threading.Lock()
 
+        #: Everything rundesk says, and what a word arriving mid-turn leaves behind.
+        self.words = Words(sys.stdin)
+        self.steering = Steering()
+        self.asking = None
+
         #: Whether *this side* is what went wrong, as against the brain reporting a failure it
         #: handled correctly. The exit code says what became of the program and nothing else.
         self.could_not_go_on = False
@@ -341,7 +355,7 @@ class Turn:
             time.sleep(WATCHING_EVERY)
         return None
 
-    def waited_out_the_turn(self, asked: int) -> None:
+    def waited_out_the_turn(self) -> None:
         """Wait for the turn to end, however it ends. **Unbounded, and deliberately.**
 
         A turn may legitimately run for hours; what bounds one is silence and a far-off ceiling, and
@@ -355,7 +369,10 @@ class Turn:
         whichever arrives first is the one that counts.
         """
         while not self.ended.wait(WATCHING_EVERY):
-            if asked in self.answers:
+            # **The ask that is live now**, which a steer replaces. `None` while one is in flight:
+            # between cancelling and re-asking there is no ask whose ending would be this turn's.
+            asked = self.asking
+            if asked is not None and asked in self.answers:
                 self.that_is_the_turn(what_the_reply_said(self.answers.pop(asked)))
                 return
             if self.brain.poll() is not None:
@@ -532,13 +549,43 @@ class Turn:
         # reader may already have run past; the moment the prompt goes out is the only boundary
         # both threads agree on without one of them waiting for the other.
         self.reporting = True
-        self.waited_out_the_turn(self.send("session/prompt", {
-            "sessionId": self.session_id,
-            "prompt": [{"type": "text", "text": prompt}]}))
+        self.ask(prompt)
+        threading.Thread(target=self.what_rundesk_says_next, name="grok-in", daemon=True).start()
+        self.waited_out_the_turn()
         self.could_not_read_it("grok stopped before the turn was finished")
         # The exit code says what became of the **program**. A brain that reported a failure is an
         # adapter that did its job; a stream this side could not go on reading is not.
         return 1 if self.could_not_go_on else 0
+
+    def ask(self, prompt: str) -> int:
+        """Put one thing to the brain, and remember which asking is the live one."""
+        self.asking = self.send("session/prompt", {
+            "sessionId": self.session_id, "prompt": [{"type": "text", "text": prompt}]})
+        return self.asking
+
+    def what_rundesk_says_next(self) -> None:
+        """Everything rundesk says after the prompt, as this brain takes it.
+
+        **A second prompt does not steer this brain, it queues behind the first.** Measured: sending
+        one mid-turn left it in the queue with the first still running, and it ran afterwards as a
+        turn of its own — two `turn_completed`, two answers. That is the right behaviour for a
+        message nobody wanted to interrupt with and the wrong one for a steer, which is meant to
+        change what the brain is doing *now*.
+
+        So a later word cancels first. `session/cancel` was measured stopping the running ask, which
+        settles as `stop_reason: cancelled`; the replacement is sent once that has drained, exactly
+        as the sibling adapter does it. **Waiting for the drain is not optional** — sent before it,
+        the replacement lands in the queue behind the ask it was meant to replace, which is the same
+        failure as not cancelling at all.
+        """
+        with contextlib.suppress(Exception):
+            for at, word in enumerate(self.words.each(self.ended)):
+                if not at:
+                    continue                       # the prompt, already asked
+                if not self.steering.cancel(self):
+                    went_wrong("grok did not stop the turn, so this word was not sent")
+                    continue
+                self.ask(with_context(word))
 
     def could_not_start(self, said: str, got) -> int:
         """The handshake did not happen, so there is no conversation and no turn to explain."""
@@ -613,13 +660,12 @@ class Turn:
     def first_thing_rundesk_says(self):
         """The prompt, off rundesk's own input. `None` when nothing was said at all.
 
-        This adapter does not declare `steer`, so its input is the prompt as plain text and is
-        closed after it. Read whole rather than a line at a time: a prompt has newlines in it.
+        Records rather than plain text, because this adapter declares `steer`: its input stays open
+        for the whole turn, so nothing means "the prompt ended" any more and a brain reading to the
+        end of its input would wait for an end that is not coming.
         """
-        with contextlib.suppress(Exception):
-            asked = sys.stdin.read()
-            return asked if asked.strip() else None
-        return None
+        word = self.words.first(THE_PROMPT_WITHIN)
+        return with_context(word) if word else None
 
     # ── what the brain said ───────────────────────────────────────────────────────────────────
 
@@ -723,13 +769,21 @@ class Turn:
         brain and from the one that asked, and whichever gets here second would otherwise say a
         second cost and a second ending for the same turn.
         """
+        counted = ended.get("usage")
+        counted = counted if isinstance(counted, dict) else {}
+        if self.steering.stopped_by_us():
+            # An ask rundesk cancelled to make room for a later word. It is not this turn's ending:
+            # it is the part of the work that was stopped, so its cost is carried onto the real
+            # ending and the ending itself is swallowed. Anything else would report a turn the owner
+            # steered as a turn that was cancelled.
+            self.steering.counted(counted)
+            return
         if not self.the_turn_ended():
             return
         # A brain that reasoned right up to the end has a thought still being gathered, and a turn
         # that ended is the last thing that can finish one.
         self.the_thought_ended()
-        counted = ended.get("usage")
-        self.the_bill(counted if isinstance(counted, dict) else {})
+        self.the_bill(self.steering.with_usage(counted))
         # Both spellings are live: the notification says `stop_reason` and the reply to the request
         # says `stopReason`, and this is reached from each.
         stopped = ended.get("stop_reason") or ended.get("stopReason")
@@ -741,6 +795,7 @@ class Turn:
                      failure_message=(f"grok ended the turn as {stopped}" if stopped
                                       else "grok ended the turn without saying why"))
         self.ended.set()
+        self.words.wake()
 
     def the_bill(self, counted: dict) -> None:
         """What this turn cost, and **only what was actually measured**.
@@ -810,6 +865,162 @@ def kept_at(raw):
     except OSError as gone:
         went_wrong(f"what this brain said could not be kept at {raw}: {gone}")
         return None
+
+
+class Steering:
+    """What rundesk stopping a turn leaves behind, and how the ending it caused is told apart.
+
+    This brain has no interrupt that leaves the ask running. What it has is a cancel: the ask ends,
+    settling as `cancelled`, and the replacement is a fresh ask on the same conversation. So a
+    steered turn produces **more than one** `turn_completed`, and only the last of them is this
+    turn's ending — the others are the parts of the work that were stopped, whose cost the owner was
+    still charged for.
+    """
+
+    def __init__(self):
+        self.watching = threading.Condition()
+
+        #: How many endings are still owed by asks that rundesk cancelled. Counted rather than
+        #: flagged because a second steer can arrive before the first has settled.
+        self.owed = 0
+
+        #: What the stopped asks cost, kept so the one ending carries all of it.
+        self.usage = {}
+
+    def cancel(self, turn) -> bool:
+        """Stop what the brain is doing, and wait until it has actually stopped."""
+        # **No ask is the live one from here until the replacement is sent.** A cancelled ask
+        # settles *twice* — once as a `turn_completed` notification and once as the reply to the
+        # request that started it — and only one of those is owed a mark. Measured: the reader
+        # swallowed the notification and the main thread then ended the turn on the reply, so a
+        # steered turn came back `cancelled` and the replacement was never asked.
+        turn.asking = None
+        with self.watching:
+            # **Marked before the cancel goes out.** The brain can settle the ask before this side
+            # has finished asking it to.
+            self.owed += 1
+        try:
+            turn.send("session/cancel", {"sessionId": turn.session_id}, wants_reply=False)
+        except (OSError, ValueError):
+            with self.watching:
+                self.no_longer_owed()
+            return False
+        with self.watching:
+            drained = self.watching.wait_for(lambda: self.owed == 0, timeout=CANCEL_WITHIN)
+            if not drained:
+                # Giving up gives the mark back: keeping it would make every later ending look like
+                # one rundesk had caused, so the turn's own would be swallowed and never said.
+                self.no_longer_owed()
+            return drained
+
+    def no_longer_owed(self) -> None:
+        """Give one mark back. **Never below zero** — a negative count is truthy, and one would make
+        every later ending look as though steering had caused it."""
+        if self.owed > 0:
+            self.owed -= 1
+
+    def stopped_by_us(self) -> bool:
+        """Whether this ending is one rundesk asked for, rather than the turn's own."""
+        with self.watching:
+            if self.owed <= 0:
+                return False
+            self.owed -= 1
+            self.watching.notify_all()
+            return True
+
+    def counted(self, usage: dict) -> None:
+        """Add one stopped ask's cost to this turn's. Work done before a steer is work the owner is
+        still billed for, so dropping it would under-report every steered turn."""
+        for name, value in (usage or {}).items():
+            if a_count(value):
+                self.usage[name] = self.usage.get(name, 0) + value
+
+    def with_usage(self, usage: dict) -> dict:
+        """This turn's own cost, carrying everything the stopped asks cost as well."""
+        if not self.usage:
+            return usage
+        self.counted(usage)
+        return dict(self.usage)
+
+
+class Words:
+    """Everything rundesk says, kept in the order it said it.
+
+    One thread owns rundesk's input for the adapter's whole life, so a word that arrives while the
+    brain is working is held here until the thread that speaks to the brain is ready for it.
+    """
+
+    def __init__(self, stream):
+        self.words = []
+        self.closed = False
+        self.watching = threading.Condition()
+        threading.Thread(target=self.read, args=(stream,), name="rundesk-in", daemon=True).start()
+
+    def read(self, stream) -> None:
+        try:
+            for line in stream:
+                word = what_rundesk_said(line)
+                if word is None:
+                    continue
+                with self.watching:
+                    self.words.append(word)
+                    self.watching.notify_all()
+        except Exception:                          # noqa: BLE001 — rundesk's input ending badly is
+            pass                                   # the same as it ending: there are no more words.
+        finally:
+            with self.watching:
+                self.closed = True
+                self.watching.notify_all()
+
+    def first(self, within: float):
+        """The prompt. `None` when rundesk said nothing at all before giving up on it."""
+        with self.watching:
+            self.watching.wait_for(lambda: self.words or self.closed, timeout=within)
+            return self.words[0] if self.words else None
+
+    def each(self, stopping: threading.Event):
+        """Every word, from the first, until the turn ends or rundesk stops speaking."""
+        at = 0
+        while True:
+            with self.watching:
+                # `so_far=at` binds where the loop is *now*. A plain closure over `at` reads it when
+                # the condition is evaluated, on another thread, after this loop has moved on.
+                self.watching.wait_for(
+                    lambda so_far=at: so_far < len(self.words) or self.closed or stopping.is_set())
+                if stopping.is_set() or at >= len(self.words):
+                    return
+                word, at = self.words[at], at + 1
+            yield word
+
+    def wake(self) -> None:
+        """Let go of anything waiting here, because the thing it was waiting for has happened."""
+        with self.watching:
+            self.watching.notify_all()
+
+
+def what_rundesk_said(line: str):
+    """One record from rundesk, as the words to send — or `None` if it was not one.
+
+    An adapter that declares `steer` is only ever sent records, so a line that is not one is a
+    contract this side cannot honour and is better dropped visibly than guessed at.
+    """
+    try:
+        one = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(one, dict) or one.get("type") != "say":
+        return None
+    return (str(one.get("text") or ""), str(one.get("context") or ""))
+
+
+def with_context(word) -> str:
+    """One thing rundesk said, as the brain reads it.
+
+    rundesk's own words go **first and marked**, so a brain reads them as framing rather than as
+    something the person tacked on — and so what the person actually said is unaltered beneath it.
+    """
+    text, context = word
+    return f"[rundesk] {context}\n\n{text}" if context else text
 
 
 def text_of(update: dict) -> str:

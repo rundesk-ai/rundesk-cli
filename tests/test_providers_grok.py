@@ -50,7 +50,8 @@ PATIENCE = 60.0
 NO_VENDOR = "/usr/bin:/bin"
 
 
-def replayed(home, prompt="Read note.txt and tell me the number in it.", captured=CAPTURED, **also):
+def replayed(home, prompt="Read note.txt and tell me the number in it.", captured=CAPTURED,
+             steering=None, **also):
     """Run the adapter against the capture and hand back every record it made, in order."""
     where = home / "cwd"
     where.mkdir(parents=True, exist_ok=True)
@@ -66,8 +67,12 @@ def replayed(home, prompt="Read note.txt and tell me the number in it.", capture
             "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1",
             "RUNDESK_CONTINUITY": "AGENTS.md=rules,MEMORY.md=memory,SOUL.md=identity"}
     told.update(also)
-    got = subprocess.run([str(ADAPTER)], input=prompt, capture_output=True, text=True,
-                         timeout=PATIENCE, env=told, check=False)
+    saying = [{"type": "say", "text": prompt}]
+    if steering:
+        saying.append({"type": "say", "text": steering, "context": "mid-turn"})
+    got = subprocess.run([str(ADAPTER)],
+                         input="".join(json.dumps(one) + "\n" for one in saying),
+                         capture_output=True, text=True, timeout=PATIENCE, env=told, check=False)
     said = [json.loads(one) for one in got.stdout.splitlines() if one.strip()]
     return said, got
 
@@ -110,14 +115,15 @@ class Capabilities(support.Isolated):
                              timeout=PATIENCE, env={"PATH": path}, check=False)
         return got, json.loads(got.stdout)
 
-    def test_it_says_what_it_can_do_and_says_steer_is_a_no(self):
-        """`steer` is stated rather than left out. Both are the same answer to rundesk and not the
-        same answer to a person reading `rundesk providers check`."""
+    def test_it_says_it_can_do_all_five(self):
+        """`steer` among them. It was a no while nothing had been measured to take more words into a
+        turn already running; a cancel and a fresh ask were then driven against a real account and
+        the turn came back answering the later word."""
         _got, can = self.answered()
-        self.assertEqual({"tools": True, "resume": True, "model": True, "usage": True},
+        self.assertEqual({"tools": True, "resume": True, "model": True, "usage": True,
+                          "steer": True},
                          {k: v for k, v in can.items() if k in
-                          ("tools", "resume", "model", "usage")})
-        self.assertIs(False, can["steer"])
+                          ("tools", "resume", "model", "usage", "steer")})
 
     def test_it_answers_with_no_vendor_on_the_machine_at_all(self):
         """A version it could not read does not change what the adapter can do, so the answer still
@@ -264,8 +270,13 @@ class ATurnOnAConversationThatWasCarriedOn(support.Isolated):
 class WhatItAsksTheBrainFor(support.Isolated):
     """What goes *out* is half the contract, and the capture cannot check it. This can."""
 
-    def spoke(self, **also):
-        """Every request the adapter sent, read off a brain that writes down what it was told."""
+    def spoke(self, then=(), **also):
+        """Every request the adapter sent, read off a brain that writes down what it was told.
+
+        `then` is what rundesk says *after* the prompt — the words a steer is made of. Named rather
+        than swept up with the environment, because everything else here becomes a variable the
+        adapter is started with and a list is not one.
+        """
         where = self.home / "cwd"
         where.mkdir(parents=True, exist_ok=True)
         instead = self.home / "bin"
@@ -308,8 +319,10 @@ for line in sys.stdin:
                 "RUNDESK_CWD": str(where), "RUNDESK_ACCESS_MODE": "work",
                 "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1"}
         told.update(also)
-        subprocess.run([str(ADAPTER)], input="hello", capture_output=True, text=True,
-                       timeout=PATIENCE, env=told, check=False)
+        subprocess.run([str(ADAPTER)],
+                       input="".join(json.dumps(one) + "\n" for one in
+                                     [{"type": "say", "text": "hello"}, *then]),
+                       capture_output=True, text=True, timeout=PATIENCE, env=told, check=False)
         return [json.loads(one) for one in heard.read_text(encoding="utf-8").splitlines()
                 if one.strip()]
 
@@ -357,6 +370,35 @@ for line in sys.stdin:
         self.assertNotIn("agentProfile", opened.get("_meta") or {})
         for flag in ("--tools", "--allow", "--deny", "--sandbox"):
             self.assertNotIn(flag, self.argv(), f"{flag} reads as a boundary and enforces none")
+
+    def test_a_word_arriving_mid_turn_stops_the_ask_before_replacing_it(self):
+        """**A second ask does not steer this brain, it queues behind the first.** Measured against
+        a real account: one sent mid-turn sat in the queue while the first ran, then ran as a turn
+        of its own — two answers to what the owner meant as one changed instruction.
+
+        So a later word cancels first. What this pins down is the order, which is the part that goes
+        wrong silently: a replacement sent before the cancel lands behind the very ask it was meant
+        to replace, and the turn answers the question the owner had already moved on from.
+        """
+        self.spoken = self.spoke(then=[{"type": "say", "text": "instead, say only: STEERED",
+                                        "context": "mid-turn"}])
+        order = [one.get("method") for one in self.spoken if one.get("method")]
+        self.assertIn("session/cancel", order, "a later word was sent without stopping the turn")
+        stopped = order.index("session/cancel")
+        asks = [at for at, method in enumerate(order) if method == "session/prompt"]
+        self.assertEqual(2, len(asks), "the replacement was never asked")
+        self.assertLess(asks[0], stopped, "the turn was stopped before it had been asked anything")
+        self.assertLess(stopped, asks[1], "the replacement queued behind the ask it replaced")
+
+    def test_rundesks_own_words_are_carried_apart_from_the_persons(self):
+        """A bare line appended to a running turn is refused by real brains as suspected prompt
+        injection, so rundesk's context goes first and marked — and what the person said is
+        unaltered beneath it."""
+        self.spoken = self.spoke(then=[{"type": "say", "text": "stop",
+                                        "context": "guidance from rundesk"}])
+        asks = [one for one in self.spoken if one.get("method") == "session/prompt"]
+        self.assertEqual("[rundesk] guidance from rundesk\n\nstop",
+                         asks[-1]["params"]["prompt"][0]["text"])
 
     def test_the_client_offers_no_services_of_its_own(self):
         """Advertising a filesystem or a terminal makes this brain send the work back and wait for
@@ -406,7 +448,9 @@ class WhenItCannotRunAtAll(support.Isolated):
     def test_a_brain_that_is_not_on_the_machine_is_said_as_a_done_and_never_as_silence(self):
         """**Rundesk reading no `done` at all is a turn nobody can explain**, so even the failure
         that happens before anything starts is said in the one shape rundesk can act on."""
-        got = subprocess.run([str(ADAPTER)], input="hello", capture_output=True, text=True,
+        got = subprocess.run([str(ADAPTER)],
+                             input=json.dumps({"type": "say", "text": "hello"}) + "\n",
+                             capture_output=True, text=True,
                              timeout=PATIENCE, check=False,
                              env={"PATH": NO_VENDOR, "RUNDESK_CWD": str(self.home)})
         said = [json.loads(one) for one in got.stdout.splitlines() if one.strip()]
