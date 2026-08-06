@@ -300,6 +300,25 @@ class AMessageOnAChannelIsAnswered(Answering):
         self.assertEqual("8841", posted[-1]["reply_to"])
         self.assertTrue(posted[-1].get("cost"))
 
+    def test_a_remark_already_posted_is_not_repeated_inside_the_answer(self):
+        """R-CH-19. `protocol.last_thought` exists for exactly this and its docstring says so: a
+        surface shown each finished remark as it landed has already had everything before the last
+        one. Sending the whole reply posted every remark a second time, and it read as the agent
+        repeating itself — caught by tracing the seam rather than by any case."""
+        self.a_stand_in_told(self.agent, remarks=["checking staging first", "now the database"])
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 3))
+        answer = next(one for one in self.what_it_was_told()
+                      if one.get("do") == "deliver" and one.get("reply_to"))
+        self.assertNotIn("checking staging first", answer["text"])
+        self.assertNotIn("now the database", answer["text"])
+        self.assertIn("You asked:", answer["text"])
+        # And each remark was said exactly once, across everything the surface was handed.
+        for once in ("checking staging first", "now the database"):
+            self.assertEqual(1, self.delivered().count(once))
+
     def test_a_brain_that_says_one_whole_thing_posts_exactly_one_message(self):
         """The other half of the same rule. A brain that never says several finished things must not
         be made chattier by this existing — the held remark is the answer and is never posted twice."""

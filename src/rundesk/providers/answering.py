@@ -161,7 +161,7 @@ class OnAChannel:
                 agent=agent, prompt=body, conversation=landed.conversation,
                 trigger=instructions.A_PERSON_ASKED,
                 source=arriving.FROM_CHANNEL, place=place), watching=watching.heard)
-            self._delivered(agent, kind, place, got, external_id)
+            self._delivered(agent, kind, place, got, external_id, watching.said_already)
             self._marked(agent, kind, place, AS_A_STATE.get(got.turn_status, FAILED), external_id)
         except turns.Busy:
             # Something is already answering in this conversation. Not a failure and not a second
@@ -174,7 +174,7 @@ class OnAChannel:
                 self._marked(agent, kind, place, FAILED, external_id)
 
     def _delivered(self, agent: str, kind: str, place: str, got: turns.Outcome,
-                   external_id: Optional[str] = None) -> None:
+                   external_id: Optional[str] = None, said_already: bool = False) -> None:
         """The answer, cut to what this platform takes, with whatever the brain made beside it.
 
         **A turn that worked is never explained.** `protocol.has_answer` counts a file as an answer
@@ -187,8 +187,16 @@ class OnAChannel:
         message being replied to, which is how a surface tells the one message somebody was waiting
         for from the running commentary around it — and it is what a platform draws its own emphasis
         from, rather than anything this builds.
+
+        **A turn somebody watched answers with its last thought, and one nobody watched with all of
+        them** (R-CH-19). `protocol.last_thought` exists for exactly this and says so: a surface that
+        was shown each finished remark as it landed has already had everything before the last one,
+        so sending the whole reply posts every remark a second time — measured, and it read as the
+        agent repeating itself. A turn with no remarks behind it is unchanged, because the reply and
+        the last thought are the same thing when there was only ever one.
         """
-        said = got.reply.strip() or ("" if got.worked else self._instead(got))
+        whole = got.last_thought if said_already and got.last_thought.strip() else got.reply
+        said = whole.strip() or ("" if got.worked else self._instead(got))
         carrying = delivery.carried(agent, [str(one.get("at")) for one in got.files
                                             if one.get("at")])
         if not said and not carrying.files:
@@ -302,6 +310,10 @@ class _Streaming:
         self._tools: Dict[str, Dict[str, str]] = {}
         #: The last finished thing the brain said, held until the next one proves it was not the end.
         self._said: Optional[str] = None
+        #: Whether any remark was actually posted. **Read by `_delivered` to decide what the answer
+        #: is**: a surface already shown everything before the last thought must be sent only that,
+        #: or every remark arrives a second time inside the answer.
+        self.said_already = False
 
     def heard(self, record: Dict[str, Any]) -> None:
         """One record from the brain. **Never raises** — a watcher is nobody's reason to fail."""
@@ -365,6 +377,7 @@ class _Streaming:
         """A finished thing the brain said. Posts the **previous** one, and holds this."""
         said, self._said = self._said, str(record.get("text") or "")
         if said and said.strip():
+            self.said_already = True
             self._on.remark(self._agent, self._kind, self._place, said)
 
     def _doing(self, did: str, ok: Optional[bool] = None, who: str = "") -> None:
