@@ -153,7 +153,7 @@ they ask it something.
 
 ```json
 {"ok": true,
- "describes": "rundesk#4471, reaching you#0",
+ "describes": "rundesk#4471, reaching you#0 — a bot already in a server has to be sent this invite again before it may open a thread in a room",
  "notify_place": "1180",
  "settings": {},
  "secret": {"env": ["DISCORD_BOT_TOKEN"]},
@@ -164,6 +164,10 @@ they ask it something.
 {"ok": false, "why": "there is no bot token — nothing set DISCORD_BOT_TOKEN",
  "secret": {"env": ["DISCORD_BOT_TOKEN"]}}
 ```
+
+**`describes` is where a standing setup caveat rides**, because it is the one line of this answer a
+person is ever shown — `channels add` prints it, `channels show` keeps it, `channels doctor` repeats
+it. Anything an owner still has to go and do belongs there rather than in prose nobody will read.
 
 | Field | | What it is for |
 |---|---|---|
@@ -303,6 +307,39 @@ The shipped adapter writes into `$RUNDESK_CHANNEL_HOME/fetched/<message id>/<n>`
 by its position, because the platform's name is flattened and made unused in exactly one place and
 that place is not the adapter.
 
+##### Where the shipped Discord adapter answers, and what it needs to
+
+Worth reading even if you are writing for another platform, because the *shape* is the general one:
+**an adapter may move an exchange somewhere quieter, and the record that moves it is the record that
+names the new place.**
+
+| What arrives | Where the exchange goes | What `conversation` is |
+|---|---|---|
+| a direct message | flat, where it was said | that conversation's id |
+| a room message naming the bot | a thread opened on that message | the **thread's** id |
+| a message in a thread the bot opened | that thread, with nobody naming the bot again | the thread's id |
+| a message in somebody else's thread | that thread, but only if the bot is named | the thread's id |
+| a room message naming nobody | nowhere. An agent in a shared server is quiet until spoken to | — |
+
+A room is somebody else's, and the reason for the thread is stronger than tidiness: a reply that
+rewrites itself in place is unreadable, so an answer that arrives whole after minutes of working
+needs somewhere of its own to arrive into.
+
+**It degrades rather than failing.** Opening a thread needs `CREATE_PUBLIC_THREADS`, which the invite
+now asks for — but an invite grants what it asked for once, when somebody accepts it, so a bot that
+was already in a server does not have it until it is sent the invite again. When Discord refuses, the
+message is answered in the room and a `note` says so once. A channel that stopped working because it
+could not open a thread would be worse than one that answers in the room.
+
+**It needs one privileged intent, and this is the whole of Discord's setup story.** `MESSAGE_CONTENT`
+must be switched on for the bot — *Developer Portal → Applications → this bot → Bot → Privileged
+Gateway Intents*. Without it Discord blanks the content of every guild message that does not
+@-mention the bot, including every message inside a thread the bot opened itself, so the thread would
+open and then nothing said in it could be read. `--check` reads the application's flags and **refuses
+while it is off**, because the alternative is close code `4014` at `serve` time: not resumable, exit
+`78`, and a gateway that then never starts the channel again. `GUILD_MEMBERS` and `GUILD_PRESENCES`
+are still not asked for; nothing reads a member list or a presence.
+
 ### What an adapter is told — `do:`
 
 Three, and only three exist today.
@@ -318,7 +355,7 @@ Three, and only three exist today.
 
 | | Fields | |
 |---|---|---|
-| `deliver` | `id`, `place`, `text`, sometimes `files` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed` |
+| `deliver` | `id`, `place`, `text`, sometimes `files`, sometimes `reply_to` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed` |
 | `state` | `place`, `external_id`, `state` | show what rundesk says a turn is doing |
 | `stop` | — | stop. The signals follow either way |
 
@@ -326,6 +363,25 @@ Three, and only three exist today.
 words describing a file are what a reader wants above it, and a platform hangs an attachment under
 the message it came with. A record carrying `files` and an empty `text` is one to take; a record with
 neither is never sent.
+
+**`reply_to` is how rundesk says *this one is the answer*.** It carries the `external_id` of the
+message being answered. A delivery with it is posted as a reply to that message; a delivery without
+it — running commentary, progress, anything mid-turn — is posted plainly, because a conversation
+where every line quotes the same message is unreadable. **Do not invent a field of your own for
+this**, and do not read the text and guess: which piece is the answer is turn state, and turn state
+is rundesk's.
+
+The shipped Discord adapter also *tints* the reply, which is the point of it: a message that names
+somebody is drawn by their own client with an amber bar down the side, and a reply draws it by
+pinging the author of the message it quotes. Three cases get the quote dropped — a direct
+conversation, where two people are already reading everything; a message the adapter wrote itself,
+where the ping would reach the bot and leave the person waiting untinted; and a message standing in
+another channel, which happens on the first answer inside a freshly opened thread, because the
+message that asked is still in the room above and a reply does not reach across.
+
+**Build the reference so a deleted message cannot cost you the answer.** Discord refuses an entire
+message that quotes one it can no longer resolve — `fail_if_not_exists=False` there — and a turn runs
+for minutes, which is long enough for somebody to delete their own question.
 
 **Anything you do not recognise: say so as a `note` and read on.** One record you could do nothing
 with is not a channel going away.
@@ -539,8 +595,13 @@ check is what catches the day the two disagree.
 along with every other unrecognised `say`. Send it; it costs nothing and it is the shape a reader
 will take. The `id` on a `failed` is ignored the same way, and `retry_after` with it.
 
-**`reply_to` on a `deliver` is understood by the shipped adapter and never sent.** Nothing in rundesk
-produces one.
+**`reply_to` on a `deliver` is fully honoured by the shipped adapter and never sent.** Nothing in
+rundesk produces one today, so no answer is yet quoted or tinted on Discord — the adapter's half is
+built and is waiting for a producer. Send one and it works; until something does, every delivery is
+posted plainly.
+
+**`done`, `stopped` and `failed` have no producer either, so a ✅ never appears.** The adapter renders
+all five states, and only `seen` is ever sent — see the turn states above.
 
 **`place` and `display` on an `arrived` are read by nothing.** The shipped adapter sends `"place":
 "dm"` or `"room"` and a flattened display name; rundesk keeps neither today.

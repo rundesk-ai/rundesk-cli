@@ -336,6 +336,12 @@ class Hosting(support.Isolated):
         self.pids.extend(one.pid for one in watching.running.values()
                          if one.pid and one.pid not in self.pids)
 
+    def told_lines(self):
+        """Every record the adapter was handed, as it was handed them."""
+        if not self.told.exists():
+            return []
+        return [one for one in self.told.read_text().splitlines() if one.strip()]
+
     def said_in_the_log(self):
         found = sorted(self.where.glob("*.log"))
         return "".join(one.read_text(encoding="utf-8") for one in found)
@@ -801,6 +807,56 @@ class TalkingToOne(Hosting):
                                      ["the daily report"]))
         self.assertTrue(support.waited_until(
             lambda: self.heard.exists() and "the daily report" in self.heard.read_text(), 5.0))
+
+    def test_an_answer_quotes_what_it_answers_and_marks_it_done(self):
+        # The ✅ the owner asked for, and it needs no provider: *answered* is a fact about delivery,
+        # known the moment the adapter acknowledges it.
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        self.assertTrue(hosting.told(self.agent, self.where, watching, "discord", "1180",
+                                     ["here is the report"], answering="8841"))
+        self.assertTrue(support.waited_until(
+            lambda: any(json.loads(one).get("do") == "state"
+                        for one in self.told_lines()), 5.0),
+            "no state record followed the delivery")
+        marked = [json.loads(one) for one in self.told_lines()
+                  if json.loads(one).get("do") == "state"]
+        self.assertEqual("done", marked[0]["state"])
+        self.assertEqual("8841", marked[0]["external_id"])
+        delivered = [json.loads(one) for one in self.told_lines()
+                     if json.loads(one).get("do") == "deliver"]
+        self.assertEqual("8841", delivered[0]["reply_to"])
+
+    def test_commentary_neither_quotes_nor_marks_anything(self):
+        # Thinking and tool activity are not answers. A thread of quoted replies is unreadable, and
+        # marking a message done for each of them says the turn finished several times.
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        hosting.told(self.agent, self.where, watching, "discord", "1180", ["reading files.py"])
+        self.assertTrue(support.waited_until(
+            lambda: any(json.loads(one).get("do") == "deliver" for one in self.told_lines()), 5.0))
+        time.sleep(0.5)
+        for one in self.told_lines():
+            record = json.loads(one)
+            self.assertNotIn("reply_to", record)
+            self.assertNotEqual("state", record.get("do"))
+
+    def test_an_answer_split_in_pieces_quotes_once(self):
+        # One answer is one answer. Quoting the same message four times is four notifications.
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        hosting.told(self.agent, self.where, watching, "discord", "1180",
+                     ["first", "second", "third"], answering="8841")
+        self.assertTrue(support.waited_until(
+            lambda: len([one for one in self.told_lines()
+                         if json.loads(one).get("do") == "deliver"]) == 3, 5.0))
+        quoted = [json.loads(one) for one in self.told_lines()
+                  if json.loads(one).get("do") == "deliver" and "reply_to" in json.loads(one)]
+        self.assertEqual(1, len(quoted))
+        self.assertEqual("first", quoted[0]["text"])
 
     def test_sending_to_a_channel_that_is_not_running_says_so_rather_than_raising(self):
         watching = hosting.Watching({}, {}, {})

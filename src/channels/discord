@@ -15,6 +15,16 @@ find, and no second `--check` that would say anything different. The build this 
 channel per *kind of place*, which is a shape for governing a public room full of strangers, and
 strangers are not what this is for.
 
+**Named in a room, the exchange moves into a thread, and goes on there without being named again.**
+A room is somebody else's, and the reason is stronger than tidiness: *a reply that rewrites itself
+in place is unreadable, so only a running commentary may grow* — an answer that arrives whole, at
+the end, after minutes of working, needs somewhere of its own to arrive into. So the message that
+names us opens a thread, the answer goes in there, and inside a thread this bot opened it answers
+with nobody having to name it a second time. A private message stays flat, because there is nobody
+to be out of the way of. A message in a room that neither names us nor stands in a thread of ours
+is not answered at all: an agent in a shared server is quiet until it is spoken to.
+
+
 Three invocations, sharing almost nothing:
 
     --capabilities   what this can do — offline, no account, the same answer every time
@@ -68,7 +78,7 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 #: The vendor library, bound by `the_library()` at the moment it is first needed.
 #:
@@ -87,44 +97,68 @@ MAX_TEXT = 2000
 #: a channel is added and written into its record, so that a surface which *cannot* edit a message
 #: is told apart from one that can and did not.
 #:
-#: `thread` says threads are ordinary conversations here — reached, answered in, and identified by
-#: their own id. It does not say this opens one: where a reply goes is wherever the message came
-#: from, and an adapter that moved a conversation somewhere rundesk had not been told about would
-#: be deciding the shape of the turn rather than its appearance.
+#: `thread` says this opens one when it is named in a room, and that the exchange then goes on
+#: inside it as an ordinary conversation, reached and identified by that thread's own id. **Rundesk
+#: is never told about a place it has not been given the id of**: the thread is reported as the
+#: `conversation` on the very record that opened it, so nothing here moves a turn somewhere the
+#: other side of the seam could not address.
 #:
 #: `max_text` is the constant above and never a second copy of it. Two copies of one limit is how
 #: the build this replaces came to have a splitting rule fixed on one platform and not the other.
 CAPABILITIES = {"stream": True, "edit": "full", "react": True, "thread": True, "attach": True,
                 "max_text": MAX_TEXT}
 
-#: What Discord is told this connection wants, and **zero of it is privileged**:
+#: What Discord is told this connection wants:
 #:
-#:     DIRECT_MESSAGES         1 << 12   a private conversation, content and all
-#:     GUILD_MESSAGES          1 <<  9   a room's messages — content only where we are named
+#:     GUILDS                  1 <<  0   what the rooms and threads of a server are
+#:     GUILD_MESSAGES          1 <<  9   a room's messages
 #:     GUILD_MESSAGE_REACTIONS 1 << 10   what becomes of the marks this program puts up
+#:     DIRECT_MESSAGES         1 << 12   a private conversation, content and all
+#:     MESSAGE_CONTENT         1 << 15   what a room's messages actually say — **privileged**
 #:
-#: **`MESSAGE_CONTENT`, `GUILD_MEMBERS` and `GUILD_PRESENCES` are deliberately absent.** Discord
-#: gives a bot the content of a direct message, and of any guild message that @-mentions it, without
-#: any of the three — and those are exactly the two messages this program acts on. Each of the three
-#: costs a toggle in somebody's Developer Portal, and that setup friction is the thing this design
-#: exists to avoid, while asking for one that has not been granted closes the gateway with `4014`,
-#: which is not resumable and looks from the outside like a bot that simply never came up.
+#: **`MESSAGE_CONTENT` is privileged and is here anyway, and this is the one trade in this file.**
+#: Without it Discord sends the content of a direct message and of any guild message that @-mentions
+#: this bot, and blanks everything else — including every message inside a thread this bot opened
+#: itself. So the two halves of what a room is for are one decision and not two: a thread can be
+#: opened without it, and then nothing said in that thread can be read unless the person types the
+#: bot's name again on every line, which reads as a feature that is broken rather than one that is
+#: absent. It costs one toggle in the Developer Portal — *Message Content Intent*, on the Bot page —
+#: and, past a hundred servers, Discord's own verification. `--check` reads the application's flags
+#: and refuses while it is off, because the failure it prevents is `4014`: not resumable, exit `78`,
+#: and from the outside a bot that simply never came up.
+#:
+#: **`GUILDS` is here because without it a thread cannot be told from a room, and no thread can be
+#: opened at all.** With nothing cached, discord.py hands every guild message a `PartialMessageable`
+#: that knows only an id: `isinstance(channel, Thread)` is false inside a thread, `message.guild` is
+#: `None`, and `Message.create_thread` refuses outright with *"this message does not have guild info
+#: attached"*. It is not privileged — nobody has to toggle anything for it. What it costs is the
+#: room and role cache of every server this bot is in, which is the library's and is proportional to
+#: servers joined.
+#:
+#: **`GUILD_MEMBERS` and `GUILD_PRESENCES` are still deliberately absent.** Nothing here reads a
+#: member list or a presence, and each is a second toggle bought for nothing.
 #:
 #: Nothing here reads a reaction. The reactions intent is declared because what a gateway is told at
 #: identify is fixed for the life of that connection, and because it is not privileged.
-INTENTS = 5632
+INTENTS = 38401
 
 #: What the invite asks a server for, one named permission at a time so that a reader can check each
 #: against something this file actually does. **Short on purpose**: a permission granted for nothing
-#: is a permission somebody was asked for under false pretences. There is no `CREATE_PUBLIC_THREADS`
-#: because this never opens a thread, and no `EMBED_LINKS` because nothing here builds an embed — a
-#: link in an answer is text either way.
+#: is a permission somebody was asked for under false pretences. There is no `CREATE_PRIVATE_THREADS`
+#: because every thread this opens is a public one, and no `EMBED_LINKS` because nothing here builds
+#: an embed — a link in an answer is text either way.
+#:
+#: **A bot already in a server is not granted a permission added here.** What an invite asks for is
+#: granted once, when somebody accepts it, so `open a thread` reaches an existing bot only when it is
+#: sent the invite again — which is why `--check` says so and why a room falls back to being answered
+#: in rather than going quiet.
 PERMITS = {
     "view a channel": 1 << 10,
     "add a reaction": 1 << 6,
     "send a message": 1 << 11,
     "attach a file": 1 << 15,
     "read the history": 1 << 16,          # Discord refuses a reply reference without it
+    "open a thread": 1 << 35,             # CREATE_PUBLIC_THREADS — a room's exchange happens in one
     "send a message in a thread": 1 << 38,
 }
 
@@ -167,6 +201,16 @@ TYPING_SECONDS = 8.0
 #: end our sentence and start one of their own — and then clipped.
 SAID_MOST = 80
 
+#: How much of what was asked becomes the name of the thread it opens. **Discord takes a hundred and
+#: this is eighty**, because a thread list is read at a glance and the first line of a sentence is
+#: what tells one exchange from another — the rest is the conversation's own to hold. Under the
+#: platform's cap rather than at it, so a name is never refused for a character somebody typed.
+THREAD_NAME_MOST = 80
+
+#: What a thread is called when there was nothing to name it from — a message that is only a file.
+#: Plain on purpose: it is a label in somebody else's room, not an announcement.
+THREAD_UNNAMED = "rundesk"
+
 #: How many conversations this holds presentation state for. Bounded because the process runs for
 #: weeks: an entry is made whenever a turn starts, and nothing else would ever remove one.
 LIVE_KEPT = 200
@@ -178,6 +222,13 @@ READS_MOST = 4 * 1024 * 1024
 #: How much of a file is read at a time while it is being verified on its way out.
 A_BLOCK = 1024 * 1024
 
+#: What an owner has to switch on for this to work at all, said the same way everywhere it is said.
+#: One string rather than three sentences, because a person reading a refused `--check` and a person
+#: reading a gateway log after close code `4014` are looking for the same switch and must be sent to
+#: it in the same words.
+THE_TOGGLE = ("Message Content Intent, in the Developer Portal under Applications → this bot → Bot "
+              "→ Privileged Gateway Intents")
+
 #: Close codes that no amount of trying again will change, and what each one means to a person.
 #: Ten thousand refusals in ten minutes earns a Cloudflare ban of this machine's own address, so
 #: these end the program loudly rather than reconnecting into one.
@@ -187,8 +238,9 @@ WILL_NOT_COME_RIGHT = {
     4011: "this bot is in too many servers to connect without sharding",
     4012: "the gateway version identified with is no longer served",
     4013: "the intents identified with are not a valid set",
-    4014: "the intents identified with include one this application has not been granted — this "
-          "program asks for none of the privileged three, so something has changed the mask",
+    4014: f"the intents identified with include one this application has not been granted — this "
+          f"asks for exactly one privileged intent, so switch on {THE_TOGGLE}. Nothing said in a "
+          f"room or a thread can be read until it is on, and nothing here will connect",
 }
 
 #: The exit code for a failure that restarting cannot fix, kept apart from the ordinary one. A
@@ -280,9 +332,11 @@ def intents_now():
     exact shape a missing intent already has, and the hardest failure on this platform to see.
     """
     intents = discord.Intents.none()
+    intents.guilds = True
     intents.guild_messages = True
     intents.guild_reactions = True
     intents.dm_messages = True
+    intents.message_content = True
     if intents.value != INTENTS:
         raise Refused(f"discord.py builds {intents.value} for the intents this needs, and Discord "
                       f"is meant to be told {INTENTS}")
@@ -313,6 +367,49 @@ def flat(said: Any, most: int = SAID_MOST) -> str:
     """One line, clipped — for a stranger's words on their way into somebody's prompt."""
     whole = " ".join(str(said or "").split())
     return whole if len(whole) <= most else whole[:most - 1] + "…"
+
+
+def thread_name(text: Any) -> str:
+    """What a thread opened by being named is called: the opening words of what was asked.
+
+    **One line and bounded, for the same two reasons a display name is.** A thread name is a place
+    somebody else's text lands, Discord refuses one past a hundred characters outright, and a
+    newline in it would be somebody ending our label and starting one of their own. `flat` is
+    already that rule and this is not a second copy of it.
+
+    Falls back to a plain word rather than to nothing: a message that is only a file has nothing to
+    be named from, and Discord will not take an empty name.
+    """
+    return flat(text, THREAD_NAME_MOST) or THREAD_UNNAMED
+
+
+def content_allowed(flags: Any) -> bool:
+    """Whether Discord has granted this application the content of a room's messages.
+
+    **Two flags and not one.** A verified application carries `gateway_message_content`; one that is
+    not verified yet — which every bot is until a hundred servers make verification compulsory —
+    carries `gateway_message_content_limited` instead, and both mean the toggle is on. Reading only
+    the first would refuse every new bot on the day it was set up correctly.
+
+    Asked with `getattr`, because what this is being handed is the vendor library's own flag object
+    and a version that renamed one must fail as *not granted* — a refusal somebody can act on —
+    rather than as an `AttributeError` in the middle of a sign-in.
+    """
+    return bool(getattr(flags, "gateway_message_content", False)
+                or getattr(flags, "gateway_message_content_limited", False))
+
+
+def unreadable_without() -> str:
+    """Why a channel is refused while the toggle is off, and what to do about it.
+
+    Its own function so that the refusal is one sentence in one place: this is the whole of what a
+    person at a terminal has to act on, and the same switch is named in `WILL_NOT_COME_RIGHT[4014]`
+    for whoever reaches it the other way round.
+    """
+    return (f"this bot has not been granted the content of the messages it would be answering, so "
+            f"switch on {THE_TOGGLE}. Without it Discord blanks every message in a room and in a "
+            f"thread unless it names this bot, so no thread could be opened, nothing said in one "
+            f"could be read, and the gateway would be closed with 4014 rather than connecting")
 
 
 def invited(application_id: Any) -> str:
@@ -492,11 +589,25 @@ async def check(options: List[str]) -> int:
         await _quietly(client.close)
         return _refused(said, secret=refused)
 
+    # **The one thing that is fatal later and answerable now.** `serve` identifies with a privileged
+    # intent; a bot without it is closed with `4014`, which is not resumable, exits `78`, and stops
+    # the gateway restarting the channel for the rest of its life. `login` has just fetched the
+    # application record, so whether the toggle is on is a fact this already holds — and a refusal
+    # here reaches somebody standing at a terminal instead of at three in the morning.
+    if not content_allowed(client.application_flags):
+        await _quietly(client.close)
+        return _refused(unreadable_without())
+
     # `login` fetches the application on the way past, so the id below costs no second call. Falling
     # back to the bot's own user id because for a bot the two are one number, and an invite URL with
     # no client id in it is a link that goes nowhere.
+    # **The caveat rides on `describes`, because that is the one line of this that a person is
+    # shown.** An invite grants what it asked for once, when somebody accepts it, so a bot standing
+    # in a server before `open a thread` was added to `PERMITS` does not have it — and the symptom
+    # is a room that goes on being answered in rather than anything that looks like a failure.
     found = {"ok": True,
-             "describes": f"{client.user}, reaching {person}",
+             "describes": f"{client.user}, reaching {person} — a bot already in a server has to be "
+                          f"sent this invite again before it may open a thread in a room",
              "notify_place": str(place.id),
              "settings": {},
              "secret": {"env": [TOKEN_FROM]},
@@ -526,6 +637,22 @@ async def _quietly(closing) -> None:
 # ---------------------------------------------------------------------------------------------
 
 
+class Handled(NamedTuple):
+    """The two facts about a message this program has already dealt with.
+
+    Kept because a delivery names a message by its id alone, and both questions a delivery asks
+    about that message — *where is it* and *did we write it* — are answerable here for nothing or
+    from Discord for a round trip each.
+    """
+
+    #: The channel the message is standing in, which is **not** always the conversation it belongs
+    #: to: being named in a room opens a thread, and the message that asked stays in the room above.
+    place: int
+    #: Whether this program wrote it. A reply that pinged the author of its own message would ping
+    #: the bot and leave the person the answer is for untinted.
+    ours: bool
+
+
 class Reaching:
     """The connection, held open for as long as this program runs, and what it is holding.
 
@@ -541,6 +668,15 @@ class Reaching:
         self.marks: Dict[str, str] = {}
         #: The typing indicator being renewed in a place, by that place's own id.
         self.typing: Dict[int, asyncio.Task] = {}
+        #: What is known about a message this has handled, by its id — see `Handled`.
+        self.handled: Dict[str, Handled] = {}
+        #: Whether a conversation is one person's own, learned from a message that arrived in it.
+        #: **Asked here and never of Discord**: a direct channel is not in any server's cache, so
+        #: the library cannot tell one from a room it has not been told about, and defaulting the
+        #: unknown to *private* would quietly cost a room the one thing a reply is for.
+        self.private: Dict[str, bool] = {}
+        #: Whether the note about not being able to open a thread has already been said.
+        self.threadless = False
         #: Whether the socket is up, so `gone` and `ready` are said on the change rather than on
         #: every reconnection attempt behind it.
         self.connected = False
@@ -660,41 +796,91 @@ class Reaching:
         megabytes before that decision was reached — so any member of a shared server could make an
         agent litter their room and fill a disk without ever being allowed to say a word to it.
 
-        Named, or private, and nothing else. Silence in a room until the bot is mentioned is both
-        the policy and the fact: without `MESSAGE_CONTENT` a room message that does not name us
-        arrives with no content to act on anyway.
+        **Three ways in, and a shared room is not one of them.** A private message, a message that
+        names us, or a message inside a thread this bot opened — and nothing else. An agent in
+        somebody else's server is quiet until it is spoken to, and now that `MESSAGE_CONTENT` is
+        declared that is a policy rather than a consequence: every room message arrives readable,
+        and answering the ones nobody addressed would be an agent that had started talking over
+        people.
         """
         if message.author.bot:
             return
-        # **Asked of the channel, and never of `message.guild`.** With no `GUILDS` intent nothing is
-        # cached, so a room message and a private one *both* answer `None` for `guild` — and a room
-        # would be handled as a private conversation, where nobody has to name us first.
+        # **Asked of the channel, and never of `message.guild`.** A stand-in that has never heard of
+        # a guild answers `None` for one, and a room read as a private conversation is a room where
+        # nobody has to name us first. `Thread` is asked the same way and for the same reason.
         direct = isinstance(message.channel, discord.DMChannel)
+        in_thread = isinstance(message.channel, discord.Thread)
         me = self.client.user
-        if not direct and not (me and me in message.mentions):
+        # **A thread this bot opened is its own conversation, and nobody says a name twice into
+        # one.** Told by who opened it rather than by being in it: a thread somebody else started
+        # and pulled this bot into is still their room, and answering every line of it would be the
+        # silence rule lost through the back door.
+        ours = in_thread and getattr(message.channel, "owner_id", None) == (me.id if me else None)
+        if not direct and not ours and not (me and me in message.mentions):
             return
         if str(message.author.id) not in self.allow:
             return
 
         text = _without_our_name(message.content, me.id if me else None)
         # **After the allow check and nothing before it.** Fetching is the first expensive, visible
-        # thing this program does, and in the build this replaces it happened for anybody at all.
+        # thing this program does, and in the build this replaces it happened for anybody at all —
+        # and so did opening a thread, so any stranger could make an agent litter a room it was
+        # never going to answer them in.
         brought = await self._brought(message)
         if not text and not brought:
             return
+        # **A room's exchange moves into a thread; a private one and a thread's own stay put.**
+        # Threads do not nest, and there is nobody in a private conversation to be out of the way
+        # of. A message with nothing in it never gets this far, so no thread is ever opened for one.
+        conversation = message.channel.id
+        if not direct and not in_thread:
+            opened = await self._a_thread(message, text)
+            if opened is not None:
+                conversation = opened
+        # **Where the message is, said before the record that will be answered.** The one that
+        # opened a thread is still standing in the room above it, and both the mark rundesk puts on
+        # it and any reply that quotes it are addressed by id alone.
+        self.handled[str(message.id)] = Handled(place=message.channel.id, ours=False)
+        self.private[str(conversation)] = direct
+        self._make_room()
         say({"say": "arrived",
              # **The thread's own id, and never its parent's.** A thread is a conversation of its
              # own, and the build this replaces asked about one by the channel it hung under —
              # which matched nothing when asked of the thread, and answered every thread in the
              # server when asked of the parent. Here it is only ever the key a session is kept
              # under, and this is the id that identifies the exchange somebody is actually having.
-             "conversation": str(message.channel.id),
+             "conversation": str(conversation),
              "place": "dm" if direct else "room",
              "user": str(message.author.id),
              "display": flat(getattr(message.author, "display_name", None) or message.author.name),
              "text": text,
              "external_id": str(message.id),
              "attachments": brought})
+
+    async def _a_thread(self, message, text: str) -> Optional[int]:
+        """Open a thread on this message and hand back its id, or `None` if Discord would not.
+
+        **Degrades, never refuses.** Opening one needs `CREATE_PUBLIC_THREADS`, and a bot that was
+        invited before this release was never granted it — what an invite asks for is granted once,
+        when somebody accepts it, so an existing bot has to be sent the invite again. A channel that
+        stopped working because it could not open a thread would be worse than one that answers in
+        the room, so a refusal here costs the tidiness and never the turn.
+
+        **Said once for the life of this process**, because a permission the bot does not have is
+        one standing fact and repeating it for every message in a busy room would bury everything
+        else in the log. Tried again every time even so: a permission granted while this is running
+        starts working without anybody restarting anything.
+        """
+        try:
+            return (await message.create_thread(name=thread_name(text))).id
+        except Exception as why:           # noqa: BLE001 — a platform boundary
+            if not self.threadless:
+                self.threadless = True
+                noted(f"could not open a thread, so this was answered in the room instead: "
+                      f"{type(why).__name__}: {why} — opening one needs the 'open a thread' "
+                      f"permission, and a bot that was already in a server when this release "
+                      f"landed has to be sent its invite again to be granted it")
+            return None
 
     async def _brought(self, message) -> List[Dict[str, Any]]:
         """Fetch what was attached onto this machine, and say where each one was put.
@@ -821,14 +1007,7 @@ class Reaching:
                 files.append(a_verified_file(one))
             if not text and not files:
                 raise Refused("there was nothing to deliver: no text, and no file")
-            reference = None
-            if it.get("reply_to"):
-                # **`fail_if_not_exists=False`, always.** Discord refuses a whole message that
-                # quotes one it cannot resolve, and a turn here runs for minutes — the asker
-                # deleting their own question is enough to lose the answer to it entirely.
-                reference = discord.MessageReference(
-                    message_id=an_id(it["reply_to"], "message id"), channel_id=place,
-                    fail_if_not_exists=False)
+            reference, tint = self._quoting(it.get("reply_to"), place)
             where = self.client.get_partial_messageable(place)
         except (Refused, TypeError, ValueError) as why:
             closed(files)
@@ -836,7 +1015,8 @@ class Reaching:
             return
 
         try:
-            sent = await where.send(content=text or None, files=files or None, reference=reference)
+            sent = await where.send(content=text or None, files=files or None,
+                                    reference=reference, mention_author=tint)
         except Exception as why:           # noqa: BLE001 — a platform boundary
             closed(files)
             self._final(why)
@@ -850,7 +1030,50 @@ class Reaching:
                 failed["retry_after"] = float(after)
             say(failed)
             return
+        # Ours, and remembered as ours: a later delivery told to quote this one must not ping its
+        # author, which is this bot.
+        self.handled[str(sent.id)] = Handled(place=place, ours=True)
+        self._make_room()
         say({"say": "delivered", "id": given, "external_id": str(sent.id)})
+
+    def _quoting(self, reply_to: Any, place: int):
+        """What this delivery quotes and whether it tints — or neither, and why.
+
+        **The tint is the whole of what the quote is for.** A message naming somebody is drawn by
+        *their own* client with an amber bar down the side of it, which is a thing no bot can draw
+        for itself and the only way an answer somebody has been waiting for stops looking like the
+        bookkeeping around it. A reply does it by pinging the author of the message it quotes.
+
+        **Which delivery is an answer is rundesk's to say**, and it says so by putting a `reply_to`
+        on it. Nothing here reads the text and guesses: running commentary carries none and is
+        posted plainly, because a thread where every line quotes the same message is unreadable.
+
+        Three ways this comes back with nothing to quote.
+
+        **A private conversation.** Two people are here, every message in it is already theirs, and
+        a quote buys no attention while the ping spends a notification asking for it.
+
+        **A message this program wrote.** Pinging its author pings the bot, and the person the
+        answer is for is left untinted — the recorded failure from the build this replaces, where a
+        scheduled report was anchored to rundesk's own notice.
+
+        **A message standing somewhere else.** Being named in a room opens a thread and the turn
+        happens inside it while the message that asked stays in the room above; a reply does not
+        reach across, so the quote is dropped here rather than left to Discord, which would drop it
+        silently and only because `fail_if_not_exists` says so.
+        """
+        if not reply_to:
+            return None, False
+        quoted = an_id(reply_to, "message id")
+        known = self.handled.get(str(quoted))
+        if self.private.get(str(place)) or (known is not None and known.place != place):
+            return None, False
+        # **`fail_if_not_exists=False`, always.** Discord refuses a whole message that quotes one it
+        # cannot resolve, and a turn here runs for minutes — the asker deleting their own question
+        # is enough to lose the answer to it entirely.
+        return (discord.MessageReference(message_id=quoted, channel_id=place,
+                                         fail_if_not_exists=False),
+                not (known is not None and known.ours))
 
     async def _state(self, it: Dict[str, Any]) -> None:
         """Show what rundesk says a turn is doing: a mark, an indicator, and no opinion of ours."""
@@ -876,12 +1099,20 @@ class Reaching:
         A message with no mark for a moment reads as a turn nobody picked up, and the order is the
         only thing that decides which of those somebody sees. If the new one cannot be placed then
         the old one stays, which is the failure to prefer.
+
+        **Marked where it is standing, which is not always where its conversation is.** Being named
+        in a room opens a thread and rundesk names that thread as the place — while the message it
+        is marking is still in the room above, where Discord answers `404` for it. Falls back to the
+        place it was told when this has never seen the message, which is every message a restart
+        forgot and is the only answer available for one.
         """
-        keyed = f"{place}/{external_id}"
+        known = self.handled.get(str(external_id))
+        standing_in = known.place if known is not None else place
+        keyed = f"{standing_in}/{external_id}"
         standing = self.marks.get(keyed)
         if standing == mark:
             return
-        where = self.client.get_partial_messageable(place)
+        where = self.client.get_partial_messageable(standing_in)
         message = where.get_partial_message(external_id)
         try:
             await message.add_reaction(mark)
@@ -945,6 +1176,10 @@ class Reaching:
             self.marks.pop(next(iter(self.marks)))
         while len(self.typing) > LIVE_KEPT:
             self._typing_stops(next(iter(self.typing)))
+        while len(self.handled) > LIVE_KEPT:
+            self.handled.pop(next(iter(self.handled)))
+        while len(self.private) > LIVE_KEPT:
+            self.private.pop(next(iter(self.private)))
 
 
 def _without_our_name(text: Any, ours: Optional[int]) -> str:

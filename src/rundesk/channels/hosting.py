@@ -140,11 +140,13 @@ NEVER_AGAIN = float("inf")
 #: either of them, so choosing cost nothing; leaving both standing costs a mark that never appears
 #: and nobody able to say why.
 #:
-#: **Only `seen` has a producer, and that is not an omission.** It is the one state that does not
-#: need a turn: a message arriving is the whole of the event. The other four say what became of a
-#: turn, and there is no provider layer in this build to run one — so they are the adapter's to
-#: render on the day something drives them.
+#: **Two of the five have a producer, and neither needs a turn.** `seen` is a message arriving,
+#: which is the whole of the event. `done` is an answer *landing* — known the moment the adapter
+#: acknowledges a delivery, which is a fact about delivery and not about a turn. The remaining
+#: three say what became of one, and there is no provider in this build to run it, so they are the
+#: adapter's to render on the day something drives them.
 SEEN = "seen"
+DONE = "done"
 
 #: The least time any one adapter gets to stop, however many there are. A gateway's whole shutdown
 #: is bounded by the job's `ExitTimeOut`, and channels share that budget with schedules — so the
@@ -198,6 +200,18 @@ class Running(NamedTuple):
     listening: Optional[threading.Thread]
     since: float
     mine: bool
+    #: What each delivery still in flight is an answer to: the delivery's own id, against the
+    #: platform's id for the message being answered. Written when the delivery goes out and read
+    #: when the adapter acknowledges it, which is the moment — and the only moment — this side
+    #: knows an answer has actually landed. That is what puts the ✅ on somebody's message, and it
+    #: needs no provider: *answered* is a fact about delivery, not about a turn.
+    #:
+    #: A plain dict on an immutable tuple, mutated by both threads under `saying`. **Stated by
+    #: every caller and never defaulted**: a mutable default on a `NamedTuple` is one object
+    #: shared by every instance that leaves it out, so two adapters would answer for each
+    #: other's deliveries. It sits above `saying` because a field with no default must.
+    awaiting: Dict[str, str]
+
     #: Held while one record is written to this adapter, because **two threads write to it**: the
     #: gateway's loop delivers and stops, and the thread draining its stdout marks what has just
     #: arrived. A line half written by one and finished by the other is a line the adapter cannot
@@ -374,11 +388,20 @@ def stopping(agent: str, where: Path, watching: Watching, within: float) -> Watc
 
 
 def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
-         pieces: List[str], sending: Sequence[naming.Sending] = ()) -> bool:
+         pieces: List[str], sending: Sequence[naming.Sending] = (),
+         answering: Optional[str] = None) -> bool:
     """Send something to a place through a running adapter. `False` when there is nothing to send it.
 
     `False` rather than an exception: a notice that could not be delivered because the adapter is
     restarting is a fact to write down, not a reason to interrupt whatever produced it.
+
+    `answering` is the platform's id for the message this replies to, and it does two things.
+    The adapter quotes that message, so an answer in a room reads as an answer rather than as a
+    remark; and when the adapter acknowledges the delivery, that message is marked done. **Left
+    out for running commentary** — thinking and tool activity are not answers, a thread of quoted
+    replies is unreadable, and marking a message done for each of them would say the turn finished
+    several times. The caller decides by setting it or leaving it out, which keeps the decision on
+    this side, where what became of a turn is already known.
 
     `sending` is what `delivery.carried` has already approved, and it goes with the **last** piece:
     the words describing a file are what a reader wants above it, and a platform hangs an attachment
@@ -395,7 +418,13 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
         record = {"do": "deliver", "id": f"{time.time():.6f}-{nth}", "place": place, "text": piece}
         if carrying and nth == len(saying) - 1:
             record["files"] = carrying
+        # The quote goes on the **first** piece only. A long answer split into four is one answer,
+        # and quoting the same message four times is four notifications for one reply.
+        if answering and nth == 0:
+            record["reply_to"] = answering
+            one.awaiting[record["id"]] = answering
         if not _said_to(where, one, record):
+            one.awaiting.pop(record["id"], None)
             return False
     return True
 
@@ -433,7 +462,7 @@ def _reckoned(agent: str, where: Path, kind: str, watching: Watching) -> None:
         said = _read_record(agent, kind)
         watching.running[kind] = Running(
             kind=kind, pid=programs.a_pid(said.get("pid")) or 0, talking=None, listening=None,
-            since=time.monotonic(), mine=False)
+            since=time.monotonic(), mine=False, awaiting={})
         # What happens to it is said by the line after this one and never promised by this one:
         # ending it needs a pid the claim has vouched for, and the case where there is not one is
         # exactly the case somebody has to be told about honestly. See `_may_be_signalled`.
@@ -498,7 +527,7 @@ def _started(agent: str, where: Path, kind: str, watching: Watching) -> None:
     # adapter is the same object on both sides of it. The stored one gains the thread afterwards;
     # the thread's own copy never reads that field.
     one = Running(kind=kind, pid=talking.pid, talking=talking, listening=None,
-                  since=time.monotonic(), mine=True, saying=threading.Lock())
+                  since=time.monotonic(), mine=True, saying=threading.Lock(), awaiting={})
     listening = threading.Thread(target=_listened, name=f"channel-{kind}",
                                  args=(agent, where, one, row), daemon=True)
     listening.start()
@@ -589,8 +618,28 @@ def _heard(agent: str, where: Path, one: Running, line: str, allowed: set) -> No
               logs.WARNING)
     elif saying == "note":
         _note(where, f"channel {kind}: {record.get('text')}", _how_serious(record.get("level")))
+    elif saying == "delivered":
+        _delivered(where, one, record)
     elif saying == "failed":
         _note(where, f"channel {kind}: could not deliver — {record.get('why')}", logs.WARNING)
+        one.awaiting.pop(str(record.get("id") or ""), None)
+
+
+def _delivered(where: Path, one: Running, record: Dict[str, Any]) -> None:
+    """An answer landed, so mark what it answered as done.
+
+    **This is the only moment this side knows an answer has arrived**, and it is why the ✅ needs no
+    provider: *answered* is a fact about delivery. The four other marks say what became of a turn and
+    have to wait for something that runs one.
+
+    A delivery nobody was answering — a notice, a piece after the first — has nothing to mark, which
+    is the ordinary case and not a failure.
+    """
+    answered = one.awaiting.pop(str(record.get("id") or ""), None)
+    if not answered:
+        return
+    _said_to(where, one, {"do": "state", "place": str(record.get("place") or ""),
+                          "external_id": answered, "state": DONE})
 
 
 def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allowed: set) -> None:
