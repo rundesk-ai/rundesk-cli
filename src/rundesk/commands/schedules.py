@@ -41,6 +41,7 @@ where it was, because testing a schedule must not be how you stop it happening.
 """
 
 import argparse
+import contextlib
 import shutil
 import sqlite3
 import sys
@@ -51,6 +52,7 @@ from rundesk.agents import directory, migration, records
 from rundesk.commands import Subcommands, as_written, failed
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK, USAGE
+from rundesk.providers import answering, turns
 from rundesk.schedules import due, firing, kept
 from rundesk.utils import locking, programs
 from rundesk.utils.terminal import as_table
@@ -138,6 +140,9 @@ def _stated(one: argparse.ArgumentParser, required: str) -> None:
     one.add_argument("--run", metavar="<program>", dest="program", default=None,
                      help=f"{required}the program to start, with its arguments, as one quoted "
                           "string — never through a shell")
+    one.add_argument("--ask", metavar="<prompt>", dest="prompt", default=None,
+                     help=f"{required}what to ask the agent, instead of --run — its own "
+                          "conversation, so it never lands in the one somebody types into")
 
 
 def cmd_schedules(args: argparse.Namespace) -> int:
@@ -254,12 +259,13 @@ def _added(args: argparse.Namespace) -> int:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was added")
 
     values = {"cron": args.when, "run_at": args.at, "expire_at": args.until,
-              "command": args.program, "enabled": 0 if args.disabled else 1}
+              "command": args.program, "agent_prompt": args.prompt,
+              "enabled": 0 if args.disabled else 1}
     try:
         # Understood before it is written, so a cron nobody can parse is refused where it was typed
         # rather than found by a gateway at the moment it was meant to run. The records refuse the
         # pairs; this refuses what only a reader can see.
-        due.understood(dict(values, name=args.schedule, agent_prompt=None))
+        due.understood(dict(values, name=args.schedule))
         kept.added(args.agent, args.schedule, values)
     except TROUBLE as why:
         return _failed(str(why), "nothing was added")
@@ -281,6 +287,12 @@ def _changed(args: argparse.Namespace) -> int:
                          "say one of them, not both", "nothing was changed")
 
     values = {}
+    if args.program is not None and args.prompt is not None:
+        return _mistyped(f"{args.schedule} starts a program or asks the agent, never both",
+                         "say --run or --ask, not the two of them", "nothing was changed")
+    if args.prompt is not None:
+        values["agent_prompt"] = args.prompt
+        values["command"] = None
     if args.when is not None:
         # **One replaces the other.** A schedule states a repeating time or one moment, so setting
         # either has to clear the other or the records refuse the pair — and the refusal would be
@@ -365,6 +377,34 @@ def _described(agent: str, name: str) -> int:
     return OK
 
 
+def _asks_the_agent(agent: str, name: str) -> bool:
+    """Whether this schedule asks the agent rather than naming a program to start."""
+    with contextlib.suppress(Exception):
+        return bool((kept.one(agent, name).get("agent_prompt") or "").strip())
+    return False
+
+
+def _asked(agent: str, name: str) -> int:
+    """Take this schedule's turn now, in this terminal.
+
+    **The minute it next falls due does not move**, exactly as running a program by hand does not
+    use one up: testing a schedule must not be how you stop it happening.
+    """
+    try:
+        got = answering.for_a_schedule(agent, name)
+    except (answering.Refused, turns.Busy, turns.NotRunnable) as why:
+        return _failed(str(why), "nothing was run")
+    except TROUBLE as why:
+        return _failed(str(why), "nothing was run")
+    if got.reply.strip():
+        print(got.reply)
+    if got.worked:
+        print(f"\nschedule {name} completed  ·  turn {got.turn}")
+        return OK
+    return _failed(f"{name} did not answer — {got.failure_message or got.turn_status}",
+                   f"what it did:  rundesk turns {agent} {got.turn}")
+
+
 def _ran(agent: str, name: str, waiting: float) -> int:
     """Run one schedule now and hand back what the program said, including its exit code.
 
@@ -378,6 +418,12 @@ def _ran(agent: str, name: str, waiting: float) -> int:
     if waiting <= 0:
         return _mistyped(f"{waiting:g} seconds is not long enough for anything to run",
                          "say a number of seconds greater than zero", "nothing was run")
+
+    if _asks_the_agent(agent, name):
+        # **One verb for both kinds.** A schedule starts a program or asks the agent, and a person
+        # checking their own work should not have to know which they wrote. The turn is taken here,
+        # in this terminal, exactly as `providers run` takes it under a gateway.
+        return _asked(agent, name)
 
     try:
         ran = firing.by_hand(agent, name, waiting=waiting, where=directory.logs(agent))
@@ -462,7 +508,15 @@ def _what_it_needs(args: argparse.Namespace, typed: str) -> str:
     if args.when is not None and args.at is not None:
         return ("a schedule runs over and over or runs once, never both — say --when or --at, "
                 "not the two of them")
-    return firing_trouble(args.program) or ""
+    # **A schedule starts a program or asks the agent, and never both.** The records hold the same
+    # rule as a `CHECK`; this is what says it in words, where somebody typed it.
+    if args.program is not None and args.prompt is not None:
+        return ("a schedule starts a program or asks the agent, never both — say --run or --ask, "
+                "not the two of them")
+    if args.program is None and args.prompt is None:
+        return ("nothing said what it does — say the program to start or what to ask the agent, "
+                f"with: {typed} --run '<program>'  or  {typed} --ask '<prompt>'")
+    return firing_trouble(args.program) if args.program is not None else ""
 
 
 def firing_trouble(said: Optional[str]) -> str:

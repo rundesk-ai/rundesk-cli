@@ -40,6 +40,8 @@ from rundesk.commands.schedules import register as register_schedules
 from rundesk.commands.skills import cmd_skills
 from rundesk.commands.skills import register as register_skills
 from rundesk.commands.status import cmd_status
+from rundesk.commands.turns import cmd_turns
+from rundesk.commands.turns import register as register_turns
 from rundesk.commands.uninstall import cmd_uninstall
 from rundesk.commands.update import Fetching, cmd_update
 from rundesk.commands.version import cmd_version
@@ -106,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_ask(sub)
     register_messages(sub)
     register_providers(sub)
+    register_turns(sub)
     register_schedules(sub)
     register_channels(sub)
     register_skills(sub)
@@ -200,6 +203,8 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
         return cmd_ask(args)
     if args.command == "messages":
         return cmd_messages(args)
+    if args.command == "turns":
+        return cmd_turns(args)
     if args.command == "providers":
         return cmd_providers(args)
     if args.command == "schedules":

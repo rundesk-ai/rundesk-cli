@@ -27,10 +27,11 @@ from rundesk.agents import directory, records
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import OK
-from rundesk.providers import adapters, instructions, protocol
+from rundesk.providers import adapters, answering, instructions, protocol, turns
 from rundesk.utils.terminal import as_table
 
-TROUBLE = (adapters.NotRunnable, directory.Refused, records.NotThere, records.Unreadable, OSError)
+TROUBLE = (adapters.NotRunnable, answering.Refused, directory.Refused,
+           records.NotThere, records.Unreadable, turns.Busy, OSError)
 
 #: What a person is shown for a capability an adapter did not claim. Absent means no, and saying so
 #: as a word rather than a blank is what tells "it said no" apart from "nothing was asked".
@@ -59,6 +60,11 @@ def register(sub: Subcommands) -> None:
     said.add_argument("--layers", action="store_true",
                       help="show only the byte breakdown, not the prompt itself")
 
+    taking = what.add_parser("run", help="take one scheduled turn here — what a firing starts")
+    taking.add_argument("agent", metavar="<agent>")
+    taking.add_argument("--schedule", metavar="<schedule>", required=True,
+                        help="which schedule this turn is for")
+
 
 def cmd_providers(args: argparse.Namespace) -> int:
     """A `Namespace` in, an exit code out."""
@@ -70,6 +76,8 @@ def cmd_providers(args: argparse.Namespace) -> int:
             return _checked(args.provider)
         if what == "instructions":
             return _instructions(getattr(args, "agent", None), args.trigger, args.layers)
+        if what == "run":
+            return _took_a_turn(args.agent, args.schedule)
     except TROUBLE as why:
         return _failed(str(why))
     raise AssertionError(f"providers {what} is registered on the parser and answered by nothing")
@@ -128,6 +136,27 @@ def _instructions(agent: str, trigger: str, only_layers: bool) -> int:
     as_table(("LAYER", "BYTES"), [(one.name, str(one.bytes_used)) for one in built.layers])
     print(f"\n{built.total_bytes} bytes in {len(built.layers)} layers, {built.sha256[:12]}")
     return OK
+
+
+def _took_a_turn(agent: str, schedule: str) -> int:
+    """One scheduled turn, in this process. **What a firing starts, and rarely typed by a person.**
+
+    Documented the way `gateways run` is: it exists because something has to be the program a
+    schedule's firing spawns, and a verb that is only reachable from inside the product is a verb
+    nobody can debug.
+
+    **Exit `0` if and only if the turn finished.** `schedules.firing` reads this code to decide
+    whether the firing completed or failed, so a turn that did not answer must not look like one that
+    did — that is the whole of what a schedule's owner reads the next morning.
+    """
+    got = answering.for_a_schedule(agent, schedule)
+    turns.note(agent, f"schedule {schedule}: turn {got.turn} {got.turn_status}"
+                      + (f" — {got.failure_message}" if got.failure_message else ""))
+    if got.worked:
+        return OK
+    return _failed(f"{agent} did not answer the schedule {schedule} — "
+                   f"{got.failure_message or got.turn_status}",
+                   f"what it did:  rundesk turns {agent} {got.turn}")
 
 
 def _about(agent: str) -> Dict[str, object]:

@@ -132,8 +132,8 @@ STOPPED_WITH = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 #: The records hold that kind and the clock decides it exactly as it decides any other, so the
 #: sentence is about the *runner* being absent and says so. A schedule reported as failing for a
 #: reason nobody can act on is worse than one that is refused in words.
-NOT_PROVEN = ("nothing in this release runs a provider, so a schedule that asks an agent cannot be "
-              "started — it is recorded and it is not run")
+NOT_PROVEN = ("no provider process was handed in, so a schedule that asks an agent cannot be "
+              "started here — it is recorded and it is not run")
 
 
 class Occupied(Exception):

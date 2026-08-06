@@ -14,7 +14,7 @@ time — which is passed in. A year of firings is decided in a millisecond, and 
 argument is why.
 
 **What it starts** is carried and never read on the way. The kind of work is one branch in one place,
-so the day rundesk can run a provider, nothing about deciding *when* changes.
+so what a schedule *does* — start a program, or ask the agent — changes nothing about deciding *when*.
 
 ## The machine's own clock, and the one hour a year that repeats
 
@@ -115,10 +115,16 @@ its own is outside the supervisor's reach, so if the gateway does not stop it, n
 
 ## What is not built
 
-Nothing in this release runs a provider, so a schedule that asks an agent rather than naming a program
-cannot be started — and there is no way to type one. The records hold that kind, the clock decides it,
-and the firing path has the seam for it, so the day a provider process lands nothing about an agent's
-records has to move. Until then it is not on the command, because a verb rundesk cannot perform is a
-verb rundesk does not have.
+A schedule asks the agent with `--ask` or starts a program with `--run`, and exactly one of the two —
+the records hold that as a `CHECK` and the command says it in words. An agent-asking schedule gets
+**its own conversation**, keyed by the schedule's name, so a run at three in the morning never lands
+in the exchange somebody types into: in the build this replaces it resumed the owner's own session
+and left its prompt and its answer in the middle of it.
 
-Channels are the same: a schedule carries where it would report, and nothing reads it yet.
+`rundesk schedules run` takes either kind by hand, and neither uses up the minute it next falls due —
+testing a schedule must not be how you stop it happening.
+
+What is still not built: a schedule carries `agent_provider` and `agent_model` columns that nothing
+writes. A schedule runs on the agent's own brain, and a way to override that per schedule is a verb
+nobody has asked for. Channels are the same — a schedule carries where it would report, and nothing
+reads it yet.

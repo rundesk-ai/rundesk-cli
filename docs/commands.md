@@ -203,10 +203,12 @@ agent cole added
         home      /Users/you/.rundesk/data/agents/cole/home
         logs      /Users/you/.rundesk/data/agents/cole/logs
         records   /Users/you/.rundesk/data/agents/cole/state.db
-        note      the provider is recorded and not proven — nothing in this release runs one
+        note      the provider is recorded and not proven — check it with: rundesk providers check
 ```
 
-**The provider is recorded and it is not proven**, and the command says so every time. Nothing in
+**The provider is recorded and it is not proven**, and the command says so every time —
+adding an agent runs no adapter, asks nothing what it can do and finds out about no
+sign-in. `rundesk providers check` is what answers that. Nothing in
 this release runs one: no credential is checked, no request is made, and there is no gateway to
 start. An agent added with a provider nobody has ever spelled correctly looks exactly like one that
 works, and a line implying otherwise would be a success this release did not earn.
@@ -241,7 +243,7 @@ Changes what an agent is configured with.
 ```console
 $ rundesk agents configure cole --provider openai
 cole: provider is now openai
-        the provider is recorded and not proven — nothing in this release runs one
+        the provider is recorded and not proven — check it with: rundesk providers check
 ```
 
 **Naming nothing to change is refused rather than reported as a success.** A command that says it
@@ -935,6 +937,65 @@ nothing ava said or was told holding 'invoice', on nowhere
 **Where an install has no full-text index it says so.** SQLite is not always built with one; the
 search then falls back to matching plain text, which finds different things — no stemming, no phrase,
 no ranking — and somebody comparing two answers has to know which they got.
+
+## turns
+
+Every turn an agent has taken, what each cost, and what one actually did.
+
+`rundesk messages` is what was *said*; this is what it *cost* and what became of it. Two different
+questions, kept apart because they are read for different reasons and answered from different tables.
+
+```console
+$ rundesk turns ava
+turns ava has taken, newest first
+TURN  WHEN                  WAS   IN  COST                           UNKNOWN  LOST
+2     2026-08-06T13:39:13Z  done  2   20in 1510out 302567cr 17453cw  0        0
+1     2026-08-06T13:38:14Z  done  1   20in 1510out 302567cr 17453cw  0        0
+```
+
+The four billed quantities are shown apart because they are billed at three different rates — fresh
+input, cache reads and cache writes — and a single total would be a number that is real and
+misleading. **A dash is not a zero**: it means nobody reported one, and a cost nobody measured and a
+cost of nothing are different answers.
+
+**`UNKNOWN` and `LOST` are how a vendor moving under you becomes visible.** The first counts records
+this release did not understand and the second records that never arrived. Both are zero on a healthy
+turn; both climbing means an adapter and its brain have drifted apart, and nothing else in the product
+will tell you before somebody notices an agent behaving oddly.
+
+With a turn as well, it shows that one whole: what it was admitted with, what the adapter said it
+could do, every record in the order it happened, what it came to — and, where it did not answer,
+whether waiting will help or whether somebody has to act.
+
+## ask
+
+Ask an agent something, here, in this terminal, and watch it work.
+
+```console
+$ rundesk ask ava "what changed in the queue today?"
+  read
+    3 files changed
+Nothing urgent — three merged pull requests and one rename.
+
+20 in, 1510 out, 302567 cached, 17453 written · 9200 in the conversation  ·  turn 7
+```
+
+The attended way in: a gateway answers a channel and the clock starts a schedule, and this is a
+person typing. **It is the only caller that can steer** — put a word into a turn that is already
+running — because it is the only one with anybody to get one from. Type while it works and the words
+reach the brain, if that brain said it can be steered.
+
+Tools are shown by what they **did** rather than by whatever the vendor calls them, so a `Bash`, a
+`shell` and a `run_terminal_command` all read as `ran`. Prose is shown when it is finished and never
+while it is being written, because a reply that rewrites itself in place is unreadable. `--thinking`
+adds what it is reasoning about, which is long and off by default.
+
+**One conversation per agent, not one per command** — asking again carries the same exchange on,
+which is what a person means by asking again. `--fresh` starts a new one on the brain.
+
+**It refuses rather than queues.** A conversation already being answered in is busy, and the claim
+is the kernel's, so this competes correctly with a gateway answering the same agent on a channel
+with no coordination between them.
 
 ## backups
 

@@ -402,9 +402,8 @@ what the previous build's contract published and what nothing here speaks.
 **Only `seen` has a producer today.** It is the one state that needs no turn — a message arriving is
 the whole of the event — and it is sent the moment the message is written down, including on a
 redelivery, because the mark belongs to the message and an adapter that has just restarted no longer
-knows it put one up. The other four say what became of a turn, and there is no provider layer in this
-build to run one. Implement them and expect silence; see
-[what is not built yet](#what-is-not-built-yet).
+knows it put one up. The other four say what became of a turn: `working` goes up the moment one is
+admitted, and exactly one of `done`, `stopped` or `failed` when it settles.
 
 **Put the new mark up before taking the old one down.** A message with no mark for a moment reads as
 a turn nobody picked up, and the order is the only thing that decides which of those somebody sees.
@@ -576,11 +575,12 @@ separator in it is used as a path. `~` is expanded.
 Said plainly, because a page that quietly omitted this would be one somebody writes against and then
 cannot explain.
 
-**There is no provider layer.** Nothing runs a turn, so **nothing produces `working`, `done`,
-`stopped` or `failed`**, and there is no streamed thinking, no tool activity, no usage and no answer.
-A message from somebody allowed is recorded, marked `seen`, and answered by nothing — and the
-gateway's log says exactly that, rather than leaving it looking as though something went wrong.
-Implement the other four states and expect them to be silent for now.
+**A turn's activity is not streamed to a channel.** All five states arrive, and the answer arrives —
+a message from somebody allowed is recorded, marked `seen`, answered, and the answer is delivered —
+but what the brain *did* on the way (its thinking, its tool calls, what it cost) is written into the
+turn's own records and is not sent out. `rundesk turns <agent> <turn>` is where that is read. A
+surface that wants to show work as it happens is the next thing this seam grows, and the sink it
+would be fed from already exists.
 
 **What `--capabilities` says is asked for and thrown away.** It is printed once, by `channels add`,
 and there is no column in the `channels` table holding it — so `max_text` is declared and not used,

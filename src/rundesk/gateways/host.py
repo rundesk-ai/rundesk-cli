@@ -204,6 +204,7 @@ from rundesk.channels import delivery, hosting
 from rundesk.channels import files as arrivals
 from rundesk.exits import OK
 from rundesk.gateways import standing
+from rundesk.providers import answering
 from rundesk.schedules import firing
 from rundesk.utils import logs
 
@@ -507,8 +508,14 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
         # exit non-zero — which under `SuccessfulExit: false` is a request to be restarted.
         standing.write_record(at, name, __version__)
         logs.note(where, f"gateway up for {name} on {__version__} as pid {os.getpid()}")
+        # **The one layer that may reach both.** `channels` and `schedules` each publish a shape
+        # and take an object of it, so neither has to know what a brain is — see
+        # `providers.answering`. Built before anything is settled or started, because an adapter
+        # adopted from a gateway that is gone has to be able to answer the moment it is adopted.
+        on_a_channel = answering.OnAChannel(where, lambda: channels_up)
+        on_a_schedule = answering.OnASchedule()
         watching = firing.settled(name, where)
-        channels_up = hosting.settled(name, where)
+        channels_up = hosting.settled(name, where, answering=on_a_channel)
         # Registered on the stack `run` unwinds however this process leaves, which is the one place
         # a child's stop belongs. Each callback reads its tenant's state as it stands at that moment
         # rather than as it stands now — they close over the names, not over these first values.
@@ -523,8 +530,10 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack) -> int:
         # loop's half is the one that matters — a gateway doing its job is one nobody restarts.
         landing, swept_for, said_up = True, "", False
         while True:
-            watching = firing.looked(name, where, watching, telling=notices)
-            channels_up = hosting.looked(name, where, channels_up)
+            watching = firing.looked(name, where, watching, telling=notices,
+                                     asking=on_a_schedule)
+            channels_up = hosting.looked(name, where, channels_up,
+                                         answering=on_a_channel)
             if not said_up:
                 # **After the first pass through `hosting.looked`, never before it.** An adapter is
                 # what a notice leaves through and `looked` is what starts one, so a gateway that

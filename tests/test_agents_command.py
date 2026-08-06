@@ -113,12 +113,14 @@ class Adding(support.Isolated):
         self.assertTrue(directory.logs("cole").is_dir())
 
     def test_it_says_out_loud_that_the_provider_is_not_proven(self):
-        # Nothing in this release runs a provider: no credential is checked and no request is made.
-        # An agent added with a provider nobody has ever spelled correctly looks exactly like one
-        # that works, and wording that implied otherwise would claim a success this did not earn.
+        # **Adding an agent checks nothing about its brain**, and it must not look as though it
+        # did. Nothing here runs the adapter, asks it what it can do, or finds out whether anybody
+        # is signed in — an agent added with a provider nobody has ever spelled correctly looks
+        # exactly like one that works. Now that a turn *can* run, the sentence has to send somebody
+        # to the verb that would actually tell them.
         _, out, _ = self.rundesk("agents", "add", "cole", "--provider", "claude")
         self.assertIn("recorded and not proven", out)
-        self.assertIn("nothing in this release runs one", out)
+        self.assertIn("rundesk providers check", out)
 
     def test_a_name_no_launchd_label_can_carry_is_warned_about_where_it_is_chosen(self):
         # `agents` allows any name a directory may have; a launchd label is narrower. Such an agent

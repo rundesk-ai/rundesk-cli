@@ -84,7 +84,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import IO, Any, Dict, List, NamedTuple, Optional, Sequence
+from typing import IO, Any, Dict, List, NamedTuple, Optional, Protocol, Sequence
 
 from rundesk.agents import directory
 from rundesk.channels import adapters, arriving, kept
@@ -176,6 +176,28 @@ SAID_AT_MOST = 20
 SAID_LINE_AT_MOST = 500
 
 
+class Answering(Protocol):
+    """What answers a message, handed in rather than reached for.
+
+    **The seam the provider layer arrives at.** This module knows that a message was written down
+    and that somebody may be answered; what it must never know is what a brain is, how a turn is
+    run, or what one costs — `channels` may not reach `providers`, so an object of this shape is
+    passed down from the layer that may reach both.
+
+    **It has to return at once.** `answer` is called on the thread reading one adapter's output, and
+    that thread's whole contract is that it cannot fall behind: a turn takes minutes, and one run
+    inline here would stop the channel reading anything for the length of it — including the next
+    message, including a `stop`. Whatever runs the turn starts it somewhere else and returns.
+
+    `landed` says whether this message was **fresh**. A redelivery is the same message arriving
+    twice, and answering it twice is the failure this exists to prevent.
+    """
+
+    def answer(self, agent: str, kind: str, place: str, who: str, body: str,
+               external_id: Optional[str], landed: arriving.Landed) -> None:
+        ...
+
+
 class Running(NamedTuple):
     """One adapter this gateway is hosting.
 
@@ -218,6 +240,10 @@ class Running(NamedTuple):
     #: parse, and this seam is newline-delimited JSON — one bad line there is not one bad record.
     #: `None` on an adapter this process did not start, which is also one it never speaks to.
     saying: Optional[threading.Lock] = None
+    #: What answers a message that arrives here, or `None` where nothing does — see
+    #: `Answering`. Carried on the adapter rather than looked up, because the thread
+    #: that reads it is the thread that has to hand a message on.
+    answering: Optional[Answering] = None
 
 
 class Watching(NamedTuple):
@@ -336,7 +362,7 @@ def claiming(agent: str, kind: str):
         os.close(held)
 
 
-def settled(agent: str, where: Path) -> Watching:
+def settled(agent: str, where: Path, answering: Optional[Answering] = None) -> Watching:
     """Reckon with what a previous gateway left, before this one starts anything. **Never raises.**
 
     An adapter whose gateway is gone is either still running — in which case this one must not start
@@ -351,7 +377,8 @@ def settled(agent: str, where: Path) -> Watching:
     return watching
 
 
-def looked(agent: str, where: Path, watching: Watching) -> Watching:
+def looked(agent: str, where: Path, watching: Watching,
+           answering: Optional[Answering] = None) -> Watching:
     """One pass: reap what has stopped, and start what should be running and is not.
 
     **Never ends the gateway.** Everything here is guarded, because a platform being down is not a
@@ -360,7 +387,7 @@ def looked(agent: str, where: Path, watching: Watching) -> Watching:
     with contextlib.suppress(Exception):
         _reaped(agent, where, watching)
     with contextlib.suppress(Exception):
-        _started_what_should_be(agent, where, watching)
+        _started_what_should_be(agent, where, watching, answering)
     return watching
 
 
@@ -385,6 +412,29 @@ def stopping(agent: str, where: Path, watching: Watching, within: float) -> Watc
         with contextlib.suppress(Exception):
             _ended(agent, where, one, watching, each, "stopped with this gateway")
     return watching
+
+
+def marked(agent: str, where: Path, watching: Watching, kind: str, place: str,
+           state: str, external_id: Optional[str] = None) -> bool:
+    """Tell a channel what a turn is doing. `False` when nothing was reading that adapter.
+
+    **This module owns the wire and never the word.** `seen` is its own — a message arriving is the
+    whole of that event — and the four that say what became of a *turn* are the provider layer's,
+    forwarded here rather than named here, so there is one source of truth and no constant to drift.
+
+    Never raises: a mark that could not be sent is a surface a little out of date, and a turn that
+    failed because it could not say it was working would be a far worse trade.
+    """
+    one = watching.running.get(kind)
+    if one is None:
+        return False
+    said = {"do": "state", "place": place, "state": state}
+    if external_id:
+        said["external_id"] = external_id
+    with contextlib.suppress(Exception):
+        _said_to(where, one, said)
+        return True
+    return False
 
 
 def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
@@ -475,7 +525,8 @@ def _reckoned(agent: str, where: Path, kind: str, watching: Watching) -> None:
         files.remove_one(record_of(agent, kind))
 
 
-def _started_what_should_be(agent: str, where: Path, watching: Watching) -> None:
+def _started_what_should_be(agent: str, where: Path, watching: Watching,
+                            answering: Optional[Answering] = None) -> None:
     """Start an adapter for every configured channel that has not got one."""
     now = time.monotonic()
     for kind in _configured(agent):
@@ -500,7 +551,8 @@ def _started_what_should_be(agent: str, where: Path, watching: Watching) -> None
             watching.waiting[kind] = time.monotonic()
 
 
-def _started(agent: str, where: Path, kind: str, watching: Watching) -> None:
+def _started(agent: str, where: Path, kind: str, watching: Watching,
+             answering: Optional[Answering] = None) -> None:
     """Start one adapter, claim its channel, and put a thread on its stream."""
     try:
         row = kept.one(agent, kind)
@@ -526,7 +578,8 @@ def _started(agent: str, where: Path, kind: str, watching: Watching) -> None:
     # Built before the thread and handed to it, so that the one lock guarding writes to this
     # adapter is the same object on both sides of it. The stored one gains the thread afterwards;
     # the thread's own copy never reads that field.
-    one = Running(kind=kind, pid=talking.pid, talking=talking, listening=None,
+    one = Running(answering=answering, kind=kind, pid=talking.pid, talking=talking,
+                  listening=None,
                   since=time.monotonic(), mine=True, saying=threading.Lock(), awaiting={})
     listening = threading.Thread(target=_listened, name=f"channel-{kind}",
                                  args=(agent, where, one, row), daemon=True)
@@ -683,11 +736,20 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allo
         # that has just restarted is one that no longer knows it put it up.
         _said_to(where, one, {"do": "state", "place": place, "external_id": external,
                               "state": SEEN})
-    if landed.fresh:
-        # There is no provider, so nothing answers this. Said plainly rather than left to look like
-        # something went wrong: a release that receives and cannot reply has to say which it is.
+    if not landed.fresh:
+        # The same message arriving twice. It is marked seen again above, because that mark belongs
+        # to the message and an adapter that has just restarted no longer knows it put one up — but
+        # answering it twice would be two turns for one question.
+        return
+    if one.answering is None:
+        # Nothing runs a turn here. Said plainly rather than left to look like something went wrong:
+        # a gateway that receives and cannot reply has to say which it is.
         _note(where, f"channel {kind}: {who} said something in {place} — recorded, and nothing "
                      "answers it yet")
+        return
+    # **Handed on, never run here.** This is the thread reading one adapter's output, and a turn
+    # takes minutes — see `Answering`.
+    one.answering.answer(agent, kind, place, who, body, external, landed)
 
 
 def _taken_in(agent: str, where: Path, kind: str, message: str,

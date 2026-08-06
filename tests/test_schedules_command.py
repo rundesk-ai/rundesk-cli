@@ -166,7 +166,7 @@ class Adding(Scheduling):
         code, _out, err = self.rundesk("schedules", "add", self.agent, "nightly",
                                        "--when", "0 2 * * *")
         self.assertEqual(FAILED, code)
-        self.assertIn("nothing said what to run", err)
+        self.assertIn("nothing said what it does", err)
         self.assertIn("--run", err)
 
     def test_a_program_with_nothing_in_it_is_a_different_mistake_from_none_at_all(self):
@@ -448,18 +448,41 @@ class Removing(Scheduling):
         self.assertEqual(["two"], [row["name"] for row in kept.all(self.agent)])
 
 
-class WhatThisReleaseWillNotOffer(Scheduling):
-    """The agent kind is in the records and is not on the parser, and that is the rule being kept."""
+class AScheduleThatAsksTheAgent(Scheduling):
+    """The kind the records always held, now that something can run one.
 
-    def test_there_is_no_way_to_type_a_schedule_that_asks_an_agent(self):
-        # `AGENTS.md`: a verb rundesk cannot perform is a verb rundesk does not have. One added this
-        # way would be listed with a next-due time it could never honour, which is a command
-        # reporting a success it did not earn.
-        for flag in ("--ask", "--provider", "--model"):
+    `AGENTS.md`: a verb rundesk cannot perform is a verb rundesk does not have — so `--ask` was off
+    the parser for as long as nothing could honour it, and it is on now because something can.
+    """
+
+    def test_it_can_be_spelled(self):
+        code, out, _err = self.rundesk("schedules", "add", self.agent, "review",
+                                       "--when", "0 9 * * *", "--ask", "what changed?")
+        self.assertEqual(OK, code)
+        self.assertIn("review", out)
+
+    def test_it_starts_a_program_or_asks_the_agent_and_never_both(self):
+        code, _out, err = self.rundesk("schedules", "add", self.agent, "review",
+                                       "--when", "0 9 * * *", "--ask", "what changed?",
+                                       "--run", "/bin/echo hello")
+        self.assertEqual(FAILED, code)
+        self.assertIn("never both", err)
+
+    def test_one_that_does_neither_is_refused_with_both_ways_to_type_it(self):
+        code, _out, err = self.rundesk("schedules", "add", self.agent, "review",
+                                       "--when", "0 9 * * *")
+        self.assertEqual(FAILED, code)
+        self.assertIn("--ask", err)
+        self.assertIn("--run", err)
+
+    def test_the_two_the_records_hold_and_nothing_yet_sets_stay_off_the_parser(self):
+        """`agent_provider` and `agent_model` are columns nothing writes: a schedule runs on the
+        agent's own brain, and a way to override it per schedule is a verb nobody has asked for."""
+        for flag in ("--provider", "--model"):
             with self.subTest(flag=flag):
                 code, _out, err = self.rundesk("schedules", "add", self.agent, "review",
-                                               "--when", "0 9 * * *", flag, "something")
-                self.assertEqual(USAGE, code, f"{flag} is on the parser and cannot be honoured")
+                                               "--when", "0 9 * * *", "--ask", "x", flag, "y")
+                self.assertEqual(USAGE, code, f"{flag} is on the parser and nothing honours it")
                 self.assertIn("unrecognized arguments", err)
 
     def test_one_written_straight_into_the_records_is_still_listed_and_shown(self):
@@ -472,11 +495,18 @@ class WhatThisReleaseWillNotOffer(Scheduling):
         code, out, _ = self.rundesk("schedules", "show", self.agent, "review")
         self.assertEqual(OK, code)
 
-    def test_running_one_by_hand_is_refused_in_words_rather_than_by_a_traceback(self):
+    def test_running_one_by_hand_takes_the_turn_rather_than_refusing(self):
+        """**One verb for both kinds.** A schedule starts a program or asks the agent, and somebody
+        checking their own work should not have to know which they wrote.
+
+        The agent here has a provider nothing stands behind, so the turn cannot start — which is the
+        point: it is refused for a reason about *this agent's brain*, and no longer for the reason
+        that rundesk has no providers at all.
+        """
         kept.added(self.agent, "review", {"cron": "0 9 * * *", "agent_prompt": "review the queue"})
         code, _out, err = self.rundesk("schedules", "run", self.agent, "review")
         self.assertEqual(FAILED, code)
-        self.assertIn("nothing in this release runs a provider", err)
+        self.assertNotIn("nothing in this release runs a provider", err)
         self.assertIn("nothing was run", err)
 
 

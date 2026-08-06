@@ -85,6 +85,25 @@ class Firing(support.Isolated):
     def outcome_of(self, name):
         return kept.one(self.agent, name)["last_outcome"]
 
+    def waited_until_the_last_firing_let_go(self, name):
+        """Wait until nothing this schedule started still holds its lock.
+
+        **A firing's claim outlives the look that started it.** The lock's descriptor is handed to
+        the child, so the kernel keeps it for as long as that child lives — which is the whole
+        design, and it means a case that starts one occurrence and then looks again a minute later
+        is racing a real `/bin/echo`. Losing that race is `Occupied`, which is correct behaviour and
+        a failure of the case rather than of the code: measured at four runs in five once an earlier
+        case in the same process had warmed the imports enough for the second look to arrive first.
+        """
+        def let_go():
+            try:
+                with firing.claiming(self.agent, name):
+                    return True
+            except firing.Occupied:
+                return False
+        self.assertTrue(support.waited_until(let_go, PATIENCE),
+                        f"what {name} started never let go of its lock")
+
     def waited_for_an_outcome(self, name, wanted=None):
         """Wait for a firing to be written down, looking again each time to give it the chance."""
         def landed():
@@ -154,6 +173,7 @@ class WhatIsDueIsStarted(Firing):
     def test_a_minute_later_is_a_new_occurrence(self):
         self.given("tick")
         self.look(at=datetime.datetime(2026, 8, 5, 9, 0))
+        self.waited_until_the_last_firing_let_go("tick")
         after = self.look(at=datetime.datetime(2026, 8, 5, 9, 1))
         self.assertEqual(["tick"], sorted(after.running))
 
@@ -486,7 +506,7 @@ class GoingDown(Firing):
         self.assertTrue(programs.alive(pid), "a gateway stopped a child that was not its own")
 
 
-class TheKindNoCommandCanSpell(Firing):
+class AScheduleThatAsksTheAgent(Firing):
     """A schedule that asks an agent, which this release records and cannot run."""
 
     def a_prompt_schedule(self, name="review"):
@@ -505,14 +525,30 @@ class TheKindNoCommandCanSpell(Firing):
         after = self.look()
         self.assertEqual({}, after.running)
         self.assertEqual(kept.FAILED, self.outcome_of("review"))
-        self.assertIn("nothing in this release runs a provider", self.said())
+        self.assertIn("no provider process was handed in", self.said())
+
+    def test_it_is_started_when_something_was_handed_in_to_start_it(self):
+        """`asking` is the seam, and this is what filling it in looks like from here: `firing` still
+        knows nothing about a brain — it starts what it was handed and reaps a pid."""
+        started = []
+
+        class Starts:
+            def start(self, one, agent, holding):
+                started.append(one.name)
+                return programs.start([SAYS_SOMETHING, "ok"], log=self.log_at, where=None,
+                                      env={}, holding=(holding,))
+
+        Starts.log_at = self.home / "asked.out"
+        self.given("review", command=None, agent_prompt="what changed?")
+        self.look(asking=Starts())
+        self.assertEqual(started, ["review"])
 
     def test_it_claims_its_minute_so_the_refusal_is_said_once_per_occurrence(self):
         self.a_prompt_schedule()
         at = datetime.datetime(2026, 8, 5, 9, 0)
         self.look(at=at)
         self.look(at=at)
-        self.assertEqual(1, self.said().count("nothing in this release runs a provider"))
+        self.assertEqual(1, self.said().count("no provider process was handed in"))
 
     def test_a_runner_handed_in_is_used_and_nothing_else_changes(self):
         # The seam the provider process arrives at, driven by a stand-in of exactly its shape. When

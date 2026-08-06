@@ -60,7 +60,11 @@ MAY_IMPORT = {
     # **The traffic goes one way only**: neither `channels` nor `skills` may reach here, so `hosting`
     # is handed an object exactly as `firing` is handed a `Starting`, and every channel case stays
     # drivable by a test with no brain, no adapter and no subprocess anywhere near it.
-    "providers": ("skills", "channels", "agents", "core", "utils"),
+    # It reaches `schedules` for the other half of the same seam: a scheduled turn has to know what
+    # its schedule asked, and `firing` publishes a `Starting` and takes an object of it exactly as
+    # `hosting` publishes an `Answering`. Neither may reach here, which is what keeps "when is this
+    # due" and "what does a brain cost" two questions with two answers.
+    "providers": ("skills", "channels", "schedules", "agents", "core", "utils"),
     # And `gateways` reaches `schedules` rather than the other way round, because the gateway is
     # what turns "this is due" into work that has started. It is the only long-lived process this
     # product has, so it is the only thing that can hold a child and reap it.

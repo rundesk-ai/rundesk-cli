@@ -112,6 +112,24 @@ def asked_at_a_terminal(agent: str, body: str, when: Optional[datetime] = None) 
     return Landed(conversation, message, fresh)
 
 
+def recorded_for_a_schedule(agent: str, schedule: str, body: str,
+                            when: Optional[datetime] = None) -> Landed:
+    """Write down what a schedule asked, in that schedule's own conversation.
+
+    **One conversation per schedule, and never the one a person types into.** In the build this
+    replaces a scheduled turn resumed the owner's own session and left its prompt and its answer in
+    the middle of it — so a run at three in the morning appeared as though somebody had asked.
+
+    Written as `rundesk` rather than as a person, because nobody asked: the clock did.
+    """
+    now = _now(when)
+    with records.writing(directory.records(agent)) as conn:
+        conversation = _conversation(conn, agent, FROM_SCHEDULE, schedule, None, now)
+        message, fresh = _message(conn, agent, conversation, BY_RUNDESK, FROM_SCHEDULE,
+                                  _bounded(body), None, now)
+    return Landed(conversation, message, fresh)
+
+
 def said_by_agent(agent: str, source: str, place: str, body: str, turn: Optional[int] = None,
                   external_id: Optional[str] = None,
                   when: Optional[datetime] = None) -> Landed:

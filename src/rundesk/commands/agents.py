@@ -48,7 +48,8 @@ from rundesk.utils.terminal import as_table
 #:
 #: One string rather than a sentence written twice, because `add` and `configure` make exactly the
 #: same claim and two wordings of it would eventually become two different claims.
-NOT_PROVEN = "the provider is recorded and not proven — nothing in this release runs one"
+NOT_PROVEN = ("the provider is recorded and not proven — check it with: "
+              "rundesk providers check")
 
 #: What a name outside `job.IN_A_LABEL` costs, said where the name is chosen rather than where it is
 #: next needed. `agents` allows any name a directory may have and launchd's labels are narrower, so
