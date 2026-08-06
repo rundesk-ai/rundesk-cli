@@ -40,7 +40,7 @@ class WhatEveryTurnIsTold(support.Isolated):
 
     def test_which_files_the_agent_lives_by_are_named_with_what_changing_one_is_called(self):
         said = built()[environment.CONTINUITY]
-        self.assertEqual(said, "AGENTS.md=rules,MEMORY.md=memory,SOUL.md=identity")
+        self.assertEqual(said, "AGENTS.md=rules,MEMORY.md=memory")
 
     def test_nothing_is_a_terminal(self):
         self.assertEqual(built()["TERM"], "dumb")

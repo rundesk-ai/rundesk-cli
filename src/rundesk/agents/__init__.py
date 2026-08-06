@@ -12,6 +12,7 @@ tested without starting a program.
 | Module | Answers |
 |---|---|
 | `directory` | where one agent's things stand, what makes a directory an agent, and adding or removing one |
+| `pages` | the files an agent lives by, and putting the ones it is missing into its home |
 | `records` | the database one agent keeps, and the only way in to it |
 | `migration` | carrying one agent, and every agent, onto this release |
 | `steps/` | one agent migration step per file, found rather than listed |

@@ -31,9 +31,10 @@ connected to a platform as an agent that is gone.
 import argparse
 import sqlite3
 import sys
+from pathlib import Path
 from typing import List, Optional
 
-from rundesk.agents import directory, migration, records
+from rundesk.agents import directory, migration, pages, records
 from rundesk.channels import hosting
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
@@ -208,6 +209,22 @@ def _the_skill_every_agent_holds(agent: str) -> str:
     return f"skill     {held.catalog}/{held.skill} — how it operates this install"
 
 
+def _the_pages_it_lives_by(home: Path) -> str:
+    """Say which files this agent was given, or which it did not get. Never silence.
+
+    `agents.directory` places them inside the staging and lets a release that ships none go past —
+    the fault would be in the tree the command was run from, and refusing to make an agent over it
+    helps nobody. **This is the half that makes that visible.** An agent whose rules are missing
+    behaves like an agent with different rules rather than like one that failed, so nothing else
+    would ever say so.
+    """
+    missing = pages.wanted(home)
+    if not missing:
+        return f"rules     {', '.join(sorted(pages.PAGES))} — how it works, and what it learns"
+    return (f"note      it has no {', '.join(missing)} yet — this release shipped none, and "
+            "rundesk update gives it them")
+
+
 def _made(name: str, provider: Optional[str]) -> int:
     """Make an agent, and say what was made — one named thing at a time.
 
@@ -230,6 +247,7 @@ def _made(name: str, provider: Optional[str]) -> int:
     print(f"        home      {at / directory.HOME}")
     print(f"        logs      {at / directory.LOGS}")
     print(f"        records   {at / directory.RECORDS}")
+    print(f"        {_the_pages_it_lives_by(at / directory.HOME)}")
     print(f"        {_the_skill_every_agent_holds(name)}")
     if job.name_trouble(name):
         print(f"        note      {NO_JOB_EVER}")

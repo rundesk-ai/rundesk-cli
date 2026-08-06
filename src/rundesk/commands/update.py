@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 
 from rundesk import __version__
-from rundesk.agents import directory, records
+from rundesk.agents import directory, pages, records
 from rundesk.agents import migration as agent_migration
 from rundesk.commands import failed, skills, the_reason
 from rundesk.commands.gateways import Cycled
@@ -274,6 +274,11 @@ def settle(gateways: Optional[Gateways] = None) -> int:
         left = carried_every_agent(_out_loud, _the_gateways(gateways))
         if left:
             return _failed(f"this install is carried and {_counted(left)} not: {_said(left)}")
+        # After the carrying, and it cannot fail this command. A page an agent is missing is filled
+        # in; one it already has is never touched, whatever it now says — see `agents.pages`. This
+        # is what reaches an agent made by a release that shipped no pages at all, and a home
+        # somebody deleted a file out of.
+        pages.everybody_has_theirs(directory.known(), directory.home, _out_loud)
     except (config.Unreadable, config.Stuck, migration.Broken, OSError) as why:
         # Every write below `settle` goes through the configuration, including the stamp each
         # migration step lands with, so all of these are caught in one place rather than at each

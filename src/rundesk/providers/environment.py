@@ -119,10 +119,16 @@ PREFACE = "RUNDESK_PREFACE"
 #: editing one in a checkout has not rewritten its own rules, and saying it did is worse than the
 #: plain `edit` it would otherwise get, because it is untrue. What qualifies is the resolved path
 #: standing directly in `RUNDESK_CWD`.
+#:
+#: **Exactly what `agents.pages` places, and nothing more.** It named a `SOUL.md` as well, which no
+#: release ever wrote: every turn told every brain the agent lived by a file that was not there, and
+#: an edit to one would have been classified as `identity` on a machine where nothing could produce
+#: one. A name here is a promise that the file exists, so the two lists are compared by
+#: `tests/test_layers.py` rather than kept in step by hand. `identity` stays in the ten words an
+#: adapter may report — the vocabulary is the protocol's, and this is only which files rundesk gives.
 LIVES_BY = {
     "AGENTS.md": "rules",
     "MEMORY.md": "memory",
-    "SOUL.md": "identity",
 }
 
 

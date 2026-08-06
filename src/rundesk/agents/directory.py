@@ -42,6 +42,7 @@ import os
 from pathlib import Path
 from typing import Any, List
 
+from rundesk.agents import pages
 from rundesk.agents.records import beside, stated
 from rundesk.core import paths
 from rundesk.utils import files, locking
@@ -366,6 +367,21 @@ def _built(name: str, provider: str, agents: Path, migration: Any) -> Path:
     try:
         (building / HOME).mkdir(parents=True)
         (building / HOME / NOTE).write_text(_HOME_NOTE.format(name=name), encoding="utf-8")
+        # The files this agent lives by, placed **inside the staging** and under the agent's own
+        # name rather than the staged one — they are what the agent reads, so they say what it is
+        # called and never where it was built. An agent that reached its first turn without them
+        # would be one told by every prompt to read files nothing had written.
+        #
+        # **A release that ships none does not stop an agent being made**, which is the same
+        # judgement `commands.agents` makes about the skill every agent holds: the fault is in the
+        # tree this was run from, not in the agent, and refusing to make one would leave somebody
+        # with a broken checkout unable to do anything at all. It is never silent — the command
+        # layer asks `pages.wanted` afterwards and says which are missing. An `OSError` is not
+        # caught here: that is this staging failing to be written, and half a home is not an agent.
+        try:
+            pages.place(building / HOME, name)
+        except pages.Missing:
+            pass
         (building / LOGS).mkdir()
         # Carried under the staged name, because that is where this agent's directory actually is
         # until the rename. The runner asks this module where an agent's things stand, so the name

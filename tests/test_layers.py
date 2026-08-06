@@ -329,6 +329,30 @@ class TheTreePointsOneWay(support.Isolated):
         self.assertEqual(standing.RECORD, directory.GATEWAY_RECORD)
         self.assertEqual(standing.LOGS, directory.LOGS)
 
+    def test_the_files_an_agent_lives_by_are_spelled_the_same_way_everywhere(self):
+        # Three layers name these files and none of them may import the others to ask. `agents.pages`
+        # writes them, `providers.environment` tells every adapter that changing one is a rules or a
+        # memory edit, and `providers.instructions` tells the brain to read them. The duplication is
+        # the layer boundary being kept clean and is not something to remove — but nothing enforced
+        # that the three agreed, and one of them was already wrong: `LIVES_BY` named a `SOUL.md` that
+        # no release has ever placed, so every turn told every brain to live by a file that was not
+        # there and an edit to one would have been reported as `identity`.
+        #
+        # A name in `LIVES_BY` is a promise the file is really given, so that is the direction
+        # checked: everything classified must be something placed. `CLAUDE.md` is placed and is not
+        # in `LIVES_BY`, which is correct — it is the same bytes as `AGENTS.md` under the name some
+        # brains look for first, and reporting one edit under two names would be reporting it twice.
+        from rundesk.agents import pages
+        from rundesk.providers import environment, instructions
+        self.assertTrue(pages.PAGES, "agents.pages places nothing at all")
+        self.assertEqual(set(), set(environment.LIVES_BY) - set(pages.PAGES),
+                         "providers.environment classifies an edit to a file no release places")
+        for name in environment.LIVES_BY:
+            with self.subTest(name=name):
+                self.assertIn(name, instructions.CORE,
+                              f"{name} is a file the agent lives by and the core never names it, "
+                              "so a brain that does not read its bootstrap page never opens it")
+
     def test_a_step_is_still_held_to_the_layer_rule(self):
         # `named_in` stops at the package's own modules so a step does not have to be listed in a
         # table. `modules_of` must not: a step is arbitrary code shipping in this tree, it runs

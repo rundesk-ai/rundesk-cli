@@ -65,7 +65,7 @@ def replayed(home, prompt="Read note.txt and tell me the number in it.", capture
     told = {"PATH": f"{instead}:/usr/bin:/bin", "CAPTURED": str(captured),
             "RUNDESK_CWD": str(where), "RUNDESK_ACCESS_MODE": "work",
             "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1",
-            "RUNDESK_CONTINUITY": "AGENTS.md=rules,MEMORY.md=memory,SOUL.md=identity"}
+            "RUNDESK_CONTINUITY": "AGENTS.md=rules,MEMORY.md=memory"}
     told.update(also)
     saying = [{"type": "say", "text": prompt}]
     if steering:

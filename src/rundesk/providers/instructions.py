@@ -13,28 +13,48 @@ CORE                        always, whatever this is and whoever asked
 + ordered ADDITIONS         each named, each bounded where it comes in
 ```
 
+**Two layers, and each answers a different question.** `CORE` is *where you are and what you can
+do* — the directory the turn stands in, the files the agent lives by, the skills beside them, the
+command that reaches this install, and the rules that hold before any of it. A situation is *why
+this turn is happening at all*, and holds only what is true because of that and false otherwise.
+
+A fact belongs in exactly one of them. The test is whether the sentence would still be true if
+nobody had asked: where the agent's own files are does not change because a schedule started this
+rather than a person, so it is `CORE` and is written once.
+
 **A trigger belongs to exactly one situation, and a person is the answer for anything not named.**
 What the other situations withhold are the rules that assume somebody is waiting, so a surface this
 release has never heard of is given a person's rules and one of the others only by being named. That
 is the safe way round, and it is the kind of default that is easy to get backwards.
 
-## The one rule the whole shape rests on
+## What the core may say, and what it may not
 
-**`CORE` carries no identity.** A role execution — an agent working as a shared specialist, which
-this release does not run and reserves the layer for — has no home, no memory, no voice and no
-rundesk to operate, and it receives this layer. So anything identity-bearing that leaked into the
-core would be handed straight to one.
+**Everything this release runs is a named agent standing in its own directory**, so the core is
+written for one: it names the agent, its home, the files it lives by and the command that reaches
+this install. That is what makes it the operational layer rather than a preamble.
 
-The core may therefore never name a home, the files an agent lives by, memory, a channel, a schedule
-or a rundesk command. That is not advice: `tests/test_providers_instructions.py` searches the built
-core for every one of those words.
+It may still never name **a channel or a schedule**. Those are the two situations, and a fact about
+one of them that leaked into the core would be read by every turn of the other — which is exactly
+how the build this replaces came to tell a scheduled run, three paragraphs after forbidding it to
+ask anybody anything, to go and ask. `tests/test_providers_instructions.py` searches the built core
+for both words.
+
+**A role execution would need a core of its own, not this one with pieces removed.** An agent
+working as a shared specialist — reserved here, run by nothing — has no home, no memory and no
+rundesk to operate, and `A_ROLE_IS_RUNNING` is the trigger that will carry it. Writing that as
+"strip the core down" is what this module deliberately does not do: a layer that can be reduced is a
+layer that can silently lose the honesty rules at the bottom of it.
 
 ## What is deliberately not here
 
-**No per-agent instruction text.** An agent's own identity is the files in its home — `AGENTS.md`,
-`SOUL.md`, `MEMORY.md` — which the brain discovers because it is standing in the directory they are
-in. That is the whole mechanism, it is what every measured brain does natively, and it means an owner
-edits a file rather than a database column.
+**No per-agent instruction text.** An agent's own identity is the files in its home — `AGENTS.md`
+and `MEMORY.md`, placed there by `agents.pages` when it was made — which the brain discovers because
+it is standing in the directory they are in. That is the whole mechanism, it is what every measured
+brain does natively, and it means an owner edits a file rather than a database column.
+
+The core names those two files rather than leaving the brain to find them, and that is the pointer
+and not a copy: a brain reads its bootstrap page late, or not at all, and one that never opened them
+is an agent with no rules and no continuity that reports nothing wrong.
 
 **No skills index.** A skill costs its description in the prompt every turn and its body only when
 used, and every measured brain discovers skills for itself. Putting a list here would charge every
@@ -104,15 +124,39 @@ class Prompt(NamedTuple):
 
 # ── CORE — true of every turn, and carrying no identity ───────────────────────────────────────
 
-#: **Nothing here may name a home, the files an agent lives by, memory, a channel, a schedule or a
-#: rundesk command.** See the module docstring for why, and the suite for the check.
+#: **Where you are, what you can reach, and the rules that hold before any of it.** Every line is
+#: true of every turn whoever started it — that is the membership test, and a line that is true only
+#: because somebody is waiting belongs in a situation instead.
 #:
-#: Short on purpose. Every line is either true of every turn or it does not belong, and the honesty
-#: rules are the ones that earn their place: the failure a person cannot see coming is a turn that
-#: reports work it did not do.
+#: **It may still never name a channel or a schedule.** See the module docstring, and the suite for
+#: the check.
+#:
+#: The three files are named rather than left to be discovered, because a brain that never opened
+#: them is an agent with no rules and no continuity that reports nothing wrong. The names are the
+#: ones `agents.pages` really places; `tests/test_layers.py` compares the two lists rather than
+#: trusting they were kept in step.
+#:
+#: The honesty rules are last and are the ones that earn their place hardest: the failure a person
+#: cannot see coming is a turn that reports work it did not do.
 CORE = """# rundesk
 
-You are running inside rundesk, which started this and receives whatever you produce.
+You are {agent_name}, an agent running inside rundesk — the program that started this turn and receives whatever you produce.
+
+## Where you are
+
+You are standing in your own directory, `{agent_home}`. It is yours, no other agent reads it, and what you keep between turns belongs in it.
+
+- `AGENTS.md` is how you work. `MEMORY.md` is what you have learned that is still true. Read both before your first reply in a conversation — they are the only thing you carry, and you start fresh every time.
+- `skills/` beside them is what you know how to do. Each skill says when it applies; read one when the work is what it describes, rather than guessing at the work.
+- This directory is not a Git repository and neither is anything above it. Resolve a project's own directory before any Git command, and never report yours as though it were a project's.
+- Work all of that out silently. Say something about it only when one of them is what blocked you.
+
+## What you can reach
+
+- The machine, as your owner would: their shell, their files, the tools they have installed.
+- `"$RUNDESK_COMMAND"` is the rundesk running you, and is how you ask it anything about this install, about yourself, or about the other agents here. Run that rather than the bare word — some brains rebuild your shell's `PATH` and lose it. Ask it rather than guessing: a verb rundesk does not have is a verb rundesk cannot do.
+
+## Before anything else
 
 - Never invent a fact, a path, a flag or a command you have not confirmed exists.
 - Never write a secret into a file, a log, a commit or your own output. Refer to it by the name it was given and leave the value where it was handed to you.
@@ -128,24 +172,25 @@ You are running inside rundesk, which started this and receives whatever you pro
 #: It names `rundesk messages` because that closes the retrieval loop inside a turn: an owner refers
 #: to work the agent has no record of, and the agent reads its own history back before answering
 #: rather than saying it does not know.
-A_PERSON_ASKED_LAYER = """## Somebody is asking you
+A_PERSON_ASKED_LAYER = """## Why this turn is happening
 
-{agent_name}, a person is waiting for this answer.
+Somebody asked you, and a person is waiting for this answer.
 
-- Referred to work you have no record of? Read it before you answer. `rundesk messages {agent_name} --conversation {conversation_id}` for this exchange, `rundesk messages {agent_name} --search <words>` to find it anywhere, `rundesk messages {agent_name} --source schedule` for work the clock started.
-- Your own files are in `{agent_home}`. Read them before your first reply in a conversation.
-- Answer the question that was asked. Where it is ambiguous, pick the reading it best supports and say which you picked."""
+- Answer the question that was asked, and nothing wider. Where it is ambiguous, pick the reading it best supports and say which you picked.
+- Ask them where the decision is theirs to make. Where only a detail is unclear, pick a sane one and say which you picked rather than stopping for it.
+- Referred to work you have no record of? Read it before you answer. `rundesk messages {agent_name} --conversation {conversation_id}` for this exchange, `rundesk messages {agent_name} --search <words>` to find it anywhere, `rundesk messages {agent_name} --source schedule` for work the clock started."""
 
 #: The clock started this and **nobody is present**. What this withholds is every rule that assumes
 #: somebody is waiting: there is nothing to ask, nothing to clarify, and no later turn to report in.
-A_SCHEDULE_CAME_DUE_LAYER = """## A schedule came due
+A_SCHEDULE_CAME_DUE_LAYER = """## Why this turn is happening
 
-The schedule '{schedule_name}' started this run. No person asked for it, and nobody is present while it runs.
+The schedule '{schedule_name}' came due and started this run. No person asked for it, and nobody is present while it runs.
 
 - Treat the schedule's own task as the whole request. Never infer more from earlier conversations or past runs.
 - Never ask a question, request approval, or wait for a reply. Nothing will answer, and the run ends when you stop. Where the task is ambiguous, pick the reading it best supports and say which you picked.
-- Your own files are in `{agent_home}`.
-- Write nothing until the work is finished. Only your last complete message is delivered; everything before it is working notes.
+- Where the work needs an action somebody would have to approve, stop before that action and report that you are blocked, naming the action and what it was for.
+- Write nothing until the work is finished. Only your last complete message is kept as this run's answer; everything before it is working notes.
+- That message is the whole report: what you did or found, how you verified it, and what you did not do. Nobody will be there to ask you a follow-up.
 - Report the outcome. When there was nothing worth acting on, say that in a short direct answer."""
 
 #: Which layer each trigger is. **A trigger absent from this is a person asking**, which is the safe

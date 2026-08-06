@@ -80,7 +80,7 @@ def replayed(home, prompt="Read note.txt and tell me the number in it.", capture
     told = {"PATH": f"{instead}:/usr/bin:/bin", "CAPTURED": str(captured),
             "RUNDESK_CWD": str(where), "RUNDESK_ACCESS_MODE": "work",
             "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1",
-            "RUNDESK_CONTINUITY": "AGENTS.md=rules,MEMORY.md=memory,SOUL.md=identity"}
+            "RUNDESK_CONTINUITY": "AGENTS.md=rules,MEMORY.md=memory"}
     told.update(also)
     saying = [{"type": "say", "text": prompt}]
     if steering:
@@ -416,7 +416,12 @@ class WhatAnAgentChangedOfItsOwn(support.Isolated):
     def test_rewriting_what_it_lives_by_is_said_as_what_it_is(self):
         self.assertEqual("rules", self.edited("AGENTS.md")["did"])
         self.assertEqual("memory", self.edited("MEMORY.md")["did"])
-        self.assertEqual("identity", self.edited("SOUL.md")["did"])
+
+    def test_a_file_no_release_places_is_an_ordinary_edit(self):
+        """`SOUL.md` was named to every brain by `LIVES_BY` and written by no release, so an edit to
+        one would have been reported as `identity` on a machine where nothing could produce it. A
+        name in that mapping is a promise the file is really given — see `agents.pages`."""
+        self.assertEqual("edit", self.edited("SOUL.md")["did"])
 
     def test_a_files_name_is_not_the_test(self):
         """**Every checkout on the machine has an `AGENTS.md`**, and an agent editing one in a
