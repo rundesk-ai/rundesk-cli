@@ -56,11 +56,7 @@ Prefix every command with `"$RUNDESK_COMMAND"`.
 ## Create or publish skills
 
 The commands above manage skills that already exist. Use
-[Writing skills](../../writing-skills/SKILL.md) to create, revise, review, debug, or publish one.
-
-- Read its [integration guidance](../../writing-skills/references/integrations.md) when the skill
-  needs values or external commands.
-- Read its [publishing guidance](../../writing-skills/references/publishing.md) when other installs
-  must be able to install it.
+[Writing skills](../../writing-skills/SKILL.md) to create, revise, review, debug, or publish one; it
+routes to its integration and publishing references only when they are needed.
 
 Rundesk has no `skills create`, `skills validate`, or `skills publish` commands.

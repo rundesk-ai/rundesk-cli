@@ -75,7 +75,8 @@ description: Drafts and reviews release notes for this team. Use when preparing 
 ## Write only what changes behavior
 
 Use imperative steps and lead with the action. Assume the reader can reason, edit files, and use
-ordinary tools.
+ordinary tools. Keep a sentence only when it changes execution, prevents a likely failure, or routes
+the reader to conditional detail. Delete it otherwise.
 
 - Keep the core workflow, defaults, and non-obvious gotchas in `SKILL.md`.
 - Give one good default. Offer choices only when the task truly requires a decision.
@@ -83,7 +84,8 @@ ordinary tools.
   approaches are valid.
 - Explain the failure a constraint prevents instead of adding unexplained `ALWAYS` or `NEVER` rules.
 - Introduce every reference by when to read it, and link it directly from `SKILL.md`.
-- State each fact once. Do not repeat a reference in the body.
+- Keep one source of truth for each instruction. Link to it from anywhere else that needs it; never
+  restate it in `SKILL.md`, another reference, or a consuming skill.
 - Remove general background, process history, dated claims, and anything already loaded from the
   agent's rules or the repository.
 

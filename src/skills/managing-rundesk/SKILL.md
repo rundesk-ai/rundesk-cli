@@ -67,14 +67,5 @@ also identifies the root or records being inspected.
 | [Configuration](references/configuration.md) | Status, version, install settings, and secret values |
 | [Lifecycle](references/lifecycle.md) | Install, update, uninstall, and purge |
 
-## Write or publish a skill
-
-Use [Writing skills](../writing-skills/SKILL.md) to create, revise, review, debug, or publish one.
-
-- Read its [integration guidance](../writing-skills/references/integrations.md) only when a skill
-  needs values or external commands.
-- Read its [publishing guidance](../writing-skills/references/publishing.md) only when other installs
-  must be able to install the skill.
-
 Use `"$RUNDESK_COMMAND" <group> --help` when exact help and a reference disagree. Report the command's
 answer, including uncertainty or refusal, without translating it into a success it did not earn.
