@@ -445,13 +445,18 @@ class ListeningToOne(Hosting):
         # Silence is the answer on purpose: replying to tell somebody they are a stranger confirms
         # the agent is listening and spends the owner's tokens doing it. Nothing is written down
         # either, because a record of it is something an agent could later be asked to read.
+        # The stranger's id is deliberately not a number. `said_in_the_log` reads the whole log,
+        # which carries pids and byte counts, so asserting that four digits are absent from it is
+        # an assertion about whatever the kernel handed out this run — `9999` was the id here and
+        # a gateway started as pid `99993` contains it. Red for a reason nobody can act on.
         self.an_adapter()
         self.a_channel(allowed=("2207",), saying=json.dumps({
-            "say": "arrived", "conversation": "1180", "user": "9999", "text": "let me in"}))
+            "say": "arrived", "conversation": "1180", "user": "nobody-invited",
+            "text": "let me in"}))
         self.hosting_now()
         support.waited_until(lambda: "connected" in self.said_in_the_log(), 5.0)
         self.assertEqual([], arriving.conversations(self.agent))
-        self.assertNotIn("9999", self.said_in_the_log())
+        self.assertNotIn("nobody-invited", self.said_in_the_log())
 
     def test_a_message_that_is_only_a_file_is_still_a_message(self):
         # Requiring text dropped it in total silence — not recorded, not logged, nothing said —
