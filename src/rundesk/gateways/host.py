@@ -21,10 +21,26 @@ hang. A permanent condition would have become a loop, and nothing anywhere would
 
 So every refusal reaches `0`, **including the case where the refusal check itself raises**, and that
 is arranged structurally rather than intended: `_may_not_run` cannot propagate anything, and the
-claim on the agent's name is entered inside a guard of its own so that a failure *there* is a
-refusal while a failure while *serving* is a crash. Once this process is up and working, an
-exception is a crash and a crash should be restarted — that distinction is the whole shape of the
-file.
+macOS idle-sleep assertion and the claim on the agent's name are each entered inside guards of their
+own, so a failure *there* is a refusal while a failure while *serving* is a crash. Once this process
+is up and working, an exception is a crash and a crash should be restarted — that distinction is the
+whole shape of the file.
+
+## The Mac stays awake before the gateway claims to be live
+
+On macOS, `awake.while_running` owns one `/usr/bin/caffeinate -i -w <pid>` child for this gateway and
+reads its assertion back from `pmset` before yielding. It is entered before `standing.holding`: the
+lock is what every command reads as LIVE, so taking the lock first would create a window where
+`gateways start` reports success before the idle-sleep assertion exists. Several gateways each own
+one child and macOS aggregates their assertions; no shared counter or process can get stuck
+disagreeing with the locks about how many are running.
+
+The child is proved on every beat. Losing it after startup is a crash worth restarting, because a
+gateway that silently kept running without its assertion would be online in name and allowed to
+sleep through its work. Normal stack unwinding kills and reaps it, which matters on `_again`'s
+`exec`: the gateway pid stays the same across that restart, so `-w` alone would keep the old helper
+beside the new one. `-w` is the other half of the contract, releasing the assertion after a crash or
+`SIGKILL` when no cleanup can run.
 
 ## The first line is written before anything else, and it is not decoration
 
@@ -205,7 +221,7 @@ from rundesk.channels import files as arrivals
 from rundesk.core import config, paths
 from rundesk.delegations import hosting as delegations
 from rundesk.exits import OK
-from rundesk.gateways import standing
+from rundesk.gateways import awake, standing
 from rundesk.providers import answering, kept
 from rundesk.schedules import firing
 from rundesk.skills import grants
@@ -332,10 +348,12 @@ def run(name: str) -> int:
        not make one appear.
     3. The agent is not settled onto this release. Its records were written by an older rundesk and
        the steps that would carry it have not run; `rundesk update` is the thing to do.
-    4. Somebody else holds the name. **The claim is the check** — there is no version of this that
+    4. This Mac cannot establish its idle-system-sleep assertion. Calling the gateway live without
+       it would be a success the machine did not earn.
+    5. Somebody else holds the name. **The claim is the check** — there is no version of this that
        asks first, because between asking and claiming another gateway can arrive.
 
-    Only after all four does anything durable happen, and from then on an exception is a crash that
+    Only after all five does anything durable happen, and from then on an exception is a crash that
     launchd should restart. See the module docstring for why that asymmetry is the point.
 
     **What the supervisor captured is rotated in between, and every start reaches it — including
@@ -353,38 +371,67 @@ def run(name: str) -> int:
         _said_first(name)
 
     if refusal is None:
-        # The claim, and nothing else, is inside this guard: a name that could not be taken is a
-        # refusal and exits 0, while anything that fails once this gateway is *working* is a crash
-        # and must exit non-zero so that launchd brings it back.
         held = contextlib.ExitStack()
         try:
-            held.enter_context(standing.holding(at))
-        except standing.Taken:
-            # Guarded like the branch below it, and for the same reason. `_who_has_it` reads the
-            # record to name the pid, and it is safe today only because a *different* module is
-            # careful — `standing` catches every `OSError` it can produce. Nothing here guarantees
-            # that, and the asymmetry with its neighbour was an oversight rather than a decision: a
-            # refusal that raises while working out how to word itself still exits non-zero.
-            try:
-                refusal = _who_has_it(at, name)
-            except BaseException:                      # noqa: BLE001 — same reason as below
-                refusal = f"{name} is already being run by another gateway"
-        except BaseException as why:                   # noqa: BLE001 — see the module docstring:
-            # this is still the refusal phase, and the one thing it may never do is end in a
-            # non-zero exit, which would turn a permanent condition into an endless restart.
-            refusal = f"{name} could not claim its own name: {why}"
+            # Before the name is claimed, because the claim is what every command reads as LIVE.
+            # Acquiring this second would leave a real window where a start reports success before
+            # macOS has promised to stay awake — exactly the false success this project refuses.
+            sleep_prevented = held.enter_context(awake.while_running())
+        except awake.TryAgain:
+            # A login burst can exhaust a process or file ceiling for a moment. Exit non-zero so
+            # launchd retries under its throttle; calling that a permanent refusal would leave this
+            # gateway down after the pressure has passed, with no process left to try again.
+            with contextlib.suppress(BaseException):
+                held.close()
+            raise
+        except awake.NotPreventingSleep as why:
+            refusal = f"{name} could not keep this Mac awake while its gateway runs: {why}"
+        except BaseException:                          # An unexpected failure is a fault, not
+            # evidence of a permanent machine condition. Let launchd try a fresh process instead of
+            # teaching it to leave this gateway down for ever.
+            with contextlib.suppress(BaseException):
+                held.close()
+            raise
         else:
-            asked_for: List[str] = []
-            with held:
-                code = _serving(name, at, held, asked_for)
-            # **Outside the stack, and that is the whole of why it is here rather than inside it.**
-            # A restart replaces this program with a fresh copy of itself, and everything this
-            # gateway was holding has to be let go of first: every child stopped, every adapter
-            # closed, and the claim on the agent's own name dropped — because the copy is going to
-            # take that claim again and cannot while this one still has it.
-            if asked_for and asked_for[0] == hosting.RESTART:
-                _again(name, standing.logs_at(at))
-            return code
+            try:
+                # The claim, and nothing else, is inside this guard: a name that could not be taken
+                # is a refusal and exits 0, while anything that fails once this gateway is *working*
+                # is a crash and must exit non-zero so that launchd brings it back.
+                held.enter_context(standing.holding(at))
+            except standing.Taken:
+                # Guarded like the branch below it, and for the same reason. `_who_has_it` reads the
+                # record to name the pid, and it is safe today only because a *different* module is
+                # careful — `standing` catches every `OSError` it can produce. Nothing here
+                # guarantees that, and the asymmetry with its neighbour was an oversight rather
+                # than a decision: a refusal that raises while working out how to word itself still
+                # exits non-zero.
+                try:
+                    refusal = _who_has_it(at, name)
+                except BaseException:                  # noqa: BLE001 — same reason as below
+                    refusal = f"{name} is already being run by another gateway"
+            except BaseException as why:               # noqa: BLE001 — see the module docstring:
+                # this is still the refusal phase, and the one thing it may never do is end in a
+                # non-zero exit, which would turn a permanent condition into an endless restart.
+                refusal = f"{name} could not claim its own name: {why}"
+            else:
+                asked_for: List[str] = []
+                with held:
+                    code = _serving(name, at, held, asked_for, sleep_prevented)
+                # **Outside the stack, and that is the whole of why it is here rather than inside
+                # it.** A restart replaces this program with a fresh copy of itself, and everything
+                # this gateway was holding has to be let go of first: every child stopped, every
+                # adapter closed, the sleep assertion released, and the claim on the agent's own
+                # name dropped — because the copy is going to take those claims again and cannot
+                # while this one still has them.
+                if asked_for and asked_for[0] == hosting.RESTART:
+                    _again(name, standing.logs_at(at))
+                return code
+
+        # A refusal after the assertion was entered — another gateway already holds the name, or
+        # the claim itself failed — must release the assertion before it reports that nothing is
+        # running. Cleanup may never turn that refusal into launchd's non-zero "bring me back".
+        with contextlib.suppress(BaseException):
+            held.close()
 
     _refused(at, name, refusal)
     return OK
@@ -509,7 +556,7 @@ def _refused(at: Optional[Path], name: str, why: str) -> None:
 
 
 def _serving(name: str, at: Path, held: contextlib.ExitStack,
-             asked_for: List[str]) -> int:
+             asked_for: List[str], sleep_prevented: awake.Guard) -> int:
     """Hold the name, say so, and go on saying so until something stops this process.
 
     Everything from here on is a working gateway, so **an exception is a crash and is let through**:
@@ -560,6 +607,8 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
         # exit non-zero — which under `SuccessfulExit: false` is a request to be restarted.
         standing.write_record(at, name, __version__)
         logs.note(where, f"gateway up for {name} on {__version__} as pid {os.getpid()}")
+        if sleep_prevented is not None:
+            logs.note(where, "gateway is preventing macOS idle system sleep while it runs")
         # **The one layer that may reach both.** `channels` and `schedules` each publish a shape
         # and take an object of it, so neither has to know what a brain is — see
         # `providers.answering`. Built before anything is settled or started, because an adapter
@@ -616,6 +665,10 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
                 said_up = True
                 notices.say(CAME_UP)
             time.sleep(standing.BEAT_SECONDS)
+            # A helper that vanished leaves a live-looking gateway without the guarantee it came
+            # up under. Treat that as a crash launchd can clear, never as a warning beside a process
+            # which may now sleep through every message it is meant to receive.
+            awake.proved(sleep_prevented)
             landing = _still_working(at, where, landing)
             swept_for = _kept_the_days(name, where, swept_for)
             # In the tail rather than before the sleep, so that on the pass where a gateway both

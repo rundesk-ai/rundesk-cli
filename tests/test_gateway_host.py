@@ -54,11 +54,22 @@ from rundesk.utils import logs, programs
 #: suite a minute of sleeping; the constant is read on every pass, so lowering it changes when the
 #: loop comes round and nothing else. Every case that is not about the loop leaves it alone.
 A_GATEWAY = """
-import sys
+import contextlib, sys
 sys.path.insert(0, {src!r})
-from rundesk.gateways import standing
+from rundesk.gateways import awake, standing
 standing.BEAT_SECONDS = {beat!r}
 from rundesk.gateways.host import run
+
+
+@contextlib.contextmanager
+def no_machine_assertion():
+    # The focused awake suite owns the one real macOS boundary check. These ninety-odd host cases
+    # prove gateway process behavior, and starting a real OS helper in every one only loads the
+    # machine and makes an unrelated test depend on the platform it happened to run on.
+    yield None
+
+
+awake.while_running = no_machine_assertion
 raise SystemExit(run({name!r}))
 """
 

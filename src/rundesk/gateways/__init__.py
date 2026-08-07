@@ -10,6 +10,7 @@ guests is a host nobody can say anything true about.
 
 | Module | Answers |
 |---|---|
+| `awake` | holding and proving the macOS idle-system-sleep assertion for exactly one live gateway |
 | `standing` | whether a gateway is online, offline, or something nobody can tell — and, when it never came up, where the only account of that is |
 | `job` | handing one gateway to the machine's supervisor, and the four ways of asking whether it is really there |
 | `host` | the gateway process itself: what it refuses to run for, and the one exit code launchd reads |
@@ -30,10 +31,12 @@ days, is `utils.logs`: rundesk journals its own work the same way, and the layer
 not reach across into this one. What stays here is the part that is genuinely the gateway's — where
 its logs stand, and what the machine's supervisor called the two files it captured on the way up.
 
-**Every function here takes the agent's own directory as an argument.** Nothing in this package
-derives it, and nothing reads where the agents are — so a gateway can be stood up in a scratch
-directory by a test, and the layer that knows what an agent is stays the layer that decides where one
-lives.
+**Every function concerned with a gateway's identity takes the agent's own directory as an
+argument.** Nothing in this package derives it, and nothing reads where the agents are — so a
+gateway can be stood up in a scratch directory by a test, and the layer that knows what an agent is
+stays the layer that decides where one lives. `awake` is the deliberate exception in subject rather
+than in architecture: its identity is the current process id, which is exactly what macOS releases
+the assertion against after a crash.
 
 May depend on `core` and `utils`. The command line is one layer's business and it is not this one: a
 module here taking a `Namespace` would be a module that cannot be driven except by typing at it, and

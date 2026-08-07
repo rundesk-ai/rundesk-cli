@@ -419,7 +419,9 @@ that says where to read next.
 On macOS, the gateway establishes its idle-system-sleep assertion **before** it takes the lock the
 kernel reports as running. A start therefore cannot prove the gateway came up while the Mac is still
 free to idle-sleep underneath it; if `/usr/bin/caffeinate` cannot establish that protection, the
-gateway refuses to come online and the start reports the refusal.
+gateway refuses to come online and the start reports the refusal. A temporary machine resource
+limit instead makes the gateway crash so launchd tries again after its throttle; it is never turned
+into a permanent refusal that strands the gateway after the limit clears.
 
 It is safe to run again on any state — it rewrites the job, clears an override nobody remembers,
 takes back whatever was loaded under that name, and puts it back — **except on a gateway that is

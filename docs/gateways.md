@@ -36,6 +36,24 @@ for.
 
 The commands are in [`commands.md`](commands.md). This is what is underneath them.
 
+## A live gateway keeps a Mac from idle-sleeping
+
+On macOS, each gateway starts `/usr/bin/caffeinate -i -w <its pid>` and reads its assertion back from
+the machine before it claims the name that commands report as live. The `-i` assertion prevents
+**idle system sleep** while still allowing the display to sleep; `-w` ties it to the gateway's
+process id, so a crash or `SIGKILL` releases it even though no cleanup code could run. Several
+gateways each hold their own assertion, and macOS may idle-sleep again only after the last gateway
+stops.
+
+The helper is also checked on every beat. If it unexpectedly exits, the gateway crashes so launchd
+can bring it back and re-establish the assertion; it never stays online while silently losing the
+protection. If the assertion cannot be started at all, the gateway refuses to come online and says
+why in its logs. A temporary machine limit is different: the start exits non-zero so launchd retries
+under its throttle rather than leaving the gateway permanently down after the pressure passes. Other
+platforms do nothing here. This does not override an explicit Sleep command, a closed laptop lid, or
+emergency power management — it prevents the ordinary idle sleep that would otherwise take a
+healthy gateway offline.
+
 ## Liveness is asked of the kernel, and no file decides anything
 
 **A gateway that was killed outright must never look alive.** Everything here is arranged around
