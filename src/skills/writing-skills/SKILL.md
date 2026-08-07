@@ -1,6 +1,6 @@
 ---
 name: writing-skills
-description: Turns repeatable work into reliable, token-efficient, provider-neutral Rundesk skills. Use when a workflow should become reusable; when creating, reviewing, debugging, or improving a skill's triggering, instructions, or resources; or when publishing skills for other installs.
+description: Provides Rundesk's workflow and standards for creating compact, provider-neutral skills. Use when creating, reviewing, or revising a skill; fixing triggering or token use; adding resources or integrations; diagnosing why a skill cannot be used; or publishing it through a catalog for other installs.
 ---
 
 # Writing skills
@@ -58,9 +58,10 @@ Use only `name` and `description` in the frontmatter.
 
 - Make `name` match its directory. Use at most 64 characters: lowercase letters, digits, and single
   hyphens.
-- Make `description` say why the skill is needed — the outcome it improves or failure it prevents —
-  and every user intent or situation that should trigger it.
-- Describe intent, not only words a user might type. Most requests will not name the skill.
+- Open `description` with a short brief of what the skill provides: its workflow, knowledge, tools,
+  or safeguards. Do not substitute an abstract outcome or a full capability inventory.
+- Follow with `Use when` and the concrete user intents or situations that should trigger it. Describe
+  intent, not only words a user might type; most requests will not name the skill.
 - Keep the description within 1024 characters and as short as complete coverage allows. Every agent
   holding the skill pays for it on every turn.
 - Put all trigger guidance in the description. The body is unavailable until after triggering.
@@ -68,7 +69,7 @@ Use only `name` and `description` in the frontmatter.
 ```markdown
 ---
 name: release-notes
-description: Turns shipped changes into accurate, user-facing release notes. Use when preparing a release, tagging a version, summarizing a changelog, or explaining shipped work to people who did not build it.
+description: Provides a workflow for drafting accurate, user-facing release notes from shipped changes. Use when preparing a release, tagging a version, summarizing a changelog, or explaining shipped work to people who did not build it.
 ---
 ```
 
