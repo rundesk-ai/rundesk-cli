@@ -1,6 +1,6 @@
 ---
 name: writing-skills
-description: Creates, revises, reviews, debugs, or publishes provider-neutral skills for rundesk. Use when asked to capture a repeatable workflow, add or improve a SKILL.md, fix triggering or token use, add scripts, references, assets, or credentials, troubleshoot an unusable skill, or share skills through a catalog — even when the request does not call the result a skill.
+description: Turns repeatable work into reliable, token-efficient, provider-neutral Rundesk skills. Use when a workflow should become reusable; when creating, reviewing, debugging, or improving a skill's triggering, instructions, or resources; or when publishing skills for other installs.
 ---
 
 # Writing skills
@@ -58,9 +58,9 @@ Use only `name` and `description` in the frontmatter.
 
 - Make `name` match its directory. Use at most 64 characters: lowercase letters, digits, and single
   hyphens.
-- Make `description` say what the skill does and every real situation that should trigger it.
-- Describe user intent, not only words a user might type. Most requests will not say the skill's
-  name.
+- Make `description` say why the skill is needed — the outcome it improves or failure it prevents —
+  and every user intent or situation that should trigger it.
+- Describe intent, not only words a user might type. Most requests will not name the skill.
 - Keep the description within 1024 characters and as short as complete coverage allows. Every agent
   holding the skill pays for it on every turn.
 - Put all trigger guidance in the description. The body is unavailable until after triggering.
@@ -68,7 +68,7 @@ Use only `name` and `description` in the frontmatter.
 ```markdown
 ---
 name: release-notes
-description: Drafts and reviews release notes for this team. Use when preparing a release, tagging a version, or explaining shipped changes to people who did not build them.
+description: Turns shipped changes into accurate, user-facing release notes. Use when preparing a release, tagging a version, summarizing a changelog, or explaining shipped work to people who did not build it.
 ---
 ```
 

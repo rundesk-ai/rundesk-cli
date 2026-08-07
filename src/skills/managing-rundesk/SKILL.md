@@ -1,6 +1,6 @@
 ---
 name: managing-rundesk
-description: Operate, inspect, or troubleshoot the Rundesk install running this agent. Use for agents, gateways, conversations, backups, schedules, channels, providers, skills, configuration, credentials, updates, paths, or anything on this machine that Rundesk may control.
+description: Uses Rundesk's verified commands to operate and diagnose the install running this agent without guessing at state, paths, or recovery. Use for agents, gateways, conversations, backups, schedules, channels, providers, skills, configuration, credentials, install lifecycle, or any Rundesk-controlled problem.
 ---
 
 # Manage Rundesk
