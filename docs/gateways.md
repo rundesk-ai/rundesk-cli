@@ -7,15 +7,22 @@ a job registered with `launchd`, the only thing on a Mac that will start a progr
 it back when it dies. The job is what makes a gateway survive a crash, a logout and a reboot; the
 process is what does the work.
 
-A gateway hosts two things: **the work its schedules start**, and **the adapters its channels
-connect through**. Both hang off the same loop in the same three places — reckoning with what a
-previous gateway left before anything begins, one pass every beat, and a stop on the way out — and
-neither of them may end the gateway hosting it. A schedule that could not run, a platform that is
-down, an adapter nobody installed: each of those is a gateway that is *up* and complaining, never a
-gateway that refuses to start.
+A gateway hosts three things: **the work its schedules start**, **the adapters its channels connect
+through**, and **the work other agents hand to this one**. All three hang off the same loop in the
+same three places — reckoning with what a previous gateway left before anything begins, one pass
+every beat, and a stop on the way out — and none of them may end the gateway hosting it. A schedule
+that could not run, a platform that is down, an adapter nobody installed, a delegation that could not
+be answered: each of those is a gateway that is *up* and complaining, never a gateway that refuses to
+start.
 
-A provider is the one thing still not built. A provider recorded against an agent is recorded and
-not proven, and starting a gateway does not change that.
+They are siblings rather than a hierarchy, which is why adding the third was one edit and not a
+rewrite: a gateway hosts a list.
+
+**The third is why an agent you delegate to has to have a gateway running.** Its own gateway is what
+notices work addressed to it and answers as itself; a delegation to an agent nothing is running would
+wait for ever, so `rundesk ask` refuses it at the point of asking rather than letting the work sit.
+The same loop collects the answers to what *this* agent handed out, and puts each in front of it —
+into the turn already running if there is one, and by starting a turn if there is not.
 
 Underneath both is the part that had to be right before either could be trusted: a gateway starts,
 holds its agent's name, says every fifteen seconds that it is still working, stops when it is asked

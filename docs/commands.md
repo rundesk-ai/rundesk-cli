@@ -8,8 +8,8 @@ rundesk status                            # the version, where the install is, a
 rundesk version                           # the version, and whether it is out of date
 rundesk configure [--<setting> <value>]   # change what this install is configured with
 rundesk agents                            # the agents this install keeps
-rundesk agents add <agent> --provider <provider>        # make one
-rundesk agents configure <agent> --provider <provider>  # change what is behind one
+rundesk agents add <agent> --provider <provider> [--describes <text>]        # make one
+rundesk agents configure <agent> [--provider <provider>] [--describes <text>]  # change one
 rundesk agents remove <agent> --confirm   # take one away, and everything it remembers
 rundesk gateways                          # every agent, and how its gateway stands
 rundesk gateways start <agent>            # start one, and prove a gateway came up
@@ -227,6 +227,17 @@ sign-in. `rundesk providers check` is what answers that. Nothing in
 this release runs one: no credential is checked, no request is made, and there is no gateway to
 start. An agent added with a provider nobody has ever spelled correctly looks exactly like one that
 works, and a line implying otherwise would be a success this release did not earn.
+
+**`--describes` is what an agent is for, in one sentence, and it is what the *other* agents read.**
+Every agent's preface lists its colleagues and what each is for, so this is how one agent decides
+whether a piece of work is somebody else's to do. An agent nobody has described is left out of that
+listing rather than named blank: a bare name in a list of specialists is an invitation to guess, and
+guessing is what this field exists to prevent. It is capped at one sentence, because every agent's
+description is charged to every other agent's prompt on every turn.
+
+`configure` takes either flag or both, and both move in one write. An empty `--describes` takes the
+description away rather than storing a blank — unset and set-to-empty stay different answers, since
+a listing has to tell an agent nobody has described from one described as nothing.
 
 All of it is built under a staged name and renamed into place once, at the end — so an interruption
 leaves litter rather than a directory wearing an agent's name and not being one.
@@ -1048,6 +1059,47 @@ which is what a person means by asking again. `--fresh` starts a new one on the 
 **It refuses rather than queues.** A conversation already being answered in is busy, and the claim
 is the kernel's, so this competes correctly with a gateway answering the same agent on a channel
 with no coordination between them.
+
+### Run from inside a turn, it hands work over instead
+
+**One agent asking another is a delegation, whichever verb was typed.** Typed by a person, `ask` is
+what it always was. Run by an agent from inside its own turn — naming somebody other than itself —
+it hands the work over and returns at once:
+
+```console
+$ rundesk ask bob "audit the exporter retention policy and report what you find"
+handed to bob  ·  del-1-6c9092
+  no answer comes back in this turn — you are woken to review one later
+```
+
+This is the front door rather than a second command, and it is not a convenience. Left alone, an
+agent could run a whole turn on somebody else's agent from inside its own — no record, no guards,
+and nobody owed a review. The build this replaces shipped exactly that and found every rule the
+feature is made of was one command away from being bypassed.
+
+**Nothing waits.** Bob's own gateway picks the work up, answers it as itself out of its own home and
+memory, and the answer reaches ava in a later turn. What ava gets is bob's last complete message,
+verbatim and labelled unchecked — rundesk summarises nothing and asserts nothing about it — and
+nothing bob wrote reaches any person until ava has reviewed it.
+
+**Four things are refused**, each with what to type instead:
+
+| | |
+|---|---|
+| a person typing it | not a delegation — it is an ordinary turn on that agent |
+| an agent naming itself | that is a turn, not a delegation |
+| a turn already answering a delegation | work handed over cannot be handed on again |
+| an agent whose gateway is not running | nothing would ever answer it, so it says how to start one |
+
+The last is the one worth knowing about operationally: **an agent you intend to delegate to needs a
+gateway running.** Its own gateway is what picks the work up, so `rundesk gateways start bob` is a
+prerequisite, and launchd brings it back at every login afterwards. A delegation to an agent nothing
+is running would otherwise wait for ever while the agent that made it believed it had handed work
+over, which is a success nothing earned.
+
+**The depth is one.** An agent answering a delegation is shown no team in its instructions and is
+refused here if it tries anyway, so `ava → bob → ava` has no path to exist and there is no chain to
+walk. A turn woken to *review* an answer is an ordinary turn and may hand out new work.
 
 ## backups
 

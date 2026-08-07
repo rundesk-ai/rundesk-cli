@@ -10,9 +10,15 @@ whole thing renders in a command, and a change to it is visible before it ships.
 ```
 CORE                        always, whatever this is and whoever asked
 + exactly one SITUATION     a person · a schedule · another agent
-+ YOUR_TEAM                 who it may delegate to, and only where that is legal
+    …composing NOBODY_IS_PRESENT where nobody is waiting
++ YOUR_TEAM_LAYER           who else is here, and only where handing work on is legal
 + ordered ADDITIONS         each named, each bounded where it comes in
 ```
+
+**One rule lives in one place.** Ask which layer a sentence is true of: *all of them* is `CORE`, *the
+unattended ones* is `NOBODY_IS_PRESENT`, and exactly one is that situation's. A rule written into two
+layers is two rules the day somebody edits one, and three of these were written twice before this
+was made mechanical.
 
 **Two layers, and each answers a different question.** `CORE` is *where you are and what you can
 do* — the directory the turn stands in, the files the agent lives by, the skills beside them, the
@@ -157,6 +163,7 @@ You are standing in your own directory, `{agent_home}`. It is yours, no other ag
 
 ## Before anything else
 
+- Answer what was asked and nothing wider. Where it is ambiguous, take the reading it best supports and say which you took.
 - Never invent a fact, a path, a flag or a command you have not confirmed exists.
 - Never write a secret into a file, a log, a commit or your own output. Refer to it by the name it was given and leave the value where it was handed to you.
 - Never dress a failure as progress. Say what you verified and how, and what you did not do.
@@ -164,6 +171,24 @@ You are standing in your own directory, `{agent_home}`. It is yours, no other ag
 
 
 # ── The situations ────────────────────────────────────────────────────────────────────────────
+
+#: What is true whenever **nobody is waiting**, whoever or whatever started the turn. Composed into
+#: the two situations that are unattended and into neither of the others.
+#:
+#: A fragment rather than two copies, because the module's own rule says so: a rule true of more than
+#: one layer belongs in a fragment or in the core, never written twice. These were written twice, in
+#: slightly different words each time, which is how two layers come to mean two things.
+#:
+#: What it does **not** hold is the blocked rule — true of every turn, so it is `CORE`'s, and a
+#: situation restating it in its own words is a second wording of one rule.
+#:
+#: Nor **"never ask a question"**, which reads as though it belongs here and does not. A schedule has
+#: nobody to answer it; an agent that was handed work has the agent that handed it over, and asking
+#: is how it reports being unable to proceed. Put here, it would sit two lines above the layer that
+#: tells a delegated turn to ask — which is the exact fault the previous build shipped, and its own
+#: guide records: a preface carrying a rule and the paragraph forbidding it, three lines apart.
+NOBODY_IS_PRESENT = """- Treat what you were given as the whole request. Never infer more from earlier conversations or past runs.
+- Write nothing until the work is finished. Only your last complete message is kept; everything before it is working notes."""
 
 #: A person is on the other end. Everything here is true **because** somebody is waiting, and false
 #: the moment nobody is — which is why it is a layer rather than part of the core.
@@ -173,10 +198,9 @@ You are standing in your own directory, `{agent_home}`. It is yours, no other ag
 #: rather than saying it does not know.
 A_PERSON_ASKED_LAYER = """## Why this turn is happening
 
-Somebody asked you, and a person is waiting for this answer.
+A person asked you, and they are waiting for this answer.
 
-- Answer the question that was asked, and nothing wider. Where it is ambiguous, pick the reading it best supports and say which you picked.
-- Ask them where the decision is theirs to make. Where only a detail is unclear, pick a sane one and say which you picked rather than stopping for it.
+- Ask them where the decision is theirs to make. Where only a detail is unclear, choose a sane one and say which you chose rather than stopping for it.
 - Referred to work you have no record of? Read it before you answer. `rundesk messages {agent_name} --conversation {conversation_id}` for this exchange, `rundesk messages {agent_name} --search <words>` to find it anywhere, `rundesk messages {agent_name} --source schedule` for work the clock started."""
 
 #: The clock started this and **nobody is present**. What this withholds is every rule that assumes
@@ -185,12 +209,10 @@ A_SCHEDULE_CAME_DUE_LAYER = """## Why this turn is happening
 
 The schedule '{schedule_name}' came due and started this run. No person asked for it, and nobody is present while it runs.
 
-- Treat the schedule's own task as the whole request. Never infer more from earlier conversations or past runs.
-- Never ask a question, request approval, or wait for a reply. Nothing will answer, and the run ends when you stop. Where the task is ambiguous, pick the reading it best supports and say which you picked.
-- Where the work needs an action somebody would have to approve, stop before that action and report that you are blocked, naming the action and what it was for.
-- Write nothing until the work is finished. Only your last complete message is kept as this run's answer; everything before it is working notes.
-- That message is the whole report: what you did or found, how you verified it, and what you did not do. Nobody will be there to ask you a follow-up.
-- Report the outcome. When there was nothing worth acting on, say that in a short direct answer."""
+{nobody_is_present}
+- Never ask a question, request approval, or wait for a reply. Nothing will answer, and the run ends when you stop.
+- That last message is the whole report: what you did or found, how you verified it, and what you did not do. Nobody will be there to ask a follow-up.
+- Where there was nothing worth acting on, say so in a short direct answer."""
 
 #: Another agent handed this turn its task. **Still this agent, as itself** — its own home, memory,
 #: skills and brain — so this composes on `CORE` like any other. What it adds is that the requester
@@ -203,12 +225,12 @@ ANOTHER_AGENT_ASKED_LAYER = """## Why this turn is happening
 
 {caller_agent}, an agent on your team, handed you this task. Not a person, not your owner, and nobody is present while you run.
 
-- Treat the task as the whole request. Never infer more from earlier conversations or past runs. Where it is ambiguous, pick the reading it best supports and say which you picked.
-- The task says how far your authority reaches. Needing more than that, stop and say you are blocked, naming the action and what it was for.
-- A question is allowed and it is never a wait. Nothing will answer while you run, so ask it as your report and stop — {caller_agent} reads it and comes back to you with the answer.
+{nobody_is_present}
+- The task says how far your authority reaches. Needing more than that, stop and say so.
+- A question is not a wait. Ask it as your report and stop — {caller_agent} reads it and comes back to you with the answer.
 - Do not hand this work on. It is yours to finish or to report blocked. Your own brain's subagents are yours to use within it.
 - Write to `MEMORY.md` only what changes how you act for your own owner. This task is {caller_agent}'s, not your continuity.
-- Write nothing until the work is finished. Only your last complete message reaches {caller_agent}; everything before it is working notes, and none of it goes to any channel or any person.
+- Nothing you write reaches any channel or any person; your last message goes to {caller_agent} alone.
 - That message is your whole report: what you did or found, how you verified it, what you did not do, and any decision {caller_agent} has to make. Report every part of the task as done or blocked."""
 
 #: Which layer each trigger is. **A trigger absent from this is a person asking**, which is the safe
@@ -226,11 +248,13 @@ _SITUATIONS = {
 #: Composed only where handing work on is legal. A turn already answering a delegation is shown
 #: nobody, which is what makes depth-one a thing an agent cannot do rather than a rule it is asked
 #: to keep.
-YOUR_TEAM = """## Agents on your team you may hand work to
+YOUR_TEAM_LAYER = """## Who else is here
 
 {team}
 
-- `rundesk ask <agent> "<the task>"`. They answer as themselves, and it does not hold up this turn.
+These are the other agents on this install. Each answers as itself, out of its own home and memory.
+
+- `rundesk ask <agent> "<the task>"`. It does not hold up this turn.
 - The answer reaches you in a later turn and you review it. Nothing they wrote reaches anybody until you have.
 - Say what you want done and how far they may go. They cannot see this conversation and will not ask — anything you leave out, they decide.
 - Hand over what is genuinely somebody else's to do. Anything you can finish here, finish here."""
@@ -251,10 +275,15 @@ def build(*, trigger: str = A_PERSON_ASKED, variables: Optional[Mapping[str, obj
     turn already answering a delegation is shown nobody, which is the depth rule made structural:
     there is nothing for it to route around, because it was never told anybody exists.
     """
+    situation = _SITUATIONS.get(trigger, A_PERSON_ASKED_LAYER)
+    # The shared fragment, spliced before anything else is filled in. Composed rather than repeated
+    # in each layer that wants it — see `NOBODY_IS_PRESENT`. A layer that does not name the
+    # placeholder is unaffected, so the two attended situations get nothing.
+    situation = situation.replace("{nobody_is_present}", NOBODY_IS_PRESENT)
     said = [("core", _filled(CORE, variables)),
-            (_named(trigger), _filled(_SITUATIONS.get(trigger, A_PERSON_ASKED_LAYER), variables))]
+            (_named(trigger), _filled(situation, variables))]
     if team.strip() and trigger != ANOTHER_AGENT_ASKED:
-        said.append(("team", _filled(YOUR_TEAM.replace("{team}", team), variables)))
+        said.append(("team", _filled(YOUR_TEAM_LAYER.replace("{team}", team), variables)))
     said.extend((name, _filled(text, variables)[:AN_ADDITION_AT_MOST])
                 for name, text in additions)
 

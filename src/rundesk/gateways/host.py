@@ -203,6 +203,7 @@ from rundesk.agents import directory, migration
 from rundesk.channels import arriving, delivery, hosting
 from rundesk.channels import files as arrivals
 from rundesk.core import config, paths
+from rundesk.delegations import hosting as delegations
 from rundesk.exits import OK
 from rundesk.gateways import standing
 from rundesk.providers import answering, kept
@@ -252,7 +253,7 @@ STOPPING_WITHIN = 20.0
 #: against an `ExitTimeOut` of twenty-five: launchd `SIGKILL`s this process partway through the
 #: second tenant, calls it *languishing*, and every child it never reached is orphaned still holding
 #: its lock. A number rather than two literals so that a third tenant is one edit and not a hunt.
-STOPPING_SHARES = 2
+STOPPING_SHARES = 3
 
 #: The signals a supervisor or a person asks this gateway to stop with — turned into `Stopped` while
 #: it is working, and ignored once a stop is already under way. Named once because two functions have
@@ -565,8 +566,10 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
         # adopted from a gateway that is gone has to be able to answer the moment it is adopted.
         on_a_channel = answering.OnAChannel(where, lambda: channels_up)
         on_a_schedule = answering.OnASchedule()
+        on_a_delegation = answering.OnADelegation(where)
         watching = firing.settled(name, where)
         channels_up = hosting.settled(name, where, answering=on_a_channel)
+        handed = delegations.settled(name, where)
         # Registered on the stack `run` unwinds however this process leaves, which is the one place
         # a child's stop belongs. Each callback reads its tenant's state as it stands at that moment
         # rather than as it stands now — they close over the names, not over these first values.
@@ -574,6 +577,7 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
         each = STOPPING_WITHIN / STOPPING_SHARES
         held.callback(lambda: hosting.stopping(name, where, channels_up, each))
         held.callback(lambda: firing.stopping(name, where, watching, each))
+        held.callback(lambda: delegations.stopping(name, where, handed, each))
         notices = _Notices(name, where, lambda: channels_up)
         # **What a gesture asked for, held rather than acted on where it was heard.** A control
         # arrives on the thread draining an adapter's stdout; a gateway torn down from there would
@@ -596,6 +600,9 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
                                      asking=on_a_schedule)
             channels_up = hosting.looked(name, where, channels_up,
                                          answering=on_a_channel, steering=gestures)
+            # The third tenant, and a sibling of the two above rather than something they contain:
+            # the same three seams, and a gateway hosting a list rather than a hierarchy.
+            handed = delegations.looked(name, where, handed, answering=on_a_delegation)
             if not said_up and _the_told_channel_is_connected(name, channels_up):
                 # **Once the adapter it leaves through has reached its platform, never merely once
                 # it has been started.** `looked` starts one; starting is a fork, and what follows

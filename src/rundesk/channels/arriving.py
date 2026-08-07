@@ -139,6 +139,24 @@ def recorded_for_a_schedule(agent: str, schedule: str, body: str,
     return Landed(conversation, message, fresh)
 
 
+def said_by_rundesk_into(agent: str, conversation: int, body: str,
+                          when: Optional[datetime] = None) -> Landed:
+    """Write down something rundesk said, in a conversation already known by its id.
+
+    The sibling of `said_by_rundesk`, which finds the conversation from a channel and a place. This
+    one is handed the conversation, because what puts a delegated answer in front of an agent knows
+    exactly which exchange it belongs to and has no channel to name.
+
+    `BY_RUNDESK` and never `BY_AGENT`: what another agent said is not this agent's own words, and a
+    reader of the history has to be able to tell the two apart.
+    """
+    now = _now(when)
+    with records.writing(directory.records(agent)) as conn:
+        message, fresh = _message(conn, agent, conversation, BY_RUNDESK, "rundesk",
+                                  _bounded(body), None, now)
+    return Landed(conversation, message, fresh)
+
+
 def recorded_for_a_delegation(agent: str, delegator: str, parent_turn: int, body: str,
                               when: Optional[datetime] = None) -> Landed:
     """Write down what another agent asked, in a conversation of its own.

@@ -31,4 +31,5 @@ The gateway imports this and hands it what it needs, the way it already does for
 |---|---|
 | `kept` | the delegations one agent has made, and the only way in to them |
 | `admitting` | whether one agent may hand this work to another, and writing it down when it may |
+| `hosting` | the gateway's third tenant: answering what was handed here, collecting what went out |
 """

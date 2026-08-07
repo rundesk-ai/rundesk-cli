@@ -89,6 +89,18 @@ A_HELPER_AT_MOST = 48
 #: word: the way in has closed and the way round has opened, and asking once more takes it. Three,
 #: because each attempt needs the one before it to have genuinely settled, and a conversation that
 #: is busy three times over is one somebody is typing into faster than their agent can answer.
+#: What an agent is shown when work it handed over comes back. **Its words, verbatim and labelled
+#: unchecked** — rundesk summarises nothing and asserts nothing about them, which is the strongest
+#: idea carried over from the previous build. What follows is the one instruction that matters: this
+#: has not been checked, and nobody has been told anything yet.
+REVIEW = """{agent} has answered the work you handed over. Nobody has been told anything about it \
+yet, and none of it has been checked.
+
+{answer}
+
+Review it before you use it: verify the claims that matter against the work itself rather than \
+taking them, then answer whoever asked you. Say what you checked."""
+
 TRIES = 3
 
 #: How long to wait before offering a refused message again. Long enough for a turn that was
@@ -610,6 +622,81 @@ def _what_is_coming(agent: str) -> str:
     said += [f"- {one.name} — {due.describe(one, now)}" for one in coming]
     said += [f"- {name} — could not be read" for name, _why in trouble]
     return "\n".join(said)
+
+
+class OnADelegation:
+    """Runs the two turns a delegation needs. Handed to `delegations.hosting.looked`.
+
+    **Both directions end in the same three-way answer**, and it is not written here: a turn starts
+    when the agent is idle, a word is **said into the turn already running** when it is busy, and it
+    is asked again on a short bound when the brain reads nothing mid-turn. That is `_take`, which is
+    what a channel message already goes through — so an answer coming back reaches a busy agent the
+    same way a person's second message does, rather than waiting for it to be free.
+
+    A thread per turn, daemon, for the reason `OnAChannel.answer` gives: a gateway going down must
+    not be held open by one, and what settles a turn is its lock rather than the thread watching it.
+    """
+
+    def __init__(self, where: Path):
+        self._where = where
+
+    def answer_this(self, agent: str, conversation: int, delegation_id: str) -> None:
+        """Take the turn that answers another agent. The brief is already the conversation's."""
+        threading.Thread(target=self._answered, name=f"delegation-{delegation_id}",
+                         args=(agent, conversation, delegation_id), daemon=True).start()
+
+    def review_this(self, agent: str, conversation: int, answer: str, from_agent: str) -> None:
+        """Put an answer in front of the agent that asked for it.
+
+        **Written into that agent's own conversation as `rundesk` first**, so it is history before
+        it is a turn: an answer delivered only as a prompt would be one no `rundesk messages` could
+        find, and the review turn is not guaranteed to happen at all if the agent is being torn
+        down this second.
+        """
+        threading.Thread(target=self._reviewed, name=f"review-{from_agent}",
+                         args=(agent, conversation, answer, from_agent), daemon=True).start()
+
+    def _answered(self, agent: str, conversation: int, delegation_id: str) -> None:
+        """One turn answering one delegation. **Never raises** — this is a thread, nobody is above."""
+        said = arriving.messages(agent, conversation, most=1)
+        body = str(said[0]["body"]) if said else ""
+        self._take(agent, conversation, body,
+                   trigger=instructions.ANOTHER_AGENT_ASKED, answering=delegation_id,
+                   about=f"delegation {delegation_id}")
+
+    def _reviewed(self, agent: str, conversation: int, answer: str, from_agent: str) -> None:
+        """One turn reviewing what came back. **Never raises.**"""
+        said = REVIEW.format(agent=from_agent, answer=answer)
+        with contextlib.suppress(Exception):
+            arriving.said_by_rundesk_into(agent, conversation, said)
+        self._take(agent, conversation, said, trigger=instructions.A_PERSON_ASKED,
+                   answering=None, about=f"the answer from {from_agent}")
+
+    def _take(self, agent: str, conversation: int, body: str, trigger: str,
+              answering: Optional[str], about: str) -> None:
+        """Start a turn, or say this into the one already running, or ask again in a moment.
+
+        The same three answers `OnAChannel._answered` gives a person's message, and deliberately the
+        same: an agent busy on a channel when an answer comes back should read it now rather than
+        after whatever it is doing, which is the whole of what steering is for.
+        """
+        try:
+            for again in range(TRIES):
+                try:
+                    turns.run(turns.Request(
+                        agent=agent, prompt=body, conversation=conversation, trigger=trigger,
+                        source=arriving.FROM_AGENT, place=agent, answering=answering))
+                    return
+                except turns.Busy:
+                    if turns.also_say(agent, conversation, body):
+                        _note(self._where, f"{about} reached the turn already running")
+                        return
+                    if again + 1 < TRIES:
+                        time.sleep(BEFORE_ASKING_AGAIN)
+            _note(self._where, f"{about} stayed busy, so it was recorded and not answered",
+                  logs.ERROR)
+        except Exception as why:  # noqa: BLE001 — a thread, and nobody is above it
+            _note(self._where, f"{about} went wrong ({why})", logs.ERROR)
 
 
 class OnASchedule:

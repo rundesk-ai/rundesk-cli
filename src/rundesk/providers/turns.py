@@ -119,6 +119,10 @@ class Request(NamedTuple):
     place: str = ""
     #: Instruction layers this caller wants added, as `(name, text)`.
     additions: Tuple[Tuple[str, str], ...] = ()
+    #: Which delegation this turn is answering, or `None` when it is answering nobody. Reaches the
+    #: brain's environment, where a `rundesk ask` run from inside the turn reads it and refuses —
+    #: which is what makes depth one enforceable rather than merely asked for.
+    answering: Optional[str] = None
 
 
 class Outcome(NamedTuple):
@@ -446,7 +450,7 @@ def _held(request: Request, held: int, watching, saying,
             provider_home=adapters.home(agent, provider_name),
             skills=grants.where(agent), turn=turn, access_mode=request.access_mode,
             raw=raw, model=request.model_name or settled.get("model_name"), resume=resume,
-            settings=settings,
+            settings=settings, answering=request.answering,
             preface=prompt.text, owners=environment.owners_own())
         # **A turn nobody passed words to is still one a channel can speak into.** The words go
         # somewhere `also_say` can reach for exactly as long as this turn will read them.

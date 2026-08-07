@@ -83,7 +83,8 @@ MAY_IMPORT = {
     # would announce a half-copied alias as granted and revoke it a second later. The traffic goes
     # one way only — `skills` may not reach here, so a grant is still something that can be made,
     # listed and revoked by code that has never heard of a gateway.
-    "gateways": ("skills", "providers", "channels", "schedules", "agents", "core", "utils"),
+    "gateways": ("skills", "providers", "channels", "schedules", "delegations", "agents",
+                 "core", "utils"),
     "lifecycle": ("agents", "core", "utils"),
     # `skills` reaches `agents` because a grant is a directory entry inside an agent's own home and
     # there is nowhere else to ask where that is. The traffic goes one way only: `agents` may not
