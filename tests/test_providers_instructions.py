@@ -169,6 +169,36 @@ class WhatThePersonLayerNames(support.Isolated):
         built = instructions.build(situation=instructions.SCHEDULE_TO_AGENT, variables=EVERYTHING)
         self.assertIn("Never ask a question", built.text)
 
+    def test_a_person_is_told_how_a_local_artifact_becomes_a_real_attachment(self):
+        built = instructions.build(variables=EVERYTHING).text
+        for phrase in ("file, screenshot, preview, or PDF", "final response",
+                       "`![preview](/absolute/image.png)`", "`file:///absolute/path`",
+                       "Verify the final file"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, built)
+
+    def test_a_schedule_is_told_the_same_attachment_contract_for_its_final_report(self):
+        built = instructions.build(situation=instructions.SCHEDULE_TO_AGENT,
+                                   variables=EVERYTHING).text
+        for phrase in ("file, screenshot, preview, or PDF", "final report",
+                       "Verify the final file", "`![preview](/absolute/image.png)`",
+                       "`[file](/absolute/file.pdf)`", "`file:///absolute/path`",
+                       "only a requested deliverable"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, built)
+
+    def test_a_delegated_artifact_is_returned_to_the_caller_without_channel_rules(self):
+        built = instructions.build(
+            situation=instructions.AGENT_TO_AGENT,
+            variables={**EVERYTHING, "caller_agent": "bob"}).text
+        self.assertIn("report its absolute path", built)
+        self.assertIn("bob decides what reaches the person", built)
+        self.assertNotIn("Rundesk attaches it", built)
+
+    def test_attachment_delivery_is_not_put_in_the_always_on_core(self):
+        self.assertNotIn("screenshot", instructions.CORE)
+        self.assertNotIn("attachment", instructions.CORE)
+
 
 class FillingInAVariable(support.Isolated):
     def test_every_variable_a_layer_reads_is_filled(self):
@@ -421,8 +451,8 @@ class PromptBudget(support.Isolated):
     def test_static_layers_have_explicit_byte_ceilings(self):
         ceilings = {
             "core": (instructions.CORE, 1900),
-            "person": (instructions.USER_TO_AGENT, 500),
-            "schedule": (instructions.SCHEDULE_TO_AGENT, 700),
+            "person": (instructions.USER_TO_AGENT, 600),
+            "schedule": (instructions.SCHEDULE_TO_AGENT, 1100),
             "agent": (instructions.AGENT_TO_AGENT, 1100),
             "team": (instructions.AGENTS_LIST, 1250),
         }
@@ -431,7 +461,7 @@ class PromptBudget(support.Isolated):
                 self.assertLessEqual(len(text.encode("utf-8")), ceiling)
 
     def test_a_maximum_dynamic_team_keeps_the_complete_prompt_bounded(self):
-        built = instructions.build(variables=EVERYTHING, team="x" * 6000)
+        built = instructions.build(variables=EVERYTHING, team="x" * 5850)
         self.assertLessEqual(built.total_bytes, 9200)
 
 

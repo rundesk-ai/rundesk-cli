@@ -32,16 +32,18 @@ given and read somebody else's file. So a name is made *unused* as well as safe.
 Three, and the third is the point:
 
 1. Whatever wants to send names an absolute path.
-2. **This** contains it to a permitted root and opens every component with `O_NOFOLLOW`, reporting
-   the size and digest of what it actually opened.
+2. **This** resolves it once, opens the canonical path component-by-component with `O_NOFOLLOW`,
+   and reports the size and digest of what it actually opened.
 3. **The adapter re-opens it the same way and refuses on any mismatch.**
 
 Without the third, a concurrent write can replace the approved file — or a directory above it —
 between the check and the send. Steps one and two look complete on their own and are not.
 
-The permitted roots are the agent's own `home/`, what its schedules wrote, and what has already
-arrived through its channels. Not `state.db`, which is the agent's entire history; not the install's
-secrets; not the program; not another agent's anything.
+An outgoing file is not copied. An explicit link in the answer may name any readable ordinary file
+on the machine. Its canonical path is opened without following a link during the actual open, then
+the adapter repeats that check before sending. This matches the authority provider agents already
+have while avoiding a duplicate merely to cross the channel seam. Intent remains separate: merely
+reading or editing a file never sends it.
 
 ## Going away
 
@@ -210,13 +212,12 @@ def _taken_over(agent: str, kind: str, message: str, at: Path, brought: Dict[str
     return where
 
 
-def approved(agent: str, said: str) -> Sending:
-    """Weigh and digest a file something wants to send, refusing anything that reaches outside.
+def approved(said: str) -> Sending:
+    """Resolve, weigh and digest any explicitly named ordinary local file.
 
-    **Every component is opened with `O_NOFOLLOW`**, so a link anywhere along the way is refused
-    rather than followed. Checking only the final name is not enough: a link two directories up
-    redirects the whole path, and `Path.resolve()` answers about the moment it was asked rather than
-    about the descriptor anything later opens.
+    A symbolic spelling is resolved once, then **every component of that canonical path is opened
+    with `O_NOFOLLOW`**. The adapter receives the canonical path and repeats the same walk, size and
+    digest check, so a later replacement is refused instead of becoming a different attachment.
 
     What comes back is measured from the descriptor this opened, never from a second look at the
     path — so the size and digest describe one file rather than whatever stood at that name twice.
@@ -224,31 +225,30 @@ def approved(agent: str, said: str) -> Sending:
     at = Path(said)
     if not at.is_absolute():
         raise Refused(f"{said} is not an absolute path, and only an absolute one can be checked")
-    # **Before the containment check, not inside the walk, and this is the whole of it.**
-    # `Path.parents` is purely lexical and collapses nothing, so `<home>/../state.db` has `home/`
-    # among its parents and reads as contained. `O_NOFOLLOW` does not save it either: it refuses a
-    # *symlink*, and `..` is not one — the walk steps out of the root exactly as the kernel would.
-    # Proven with a working exploit that read `state.db`, the one file this function's docstring
-    # says can never be reached. Refused by shape, the way `plainly` refuses a name by shape.
+    # A path with navigation steps is ambiguous intent even when it resolves to an ordinary file.
+    # Refused by shape before canonicalization, the same way `plainly` refuses an unsafe name.
     if any(part in (".", "..") for part in at.parts):
         raise Refused(
             f"{said} reaches through a relative step, and a path that does that cannot be checked "
             "— name the file where it actually stands")
-    root = _the_root_holding(agent, at)
-    if root is None:
-        raise Refused(
-            f"{said} is not somewhere {agent} may send from — that is its own home, what its "
-            "schedules wrote, and what has arrived through its channels")
-
-    held = _opened_without_following(root, at)
+    shown = at.name
     try:
-        _one_name_only(held, at)
-        size, digest = _weighed(held)
+        at = at.resolve(strict=True)
+    except (ValueError, RuntimeError) as why:
+        raise Refused(f"{said!r} could not be resolved to a file on this machine") from why
+    except OSError as why:
+        raise Refused(f"{said} could not be resolved to a file on this machine") from why
+    held = _opened_without_following(at)
+    try:
+        how = _ordinary_file(held, at)
+        if how.st_size > EACH_AT_MOST:
+            raise Refused(f"{at.name} is {how.st_size} bytes, and one file may be {EACH_AT_MOST}")
+        size, digest = _weighed(held, at_most=EACH_AT_MOST)
     finally:
         os.close(held)
     if size > EACH_AT_MOST:
         raise Refused(f"{at.name} is {size} bytes, and one file may be {EACH_AT_MOST}")
-    return Sending(name=plainly(at.name), at=at, bytes=size, sha256=digest)
+    return Sending(name=plainly(shown), at=at, bytes=size, sha256=digest)
 
 
 def swept(agent: str, kind: str, keeping: int = KEPT_DAYS,
@@ -282,47 +282,15 @@ def swept(agent: str, kind: str, keeping: int = KEPT_DAYS,
     return gone
 
 
-def _the_root_holding(agent: str, at: Path) -> Optional[Path]:
-    """Which permitted root this file stands under, or `None` when it stands under none.
-
-    Compared on resolved roots and an unresolved file: the roots are directories this product made
-    and may themselves be reached through a link — `/tmp` is `/private/tmp` on this platform — while
-    the file is checked component by component afterwards, which is the check that actually holds.
-    """
-    for root in (directory.home(agent), directory.schedules(agent), directory.channels(agent)):
-        try:
-            settled = root.resolve()
-        except OSError:
-            continue
-        # **A root that is itself a link is not a root**, and this is the check that says so.
-        # Resolving both sides is not enough on its own: with `home/` replaced by a link to an
-        # ancestor, `.resolve()` turns it into that ancestor and *every* path on the machine is
-        # then genuinely under it — both sides agree and the containment means nothing. Proven with
-        # a working exploit that read another agent's `state.db`. `agents.directory.where` refuses
-        # an agent reached through a link for the same reason, one level up.
-        if root.is_symlink():
-            raise Refused(
-                f"{root} is a link, and what an agent may send from may not be reached through one")
-        # Then resolved on both sides, at any depth. `utils.files.escapes` is the near neighbour of
-        # this and is deliberately not reused: it asks whether something stands *directly* inside a
-        # parent, and what is sent stands in directories below one.
-        try:
-            settled_at = at.resolve()
-        except OSError:
-            continue
-        if settled_at == settled or settled in settled_at.parents:
-            return settled
-    return None
-
-
-def _opened_without_following(root: Path, at: Path) -> int:
-    """Open `at` under `root` refusing every link on the way. Hands back the descriptor.
+def _opened_without_following(at: Path) -> int:
+    """Open canonical `at` from its filesystem root, refusing every link on the way.
 
     Walked a component at a time with `dir_fd`, because that is the only form where each step is
     checked as it is taken. A single `open` of the whole path with `O_NOFOLLOW` checks the *last*
     component only, which leaves the interesting attack — a link on a directory above it — working
     perfectly.
     """
+    root = Path(at.anchor)
     try:
         parts = at.relative_to(root).parts
     except ValueError as why:
@@ -353,19 +321,8 @@ def _opened_without_following(root: Path, at: Path) -> int:
         os.close(holding)
 
 
-def _one_name_only(held: int, at: Path) -> None:
-    """Refuse a file reachable under more than one name, or one that is not an ordinary file.
-
-    **A hardlink is not a symlink, and `O_NOFOLLOW` has nothing to refuse.** It is an ordinary
-    directory entry onto the same inode, indistinguishable at open time — so an agent with write
-    access to its own `home/`, which it is explicitly given, can link `state.db` to a name in there
-    and every check above passes. Proven with a working exploit that read the whole of it. The link
-    count is the only thing that sees this.
-
-    The `S_ISREG` half refuses a device or a named pipe in the same breath, which the adapter's own
-    walk already does: a FIFO under `home/` made the read below wait for a writer that never came,
-    wedging whatever thread asked.
-    """
+def _ordinary_file(held: int, at: Path) -> os.stat_result:
+    """Refuse anything that is not an ordinary file without blocking on a device or pipe."""
     how = os.fstat(held)
     if stat.S_ISREG(how.st_mode):
         # An ordinary file never blocks, so the flag that saved us from the pipe is taken off again
@@ -375,13 +332,10 @@ def _one_name_only(held: int, at: Path) -> None:
                         fcntl.fcntl(held, fcntl.F_GETFL) & ~os.O_NONBLOCK)
     if not stat.S_ISREG(how.st_mode):
         raise Refused(f"{at} is not an ordinary file, and only an ordinary file can be sent")
-    if how.st_nlink > 1:
-        raise Refused(
-            f"{at} is reachable under {how.st_nlink} names, so what it is cannot be established "
-            "from where it stands — send a copy of it instead")
+    return how
 
 
-def _weighed(held: int) -> tuple:
+def _weighed(held: int, at_most: int = EACH_AT_MOST) -> tuple:
     """How big a descriptor's file is and what it hashes to, read once, from the descriptor.
 
     From the descriptor rather than from the path, which is the whole reason this takes one: two
@@ -390,8 +344,8 @@ def _weighed(held: int) -> tuple:
     digest = hashlib.sha256()
     size = 0
     with os.fdopen(os.dup(held), "rb") as reading:
-        while True:
-            block = reading.read(BLOCK)
+        while size <= at_most:
+            block = reading.read(min(BLOCK, at_most + 1 - size))
             if not block:
                 break
             size += len(block)

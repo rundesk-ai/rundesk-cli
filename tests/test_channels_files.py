@@ -190,110 +190,145 @@ class WhatMayBeSent(Files):
     def test_a_file_in_the_agents_own_home_is_weighed_and_digested(self):
         body = b"one,two\nthree,four\n"
         at = self.a_file("report.csv", body)
-        sending = files.approved(self.agent, str(at))
+        sending = files.approved(str(at))
         self.assertEqual("report.csv", sending.name)
         self.assertEqual(len(body), sending.bytes)
         self.assertEqual(hashlib.sha256(body).hexdigest(), sending.sha256)
 
     def test_what_a_schedule_wrote_may_be_sent(self):
         at = self.a_file("nightly.out", b"it ran\n", where=directory.schedules(self.agent))
-        self.assertEqual(7, files.approved(self.agent, str(at)).bytes)
+        self.assertEqual(7, files.approved(str(at)).bytes)
 
     def test_what_arrived_through_a_channel_may_be_sent_back(self):
         at = self.a_file("came-in.csv", b"x\n", where=self.a_day())
-        self.assertEqual(2, files.approved(self.agent, str(at)).bytes)
+        self.assertEqual(2, files.approved(str(at)).bytes)
+
+    def test_an_ordinary_file_anywhere_on_the_computer_may_be_sent_in_place(self):
+        at = self.a_file("preview.png", b"pixels", where=self.home / "computer-use")
+        sending = files.approved(str(at))
+        self.assertEqual(at, sending.at)
+        self.assertEqual(hashlib.sha256(b"pixels").hexdigest(), sending.sha256)
+
+    def test_an_already_oversize_file_is_refused_before_it_is_hashed(self):
+        at = self.a_file("huge.bin", b"")
+        with at.open("r+b") as growing:
+            growing.truncate(files.EACH_AT_MOST + 1)
+        weighed = files._weighed
+        self.addCleanup(setattr, files, "_weighed", weighed)
+        files._weighed = lambda *_args, **_kwargs: self.fail("an oversize file was hashed")
+        with self.assertRaises(files.Refused):
+            files.approved(str(at))
+
+    def test_a_file_that_grows_while_read_caps_work_at_the_limit(self):
+        at = self.a_file("growing.bin", b"0123456789")
+        held = os.open(str(at), os.O_RDONLY)
+        self.addCleanup(os.close, held)
+        size, _digest = files._weighed(held, at_most=5)
+        self.assertEqual(6, size)
+
+    def test_a_file_that_grows_after_the_initial_size_check_is_refused(self):
+        at = self.a_file("growing-after-check.bin", b"12345")
+        limit = files.EACH_AT_MOST
+        ordinary = files._ordinary_file
+        self.addCleanup(setattr, files, "EACH_AT_MOST", limit)
+        self.addCleanup(setattr, files, "_ordinary_file", ordinary)
+        files.EACH_AT_MOST = 5
+
+        def growing(held, named):
+            how = ordinary(held, named)
+            with named.open("ab") as writing:
+                writing.write(b"67890")
+            return how
+
+        files._ordinary_file = growing
+        with self.assertRaises(files.Refused):
+            files.approved(str(at))
 
     def test_a_relative_path_is_refused_because_it_cannot_be_checked(self):
         with self.assertRaises(files.Refused):
-            files.approved(self.agent, "home/report.csv")
+            files.approved("home/report.csv")
 
-    def test_the_agents_own_records_may_never_be_sent(self):
-        # `state.db` is the agent's entire history, and it stands beside the directories that may.
-        with self.assertRaises(files.Refused):
-            files.approved(self.agent, str(directory.records(self.agent)))
+    def test_no_special_directory_is_needed_when_a_file_is_explicitly_declared(self):
+        sending = files.approved(str(directory.records(self.agent)))
+        self.assertEqual(directory.records(self.agent), sending.at)
 
-    def test_somewhere_else_entirely_is_refused(self):
-        elsewhere = self.a_file("secrets.txt", b"x", where=self.home / "somewhere")
-        with self.assertRaises(files.Refused):
-            files.approved(self.agent, str(elsewhere))
-
-    def test_another_agents_home_is_refused(self):
-        directory.made("nina", "claude")
-        theirs = self.a_file("theirs.csv", b"x", where=directory.home("nina"))
-        with self.assertRaises(files.Refused):
-            files.approved(self.agent, str(theirs))
-
-    def test_a_link_standing_where_the_file_should_be_is_refused(self):
+    def test_a_link_standing_where_the_file_should_be_is_resolved_once(self):
         elsewhere = self.a_file("real.txt", b"x", where=self.home / "outside")
         pointing = directory.home(self.agent) / "looks-fine.txt"
         pointing.symlink_to(elsewhere)
-        with self.assertRaises(files.Refused):
-            files.approved(self.agent, str(pointing))
+        sending = files.approved(str(pointing))
+        self.assertEqual(elsewhere.resolve(), sending.at)
+        self.assertEqual("looks-fine.txt", sending.name)
 
-    def test_a_link_on_a_directory_above_the_file_is_refused(self):
-        # **The case that decides whether this check is real.** Opening only the last component
-        # with O_NOFOLLOW leaves this working perfectly: the name is an ordinary file, and a
-        # directory two steps up is what redirects the whole path.
+    def test_a_link_on_a_directory_above_the_file_is_canonicalized_before_approval(self):
         outside = self.home / "outside"
         outside.mkdir(parents=True, exist_ok=True)
         (outside / "real.txt").write_bytes(b"somebody else's")
         pointing = directory.home(self.agent) / "ordinary"
         pointing.symlink_to(outside, target_is_directory=True)
-        with self.assertRaises(files.Refused):
-            files.approved(self.agent, str(pointing / "real.txt"))
+        sending = files.approved(str(pointing / "real.txt"))
+        self.assertEqual((outside / "real.txt").resolve(), sending.at)
 
-    def test_a_relative_step_cannot_walk_out_of_a_permitted_root(self):
-        # **A working exploit before this was refused.** `Path.parents` collapses nothing, so this
-        # path has `home/` among its parents and read as contained; `O_NOFOLLOW` refuses a symlink
-        # and `..` is not one, so the walk stepped out and returned the agent's whole history.
+    def test_a_symbolic_link_loop_is_a_refusal_instead_of_an_exception(self):
+        loop = directory.home(self.agent) / "loop"
+        loop.symlink_to(loop)
+        with self.assertRaises(files.Refused):
+            files.approved(str(loop))
+
+    def test_a_relative_step_is_refused_before_canonicalization(self):
+        # A declaration must name where the file actually stands. Navigation steps make its intent
+        # ambiguous even though canonicalization could produce an ordinary absolute file.
         escaping = directory.home(self.agent) / ".." / directory.RECORDS
         with self.assertRaises(files.Refused):
-            files.approved(self.agent, str(escaping))
+            files.approved(str(escaping))
 
     def test_a_relative_step_is_refused_however_deep_it_reaches(self):
         for said in ("home/../../../etc/passwd", "home/./notes.md", "home/../../nina/home/x"):
             with self.subTest(said=said):
                 with self.assertRaises(files.Refused):
-                    files.approved(self.agent, str(directory.where(self.agent) / said))
+                    files.approved(str(directory.where(self.agent) / said))
 
-    def test_a_permitted_root_that_is_itself_a_link_is_not_a_permitted_root(self):
-        # **A working exploit before this was refused**, and resolving both sides does not close it:
-        # with home/ pointing at an ancestor, `.resolve()` makes that ancestor the root and every
-        # path on the machine is genuinely under it — both sides agree and containment means nothing.
+    def test_the_agents_home_is_not_a_boundary_for_an_explicit_file(self):
         at = directory.home(self.agent)
         shutil.rmtree(at)
         at.symlink_to(self.home)
         directory.made("nina", "claude")
-        with self.assertRaises(files.Refused):
-            files.approved(self.agent, str(directory.records("nina")))
+        sending = files.approved(str(directory.records("nina")))
+        self.assertEqual(directory.records("nina"), sending.at)
 
-    def test_a_file_reachable_under_a_second_name_is_refused(self):
-        # **A hardlink is not a symlink and O_NOFOLLOW has nothing to refuse** — it is an ordinary
-        # entry onto the same inode. An agent may write in its own home, so it could link its own
-        # records to a name in there and every other check passes. The link count is the only thing
-        # that sees this.
+    def test_a_hardlink_is_still_the_exact_regular_file_it_names(self):
         pointing = directory.home(self.agent) / "notes.txt"
         os.link(str(directory.records(self.agent)), str(pointing))
-        with self.assertRaises(files.Refused) as refused:
-            files.approved(self.agent, str(pointing))
-        self.assertIn("more than one name", str(refused.exception).replace("2 names",
-                                                                          "more than one name"))
+        sending = files.approved(str(pointing))
+        self.assertEqual(pointing, sending.at)
 
     def test_a_named_pipe_is_refused_rather_than_waited_on(self):
         # It used to wedge whatever thread asked, for ever: opening a FIFO for reading waits for a
         # writer that never comes, and refusing it afterwards is too late because the open blocks.
         pipe = directory.home(self.agent) / "pipe"
         os.mkfifo(str(pipe))
+        opened = files.os.open
+        final_flags = []
+        self.addCleanup(setattr, files.os, "open", opened)
+
+        def opening(name, flags, *args, **kwargs):
+            if name == pipe.name:
+                final_flags.append(flags)
+                flags |= os.O_NONBLOCK
+            return opened(name, flags, *args, **kwargs)
+
+        files.os.open = opening
         with self.assertRaises(files.Refused):
-            files.approved(self.agent, str(pipe))
+            files.approved(str(pipe))
+        self.assertTrue(final_flags[0] & os.O_NONBLOCK)
 
     def test_a_file_that_is_not_there_is_refused_rather_than_reported_empty(self):
         with self.assertRaises(files.Refused):
-            files.approved(self.agent, str(directory.home(self.agent) / "never-written"))
+            files.approved(str(directory.home(self.agent) / "never-written"))
 
     def test_a_directory_is_not_a_file_to_send(self):
         with self.assertRaises(files.Refused):
-            files.approved(self.agent, str(directory.home(self.agent)))
+            files.approved(str(directory.home(self.agent)))
 
 
 class WhatIsSweptAway(Files):

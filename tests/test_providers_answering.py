@@ -631,11 +631,14 @@ class ATurnThatMadeSomethingAndSaidNothing(Answering):
         self.assertEqual(kept.DONE, turn["turn_status"])
         self.assertTrue(self.waited_until(lambda: answering.DONE in self.marks()))
         self.assertNotIn("could not answer", " ".join(self.delivered()))
+        self.assertTrue(self.waited_until(
+            lambda: any(one.get("files") for one in self.what_it_was_told())),
+            "the provider file record counted as an answer but attached no file")
 
 
 class WhenTheBrainMadeSomethingForThePerson(Answering):
     """R-CH-31, end to end through both seams. **The whole outbound path was built and unreachable**
-    — containment, `O_NOFOLLOW`, the digest, the adapter's re-open — with nothing able to produce a
+    — explicit intent, `O_NOFOLLOW`, the digest, the adapter's re-open — with nothing able to produce a
     candidate, because no shipped adapter emits a `file` record and each explains why. The link in the
     answer is what closes it."""
 
@@ -667,6 +670,34 @@ class WhenTheBrainMadeSomethingForThePerson(Answering):
         words = " ".join(self.delivered())
         self.assertIn("the chart", words, "the label was taken out along with the path")
         self.assertNotIn("a-chart.png", words, "the machine path was posted into the room")
+
+    def test_a_preview_declared_mid_turn_is_held_and_attached_with_the_final(self):
+        at = self.home / "computer-use" / "screen shot.png"
+        at.parent.mkdir(parents=True)
+        at.write_bytes(b"pixels")
+        linked = f"Preview: ![screen](file://{str(at).replace(' ', '%20')})"
+        self.a_stand_in_told(self.agent, remarks=[linked, "verification complete"])
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: self.files_sent()),
+                        "a preview named before the last thought was never attached")
+        self.assertEqual(["screen-shot.png"],
+                         [one["name"] for one in self.files_sent()[0]["files"]])
+        self.assertNotIn("file://", " ".join(self.delivered()))
+        self.assertNotIn(str(at), " ".join(self.delivered()))
+
+    def test_a_file_that_cannot_be_opened_is_reported_without_showing_its_path(self):
+        missing = self.home / "private" / "missing preview.png"
+        linked = f"Preview: [image](<{missing}>)"
+        self.a_stand_in_told(self.agent, remarks=[linked, "verification complete"])
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(
+            lambda: "could not attach" in " ".join(self.delivered()).lower()),
+            "the path was stripped and the missing attachment was silently lost")
+        self.assertNotIn(str(missing), " ".join(self.delivered()))
 
 
 class WhenTheBrainCouldNotAnswer(Answering):

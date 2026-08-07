@@ -217,40 +217,65 @@ class WhatADeliveryMayCarry(support.Isolated):
 
     def test_a_file_the_agent_may_send_comes_back_weighed_and_digested(self):
         at = self.a_file()
-        carrying = delivery.carried(self.agent, [str(at)])
+        carrying = delivery.carried([str(at)])
         self.assertEqual([], carrying.refused)
         self.assertEqual(["report.csv"], [one.name for one in carrying.files])
         self.assertEqual(8, carrying.files[0].bytes)
         self.assertEqual(64, len(carrying.files[0].sha256))
 
-    def test_one_it_may_not_send_is_a_sentence_rather_than_an_exception(self):
+    def test_one_it_cannot_open_is_a_sentence_rather_than_an_exception(self):
         # A delivery of four files of which one may not be sent is three files that still have to
         # arrive, plus a line somebody reads.
-        elsewhere = self.a_file("theirs.txt", b"x", where=self.home / "somewhere")
+        elsewhere = self.home / "somewhere" / "missing.txt"
         mine = self.a_file()
-        carrying = delivery.carried(self.agent, [str(elsewhere), str(mine)])
+        carrying = delivery.carried([str(elsewhere), str(mine)])
         self.assertEqual(["report.csv"], [one.name for one in carrying.files])
         self.assertEqual(1, len(carrying.refused))
         self.assertIn(str(elsewhere), carrying.refused[0])
 
     def test_one_file_named_twice_is_one_file(self):
         at = self.a_file()
-        self.assertEqual(1, len(delivery.carried(self.agent, [str(at), str(at)]).files))
+        self.assertEqual(1, len(delivery.carried([str(at), str(at)]).files))
+
+    def test_two_names_for_one_file_are_one_attachment(self):
+        at = self.a_file()
+        alias = directory.home(self.agent) / "report-alias.csv"
+        alias.symlink_to(at)
+        carrying = delivery.carried([str(alias), str(at)])
+        self.assertEqual(1, len(carrying.files))
+        self.assertEqual(at.resolve(), carrying.files[0].at)
+
+    def test_a_link_and_provider_record_alias_are_one_attachment(self):
+        at = self.a_file()
+        alias = directory.home(self.agent) / "report-alias.csv"
+        alias.symlink_to(at)
+        prepared = delivery.prepared(f"[report]({alias})", [str(at)])
+        self.assertEqual(1, len(prepared.files))
+        self.assertEqual(at.resolve(), prepared.files[0].at)
 
     def test_no_more_of_them_are_carried_than_one_message_may_hold(self):
         named = [str(self.a_file(f"one-{nth}.txt", b"x")) for nth in range(files.PER_MESSAGE + 2)]
-        carrying = delivery.carried(self.agent, named)
+        carrying = delivery.carried(named)
         self.assertEqual(files.PER_MESSAGE, len(carrying.files))
         self.assertEqual(2, len(carrying.refused))
+
+    def test_an_alias_after_the_capacity_does_not_crowd_out_or_count_as_a_refusal(self):
+        named = [self.a_file(f"one-{nth}.txt", b"x") for nth in range(files.PER_MESSAGE)]
+        alias = directory.home(self.agent) / "alias.txt"
+        alias.symlink_to(named[0])
+        extra = self.a_file("extra.txt", b"x")
+        carrying = delivery.carried([*(str(one) for one in named), str(alias), str(extra)])
+        self.assertEqual(files.PER_MESSAGE, len(carrying.files))
+        self.assertEqual(1, len(carrying.refused))
 
     def test_a_file_that_moved_after_it_was_approved_is_the_adapters_to_catch(self):
         # What `carried` hands over is what the far side checks itself against, so the digest has to
         # be of the bytes that were there and not of the name.
         at = self.a_file("report.csv", b"the first")
-        carrying = delivery.carried(self.agent, [str(at)])
+        carrying = delivery.carried([str(at)])
         os.remove(str(at))
         self.a_file("report.csv", b"something else entirely")
-        self.assertNotEqual(delivery.carried(self.agent, [str(at)]).files[0].sha256,
+        self.assertNotEqual(delivery.carried([str(at)]).files[0].sha256,
                             carrying.files[0].sha256)
 
 
@@ -271,6 +296,53 @@ class HowABrainSaysSendThis(unittest.TestCase):
         said, paths = delivery.declared_in("done [it](</home/ava/a file.png>)")
         self.assertEqual(["/home/ava/a file.png"], paths)
         self.assertEqual("done it", said)
+
+    def test_a_natural_unwrapped_path_may_contain_spaces_and_parentheses(self):
+        said, paths = delivery.declared_in(
+            "![preview](/tmp/artifacts/team status (final).svg)")
+        self.assertEqual(["/tmp/artifacts/team status (final).svg"], paths)
+        self.assertEqual("preview", said)
+
+    def test_an_image_embed_is_an_attachment_without_a_stray_mark(self):
+        said, paths = delivery.declared_in("Here is ![the preview](/home/ava/screen.png)")
+        self.assertEqual(["/home/ava/screen.png"], paths)
+        self.assertEqual("Here is the preview", said)
+
+    def test_a_local_file_url_is_decoded_into_its_absolute_path(self):
+        said, paths = delivery.declared_in(
+            "[the PDF](file:///home/ava/Quarterly%20Preview.pdf)")
+        self.assertEqual(["/home/ava/Quarterly Preview.pdf"], paths)
+        self.assertEqual("the PDF", said)
+
+    def test_a_percent_encoded_plain_path_is_decoded_too(self):
+        said, paths = delivery.declared_in(
+            "[the PDF](/tmp/Quarterly%20Preview.pdf)")
+        self.assertEqual(["/tmp/Quarterly Preview.pdf"], paths)
+        self.assertEqual("the PDF", said)
+
+    def test_a_malformed_local_file_url_is_a_safe_refusal(self):
+        prepared = delivery.prepared("[broken](file:///tmp/bad%00name.png)")
+        self.assertEqual([], prepared.files)
+        self.assertIn("Could not attach", prepared.text)
+        self.assertNotIn("/tmp/", prepared.text)
+
+    def test_a_rejected_local_file_url_never_leaks_its_destination(self):
+        for said in (
+                "[broken](file:///tmp/private%0Aname.png)",
+                "[broken](file:///tmp/private.png?version=1)",
+                "[broken](file://localhost/tmp/private.png)"):
+            with self.subTest(said=said):
+                prepared = delivery.prepared(said)
+                self.assertEqual([], prepared.files)
+                self.assertIn("Could not attach", prepared.text)
+                self.assertNotIn("file://", prepared.text)
+                self.assertNotIn("/tmp/", prepared.text)
+
+    def test_a_provider_path_with_an_unencodable_character_is_a_safe_refusal(self):
+        prepared = delivery.prepared("result", ["/tmp/bad\ud800name.png"])
+        self.assertEqual([], prepared.files)
+        self.assertIn("Could not attach", prepared.text)
+        self.assertNotIn("/tmp/", prepared.text)
 
     def test_an_ordinary_web_link_is_left_exactly_as_it_was(self):
         """The common case by far, and the one a wrong rule would silently mangle."""
@@ -313,9 +385,8 @@ class HowABrainSaysSendThis(unittest.TestCase):
         self.assertEqual(["/Users/joe/file(1).png"], paths)
         self.assertEqual("here is the report enjoy", said)
 
-    def test_naming_a_file_is_not_the_same_as_being_allowed_to_send_it(self):
-        """This reads intent and decides nothing. A brain naming somewhere it may not reach produces
-        a refusal and a sentence one call later, in `carried` — never a delivery."""
+    def test_naming_a_file_reads_intent_without_opening_it(self):
+        """Parsing strips a private path but leaves validation to `carried` one call later."""
         said, paths = delivery.declared_in("[passwords](/etc/passwd)")
         self.assertEqual(["/etc/passwd"], paths)
         self.assertEqual("passwords", said)

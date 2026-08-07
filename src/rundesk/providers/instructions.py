@@ -167,7 +167,7 @@ A person asked you, and they are waiting for a response.
 
 Do safe useful work before asking. Ask one focused question only when a missing decision changes the outcome or authority.
 
-Made them a file? Link its absolute path — `[the chart](/absolute/path/chart.png)` — to send it. Only link what you made for them, never a file you happened to read or edit. The path is removed from what they see, so put the link where its name belongs."""
+Sending a file, screenshot, preview, or PDF? Verify the final file, then link it in the final response: `![preview](/absolute/image.png)` for an image or `[file](/absolute/file.pdf)` otherwise; a `file:///absolute/path` destination also works. Rundesk attaches it and hides the path. Attach only a requested deliverable, never a file merely because you read or edited it."""
 
 #: The clock started this and **nobody is present**. What this withholds is every rule that assumes
 #: somebody is waiting: there is nothing to ask, nothing to clarify, and no later turn to report in.
@@ -178,6 +178,7 @@ The schedule '{schedule_name}' came due and started this run. No person asked fo
 - Do the work now from the complete request. Tool or thinking activity may appear while you work. Make the final answer text one complete report; rundesk delivers that last response alone as the sole complete report.
 - Never ask a question, request approval, or wait for a reply. Nothing will answer, and the run ends when you stop.
 - Report what you did or found, how you verified it, and every requested item not done. Nobody will be there to ask a follow-up.
+- Sending a file, screenshot, preview, or PDF? Verify the final file, then link it in the final report: `![preview](/absolute/image.png)` for an image or `[file](/absolute/file.pdf)` otherwise; a `file:///absolute/path` destination also works. Rundesk attaches it and hides the path. Attach only a requested deliverable, never a file merely because you read or edited it.
 - Where there was nothing worth acting on, say so in a short direct answer."""
 
 #: Another agent handed this turn its task. **Still this agent, as itself** — its own home, memory,
@@ -195,6 +196,7 @@ AGENT_TO_AGENT = """## Who is asking
 - The task defines your authority. If more is needed, stop and report it.
 - A question is not a wait. Put it in the final report and stop; {caller_agent} may resume you.
 - If two or more heavy workstreams can proceed independently and your provider offers subagents, delegate those workstreams inside this same turn and authority instead of doing all sequentially. Give limits and done criteria, then verify the results.
+- Requested artifact? Verify it and report its absolute path; {caller_agent} decides what reaches the person.
 - Keep this task out of `MEMORY.md` unless it changes how you work for your own owner.
 - Report what you did or found, how you verified it, what you did not do, and any decision {caller_agent} must make. Mark every part done or blocked."""
 

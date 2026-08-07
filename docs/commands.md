@@ -736,6 +736,22 @@ down, and nothing to name. The channel **is** its adapter, so `rundesk channels 
 gives alan a channel called `discord`, and one list of ids says who may reach that agent wherever
 they say it.
 
+**A local link in the agent's final answer is an attachment declaration.** `[report](/absolute/report.pdf)`
+attaches a file, `![preview](/absolute/preview.png)` attaches an image, and a local
+`file:///absolute/path` destination works too. Percent-encoded characters in either local form are
+decoded. Rundesk removes the machine path from the posted text,
+opens any readable ordinary local file in place, fingerprints it, and has the adapter reopen and
+verify the same bytes before sending. It never guesses from files the agent merely read or edited.
+A declaration made in an earlier finished remark is held and attached with the final answer rather
+than leaking its path mid-turn. Up to ten files of 32 MiB each may go with one answer; a file that
+cannot go is named safely in the answer and logged with the full reason.
+
+**Outgoing files are not copied or deleted.** Project output remains project output, and a temporary
+Computer Use screenshot remains owned by that tool or the operating system. Discord's verification
+snapshot exists only for the send and is closed afterwards. Incoming channel files are different:
+Rundesk owns their landed copies under the channel's dated `in/` directory and sweeps whole days
+after 60 days, including for channels later disconnected.
+
 ```console
 $ rundesk channels
 channels in /Users/you/.rundesk/data/agents

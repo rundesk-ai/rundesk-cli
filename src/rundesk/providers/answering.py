@@ -239,7 +239,7 @@ class OnAChannel:
                         # exactly one fallback turn rather than an orphaned pending row.
                         waiting=again + 1 == TRIES)
                     refused = self._delivered(agent, kind, place, got, external_id,
-                                              watching.said_already)
+                                              watching.said_already, watching.linked)
                     # **One producer of the mark, and this is still it.** Turning the adapter's
                     # acknowledgement into a mark of its own was removed once and must stay removed
                     # — two producers raced and the mark a person saw was whichever record arrived
@@ -282,7 +282,8 @@ class OnAChannel:
                 self._marked(agent, kind, place, FAILED, external_id)
 
     def _delivered(self, agent: str, kind: str, place: str, got: turns.Outcome,
-                   external_id: Optional[str] = None, said_already: bool = False) -> str:
+                   external_id: Optional[str] = None, said_already: bool = False,
+                   linked_earlier: Tuple[str, ...] = ()) -> str:
         """The answer, cut to what this platform takes, with whatever the brain made beside it.
 
         **Hands back why the platform would not take it, or `""`.** A turn whose answer was refused
@@ -323,17 +324,17 @@ class OnAChannel:
         # what is left in the words is the label alone — never the owner's own directory, posted into
         # a room. Both sources are merged before approval, so an adapter that one day does report one
         # needs nothing changed here.
-        said, linked = delivery.declared_in(said)
-        said = said.strip()
-        carrying = delivery.carried(agent, [*linked, *(str(one.get("at")) for one in got.files
-                                                       if one.get("at"))])
+        prepared = delivery.prepared(
+            said, [*linked_earlier, *(str(one.get("at")) for one in got.files
+                                      if one.get("at"))])
+        said = prepared.text.strip()
         # **What could not be sent is said, never dropped.** `delivery.carried` computes a sentence
-        # for every file it turns away — outside the agent's roots, too big, past the ten — and until
+        # for every file it turns away — unreadable, too big, past the ten — and until
         # this read it, the whole of what happened to one was that it did not arrive. A person
         # expecting a file and told nothing cannot tell that from an agent that made none.
-        for why in carrying.refused:
+        for why in prepared.refused:
             _note(self._where, f"channel {kind}: {why}", logs.WARNING)
-        if not said and not carrying.files:
+        if not said and not prepared.files:
             return ""
         cost = self._cost(got)
         # **Room for the cost line is taken out of the limit before the words are cut, not after.**
@@ -346,7 +347,7 @@ class OnAChannel:
         pieces = delivery.split(said, at_most=max(1, room))
         turned_away: List[str] = []
         wrote = hosting.told(agent, self._where, self._hosted(), kind, place, pieces,
-                             sending=carrying.files, answering=external_id, cost=cost,
+                             sending=prepared.files, answering=external_id, cost=cost,
                              landed_within=LANDS_WITHIN, refusals=turned_away)
         if not wrote:
             # Nothing was hosting this channel by the time the answer was ready. The words exist in
@@ -452,6 +453,9 @@ class _Streaming:
         self._tools: Dict[str, Dict[str, str]] = {}
         #: The last finished thing the brain said, held until the next one proves it was not the end.
         self._said: Optional[str] = None
+        #: Local files explicitly declared in remarks already shown. They are held for the final
+        #: delivery: a path must never leak mid-turn, and an attachment belongs with the answer.
+        self.linked: List[str] = []
         #: Whether any remark was actually posted. **Read by `_delivered` to decide what the answer
         #: is**: a surface already shown everything before the last thought must be sent only that,
         #: or every remark arrives a second time inside the answer.
@@ -520,7 +524,9 @@ class _Streaming:
         said, self._said = self._said, str(record.get("text") or "")
         if said and said.strip():
             self.said_already = True
-            self._on.remark(self._agent, self._kind, self._place, said)
+            shown, linked = delivery.declared_in(said)
+            self.linked.extend(linked)
+            self._on.remark(self._agent, self._kind, self._place, shown)
 
     def _doing(self, did: str, ok: Optional[bool] = None, who: str = "") -> None:
         hosting.doing(self._agent, self._on.where, self._on.hosted(), self._kind, self._place,

@@ -65,6 +65,7 @@ data/agents/<name>/
   home/             where the agent starts, and what it puts there. Yours, not rundesk's
   logs/             what its gateway said: a file per day, and what launchd caught
   schedules/        what each firing holds, wrote, and was: <schedule>.lock, .out and .json
+  channels/<kind>/  one adapter's records, logs, staging, and dated inbound files
   gateway.lock      held by the one gateway running this agent, for as long as it runs
   gateway.json      what that gateway wrote down about itself
   rundesk-gateway-<name>   the program launchd starts, written when the job is placed
@@ -93,6 +94,11 @@ gateway each starting a copy. `<schedule>.json` says which minute the firing was
 process id is, written before the spawn so that a gateway killed outright still leaves something
 pointing at the work. `<schedule>.out` is everything that schedule's work has ever written, appended
 across runs and rotated by size.
+
+`channels/<kind>/in/YYYY-MM-DD/<message>/` holds files that arrived through a channel. Rundesk owns
+those copies and sweeps whole days after 60 days. Outgoing files have no directory here: they are
+sent in place from the explicit local path in an answer and remain owned by the project, tool, or
+person that created them.
 
 It is one of the two directories a migration does not copy aside and put back, along with `logs/`:
 both grow without bound, and putting a lock file back underneath a child that is still running would

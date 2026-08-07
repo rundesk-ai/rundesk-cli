@@ -948,7 +948,7 @@ class TalkingToOne(Hosting):
         self.an_adapter()
         self.a_channel(told=True)
         watching = self.hosting_now()
-        carrying = delivery.carried(self.agent, [str(at)])
+        carrying = delivery.carried([str(at)])
 
         self.assertTrue(hosting.told(self.agent, self.where, watching, "discord", "1180",
                                      ["here it is"], carrying.files))
@@ -970,7 +970,7 @@ class TalkingToOne(Hosting):
         self.an_adapter()
         self.a_channel(told=True)
         watching = self.hosting_now()
-        carrying = delivery.carried(self.agent, [str(at)])
+        carrying = delivery.carried([str(at)])
 
         hosting.told(self.agent, self.where, watching, "discord", "1180",
                      ["first", "second", "third"], carrying.files)

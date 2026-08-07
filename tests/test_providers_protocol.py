@@ -192,6 +192,12 @@ class WhetherTheTurnWorked(support.Isolated):
     def test_a_file_is_an_answer_even_with_nothing_typed_about_it(self):
         self.assertTrue(protocol.has_answer([{"type": "file", "at": "/tmp/chart.png"}, done()]))
 
+    def test_a_file_record_with_no_absolute_path_answered_nobody(self):
+        for record in ({"type": "file"}, {"type": "file", "at": ""},
+                       {"type": "file", "at": "relative/chart.png"}):
+            with self.subTest(record=record):
+                self.assertFalse(protocol.has_answer([record, done()]))
+
     def test_a_tool_call_is_not_an_answer(self):
         """Reading a file and thinking about it is work nobody receives."""
         self.assertFalse(protocol.has_answer([{"type": "tool", "id": "1", "did": "read"}, done()]))

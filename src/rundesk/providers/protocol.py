@@ -29,6 +29,7 @@ going missing.
 """
 
 import json
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional
 
 #: What an adapter reports, and the whole of it. A ninth is a change to the contract, deliberately.
@@ -284,7 +285,7 @@ def has_answer(said: Iterable[Dict[str, Any]]) -> bool:
     not an answer either — a surface posts nothing for it.
     """
     for one in said:
-        if one.get("type") == "file":
+        if one.get("type") == "file" and Path(str(one.get("at") or "")).is_absolute():
             return True
         if one.get("type") == "text" and str(one.get("text") or "").strip():
             return True

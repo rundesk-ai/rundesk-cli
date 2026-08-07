@@ -1326,6 +1326,7 @@ for line in sys.stdin:
         with open(settings["heard"], "a") as writing:
             writing.write(json.dumps({"place": record.get("place", ""),
                                       "text": record.get("text", ""),
+                                      "files": record.get("files", []),
                                       "reply_to": record.get("reply_to"),
                                       "external_id": named}) + "\\n")
         print(json.dumps({"say": "delivered", "id": record.get("id"),
@@ -1503,6 +1504,101 @@ class WhatAScheduledRunSaysOnASurface(TheChannelsItHosts):
         self.assertTrue(support.waited_until(lambda: len(self.what_was_posted()) >= 1,
                                              self.PATIENCE), "nothing was reported at all")
         self.assertIn("Tuesday's report.", self.what_was_posted()[-1]["text"])
+
+    def test_a_scheduled_reports_local_link_is_attached_without_exposing_the_path(self):
+        self.an_adapter(body=AN_ADAPTER_THAT_NAMES_WHAT_IT_POSTED)
+        self.a_channel()
+        at = self.home / "reports" / "Quarterly Preview.pdf"
+        at.parent.mkdir(parents=True)
+        at.write_bytes(b"a small pdf")
+        began = datetime.datetime(2026, 8, 4, 9, 0, tzinfo=datetime.timezone.utc)
+        arriving.said_by_agent(
+            self.name, arriving.FROM_SCHEDULE, "nightly",
+            f"Report: [the PDF](<file://{str(at).replace(' ', '%20')}>)",
+            when=datetime.datetime(2026, 8, 4, 9, 5, tzinfo=datetime.timezone.utc))
+        logs_at = standing.logs_at(self.at)
+        watching = hosting.looked(self.name, logs_at, hosting.Watching({}, {}, {}))
+        self.addCleanup(hosting.stopping, self.name, logs_at, watching, 4.0)
+        self.assertTrue(support.waited_until(
+            lambda: hosting.connected(watching, "discord"), self.PATIENCE))
+
+        host._Notices(self.name, logs_at, lambda: watching).reported(
+            "nightly", "msg-1", "done", config.moment_of(began))
+
+        self.assertTrue(support.waited_until(lambda: self.what_was_posted(), self.PATIENCE))
+        posted = self.what_was_posted()[-1]
+        self.assertEqual(["Quarterly-Preview.pdf"],
+                         [one["name"] for one in posted["files"]])
+        self.assertNotIn("file://", posted["text"])
+        self.assertNotIn(str(at), posted["text"])
+
+    def test_a_scheduled_artifact_refused_by_the_adapter_falls_back_to_text(self):
+        self.a_channel()
+        at = self.home / "reports" / "preview.png"
+        at.parent.mkdir(parents=True)
+        at.write_bytes(b"pixels")
+        began = datetime.datetime(2026, 8, 4, 9, 0, tzinfo=datetime.timezone.utc)
+        arriving.said_by_agent(
+            self.name, arriving.FROM_SCHEDULE, "nightly", f"Result: [preview]({at})",
+            when=datetime.datetime(2026, 8, 4, 9, 5, tzinfo=datetime.timezone.utc))
+        calls = []
+        told = host._told
+        self.addCleanup(setattr, host, "_told", told)
+
+        def refusing(name, where, watching, saying, landed_within=0.0, answering=None,
+                     sending=(), refusals=None):
+            calls.append({"text": saying, "within": landed_within,
+                          "sending": tuple(sending), "answering": answering})
+            if sending and refusals is not None:
+                refusals.append("the file changed after approval")
+            return host.TOLD
+
+        host._told = refusing
+        host._Notices(
+            self.name, standing.logs_at(self.at),
+            lambda: hosting.Watching({}, {}, {})).reported(
+                "nightly", "msg-1", "done", config.moment_of(began))
+
+        self.assertEqual(2, len(calls))
+        self.assertGreater(calls[0]["within"], 0)
+        self.assertTrue(calls[0]["sending"])
+        self.assertFalse(calls[1]["sending"])
+        self.assertIn("Could not attach: preview.png", calls[1]["text"])
+        self.assertNotIn(str(at), calls[1]["text"])
+
+    def test_a_long_scheduled_report_retries_only_its_refused_final_piece(self):
+        self.a_channel()
+        at = self.home / "reports" / "preview.png"
+        at.parent.mkdir(parents=True)
+        at.write_bytes(b"pixels")
+        began = datetime.datetime(2026, 8, 4, 9, 0, tzinfo=datetime.timezone.utc)
+        said = "BEGIN\n" + "x" * 5000 + f"\nEND [preview]({at})"
+        arriving.said_by_agent(
+            self.name, arriving.FROM_SCHEDULE, "nightly", said,
+            when=datetime.datetime(2026, 8, 4, 9, 5, tzinfo=datetime.timezone.utc))
+        calls = []
+        told = host._told
+        self.addCleanup(setattr, host, "_told", told)
+
+        def refusing(name, where, watching, saying, landed_within=0.0, answering=None,
+                     sending=(), refusals=None):
+            calls.append({"text": saying, "answering": answering})
+            if sending and refusals is not None:
+                refusals.append("the file changed after approval")
+            return host.TOLD
+
+        host._told = refusing
+        host._Notices(
+            self.name, standing.logs_at(self.at),
+            lambda: hosting.Watching({}, {}, {})).reported(
+                "nightly", "msg-1", "done", config.moment_of(began))
+
+        self.assertEqual(2, len(calls))
+        self.assertIn("BEGIN", calls[0]["text"])
+        self.assertNotIn("BEGIN", calls[1]["text"])
+        self.assertIn("END preview", calls[1]["text"])
+        self.assertEqual("msg-1", calls[0]["answering"])
+        self.assertIsNone(calls[1]["answering"])
 
     def test_a_schedule_that_starts_a_program_says_neither(self):
         """It has no answer to report, so promising to report back is a promise rundesk does not

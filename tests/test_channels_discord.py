@@ -16,6 +16,7 @@ on the far side of a pipe; if it ever needs `tests/support.py` to be exercised, 
 
 import asyncio
 import contextlib
+import hashlib
 import importlib.machinery
 import importlib.util
 import io
@@ -23,6 +24,8 @@ import json
 import os
 import shutil
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -153,6 +156,17 @@ class AppCommands:
         return keeping
 
 
+class File:
+    """A Discord upload holding the temporary snapshot the adapter gives the library."""
+
+    def __init__(self, fp: Any, filename: str) -> None:
+        self.fp = fp
+        self.filename = filename
+
+    def close(self) -> None:
+        self.fp.close()
+
+
 class Library:
     """The module global the adapter binds `discord.py` to."""
 
@@ -163,6 +177,7 @@ class Library:
     Status = Status
     app_commands = AppCommands
     CommandTree = CommandTree
+    File = File
 
 
 class Person:
@@ -828,6 +843,91 @@ class WhatADeliveryQuotes(Records):
         sent = self.delivering(place="500")
         self.assertIsNone(sent["reference"])
         self.assertIs(sent["mention_author"], False)
+
+    def test_a_successful_upload_closes_its_temporary_snapshot(self) -> None:
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
+        at = Path(project.name) / "project" / "preview.png"
+        at.parent.mkdir(parents=True)
+        at.write_bytes(b"pixels")
+        sent = self.delivering(
+            place="500", files=[{"name": "preview.png", "at": str(at.resolve()), "bytes": 6,
+                                  "sha256": hashlib.sha256(b"pixels").hexdigest()}])
+        uploaded = sent["files"][0]
+        self.assertTrue(uploaded.fp.closed,
+                        "a successful upload left its verification snapshot open")
+
+    def test_a_file_replaced_by_a_pipe_is_refused_without_blocking(self) -> None:
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
+        at = Path(project.name).resolve() / "preview.png"
+        at.write_bytes(b"pixels")
+        said = {"name": "preview.png", "at": str(at), "bytes": 6,
+                "sha256": hashlib.sha256(b"pixels").hexdigest()}
+        at.unlink()
+        os.mkfifo(str(at))
+        opened = adapter.os.open
+        final_flags: List[int] = []
+
+        def opening(name: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+            if name == at.name:
+                final_flags.append(flags)
+                # Keep the regression itself bounded even against the broken implementation.
+                flags |= os.O_NONBLOCK
+            return opened(name, flags, *args, **kwargs)
+
+        adapter.os.open = opening
+        self.addCleanup(setattr, adapter.os, "open", opened)
+        with self.assertRaises(adapter.Refused):
+            adapter.a_verified_file(said)
+        self.assertTrue(final_flags[0] & os.O_NONBLOCK,
+                        "the final component may block before it is known to be regular")
+
+    def test_a_file_changed_after_approval_refuses_words_and_file_together(self) -> None:
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
+        at = Path(project.name).resolve() / "preview.png"
+        at.write_bytes(b"first!")
+        said = {"do": "deliver", "id": "changed-1", "place": "500", "text": "preview",
+                "files": [{"name": "preview.png", "at": str(at), "bytes": 6,
+                           "sha256": hashlib.sha256(b"first!").hexdigest()}]}
+        at.write_bytes(b"second")
+
+        async def exchange(reaching: Any) -> None:
+            await reaching._deliver(said)
+
+        records = self.during(exchange)
+        self.assertTrue([one for one in records if one.get("say") == "failed"])
+        place = self.client.places.get(500)
+        self.assertTrue(place is None or not place.sent)
+
+    def test_discord_file_verification_leaves_the_event_loop_free(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        verifying = adapter.a_verified_file
+        self.addCleanup(setattr, adapter, "a_verified_file", verifying)
+
+        def blocked(_said: Any) -> Any:
+            entered.set()
+            release.wait(1.0)
+            raise adapter.Refused("fixture refusal")
+
+        adapter.a_verified_file = blocked
+        elapsed = []
+
+        async def exchange(reaching: Any) -> None:
+            began = time.monotonic()
+            delivering = asyncio.create_task(reaching._deliver(
+                {"do": "deliver", "id": "slow-1", "place": "500", "text": "preview",
+                 "files": [{}]}))
+            while not entered.is_set():
+                await asyncio.sleep(0)
+            release.set()
+            await delivering
+            elapsed.append(time.monotonic() - began)
+
+        self.during(exchange)
+        self.assertLess(elapsed[0], 0.5, "file verification blocked the adapter event loop")
 
     def test_an_answer_in_a_private_conversation_is_quoted_and_tinted(self) -> None:
         # R-DIS-28. This was dropped on the reasoning that two people alone need no quote — which is

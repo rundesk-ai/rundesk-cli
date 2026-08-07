@@ -521,8 +521,8 @@ build held the limit in each adapter, and the two drifted: Slack found that cutt
 newline could put a single completion line in a message of its own carrying the mention, and fixed
 it; Discord still had the original rule. One copy of a rule cannot drift from itself.
 
-**A file going out is verified twice and the second check is yours.** Rundesk resolves the path,
-contains it to a root that agent may send from, opens every component with `O_NOFOLLOW` and reports
+**A file going out is verified twice and the second check is yours.** Rundesk resolves an explicitly
+declared absolute path, opens every component with `O_NOFOLLOW` and reports
 the size and digest of the descriptor it opened. **Re-open it the same way, stream it into a snapshot,
 compare both against `bytes` and `sha256`, and send the snapshot rather than the path.** Between the
 approval and the send a concurrent turn can replace the file — or replace a directory above it with a

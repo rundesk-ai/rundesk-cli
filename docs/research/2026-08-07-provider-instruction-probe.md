@@ -1,9 +1,10 @@
 # Provider instruction probe: Claude, Codex, and Grok
 
-**Run 2026-08-07** against the `refactor-2` working tree. The task began at `0fa76df`; the branch
-advanced to `32f0b64` before final validation. Fresh `RUNDESK_HOME` roots under `/tmp` held every
-live fixture. This is test evidence, not a product guarantee. The owner's live install was never
-mutated or used as a fixture.
+**Run 2026-08-07** against the `refactor-2` working tree. The task began at `0fa76df`; the
+instruction and steering phase landed at `27c390f`, and the artifact extension was validated in the
+working tree documented here. Fresh `RUNDESK_HOME` roots under `/tmp` held every live fixture. This
+is test evidence, not a product guarantee. The owner's live install was never mutated or used as a
+fixture.
 
 ## Question
 
@@ -24,7 +25,7 @@ Do the three shipped providers follow Rundesk’s four instruction layers in liv
 | Item | Observed |
 |---|---|
 | Branch | `refactor-2` |
-| Final baseline | `32f0b64` |
+| Instruction baseline | `27c390f` |
 | Claude CLI | `2.1.224` (adapter capture: `2.1.223`) |
 | Codex CLI | `0.147.0` (adapter capture: `0.146.0`) |
 | Grok CLI | `0.2.118` (matches adapter capture) |
@@ -229,6 +230,15 @@ all three providers.
 | E14 active delegation steering | pass: two blasts in target turn 1 and final | pass: natural `asked say` plus second blast in target turn 1 and final | pass: two separate sends in target turn 1 and final |
 | E15 active person steering | pass: Claude adapter capture plus shared channel same-turn integration | pass: Codex adapter capture plus shared channel same-turn integration | pass: Grok adapter capture plus shared channel same-turn integration |
 | E16 active result steering | shared lifecycle regression; provider-independent | shared lifecycle regression; provider-independent | shared lifecycle regression; provider-independent |
+| E17 generated file outside agent home | pass: SVG attached in place | pass: SVG attached in place | pass: SVG attached in place |
+| E18 rendered screenshot / preview | pass: verified PNG attached | pass: verified PNG attached | pass: verified PNG attached |
+| E19 provider-native generated image | not applicable: no native image tool used | pass: native image tool, verified PNG attached | pass: native image tool, verified PNG attached |
+| E20 awkward file name / file-only response | pass: percent-encoded `file:` URL | pass: angle-wrapped absolute path | pass: unwrapped absolute path |
+| E21 scheduled artifact | shared lifecycle regression; provider-independent | shared lifecycle regression; provider-independent | shared lifecycle regression; provider-independent |
+| E22 mid-turn artifact declaration | shared lifecycle regression; provider-independent | shared lifecycle regression; provider-independent | shared lifecycle regression; provider-independent |
+| E23 refused or malformed artifact | shared validation regressions; provider-independent | shared validation regressions; provider-independent | shared validation regressions; provider-independent |
+| E24 valid PDF delivery | pass: verified one-page PDF | pass: verified one-page PDF | pass: verified one-page PDF |
+| E25 natural skill discovery | pass: native skill load record | pass: skill-only marker and verified PDF | pass: skill read, marker, and verified PDF |
 
 ### Active-steering chronology
 
@@ -267,6 +277,75 @@ resuming. A mismatch discards the old handle and starts fresh; the stale handle 
 if that fresh attempt fails. The same-hash resume and changed-hash fresh paths were watched fail
 before the fix and pass afterward on current Python and Python 3.9.
 
+### Artifact delivery extension
+
+Fresh generation-1 artifact agents ran from `/tmp/rundesk-attachment-probe.nGCeWQ`, with the local
+`artifact-conformance` skill installed and granted in that scratch root. The skill required a
+harmless artifact and byte/format verification but did not state Rundesk's attachment syntax. The
+installed provider CLIs were Claude 2.1.224, Codex 0.147.0, and Grok 0.2.118.
+
+Each provider received natural requests for an ordinary generated file, a rendered screenshot or
+preview, a valid one-page PDF, and a file-only CSV whose name contained spaces and parentheses.
+Codex and Grok also received a provider-native image-generation request. The files were deliberately
+created outside the agent homes so the runs exercised in-place delivery rather than a
+private-workspace exception. The screenshot probe rendered a harmless fixture to PNG; it did not
+capture an unrelated desktop. Computer-use screenshots use the same local `file:` URL declaration
+path.
+
+| Provider | Ordinary file | Rendered preview | Native image | Valid PDF | Awkward file-only result |
+|---|---|---|---|---|---|
+| Claude | verified SVG | verified PNG | not requested | PDF 1.4, one page; percent-encoded plain path | CSV via percent-encoded `file:` URL |
+| Codex | verified SVG | verified PNG | image tool; verified 1254x1254 PNG | PDF 1.3, one page; angle-wrapped path | CSV via angle-wrapped absolute path |
+| Grok | verified SVG | verified PNG | native image tool; converted and verified PNG | PDF 1.4, one page; unwrapped path | CSV via unwrapped absolute path |
+
+All 14 declarations resolved to one approved original file, exposed no local path in the visible
+message, and produced no refusal. The same 14 files then passed the Discord adapter's size and
+SHA-256 re-verification; all 14 temporary upload snapshots closed after the simulated send. `file`
+and `pdfinfo` independently identified every PDF's title and single page. Claude's `file:` URL,
+percent-encoded plain PDF path, and Grok's unwrapped paths exposed parser cases that were added to
+the repeatable suite before being accepted as live passes.
+
+The Grok PDF turn installed `reportlab 5.0.0` into the user Python while exploring a generator. The
+package did not exist before that turn; it was removed immediately after the run and the same
+interpreter again produced `ModuleNotFoundError`. Its pre-existing Pillow dependency was untouched.
+
+### Natural skill discovery without a prompt hint
+
+E3 intentionally used a semantic trigger phrase, while E4 and E5 already tested natural unnamed
+discovery for skill authoring and Rundesk management. A final probe removed even that ambiguity. A
+temporary granted skill described when it applied to a one-page PDF titled `Natural Skill Check`;
+its body required verification and the otherwise-unknown final marker `NATURAL-PDF-SKILL-USED`.
+The user prompt named no skill, marker, command, or instruction mechanism:
+
+> Create and send me a one-page PDF titled “Natural Skill Check”. It should visibly say “Skills
+> were checked before work.” Save it under `/tmp/rundesk-natural-skill/<provider>/`. Verify the PDF
+> before sending it. Use existing tools only; do not install software.
+
+`<provider>` was replaced with `claude`, `codex`, or `grok`; nothing else changed.
+
+Claude recorded its native skill-load tool. Grok recorded reading the granted skill. Codex's stream
+did not expose a separate skill-load record, but its response identified the skill and emitted the
+marker available only in that skill body. All three created dependency-free PDF 1.4 files; `file`
+and `pdfinfo` confirmed the title and one-page count, and Rundesk parsed each final declaration into
+one approved original file. This is the direct evidence that all three providers check applicable
+granted skills from a natural task rather than only when the prompt advertises a skill probe.
+
+Deterministic regressions cover the transport edges the provider answer alone cannot prove:
+
+- Markdown file links, image embeds, `file:` URLs, angle wrapping, spaces, parentheses, fences,
+  remote URLs, ordering, and deduplication.
+- An explicitly declared readable ordinary file anywhere on the computer is opened in place; the
+  source file is neither copied nor deleted. Replacement after validation is rejected.
+- A final file declaration emitted during a completed mid-turn remark is held and attached once
+  with the final response instead of leaking its path.
+- Scheduled final reports use the same parsing, approval, refusal, and attachment path as attended
+  channel answers.
+- A missing or unreadable declaration produces a path-free visible refusal, while a malformed
+  provider file record cannot count as an answer.
+- Discord snapshots are short-lived transport copies and close after success or refusal. Incoming
+  channel downloads remain the separate case: Rundesk owns their dated copies and sweeps days older
+  than 60. Rundesk never sweeps an outbound original.
+
 ## Repeatable tests
 
 Focused suites cover instruction assembly and the 9,200-byte ceiling (maximum observed 9,199), situation isolation, literal teammate
@@ -275,6 +354,12 @@ instruction-aware session reuse, unattended final extraction, progress-without-f
 delegation correlation and guidance races, live-turn polling, blast ordering, refusal release,
 person/channel steering, active-parent result steering, resumed-result deduplication, CLI skill
 display, and generated page identity.
+
+The artifact extension adds repeatable coverage for local Markdown/image/`file:` declarations,
+percent encoding and malformed destinations, canonical aliases and capacity, bounded file reads,
+FIFO and changed-file races, provider file-only answers, mid-turn holding, scheduled delivery and
+fallback, Discord event-loop isolation and snapshot cleanup, plus situation-specific attachment
+wording and prompt budgets.
 
 Final release gates on the complete working tree:
 
@@ -289,7 +374,8 @@ This probe measures the installed CLI versions and local account state named abo
 green live run is evidence that the wording works across those three implementations; the offline
 suite remains the repeatable guard against composition or wording regressions without reaching a
 vendor. All provider adapters grant full machine access; read mode is an instruction, not a sandbox.
-Every live mutation was confined to explicit `/tmp` scratch roots. Grok's macOS tool sandbox could
+Product data and retained artifacts were confined to explicit `/tmp` scratch roots. The temporary
+Grok `reportlab` installation and verified restoration are disclosed above. Grok's macOS tool sandbox could
 not create SQLite WAL sidecars for a read-only CLI inspection. The successful Grok probes kept
 normal scratch-database connections open so those sidecars already existed; this changed
 no product data and avoided treating a harness limitation as an instruction failure. The earlier

@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -681,7 +682,7 @@ def a_verified_file(said: Dict[str, Any]):
     """Re-open what rundesk approved, prove it is still that, and hand back those exact bytes.
 
     **The second of two checks, and it is the one that closes the window.** Rundesk resolved this
-    path, contained it to a permitted root and fingerprinted it; between that moment and this one a
+    explicitly declared path and fingerprinted it; between that moment and this one a
     concurrent write can replace the file, or replace a directory above it with a symlink to
     somewhere else entirely. So every component is opened with `O_NOFOLLOW` from a descriptor on the
     one above it — a path resolved twice is two different paths — and the bytes are streamed into a
@@ -717,9 +718,13 @@ def a_verified_file(said: Dict[str, Any]):
             below = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
             os.close(directory)
             directory = below
-        descriptor = os.open(path.parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+        descriptor = os.open(path.parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=directory)
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise OSError("it is not a regular file")
+        with contextlib.suppress(OSError):
+            fcntl.fcntl(descriptor, fcntl.F_SETFL,
+                        fcntl.fcntl(descriptor, fcntl.F_GETFL) & ~os.O_NONBLOCK)
         with os.fdopen(descriptor, "rb") as reading:
             descriptor = None                      # the file object owns the descriptor from here
             while size <= expected:
@@ -760,7 +765,7 @@ def an_id(said: Any, called: str) -> int:
 
 
 def closed(files: List[Any]) -> None:
-    """Let go of snapshots that will never be sent, so a refused delivery costs nothing."""
+    """Let go of short-lived upload snapshots after the platform consumes or refuses them."""
     for one in files:
         with contextlib.suppress(Exception):
             one.close()
@@ -1417,7 +1422,9 @@ class Reaching:
             # parse is the one failure here that no file and no text could ever get past.
             place = an_id(it.get("place"), "channel id")
             for one in it.get("files") or []:
-                files.append(a_verified_file(one))
+                # Re-opening and hashing as much as 32 MiB is filesystem work, not event-loop work.
+                # Kept sequential so attachment order and all-or-none cleanup stay exact.
+                files.append(await asyncio.to_thread(a_verified_file, one))
             if not text and not files:
                 raise Refused("there was nothing to deliver: no text, and no file")
             reference, tint = self._quoting(it.get("reply_to"), place)
@@ -1431,7 +1438,6 @@ class Reaching:
             sent = await where.send(content=text or None, files=files or None,
                                     reference=reference, mention_author=tint)
         except Exception as why:           # noqa: BLE001 — a platform boundary
-            closed(files)
             self._final(why)
             failed = {"say": "failed", "id": given,
                       "why": f"Discord would not take it: {type(why).__name__}: {why}"}
@@ -1443,6 +1449,10 @@ class Reaching:
                 failed["retry_after"] = float(after)
             say(failed)
             return
+        finally:
+            # The platform has consumed the upload before ``send`` returns. The snapshot is ours,
+            # not durable output, and must close on success just as surely as on refusal.
+            closed(files)
         # Ours, and remembered as ours: a later delivery told to quote this one must not ping its
         # author, which is this bot.
         self.handled[str(sent.id)] = Handled(place=place, ours=True)

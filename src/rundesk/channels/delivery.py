@@ -26,7 +26,7 @@ for something nobody needed sent.
 ## And what a delivery carries besides words
 
 `carried` is the second of the three checks a file passes on its way out — the brain names one,
-**this** contains it and fingerprints it through `channels.files.approved`, and the adapter re-opens
+**this** resolves and fingerprints it through `channels.files.approved`, and the adapter re-opens
 it with `O_NOFOLLOW` and refuses on any mismatch. The third is not belt-and-braces: between the
 approval and the send a concurrent turn can replace the file, or a directory above it, and only a
 re-open sees that.
@@ -35,7 +35,9 @@ May depend on `agents`, `core` and `utils`.
 """
 
 import re
+from pathlib import Path
 from typing import List, NamedTuple, Optional, Sequence, Tuple
+from urllib.parse import unquote, urlsplit
 
 from rundesk.channels import files, kept
 
@@ -71,6 +73,15 @@ class Carrying(NamedTuple):
     product is built around not committing.
     """
 
+    files: List["files.Sending"]
+    refused: List[str]
+    not_sent: List[str]
+
+
+class Prepared(NamedTuple):
+    """Channel-safe words and the files explicitly declared in them."""
+
+    text: str
     files: List["files.Sending"]
     refused: List[str]
 
@@ -198,8 +209,9 @@ def split(said: str, at_most: int = WHEN_UNSAID) -> List[str]:
     return pieces or [said[:at_most]]
 
 
-#: How a brain says *send this file*: an ordinary Markdown link whose destination is an absolute
-#: local path. `[the chart](/Users/…/home/chart.png)` and `[it](</Users/…/a file.png>)` both count.
+#: How a brain says *send this file*: a Markdown link or image whose destination is an absolute
+#: local path or local ``file:`` URL. `[chart](/Users/…/chart.png)`,
+#: `![preview](file:///Users/…/preview.png)`, and angle-wrapped paths with spaces all count.
 #:
 #: **A convention rather than a record, because no brain has an intent to report.** All three shipped
 #: adapters refuse to emit a `file` record and each says why in its own words: a brain's stream says
@@ -219,8 +231,9 @@ def split(said: str, at_most: int = WHEN_UNSAID) -> List[str]:
 #: an operating system names a duplicate and a rule that stopped at the first `)` did not merely fail
 #: to match — it captured half a path and left the other half as loose text in the answer.
 A_LOCAL_LINK = re.compile(
-    r"\[([^\[\]]*)\]\(<(/[^>\n\r]+)>\)"
-    r"|\[([^\[\]]*)\]\((/(?:[^()\s]|\([^()\s]*\))*)\)")
+    r"!?\[([^\[\]]*)\]\(<(file://[^>\n\r]*|/[^>\n\r]+)>\)"
+    r"|!?\[([^\[\]]*)\]\((file://(?:[^()\n\r]|\([^()\n\r]*\))*"
+    r"|/(?:[^()\n\r]|\([^()\n\r]*\))*?)\)")
 
 
 def declared_in(said: str) -> Tuple[str, List[str]]:
@@ -232,8 +245,7 @@ def declared_in(said: str) -> Tuple[str, List[str]]:
     cannot act on it anyway.
 
     Nothing here decides whether a file may actually be sent. That is `carried`, one call later,
-    which contains it to the agent's own roots and fingerprints it — so a brain naming
-    `/etc/passwd` produces a refusal and a sentence, never a delivery.
+    which requires an ordinary readable file, bounds its size, and fingerprints its bytes.
 
     **Order is kept**, because a brain that made three charts described them in an order and a
     platform hangs attachments under the message in the order they were given.
@@ -251,8 +263,12 @@ def declared_in(said: str) -> Tuple[str, List[str]]:
     paths: List[str] = []
 
     def taken(found: "re.Match") -> str:
-        label, at = (found.group(1), found.group(2)) if found.group(2) else (found.group(3),
-                                                                            found.group(4))
+        label, named = ((found.group(1), found.group(2)) if found.group(2)
+                        else (found.group(3), found.group(4)))
+        at = _local_path(named)
+        if at is None:
+            paths.append(named)
+            return label
         if at.startswith("//"):
             return found.group(0)
         paths.append(at)
@@ -265,7 +281,19 @@ def declared_in(said: str) -> Tuple[str, List[str]]:
                       for nth, part in enumerate(parts)), paths
 
 
-def carried(agent: str, named: Sequence[str]) -> "Carrying":
+def _local_path(named: str) -> Optional[str]:
+    """An absolute path from a plain local destination or canonical local ``file:`` URL."""
+    if not named.startswith("file://"):
+        at = unquote(named)
+        return at if "\n" not in at and "\r" not in at else None
+    parsed = urlsplit(named)
+    if parsed.scheme != "file" or parsed.netloc or parsed.query or parsed.fragment:
+        return None
+    at = unquote(parsed.path)
+    return at if at.startswith("/") and "\n" not in at and "\r" not in at else None
+
+
+def carried(named: Sequence[str]) -> "Carrying":
     """What of these files a delivery may actually take with it, and a sentence for each it may not.
 
     **Vetted here and verified again by the adapter, and the second check is not a duplicate of the
@@ -281,20 +309,49 @@ def carried(agent: str, named: Sequence[str]) -> "Carrying":
     """
     taking: List[files.Sending] = []
     refused: List[str] = []
+    not_sent: List[str] = []
     seen = set()
+    approved = set()
     for one in named:
         if one in seen:
             continue
         seen.add(one)
         if len(taking) >= files.PER_MESSAGE:
+            try:
+                if Path(one).resolve(strict=True) in approved:
+                    continue
+            except (OSError, ValueError, RuntimeError):
+                pass
             refused.append(f"only the first {files.PER_MESSAGE} files of a delivery are sent, so "
                            f"{one} was left behind")
+            not_sent.append(_safe_name(one))
             continue
         try:
-            taking.append(files.approved(agent, one))
+            sending = files.approved(one)
         except (files.Refused, OSError) as why:
             refused.append(str(why))
-    return Carrying(taking, refused)
+            not_sent.append(_safe_name(one))
+            continue
+        if sending.at in approved:
+            continue
+        approved.add(sending.at)
+        taking.append(sending)
+    return Carrying(taking, refused, not_sent)
+
+
+def prepared(said: str, named: Sequence[str] = ()) -> Prepared:
+    """Extract, approve, and visibly account for every file a final response declares."""
+    text, linked = declared_in(said)
+    carrying = carried([*linked, *named])
+    if carrying.not_sent:
+        warning = "Could not attach: " + ", ".join(carrying.not_sent) + "."
+        text = "\n\n".join(one for one in (text.strip(), warning) if one)
+    return Prepared(text, carrying.files, carrying.refused)
+
+
+def _safe_name(named: str) -> str:
+    """A refused path named without exposing any directory to the channel."""
+    return files.plainly(Path(named).name)
 
 
 def _how_much(said: str, at_most: int, open_fence: bool) -> int:

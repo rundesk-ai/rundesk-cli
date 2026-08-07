@@ -309,6 +309,11 @@ WENT_DOWN = "🔴 Gateway offline — rundesk has shut down."
 #: for; a goodbye nobody waited for is the one that never arrives.
 GOODBYE_WITHIN = 3.0
 
+#: A scheduled artifact needs the adapter's answer before its run can be considered reported. The
+#: gateway remains alive either way, but without this wait a file changed after approval can make
+#: the platform refuse the whole report and leave nobody knowing that it ran.
+ATTACHMENT_WITHIN = 10.0
+
 #: What a gateway asked to restart exits with. **Any non-zero number would do and the number is not
 #: the point** — `KeepAlive {SuccessfulExit: false}` reads *anything but zero* as *bring me back* —
 #: but it is named rather than written as a literal so that a reader of the exit finds the word
@@ -897,8 +902,23 @@ class _Notices:
             # not a reason to lose the report: the run happened and its outcome is still worth
             # saying. See `_told`, which guards the delivery itself the same way.
             said = ""
-        _told(self.name, self.where, self.hosted(),
-              said.strip() or f"schedule {schedule} {became}", answering=answering)
+        prepared = delivery.prepared(said.strip() or f"schedule {schedule} {became}")
+        for why in prepared.refused:
+            logs.note(self.where, f"schedule {schedule}: {why}", logs.WARNING)
+        adapter_refused: List[str] = []
+        _told(self.name, self.where, self.hosted(), prepared.text,
+              landed_within=ATTACHMENT_WITHIN if prepared.files else 0.0,
+              answering=answering, sending=prepared.files, refusals=adapter_refused)
+        if adapter_refused:
+            for why in adapter_refused:
+                logs.note(self.where, f"schedule {schedule}: {why}", logs.WARNING)
+            names = ", ".join(one.name for one in prepared.files)
+            telling = delivery.notice(self.name, prepared.text)
+            last = telling.pieces[-1] if telling is not None and telling.pieces else prepared.text
+            fallback_answering = answering if telling is None or len(telling.pieces) == 1 else None
+            fallback = "\n\n".join(
+                one for one in (last.strip(), f"Could not attach: {names}.") if one)
+            _told(self.name, self.where, self.hosted(), fallback, answering=fallback_answering)
 
 
 def _told_what_changed(name: str, where: Path, channels_up: hosting.Watching,
@@ -991,7 +1011,9 @@ def _the_told_channel_is_connected(name: str, channels_up: hosting.Watching) -> 
 
 
 def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
-          landed_within: float = 0.0, answering: Optional[str] = None) -> str:
+          landed_within: float = 0.0, answering: Optional[str] = None,
+          sending: Sequence[arrivals.Sending] = (),
+          refusals: Optional[List[str]] = None) -> str:
     """Send one notice out through the channel this agent asked to be told things. Never raises.
 
     Answers which of **three** things happened, because a caller that has to decide whether to write
@@ -1019,7 +1041,9 @@ def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
     one — a schedule's report, put below the notice that said the run had begun. Passed through
     rather than left to that caller to call `hosting.told` itself, because what would be duplicated
     is this function's three-state answer and the `Exception`-and-never-`BaseException` rule above,
-    and a rule worth a paragraph is a rule that must have one home.
+    and a rule worth a paragraph is a rule that must have one home. `refusals` receives any adapter
+    refusal when `landed_within` asks this call to wait; scheduled artifacts use it to send the
+    report again without files rather than lose the report with the changed attachment.
     """
     # `try`/`except` rather than `suppress`, only so there is somewhere to answer from. The rule is
     # unchanged and is the one that matters: `Exception` and never `BaseException`, so that `Stopped`
@@ -1029,7 +1053,8 @@ def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
         if going is None:
             return TELLS_NOBODY
         if hosting.told(name, where, channels_up, going.kind, going.place, going.pieces,
-                        landed_within=landed_within, answering=answering):
+                        landed_within=landed_within, answering=answering, sending=sending,
+                        refusals=refusals):
             return TOLD
     except Exception:                              # noqa: BLE001 — see the docstring
         return NOT_YET
