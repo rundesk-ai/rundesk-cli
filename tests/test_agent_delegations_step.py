@@ -1,9 +1,9 @@
 """The table an agent keeps about work it handed on, and what an agent is for.
 
-Two things this proves that nothing else can. **The constraints are the specification**: every rule
-about which columns belong to which kind is a `CHECK` rather than Python, so the cases here insert
-rows that must be refused — a constraint nobody has watched refuse something is a constraint nobody
-knows is there.
+Two things this proves that nothing else can. **The constraints are the specification**: what a
+delegation must name, and what it must point at, are the table's rather than Python's, so the cases
+here insert rows that must be refused — a constraint nobody has watched refuse something is a
+constraint nobody knows is there.
 
 And **the step is safe against an agent that does not need it**: an install carrying forward already
 has a `config` table, so the column is asked about before it is added, and running the step twice
@@ -62,8 +62,7 @@ class OneAgentsDelegations(support.Isolated):
         if conversation is None:
             conversation, turn = self.a_conversation_and_a_turn()
             self._pointing = (conversation, turn)
-        said = {"delegation_id": "del-1-aaaa", "kind": "agent", "to_agent": "bob",
-                "role": None, "revision": None,
+        said = {"delegation_id": "del-1-aaaa", "to_agent": "bob",
                 "parent_conversation": conversation, "parent_turn": turn,
                 "created_at": "2026-08-06T00:00:00Z", "latest_at": "2026-08-06T00:00:00Z"}
         said.update(moving)
@@ -96,33 +95,11 @@ class TheStepItself(OneAgentsDelegations):
 
 
 class WhatTheConstraintsRefuse(OneAgentsDelegations):
-    """Every rule about the two kinds is a `CHECK`, so every one of them is watched refusing."""
+    """Every rule the table holds, watched refusing something."""
 
-    def test_a_kind_that_is_neither_is_refused(self):
+    def test_a_delegation_that_names_no_agent_is_refused(self):
         with self.assertRaises(sqlite3.IntegrityError):
-            self.a_delegation(kind="schedule")
-
-    def test_delegating_to_an_agent_without_naming_one_is_refused(self):
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.a_delegation(kind="agent", to_agent=None)
-
-    def test_delegating_to_an_agent_may_not_also_name_a_role(self):
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.a_delegation(kind="agent", to_agent="bob", role="development")
-
-    def test_a_role_run_without_naming_a_role_is_refused(self):
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.a_delegation(kind="role", to_agent=None, role=None)
-
-    def test_a_role_run_may_not_also_name_an_agent(self):
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.a_delegation(kind="role", role="development", to_agent="bob")
-
-    def test_a_revision_belongs_to_a_role_and_to_nothing_else(self):
-        # `revision` is what a role run was admitted against. On a delegation to an agent it would
-        # be a column that reads as meaning something and means nothing.
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.a_delegation(kind="agent", to_agent="bob", revision="abc123")
+            self.a_delegation(to_agent=None)
 
     def test_two_delegations_may_not_share_an_id(self):
         self.a_delegation(delegation_id="del-1-aaaa")

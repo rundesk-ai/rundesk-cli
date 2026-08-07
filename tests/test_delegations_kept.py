@@ -44,7 +44,7 @@ class TwoAgents(support.Isolated):
         return conversation, turn
 
     def ava_delegates(self, delegation_id="del-1-aaaa", **more):
-        said = {"kind": kept.AGENT, "to_agent": "bob",
+        said = {"to_agent": "bob",
                 "parent_conversation": self.conversation, "parent_turn": self.turn}
         said.update(more)
         kept.made("ava", delegation_id, **said)
@@ -59,30 +59,13 @@ class WritingOneDown(TwoAgents):
         # And in nobody else's. Bob holds no record of somebody else's bookkeeping.
         self.assertEqual([], kept.every("bob"))
 
-    def test_a_kind_that_is_neither_is_refused_in_words_rather_than_by_the_table(self):
-        with self.assertRaises(kept.Refused) as caught:
-            self.ava_delegates(kind="schedule")
-        self.assertIn("schedule", str(caught.exception))
-
-    def test_delegating_to_an_agent_without_naming_one_says_what_was_missing(self):
+    def test_delegating_without_naming_an_agent_says_what_was_missing(self):
         """The table refuses it too. **The sentence is what this guard is for** — SQLite answers
-        `CHECK constraint failed: delegations`, which names the table and not the mistake."""
+        `NOT NULL constraint failed: delegations.to_agent`, naming a column and not the mistake."""
         with self.assertRaises(kept.Refused) as caught:
-            self.ava_delegates(to_agent=None)
-        self.assertIn("has to name the agent", str(caught.exception))
-        self.assertNotIn("CHECK constraint", str(caught.exception))
-
-    def test_a_role_run_without_naming_a_role_says_what_was_missing(self):
-        with self.assertRaises(kept.Refused) as caught:
-            self.ava_delegates(kind=kept.ROLE, to_agent=None)
-        self.assertIn("has to name the role", str(caught.exception))
-        self.assertNotIn("CHECK constraint", str(caught.exception))
-
-    def test_a_role_run_names_the_role_and_the_revision_it_was_admitted_against(self):
-        self.ava_delegates(kind=kept.ROLE, to_agent=None, role="review", revision="abc123")
-        said = kept.one("ava", "del-1-aaaa")
-        self.assertEqual(("review", "abc123"), (said.role, said.revision))
-        self.assertEqual("review", said.handed_to)
+            self.ava_delegates(to_agent="")
+        self.assertIn("has to name the agent it goes to", str(caught.exception))
+        self.assertNotIn("constraint", str(caught.exception))
 
     def test_two_may_not_share_an_id(self):
         self.ava_delegates()
@@ -101,13 +84,6 @@ class FindingWorkToDo(TwoAgents):
         self.ava_delegates("del-2-bbbb", to_agent="nina")
         waiting = kept.outstanding("ava", to_agent="bob")
         self.assertEqual(["del-1-aaaa"], [one.delegation_id for one in waiting])
-
-    def test_a_role_run_is_never_work_for_another_agent(self):
-        """`to_agent` is null on a role run, and a query that matched it would hand one agent's
-        private mode to somebody else's gateway."""
-        self.ava_delegates(kind=kept.ROLE, to_agent=None, role="review")
-        self.assertEqual([], kept.outstanding("ava", to_agent="bob"))
-        self.assertEqual(1, len(kept.outstanding("ava")))
 
     def test_what_has_been_answered_is_no_longer_waiting(self):
         self.ava_delegates()
@@ -158,34 +134,18 @@ class AskingOneToStop(TwoAgents):
         self.assertFalse(kept.stop_asked("ava", "del-1-aaaa"))
 
 
-class CountingAttemptsAtStartingIt(TwoAgents):
-    """A failed start produces no turn, which is exactly why this cannot be counted off `turns`."""
-
-    def test_each_attempt_counts_and_the_count_comes_back(self):
-        self.ava_delegates()
-        self.assertEqual([1, 2, 3], [kept.tried("ava", "del-1-aaaa") for _ in range(3)])
-
-    def test_counting_one_nobody_made_answers_none_rather_than_raising(self):
-        self.assertEqual(0, kept.tried("ava", "del-9-zzzz"))
-
-
 class WhereTheWorkStands(support.Isolated):
     """The key is constructed rather than stored, so nothing can point at the wrong database."""
 
-    def test_a_delegation_to_an_agent_is_keyed_by_who_asked_and_which_turn(self):
-        self.assertEqual("ava/12", kept.source_id_for(kept.AGENT, "ava", 12, "del-1-aaaa"))
+    def test_it_is_keyed_by_who_asked_and_which_turn(self):
+        self.assertEqual("ava/12", kept.source_id_for("ava", 12))
 
     def test_two_delegations_from_one_turn_share_a_conversation(self):
         """So they share a provider session, and the answering agent is not made to start again."""
-        self.assertEqual(kept.source_id_for(kept.AGENT, "ava", 12, "del-1-aaaa"),
-                         kept.source_id_for(kept.AGENT, "ava", 12, "del-2-bbbb"))
+        self.assertEqual(kept.source_id_for("ava", 12), kept.source_id_for("ava", 12))
 
     def test_one_from_a_later_turn_does_not(self):
-        self.assertNotEqual(kept.source_id_for(kept.AGENT, "ava", 12, "del-1-aaaa"),
-                            kept.source_id_for(kept.AGENT, "ava", 13, "del-2-bbbb"))
-
-    def test_a_role_run_is_keyed_by_the_run_because_it_has_no_identity_to_share_one_with(self):
-        self.assertEqual("rol-1-aaaa", kept.source_id_for(kept.ROLE, "ava", 12, "rol-1-aaaa"))
+        self.assertNotEqual(kept.source_id_for("ava", 12), kept.source_id_for("ava", 13))
 
 
 class ReadingSomebodyElsesStore(TwoAgents):
@@ -231,7 +191,7 @@ class DeliveringTheBriefIntoTheOtherAgentsStore(TwoAgents):
         with records.reading(directory.records("bob")) as conn:
             source_id = conn.execute("SELECT source_id FROM conversations WHERE id = ?",
                                      (landed.conversation,)).fetchone()[0]
-        self.assertEqual(kept.source_id_for(kept.AGENT, "ava", self.turn, "del-1-aaaa"), source_id)
+        self.assertEqual(kept.source_id_for("ava", self.turn), source_id)
 
     def test_two_briefs_from_one_turn_share_a_conversation(self):
         one = arriving.recorded_for_a_delegation("bob", "ava", self.turn, "one")

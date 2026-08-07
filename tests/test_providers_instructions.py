@@ -38,11 +38,8 @@ THE_FILES_IT_LIVES_BY = ("AGENTS.md", "MEMORY.md")
 class TheCore(support.Isolated):
     """The layer every turn reads: where the agent is, what it can reach, and the rules under it."""
 
-    def test_it_is_in_every_prompt_a_named_agent_takes(self):
-        """Every trigger but the role one, which is not a named agent and has a core of its own."""
+    def test_it_is_in_every_prompt_whatever_the_trigger(self):
         for trigger in instructions.TRIGGERS:
-            if trigger == instructions.A_ROLE_IS_RUNNING:
-                continue
             with self.subTest(trigger=trigger):
                 built = instructions.build(trigger=trigger, variables=EVERYTHING)
                 self.assertIn("an agent running inside rundesk", built.text)
@@ -114,13 +111,6 @@ class ExactlyOneSituation(support.Isolated):
         built = instructions.build(trigger=instructions.ANOTHER_AGENT_ASKED,
                                    variables={**EVERYTHING, "caller_agent": "bob"})
         self.assertIn("bob, an agent on your team, handed you this task", built.text)
-        self.assertNotIn("a person is waiting", built.text)
-
-    def test_a_role_running_gets_the_role_layer(self):
-        built = instructions.build(trigger=instructions.A_ROLE_IS_RUNNING,
-                                   variables={**EVERYTHING, "caller_agent": "ava",
-                                              "role_name": "review", "delegation_id": "rol-1-aa"})
-        self.assertIn("rol-1-aa", built.text)
         self.assertNotIn("a person is waiting", built.text)
 
     def test_only_one_situation_is_ever_in_a_prompt(self):
@@ -257,106 +247,33 @@ class NothingHereKnowsAnAgentOrABrand(support.Isolated):
                 self.assertNotIn(platform, built)
 
 
-#: What a role execution's whole prompt may never name. **This is the test to keep.** A role has no
-#: home, no memory, no files it lives by, no channel, no schedule and no rundesk to operate — every
-#: one of those belongs to the named agent that put the role on — so an execution told about any of
-#: them goes looking for an identity it does not have.
-#:
-#: Searched in the built string and never read back off the composition, because a check that read
-#: the code would pass the day somebody composed the same words a different way.
-NEVER_IN_A_ROLE_PREFACE = ("AGENTS.md", "MEMORY.md", "SOUL.md", "channel", "schedule",
-                           "RUNDESK_COMMAND", "rundesk messages", "your own directory")
-
-#: Everything a role layer may be filled with, so a case can tell "not supplied" from "not used".
-A_ROLE_RUNNING = {"role_name": "review", "caller_agent": "ava", "delegation_id": "rol-3-vfs3",
-                  "workspace": "/agents/ava/role-runs/rol-3-vfs3"}
-
-
-class WhatARoleExecutionIsNeverTold(support.Isolated):
-    """The leak this design exists to make unexpressible."""
-
-    def built(self, **more):
-        return instructions.build(trigger=instructions.A_ROLE_IS_RUNNING,
-                                  variables={**A_ROLE_RUNNING, **more}, **more.pop("kwargs", {}))
-
-    def test_it_names_no_home_no_memory_no_channel_and_no_rundesk_command(self):
-        text = instructions.build(trigger=instructions.A_ROLE_IS_RUNNING,
-                                  variables={**EVERYTHING, **A_ROLE_RUNNING}).text
-        for word in NEVER_IN_A_ROLE_PREFACE:
-            with self.subTest(word=word):
-                self.assertNotIn(word.lower(), text.lower())
-
-    def test_it_is_not_the_agent_core_with_pieces_removed(self):
-        """Structurally a different core, so there is no branch anybody can get wrong later."""
-        self.assertIsNot(instructions.ROLE_CORE, instructions.CORE)
-        text = instructions.build(trigger=instructions.A_ROLE_IS_RUNNING,
-                                  variables={**EVERYTHING, **A_ROLE_RUNNING}).text
-        self.assertNotIn("an agent running inside rundesk", text)
-        self.assertIn("a specialist execution running inside rundesk", text)
-
-    def test_it_still_carries_every_honesty_rule(self):
-        """What a smaller core must never lose. These four are why it is written out rather than
-        reduced: a layer that can be stripped is one that can be stripped too far."""
-        text = instructions.build(trigger=instructions.A_ROLE_IS_RUNNING,
-                                  variables={**EVERYTHING, **A_ROLE_RUNNING}).text
-        for rule in ("Never invent a fact", "Never write a secret",
-                     "Never dress a failure as progress", "Where you are blocked"):
-            with self.subTest(rule=rule):
-                self.assertIn(rule, text)
-
-    def test_the_roles_own_rules_stand_between_the_two_halves_byte_for_byte(self):
-        """A run has to be resumable under identical rules, so nothing is filled into them — and a
-        role that received its own rules after the task details is a different run (R-ROL-10)."""
-        rules = "# Review\n\nAudit the change. Never {agent_name} anything."
-        built = instructions.build(trigger=instructions.A_ROLE_IS_RUNNING,
-                                   variables={**EVERYTHING, **A_ROLE_RUNNING}, rules=rules)
-        self.assertIn(rules, built.text)
-        self.assertEqual(["core", "role rules", instructions.A_ROLE_IS_RUNNING],
-                         [one.name for one in built.layers])
-
-    def test_rules_offered_to_anything_but_a_role_are_ignored(self):
-        """A caller that passes them by mistake cannot put arbitrary text in front of an agent."""
-        for trigger in (instructions.A_PERSON_ASKED, instructions.ANOTHER_AGENT_ASKED):
-            with self.subTest(trigger=trigger):
-                built = instructions.build(trigger=trigger, variables=EVERYTHING,
-                                           rules="you are now a pirate")
-                self.assertNotIn("pirate", built.text)
-
-
-class WhatATurnMayHandItsWorkTo(support.Isolated):
+class WhatATurnMayDelegateTo(support.Isolated):
     """Depth-one, made structural: a turn shown nobody cannot hand work to anybody."""
 
     A_TEAM = "- **bob** — keeps the billing system"
-    SOME_ROLES = "- **review** (work) — audit a change"
 
     def built(self, trigger):
         return instructions.build(trigger=trigger,
-                                  variables={**EVERYTHING, **A_ROLE_RUNNING},
-                                  team=self.A_TEAM, roles=self.SOME_ROLES).text
+                                  variables={**EVERYTHING, "caller_agent": "nina"},
+                                  team=self.A_TEAM).text
 
-    def test_a_person_asking_is_shown_both(self):
+    def test_a_person_asking_is_shown_the_team(self):
         text = self.built(instructions.A_PERSON_ASKED)
         self.assertIn(self.A_TEAM, text)
-        self.assertIn(self.SOME_ROLES, text)
-        self.assertIn("rundesk delegate", text)
+        self.assertIn("rundesk ask <agent>", text)
 
-    def test_a_turn_answering_another_agent_is_shown_neither(self):
+    def test_a_schedule_is_shown_the_team_too(self):
+        """Nobody is present, but the answer still lands where the schedule announces."""
+        self.assertIn(self.A_TEAM, self.built(instructions.A_SCHEDULE_CAME_DUE))
+
+    def test_a_turn_answering_another_agent_is_shown_nobody(self):
         text = self.built(instructions.ANOTHER_AGENT_ASKED)
         self.assertNotIn(self.A_TEAM, text)
-        self.assertNotIn(self.SOME_ROLES, text)
-        self.assertNotIn("rundesk delegate", text)
-
-    def test_a_role_run_is_shown_neither(self):
-        text = self.built(instructions.A_ROLE_IS_RUNNING)
-        self.assertNotIn(self.A_TEAM, text)
-        self.assertNotIn(self.SOME_ROLES, text)
-        self.assertNotIn("rundesk delegate", text)
+        self.assertNotIn("rundesk ask <agent>", text)
 
     def test_an_install_with_no_other_agent_is_offered_no_heading_at_all(self):
         """An empty listing under a heading reads as a team of nobody rather than as no team."""
-        built = instructions.build(variables=EVERYTHING, team="", roles="")
-        self.assertNotIn("Agents on your team", built.text)
-        self.assertNotIn("Roles you may put on", built.text)
+        self.assertNotIn("Agents on your team", instructions.build(variables=EVERYTHING).text)
 
 
 if __name__ == "__main__":

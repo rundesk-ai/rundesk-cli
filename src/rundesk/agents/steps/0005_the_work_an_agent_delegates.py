@@ -1,10 +1,10 @@
 """What one agent handed to somebody else, and what it is still owed. 0.40.0.
 
-The release that lets an agent delegate — to another named agent, or to a role it puts on. `0003`
-reserved the two words this needs (`conversations.source` already accepts `'agent'` and `'role'`)
-and said why the vocabulary was written complete rather than grown: *"Widening a `CHECK` later means
-rebuilding the table, and a rebuild here cannot follow SQLite's own documented procedure."* So this
-step adds a table and a column, and rebuilds nothing.
+The release that lets one agent hand a bounded task to another. `0003` reserved the word this needs
+— `conversations.source` already accepts `'agent'` — and said why the vocabulary was written complete
+rather than grown: *"Widening a `CHECK` later means rebuilding the table, and a rebuild here cannot
+follow SQLite's own documented procedure."* So this step adds a table and a column, and rebuilds
+nothing.
 
 ## One table, and the test it keeps passing
 
@@ -38,18 +38,16 @@ with a cascade, so a swept conversation cannot leave a delegation behind pointin
 
 **Finding the work stores no id.** `conversations` already has `UNIQUE (source, source_id)`, and the
 key is one the delegator can construct rather than keep: `('agent', '<me>/<parent_turn>')` in the
-other agent's database, `('role', '<delegation_id>')` in its own.
+other agent's database.
 
-## The two kinds, in one table
+## Why there is no attempt counter
 
-`kind` is `'agent'` or `'role'`, and the two `CHECK`s tie the nullable columns to it so neither
-kind's fields can be set on the other. The overlap between them is near-total and there are two of
-them, which is the size at which one table with a constraint beats a table each.
-
-`revision` is a snapshot of what the role was when the run was admitted, and it is deliberately not a
-live lookup — the same denormalization `turns.schedule_name` already is, and for the same reason. A
-role is replaced wholesale on every update, so a run that resumed against whatever the library holds
-today would be a different run from the one that was admitted.
+A failed start would seem to need one, since a delegation nothing can begin must not be picked up for
+ever. It does not: `providers.turns` writes the turn row **before** the work starts and settles it in
+a `finally` that survives the process being taken down — *"leave no turn recorded as still working
+once nothing is doing it."* So a provider that cannot start still produces a turn that reaches a
+terminal status, and a terminal turn is what settles a delegation. There is no state where work was
+admitted, nothing ran, and nothing knows.
 
 Imports nothing of rundesk's, never `executescript`, never ends the runner's transaction, and is safe
 against an agent that does not need it.
@@ -73,27 +71,17 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS delegations (
   id                  INTEGER PRIMARY KEY,
   delegation_id       TEXT NOT NULL UNIQUE,
-  kind                TEXT NOT NULL CHECK (kind IN ('agent', 'role')),
-  to_agent            TEXT,
-  role                TEXT,
-  revision            TEXT,
+  to_agent            TEXT NOT NULL,
   parent_conversation INTEGER NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
   parent_turn         INTEGER NOT NULL REFERENCES turns (id) ON DELETE CASCADE,
   answered_at         TEXT,
   stop_asked_at       TEXT,
-  carry_attempts      INTEGER NOT NULL DEFAULT 0,
   created_at          TEXT NOT NULL,
-  latest_at           TEXT NOT NULL,
-  CHECK ((kind = 'agent') = (to_agent IS NOT NULL)),
-  CHECK ((kind = 'role') = (role IS NOT NULL)),
-  CHECK ((kind = 'role') OR revision IS NULL)
+  latest_at           TEXT NOT NULL
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_delegations_waiting
   ON delegations (to_agent) WHERE answered_at IS NULL;
-
-CREATE INDEX IF NOT EXISTS idx_delegations_mine
-  ON delegations (kind, id) WHERE answered_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_delegations_parent
   ON delegations (parent_conversation, id);

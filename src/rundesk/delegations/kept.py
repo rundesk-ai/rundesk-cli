@@ -23,16 +23,20 @@ is no care to be taken and no reviewer who has to notice.
 **Every column is a thing that is neither a turn nor a message**, and that is the membership rule
 step `0005` was written to. The brief, the answer and every steer are `conversation_messages`; the
 work is `turns`; its outcome is `turn_status`. There is no `state` column, because what state a
-delegation is in is read off the work it delegated — `standing` is where that reading happens, and
-it is the only place that knows how the two fit together.
+delegation is in is read off the work it delegated: no terminal turn yet means it is still being
+answered, and `turn_status` says how it went.
+
+There is no attempt counter either, and that is worth saying because its absence looks like an
+oversight. `providers.turns` writes the turn row before the work starts and settles it in a `finally`
+that survives the process being taken down, so a provider that cannot start still leaves a turn that
+reached a terminal status. Work that was admitted and then vanished is not a state this can be in.
 
 ## Finding the work without keeping a pointer to it
 
 `conversations` has `UNIQUE (source, source_id)`, so the conversation a delegation's work happens in
-is found by a key that is **constructed rather than stored**: `('agent', '<delegator>/<parent turn>')`
-in the other agent's database, `('role', '<delegation id>')` in the delegator's own. A stored id
-would be a second source of truth, and for the agent kind it would point into a database this one
-may not follow it into.
+is found by a key that is **constructed rather than stored** — `('agent', '<delegator>/<parent turn>')`
+in the answering agent's database. A stored id would be a second source of truth, and it would point
+into a database this one may not follow it into.
 
 May depend on `agents`, `core` and `utils`.
 """
@@ -47,24 +51,22 @@ from rundesk.core import config
 #: The table, named once.
 TABLE = "delegations"
 
-#: What a delegation was handed to. `AGENT` is another named agent, answering as itself out of its
-#: own home; `ROLE` is a specialist definition this agent puts on, with its identity withheld. The
-#: words are `conversations.source`'s, which step `0003` wrote complete rather than grew.
-AGENT = "agent"
-ROLE = "role"
-KINDS = (AGENT, ROLE)
+#: Where a delegated turn's conversation comes from, in `conversations.source`. Step `0003` wrote
+#: that vocabulary complete rather than growing it, which is why this word was already legal.
+FROM_AGENT = "agent"
 
 
-#: How the conversation holding a delegation's work is keyed, per kind. Not stored anywhere — see
-#: the module docstring. `source_id` is `TEXT`, and both of these are built into one.
-def source_id_for(kind: str, delegator: str, parent_turn: int, delegation_id: str) -> str:
+def source_id_for(delegator: str, parent_turn: int) -> str:
     """The `conversations.source_id` this delegation's work stands under.
 
-    An agent's is keyed by **who asked and which turn of theirs**, so two delegations from one turn
-    share a conversation and a provider session, and one from a later turn does not. A role's is
-    keyed by the run, because a role has no identity to share a conversation with.
+    Keyed by **who asked and which turn of theirs**, so two delegations from one turn share a
+    conversation and therefore a provider session, and one from a later turn starts its own.
+
+    Constructed rather than stored — see the module docstring. Whoever delivers the brief and
+    whoever looks the work up later both build it, so there is no pointer to keep true, and none
+    that could point into a database this agent may not follow it into.
     """
-    return f"{delegator}/{parent_turn}" if kind == AGENT else delegation_id
+    return f"{delegator}/{parent_turn}"
 
 
 class Refused(Exception):
@@ -84,49 +86,34 @@ class Delegation(NamedTuple):
     """
 
     delegation_id: str
-    kind: str
-    to_agent: Optional[str]
-    role: Optional[str]
-    revision: Optional[str]
+    to_agent: str
     parent_conversation: int
     parent_turn: int
     answered_at: Optional[str]
     stop_asked_at: Optional[str]
-    carry_attempts: int
     created_at: str
     latest_at: str
 
-    @property
-    def handed_to(self) -> str:
-        """Who or what this went to, for a listing that shows both kinds in one column."""
-        return self.to_agent or self.role or ""
 
-
-def made(agent: str, delegation_id: str, kind: str, parent_conversation: int, parent_turn: int,
-         to_agent: Optional[str] = None, role: Optional[str] = None,
-         revision: Optional[str] = None, now: Optional[datetime] = None) -> None:
+def made(agent: str, delegation_id: str, to_agent: str, parent_conversation: int,
+         parent_turn: int, now: Optional[datetime] = None) -> None:
     """Write down that this agent has handed work over. In the **delegator's** own store.
 
-    Refuses rather than writes where the kind and what it names disagree — though the table refuses
-    it too, and that is deliberate: the `CHECK` is the guarantee and this is the sentence, because
-    `CHECK constraint failed: delegations` tells nobody what they did.
+    The table refuses a missing `to_agent` too, and the guard here is deliberate rather than
+    duplication: the `NOT NULL` is the guarantee and this is the sentence, because SQLite answers
+    `NOT NULL constraint failed: delegations.to_agent`, which names a column and not the mistake.
     """
-    if kind not in KINDS:
-        raise Refused(f"work is handed to one of {KINDS}, not {kind!r}")
-    if kind == AGENT and not to_agent:
-        raise Refused("a delegation to an agent has to name the agent")
-    if kind == ROLE and not role:
-        raise Refused("a role run has to name the role")
+    if not to_agent:
+        raise Refused("a delegation has to name the agent it goes to")
 
     at = config.moment_of(now)
     with records.writing(directory.records(agent)) as conn:
         try:
             conn.execute(
-                f"INSERT INTO {TABLE} (delegation_id, kind, to_agent, role, revision,"
+                f"INSERT INTO {TABLE} (delegation_id, to_agent,"
                 " parent_conversation, parent_turn, created_at, latest_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (delegation_id, kind, to_agent, role, revision,
-                 parent_conversation, parent_turn, at, at))
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (delegation_id, to_agent, parent_conversation, parent_turn, at, at))
         except sqlite3.IntegrityError as why:
             raise Refused(f"{delegation_id} could not be written down: {why}") from why
 
@@ -159,8 +146,8 @@ def outstanding(agent: str, to_agent: Optional[str] = None) -> List[Delegation]:
     sql = f"SELECT * FROM {TABLE} WHERE answered_at IS NULL"
     values: tuple = ()
     if to_agent is not None:
-        sql += " AND kind = ? AND to_agent = ?"
-        values = (AGENT, to_agent)
+        sql += " AND to_agent = ?"
+        values = (to_agent,)
     with records.reading(directory.records(agent)) as conn:
         rows = _asked(conn, agent, sql + " ORDER BY id", values).fetchall()
     return [_read(row) for row in rows]
@@ -198,33 +185,13 @@ def stop_asked(agent: str, delegation_id: str, now: Optional[datetime] = None) -
         return bool(moved.rowcount)
 
 
-def tried(agent: str, delegation_id: str, now: Optional[datetime] = None) -> int:
-    """Count one more attempt at starting this work, and hand back the count.
-
-    **A failed start produces no turn**, which is exactly why this cannot be counted off `turns` and
-    has a column of its own. It is a wedge-stop rather than a retry policy: something that cannot be
-    started must not be picked up for ever, and a bounded count is what says when to give up.
-    """
-    at = config.moment_of(now)
-    with records.writing(directory.records(agent)) as conn:
-        conn.execute(
-            f"UPDATE {TABLE} SET carry_attempts = carry_attempts + 1, latest_at = ?"
-            " WHERE delegation_id = ?", (at, delegation_id))
-        row = conn.execute(
-            f"SELECT carry_attempts FROM {TABLE} WHERE delegation_id = ?",
-            (delegation_id,)).fetchone()
-    return int(row[0]) if row else 0
-
-
 def _read(row: Any) -> Delegation:
     """One row as a `Delegation`, naming every field rather than trusting column order."""
     return Delegation(
-        delegation_id=str(row["delegation_id"]), kind=str(row["kind"]),
-        to_agent=row["to_agent"], role=row["role"], revision=row["revision"],
+        delegation_id=str(row["delegation_id"]), to_agent=str(row["to_agent"]),
         parent_conversation=int(row["parent_conversation"]),
         parent_turn=int(row["parent_turn"]),
         answered_at=row["answered_at"], stop_asked_at=row["stop_asked_at"],
-        carry_attempts=int(row["carry_attempts"]),
         created_at=str(row["created_at"]), latest_at=str(row["latest_at"]))
 
 
