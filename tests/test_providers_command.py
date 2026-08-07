@@ -128,9 +128,9 @@ class Instructions(Providers):
         could not tell them apart would answer a clock as though somebody were waiting."""
         agent = self.an_agent()
         _code, asked, _err = self.rundesk("providers", "instructions", agent,
-                                          "--trigger", "a_person_asked")
+                                          "--situation", "person")
         _code, due, _err = self.rundesk("providers", "instructions", agent,
-                                        "--trigger", "a_schedule_came_due")
+                                        "--situation", "schedule")
         self.assertNotEqual(asked, due)
 
     def test_a_past_turn_is_recomposed_and_compared_rather_than_read_back(self):

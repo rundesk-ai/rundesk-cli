@@ -204,7 +204,7 @@ class OnAChannel:
                     watching = _Streaming(self, agent, kind, place)
                     got = turns.run(turns.Request(
                         agent=agent, prompt=body, conversation=landed.conversation,
-                        trigger=instructions.A_PERSON_ASKED,
+                        situation=instructions.USER_TO_AGENT,
                         source=arriving.FROM_CHANNEL, place=place), watching=watching.heard)
                     self._delivered(agent, kind, place, got, external_id, watching.said_already)
                     self._marked(agent, kind, place,
@@ -673,7 +673,7 @@ class OnADelegation:
             return
         body = str(said[0]["body"]) if said else ""
         self._take(agent, conversation, body,
-                   trigger=instructions.ANOTHER_AGENT_ASKED, answering=delegation_id,
+                   situation=instructions.AGENT_TO_AGENT, answering=delegation_id,
                    caller_agent=delegator, about=f"delegation {delegation_id}")
 
     def _reviewed(self, agent: str, conversation: int, answer: str, from_agent: str) -> None:
@@ -681,11 +681,11 @@ class OnADelegation:
         said = REVIEW.format(agent=from_agent, answer=answer)
         with contextlib.suppress(Exception):
             arriving.said_by_rundesk_into(agent, conversation, said)
-        self._take(agent, conversation, said, trigger=instructions.A_PERSON_ASKED,
+        self._take(agent, conversation, said, situation=instructions.USER_TO_AGENT,
                    answering=None, caller_agent=None,
                    about=f"the answer from {from_agent}")
 
-    def _take(self, agent: str, conversation: int, body: str, trigger: str,
+    def _take(self, agent: str, conversation: int, body: str, situation: str,
               answering: Optional[str], caller_agent: Optional[str], about: str) -> None:
         """Start a turn, or say this into the one already running, or ask again in a moment.
 
@@ -705,7 +705,8 @@ class OnADelegation:
             for again in range(TRIES):
                 try:
                     turns.run(turns.Request(
-                        agent=agent, prompt=body, conversation=conversation, trigger=trigger,
+                        agent=agent, prompt=body, conversation=conversation,
+                        situation=situation,
                         source=source, place=place, answering=answering,
                         caller_agent=caller_agent))
                     return
@@ -755,7 +756,7 @@ def for_a_schedule(agent: str, schedule: str, when=None) -> turns.Outcome:
     landed = arriving.recorded_for_a_schedule(agent, schedule, said.prompt)
     return turns.run(turns.Request(
         agent=agent, prompt=said.prompt, conversation=landed.conversation,
-        trigger=instructions.A_SCHEDULE_CAME_DUE, schedule_id=row.get("id"),
+        situation=instructions.SCHEDULE_TO_AGENT, schedule_id=row.get("id"),
         model_name=said.model, source=arriving.FROM_SCHEDULE, place=schedule))
 
 

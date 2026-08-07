@@ -25,8 +25,8 @@ class WhatADelegatedTurnIsTold(support.Isolated):
 
     def built(self, **more):
         request = turns.Request(agent="bob", prompt="audit it", conversation=1,
-                                trigger=instructions.ANOTHER_AGENT_ASKED, **more)
-        return instructions.build(trigger=request.trigger,
+                                situation=instructions.AGENT_TO_AGENT, **more)
+        return instructions.build(situation=request.situation,
                                   variables=turns._about(request, "a-stand-in"))
 
     def test_the_agent_that_asked_is_named(self):

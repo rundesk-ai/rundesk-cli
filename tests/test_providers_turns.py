@@ -126,7 +126,7 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
         first = kept.list_turn_records("ava", got.turn)[0]
         self.assertEqual(first["record_type"], turns.INSTRUCTIONS)
         said = json.loads(first["event_data"])
-        self.assertEqual([one["name"] for one in said["layers"]], ["core", "a_person_asked"])
+        self.assertEqual([one["name"] for one in said["layers"]], ["core", "situation"])
 
     def test_what_was_asked_is_written_before_the_brain_is_started(self):
         got = self.run_turn()

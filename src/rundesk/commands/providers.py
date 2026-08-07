@@ -20,11 +20,11 @@ to `providers.instructions`.
 """
 
 import argparse
-import contextlib
 import json
 from typing import Any, Dict, Optional
 
 from rundesk.agents import directory, records
+from rundesk.channels import arriving
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import OK
@@ -38,6 +38,24 @@ TROUBLE = (adapters.NotRunnable, answering.Refused, directory.Refused,
 #: as a word rather than a blank is what tells "it said no" apart from "nothing was asked".
 NO = "no"
 YES = "yes"
+
+
+#: What somebody may type after `--situation`, and the block each names. **The only place a
+#: situation has a name at all**: nothing stores one, and `instructions` takes the block itself — so
+#: the name exists for the one reason names exist, which is that a person has to type something.
+BY_A_PERSON = "person"
+SITUATIONS = {
+    BY_A_PERSON: instructions.USER_TO_AGENT,
+    "schedule": instructions.SCHEDULE_TO_AGENT,
+    "agent": instructions.AGENT_TO_AGENT,
+}
+
+#: Which block a turn was composed with, from the `conversations.source` written when it ran. The
+#: words are `arriving`'s, and a source absent here is a person asking.
+FROM_A_SOURCE = {
+    arriving.FROM_SCHEDULE: instructions.SCHEDULE_TO_AGENT,
+    arriving.FROM_AGENT: instructions.AGENT_TO_AGENT,
+}
 
 
 def register(sub: Subcommands) -> None:
@@ -55,9 +73,9 @@ def register(sub: Subcommands) -> None:
                            help="what a brain is told before it reads the task")
     said.add_argument("agent", metavar="<agent>", nargs="?",
                       help="fill the layers in for this agent")
-    said.add_argument("--trigger", metavar="<situation>", default=instructions.A_PERSON_ASKED,
-                      choices=list(instructions.TRIGGERS),
-                      help="which situation to render (default: a person asking)")
+    said.add_argument("--situation", metavar="<who asked>", default=BY_A_PERSON,
+                      choices=list(SITUATIONS),
+                      help=f"which of {', '.join(SITUATIONS)} to render (default: {BY_A_PERSON})")
     said.add_argument("--layers", action="store_true",
                       help="show only the byte breakdown, not the prompt itself")
     said.add_argument("--turn", metavar="<turn>", type=int,
@@ -78,7 +96,7 @@ def cmd_providers(args: argparse.Namespace) -> int:
         if what == "check":
             return _checked(args.provider)
         if what == "instructions":
-            return _instructions(getattr(args, "agent", None), args.trigger, args.layers,
+            return _instructions(getattr(args, "agent", None), args.situation, args.layers,
                                  args.turn)
         if what == "run":
             return _took_a_turn(args.agent, args.schedule)
@@ -126,7 +144,7 @@ def _besides_what_was_asked(said: Dict[str, Any]) -> Dict[str, Any]:
     return {one: said[one] for one in said if one not in protocol.CAPABILITIES}
 
 
-def _instructions(agent: str, trigger: str, only_layers: bool,
+def _instructions(agent: str, situation: str, only_layers: bool,
                   turn: Optional[int] = None) -> int:
     """What a brain would read, and what each layer of it costs.
 
@@ -144,7 +162,8 @@ def _instructions(agent: str, trigger: str, only_layers: bool,
             return _failed("a turn belongs to an agent, so say which one",
                            "rundesk providers instructions <agent> --turn <turn>")
         return _what_a_turn_was_sent(agent, turn, only_layers)
-    return _shown(instructions.build(trigger=trigger, variables=_about(agent)), only_layers)
+    return _shown(instructions.build(situation=SITUATIONS[situation], variables=_about(agent)),
+                  only_layers)
 
 
 def _what_a_turn_was_sent(agent: str, turn: int, only_layers: bool) -> int:
@@ -159,7 +178,7 @@ def _what_a_turn_was_sent(agent: str, turn: int, only_layers: bool) -> int:
     as though they were the ones that turn was sent.
     """
     row = kept.get_turn(agent, turn)
-    built = instructions.build(trigger=_the_situation_it_ran_in(agent, turn),
+    built = instructions.build(situation=_the_situation_it_ran_in(agent, row),
                                variables=_as_that_turn_saw_it(agent, row))
     print(f"turn {turn}, {row['created_at']}")
     if built.sha256 != row["instructions_sha256"]:
@@ -173,20 +192,20 @@ def _what_a_turn_was_sent(agent: str, turn: int, only_layers: bool) -> int:
     return _shown(built, only_layers)
 
 
-def _the_situation_it_ran_in(agent: str, turn: int) -> str:
-    """Which situation that turn was composed for, off the record written beside it.
+def _the_situation_it_ran_in(agent: str, row: Dict[str, Any]) -> str:
+    """Which block that turn was composed with, off what is actually written down about it.
 
-    Read from the layers rather than kept as a column of its own: the situation *is* the layer that
-    is not the core, so a column would be the same fact written down twice and free to disagree.
+    **`conversations.source` is the record of who started a turn**, and it is the durable one: a
+    word in a column with a `CHECK` behind it, written when the conversation was made. Read from
+    there rather than from the name of a layer in the turn's own instruction record, which is a
+    label for a byte breakdown and not a fact about the turn.
+
+    A source this release has never heard of is a person asking, which is the safe way round for the
+    reason it always was: what the other two blocks withhold are the rules that assume somebody is
+    waiting.
     """
-    for one in kept.list_turn_records(agent, turn):
-        if one["record_type"] != "instructions":
-            continue
-        with contextlib.suppress(ValueError, TypeError, KeyError):
-            for layer in json.loads(one["event_data"])["layers"]:
-                if layer["name"] in instructions.TRIGGERS:
-                    return str(layer["name"])
-    return instructions.A_PERSON_ASKED
+    stood = arriving.where_it_stands(agent, int(row["conversation_id"]))
+    return FROM_A_SOURCE.get(stood[0] if stood else "", instructions.USER_TO_AGENT)
 
 
 def _as_that_turn_saw_it(agent: str, row: Dict[str, Any]) -> Dict[str, object]:

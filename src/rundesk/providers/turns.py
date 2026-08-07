@@ -108,7 +108,10 @@ class Request(NamedTuple):
     agent: str
     prompt: str
     conversation: int
-    trigger: str = instructions.A_PERSON_ASKED
+    #: Which of `instructions`' situation blocks this turn reads — the block itself, not a name
+    #: for one. There is no table turning a name back into a block, because there was nothing else
+    #: a name was ever used for.
+    situation: str = instructions.USER_TO_AGENT
     access_mode: str = protocol.ACCESS_WORK
     model_name: Optional[str] = None
     schedule_id: Optional[int] = None
@@ -124,7 +127,7 @@ class Request(NamedTuple):
     #: which is what makes depth one enforceable rather than merely asked for.
     answering: Optional[str] = None
     #: Which agent handed this turn its task, for the layer that names them. **Required whenever
-    #: `trigger` is `ANOTHER_AGENT_ASKED`**: that layer is four sentences about who asked and where
+    #: `situation` is `AGENT_TO_AGENT`**: that block is four sentences about who asked and where
     #: the answer goes, and without this every one of them reaches the brain saying `{caller_agent}`.
     caller_agent: Optional[str] = None
 
@@ -414,7 +417,8 @@ def _held(request: Request, held: int, watching, saying,
     can = protocol.parse_capabilities(adapters.capabilities(provider_name, settings))
     resume = None if request.fresh else kept.get_session(agent, request.conversation, provider_name)
 
-    prompt = instructions.build(trigger=request.trigger, variables=_about(request, provider_name),
+    prompt = instructions.build(situation=request.situation,
+                                variables=_about(request, provider_name),
                                 additions=request.additions,
                                 # Who this agent may hand work to, read now rather than kept: an
                                 # agent added this morning is one it can delegate to this afternoon,

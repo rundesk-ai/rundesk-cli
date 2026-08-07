@@ -5,68 +5,59 @@ the same trigger and the same variables it builds the same bytes, on any machine
 what makes prompting something this project can maintain: every case is a string comparison, the
 whole thing renders in a command, and a change to it is visible before it ships.
 
-## The shape
+## Five blocks, and nothing else
 
 ```
-CORE                        always, whatever this is and whoever asked
-+ exactly one SITUATION     a person · a schedule · another agent
-    …composing NOBODY_IS_PRESENT where nobody is waiting
-+ YOUR_TEAM_LAYER           who else is here, and only where handing work on is legal
-+ ordered ADDITIONS         each named, each bounded where it comes in
+CORE                 always, whoever asked
++ one of:
+    USER_TO_AGENT        a person is waiting
+    SCHEDULE_TO_AGENT    the clock started it, nobody is present
+    AGENT_TO_AGENT       another agent handed it over, nobody is present
++ AGENTS_LIST        who else is here — only where handing work on is legal
++ ADDITIONS          whatever the caller appended, each named and bounded
 ```
 
-**One rule lives in one place.** Ask which layer a sentence is true of: *all of them* is `CORE`, *the
-unattended ones* is `NOBODY_IS_PRESENT`, and exactly one is that situation's. A rule written into two
-layers is two rules the day somebody edits one, and three of these were written twice before this
-was made mechanical.
+They are plain strings. There is no fragment spliced into another, no block built from pieces of a
+third, and nothing composed conditionally out of parts — a block is what it looks like, and reading
+one tells you everything a turn of that kind is told.
 
-**Two layers, and each answers a different question.** `CORE` is *where you are and what you can
-do* — the directory the turn stands in, the files the agent lives by, the skills beside them, the
-command that reaches this install, and the rules that hold before any of it. A situation is *why
-this turn is happening at all*, and holds only what is true because of that and false otherwise.
-
-A fact belongs in exactly one of them. The test is whether the sentence would still be true if
-nobody had asked: where the agent's own files are does not change because a schedule started this
-rather than a person, so it is `CORE` and is written once.
-
-**A trigger belongs to exactly one situation, and a person is the answer for anything not named.**
-What the other situations withhold are the rules that assume somebody is waiting, so a surface this
-release has never heard of is given a person's rules and one of the others only by being named. That
-is the safe way round, and it is the kind of default that is easy to get backwards.
+**A trigger belongs to exactly one block, and a person is the answer for anything not named.** What
+the other two withhold are the rules that assume somebody is waiting, so a surface this release has
+never heard of is given a person's rules and one of the others only by being named. That is the safe
+way round, and it is the kind of default that is easy to get backwards.
 
 ## What the core may say, and what it may not
 
 **Everything this release runs is a named agent standing in its own directory**, so the core is
 written for one: it names the agent, its home, the files it lives by and the command that reaches
-this install. That is what makes it the operational layer rather than a preamble.
+this install.
 
-It may still never name **a channel or a schedule**. Those are the two situations, and a fact about
-one of them that leaked into the core would be read by every turn of the other — which is exactly
-how the build this replaces came to tell a scheduled run, three paragraphs after forbidding it to
-ask anybody anything, to go and ask. `tests/test_providers_instructions.py` searches the built core
-for both words.
+It may never name **a channel or a schedule**. Those belong to the blocks below it, and a fact about
+one that leaked into the core would be read by every turn of the other — which is exactly how the
+build this replaces came to tell a scheduled run, three paragraphs after forbidding it to ask
+anybody anything, to go and ask.
 
-## Who a turn may delegate to, and where that is said
+It ends in four rules that are the reason the core exists at all: never invent what you have not
+confirmed, never write a secret down, never dress a failure as progress, and say when you are
+blocked. They matter most on the block furthest from a person — an agent answering another agent
+reports to nobody who can check it, and a report that reads well and is untrue reaches an owner
+through the review turn.
 
-An agent is told which colleagues it may hand work to. **That listing is withheld from a turn which
-is itself answering a delegation**, and that is depth-one made structural rather than asked for: a
-turn shown nobody cannot hand work to anybody, so there is no rule for it to be talked out of.
-`build` is where it applies, and `ANOTHER_AGENT_ASKED` is the one trigger it is withheld from.
+## `AGENTS_LIST` is withheld from `AGENT_TO_AGENT`, and that is the depth rule
+
+An agent already answering a delegation is shown nobody to hand work to, so handing it on is not
+something it can decide to do. There is a durable refusal underneath as well, but this is the half
+that means nothing has to be talked out of it.
 
 ## What is deliberately not here
 
-**No per-agent instruction text.** An agent's own identity is the files in its home — `AGENTS.md`
-and `MEMORY.md`, placed there by `agents.pages` when it was made — which the brain discovers because
-it is standing in the directory they are in. That is the whole mechanism, it is what every measured
-brain does natively, and it means an owner edits a file rather than a database column.
+**No per-agent instruction text.** An agent's own identity is the files in its home — `AGENTS.md` and
+`MEMORY.md`, placed there by `agents.pages` — which the brain discovers because it is standing in the
+directory they are in. The core names them rather than leaving them to be found: a brain that never
+opened them is an agent with no rules and no continuity that reports nothing wrong.
 
-The core names those two files rather than leaving the brain to find them, and that is the pointer
-and not a copy: a brain reads its bootstrap page late, or not at all, and one that never opened them
-is an agent with no rules and no continuity that reports nothing wrong.
-
-**No skills index.** A skill costs its description in the prompt every turn and its body only when
-used, and every measured brain discovers skills for itself. Putting a list here would charge every
-turn for every skill an agent has ever been granted.
+**No skills index.** A skill costs its description every turn and its body only when used, and every
+measured brain discovers skills for itself.
 
 **No content-safety or refusal text.** Neither comparable product ships any, and adding it would
 spend an invariant prefix on what the model already does.
@@ -74,16 +65,6 @@ spend an invariant prefix on what the model already does.
 
 import hashlib
 from typing import Iterable, List, Mapping, NamedTuple, Optional, Tuple
-
-#: Which situation a turn is. A trigger absent from this is **a person asking**, which is what makes
-#: a surface nobody has taught this release about safe by default.
-A_PERSON_ASKED = "a_person_asked"
-A_SCHEDULE_CAME_DUE = "a_schedule_came_due"
-
-#: Another named agent handed this turn a task. `conversations.source` holds the matching word.
-ANOTHER_AGENT_ASKED = "another_agent_asked"
-
-TRIGGERS = (A_PERSON_ASKED, A_SCHEDULE_CAME_DUE, ANOTHER_AGENT_ASKED)
 
 #: How much of one supplied addition is used. **Bounded where it comes in, and the finished stack is
 #: never clipped** — clipping the whole would silently drop whichever later layers fell past the
@@ -97,7 +78,7 @@ AN_ADDITION_AT_MOST = 4000
 #: the machine this turn may touch. Nothing here says Discord, or Slack, or a room — a variable that
 #: named one would be a layer that has to be rewritten for the second surface.
 VARIABLES = ("agent_name", "agent_home", "provider_name", "access_mode", "schedule_name",
-             "conversation_id", "caller_agent", "delegation_id")
+             "conversation_id", "caller_agent")
 
 
 class Layer(NamedTuple):
@@ -154,6 +135,7 @@ Your home `{agent_home}`. It is yours, no other agent reads it, and what you kee
 - `AGENTS.md` is how you work. `MEMORY.md` is what you have learned that is still true. Read both before your first reply in a conversation — they are the only thing you carry, and you start fresh every time.
 - Review your skills before you reply or do any action. Each skill says when it applies; read one when the work is what it describes, rather than guessing at the work.
 - Your home directory is not a Git repository, do not report it as one.
+- Do not store Git repositories in your home, projects should be stored outside of the rundesk data.
 - Work all of that out silently. Say something about it only when one of them is what blocked you.
 
 ## What you can reach
@@ -172,30 +154,13 @@ Your home `{agent_home}`. It is yours, no other agent reads it, and what you kee
 
 # ── The situations ────────────────────────────────────────────────────────────────────────────
 
-#: What is true whenever **nobody is waiting**, whoever or whatever started the turn. Composed into
-#: the two situations that are unattended and into neither of the others.
-#:
-#: A fragment rather than two copies, because the module's own rule says so: a rule true of more than
-#: one layer belongs in a fragment or in the core, never written twice. These were written twice, in
-#: slightly different words each time, which is how two layers come to mean two things.
-#:
-#: What it does **not** hold is the blocked rule — true of every turn, so it is `CORE`'s, and a
-#: situation restating it in its own words is a second wording of one rule.
-#:
-#: Nor **"never ask a question"**, which reads as though it belongs here and does not. A schedule has
-#: nobody to answer it; an agent that was handed work has the agent that handed it over, and asking
-#: is how it reports being unable to proceed. Put here, it would sit two lines above the layer that
-#: tells a delegated turn to ask — which is the exact fault the previous build shipped, and its own
-#: guide records: a preface carrying a rule and the paragraph forbidding it, three lines apart.
-NOBODY_IS_PRESENT = """Treat what you were given as the whole request. Write nothing until the work is finished. Only your last complete message is kept; everything before it is working notes."""
-
 #: A person is on the other end. Everything here is true **because** somebody is waiting, and false
 #: the moment nobody is — which is why it is a layer rather than part of the core.
 #:
 #: It names `rundesk messages` because that closes the retrieval loop inside a turn: an owner refers
 #: to work the agent has no record of, and the agent reads its own history back before answering
 #: rather than saying it does not know.
-A_PERSON_ASKED_LAYER = """## Who is asking
+USER_TO_AGENT = """## Who is asking
 
 A person asked you, and they are waiting for a response.
 
@@ -203,11 +168,11 @@ Referred to work you have no record of? Read it before you answer. `rundesk mess
 
 #: The clock started this and **nobody is present**. What this withholds is every rule that assumes
 #: somebody is waiting: there is nothing to ask, nothing to clarify, and no later turn to report in.
-A_SCHEDULE_CAME_DUE_LAYER = """## Who is asking
+SCHEDULE_TO_AGENT = """## Who is asking
 
 The schedule '{schedule_name}' came due and started this run. No person asked for it, and nobody is present while it runs.
 
-{nobody_is_present}
+- Treat what you were given as the whole request. Write nothing until the work is finished; only your last complete message is kept.
 - Never ask a question, request approval, or wait for a reply. Nothing will answer, and the run ends when you stop.
 - That last message is the whole report: what you did or found, how you verified it, and what you did not do. Nobody will be there to ask a follow-up.
 - Where there was nothing worth acting on, say so in a short direct answer."""
@@ -219,12 +184,11 @@ The schedule '{schedule_name}' came due and started this run. No person asked fo
 #: **It offers no team, and that is the depth rule** rather than a sentence asking nicely: an agent
 #: answering a delegation is never shown anybody to hand work to, so handing it on is not something
 #: it can decide to do. `build` withholds the listing for this trigger.
-ANOTHER_AGENT_ASKED_LAYER = """## Why this turn is happening
+AGENT_TO_AGENT = """## Who is asking
 
 {caller_agent}, an agent on your team, handed you this task. Not a person, not your owner, and nobody is present while you run.
 
-{nobody_is_present}
-
+- Treat the task as the whole request. Write nothing until the work is finished; only your last complete message is kept.
 - The task says how far your authority reaches. Needing more than that, stop and say so.
 - A question is not a wait. Ask it as your report and stop — {caller_agent} reads it and comes back to you with the answer.
 - Do not hand this work on. It is yours to finish or to report blocked. Your own brain's subagents are yours to use within it.
@@ -232,26 +196,37 @@ ANOTHER_AGENT_ASKED_LAYER = """## Why this turn is happening
 - Nothing you write reaches any channel or any person; your last message goes to {caller_agent} alone.
 - That message is your whole report: what you did or found, how you verified it, what you did not do, and any decision {caller_agent} has to make. Report every part of the task as done or blocked."""
 
-#: Which layer each trigger is. **A trigger absent from this is a person asking**, which is the safe
-#: way round: a surface this release has never heard of is somebody typing, and what the other
-#: situations withhold are the rules that assume somebody is waiting.
-_SITUATIONS = {
-    A_PERSON_ASKED: A_PERSON_ASKED_LAYER,
-    A_SCHEDULE_CAME_DUE: A_SCHEDULE_CAME_DUE_LAYER,
-    ANOTHER_AGENT_ASKED: ANOTHER_AGENT_ASKED_LAYER,
-}
-
-#: Who a turn may hand work to. **A listing the caller supplies**, because which agents exist is a
-#: fact about an install and this module reads nothing.
+#: Who a turn may hand work to. `{team}` is a listing the caller supplies, because which agents an
+#: install has is a fact about that install and this module reads nothing — `agents.directory`
+#: builds it, excluding the agent being told.
 #:
 #: Composed only where handing work on is legal. A turn already answering a delegation is shown
 #: nobody, which is what makes depth-one a thing an agent cannot do rather than a rule it is asked
 #: to keep.
-YOUR_TEAM_LAYER = """## Who else is here
+#:
+#: What an agent actually reads::
+#:
+#:     ## Who else is here
+#:
+#:     - **bob** — keeps the billing system; knows every invoice edge case we have hit
+#:     - **nina** — runs the deploy pipeline and the incident history
+#:
+#:     These are the other agents on this install. Each answers as itself, out of its own home
+#:     and memory.
+#:
+#:     - `rundesk ask <agent> "<the task>"`. It does not hold up this turn.
+#:     - The answer reaches you in a later turn and you review it. Nothing they wrote reaches
+#:       anybody until you have.
+#:     …
+#:
+#: An agent nobody has described is left out rather than listed blank, so this block is absent
+#: entirely on an install where nothing else is described — an empty listing under a heading reads
+#: as a team of nobody rather than as no team.
+AGENTS_LIST = """## Who else is here
 
 {team}
 
-These are the other agents on this install. Each answers as itself, out of its own home and memory.
+These are the other agents you can delegate too. Each answers as itself, out of its own home and memory.
 
 - `rundesk ask <agent> "<the task>"`. It does not hold up this turn.
 - The answer reaches you in a later turn and you review it. Nothing they wrote reaches anybody until you have.
@@ -260,7 +235,7 @@ These are the other agents on this install. Each answers as itself, out of its o
 - Hand over what is genuinely somebody else's to do. Anything you can finish here, finish here."""
 
 
-def build(*, trigger: str = A_PERSON_ASKED, variables: Optional[Mapping[str, object]] = None,
+def build(*, situation: str = USER_TO_AGENT, variables: Optional[Mapping[str, object]] = None,
           additions: Iterable[Tuple[str, str]] = (), team: str = "") -> Prompt:
     """The core, the one situation naming who asked, then every addition in the order supplied.
 
@@ -271,19 +246,20 @@ def build(*, trigger: str = A_PERSON_ASKED, variables: Optional[Mapping[str, obj
     whole of the composition rule — a layer that could replace an earlier one is a layer that can
     silently delete the honesty rules.
 
+    `situation` is **one of the blocks above**, passed as itself. There is no name for it to be
+    looked up by: a caller that has to name a situation and a table that turns that name back into
+    the block are two things to keep in step, and the name was never stored, compared or shown
+    anywhere outside this module. Omitted, it is a person asking — which is the safe default for
+    the same reason it always was, and is now the signature rather than a fallback in a lookup.
+
     `team` is who this turn may hand work to, and it is composed **only where doing so is legal**. A
     turn already answering a delegation is shown nobody, which is the depth rule made structural:
     there is nothing for it to route around, because it was never told anybody exists.
     """
-    situation = _SITUATIONS.get(trigger, A_PERSON_ASKED_LAYER)
-    # The shared fragment, spliced before anything else is filled in. Composed rather than repeated
-    # in each layer that wants it — see `NOBODY_IS_PRESENT`. A layer that does not name the
-    # placeholder is unaffected, so the two attended situations get nothing.
-    situation = situation.replace("{nobody_is_present}", NOBODY_IS_PRESENT)
     said = [("core", _filled(CORE, variables)),
-            (_named(trigger), _filled(situation, variables))]
-    if team.strip() and trigger != ANOTHER_AGENT_ASKED:
-        said.append(("team", _filled(YOUR_TEAM_LAYER.replace("{team}", team), variables)))
+            ("situation", _filled(situation or USER_TO_AGENT, variables))]
+    if team.strip() and situation != AGENT_TO_AGENT:
+        said.append(("agents", _filled(AGENTS_LIST.replace("{team}", team), variables)))
     said.extend((name, _filled(text, variables)[:AN_ADDITION_AT_MOST])
                 for name, text in additions)
 
@@ -295,11 +271,6 @@ def build(*, trigger: str = A_PERSON_ASKED, variables: Optional[Mapping[str, obj
         sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         total_bytes=len(text.encode("utf-8")),
     )
-
-
-def _named(trigger: str) -> str:
-    """What a byte breakdown calls this situation. An unnamed trigger is a person asking."""
-    return trigger if trigger in _SITUATIONS else A_PERSON_ASKED
 
 
 def _filled(template: str, variables: Optional[Mapping[str, object]]) -> str:

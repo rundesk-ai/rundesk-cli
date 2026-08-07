@@ -89,7 +89,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
         landed = arriving.asked_at_a_terminal(agent, said)
         request = turns.Request(
             agent=agent, prompt=said, conversation=landed.conversation,
-            trigger=instructions.A_PERSON_ASKED,
+            situation=instructions.USER_TO_AGENT,
             access_mode=protocol.ACCESS_READ if args.read_only else protocol.ACCESS_WORK,
             model_name=args.model, fresh=args.fresh,
             source=arriving.FROM_TERMINAL, place=agent)

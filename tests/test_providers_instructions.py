@@ -22,6 +22,11 @@ EVERYTHING = {
     "conversation_id": "7",
 }
 
+#: The three situation blocks, for a case that has to try each. Named here rather than exported by
+#: the module: nothing in the product iterates them — a caller passes the one block it means.
+EVERY_SITUATION = (instructions.USER_TO_AGENT, instructions.SCHEDULE_TO_AGENT,
+                   instructions.AGENT_TO_AGENT)
+
 #: What the core may never name. **The two situations**, because a rule about one of them standing
 #: in the layer every turn reads is a rule the other turn reads too — which is how the build this
 #: replaces told a scheduled run to go and ask somebody, three paragraphs after forbidding it.
@@ -38,10 +43,10 @@ THE_FILES_IT_LIVES_BY = ("AGENTS.md", "MEMORY.md")
 class TheCore(support.Isolated):
     """The layer every turn reads: where the agent is, what it can reach, and the rules under it."""
 
-    def test_it_is_in_every_prompt_whatever_the_trigger(self):
-        for trigger in instructions.TRIGGERS:
-            with self.subTest(trigger=trigger):
-                built = instructions.build(trigger=trigger, variables=EVERYTHING)
+    def test_it_is_in_every_prompt_whatever_the_situation(self):
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation):
+                built = instructions.build(situation=situation, variables=EVERYTHING)
                 self.assertIn("an agent running inside rundesk", built.text)
 
     def test_it_names_neither_situation(self):
@@ -90,33 +95,33 @@ class TheCore(support.Isolated):
 
 class ExactlyOneSituation(support.Isolated):
     def test_a_person_asking_gets_the_person_layer(self):
-        built = instructions.build(trigger=instructions.A_PERSON_ASKED, variables=EVERYTHING)
+        built = instructions.build(situation=instructions.USER_TO_AGENT, variables=EVERYTHING)
         self.assertIn("A person asked you", built.text)
         self.assertNotIn("came due", built.text)
 
     def test_a_schedule_gets_the_schedule_layer(self):
-        built = instructions.build(trigger=instructions.A_SCHEDULE_CAME_DUE, variables=EVERYTHING)
+        built = instructions.build(situation=instructions.SCHEDULE_TO_AGENT, variables=EVERYTHING)
         self.assertIn("nightly", built.text)
         self.assertNotIn("A person asked you", built.text)
 
-    def test_a_trigger_this_release_has_never_heard_of_is_a_person_asking(self):
+    def test_a_situation_nobody_supplied_is_a_person_asking(self):
         """The safe way round: what the other situations withhold are the rules that assume somebody
         is waiting, so an unknown surface gets a person's rules rather than a schedule's silence."""
-        built = instructions.build(trigger="carrier-pigeon", variables=EVERYTHING)
+        built = instructions.build(variables=EVERYTHING)
         self.assertIn("A person asked you", built.text)
         self.assertEqual([one.name for one in built.layers],
-                         ["core", instructions.A_PERSON_ASKED])
+                         ["core", "situation"])
 
     def test_another_agent_asking_gets_the_agent_layer(self):
-        built = instructions.build(trigger=instructions.ANOTHER_AGENT_ASKED,
+        built = instructions.build(situation=instructions.AGENT_TO_AGENT,
                                    variables={**EVERYTHING, "caller_agent": "bob"})
         self.assertIn("bob, an agent on your team, handed you this task", built.text)
         self.assertNotIn("A person asked you", built.text)
 
     def test_only_one_situation_is_ever_in_a_prompt(self):
-        for trigger in instructions.TRIGGERS:
-            with self.subTest(trigger=trigger):
-                built = instructions.build(trigger=trigger, variables=EVERYTHING)
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation):
+                built = instructions.build(situation=situation, variables=EVERYTHING)
                 situations = [one for one in built.layers if one.name != "core"]
                 self.assertEqual(len(situations), 1)
 
@@ -131,11 +136,11 @@ class WhatThePersonLayerNames(support.Isolated):
         self.assertIn("--source schedule", built.text)
 
     def test_the_schedule_layer_does_not_because_nobody_referred_to_anything(self):
-        built = instructions.build(trigger=instructions.A_SCHEDULE_CAME_DUE, variables=EVERYTHING)
+        built = instructions.build(situation=instructions.SCHEDULE_TO_AGENT, variables=EVERYTHING)
         self.assertNotIn("rundesk messages", built.text)
 
     def test_the_schedule_layer_forbids_asking_because_nothing_would_answer(self):
-        built = instructions.build(trigger=instructions.A_SCHEDULE_CAME_DUE, variables=EVERYTHING)
+        built = instructions.build(situation=instructions.SCHEDULE_TO_AGENT, variables=EVERYTHING)
         self.assertIn("Never ask a question", built.text)
 
 
@@ -166,14 +171,14 @@ class Additions(support.Isolated):
         built = instructions.build(variables=EVERYTHING,
                                    additions=[("first", "one"), ("second", "two")])
         self.assertEqual([one.name for one in built.layers],
-                         ["core", instructions.A_PERSON_ASKED, "first", "second"])
+                         ["core", "situation", "first", "second"])
         self.assertLess(built.text.index("one"), built.text.index("two"))
 
     def test_one_that_is_empty_is_not_a_layer_at_all(self):
         """An empty heading is a brain told it has something and then shown nothing."""
         built = instructions.build(variables=EVERYTHING, additions=[("nothing", "   \n ")])
         self.assertEqual([one.name for one in built.layers],
-                         ["core", instructions.A_PERSON_ASKED])
+                         ["core", "situation"])
 
     def test_one_is_bounded_where_it_comes_in(self):
         built = instructions.build(variables=EVERYTHING,
@@ -203,8 +208,8 @@ class WhatWasSentIsProvableAfterwards(support.Isolated):
         self.assertEqual(once.text, again.text)
 
     def test_a_different_situation_is_a_different_fingerprint(self):
-        person = instructions.build(trigger=instructions.A_PERSON_ASKED, variables=EVERYTHING)
-        clock = instructions.build(trigger=instructions.A_SCHEDULE_CAME_DUE, variables=EVERYTHING)
+        person = instructions.build(situation=instructions.USER_TO_AGENT, variables=EVERYTHING)
+        clock = instructions.build(situation=instructions.SCHEDULE_TO_AGENT, variables=EVERYTHING)
         self.assertNotEqual(person.sha256, clock.sha256)
 
     def test_changing_a_word_of_the_core_changes_the_fingerprint(self):
@@ -252,22 +257,22 @@ class WhatATurnMayDelegateTo(support.Isolated):
 
     A_TEAM = "- **bob** — keeps the billing system"
 
-    def built(self, trigger):
-        return instructions.build(trigger=trigger,
+    def built(self, situation):
+        return instructions.build(situation=situation,
                                   variables={**EVERYTHING, "caller_agent": "nina"},
                                   team=self.A_TEAM).text
 
     def test_a_person_asking_is_shown_the_team(self):
-        text = self.built(instructions.A_PERSON_ASKED)
+        text = self.built(instructions.USER_TO_AGENT)
         self.assertIn(self.A_TEAM, text)
         self.assertIn("rundesk ask <agent>", text)
 
     def test_a_schedule_is_shown_the_team_too(self):
         """Nobody is present, but the answer still lands where the schedule announces."""
-        self.assertIn(self.A_TEAM, self.built(instructions.A_SCHEDULE_CAME_DUE))
+        self.assertIn(self.A_TEAM, self.built(instructions.SCHEDULE_TO_AGENT))
 
     def test_a_turn_answering_another_agent_is_shown_nobody(self):
-        text = self.built(instructions.ANOTHER_AGENT_ASKED)
+        text = self.built(instructions.AGENT_TO_AGENT)
         self.assertNotIn(self.A_TEAM, text)
         self.assertNotIn("rundesk ask <agent>", text)
 
@@ -283,9 +288,9 @@ class OneRuleLivesInOnePlace(support.Isolated):
     which is how two layers come to mean two things. These cases are the reason that cannot happen
     again quietly."""
 
-    def rendered(self, trigger):
+    def rendered(self, situation):
         return instructions.build(
-            trigger=trigger,
+            situation=situation,
             variables={**EVERYTHING, "caller_agent": "bob"}).text
 
     #: Rules `CORE` owns outright. A situation saying one again in its own words is a second wording
@@ -294,15 +299,15 @@ class OneRuleLivesInOnePlace(support.Isolated):
 
     #: The situations, by the constants rather than by slicing the rendered prompt on a heading.
     #: Headings are wording somebody edits; what belongs to which layer is not.
-    THE_SITUATIONS = (instructions.A_PERSON_ASKED_LAYER, instructions.A_SCHEDULE_CAME_DUE_LAYER,
-                      instructions.ANOTHER_AGENT_ASKED_LAYER)
+    THE_SITUATIONS = (instructions.USER_TO_AGENT, instructions.SCHEDULE_TO_AGENT,
+                      instructions.AGENT_TO_AGENT)
 
     def test_the_core_actually_holds_them(self):
         """Asserted as well as the absence below. Without this, a rule deleted from the core *and*
         from every situation would pass every other case in this class."""
         for phrase in self.THE_CORES_OWN:
             with self.subTest(phrase=phrase):
-                self.assertIn(phrase, self.rendered(instructions.A_PERSON_ASKED))
+                self.assertIn(phrase, self.rendered(instructions.USER_TO_AGENT))
                 self.assertIn(phrase, instructions.CORE)
 
     def test_no_situation_restates_a_rule_the_core_already_holds(self):
@@ -311,40 +316,34 @@ class OneRuleLivesInOnePlace(support.Isolated):
                 with self.subTest(phrase=phrase, situation=situation[:24]):
                     self.assertNotIn(phrase, situation)
 
-    def test_what_is_true_of_both_unattended_situations_is_written_once(self):
-        for phrase in ("Treat what you were given as the whole request",
-                       "Only your last complete message is kept"):
-            with self.subTest(phrase=phrase):
-                self.assertIn(phrase, instructions.NOBODY_IS_PRESENT)
-                self.assertNotIn(phrase, instructions.A_SCHEDULE_CAME_DUE_LAYER)
-                self.assertNotIn(phrase, instructions.ANOTHER_AGENT_ASKED_LAYER)
+    def test_both_unattended_blocks_say_only_the_last_message_is_kept(self):
+        """Written into each rather than shared. Two short sentences in two blocks is less to hold
+        in your head than a fragment and the splice that puts it there."""
+        for situation in (instructions.SCHEDULE_TO_AGENT, instructions.AGENT_TO_AGENT):
+            with self.subTest(situation=situation):
+                self.assertIn("only your last complete message is kept", self.rendered(situation))
 
-    def test_and_it_reaches_both_of_them(self):
-        for trigger in (instructions.A_SCHEDULE_CAME_DUE, instructions.ANOTHER_AGENT_ASKED):
-            with self.subTest(trigger=trigger):
-                self.assertIn("Treat what you were given as the whole request",
-                              self.rendered(trigger))
-
-    def test_and_neither_attended_situation_is_told_any_of_it(self):
+    def test_and_a_person_asking_is_told_none_of_it(self):
         """A person is waiting, so none of it is true: they can be asked, and they are reading."""
-        self.assertNotIn("Only your last complete message is kept",
-                         self.rendered(instructions.A_PERSON_ASKED))
+        self.assertNotIn("only your last complete message is kept",
+                         self.rendered(instructions.USER_TO_AGENT))
 
     def test_never_ask_a_question_is_the_schedules_alone(self):
         """It reads as though it belongs in the shared fragment and does not. A schedule has nobody
         to answer it; a delegated turn has the agent that handed the work over, and asking is how it
         reports being unable to proceed. Shared, it would sit two lines above the layer telling a
         delegated turn to ask — the exact fault the previous build shipped."""
-        self.assertIn("Never ask a question", self.rendered(instructions.A_SCHEDULE_CAME_DUE))
-        self.assertNotIn("Never ask a question", self.rendered(instructions.ANOTHER_AGENT_ASKED))
-        self.assertIn("A question is not a wait", self.rendered(instructions.ANOTHER_AGENT_ASKED))
+        self.assertIn("Never ask a question", self.rendered(instructions.SCHEDULE_TO_AGENT))
+        self.assertNotIn("Never ask a question", self.rendered(instructions.AGENT_TO_AGENT))
+        self.assertIn("A question is not a wait", self.rendered(instructions.AGENT_TO_AGENT))
 
     def test_no_placeholder_is_ever_left_standing_in_a_built_prompt(self):
-        """`_filled` leaves an unknown one visible on purpose, so a fragment that stopped being
-        composed would reach a brain as `{nobody_is_present}` rather than as a missing paragraph."""
-        for trigger in instructions.TRIGGERS:
-            with self.subTest(trigger=trigger):
-                self.assertNotIn("{nobody_is_present}", self.rendered(trigger))
+        """`_filled` leaves an unknown one visible on purpose, so a variable nobody wired reaches a
+        brain as `{caller_agent}` rather than as a sentence with a hole in it — which is exactly how
+        one was found, after every case that renders that block had filled it by hand."""
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation):
+                self.assertNotIn("{schedule_name}", self.rendered(situation))
 
 
 if __name__ == "__main__":
