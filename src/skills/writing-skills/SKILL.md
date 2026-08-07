@@ -1,6 +1,6 @@
 ---
 name: writing-skills
-description: Writes, reviews, and repairs provider-neutral Rundesk skills, including SKILL.md, references, scripts, integrations, validation, and catalog publishing. Apply when you need to create a skill, revise an existing one, fix triggering or token waste, diagnose why Rundesk cannot use it, or publish it for other installs.
+description: Writes focused, provider-neutral Rundesk skills that agents apply only to relevant tasks, with enough instruction to work and no duplicated context. Apply this skill when the task is to create, review, revise, debug, or publish a SKILL.md or any of its references, scripts, integrations, or catalog files.
 ---
 
 # Writing skills
@@ -58,10 +58,10 @@ Use only `name` and `description` in the frontmatter.
 
 - Make `name` match its directory. Use at most 64 characters: lowercase letters, digits, and single
   hyphens.
-- Open `description` with a short brief of what the skill provides: its workflow, knowledge, tools,
-  or safeguards. Do not substitute an abstract outcome or a full capability inventory.
-- Follow with `Apply when you need to` and the concrete tasks that should trigger the skill. Name
-  what the agent is being asked to do; most requests will not name the skill.
+- Open `description` with the focused work the skill improves and why an agent needs its
+  instructions. Do not inventory files or capabilities.
+- Follow with `Apply this skill when the task is to` and the concrete tasks that make the skill
+  relevant. Name what the agent is being asked to do; most requests will not name the skill.
 - Keep the description within 1024 characters and as short as complete coverage allows. Every agent
   holding the skill pays for it on every turn.
 - Put all trigger guidance in the description. The body is unavailable until after triggering.
@@ -69,7 +69,7 @@ Use only `name` and `description` in the frontmatter.
 ```markdown
 ---
 name: release-notes
-description: Drafts accurate, user-facing release notes from shipped changes. Apply when you need to prepare a release, tag a version, summarize a changelog, or explain shipped work to people who did not build it.
+description: Drafts accurate release notes that make shipped changes clear to people who did not build them. Apply this skill when the task is to prepare a release, tag a version, summarize a changelog, or explain shipped work to users.
 ---
 ```
 
