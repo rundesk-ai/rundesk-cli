@@ -49,6 +49,11 @@ PATIENCE = 60.0
 #: the wrong reason. This is the shape of a machine where the CLI was simply never installed.
 NO_VENDOR = "/usr/bin:/bin"
 
+#: What tells a stand-in brain to keep its first ask running rather than answering it at once.
+#: **Not the adapter's**, and named so nobody reads it as one: this side of the pipe is what the
+#: suite is arranging, and the adapter never sees a difference.
+WORKS_UNTIL_STOPPED = "RUNDESK_TEST_WORKS_UNTIL_STOPPED"
+
 
 def replayed(home, prompt="Read note.txt and tell me the number in it.", captured=CAPTURED,
              steering=None, **also):
@@ -270,24 +275,42 @@ class ATurnOnAConversationThatWasCarriedOn(support.Isolated):
 class WhatItAsksTheBrainFor(support.Isolated):
     """What goes *out* is half the contract, and the capture cannot check it. This can."""
 
-    def spoke(self, then=(), **also):
-        """Every request the adapter sent, read off a brain that writes down what it was told.
-
-        `then` is what rundesk says *after* the prompt — the words a steer is made of. Named rather
-        than swept up with the environment, because everything else here becomes a variable the
-        adapter is started with and a list is not one.
-        """
-        where = self.home / "cwd"
-        where.mkdir(parents=True, exist_ok=True)
-        instead = self.home / "bin"
-        instead.mkdir(parents=True, exist_ok=True)
-        heard = self.home / "heard.jsonl"
-        (instead / "grok").write_text('''#!/usr/bin/env python3
+    #: A brain that writes down everything it is told and answers the handshake, and whose one
+    #: variable is **whether the turn is still running when the second word arrives**.
+    #:
+    #: Answering `session/prompt` the moment it lands — which this stand-in did unconditionally —
+    #: makes a turn that is over before rundesk's next word has been read, and there is nothing to
+    #: steer in a turn that has ended. Which of the adapter's threads got there first then decided
+    #: whether a mid-turn word was a steer at all: green on an idle laptop, red on an oversubscribed
+    #: CI runner, and a reading of the scheduler rather than of the adapter. Reproduced by hand by
+    #: writing the second word only once the first ask had been answered — no `session/cancel` at
+    #: all, and the last prompt still `hello`, which is exactly what CI reported.
+    #:
+    #: So a case that sends one gets `WORKS_UNTIL_STOPPED`, and the first ask then runs until
+    #: something stops it — the shape a real one was measured to have, and the same one
+    #: `WhenItIsSteeredMidTurn` uses. Every other case here needs a turn that ends by itself.
+    BRAIN = '''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["HEARD"], "a") as writing:
     writing.write(json.dumps({"argv": sys.argv[1:]}) + "\\n")
 if "--capabilities" in sys.argv[1:]:
     print('{"tools": true}'); raise SystemExit(0)
+
+
+def out(one):
+    print(json.dumps(one), flush=True)
+
+
+def settle(which, stopped):
+    out({"jsonrpc": "2.0", "method": "_x.ai/session_notification",
+         "params": {"sessionId": "s-1", "update": {
+             "sessionUpdate": "turn_completed", "stop_reason": stopped,
+             "usage": {"inputTokens": 10, "outputTokens": 2}}}})
+    out({"jsonrpc": "2.0", "id": which, "result": {"stopReason": stopped}})
+
+
+working = bool(os.environ.get("%s"))
+asks = []
 for line in sys.stdin:
     with open(os.environ["HEARD"], "a") as writing:
         writing.write(line)
@@ -295,29 +318,48 @@ for line in sys.stdin:
         said = json.loads(line)
     except ValueError:
         continue
-    if said.get("method") == "initialize":
-        print(json.dumps({"jsonrpc": "2.0", "id": said["id"], "result": {
+    method, which = said.get("method"), said.get("id")
+    if method == "initialize":
+        out({"jsonrpc": "2.0", "id": which, "result": {
             "protocolVersion": 1,
             "authMethods": [{"id": "cached_token"}],
-            "_meta": {"defaultAuthMethodId": "cached_token"}}}), flush=True)
-    elif said.get("method") == "authenticate":
-        print(json.dumps({"jsonrpc": "2.0", "id": said["id"], "result": {}}), flush=True)
-    elif said.get("method") in ("session/new", "session/load"):
-        print(json.dumps({"jsonrpc": "2.0", "id": said["id"],
-                          "result": {"sessionId": "s-1"}}), flush=True)
-    elif said.get("method") == "session/prompt":
-        print(json.dumps({"jsonrpc": "2.0", "method": "_x.ai/session_notification",
-                          "params": {"sessionId": "s-1", "update": {
-                              "sessionUpdate": "turn_completed", "stop_reason": "end_turn",
-                              "usage": {"inputTokens": 10, "outputTokens": 2}}}}), flush=True)
-        print(json.dumps({"jsonrpc": "2.0", "id": said["id"],
-                          "result": {"stopReason": "end_turn"}}), flush=True)
-''', encoding="utf-8")
+            "_meta": {"defaultAuthMethodId": "cached_token"}}})
+    elif method == "authenticate":
+        out({"jsonrpc": "2.0", "id": which, "result": {}})
+    elif method in ("session/new", "session/load"):
+        out({"jsonrpc": "2.0", "id": which, "result": {"sessionId": "s-1"}})
+    elif method == "session/prompt":
+        asks.append(which)
+        # The first ask is left running when a word is coming for it; a replacement answers at once,
+        # because what it replaced is already stopped.
+        if not working or len(asks) > 1:
+            settle(which, "end_turn")
+    elif method == "session/cancel":
+        settle(asks[0], "cancelled")
+'''
+
+    def spoke(self, then=(), **also):
+        """Every request the adapter sent, read off a brain that writes down what it was told.
+
+        `then` is what rundesk says *after* the prompt — the words a steer is made of. Named rather
+        than swept up with the environment, because everything else here becomes a variable the
+        adapter is started with and a list is not one. Sending any also puts this brain into the
+        shape a steer means anything against — see `WORKS_UNTIL_STOPPED`.
+        """
+        where = self.home / "cwd"
+        where.mkdir(parents=True, exist_ok=True)
+        instead = self.home / "bin"
+        instead.mkdir(parents=True, exist_ok=True)
+        heard = self.home / "heard.jsonl"
+        # The one `%s` is `WORKS_UNTIL_STOPPED`, so the name of the variable this stand-in reads is
+        # written down once rather than in both halves of a seam that would drift silently.
+        (instead / "grok").write_text(self.BRAIN % WORKS_UNTIL_STOPPED, encoding="utf-8")
         (instead / "grok").chmod(0o755)
         heard.write_text("", encoding="utf-8")
         told = {"PATH": f"{instead}:/usr/bin:/bin", "HEARD": str(heard),
                 "RUNDESK_CWD": str(where), "RUNDESK_ACCESS_MODE": "work",
-                "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1"}
+                "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1",
+                WORKS_UNTIL_STOPPED: "1" if then else ""}
         told.update(also)
         subprocess.run([str(ADAPTER)],
                        input="".join(json.dumps(one) + "\n" for one in
