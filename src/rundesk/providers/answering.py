@@ -640,10 +640,12 @@ class OnADelegation:
     def __init__(self, where: Path):
         self._where = where
 
-    def answer_this(self, agent: str, conversation: int, delegation_id: str) -> None:
+    def answer_this(self, agent: str, conversation: int, delegation_id: str,
+                    delegator: str) -> None:
         """Take the turn that answers another agent. The brief is already the conversation's."""
         threading.Thread(target=self._answered, name=f"delegation-{delegation_id}",
-                         args=(agent, conversation, delegation_id), daemon=True).start()
+                         args=(agent, conversation, delegation_id, delegator),
+                         daemon=True).start()
 
     def review_this(self, agent: str, conversation: int, answer: str, from_agent: str) -> None:
         """Put an answer in front of the agent that asked for it.
@@ -656,13 +658,23 @@ class OnADelegation:
         threading.Thread(target=self._reviewed, name=f"review-{from_agent}",
                          args=(agent, conversation, answer, from_agent), daemon=True).start()
 
-    def _answered(self, agent: str, conversation: int, delegation_id: str) -> None:
-        """One turn answering one delegation. **Never raises** — this is a thread, nobody is above."""
-        said = arriving.messages(agent, conversation, most=1)
+    def _answered(self, agent: str, conversation: int, delegation_id: str,
+                  delegator: str) -> None:
+        """One turn answering one delegation. **Never raises** — this is a thread, nobody is above.
+
+        The read is inside the guard and not before it, which is the difference between a claim and
+        a fact: an agent removed while its gateway runs makes `arriving.messages` raise, and an
+        exception out of a thread target reaches nobody and writes nothing anybody will find.
+        """
+        try:
+            said = arriving.messages(agent, conversation, most=1)
+        except Exception as why:  # noqa: BLE001 — a thread, and nobody is above it
+            _note(self._where, f"delegation {delegation_id} could not be read ({why})", logs.ERROR)
+            return
         body = str(said[0]["body"]) if said else ""
         self._take(agent, conversation, body,
                    trigger=instructions.ANOTHER_AGENT_ASKED, answering=delegation_id,
-                   about=f"delegation {delegation_id}")
+                   caller_agent=delegator, about=f"delegation {delegation_id}")
 
     def _reviewed(self, agent: str, conversation: int, answer: str, from_agent: str) -> None:
         """One turn reviewing what came back. **Never raises.**"""
@@ -670,22 +682,32 @@ class OnADelegation:
         with contextlib.suppress(Exception):
             arriving.said_by_rundesk_into(agent, conversation, said)
         self._take(agent, conversation, said, trigger=instructions.A_PERSON_ASKED,
-                   answering=None, about=f"the answer from {from_agent}")
+                   answering=None, caller_agent=None,
+                   about=f"the answer from {from_agent}")
 
     def _take(self, agent: str, conversation: int, body: str, trigger: str,
-              answering: Optional[str], about: str) -> None:
+              answering: Optional[str], caller_agent: Optional[str], about: str) -> None:
         """Start a turn, or say this into the one already running, or ask again in a moment.
 
         The same three answers `OnAChannel._answered` gives a person's message, and deliberately the
         same: an agent busy on a channel when an answer comes back should read it now rather than
         after whatever it is doing, which is the whole of what steering is for.
         """
+        # **Where this conversation actually stands, asked rather than assumed.** `turns` writes the
+        # answer back through `said_by_agent`, which finds the conversation from `(source, place)` —
+        # so a pair that merely looks right makes a second conversation and an answer nobody reads.
+        stands = arriving.where_it_stands(agent, conversation)
+        if stands is None:
+            _note(self._where, f"{about} names a conversation that is not there", logs.ERROR)
+            return
+        source, place = stands
         try:
             for again in range(TRIES):
                 try:
                     turns.run(turns.Request(
                         agent=agent, prompt=body, conversation=conversation, trigger=trigger,
-                        source=arriving.FROM_AGENT, place=agent, answering=answering))
+                        source=source, place=place, answering=answering,
+                        caller_agent=caller_agent))
                     return
                 except turns.Busy:
                     if turns.also_say(agent, conversation, body):

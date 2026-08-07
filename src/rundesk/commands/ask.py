@@ -71,7 +71,13 @@ def cmd_ask(args: argparse.Namespace) -> int:
         return _failed("there was nothing to ask")
 
     asking = admitting.whoever_is_asking()
-    if asking.is_a_turn and asking.agent != agent:
+    if asking.is_a_turn:
+        # **Every `ask` from inside a turn goes here, including one naming the agent itself.** The
+        # self-delegation guard lives in `admitting.refusal`, and routing on the names before
+        # reaching it made that guard unreachable from the command — an agent asking itself fell
+        # through to the attended path and started a second turn on its own conversation instead of
+        # being told that is a turn, not a delegation.
+        #
         # **One agent asking another is a delegation, whichever verb was typed**, and this is the
         # front door rather than a second command. Left alone, an agent could run a whole turn on
         # somebody else's agent from inside its own: no record, no guards, and nobody owed a review.
@@ -105,11 +111,19 @@ def _handed_over(asking: admitting.Asking, to_agent: str, task: str) -> int:
     of delegating: a verb that blocked would be a verb that spends one brain's time watching
     another's, and a turn that timed out would take the work with it.
 
-    Two writes, in this order and no other. The row lands in the **asking** agent's own store first,
-    because that is the record of being owed an answer; the brief is then delivered into the
-    answering agent's, which is the one write a gateway makes to a store that is not its own. Done
-    the other way round, an interruption between them leaves work nobody is owed anything for —
-    which is a turn that runs, answers, and is never collected.
+    **Two writes, into two databases, and they cannot be one transaction.** So the order is chosen
+    for which half-done state is harmless, and it is the reverse of what it first looks like.
+
+    The brief goes into the answering agent's store **first**, and the row into this agent's own
+    **second**. An interruption between them then leaves a message in a conversation nothing will
+    ever act on: the answering gateway finds work by reading the *delegator's* rows
+    (`hosting._addressed_to`), so with no row there is no work, and the command's "nothing was
+    handed over" is true.
+
+    Written the other way round it is not true. The row would exist, outstanding for ever, while the
+    brief it points at never arrived — and nothing could find it, because the answering side needs
+    the conversation to exist before it will start anything. A delegation nobody can see, resolve or
+    stop, under a command that said it had failed.
     """
     # Collapsed here, where all three of `standing`'s answers are visible. Only a gateway that is
     # definitely down refuses; one nobody can ask about is admitted.
@@ -125,8 +139,8 @@ def _handed_over(asking: admitting.Asking, to_agent: str, task: str) -> int:
         # rather than guessed at. An agent delegating from a channel is answering somebody there,
         # and a review that arrived in its terminal conversation instead would reach nobody.
         was = kept.get_turn(asking.agent or "", asking.run or 0)
-        admitting.admitted(asking, delegation_id, to_agent, int(was["conversation_id"]))
         arriving.recorded_for_a_delegation(to_agent, asking.agent or "", asking.run or 0, task)
+        admitting.admitted(asking, delegation_id, to_agent, int(was["conversation_id"]))
     except (admitting.Refused, delegations.Refused, directory.Refused, kept.Refused,
             records.NotThere, records.Unreadable, OSError) as why:
         return _failed(str(why), "nothing was handed over")

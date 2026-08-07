@@ -91,19 +91,19 @@ class TheCore(support.Isolated):
 class ExactlyOneSituation(support.Isolated):
     def test_a_person_asking_gets_the_person_layer(self):
         built = instructions.build(trigger=instructions.A_PERSON_ASKED, variables=EVERYTHING)
-        self.assertIn("they are waiting for this answer", built.text)
+        self.assertIn("A person asked you", built.text)
         self.assertNotIn("came due", built.text)
 
     def test_a_schedule_gets_the_schedule_layer(self):
         built = instructions.build(trigger=instructions.A_SCHEDULE_CAME_DUE, variables=EVERYTHING)
         self.assertIn("nightly", built.text)
-        self.assertNotIn("they are waiting for this answer", built.text)
+        self.assertNotIn("A person asked you", built.text)
 
     def test_a_trigger_this_release_has_never_heard_of_is_a_person_asking(self):
         """The safe way round: what the other situations withhold are the rules that assume somebody
         is waiting, so an unknown surface gets a person's rules rather than a schedule's silence."""
         built = instructions.build(trigger="carrier-pigeon", variables=EVERYTHING)
-        self.assertIn("they are waiting for this answer", built.text)
+        self.assertIn("A person asked you", built.text)
         self.assertEqual([one.name for one in built.layers],
                          ["core", instructions.A_PERSON_ASKED])
 
@@ -111,7 +111,7 @@ class ExactlyOneSituation(support.Isolated):
         built = instructions.build(trigger=instructions.ANOTHER_AGENT_ASKED,
                                    variables={**EVERYTHING, "caller_agent": "bob"})
         self.assertIn("bob, an agent on your team, handed you this task", built.text)
-        self.assertNotIn("they are waiting for this answer", built.text)
+        self.assertNotIn("A person asked you", built.text)
 
     def test_only_one_situation_is_ever_in_a_prompt(self):
         for trigger in instructions.TRIGGERS:
@@ -290,8 +290,12 @@ class OneRuleLivesInOnePlace(support.Isolated):
 
     #: Rules `CORE` owns outright. A situation saying one again in its own words is a second wording
     #: of one rule — which is what "one rule lives in one place" means when it is not merely prose.
-    THE_CORES_OWN = ("Where you are blocked", "Never invent a fact",
-                     "take the reading it best supports")
+    THE_CORES_OWN = ("Blocked?", "Never invent a fact", "take the reading it best supports")
+
+    #: The situations, by the constants rather than by slicing the rendered prompt on a heading.
+    #: Headings are wording somebody edits; what belongs to which layer is not.
+    THE_SITUATIONS = (instructions.A_PERSON_ASKED_LAYER, instructions.A_SCHEDULE_CAME_DUE_LAYER,
+                      instructions.ANOTHER_AGENT_ASKED_LAYER)
 
     def test_the_core_actually_holds_them(self):
         """Asserted as well as the absence below. Without this, a rule deleted from the core *and*
@@ -303,9 +307,8 @@ class OneRuleLivesInOnePlace(support.Isolated):
 
     def test_no_situation_restates_a_rule_the_core_already_holds(self):
         for phrase in self.THE_CORES_OWN:
-            for trigger in instructions.TRIGGERS:
-                with self.subTest(phrase=phrase, trigger=trigger):
-                    situation = self.rendered(trigger).split("## Why this turn is happening")[-1]
+            for situation in self.THE_SITUATIONS:
+                with self.subTest(phrase=phrase, situation=situation[:24]):
                     self.assertNotIn(phrase, situation)
 
     def test_what_is_true_of_both_unattended_situations_is_written_once(self):

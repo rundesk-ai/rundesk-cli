@@ -23,7 +23,7 @@ May depend on `agents`, `core` and `utils`.
 
 import sqlite3
 from datetime import datetime
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from rundesk.agents import directory, records
 from rundesk.core import config
@@ -167,9 +167,14 @@ def recorded_for_a_delegation(agent: str, delegator: str, parent_turn: int, body
     records it, and it holds no account of somebody else's delegation.
 
     **Keyed by who asked and which of their turns**, so two delegations from one turn share a
-    conversation and therefore a provider session, and one from a later turn starts its own. That
-    key is constructed by `delegations.kept.source_id_for` and never stored, because a stored id
-    would point into a database the delegator may not follow it into.
+    conversation and therefore a provider session, and one from a later turn starts its own. The key
+    is never stored — a stored id would point into a database the delegator may not follow it into.
+
+    **The format is spelled here and in `delegations.kept.source_id_for`, and it has to stay the
+    same in both.** This layer may not import that one, so the two cannot share a function;
+    `tests/test_layers.py` compares them instead, the way it already compares the two spellings of a
+    gateway's own files. Left to agree by hand they would eventually not, and the symptom is an
+    answer written into a conversation nobody is reading.
 
     **Never the conversation a person is typing into**, which is what `FROM_AGENT` buys: an answer
     to another agent turning up in the middle of somebody's exchange is the fault the schedules got
@@ -210,6 +215,27 @@ def said_by_agent(agent: str, source: str, place: str, body: str, turn: Optional
         message, fresh = _message(conn, agent, conversation, BY_AGENT, agent,
                                   _bounded(body), external_id, now, turn=turn)
     return Landed(conversation, message, fresh)
+
+
+def where_it_stands(agent: str, conversation: int) -> Optional[Tuple[str, str]]:
+    """The `source` and `source_id` this conversation was made under, or `None` if there is no such
+    conversation.
+
+    **What a turn has to be told so its answer lands where it was asked.** `said_by_agent` resolves
+    the conversation to write into from `(source, place)` rather than from an id, so a caller that
+    passed a plausible-looking pair instead of the real one gets a *new* conversation and an answer
+    nobody is reading. Measured: a delegated turn answered into a conversation of its own six times
+    over, while the one that asked sat unanswered and the gateway started a turn every beat.
+
+    So a caller that already knows the conversation asks here rather than reconstructing the pair.
+    """
+    try:
+        with records.reading(directory.records(agent)) as conn:
+            row = _rows(conn, agent, "SELECT source, source_id FROM conversations WHERE id = ?",
+                        (conversation,)).fetchone()
+    except (records.NotThere, records.Unreadable, OSError):
+        return None
+    return (str(row["source"]), str(row["source_id"])) if row else None
 
 
 def conversations(agent: str, most: int = CONVERSATIONS_AT_MOST) -> List[Dict[str, Any]]:

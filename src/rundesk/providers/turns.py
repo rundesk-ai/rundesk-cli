@@ -123,6 +123,10 @@ class Request(NamedTuple):
     #: brain's environment, where a `rundesk ask` run from inside the turn reads it and refuses —
     #: which is what makes depth one enforceable rather than merely asked for.
     answering: Optional[str] = None
+    #: Which agent handed this turn its task, for the layer that names them. **Required whenever
+    #: `trigger` is `ANOTHER_AGENT_ASKED`**: that layer is four sentences about who asked and where
+    #: the answer goes, and without this every one of them reaches the brain saying `{caller_agent}`.
+    caller_agent: Optional[str] = None
 
 
 class Outcome(NamedTuple):
@@ -695,6 +699,7 @@ def _about(request: Request, provider_name: str) -> Dict[str, object]:
         "access_mode": request.access_mode,
         "schedule_name": _schedule_name(request),
         "conversation_id": request.conversation,
+        "caller_agent": request.caller_agent,
     }
 
 

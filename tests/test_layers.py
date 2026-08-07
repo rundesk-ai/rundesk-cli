@@ -401,5 +401,33 @@ class TheTreePointsOneWay(support.Isolated):
                     self.assertNotIn("argparse", module.read_text(encoding="utf-8"))
 
 
+class TheTwoLayersSpellADelegationTheSameWay(support.Isolated):
+    """`channels` may not import `delegations`, so the conversation a delegated turn stands in is
+    spelled in both. Compared here rather than left to agree by hand — the symptom of drift is an
+    answer written into a conversation nobody is reading, which nothing else would notice."""
+
+    def test_the_source_word_is_the_same_in_both(self):
+        from rundesk.channels import arriving
+        from rundesk.delegations import kept
+        self.assertEqual(arriving.FROM_AGENT, kept.FROM_AGENT)
+
+    def test_the_conversation_key_is_built_the_same_way_in_both(self):
+        import sqlite3
+
+        from rundesk.agents import directory, records
+        from rundesk.channels import arriving
+        from rundesk.core import paths
+        from rundesk.delegations import kept
+        paths.agents().mkdir(parents=True, exist_ok=True)
+        directory.made("bob", "a-stand-in")
+        landed = arriving.recorded_for_a_delegation("bob", "ava", 12, "audit it")
+        with records.reading(directory.records("bob")) as conn:
+            conn.row_factory = sqlite3.Row
+            stood = conn.execute("SELECT source, source_id FROM conversations WHERE id = ?",
+                                 (landed.conversation,)).fetchone()
+        self.assertEqual((kept.FROM_AGENT, kept.source_id_for("ava", 12)),
+                         (stood["source"], stood["source_id"]))
+
+
 if __name__ == "__main__":
     unittest.main()

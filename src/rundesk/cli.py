@@ -20,6 +20,8 @@ from rundesk.commands.agents import cmd_agents
 from rundesk.commands.agents import register as register_agents
 from rundesk.commands.ask import cmd_ask
 from rundesk.commands.ask import register as register_ask
+from rundesk.commands.asked import cmd_asked
+from rundesk.commands.asked import register as register_asked
 from rundesk.commands.backups import cmd_backups
 from rundesk.commands.backups import register as register_backups
 from rundesk.commands.channels import Reaching, cmd_channels
@@ -106,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_backups(sub)
     register_env(sub)
     register_ask(sub)
+    register_asked(sub)
     register_messages(sub)
     register_providers(sub)
     register_turns(sub)
@@ -221,6 +224,8 @@ def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshin
         return cmd_env(args)
     if args.command == "ask":
         return cmd_ask(args)
+    if args.command == "asked":
+        return cmd_asked(args)
     if args.command == "messages":
         return cmd_messages(args)
     if args.command == "turns":

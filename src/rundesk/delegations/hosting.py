@@ -53,6 +53,11 @@ STARTED_AT_MOST = 4
 #: turn begin.
 COLLECTED_AT_MOST = 4
 
+#: What `turns.turn_status` says while a turn is still going. Named here rather than imported,
+#: because this package may not reach `providers` — and asserted against it by the suite, so the two
+#: cannot drift into meaning different things.
+WORKING = "working"
+
 
 class Answering:
     """What this tenant is handed so it can run a turn without knowing what one is.
@@ -62,8 +67,14 @@ class Answering:
     different methods rather than one with a flag saying which it is.
     """
 
-    def answer_this(self, agent: str, conversation: int, delegation_id: str) -> None:
-        """Take a turn on a conversation another agent asked in. Never raises past the caller."""
+    def answer_this(self, agent: str, conversation: int, delegation_id: str,
+                    delegator: str) -> None:
+        """Take a turn on a conversation another agent asked in. Never raises past the caller.
+
+        `delegator` is who asked, and it is passed rather than looked up because the layer that
+        names them is four sentences about who asked and where the answer goes — a turn that got
+        this wrong would tell a brain `{caller_agent}` five times over.
+        """
         raise NotImplementedError
 
     def review_this(self, agent: str, conversation: int, answer: str, from_agent: str) -> None:
@@ -72,16 +83,20 @@ class Answering:
 
 
 class Carrying(NamedTuple):
-    """What this tenant is in the middle of, carried from one pass to the next.
+    """What this tenant carries between passes, which is **nothing**.
 
-    `started` and `collected` are delegation ids this process has already acted on. Held in memory
-    rather than written down, and that is safe in exactly one direction: forgetting them on restart
-    costs a second look, which finds the work already done and does nothing. Writing them would be a
-    second record of what the turn itself already says.
+    It held two lists of delegation ids this process had already acted on, and that was a bug rather
+    than an optimisation: a delegation carried on with more work is the same delegation, so an id
+    remembered as *started* was one this gateway would never start again. Resuming wrote the message,
+    cleared the answer, and nothing ever picked it up.
+
+    Both questions are answerable from what is already written down — see `_is_waiting_on_us` and
+    `kept.outstanding` — so there is no state to keep in step, and a gateway that restarts mid-flight
+    reaches the same answer as one that did not.
+
+    Kept as a type so the three seams have the shape the other two tenants have, and so the day this
+    needs to carry something there is somewhere for it to go.
     """
-
-    started: Tuple[str, ...] = ()
-    collected: Tuple[str, ...] = ()
 
 
 def settled(name: str, where) -> Carrying:
@@ -108,18 +123,15 @@ def looked(name: str, where, carrying: Carrying, answering: Answering) -> Carryi
     gateway does — its heartbeat, its channels, its schedules — is more important than one
     delegation. What went wrong is written to this agent's own log and the pass goes on.
     """
-    return Carrying(
-        started=_whatever_happens(where, "answering what was handed here", carrying.started,
-                                  lambda: _answered_what_was_handed_here(
-                                      name, where, carrying.started, answering)),
-        collected=_whatever_happens(where, "collecting what came back", carrying.collected,
-                                    lambda: _collected_what_came_back(
-                                        name, where, carrying.collected, answering)))
+    _whatever_happens(where, "answering what was handed here",
+                      lambda: _answered_what_was_handed_here(name, where, answering))
+    _whatever_happens(where, "collecting what came back",
+                      lambda: _collected_what_came_back(name, where, answering))
+    return carrying
 
 
-def _whatever_happens(where, doing: str, keeping: Tuple[str, ...],
-                      sweep: Callable[[], Tuple[str, ...]]) -> Tuple[str, ...]:
-    """Run one sweep and answer what it carried, or keep what there was and write down why not.
+def _whatever_happens(where, doing: str, sweep: Callable[[], None]) -> None:
+    """Run one sweep, or write down why it did not happen and let the pass go on.
 
     **The whole sweep, not each item.** An agent removed while its gateway runs is the case this
     exists for: every read here is of a store that has just stopped being there, so the failure is
@@ -131,7 +143,7 @@ def _whatever_happens(where, doing: str, keeping: Tuple[str, ...],
     process that was hosting it.
     """
     try:
-        return sweep()
+        sweep()
     except Exception as why:  # noqa: BLE001 — see the docstring, and `looked`
         # **Only where there is still somewhere to write.** `gateways.host._refused` has the same
         # rule for the same reason: an agent taken away while its gateway runs is exactly when this
@@ -140,49 +152,80 @@ def _whatever_happens(where, doing: str, keeping: Tuple[str, ...],
         # own captured output already carries what happened.
         if Path(where).exists():
             logs.note(where, f"delegations: {doing} did not happen this pass ({why})", logs.ERROR)
-        return keeping
 
 
 def stopping(name: str, where, carrying: Carrying, within: float) -> None:
-    """Stand down. **Nothing to stop and nothing to wait for**, which is why this is empty.
+    """Stand down. **Nothing here stops anything**, and what that costs is worth stating plainly.
 
-    A turn started for a delegation is an ordinary turn, claimed and settled by `providers.turns`,
-    and the gateway's own shutdown already waits on those. What this tenant holds between passes is
-    two lists of ids in memory, and losing them costs one repeated look.
+    A turn started for a delegation runs on a daemon thread this module never sees and nothing
+    joins. A gateway told to stop does not wait for it: the process goes, and the turn goes with it
+    part-written. The turn row is then settled by whatever next opens that agent's records rather
+    than on the way out — the same is true of a channel-answering turn, which uses the identical
+    pattern, so this is the shape the gateway already had rather than one delegation introduced.
 
-    Here so the three seams are three, and so the day this grows something to stop there is a place
-    for it that the loop already calls.
+    It is **not** what `settled` relies on. That one is safe because a delegation with no terminal
+    turn is simply picked up again, which is true however the previous turn ended.
+
+    Here so the three seams are three, and so the day something does need stopping there is a place
+    for it the loop already calls.
     """
 
 
-def _answered_what_was_handed_here(name: str, where, started: Tuple[str, ...],
-                                   answering: Answering) -> Tuple[str, ...]:
-    """Start a turn for each delegation addressed to this agent that nothing has answered."""
-    doing = list(started)
+def _answered_what_was_handed_here(name: str, where, answering: Answering) -> None:
+    """Start a turn for each delegation addressed to this agent that is waiting on one."""
     for delegator, one in _addressed_to(name, where)[:STARTED_AT_MOST]:
-        if one.delegation_id in doing:
-            continue
         conversation = _the_conversation(name, delegator, one.parent_turn)
         if conversation is None:
             # The row is there and the brief is not, which is the window between the two writes
             # `commands.ask` makes. It lands on the next pass.
             continue
-        doing.append(one.delegation_id)
+        if not _is_waiting_on_us(name, conversation, delegator):
+            continue
         try:
-            answering.answer_this(name, conversation, one.delegation_id)
+            answering.answer_this(name, conversation, one.delegation_id, delegator)
         except Exception as why:  # noqa: BLE001 — see `looked`
             logs.note(where, f"delegation {one.delegation_id} could not be answered ({why})",
                       logs.ERROR)
-    return tuple(doing)
 
 
-def _collected_what_came_back(name: str, where, collected: Tuple[str, ...],
-                              answering: Answering) -> Tuple[str, ...]:
-    """Deliver the answer to each of this agent's own delegations whose work has settled."""
-    doing = list(collected)
+def _is_waiting_on_us(name: str, conversation: int, delegator: str) -> bool:
+    """Whether the newest thing said in this conversation is the other agent's, and so unanswered.
+
+    **The whole of "has this been answered yet", and it keeps no state.** A turn already running on
+    this conversation is refused its claim by `providers.turns` and settles the question the moment
+    it writes its reply, so two passes a beat apart cannot both start one.
+
+    This replaces a list of ids the gateway used to remember having started, which was wrong the
+    first time a delegation was carried on: the same id, more work to do, and a gateway that would
+    never look at it again. What is being asked is about the conversation, not about the row.
+    """
+    try:
+        with records.reading(directory.records(name)) as conn:
+            # **A turn already going is the answer in progress.** Without this the next beat sees a
+            # conversation whose newest message is still the other agent's — because the reply is
+            # not written until the turn settles — and starts a second turn for the same work. It
+            # was measured: one delegation, two turns, the second resuming the first's session and
+            # answering again. `providers.turns` refuses the second its claim, but `Busy` is
+            # retried on a short bound, and the first turn ending inside that bound lets it through.
+            if conn.execute("SELECT 1 FROM turns WHERE conversation_id = ? AND turn_status = ?",
+                            (conversation, WORKING)).fetchone():
+                return False
+            said = conn.execute(
+                "SELECT author_id FROM conversation_messages"
+                " WHERE conversation_id = ? ORDER BY id DESC LIMIT 1", (conversation,)).fetchone()
+    except (records.NotThere, records.Unreadable, OSError):
+        return False
+    return bool(said) and str(said["author_id"]) == delegator
+
+
+def _collected_what_came_back(name: str, where, answering: Answering) -> None:
+    """Deliver the answer to each of this agent's own delegations whose work has settled.
+
+    Keeps no list of what it has already collected either: `kept.outstanding` answers only what is
+    still owed, and `kept.answered` is the `UPDATE` that decides — so the row is the guard, and a
+    list beside it would be a second one to keep in step.
+    """
     for one in kept.outstanding(name)[:COLLECTED_AT_MOST]:
-        if one.delegation_id in doing:
-            continue
         said = _what_they_answered(one.to_agent, name, one.parent_turn)
         if said is None:
             continue
@@ -191,13 +234,11 @@ def _collected_what_came_back(name: str, where, collected: Tuple[str, ...],
         # still owed, so exactly one of them goes on to wake the agent.
         if not kept.answered(name, one.delegation_id):
             continue
-        doing.append(one.delegation_id)
         try:
             answering.review_this(name, one.parent_conversation, said, one.to_agent)
         except Exception as why:  # noqa: BLE001 — see `looked`
             logs.note(where, f"the answer to {one.delegation_id} could not be delivered ({why})",
                       logs.ERROR)
-    return tuple(doing)
 
 
 def _addressed_to(name: str, where) -> List[Tuple[str, kept.Delegation]]:
@@ -237,30 +278,45 @@ def _the_conversation(name: str, delegator: str, parent_turn: int) -> Optional[i
 
 
 def _what_they_answered(to_agent: str, delegator: str, parent_turn: int) -> Optional[str]:
-    """The last complete thing the answering agent said, once its turn has settled — else `None`.
+    """The answering agent's reply to **the newest thing this agent said**, or `None` if it has not
+    replied to that yet.
 
-    **Only the last message, and only once the turn is terminal** (R-DEL-10). Everything said on the
+    **Newer than the ask, and that clause is the whole of it.** Without it, a delegation carried on
+    with more work is answered instantly with the reply to the *previous* task: the last terminal
+    turn is still the old one, so its last message reads as an answer, the row is marked collected,
+    and the answering agent's gateway never sees the new work as outstanding at all. Measured — a
+    resume that delivered a stale answer and left the further task untouched.
+
+    **Only the last message, and only once its turn is terminal** (R-DEL-10). Everything said on the
     way is working narration, and handing that back would bury the report inside it.
 
     A turn that failed or was stopped still answers: what it managed to say is what the delegator
-    reviews, and an empty one becomes a sentence saying the work did not report anything, because
-    silence delivered as an answer reads as an answer.
+    reviews, and an empty one becomes a sentence saying so, because silence delivered as an answer
+    reads as an answer.
     """
     try:
         with records.reading(directory.records(to_agent)) as conn:
-            turn = conn.execute(
-                "SELECT t.id, t.turn_status FROM turns t"
-                " JOIN conversations c ON c.id = t.conversation_id"
-                " WHERE c.source = ? AND c.source_id = ?"
-                " ORDER BY t.id DESC LIMIT 1",
+            conversation = conn.execute(
+                "SELECT id FROM conversations WHERE source = ? AND source_id = ?",
                 (kept.FROM_AGENT, kept.source_id_for(delegator, parent_turn))).fetchone()
-            if turn is None or turn["turn_status"] == "working":
+            if conversation is None:
+                return None
+            asked = conn.execute(
+                "SELECT id FROM conversation_messages"
+                " WHERE conversation_id = ? AND author_id = ? ORDER BY id DESC LIMIT 1",
+                (conversation["id"], delegator)).fetchone()
+            if asked is None:
                 return None
             said = conn.execute(
-                "SELECT body FROM conversation_messages"
-                " WHERE turn_id = ? AND author = 'agent' ORDER BY id DESC LIMIT 1",
-                (turn["id"],)).fetchone()
+                "SELECT m.body, t.turn_status FROM conversation_messages m"
+                " JOIN turns t ON t.id = m.turn_id"
+                " WHERE m.conversation_id = ? AND m.author_id = ? AND m.id > ?"
+                "   AND t.turn_status <> ?"
+                " ORDER BY m.id DESC LIMIT 1",
+                (conversation["id"], to_agent, asked["id"], WORKING)).fetchone()
     except (records.NotThere, records.Unreadable, OSError):
         return None
-    body = (said["body"] if said else "") or ""
-    return body.strip() or f"{to_agent} finished without saying anything ({turn['turn_status']})"
+    if said is None:
+        return None
+    body = (said["body"] or "").strip()
+    return body or f"{to_agent} finished without saying anything ({said['turn_status']})"

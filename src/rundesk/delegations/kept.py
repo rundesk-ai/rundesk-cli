@@ -170,6 +170,25 @@ def answered(agent: str, delegation_id: str, now: Optional[datetime] = None) -> 
         return bool(moved.rowcount)
 
 
+def reopened(agent: str, delegation_id: str, now: Optional[datetime] = None) -> bool:
+    """Owe an answer again, so work already settled can be carried on. `False` if it was not settled.
+
+    **Carrying on is not asking again.** The conversation is the same one, so the answering agent
+    picks up the provider session it already had rather than starting over — which is the whole
+    point of resuming rather than handing over a second task that repeats the first.
+
+    Clearing `answered_at` is what puts it back in front of the answering gateway: that column is
+    the only thing marking it done, so taking it away is the same thing as never having been.
+    """
+    at = config.moment_of(now)
+    with records.writing(directory.records(agent)) as conn:
+        moved = conn.execute(
+            f"UPDATE {TABLE} SET answered_at = NULL, stop_asked_at = NULL, latest_at = ?"
+            " WHERE delegation_id = ? AND answered_at IS NOT NULL",
+            (at, delegation_id))
+        return bool(moved.rowcount)
+
+
 def stop_asked(agent: str, delegation_id: str, now: Optional[datetime] = None) -> bool:
     """Ask for one to end. **A request, and never an outcome** — what came of it is the turn's.
 
