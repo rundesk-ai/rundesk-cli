@@ -1,6 +1,6 @@
 ---
 name: writing-skills
-description: Writes focused, provider-neutral Rundesk skills that agents apply only to relevant tasks, with enough instruction to work and no duplicated context. Apply this skill when the task is to create, review, revise, debug, or publish a SKILL.md or any of its references, scripts, integrations, or catalog files.
+description: Use this skill when the user asks to create, revise, review, debug, or publish a Rundesk skill; turn repeatable work into a skill; or fix a skill that triggers incorrectly or wastes context. It supplies Rundesk's provider-neutral workflow for writing compact, reliable skills that route correctly, load only needed context, support integrations, and can be shared through catalogs. Do not use it merely to perform the workflow a skill would teach.
 ---
 
 # Writing skills
@@ -52,16 +52,17 @@ installation guide, or an account of how the skill was made.
 Read `references/integrations.md` before adding `rundesk.json` or a script that reaches an external
 service.
 
-## Write the metadata first
+## Write the routing description first
 
 Use only `name` and `description` in the frontmatter.
 
 - Make `name` match its directory. Use at most 64 characters: lowercase letters, digits, and single
   hyphens.
-- Open `description` with the focused work the skill improves and why an agent needs its
-  instructions. Do not inventory files or capabilities.
-- Follow with `Apply this skill when the task is to` and the concrete tasks that make the skill
-  relevant. Name what the agent is being asked to do; most requests will not name the skill.
+- Treat `description` as the routing instruction. Begin `Use this skill when` and name the user
+  goals and situations that require it, including indirect requests that may not name the skill.
+- Follow with one short sentence stating the specialized workflow or knowledge the skill supplies.
+  Describe the user's intent, not the skill's files or implementation.
+- Add `Do not use` only to separate a likely near-miss from the skill's scope.
 - Keep the description within 1024 characters and as short as complete coverage allows. Every agent
   holding the skill pays for it on every turn.
 - Put all trigger guidance in the description. The body is unavailable until after triggering.
@@ -69,7 +70,7 @@ Use only `name` and `description` in the frontmatter.
 ```markdown
 ---
 name: release-notes
-description: Drafts accurate release notes that make shipped changes clear to people who did not build them. Apply this skill when the task is to prepare a release, tag a version, summarize a changelog, or explain shipped work to users.
+description: Use this skill when the user asks to prepare a release, tag a version, summarize shipped changes, or explain those changes to people who did not build them. It supplies a workflow for turning repository history into accurate, audience-focused release notes. Do not use it for unreleased implementation plans or general code summaries.
 ---
 ```
 
@@ -119,7 +120,8 @@ Check the skill through the same surface an agent uses:
    ```
 
 3. Run every shipped script with representative input and confirm it is executable.
-4. Use a fresh turn to request the outcome without naming the skill. Confirm the description triggers
-   it and the instructions change the result.
+4. In fresh turns, try relevant requests with different wording and close near-misses that share the
+   description's terms. Tighten missed scope or false matches by category, not by copying individual
+   prompt phrases into the description.
 5. For a substantial skill, compare that result with a fresh baseline that does not hold the skill.
    If the result is materially the same, remove instructions that are not earning their token cost.

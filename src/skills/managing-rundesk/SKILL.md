@@ -1,6 +1,6 @@
 ---
 name: managing-rundesk
-description: Safely operates and diagnoses Rundesk, the supervisor that owns this agent and its operational state. Apply when you need to inspect or change the install; manage agents, gateways, channels, schedules, conversations, providers, skills, backups, configuration, or credentials; diagnose Rundesk-controlled behavior; or recover a failed operation without guessing at state or success.
+description: Use this skill when the user asks to inspect, configure, operate, troubleshoot, or recover the Rundesk install that owns this agent, including its agents, gateways, conversations, channels, schedules, providers, skills, backups, lifecycle, or credentials. It supplies the verified commands and safety rules needed to establish state, make requested changes, and report only proven outcomes. Do not use it for work inside an agent's project unless Rundesk controls the behavior.
 ---
 
 # Manage Rundesk
