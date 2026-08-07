@@ -52,5 +52,15 @@ Prefix every command with `"$RUNDESK_COMMAND"`.
 - `forget` empties values for only the selected skill account. It requires preview and `--confirm`.
 - `doctor` checks granted skills. A library skill that is not granted has no agent context to
   diagnose.
-- To author or publish a skill, use the `writing-skills` skill; do not invent `skills create`,
-  `skills validate`, or `skills publish` commands.
+
+## Create or publish skills
+
+The commands above manage skills that already exist. Use
+[Writing skills](../../writing-skills/SKILL.md) to create, revise, review, debug, or publish one.
+
+- Read its [integration guidance](../../writing-skills/references/integrations.md) when the skill
+  needs values or external commands.
+- Read its [publishing guidance](../../writing-skills/references/publishing.md) when other installs
+  must be able to install it.
+
+Rundesk has no `skills create`, `skills validate`, or `skills publish` commands.
