@@ -239,10 +239,17 @@ class WhichInterpreterRunsOne(Adapters):
         them read as the shipped Discord adapter reporting that `discord.py` "is not installed", on
         a machine where it plainly was — which is a channel nobody can connect and a sentence that
         sends the reader to fix the wrong thing.
+
+        **The checkout is made here rather than read off the one this suite is running from.**
+        Whether the tree somebody is working in happens to have a virtualenv beside the code is a
+        fact about their machine: the case passed on the machine it was written on and went red on
+        every CI runner at once, where a fresh clone has no `.venv` and never will.
         """
-        beside = paths.program() / ".venv" / "bin"
-        self.assertTrue(beside.is_dir(), "this checkout has no virtualenv to find")
-        self.assertEqual(str(beside), core_adapters.environment()["PATH"].split(":")[0])
+        checkout = self.home / "somebodys-checkout"
+        beside = checkout / ".venv" / "bin"
+        beside.mkdir(parents=True)
+        with mock.patch.object(paths, "program", return_value=checkout):
+            self.assertEqual(str(beside), core_adapters.environment()["PATH"].split(":")[0])
 
     def test_an_install_with_no_packages_at_all_is_not_a_failure(self):
         """A machine with no network has a working install and no packages, and an adapter that
