@@ -58,8 +58,10 @@ Use only `name` and `description` in the frontmatter.
 
 - Make `name` match its directory. Use at most 64 characters: lowercase letters, digits, and single
   hyphens.
-- Treat `description` as the routing instruction. Begin `Use this skill when` and name the user
-  goals and situations that require it, including indirect requests that may not name the skill.
+- Treat `description` as the routing instruction. State applicability directly with `Use when`,
+  `Apply when`, or equivalent imperative wording, then name the user goals and situations that
+  require it, including indirect requests that may not name the skill. The exact phrase is not a
+  trigger; the intent and boundary are.
 - Follow with one short sentence stating the specialized workflow or knowledge the skill supplies.
   Describe the user's intent, not the skill's files or implementation.
 - Add `Do not use` only to separate a likely near-miss from the skill's scope.
