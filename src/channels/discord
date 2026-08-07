@@ -1241,17 +1241,35 @@ class Reaching:
                 into.mkdir(parents=True, exist_ok=True)
                 await one.save(at)
                 # **What a platform declares and what it sends are two facts.** A save that returned
-                # is not a file of the right length, and rundesk refuses a mismatch — so it is caught
-                # here too, where the file can simply be dropped rather than reported and refused.
+                # is not a file of the right length: a fetch cut off part way leaves a readable file
+                # holding half of what somebody sent, and nothing downstream can tell that from a
+                # small file. Caught here, where it can simply be dropped.
                 fetched = at.stat().st_size
                 if fetched > BROUGHT_BYTES:
-                    at.unlink()
                     raise Refused(f"it arrived as {fetched} bytes, past the {BROUGHT_BYTES} one "
                                   f"message may bring in")
+                if declared and fetched != declared:
+                    raise Refused(f"Discord said {declared} bytes and {fetched} arrived, so this "
+                                  "is not the whole of what was sent")
             except Exception as why:       # noqa: BLE001 — a platform boundary
+                # **Nothing is left behind on the way out.** A path this never reports is a path
+                # rundesk never hears of, so `files.landed` — which removes every staged file it is
+                # told about, taken or refused — cannot remove this one, and `files.swept` never
+                # looks in here. Dropped by hand or it is debris for the life of the install.
+                with contextlib.suppress(OSError):
+                    at.unlink()
                 noted(f"could not bring in {one.filename}: {type(why).__name__}: {why}")
                 continue
-            brought.append({"name": one.filename, "at": str(at), "bytes": fetched})
+            # **What the platform said, not what this measured.** Rundesk checks the declared size
+            # against the file it lands, and a number this took from its own `stat()` makes that
+            # check compare rundesk's measurement with rundesk's measurement — it agreed always, and
+            # a documented guarantee had no way to fire. Left out entirely when Discord declared
+            # nothing, because said-nothing and said-zero are different answers and `files.landed`
+            # reads an absent one as the first.
+            said = {"name": one.filename, "at": str(at)}
+            if declared:
+                said["bytes"] = declared
+            brought.append(said)
         if len(message.attachments) > BROUGHT_MOST:
             noted(f"{len(message.attachments)} files were attached and only the first "
                   f"{BROUGHT_MOST} were brought in")

@@ -20,6 +20,9 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import os
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -297,6 +300,28 @@ class Message:
         return Thread(self.opens)
 
 
+class Attachment:
+    """One file as the adapter reads it, and what a save of it really produces.
+
+    **`size` and `writes` are two fields because they are two facts.** `size` is what the platform
+    *declares* before anything is fetched; `writes` is what actually lands. A fetch cut off part way
+    is exactly the case where they disagree, and it is the case `_brought` exists to catch — so a
+    stand-in that derived one from the other could not express the only interesting state.
+    """
+
+    def __init__(self, filename: str, size: int, writes: Optional[bytes] = None,
+                 raises: Optional[Exception] = None) -> None:
+        self.filename = filename
+        self.size = size
+        self.writes = b"x" * size if writes is None else writes
+        self.raises = raises
+
+    async def save(self, at: Any) -> None:
+        if self.raises is not None:
+            raise self.raises
+        Path(at).write_bytes(self.writes)
+
+
 class Records(unittest.TestCase):
     """Everything a case here needs: a wired adapter, and the records it wrote."""
 
@@ -437,6 +462,94 @@ class WhatIsAskedFor(unittest.TestCase):
 # ---------------------------------------------------------------------------------------------
 # Where a message is answered.
 # ---------------------------------------------------------------------------------------------
+
+
+class WhatIsBroughtIn(Records):
+    """The fetch. **Never exercised at all until these were written**, and both defects it holds
+    were in the half no case reached: the number reported as `bytes`, and what is left behind when a
+    save goes wrong."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.home, True)
+        self.was = os.environ.get("RUNDESK_CHANNEL_HOME")
+        os.environ["RUNDESK_CHANNEL_HOME"] = str(self.home)
+        self.addCleanup(self.put_it_back)
+
+    def put_it_back(self) -> None:
+        if self.was is None:
+            os.environ.pop("RUNDESK_CHANNEL_HOME", None)
+        else:
+            os.environ["RUNDESK_CHANNEL_HOME"] = self.was
+
+    def brought(self, *attachments: Attachment) -> List[Dict[str, Any]]:
+        """What `_brought` reports for one message carrying these."""
+        message = Message(8841, DMChannel(1180), self.asker, "here you go")
+        message.attachments = list(attachments)
+        got: List[Any] = []
+
+        async def doing(reaching: Any) -> None:
+            got.append(await reaching._brought(message))
+
+        self.during(doing)
+        return got[0]
+
+    def staged(self) -> List[Path]:
+        """Every file still standing in the channel's own directory."""
+        return [one for one in self.home.rglob("*") if one.is_file()]
+
+    def test_the_size_reported_is_the_platforms_and_never_this_adapters_own(self):
+        """**The whole of why the truncation guard could not fire.**
+
+        Rundesk checks the declared size against the file it lands, and refuses a mismatch. This
+        reported a number it took from its own `stat()` of the file it had just written — so that
+        check compared rundesk's measurement against rundesk's measurement, agreed always, and a
+        documented guarantee had no way to bite. The number has to be the one Discord declared.
+        """
+        got = self.brought(Attachment("report.csv", 8))
+        self.assertEqual(1, len(got))
+        self.assertEqual(8, got[0]["bytes"])
+        self.assertEqual("report.csv", got[0]["name"])
+
+    def test_a_download_cut_off_part_way_is_dropped_and_never_reported(self):
+        """A save that returns is not a file of the right length. Left to rundesk this would land as
+        an ordinary file and be named to the brain as the whole of what somebody sent."""
+        got = self.brought(Attachment("report.csv", 4096, writes=b"only the first bit"))
+        self.assertEqual([], got, "half a file was reported as though it were the whole")
+        self.assertEqual([], self.staged(), "the half that arrived was left on disk")
+
+    def test_a_save_that_raises_leaves_nothing_behind(self):
+        """`files.landed` removes every staged file it is *told about*, taken or refused — and
+        `files.swept` never looks in here. A path this does not report is one nothing can ever
+        remove, so the debris would stand for the life of the install."""
+        got = self.brought(Attachment("report.csv", 8, raises=OSError("the socket went away")))
+        self.assertEqual([], got)
+        self.assertEqual([], self.staged())
+
+    def test_a_file_the_platform_says_is_too_big_costs_no_bandwidth(self):
+        """Refused on what Discord declared, before a byte is fetched."""
+        got = self.brought(Attachment("huge.bin", adapter.BROUGHT_BYTES + 1))
+        self.assertEqual([], got)
+        self.assertEqual([], self.staged())
+
+    def test_only_the_first_ten_are_brought_in(self):
+        got = self.brought(*[Attachment(f"{nth}.txt", 4) for nth in range(adapter.BROUGHT_MOST + 3)])
+        self.assertEqual(adapter.BROUGHT_MOST, len(got))
+
+    def test_with_nowhere_to_put_them_nothing_is_fetched_and_it_is_said(self):
+        os.environ.pop("RUNDESK_CHANNEL_HOME", None)
+        message = Message(8841, DMChannel(1180), self.asker, "here you go")
+        message.attachments = [Attachment("report.csv", 8)]
+        got: List[Any] = []
+
+        async def doing(reaching: Any) -> None:
+            got.append(await reaching._brought(message))
+
+        said = self.during(doing)
+        self.assertEqual([], got[0])
+        self.assertTrue([one for one in said if one.get("say") == "note"],
+                        "nothing was said about having nowhere to put what arrived")
 
 
 class WhereAMessageIsAnswered(Records):

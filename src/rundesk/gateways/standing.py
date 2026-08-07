@@ -222,7 +222,7 @@ def write_record(at: Path, name: str, version: str) -> None:
         "version": version,
         "started_at": when,
         "beat_at": when,
-        "since_boot": time.monotonic(),
+        "since_boot": _since_boot(),
     })
 
 
@@ -246,7 +246,7 @@ def write_beat(at: Path) -> None:
             "gateway named in the record is still the one holding the lock")
     kept = dict(said)
     kept["beat_at"] = _when()
-    kept["since_boot"] = time.monotonic()
+    kept["since_boot"] = _since_boot()
     files.write_json(at / RECORD, kept)
 
 
@@ -282,11 +282,32 @@ def _what_it_said_about_itself(at: Path) -> Standing:
     return Standing(ONLINE, programs.a_pid(said.get("pid")), _wedged(said.get("since_boot")), "")
 
 
+def _since_boot() -> float:
+    """A clock reading **one process can compare against another's**, which is the whole job here.
+
+    **Never `time.monotonic()`, and that was a real defect on the interpreter this project's floor
+    pins.** On macOS, Python 3.9's `time.monotonic()` counts from the start of *this process* —
+    3.9 reads 0.004 a moment after starting while 3.14 reads 1280225 on the same machine at the same
+    instant. `since_boot` is written by a gateway and read by something else, so on 3.9 the
+    subtraction was the *reader's* own age: anything that had been alive longer than `WEDGED_AFTER`
+    reported every gateway it looked at as wedged, however healthy. A `rundesk status` is short-lived
+    and got away with it; a gateway asking about another agent, or a test suite, did not.
+
+    `clock_gettime(CLOCK_MONOTONIC)` is the same system-wide reading on both — 1432188.22 against
+    1432188.24, measured. It is not on Windows, which this product does not run on: the job it is
+    written against is `launchd`.
+
+    Still monotonic, so the reasoning in `_wedged` holds unchanged — the wall clock moves in both
+    directions and an age taken from it can be negative or hours out.
+    """
+    return time.clock_gettime(time.CLOCK_MONOTONIC)
+
+
 def _wedged(said: Any) -> Optional[bool]:
     """Whether enough beats have been missed for this to be wedged rather than healthy.
 
-    **Measured from `since_boot`, which is a `time.monotonic()` reading, and never from the two
-    timestamps beside it.** Those are for a person to read. The wall clock moves in both directions —
+    **Measured from `since_boot`, which is a monotonic reading two processes can compare — see
+    `_since_boot` — and never from the two timestamps beside it.** Those are for a person to read. The wall clock moves in both directions —
     a laptop waking, an NTP correction — so an age taken from it can be negative or hours out, and a
     gateway beating every fifteen seconds would be reported wedged because somebody's clock was
     adjusted.
@@ -297,7 +318,7 @@ def _wedged(said: Any) -> Optional[bool]:
     """
     if isinstance(said, bool) or not isinstance(said, (int, float)):
         return None
-    return time.monotonic() - float(said) > WEDGED_AFTER
+    return _since_boot() - float(said) > WEDGED_AFTER
 
 
 def _when() -> str:

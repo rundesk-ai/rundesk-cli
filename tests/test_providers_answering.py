@@ -76,8 +76,14 @@ for line in sys.stdin:
     if record.get("do") == "stop":
         break
     if record.get("do") == "deliver":
-        print(json.dumps({"say": "delivered", "id": record.get("id"),
-                          "external_id": "8841"}), flush=True)
+        # A platform that will not take the words answers the delivery just as surely as one that
+        # does, and the two are told apart here and nowhere else.
+        if settings.get("refuse"):
+            print(json.dumps({"say": "failed", "id": record.get("id"),
+                              "why": settings["refuse"]}), flush=True)
+        else:
+            print(json.dumps({"say": "delivered", "id": record.get("id"),
+                              "external_id": "8841"}), flush=True)
 """
 
 
@@ -107,13 +113,14 @@ class Answering(support.Isolated):
             with contextlib.suppress(OSError):
                 programs.stop(pid, gently_for=0.2, firmly_for=2.0)
 
-    def a_channel(self, saying="", allowed=("2207",)):
+    def a_channel(self, saying="", allowed=("2207",), refuse=""):
         at = self.adapters / "discord"
         at.write_text(AN_ADAPTER, encoding="utf-8")
         at.chmod(0o755)
         channels_kept.added(self.agent, "discord", {
             "describes": "discord", "allowed": json.dumps(list(allowed)),
-            "settings": json.dumps({"saying": saying, "told": str(self.told)})})
+            "settings": json.dumps({"saying": saying, "told": str(self.told),
+                                    "refuse": refuse})})
 
     def a_message_arrived(self, text="what changed today?", **also):
         said = {"say": "arrived", "conversation": "1180", "user": "2207",
@@ -195,6 +202,43 @@ class AMessageOnAChannelIsAnswered(Answering):
         self.assertEqual(1, len([one for one in said if one in (answering.DONE,
                                                                 answering.STOPPED,
                                                                 answering.FAILED)]))
+
+    def test_an_answer_the_platform_refused_is_never_marked_done(self):
+        """**The mark says what a person can see, not what a brain managed.**
+
+        A turn can succeed and its answer still reach nobody: a bot invited before a permission was
+        asked for, a locked thread, a channel deleted mid-turn. The words were written to the pipe,
+        the adapter said the platform would not take them, and that refusal reached one `WARNING`
+        line and nothing else — so the mark was composed from the turn's own outcome and the
+        question wore ✅ with the answer existing nowhere a person could reach.
+
+        A brain that answered perfectly well is deliberately used here, so that what is being proved
+        is the delivery and not the turn.
+        """
+        self.a_channel(saying=self.a_message_arrived(), refuse="Forbidden")
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: self.delivered()),
+                        "nothing was ever delivered to the channel")
+        settled = (answering.DONE, answering.STOPPED, answering.FAILED)
+        self.assertTrue(self.waited_until(lambda: any(one in settled for one in self.marks())),
+                        "the turn never settled on a mark")
+        said = [one for one in self.marks() if one in settled]
+        self.assertEqual([answering.FAILED], said,
+                         "a refused delivery left the question marked as though it was answered")
+
+    def test_a_turn_whose_answer_landed_is_still_marked_done(self):
+        """The other half of the one above, and the reason it is a pair.
+
+        A guard that reads a refusal out of silence would mark every turn failed on any adapter that
+        acknowledges nothing — which the contract allows and calls a whole adapter. **Only an
+        explicit refusal is news**, so the ordinary path has to stay green with the guard in place.
+        """
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: answering.DONE in self.marks()),
+                        "a delivery the platform took did not leave the question done")
 
     def test_the_answer_quotes_the_message_that_asked(self):
         """R-DIS-28. The reply is how a surface tells the one message somebody was waiting for from

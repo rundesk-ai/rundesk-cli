@@ -35,7 +35,7 @@ import json
 import threading
 import time
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from rundesk import __version__
 from rundesk.agents import directory, records
@@ -64,6 +64,19 @@ AS_A_STATE = {kept.DONE: DONE, kept.STOPPED: STOPPED, kept.FAILED: FAILED}
 #: is a `-# ` prefix and a newline — and none of that is rundesk's to write. Generous rather than
 #: exact, because the cost of being a few characters over is a delivery the adapter refuses whole.
 AROUND_THE_COST = 8
+
+#: How long an answer waits to find out whether its platform took it, before the turn is settled.
+#:
+#: **This is what stands between a refused delivery and a ✅ on the question it answered.** The mark
+#: is composed from the turn's own outcome, and a turn whose answer nobody can see did not do what
+#: the mark would say it did — so the outcome has to know, and knowing costs one platform round trip
+#: on the one delivery a person is actually waiting for.
+#:
+#: Generous against a round trip and short against somebody watching a thread: an adapter that has
+#: not answered inside this is one whose delivery is treated as landed, because **an adapter is free
+#: to acknowledge nothing at all** and silence must never become a failure. What this bounds is how
+#: long a turn waits to hear bad news, never whether it settles.
+LANDS_WITHIN = 10.0
 
 #: The one word in `protocol.DID` whose *ending* is worth showing as well as its beginning, and the
 #: only one that carries a name. A subagent runs for minutes, so a reader who saw it start has been
@@ -206,9 +219,19 @@ class OnAChannel:
                         agent=agent, prompt=body, conversation=landed.conversation,
                         situation=instructions.USER_TO_AGENT,
                         source=arriving.FROM_CHANNEL, place=place), watching=watching.heard)
-                    self._delivered(agent, kind, place, got, external_id, watching.said_already)
-                    self._marked(agent, kind, place,
-                                 AS_A_STATE.get(got.turn_status, FAILED), external_id)
+                    refused = self._delivered(agent, kind, place, got, external_id,
+                                              watching.said_already)
+                    # **One producer of the mark, and this is still it.** Turning the adapter's
+                    # acknowledgement into a mark of its own was removed once and must stay removed
+                    # — two producers raced and the mark a person saw was whichever record arrived
+                    # last. What changed is that the outcome now includes whether the answer reached
+                    # anybody, which is a fact about this turn and not a second opinion about it.
+                    became = AS_A_STATE.get(got.turn_status, FAILED)
+                    if refused:
+                        _note(self._where, f"channel {kind}: the answer to {place} was not "
+                                           f"delivered — {refused}", logs.ERROR)
+                        became = FAILED
+                    self._marked(agent, kind, place, became, external_id)
                     return
                 except turns.Busy:
                     if turns.also_say(agent, landed.conversation, body):
@@ -236,8 +259,14 @@ class OnAChannel:
                 self._marked(agent, kind, place, FAILED, external_id)
 
     def _delivered(self, agent: str, kind: str, place: str, got: turns.Outcome,
-                   external_id: Optional[str] = None, said_already: bool = False) -> None:
+                   external_id: Optional[str] = None, said_already: bool = False) -> str:
         """The answer, cut to what this platform takes, with whatever the brain made beside it.
+
+        **Hands back why the platform would not take it, or `""`.** A turn whose answer was refused
+        is not a turn somebody can read the answer to, and the mark that says what became of it is
+        composed one line later — so this waits `LANDS_WITHIN` for the adapter to answer, and says
+        what it heard. `""` covers both *it landed* and *nobody said*, which is deliberate: an
+        adapter may acknowledge nothing, and only an explicit refusal is news.
 
         **A turn that worked is never explained.** `protocol.has_answer` counts a file as an answer
         on purpose — something delivered is an answer even when nothing was typed about it — so a
@@ -266,8 +295,14 @@ class OnAChannel:
         said = whole.strip() or ("" if excused else self._instead(got))
         carrying = delivery.carried(agent, [str(one.get("at")) for one in got.files
                                             if one.get("at")])
+        # **What could not be sent is said, never dropped.** `delivery.carried` computes a sentence
+        # for every file it turns away — outside the agent's roots, too big, past the ten — and until
+        # this read it, the whole of what happened to one was that it did not arrive. A person
+        # expecting a file and told nothing cannot tell that from an agent that made none.
+        for why in carrying.refused:
+            _note(self._where, f"channel {kind}: {why}", logs.WARNING)
         if not said and not carrying.files:
-            return
+            return ""
         cost = self._cost(got)
         # **Room for the cost line is taken out of the limit before the words are cut, not after.**
         # The line goes above the answer on the piece that carries it, so a split done against the
@@ -277,8 +312,16 @@ class OnAChannel:
         # only the first: it costs a few characters on the later ones and cannot be wrong.
         room = self._at_most(agent, kind) - (len(cost) + AROUND_THE_COST if cost else 0)
         pieces = delivery.split(said, at_most=max(1, room))
-        hosting.told(agent, self._where, self._hosted(), kind, place, pieces,
-                     sending=carrying.files, answering=external_id, cost=cost)
+        turned_away: List[str] = []
+        wrote = hosting.told(agent, self._where, self._hosted(), kind, place, pieces,
+                             sending=carrying.files, answering=external_id, cost=cost,
+                             landed_within=LANDS_WITHIN, refusals=turned_away)
+        if not wrote:
+            # Nothing was hosting this channel by the time the answer was ready. The words exist in
+            # the agent's own records either way; what does not exist is anywhere a person can read
+            # them, which is the same news as a refusal and is said as one.
+            return "there was no channel to answer through"
+        return turned_away[0] if turned_away else ""
 
     def _cost(self, got: turns.Outcome) -> str:
         """What the turn cost, as one line — or nothing at all when nobody said.

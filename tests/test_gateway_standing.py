@@ -21,9 +21,11 @@ import fcntl
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 import unittest
+from pathlib import Path
 
 import support
 from rundesk.gateways import standing
@@ -263,7 +265,7 @@ class WhetherAGatewayIsWedged(WithAnAgentDirectory):
         # the state a person most needs told — and the one a plain up/down answer cannot express.
         with standing.holding(self.agent):
             standing.write_record(self.agent, "one", "9.9.9")
-            self.record_says(since_boot=time.monotonic() - standing.WEDGED_AFTER - 1)
+            self.record_says(since_boot=standing._since_boot() - standing.WEDGED_AFTER - 1)
             how = standing.standing(self.agent)
         self.assertEqual(standing.ONLINE, how.how, "a wedged gateway is still a running one")
         self.assertTrue(how.stale)
@@ -272,7 +274,7 @@ class WhetherAGatewayIsWedged(WithAnAgentDirectory):
         # A slow disk or a loaded machine is not a gateway that has stopped working.
         with standing.holding(self.agent):
             standing.write_record(self.agent, "one", "9.9.9")
-            self.record_says(since_boot=time.monotonic() - standing.BEAT_SECONDS - 1)
+            self.record_says(since_boot=standing._since_boot() - standing.BEAT_SECONDS - 1)
             self.assertFalse(standing.standing(self.agent).stale)
 
     def test_a_clock_that_moved_does_not_make_a_working_gateway_look_wedged(self):
@@ -285,7 +287,7 @@ class WhetherAGatewayIsWedged(WithAnAgentDirectory):
                 with standing.holding(self.agent):
                     standing.write_record(self.agent, "one", "9.9.9")
                     self.record_says(started_at=when, beat_at=when,
-                                     since_boot=time.monotonic())
+                                     since_boot=standing._since_boot())
                     self.assertFalse(standing.standing(self.agent).stale,
                                      "staleness was read off a wall clock")
 
@@ -382,7 +384,7 @@ class WhatAGatewayWritesDownAboutItself(WithAnAgentDirectory):
     def test_a_beat_makes_a_wedged_gateway_healthy_again(self):
         with standing.holding(self.agent):
             standing.write_record(self.agent, "one", "9.9.9")
-            self.record_says(since_boot=time.monotonic() - standing.WEDGED_AFTER - 1)
+            self.record_says(since_boot=standing._since_boot() - standing.WEDGED_AFTER - 1)
             self.assertTrue(standing.standing(self.agent).stale)
 
             standing.write_beat(self.agent)
@@ -466,6 +468,53 @@ class WhereAGatewaysOwnAccountStands(WithAnAgentDirectory):
         # Given rather than derived, like everything else here: nothing in this layer reads where
         # the agents are, so a gateway can be stood up in a scratch directory.
         self.assertEqual(self.agent / "logs", standing.logs_at(self.agent))
+
+
+class TheClockTwoProcessesCompare(support.Isolated):
+    """`since_boot` is written by a gateway and read by something else, so the reading has to mean
+    the same thing in both. It did not, and the symptom was a healthy gateway reported wedged."""
+
+    def a_reading_from(self, interpreter):
+        """What another process, on another interpreter, reads from the same clock."""
+        got = subprocess.run(
+            [interpreter, "-c",
+             "import sys; sys.path.insert(0, %r);"
+             "from rundesk.gateways import standing; print(standing._since_boot())"
+             % str(support.CHECKOUT / "src")],
+            capture_output=True, text=True, timeout=30)
+        return float(got.stdout.strip()) if got.returncode == 0 else None
+
+    def keeps_rising_across(self, interpreter):
+        """A process started *after* this one must read a **higher** number than it.
+
+        This is the property, and comparing the two for nearness is not: a per-process clock makes
+        both small, so a reading of 0.004 against 0.6 looks close and passes. What it cannot do is
+        keep rising — a child that starts fresh reads *below* a parent that has been alive a while,
+        and that is the thing to assert.
+        """
+        mine = standing._since_boot()
+        theirs = self.a_reading_from(interpreter)
+        self.assertIsNotNone(theirs, f"{interpreter} could not be asked")
+        self.assertGreaterEqual(
+            theirs, mine,
+            f"{interpreter} started after this process and read a lower number, so the clock "
+            "counts from the start of each process — a gateway's reading means nothing to whoever "
+            "reads it, and anything alive longer than WEDGED_AFTER calls every gateway wedged")
+
+    def test_it_keeps_rising_into_another_process(self):
+        self.keeps_rising_across(sys.executable)
+
+    @unittest.skipUnless(Path("/usr/bin/python3").exists(), "no system interpreter to compare with")
+    def test_and_into_the_oldest_interpreter_this_supports(self):
+        """The one that made this a defect: on macOS, 3.9's `time.monotonic()` counts from the start
+        of the calling process."""
+        self.keeps_rising_across("/usr/bin/python3")
+
+    def test_a_gateway_that_has_just_written_its_record_is_not_stale(self):
+        at = self.home / "one"
+        at.mkdir(parents=True)
+        standing.write_record(at, "ava", "0.0.0")
+        self.assertFalse(standing.standing(at).stale)
 
 
 if __name__ == "__main__":

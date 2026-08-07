@@ -324,6 +324,27 @@ class Running(NamedTuple):
     #: `.get`, which is indivisible.
     posted: Dict[str, str]
 
+    #: Why the platform would not take a delivery, by rundesk's own id for it. Written by the drain
+    #: as each `failed` arrives, and read by whoever is about to say what became of the turn behind
+    #: it.
+    #:
+    #: **A delivery the platform refused is not a turn that worked**, and until this existed nothing
+    #: downstream could tell: the words were written to the pipe, `told` answered that they had been,
+    #: and the mark went up off the turn's own outcome a moment later. Measured on a bot invited
+    #: before `ATTACH_FILES` was asked for — the question wore a ✅ and the answer existed nowhere a
+    #: person could reach.
+    #:
+    #: **Three answers and not two, which is the whole reason this is a dict rather than a flag on
+    #: `awaiting`.** A delivery is acknowledged, refused, or never spoken of again, and only the
+    #: middle one is a failure. An adapter that acknowledges nothing is a whole adapter by the
+    #: contract, so silence must go on reading as *landed* — see `_landed`, which times out into
+    #: exactly that.
+    #:
+    #: Written by the drain thread alone, like `posted`, and bounded by the same `_make_room` for the
+    #: same reason. Entries are taken out by whoever reads them, because a refusal answers one
+    #: question once.
+    refused: Dict[str, str]
+
     #: Held while one record is written to this adapter, because **two threads write to it**: the
     #: gateway's loop delivers and stops, and the thread draining its stdout marks what has just
     #: arrived. A line half written by one and finished by the other is a line the adapter cannot
@@ -598,7 +619,8 @@ def connected(watching: Watching, kind: str) -> bool:
 def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
          pieces: List[str], sending: Sequence[naming.Sending] = (),
          answering: Optional[str] = None, cost: str = "",
-         landed_within: float = 0.0, noting: Optional[List[str]] = None) -> bool:
+         landed_within: float = 0.0, noting: Optional[List[str]] = None,
+         refusals: Optional[List[str]] = None) -> bool:
     """Send something to a place through a running adapter. `False` when there is nothing to send it.
 
     `False` rather than an exception: a notice that could not be delivered because the adapter is
@@ -635,6 +657,17 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
     has to find out what the platform then called them — see `announced`. A list handed in rather
     than a second return value, because every other caller wants the answer this already gives:
     whether the words were written at all.
+
+    `refusals` is the same idiom for the opposite news: a list this appends the platform's reason to
+    for every one of these deliveries it would not take. **Only meaningful beside `landed_within`**,
+    because a refusal arrives a round trip after the writing and a caller that did not wait has not
+    given it time to. Handed in for the same reason as `noting` — what this returns is whether the
+    words were *written*, and that is what almost every caller is asking.
+
+    **Nothing appended is not the same as landed**, and the caller that acts on this must not read it
+    that way: an adapter is free to acknowledge nothing at all, so silence and success arrive here
+    identically. What an empty list means is *nobody said this was refused*, which is the honest
+    reading and the one `_delivered` in `providers.answering` acts on.
     """
     one = watching.running.get(kind)
     if one is None or one.talking is None:
@@ -664,6 +697,11 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
             noting.append(record["id"])
     if landed_within > 0:
         _landed(one, written, landed_within)
+        if refusals is not None:
+            # Taken out as they are read: a refusal answers one question once, and leaving it behind
+            # would have it answer the next delivery that happened to reuse the moment in its id.
+            refusals.extend(why for why in (one.refused.pop(each, None) for each in written)
+                            if why)
     return True
 
 
@@ -714,7 +752,11 @@ def announced(agent: str, where: Path, watching: Watching, kind: str, place: str
 
 
 def _landed(one: Running, written: List[str], within: float) -> bool:
-    """Wait for an adapter to say these deliveries reached its platform. `False` when it did not.
+    """Wait for an adapter to **say something** about these deliveries. `False` when it never did.
+
+    Not *whether they landed*, which is the reading the name invites and the one that would be
+    wrong: an adapter answers a delivery either way, and both answers empty `awaiting`. What
+    became of them is `one.refused` — see `told`, which reads it the moment this returns.
 
     **The drain thread is what answers this**, by taking each id out of `awaiting` as the adapter
     acknowledges it — so this only has to watch, and watching is all it does: nothing here writes,
@@ -732,11 +774,15 @@ def _landed(one: Running, written: List[str], within: float) -> bool:
     return not any(one.awaiting.get(each) is not None for each in written)
 
 
-def _make_room(awaiting: Dict[str, str]) -> None:
+def _make_room(held: Dict[str, str]) -> None:
     """Keep what is held bounded. **A gateway runs for weeks**, and an adapter that never
-    acknowledges a delivery would otherwise leave one entry behind for every one it was sent."""
-    while len(awaiting) > IN_FLIGHT_KEPT:
-        awaiting.pop(next(iter(awaiting)), None)
+    acknowledges a delivery would otherwise leave one entry behind for every one it was sent.
+
+    Named for what it is given rather than for one of its callers: `awaiting`, `posted` and
+    `refused` are all bounded here, to the same count and against the same condition.
+    """
+    while len(held) > IN_FLIGHT_KEPT:
+        held.pop(next(iter(held)), None)
 
 
 def _said_once(where: Path, watching: Watching, kind: str, said: str) -> None:
@@ -772,7 +818,7 @@ def _reckoned(agent: str, where: Path, kind: str, watching: Watching) -> None:
         said = _read_record(agent, kind)
         watching.running[kind] = Running(
             kind=kind, pid=programs.a_pid(said.get("pid")) or 0, talking=None, listening=None,
-            since=time.monotonic(), mine=False, awaiting={}, posted={})
+            since=time.monotonic(), mine=False, awaiting={}, posted={}, refused={})
         # What happens to it is said by the line after this one and never promised by this one:
         # ending it needs a pid the claim has vouched for, and the case where there is not one is
         # exactly the case somebody has to be told about honestly. See `_may_be_signalled`.
@@ -844,7 +890,7 @@ def _started(agent: str, where: Path, kind: str, watching: Watching,
                   talking=talking,
                   listening=None, connected=threading.Event(),
                   since=time.monotonic(), mine=True, saying=threading.Lock(), awaiting={},
-                  posted={})
+                  posted={}, refused={})
     listening = threading.Thread(target=_listened, name=f"channel-{kind}",
                                  args=(agent, where, one, row), daemon=True)
     listening.start()
@@ -935,8 +981,7 @@ def _heard(agent: str, where: Path, one: Running, line: str, allowed: set) -> No
     elif saying == "delivered":
         _delivered(where, one, record)
     elif saying == "failed":
-        _note(where, f"channel {kind}: could not deliver — {record.get('why')}", logs.WARNING)
-        one.awaiting.pop(str(record.get("id") or ""), None)
+        _refused(where, kind, one, record)
     elif saying in ("control", "query", "configure"):
         _gestured(agent, where, one, record, allowed, saying)
 
@@ -1028,6 +1073,32 @@ def _delivered(where: Path, one: Running, record: Dict[str, Any]) -> None:
         # is what `told` watches when something is waiting for the words to land.
         return
     _note(where, f"channel {one.kind}: the answer to {answered} reached the platform")
+
+
+def _refused(where: Path, kind: str, one: Running, record: Dict[str, Any]) -> None:
+    """The platform would not take a delivery. **Written down, not only logged.**
+
+    This wrote one `WARNING` and dropped the id. That was the whole of it, and it meant a refusal
+    reached nothing that could act on one: the words were gone, and the mark that went up a moment
+    later was composed from the turn's own outcome, which knew only that a brain had answered. A
+    person saw ✅ on their question and never saw an answer.
+
+    So the reason is kept against the delivery's id, for `told` to collect on behalf of whoever is
+    about to settle that turn. **Kept whether or not this delivery answered anybody** — a notice
+    the platform refused is worth the same sentence, and which deliveries matter is not this
+    moment's to decide.
+
+    Recorded **before** the id leaves `awaiting`, because that removal is what releases a caller
+    waiting in `_landed`: the other order lets it wake, find nothing refused, and report a delivery
+    that had already been refused as one nobody said anything about.
+    """
+    why = str(record.get("why") or "no reason given")
+    given = str(record.get("id") or "")
+    _note(where, f"channel {kind}: could not deliver — {why}", logs.WARNING)
+    if given:
+        one.refused[given] = why
+        _make_room(one.refused)
+    one.awaiting.pop(given, None)
 
 
 def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allowed: set) -> None:
