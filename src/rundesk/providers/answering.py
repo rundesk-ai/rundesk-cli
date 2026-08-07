@@ -524,7 +524,16 @@ class Gestures:
         """
         wanted = provider.strip()
         if not wanted:
-            return "Say which brain — for example **/provider codex**."
+            # **Named off what this install actually has**, never a brand written down here. Two
+            # reasons and both matter: nothing under `providers/` may know a vendor's name — the
+            # seam is what makes a brain replaceable, and a module that named one would be the
+            # first place to stop being true — and an example naming a brain this machine cannot
+            # run is advice that fails the moment somebody takes it.
+            here = adapters.known()
+            naming = " — one of " + ", ".join(f"**{one}**" for one in here) if here else ""
+            # The command is named in both branches. An install with no adapter still has to be
+            # told what to type, and a refusal that leaves it out is one somebody cannot act on.
+            return f"Say which brain: **/provider <name>**{naming}."
         allowed = self._only_one(agent, kind)
         if allowed is None or allowed != who:
             return ("Changing the brain is an agent-wide decision, so it can only be done on a "
