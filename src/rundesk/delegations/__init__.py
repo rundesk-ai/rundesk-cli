@@ -30,4 +30,5 @@ The gateway imports this and hands it what it needs, the way it already does for
 | Module | Answers |
 |---|---|
 | `kept` | the delegations one agent has made, and the only way in to them |
+| `admitting` | whether one agent may hand this work to another, and writing it down when it may |
 """

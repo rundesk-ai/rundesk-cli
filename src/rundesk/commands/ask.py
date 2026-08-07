@@ -24,7 +24,10 @@ from typing import Any, Dict, Iterator, Optional
 from rundesk.agents import directory, records
 from rundesk.channels import arriving
 from rundesk.commands import Subcommands, failed
+from rundesk.delegations import admitting
+from rundesk.delegations import kept as delegations
 from rundesk.exits import OK
+from rundesk.gateways import standing
 from rundesk.providers import instructions, kept, protocol, turns
 from rundesk.utils import terminal
 
@@ -67,6 +70,15 @@ def cmd_ask(args: argparse.Namespace) -> int:
     if not said:
         return _failed("there was nothing to ask")
 
+    asking = admitting.whoever_is_asking()
+    if asking.is_a_turn and asking.agent != agent:
+        # **One agent asking another is a delegation, whichever verb was typed**, and this is the
+        # front door rather than a second command. Left alone, an agent could run a whole turn on
+        # somebody else's agent from inside its own: no record, no guards, and nobody owed a review.
+        # The previous build found that out by shipping it — every rule the feature is made of was
+        # one command away from being bypassed.
+        return _handed_over(asking, agent, said)
+
     try:
         landed = arriving.asked_at_a_terminal(agent, said)
         request = turns.Request(
@@ -84,6 +96,46 @@ def cmd_ask(args: argparse.Namespace) -> int:
             kept.Refused, OSError) as why:
         return _failed(str(why))
     return _said(agent, got, args.quiet)
+
+
+def _handed_over(asking: admitting.Asking, to_agent: str, task: str) -> int:
+    """One agent hands work to another, and this turn carries on without it.
+
+    **Nothing waits.** The answer reaches the asking agent in a later turn, which is the whole shape
+    of delegating: a verb that blocked would be a verb that spends one brain's time watching
+    another's, and a turn that timed out would take the work with it.
+
+    Two writes, in this order and no other. The row lands in the **asking** agent's own store first,
+    because that is the record of being owed an answer; the brief is then delivered into the
+    answering agent's, which is the one write a gateway makes to a store that is not its own. Done
+    the other way round, an interruption between them leaves work nobody is owed anything for —
+    which is a turn that runs, answers, and is never collected.
+    """
+    # Collapsed here, where all three of `standing`'s answers are visible. Only a gateway that is
+    # definitely down refuses; one nobody can ask about is admitted.
+    how = standing.standing(directory.where(to_agent)).how
+    trouble = admitting.refusal(asking, to_agent, task,
+                                nothing_would_answer=how == standing.OFFLINE)
+    if trouble:
+        return _failed(trouble)
+
+    delegation_id = admitting.a_name(asking.run or 0)
+    try:
+        # Where the answer goes: the conversation the *delegating turn* is in, read off the turn
+        # rather than guessed at. An agent delegating from a channel is answering somebody there,
+        # and a review that arrived in its terminal conversation instead would reach nobody.
+        was = kept.get_turn(asking.agent or "", asking.run or 0)
+        admitting.admitted(asking, delegation_id, to_agent, int(was["conversation_id"]))
+        arriving.recorded_for_a_delegation(to_agent, asking.agent or "", asking.run or 0, task)
+    except (admitting.Refused, delegations.Refused, directory.Refused, kept.Refused,
+            records.NotThere, records.Unreadable, OSError) as why:
+        return _failed(str(why), "nothing was handed over")
+
+    print(f"handed to {to_agent}  ·  {delegation_id}")
+    print(terminal.dim("  no answer comes back in this turn — you are woken to review one later"))
+    print(terminal.dim(f"  guide, end or carry it on:  rundesk asked {asking.agent} "
+                       f"say|stop|resume {delegation_id}"))
+    return OK
 
 
 def _said(agent: str, got: turns.Outcome, quiet: bool) -> int:

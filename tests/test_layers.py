@@ -90,8 +90,8 @@ MAY_IMPORT = {
     # reach here, so an agent is still something that can be made, carried and removed by code that
     # has never heard of a skill, and presenting a new agent's skills is done in `commands`.
     "skills": ("agents", "core", "utils"),
-    "commands": ("skills", "providers", "channels", "schedules", "gateways", "lifecycle",
-                 "agents", "core", "utils"),
+    "commands": ("skills", "providers", "channels", "schedules", "delegations", "gateways",
+                 "lifecycle", "agents", "core", "utils"),
 }
 
 #: Below the layers rather than in them: the version this is, and what a command may exit with.

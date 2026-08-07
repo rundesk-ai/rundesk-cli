@@ -100,6 +100,14 @@ MODEL = "RUNDESK_MODEL"
 #: The handle this conversation got to last time on this brain, or unset for a new one.
 RESUME = "RUNDESK_RESUME"
 
+#: Which delegation this turn is answering, or unset when it is answering nobody. **Set only on a
+#: turn another agent asked for**, and it is what makes depth one enforceable: a `rundesk ask` run
+#: from inside one reads this and refuses, so work handed over cannot be handed on again.
+#:
+#: A correctness guard and not a security boundary — a brain determined to get around it can clear a
+#: variable, and an agent already has the owner's shell. What it prevents is an honest mistake.
+ANSWERING = "RUNDESK_DELEGATION"
+
 #: Whatever the owner set, as one JSON object, with no keys rundesk defines. Written sorted, so the
 #: same settings are the same bytes every turn and one turn can be compared with another.
 SETTINGS = "RUNDESK_SETTINGS"
@@ -135,7 +143,8 @@ LIVES_BY = {
 def for_turn(*, agent: str, home: Path, provider_home: Path, skills: Path, turn: int,
              access_mode: str, raw: Optional[Path] = None, model: Optional[str] = None,
              resume: Optional[str] = None, settings: Optional[str] = None,
-             preface: str = "", owners: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+             preface: str = "", owners: Optional[Mapping[str, str]] = None,
+             answering: Optional[str] = None) -> Dict[str, str]:
     """Everything an adapter is told about this turn.
 
     Keyword-only throughout, and deliberately: this has thirteen things to say and a caller that got
@@ -160,10 +169,12 @@ def for_turn(*, agent: str, home: Path, provider_home: Path, skills: Path, turn:
         ACCESS_MODE: access_mode,
         CONTINUITY: ",".join(f"{name}={verb}" for name, verb in sorted(LIVES_BY.items())),
     })
-    # **Absent rather than empty**, each of them. See the module docstring.
+    # **Absent rather than empty**, each of them. See the module docstring — and for `ANSWERING` it
+    # is the whole mechanism rather than a tidiness: a turn nobody delegated must not carry the
+    # variable at all, because what reads it treats *present* as "this work was handed to you".
     for name, value in ((MODEL, model), (RESUME, resume), (SETTINGS, settings),
                         (RAW, str(raw) if raw is not None else None),
-                        (PREFACE, preface.strip() or None)):
+                        (ANSWERING, answering), (PREFACE, preface.strip() or None)):
         if value:
             said[name] = value
     said["PATH"] = _reachable(said.get("PATH", ""))
