@@ -26,6 +26,8 @@ Run directly: `python3 tests/test_providers_answering.py`
 
 import contextlib
 import json
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -53,6 +55,26 @@ PATIENCE = 30.0
 #: Twenty times what the positive cases beside it take, which is the margin that matters: they are
 #: the measure of how long a turn takes to start when it is going to, and they settle in tenths.
 NOT_GOING_TO_HAPPEN = 2.0
+
+#: How long a case waits for a turn it started to be over before saying so out loud.
+#:
+#: **A turn is a thread, and where things are is one variable for the whole process.** Every location
+#: this product reads is derived from `RUNDESK_HOME` on every call and cached nowhere, so a turn still
+#: running after its case has ended does not go on writing into that case's root — it writes into
+#: whatever root is current by then. That is the next case's scratch directory, or, in the moment
+#: between one case putting the variable back and the next one setting it, **the owner's live
+#: install**.
+#:
+#: Both have happened. `~/.rundesk/data/agents/cole/conversations/1/stderr.log` was written on a
+#: developer's machine by this suite, through `providers.adapters.talking_to`, which makes the
+#: directory a turn's error log stands in. And on CI the same `conversations/` directory appeared
+#: under the *next* case's `data/agents/cole` between `directory.taken` saying the name was free and
+#: the rename that lands the agent — so a staged agent was renamed onto a directory that was no
+#: longer empty, and the case failed in `setUp` with `ENOTEMPTY` having never run.
+#:
+#: Generous, because it is never reached: a case that ends its own turn is through in hundredths, and
+#: the longest any case here deliberately leaves running is a few seconds.
+A_TURN_TO_END = 15.0
 
 #: A channel adapter that announces one message on its way up and writes down everything rundesk
 #: says back to it. **Everything, whole and unread** — half of what this file proves is what goes
@@ -102,16 +124,50 @@ class Answering(support.Isolated):
         self.told = self.home / "told.txt"
         self.watching = []
         self.pids = []
+        # Read after the root is set and before the case can start anything, so what is running now
+        # belongs to whoever started it and only what appears after this is this case's to end.
+        self.already_running = set(threading.enumerate())
         self.addCleanup(self.stop_everything)
 
     def stop_everything(self):
-        """End what this case started, by pid, however the case ended."""
+        """End what this case started — by pid and by thread — however the case ended.
+
+        Registered last, so it runs first: cleanups unwind in reverse, and every one after this puts
+        the scratch root back or takes it away. Nothing of this case's may still be running by then.
+        """
         for watching in self.watching:
             with contextlib.suppress(Exception):
                 hosting.stopping(self.agent, self.where, watching, 4.0)
         for pid in self.pids:
             with contextlib.suppress(OSError):
                 programs.stop(pid, gently_for=0.2, firmly_for=2.0)
+        self.assert_nothing_this_case_started_outlives_it()
+
+    def still_running(self):
+        """Every thread this case started that has not finished."""
+        return [one for one in threading.enumerate()
+                if one not in self.already_running and one.is_alive()]
+
+    def assert_nothing_this_case_started_outlives_it(self):
+        """Wait for this case's own threads, and fail rather than let one reach the next root.
+
+        **A turn returns before it has finished, on purpose** — that is what `OnAChannel.answer`
+        guarantees and what one case here proves — so a case that asserts on the first thing a turn
+        writes is over while the turn is still going. The thread is a daemon and nothing joins it.
+        `A_TURN_TO_END` says what that costs: the next case's root, or the owner's own install.
+        Stopping the adapters above is not enough, because a turn outlives the channel it came in on.
+
+        **Failed rather than waited out quietly.** A thread that is still running here has already
+        been given every reason to stop; letting the case pass would hand the next one a root that
+        something else is writing into, and that failure lands on the wrong case with nothing in it
+        pointing here.
+        """
+        ceiling = time.monotonic() + A_TURN_TO_END
+        for one in self.still_running():
+            one.join(max(0.0, ceiling - time.monotonic()))
+        left = sorted(one.name for one in self.still_running())
+        self.assertEqual([], left, "this case left something running, and every location rundesk "
+                                   "reads is about to point somewhere else")
 
     def a_channel(self, saying="", allowed=("2207",), refuse=""):
         at = self.adapters / "discord"
