@@ -39,11 +39,12 @@ the owner's live install.
 """
 
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any, List
 
 from rundesk.agents import pages
-from rundesk.agents.records import beside, stated
+from rundesk.agents.records import NotThere, Unreadable, beside, reading, stated
 from rundesk.core import paths
 from rundesk.utils import files, locking
 
@@ -332,6 +333,42 @@ def taken(name: str) -> str:
     if at.exists() or at.is_symlink():
         return f"{at} is already there and is not an agent, so rundesk will not write over it"
     return ""
+
+
+def a_team_for(name: str) -> str:
+    """Every *other* agent on this install and what it is for, as lines a preface can carry.
+
+    **Excluding the one asking**, which is not tidiness: an agent shown its own name in a list of
+    colleagues would try to hand work to itself, and the refusal for that arrives a whole turn later
+    — after the brain has spent tokens deciding to do it.
+
+    An agent nobody has described is left out rather than listed blank. The description is the whole
+    of what a reader has to go on, so a bare name in a list of specialists is an invitation to guess,
+    and a guess is what `describes` exists to prevent. It is not silent about it: `rundesk agents`
+    shows every agent, described or not.
+
+    Answers `""` where there is nobody, and the caller composes no heading at all — an empty listing
+    under a heading reads as a team of nobody rather than as no team.
+
+    Reads each agent's records rather than one shared file, because there is no shared one; anything
+    unreadable is skipped, since a colleague whose store is broken is a colleague this agent cannot
+    hand work to anyway, and a preface is not where that gets reported.
+    """
+    lines = []
+    for one in known():
+        if one == name:
+            continue
+        try:
+            # `records` is this module's own function for where a store stands, so the reader is
+            # imported by name rather than reached through it.
+            with reading(records(one)) as conn:
+                said = conn.execute("SELECT describes FROM config").fetchone()
+        except (NotThere, Unreadable, sqlite3.DatabaseError, OSError):
+            continue
+        describes = (said["describes"] if said and said["describes"] else "").strip()
+        if describes:
+            lines.append(f"- **{one}** — {describes}")
+    return "\n".join(lines)
 
 
 def made(name: str, provider: str, describes: str = "") -> Path:

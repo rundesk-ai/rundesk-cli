@@ -407,7 +407,13 @@ def _held(request: Request, held: int, watching, saying,
     resume = None if request.fresh else kept.get_session(agent, request.conversation, provider_name)
 
     prompt = instructions.build(trigger=request.trigger, variables=_about(request, provider_name),
-                                additions=request.additions)
+                                additions=request.additions,
+                                # Who this agent may hand work to, read now rather than kept: an
+                                # agent added this morning is one it can delegate to this afternoon,
+                                # and a list cached anywhere would be a list that goes stale
+                                # silently. `build` withholds it from a turn already answering a
+                                # delegation, which is where depth one is enforced.
+                                team=directory.a_team_for(agent))
     # **From admitted to settled** (R-DIS-24) — what somebody waiting actually experienced, which
     # starts here and not when the brain was reached: resolving a provider and building the prompt
     # are part of the wait. Monotonic, so a clock correction mid-turn cannot make it negative.

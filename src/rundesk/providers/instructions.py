@@ -230,10 +230,10 @@ YOUR_TEAM = """## Agents on your team you may hand work to
 
 {team}
 
-- `rundesk ask <agent>`, task on standard input. They answer as themselves and it does not hold up this turn.
-- The answer reaches you in a later turn, and you review it. Nothing they wrote reaches anybody until you have.
-- While one is working you can guide it, end it, or carry a finished one on: `rundesk asked <agent> say|stop|resume <id>`, words on standard input.
-- Hand over work that is genuinely somebody else's to do. Anything you can finish here, finish here."""
+- `rundesk ask <agent> "<the task>"`. They answer as themselves, and it does not hold up this turn.
+- The answer reaches you in a later turn and you review it. Nothing they wrote reaches anybody until you have.
+- Say what you want done and how far they may go. They cannot see this conversation and will not ask — anything you leave out, they decide.
+- Hand over what is genuinely somebody else's to do. Anything you can finish here, finish here."""
 
 
 def build(*, trigger: str = A_PERSON_ASKED, variables: Optional[Mapping[str, object]] = None,
