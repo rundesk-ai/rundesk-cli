@@ -164,7 +164,9 @@ USER_TO_AGENT = """## Who is asking
 
 A person asked you, and they are waiting for a response.
 
-Referred to work you have no record of? Read it before you answer. `rundesk messages {agent_name} --conversation {conversation_id}` for this exchange, `rundesk messages {agent_name} --search <words>` to find it anywhere, `rundesk messages {agent_name} --source schedule` for work the clock started."""
+Referred to work you have no record of? Read it before you answer. `rundesk messages {agent_name} --conversation {conversation_id}` for this exchange, `rundesk messages {agent_name} --search <words>` to find it anywhere, `rundesk messages {agent_name} --source schedule` for work the clock started.
+
+Made them a file? Link it by its absolute path — `[the chart](/absolute/path/chart.png)` — and it is sent with your answer. Only what you made for them, never a file you happened to read or edit. The path itself is taken out of what they see, so write the link where you would have written the name."""
 
 #: The clock started this and **nobody is present**. What this withholds is every rule that assumes
 #: somebody is waiting: there is nothing to ask, nothing to clarify, and no later turn to report in.

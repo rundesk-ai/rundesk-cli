@@ -288,6 +288,41 @@ for goes to stderr; see [the rules](#the-rules-that-will-bite).
 | `text` | required unless `attachments` | what was said. Clipped at 64 KiB rather than refused |
 | `attachments` | required unless `text` | what they attached, already fetched onto this machine — see below |
 | `external_id` | optional | the platform's own id for this message. **Without it there is no redelivery guard and no `seen` mark** |
+| `display` | optional | what the platform calls the person speaking. Reaches the brain, so an agent in a room can address somebody by name |
+| `where` | optional | **one ordinary sentence** saying where this was said — `a direct message`, `the ops room in Acme`. Rundesk never parses it and never names a room itself; what a place is called is the one thing only you know |
+| `reply_to` | optional | the earlier message this one answers — see below. Left out entirely when it answers nothing |
+
+**`reply_to` is an object, and it is not the `reply_to` on a `deliver`.** One word, two records,
+two shapes, and they travel in opposite directions: outbound it is a bare id saying *this delivery is
+the answer*, and inbound it is what somebody was replying to when they wrote. Named the same because
+that is the word both the platform and the person use.
+
+```json
+{"reply_to": {"id": "8800", "resolved": true, "author": "Dana", "text": "shall I deploy?"}}
+{"reply_to": {"id": "8800", "resolved": false}}
+```
+
+| | | |
+|---|---|---|
+| `id` | required | the platform's id for the message being answered |
+| `resolved` | required | whether you actually have that message. **Anything but `true` is read as no** |
+| `author` | on a resolved one | who wrote it |
+| `text` | on a resolved one | what it said |
+
+**Send `resolved: false` rather than nothing when you cannot read the parent.** A reply whose parent
+is unavailable is still a reply, and a brain told *they answered an earlier message that could not be
+read* can say so; one told nothing is handed "yes, that one" with no idea what *that one* was.
+
+**Do not go and fetch it.** This is the inbound path, in front of every message, and a fetch is a
+round trip. Use what the platform already handed you — the shipped adapter reads Discord's `resolved`
+and then its cached message, and asks for nothing.
+
+**Anything beside `resolved: false` is discarded**, author and text both. A parent you could not read
+is one you cannot describe, and a guess reaches a brain as though it were what somebody wrote.
+
+**Rundesk bounds both before they reach a prompt** — the name flattened to one line and clipped, the
+quote clipped with a marker saying so. Narrow them anyway: this is a stranger's text and the bound
+that protects a prompt is the one that runs on rundesk's side.
 
 **A message that is only a file is still a message.** Neither text nor attachments is nothing, and
 nothing is recorded.
@@ -303,7 +338,7 @@ Each entry of `attachments`:
 |---|---|---|
 | `at` | required | absolute path to what you fetched. **Must stand inside `RUNDESK_CHANNEL_HOME`**, must be an ordinary file, and must not be reached through a relative step |
 | `name` | optional | what the platform called it — a stranger's text, flattened by rundesk and nowhere else. Falls back to the basename of `at` |
-| `bytes` | optional | what the platform said it would be. Checked against the file's real size, and a mismatch is refused |
+| `bytes` | optional | **what the platform said it would be — never your own measurement of what you wrote.** Checked against the file's real size, and a mismatch is refused. Reporting your own `stat()` here makes rundesk compare its measurement with its own, which agrees always: the shipped adapter did exactly that, and a download cut off part way landed and was named to the brain as whole. Leave it out entirely if the platform declared nothing; said-nothing and said-zero are different answers |
 
 **Rundesk takes each one from there** into the agent's own account of what arrived — under the day,
 under the message, under a name that is both safe and unused — and **removes what you staged either
@@ -349,7 +384,7 @@ are still not asked for; nothing reads a member list or a presence.
 
 ### What an adapter is told — `do:`
 
-Four, and only four exist today.
+Five, and only five exist today.
 
 ```json
 {"do": "deliver", "id": "1754431200.123456-0", "place": "1180", "text": "Three files changed…",
@@ -359,6 +394,7 @@ Four, and only four exist today.
             "sha256": "b1f3…"}]}
 {"do": "state", "place": "1180", "external_id": "8841", "state": "seen"}
 {"do": "activity", "place": "1180", "did": "run"}
+{"do": "answered", "ref": "c-91f2", "text": "3 schedules, next at 09:00"}
 {"do": "stop"}
 ```
 
@@ -367,6 +403,7 @@ Four, and only four exist today.
 | `deliver` | `id`, `place`, `text`, sometimes `files`, sometimes `reply_to`, sometimes `cost` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed` |
 | `state` | `place`, `external_id`, `state` | show what rundesk says a turn is doing |
 | `activity` | `place`, `did`, sometimes `ok`, sometimes `who` | show what the agent is doing, while it is still doing it |
+| `answered` | `ref`, `text` | the answer to a `control`, `query` or `configure` you sent, against the `ref` you gave it |
 | `stop` | — | stop. The signals follow either way |
 
 **A long answer arrives as several `deliver` records, and `files` go with the last of them.** The
@@ -647,12 +684,19 @@ own `id` for that delivery — so something rundesk sent can later be replied to
 adapter that acknowledges without one is a whole adapter and nothing fails: the report is then posted
 on its own rather than as a reply, which is the honest outcome for a platform that has no ids.
 
-**`place` and `display` on an `arrived` are read by nothing.** The shipped adapter sends `"place":
-"dm"` or `"room"` and a flattened display name; rundesk keeps neither today.
+**`place` on an `arrived` is read by nothing.** The shipped adapter sends `"dm"` or `"room"` and
+rundesk keeps neither. `display` and `where` **are** read — both reach the brain as part of the turn,
+which is how an agent in a shared room can name the person it is answering and say which room it is
+standing in. They were dead for a while and this page said so.
 
-**There are no `control`, `query` or `configure` records**, and no `query-result`. Those are the
-previous build's contract, are named here only because somebody will arrive from that page looking
-for them, and nothing in this build sends or answers one.
+**There is no `query-result`.** That is the previous build's contract and is named here only because
+somebody will arrive from that page looking for it.
+
+`control`, `query` and `configure` **do** exist, and this page said for a while that they did not —
+which was wrong, and wrong in the way that matters most, because somebody writing a third-party
+adapter against it could not implement a slash command at all. The shipped Discord adapter sends all
+three and the gateway answers them; the answer comes back as `{"do": "answered", "ref": …, "text":
+…}`, which is the fifth `do:` record.
 
 **Nothing downloads on rundesk's side.** The adapter holds the credential and rundesk does not; the
 adapter fetches, and rundesk decides where it lands. The previous build's page has that the other way

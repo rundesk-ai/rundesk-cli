@@ -34,7 +34,8 @@ re-open sees that.
 May depend on `agents`, `core` and `utils`.
 """
 
-from typing import List, NamedTuple, Optional, Sequence
+import re
+from typing import List, NamedTuple, Optional, Sequence, Tuple
 
 from rundesk.channels import files, kept
 
@@ -195,6 +196,73 @@ def split(said: str, at_most: int = WHEN_UNSAID) -> List[str]:
     if last:
         pieces.append(_reopened(last, open_fence))
     return pieces or [said[:at_most]]
+
+
+#: How a brain says *send this file*: an ordinary Markdown link whose destination is an absolute
+#: local path. `[the chart](/Users/…/home/chart.png)` and `[it](</Users/…/a file.png>)` both count.
+#:
+#: **A convention rather than a record, because no brain has an intent to report.** All three shipped
+#: adapters refuse to emit a `file` record and each says why in its own words: a brain's stream says
+#: which files it *touched* and never which one it made for the person who asked. So the intent is
+#: taken from the one place it genuinely exists — the answer the brain chose to write. The build this
+#: replaces settled on exactly this and for exactly this reason (R-CH-31).
+#:
+#: A link to `http://…` or to a relative path matches nothing here, which is what makes an ordinary
+#: link in an answer stay an ordinary link. `//` is excluded too: that is a protocol-relative URL and
+#: not a path anybody meant.
+#:
+#: The label may not itself hold brackets. Balanced-bracket parsing is what the previous build spent
+#: ninety lines on, and what it bought was a label like `[see [1] here]` — against a rule that then
+#: has to be re-derived by anybody reading it. A link that does not match is left in the prose it
+#: stands in, which is visible and harmless, where a mis-parse would silently send the wrong file.
+#: One level of balanced parentheses is allowed in an unwrapped path, because `Copy (1).pdf` is what
+#: an operating system names a duplicate and a rule that stopped at the first `)` did not merely fail
+#: to match — it captured half a path and left the other half as loose text in the answer.
+A_LOCAL_LINK = re.compile(
+    r"\[([^\[\]]*)\]\(<(/[^>\n\r]+)>\)"
+    r"|\[([^\[\]]*)\]\((/(?:[^()\s]|\([^()\s]*\))*)\)")
+
+
+def declared_in(said: str) -> Tuple[str, List[str]]:
+    """What the brain wrote with its file links taken out, and the paths they named.
+
+    **The path never reaches the room.** What is left behind is the label alone, because the
+    destination is a location on the owner's own machine — the build this replaces got this right and
+    said so: left in, an answer posts somebody's home directory into a chat room, and a reader
+    cannot act on it anyway.
+
+    Nothing here decides whether a file may actually be sent. That is `carried`, one call later,
+    which contains it to the agent's own roots and fingerprints it — so a brain naming
+    `/etc/passwd` produces a refusal and a sentence, never a delivery.
+
+    **Order is kept**, because a brain that made three charts described them in an order and a
+    platform hangs attachments under the message in the order they were given.
+
+    **Nothing inside a fenced block counts.** A brain that has been taught this convention will
+    sooner or later show somebody the convention — in an example, in a quoted past exchange, in
+    documentation it wrote — and a link inside a fence is somebody being *shown* the syntax rather
+    than asking for a file. Read as live it did two wrong things at once: the example was mangled
+    into unformatted prose, and if the path happened to name a real file the agent could reach, that
+    file was posted to somebody who never asked for it.
+
+    An unclosed fence makes everything after it fenced, which is the safe direction to be wrong in:
+    an unsent file is a sentence somebody can act on and an unasked-for one is not.
+    """
+    paths: List[str] = []
+
+    def taken(found: "re.Match") -> str:
+        label, at = (found.group(1), found.group(2)) if found.group(2) else (found.group(3),
+                                                                            found.group(4))
+        if at.startswith("//"):
+            return found.group(0)
+        paths.append(at)
+        return label
+
+    # Odd segments stand between fences. Rejoined with the fences they were split on, so what is
+    # inside one comes back exactly as it was written.
+    parts = said.split(FENCE)
+    return FENCE.join(part if nth % 2 else A_LOCAL_LINK.sub(taken, part)
+                      for nth, part in enumerate(parts)), paths
 
 
 def carried(agent: str, named: Sequence[str]) -> "Carrying":

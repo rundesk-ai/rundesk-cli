@@ -293,8 +293,17 @@ class OnAChannel:
         # not answer that" for doing what they asked, the apology reads as a fault they caused.
         excused = got.worked or got.turn_status == kept.STOPPED
         said = whole.strip() or ("" if excused else self._instead(got))
-        carrying = delivery.carried(agent, [str(one.get("at")) for one in got.files
-                                            if one.get("at")])
+        # **A brain says *send this* by linking it, because that is the one place the intent exists**
+        # (R-CH-31). No shipped adapter emits a `file` record and each explains why: a stream says
+        # which files were *touched* and never which one was made for the person who asked. So the
+        # links come out of the answer, the paths go through the same approval as anything else, and
+        # what is left in the words is the label alone — never the owner's own directory, posted into
+        # a room. Both sources are merged before approval, so an adapter that one day does report one
+        # needs nothing changed here.
+        said, linked = delivery.declared_in(said)
+        said = said.strip()
+        carrying = delivery.carried(agent, [*linked, *(str(one.get("at")) for one in got.files
+                                                       if one.get("at"))])
         # **What could not be sent is said, never dropped.** `delivery.carried` computes a sentence
         # for every file it turns away — outside the agent's roots, too big, past the ten — and until
         # this read it, the whole of what happened to one was that it did not arrive. A person

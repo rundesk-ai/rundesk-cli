@@ -79,6 +79,15 @@ def main():
         sys.stdout.write("this is not json at all\n")
         sys.stdout.flush()
 
+    if how.get("linked_a_file_it_made"):
+        # **How a brain actually says *send this*.** No shipped adapter emits a `file` record, so the
+        # convention is a link in the answer — which is the only place the intent exists.
+        made = Path(os.environ.get("RUNDESK_CWD") or ".") / "a-chart.png"
+        made.write_bytes(b"not really a chart")
+        say(type="text", text=f"Here is what you asked for: [the chart]({made})", whole=True)
+        say(type="done", ok=True, session_id="thread-9")
+        return 0
+
     if how.get("made_a_file_and_said_nothing"):
         # Something delivered *is* an answer even when nothing was typed about it — which is the
         # one shape of successful turn that has no reply text to fall back on.

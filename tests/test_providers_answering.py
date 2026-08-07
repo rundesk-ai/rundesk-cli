@@ -576,6 +576,42 @@ class ATurnThatMadeSomethingAndSaidNothing(Answering):
         self.assertNotIn("could not answer", " ".join(self.delivered()))
 
 
+class WhenTheBrainMadeSomethingForThePerson(Answering):
+    """R-CH-31, end to end through both seams. **The whole outbound path was built and unreachable**
+    — containment, `O_NOFOLLOW`, the digest, the adapter's re-open — with nothing able to produce a
+    candidate, because no shipped adapter emits a `file` record and each explains why. The link in the
+    answer is what closes it."""
+
+    def files_sent(self):
+        return [one for one in self.what_it_was_told()
+                if one.get("do") == "deliver" and one.get("files")]
+
+    def test_a_file_the_brain_linked_is_actually_sent(self):
+        self.a_stand_in_told(self.agent, linked_a_file_it_made=True)
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: self.files_sent()),
+                        "the brain linked a file it made and nothing was ever sent")
+        carried = self.files_sent()[0]["files"]
+        self.assertEqual(1, len(carried))
+        self.assertEqual("a-chart.png", carried[0]["name"])
+        self.assertEqual(len(b"not really a chart"), carried[0]["bytes"])
+        self.assertTrue(carried[0]["sha256"], "a file crossed the seam with no digest to check it")
+
+    def test_the_machine_path_is_never_posted_into_the_room(self):
+        """**A path is the owner's own directory** and a reader cannot act on it. Left in the words,
+        an answer publishes where somebody's home stands to whoever is in the room."""
+        self.a_stand_in_told(self.agent, linked_a_file_it_made=True)
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: self.files_sent()))
+        words = " ".join(self.delivered())
+        self.assertIn("the chart", words, "the label was taken out along with the path")
+        self.assertNotIn("a-chart.png", words, "the machine path was posted into the room")
+
+
 class WhenTheBrainCouldNotAnswer(Answering):
 
     def test_somebody_waiting_is_told_rather_than_left_in_silence(self):

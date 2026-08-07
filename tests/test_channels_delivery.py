@@ -254,5 +254,72 @@ class WhatADeliveryMayCarry(support.Isolated):
                             carrying.files[0].sha256)
 
 
+class HowABrainSaysSendThis(unittest.TestCase):
+    """R-CH-31. **The link is the intent**, because no brain has one to report: every shipped adapter
+    refuses to emit a `file` record, each saying that a stream names files *touched* and never the one
+    made for the person who asked. Until this existed the whole outbound path was built, correct, and
+    unreachable — seven links of eight, with nothing able to produce a candidate."""
+
+    def test_a_linked_file_is_taken_and_only_its_label_is_left(self):
+        """**The path never reaches the room.** Left in, an answer posts the owner's own home
+        directory into a chat somebody else is reading, and a reader cannot act on it anyway."""
+        said, paths = delivery.declared_in("Here it is: [the chart](/home/ava/chart.png)")
+        self.assertEqual(["/home/ava/chart.png"], paths)
+        self.assertEqual("Here it is: the chart", said)
+
+    def test_a_path_with_spaces_may_be_wrapped_in_angle_brackets(self):
+        said, paths = delivery.declared_in("done [it](</home/ava/a file.png>)")
+        self.assertEqual(["/home/ava/a file.png"], paths)
+        self.assertEqual("done it", said)
+
+    def test_an_ordinary_web_link_is_left_exactly_as_it_was(self):
+        """The common case by far, and the one a wrong rule would silently mangle."""
+        for said in ("see [the docs](https://example.com/x)",
+                     "see [it](./relative.png)",
+                     "see [it](//example.com/x)"):
+            with self.subTest(said=said):
+                self.assertEqual((said, []), delivery.declared_in(said))
+
+    def test_several_files_keep_the_order_they_were_named_in(self):
+        said, paths = delivery.declared_in("[a](/tmp/a.png) then [b](/tmp/b.png)")
+        self.assertEqual(["/tmp/a.png", "/tmp/b.png"], paths)
+        self.assertEqual("a then b", said)
+
+    def test_an_answer_naming_no_file_is_untouched(self):
+        self.assertEqual(("just words", []), delivery.declared_in("just words"))
+
+    def test_a_link_inside_a_fence_is_an_example_and_never_a_delivery(self):
+        """**A brain taught this convention will show somebody the convention.** Read as live, an
+        example did two wrong things at once: it was mangled into unformatted prose, and a path that
+        happened to name a real file posted it to somebody who never asked for one."""
+        said = "Like this:\n```\n[report](/tmp/real.png)\n```\nThat is the syntax."
+        self.assertEqual((said, []), delivery.declared_in(said))
+
+    def test_a_real_link_beside_a_fenced_example_is_still_taken(self):
+        said, paths = delivery.declared_in(
+            "```\n[example](/tmp/example.png)\n```\nHere it is: [the chart](/tmp/real.png)")
+        self.assertEqual(["/tmp/real.png"], paths)
+        self.assertIn("[example](/tmp/example.png)", said)
+        self.assertIn("Here it is: the chart", said)
+
+    def test_an_unclosed_fence_is_wrong_in_the_safe_direction(self):
+        said = "look:\n```\n[report](/tmp/real.png)"
+        self.assertEqual((said, []), delivery.declared_in(said))
+
+    def test_a_path_with_parentheses_is_taken_whole(self):
+        """`Copy (1).pdf` is what an operating system names a duplicate. Stopping at the first `)`
+        captured half a path and left the other half loose in the answer somebody reads."""
+        said, paths = delivery.declared_in("here is [the report](/Users/joe/file(1).png) enjoy")
+        self.assertEqual(["/Users/joe/file(1).png"], paths)
+        self.assertEqual("here is the report enjoy", said)
+
+    def test_naming_a_file_is_not_the_same_as_being_allowed_to_send_it(self):
+        """This reads intent and decides nothing. A brain naming somewhere it may not reach produces
+        a refusal and a sentence one call later, in `carried` — never a delivery."""
+        said, paths = delivery.declared_in("[passwords](/etc/passwd)")
+        self.assertEqual(["/etc/passwd"], paths)
+        self.assertEqual("passwords", said)
+
+
 if __name__ == "__main__":
     unittest.main()

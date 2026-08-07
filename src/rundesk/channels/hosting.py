@@ -204,6 +204,30 @@ LINE_AT_MOST = lines.AT_MOST
 SAID_AT_MOST = 20
 SAID_LINE_AT_MOST = 500
 
+#: How much of a quoted message travels into a prompt, and how much of the name beside it.
+#:
+#: **Both are a stranger's text on its way into a brain's instructions**, which is the one place a
+#: person can write something shaped like an instruction and have it read as one. A newline is how
+#: they would end rundesk's sentence and start their own, so the name is flattened to a single line;
+#: the quote keeps its shape, because a quoted code block that lost its newlines would be unreadable,
+#: and is clipped instead.
+#:
+#: **Bounded here and not only in the adapter.** `docs/adapters.md` asks an adapter to narrow a
+#: display name before it sends one, and the shipped one does — but a bound that lives only on the
+#: far side of a seam is a bound a third-party adapter can be wrong about, and being wrong about it
+#: reaches a prompt. The numbers are the previous build's, which settled on them for this exact pair.
+A_QUOTE_AT_MOST = 255
+A_NAME_AT_MOST = 80
+
+#: How much of an adapter's account of *where* this was said travels. A sentence rather than a name,
+#: and a longer bound for that reason — it may hold both a room and the server it stands in, each
+#: named by whoever made it.
+A_PLACE_AT_MOST = 140
+
+#: Said at the end of a quote that did not fit, so that a brain reading it knows it is reading part.
+#: Without it a clipped quote is indistinguishable from somebody who stopped mid-sentence.
+A_QUOTE_CUT = "…(clipped)"
+
 
 class Answering(Protocol):
     """What answers a message, handed in rather than reached for.
@@ -765,11 +789,20 @@ def _landed(one: Running, written: List[str], within: float) -> bool:
     Polled rather than waited on an event, because what is being watched is a dict two threads share
     and the only safe operations on it are the indivisible ones. A tenth of a second is far below a
     platform round trip and far above the cost of asking.
+
+    **Given up on the moment nobody is reading**, rather than waited out in full. The drain thread is
+    the only thing that can ever answer this, so once it has ended — the adapter stopped, the gateway
+    shutting down, the channel being replaced — the deadline is time spent waiting for something that
+    cannot arrive. Held to the full ceiling it is worse than slow: this runs on the thread answering
+    somebody, and a turn that settles seconds after the adapter it was answering through has gone is
+    a turn still holding its conversation's claim.
     """
     deadline = time.monotonic() + within
     while time.monotonic() < deadline:
         if not any(one.awaiting.get(each) is not None for each in written):
             return True
+        if one.listening is not None and not one.listening.is_alive():
+            break
         time.sleep(0.1)
     return not any(one.awaiting.get(each) is not None for each in written)
 
@@ -1134,6 +1167,13 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allo
                          f"be taken in, so there was nothing to record", logs.WARNING)
             return
         body = _also_attached(body, here)
+    # After the attachments, so the two blocks always stand in one order however many arrived — and
+    # recorded as part of the body, which is what makes `rundesk messages` read back as the exchange
+    # somebody actually had rather than as a set of remarks with the context stripped out.
+    body = _also_replying(body, record.get("reply_to"))
+    # Last of the three blocks, because it is the one about the message rather than its contents —
+    # what was attached and what was being answered both belong nearer what somebody typed.
+    body = _also_who(body, record.get("display"), record.get("where"))
     landed = arriving.recorded(agent, kind, place, who, body, external)
     if external and not _joining_one(agent, one, landed):
         # **The mark belongs to the message that starts a turn, and to no other.** Said the moment it
@@ -1219,6 +1259,81 @@ def _also_attached(body: str, here: List[Path]) -> str:
         return body
     named = "\n".join(f"- {at.name}: {at}" for at in here)
     return f"{body}\n\nAttached to this message, on this machine:\n{named}".strip()
+
+
+def _also_who(body: str, display: Any, where: Any) -> str:
+    """What somebody typed, and who said it and where (R-CH-21, R-DIS-21).
+
+    **An agent that cannot say who it is talking to is an agent writing every answer as though it
+    were a private terminal session.** Both fields crossed this seam already and both were read by
+    nothing — so in a room with four people in it a brain could not address any of them, could not
+    tell two askers apart inside one thread, and had no idea which room it was answering in.
+
+    **In the turn, never in the instructions.** `providers.instructions` may name no platform and its
+    variables are a closed, communication-agnostic set; a `{room_name}` there would be a layer to be
+    rewritten for the second surface. So the words are composed here, out of what an adapter said,
+    and what reaches a brain is one ordinary sentence that any platform can produce.
+
+    **The adapter names the place and rundesk never parses it.** `where` is already a sentence when
+    it arrives — *a direct message*, *the ops room in Acme* — because what a place is called is the
+    one thing only the platform knows.
+
+    Both are a stranger's text: an account name and a room name are chosen by whoever made them, and
+    both are bounded here whatever the adapter did.
+    """
+    who = " ".join(str(display or "").split())[:A_NAME_AT_MOST]
+    stood = " ".join(str(where or "").split())[:A_PLACE_AT_MOST]
+    if not who and not stood:
+        return body
+    if not stood:
+        return f"{body}\n\n--\n\nSaid by {who}.".strip()
+    said = f"Said by {who} in {stood}." if who else f"Said in {stood}."
+    return f"{body}\n\n--\n\n{said}".strip()
+
+
+def _also_replying(body: str, said: Any) -> str:
+    """What somebody typed, and which earlier message they were answering (R-CH-29, R-CH-30).
+
+    **Somebody replying to a message means the reply and the message together.** Without this a
+    brain is handed *"yes, do that one"* with nothing to say what *that one* was — and on a platform
+    where replying is how people disambiguate in a busy room, that is most of what they said.
+
+    Composed as its own block after what they typed, separated the way `_also_attached` separates
+    its own, so **rundesk's words and a stranger's stay told apart**. A brain that can see where the
+    quote begins and ends can weigh it as something somebody else wrote; text folded into the
+    sentence around it cannot be weighed at all.
+
+    **The bounds are rundesk's and are applied here whatever the adapter did** — see
+    `A_QUOTE_AT_MOST`. Author and quote are both flattened or clipped before they reach a prompt.
+
+    **An unresolved parent still says so.** `resolved: false` means the platform did not hand the
+    message over and this build never goes and asks — so the honest block names the message and says
+    the words could not be read, rather than dropping the fact that a reply happened at all. Anything
+    an adapter supplies beside `resolved: false` is discarded: it would be a guess, and a guessed
+    quote is worse than a missing one.
+    """
+    if not isinstance(said, dict):
+        return body
+    which = _a_text(said.get("id"))
+    if not which:
+        return body
+    if said.get("resolved") is not True:
+        # **Bounded and flattened like everything else here, and it was not.** An id is a number on
+        # every platform anybody has written for — and it arrives from the far side of a seam, which
+        # is the whole reason the rest of this function does not trust what it is handed. Left raw, a
+        # newline in one ends rundesk's sentence and starts something that reads like rundesk's.
+        named = " ".join(which.split())[:A_NAME_AT_MOST]
+        return f"{body}\n\n--\n\nThis replies to an earlier message ({named}) that could not be " \
+               "read.".strip()
+    quoted = str(said.get("text") or "")
+    if len(quoted) > A_QUOTE_AT_MOST:
+        quoted = quoted[:A_QUOTE_AT_MOST] + A_QUOTE_CUT
+    who = " ".join(str(said.get("author") or "").split())[:A_NAME_AT_MOST]
+    naming = f" from {who}" if who else ""
+    if not quoted:
+        return f"{body}\n\n--\n\nThis replies to an earlier message{naming}, which had no text " \
+               "of its own.".strip()
+    return f"{body}\n\n--\n\nThis replies to an earlier message{naming}:\n{quoted}".strip()
 
 
 def _reaped(agent: str, where: Path, watching: Watching) -> None:

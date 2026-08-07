@@ -321,6 +321,11 @@ CLIPPED = f"{SUBTEXT}…"
 #: end our sentence and start one of their own — and then clipped.
 SAID_MOST = 80
 
+#: How much of a server's or a room's own name travels into a prompt. Both are named by whoever made
+#: them, so both are a stranger's text — and two of them stand in one sentence, which is why this is
+#: shorter than a display name rather than the same number.
+WHERE_AT_MOST = 60
+
 #: How much of what was asked becomes the name of the thread it opens. **Discord takes a hundred and
 #: this is eighty**, because a thread list is read at a glance and the first line of a sentence is
 #: what tells one exchange from another — the rest is the conversation's own to hold. Under the
@@ -1148,6 +1153,7 @@ class Reaching:
         brought = await self._brought(message)
         if not text and not brought:
             return
+        replying = self._replying_to(message)
         # **A room's exchange moves into a thread; a private one and a thread's own stay put.**
         # Threads do not nest, and there is nobody in a private conversation to be out of the way
         # of. A message with nothing in it never gets this far, so no thread is ever opened for one.
@@ -1173,9 +1179,73 @@ class Reaching:
              "place": "dm" if direct else "room",
              "user": str(message.author.id),
              "display": flat(getattr(message.author, "display_name", None) or message.author.name),
+             "where": self._where_this_is(message),
              "text": text,
              "external_id": str(message.id),
-             "attachments": brought})
+             "attachments": brought,
+             # Sent only when there is one, so an ordinary message carries no empty key and an
+             # absent field goes on meaning what it has always meant: this replies to nothing.
+             **({"reply_to": replying} if replying else {})})
+
+    def _where_this_is(self, message) -> str:
+        """Where this was said, in words a brain can repeat (R-DIS-21).
+
+        **The platform's nouns, rundesk's sentence.** Rundesk may never name a room or a server —
+        that is a layer which would have to be rewritten for the second surface — so the naming
+        happens here, where the vendor's objects actually are, and what crosses the seam is one line
+        of ordinary English that any adapter could produce for its own platform.
+
+        Names, never ids. An id is what a conversation is keyed by and is already carried; what this
+        is for is an agent being able to say *which* room it is answering in, to the person in it.
+
+        Flattened and bounded like every other stranger's text on its way to a prompt: a server and a
+        room are both named by whoever made them.
+        """
+        channel = message.channel
+        if isinstance(channel, discord.DMChannel):
+            return "a direct message"
+        named = flat(getattr(channel, "name", None) or "", WHERE_AT_MOST)
+        server = flat(getattr(getattr(message, "guild", None), "name", None) or "", WHERE_AT_MOST)
+        if isinstance(channel, discord.Thread):
+            where = f"a thread called {named}" if named else "a thread"
+        else:
+            where = f"the {named} room" if named else "a room"
+        return f"{where} in {server}" if server else where
+
+    def _replying_to(self, message) -> Optional[Dict[str, Any]]:
+        """What this message replies to, or `None` when it replies to nothing (R-DIS-34).
+
+        **Never fetched.** What Discord already handed over is used and nothing is asked for: this
+        stands on the inbound path in front of every message, a fetch is a round trip, and a parent
+        that cannot be resolved is an honest answer rather than a thing to chase (R-CH-30). A real
+        share of replies arrive unresolved and say so.
+
+        **A reference is not always a reply.** A forward and a pin carry one too, and presenting
+        either as *this answers that* would put words in somebody's mouth. Only an ordinary reply
+        counts, and the type is read through `getattr` because it is a vendor enum whose spelling is
+        not this program's to depend on.
+
+        **Nothing is invented for a parent that is not there.** An id alone says *they replied to
+        something and it could not be read*, which a brain can act on honestly; an author or a body
+        guessed beside it would be this adapter making something up.
+        """
+        reference = getattr(message, "reference", None)
+        if reference is None:
+            return None
+        if getattr(getattr(reference, "type", None), "name", "default") not in ("default", "reply"):
+            return None
+        which = getattr(reference, "message_id", None)
+        if not which:
+            return None
+        parent = getattr(reference, "resolved", None) or getattr(reference, "cached_message", None)
+        author = getattr(parent, "author", None)
+        if parent is None or author is None or not hasattr(parent, "content"):
+            return {"id": str(which), "resolved": False}
+        # Flattened here as well as by rundesk, which is not a second copy of the rule so much as
+        # the same guard standing on the side that reads a stranger's account name.
+        return {"id": str(which), "resolved": True,
+                "author": flat(getattr(author, "display_name", None) or author.name),
+                "text": parent.content or ""}
 
     async def _a_thread(self, message, text: str) -> Optional[int]:
         """Open a thread on this message and hand back its id, or `None` if Discord would not.
