@@ -101,6 +101,17 @@ SIBLINGS = ("-wal", "-shm")
 #: at the moment it is opened rather than three statements later inside somebody else's `try`.
 READABLE = "PRAGMA schema_version"
 
+#: Whether this database has ever been analysed at all. `ANALYZE` is what makes the table, so its
+#: absence is the one state `PRAGMA optimize` alone cannot get out of on an older SQLite — see
+#: `_left_tidy`.
+NO_STATISTICS_YET = "SELECT 1 FROM sqlite_master WHERE name = 'sqlite_stat1'"
+
+#: How many rows of an index `ANALYZE` reads before it stops and estimates the rest. SQLite's own
+#: recommended figure, and the reason the first analysis is affordable on a database that already
+#: holds a year of turns rather than something that reads all of it once and is never asked for
+#: again because it was too slow.
+STATISTICS_AT_MOST = 400
+
 
 class NotThere(Exception):
     """There are no records here. Nobody has made this agent, or they have been taken away."""
@@ -252,9 +263,24 @@ def _left_tidy(conn: sqlite3.Connection) -> None:
     Suppressed rather than raised, and that is the whole of its contract: this is a tidy-up after
     work that has *already committed*, and a caller told their write failed because the statistics
     could not be refreshed would be told something untrue about the thing they asked for.
+
+    **`PRAGMA optimize` cannot start from nothing before SQLite 3.46.** Until that release it
+    analysed a table only where the planner had already used statistics for it on this connection —
+    which a database that has never been analysed has none of, so the habit that keeps statistics
+    fresh could never take the first step and the planner guessed for ever. Rundesk runs on whatever
+    SQLite the interpreter came with, and the ones a supported Python is built against span both
+    sides of that release, so the first analysis is asked for here rather than left to a default
+    that changed underneath it. `analysis_limit` is what keeps the asking cheap: it stops each index
+    after a few hundred rows and estimates the rest, so this stays a tidy-up on a database that has
+    been growing for a year. An older SQLite that has never heard of either pragma ignores it,
+    which is the same nothing it did before.
     """
     with contextlib.suppress(sqlite3.DatabaseError):
-        conn.execute("PRAGMA optimize")
+        conn.execute(f"PRAGMA analysis_limit = {STATISTICS_AT_MOST}")
+        if conn.execute(NO_STATISTICS_YET).fetchone() is None:
+            conn.execute("ANALYZE")
+        else:
+            conn.execute("PRAGMA optimize")
 
 
 def _understood(conn: sqlite3.Connection, at: Path) -> None:
