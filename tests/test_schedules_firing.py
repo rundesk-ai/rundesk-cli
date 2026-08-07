@@ -16,6 +16,7 @@ import contextlib
 import datetime
 import fcntl
 import os
+import shlex
 import shutil
 import signal
 import time
@@ -37,6 +38,17 @@ PATIENCE = 20.0
 SAYS_SOMETHING = "/bin/echo"
 FAILS = "/bin/sh -c 'echo it went wrong >&2; exit 3'"
 NEVER_ENDS = "/bin/sh -c 'while true; do sleep 0.05; done'"
+
+#: The same program, as the words `execve` is handed rather than as a command line — for the cases
+#: that drive a stand-in runner, which is given an argv instead of a `command` column.
+#:
+#: **Split the way a shell would, and never with `str.split`.** That looked right and was not: it
+#: hands `/bin/sh -c` the word `'while` on its own and leaves the closing quote eight words later,
+#: so the shell dies of an unbalanced quote in about three milliseconds instead of looping for ever.
+#: Three cases then called what it left behind a firing still in flight, and were racing a window
+#: that wide — green on a quiet laptop, red on one run in two of a loaded CI runner, with a failure
+#: that reads as the product announcing a firing it had refused.
+NEVER_ENDING = shlex.split(NEVER_ENDS)
 
 
 class Firing(support.Isolated):
@@ -104,6 +116,22 @@ class Firing(support.Isolated):
                 return False
         self.assertTrue(support.waited_until(let_go, PATIENCE),
                         f"what {name} started never let go of its lock")
+
+    def waited_until_the_firing_is_really_in_flight(self, name):
+        """Wait until this schedule's work is holding its lock, before observing anything about it.
+
+        **The twin of `waited_until_the_last_firing_let_go`, and it is here for the same reason.** A
+        case that starts something and then asks what a second gateway would make of it is asking
+        about a child that has to still be alive to be worth asking about — and a child that died on
+        its way up looks exactly like one that finished, which is a green run for a case that proved
+        nothing and a red one for a case that proves the opposite of what it says.
+
+        Asked of the kernel rather than waited out, so an ordinary run is through in hundredths and
+        a child that never came up is named rather than showing up as an assertion about announcing.
+        """
+        self.assertTrue(
+            support.waited_until(lambda: firing.still_running(self.agent, name), PATIENCE),
+            f"what {name} started never took hold of its lock. It said: {self.said()}")
 
     def waited_for_an_outcome(self, name, wanted=None):
         """Wait for a firing to be written down, looking again each time to give it the chance."""
@@ -784,7 +812,7 @@ class SayingAScheduleHasBegun(Firing):
     def test_it_is_written_into_the_record_so_a_later_gateway_still_anchors_the_report(self):
         """The gateway that announced can be gone by the time the work ends. The notice is not."""
         self.an_asking_schedule()
-        self.look(asking=self.a_runner(NEVER_ENDS.split()), telling=ATelling(handle="8841"))
+        self.look(asking=self.a_runner(NEVER_ENDING), telling=ATelling(handle="8841"))
         said = records_of_the_firing(self, "review")
         self.assertEqual("8841", said.get("announced"))
 
@@ -792,7 +820,8 @@ class SayingAScheduleHasBegun(Firing):
         """Everything the report needs is read back off the record: that this run owes one at all,
         and the notice it goes under. The gateway that announced is gone; the notice is not."""
         self.an_asking_schedule()
-        self.look(asking=self.a_runner(NEVER_ENDS.split()), telling=ATelling(handle="8841"))
+        self.look(asking=self.a_runner(NEVER_ENDING), telling=ATelling(handle="8841"))
+        self.waited_until_the_firing_is_really_in_flight("review")
         adopted = firing.settled(self.agent, self.where)
         self.assertTrue(adopted.running["review"].asks,
                         "an adopted firing forgot that it owes somebody a report")
@@ -803,7 +832,8 @@ class SayingAScheduleHasBegun(Firing):
         belongs to the run still in flight, whose own report is still coming."""
         self.an_asking_schedule()
         at = datetime.datetime(2026, 8, 5, 9, 0)
-        self.look(at=at, asking=self.a_runner(NEVER_ENDS.split()), telling=ATelling())
+        self.look(at=at, asking=self.a_runner(NEVER_ENDING), telling=ATelling())
+        self.waited_until_the_firing_is_really_in_flight("review")
         telling = ATelling()
         self.look(at=datetime.datetime(2026, 8, 5, 9, 1), asking=self.a_runner(),
                   telling=telling, watching=firing.Watching({}, {}))

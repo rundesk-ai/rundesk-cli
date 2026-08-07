@@ -529,6 +529,28 @@ class WhatItGoesOnDoingForMonths(WithAnAgent):
         """
         time.sleep(self.QUICKLY * 6)
 
+    def taken_away(self, at: Path) -> None:
+        """Remove a directory a live gateway is still writing into, and prove it went.
+
+        **`shutil.rmtree` is two steps and a running gateway fits between them.** It walks the tree
+        unlinking as it goes and then `rmdir`s what is left, so a beat, a log line or a swept day
+        landing in that window leaves the directory not empty and the call raises `ENOTEMPTY` — the
+        case going red in its own setup, before the guarantee it exists for has been asked about at
+        all. Measured on the 3.9 floor with eight suites running at once.
+
+        So the removal is asked for until it takes, which is the same shape as every other wait in
+        this suite: a condition asked about rather than a window slept through. It cannot hide the
+        thing the case is *for* — that a gateway does not put its agent's directory back is proved by
+        the assertion after the beats that follow, and a gateway which really did rebuild it would
+        rebuild it there too.
+        """
+        def gone() -> bool:
+            shutil.rmtree(at, ignore_errors=True)
+            return not at.exists()
+        self.assertTrue(support.waited_until(gone, self.PATIENCE),
+                        f"{at} could not be taken away: something is writing into it faster than "
+                        f"it can be removed")
+
     def a_day_file_from(self, days_ago: int) -> Path:
         """One of this gateway's own day files, from far enough back that it should be swept."""
         where = standing.logs_at(self.at)
@@ -700,7 +722,7 @@ class WhatItGoesOnDoingForMonths(WithAnAgent):
         # `_refused` has the same rule for the same reason: a directory invented by whatever is
         # complaining that it is missing is one that then looks half-made to everything else.
         child = self.a_running_gateway(beat=self.QUICKLY)
-        shutil.rmtree(self.at)
+        self.taken_away(self.at)
 
         self.several_more_beats()
 
