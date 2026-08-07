@@ -1,6 +1,6 @@
 ---
 name: writing-skills
-description: Provides Rundesk's workflow and standards for creating compact, provider-neutral skills. Use when creating, reviewing, or revising a skill; fixing triggering or token use; adding resources or integrations; diagnosing why a skill cannot be used; or publishing it through a catalog for other installs.
+description: Writes, reviews, and repairs provider-neutral Rundesk skills, including SKILL.md, references, scripts, integrations, validation, and catalog publishing. Apply when you need to create a skill, revise an existing one, fix triggering or token waste, diagnose why Rundesk cannot use it, or publish it for other installs.
 ---
 
 # Writing skills
@@ -60,8 +60,8 @@ Use only `name` and `description` in the frontmatter.
   hyphens.
 - Open `description` with a short brief of what the skill provides: its workflow, knowledge, tools,
   or safeguards. Do not substitute an abstract outcome or a full capability inventory.
-- Follow with `Use when` and the concrete user intents or situations that should trigger it. Describe
-  intent, not only words a user might type; most requests will not name the skill.
+- Follow with `Apply when you need to` and the concrete tasks that should trigger the skill. Name
+  what the agent is being asked to do; most requests will not name the skill.
 - Keep the description within 1024 characters and as short as complete coverage allows. Every agent
   holding the skill pays for it on every turn.
 - Put all trigger guidance in the description. The body is unavailable until after triggering.
@@ -69,7 +69,7 @@ Use only `name` and `description` in the frontmatter.
 ```markdown
 ---
 name: release-notes
-description: Provides a workflow for drafting accurate, user-facing release notes from shipped changes. Use when preparing a release, tagging a version, summarizing a changelog, or explaining shipped work to people who did not build it.
+description: Drafts accurate, user-facing release notes from shipped changes. Apply when you need to prepare a release, tag a version, summarize a changelog, or explain shipped work to people who did not build it.
 ---
 ```
 
