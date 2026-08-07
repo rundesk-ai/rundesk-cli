@@ -1,6 +1,6 @@
 ---
 name: managing-rundesk
-description: Use this skill when the user asks to inspect, configure, operate, troubleshoot, or recover the Rundesk install that owns this agent, including its agents, gateways, conversations, channels, schedules, providers, skills, backups, lifecycle, or credentials. It supplies the verified commands and safety rules needed to establish state, make requested changes, and report only proven outcomes. Do not use it for work inside an agent's project unless Rundesk controls the behavior.
+description: Use this skill when the user asks to inspect, configure, operate, troubleshoot, or recover the Rundesk install that owns this agent, including its agents, gateways, agent-to-agent delegation, conversations, channels, schedules, providers, skills, backups, lifecycle, or credentials. It supplies the verified commands and safety rules needed to establish state, make requested changes, and report only proven outcomes. Do not use it for work inside an agent's project unless Rundesk controls the behavior.
 ---
 
 # Manage Rundesk
@@ -31,8 +31,9 @@ command syntax. Never report success from wording alone; read the exit code and 
 | 3 | See whether gateways are running | `"$RUNDESK_COMMAND" gateways` |
 | 4 | Explain gateway trouble | `"$RUNDESK_COMMAND" gateways logs <agent>` |
 | 5 | Ask an agent from this terminal | `"$RUNDESK_COMMAND" ask <agent> '<prompt>'` |
-| 6 | Check provider, channel, and skill readiness | `"$RUNDESK_COMMAND" providers check <provider>` · `"$RUNDESK_COMMAND" channels doctor <agent>` · `"$RUNDESK_COMMAND" skills doctor <agent>` |
-| 7 | Protect approved risky work | `"$RUNDESK_COMMAND" backups save` |
+| 6 | Inspect work this agent delegated | `"$RUNDESK_COMMAND" asked` |
+| 7 | Check provider, channel, and skill readiness | `"$RUNDESK_COMMAND" providers check <provider>` · `"$RUNDESK_COMMAND" channels doctor <agent>` · `"$RUNDESK_COMMAND" skills doctor <agent>` |
+| 8 | Protect approved risky work | `"$RUNDESK_COMMAND" backups save` |
 
 Use listing commands before mutations. Most groups list when called with no subcommand. Their output
 also identifies the root or records being inspected.
@@ -58,6 +59,7 @@ also identifies the root or records being inspected.
 |---|---|
 | [Agents](references/agents.md) | Add, describe, reassign, or remove agents |
 | [Gateways](references/gateways.md) | Start, stop, restart, run, inspect, or recover gateways |
+| [Delegations](references/delegations.md) | Hand work to another agent; inspect, guide, stop, resume, or review it |
 | [Conversations](references/conversations.md) | Ask agents; inspect messages, turns, usage, and failures |
 | [Backups](references/backups.md) | Save, locate, move, or restore copies |
 | [Schedules](references/schedules.md) | Create and control timed programs or agent prompts |
