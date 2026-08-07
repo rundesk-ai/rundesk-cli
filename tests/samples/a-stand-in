@@ -106,15 +106,21 @@ def main():
         say(type="text", text=remark, whole=True)
         if how.get("also_did"):
             say(type="tool", id=f"r{nth}", name="Bash", did=how["also_did"])
-    say(type="text", text="You asked: " + asked.strip(), whole=True)
+    if not how.get("omit_final_response"):
+        say(type="text", text="You asked: " + asked.strip(), whole=True)
 
     if capabilities(how)["steer"]:
         # Anything said after the prompt reaches a running turn, and is answered as it arrives.
+        heard = 0
+        finish_after = int(how.get("finish_after_steers") or 0)
         for line in sys.stdin:
             if not line.strip():
                 continue
             word = json.loads(line)
             say(type="text", text="heard " + (word.get("text") or "").strip(), whole=True)
+            heard += 1
+            if finish_after and heard >= finish_after:
+                break
 
     # Account state, which is news about the account and never about the work — a turn carrying one
     # may have succeeded, so it is said on the way to a `done` that says `ok`.

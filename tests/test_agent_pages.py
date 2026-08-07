@@ -75,8 +75,37 @@ class ANewAgent(support.Isolated):
                          (self.home / "CLAUDE.md").read_bytes())
 
     def test_the_pages_say_what_they_are(self):
-        self.assertIn("MEMORY.md", (self.home / "AGENTS.md").read_text(encoding="utf-8"))
+        rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("MEMORY.md", rules)
         self.assertIn("# MEMORY", (self.home / "MEMORY.md").read_text(encoding="utf-8"))
+
+    def test_the_rules_distinguish_named_agents_from_same_turn_subagents(self):
+        rules = (self.home / "AGENTS.md").read_text(encoding="utf-8").lower()
+        for phrase in ("named rundesk agent", "asynchronously", "provider-local subagent",
+                       "same turn", "verify", "parent task done"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, rules)
+        self.assertIn("`asked say` guides working work", rules)
+        self.assertIn("steers its active turn", rules)
+        self.assertIn("falls back to its next turn", rules)
+        self.assertIn("`asked resume` continues answered work", rules)
+        self.assertIn("continue independent useful work", rules)
+        self.assertIn("result reaches this turn", rules)
+        self.assertIn("wakes a review turn", rules)
+
+    def test_the_rules_do_not_claim_the_two_rule_files_synchronize_after_placement(self):
+        rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertNotIn("editing one means editing both", rules)
+        self.assertNotIn("CLAUDE.md", rules)
+
+    def test_the_standing_rules_have_a_context_budget(self):
+        rules = (self.home / "AGENTS.md").read_bytes()
+        self.assertLessEqual(len(rules), 4500)
+
+    def test_the_rules_defer_question_policy_to_the_turn_situation(self):
+        rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertNotIn("Ask about goals", rules)
+        self.assertIn("situation rules", rules)
 
     def test_nothing_is_left_staged_beside_them(self):
         """Each is written aside and renamed, because a brain may be reading the directory while an

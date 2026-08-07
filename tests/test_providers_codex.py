@@ -129,6 +129,12 @@ class OneCapturedTurn(support.Isolated):
         at the end. Both are things the agent said."""
         self.assertEqual(2, len(self.of_type("text")))
 
+    def test_only_the_final_answer_phase_is_marked_final(self):
+        text = self.of_type("text")
+        self.assertNotIn("final", text[0])
+        self.assertIs(text[-1]["final"], True)
+        self.assertEqual("41", text[-1]["text"])
+
     def test_a_command_is_reported_by_what_it_did_and_not_by_the_brains_word_for_it(self):
         """It ran `sed -n '1,40p' note.txt`. **`read`** is the word rundesk carries, because the
         same act is `Bash` on one brain and `run_terminal_command` on the next."""

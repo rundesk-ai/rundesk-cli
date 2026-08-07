@@ -22,7 +22,7 @@ Treat generated help as authoritative. If a verb is absent, Rundesk cannot perfo
 exits `0` when it answered or completed, `1` when understood but not completed, and `2` for invalid
 command syntax. Never report success from wording alone; read the exit code and result.
 
-## Start with the essentials
+## Common entry points
 
 | Priority | Need | Command |
 |---|---|---|
@@ -35,11 +35,13 @@ command syntax. Never report success from wording alone; read the exit code and 
 | 7 | Check provider, channel, and skill readiness | `"$RUNDESK_COMMAND" providers check <provider>` · `"$RUNDESK_COMMAND" channels doctor <agent>` · `"$RUNDESK_COMMAND" skills doctor <agent>` |
 | 8 | Protect approved risky work | `"$RUNDESK_COMMAND" backups save` |
 
-Use listing commands before mutations. Most groups list when called with no subcommand. Their output
-also identifies the root or records being inspected.
+Choose the narrowest command that answers the request. Before a mutation, inspect only enough state
+to identify the exact target and consequence. Most groups list when called with no subcommand.
 
 ## Safety boundaries
 
+- Never open or edit rundesk databases or lock files directly. If the command fails, diagnose with
+  its documented read-only surfaces or report the failure; do not bypass it with SQLite or file tools.
 - Never stop your own gateway. Restarting it is allowed: Rundesk queues the restart until the active
   turn finishes, then brings the gateway back online.
 - Require an explicit request for agent removal, schedule removal, backup restore, uninstall, purge,

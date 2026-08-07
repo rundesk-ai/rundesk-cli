@@ -170,8 +170,17 @@ def _listed() -> int:
         print("        no agents yet — add one with: "
               "rundesk agents add <agent> --provider <provider>")
         return OK
-    as_table(("AGENT", "PROVIDER"), [(name, _provider_of(name)) for name in there])
+    as_table(("AGENT", "PROVIDER", "SKILLS"),
+             [(name, _provider_of(name), _skills_of(name)) for name in there])
     return OK
+
+
+def _skills_of(name: str) -> str:
+    """Current skill names for routing, or why they could not be read."""
+    try:
+        return ", ".join(one.name for one in grants.held(name)) or "none"
+    except OSError:
+        return "? — cannot be read"
 
 
 def _provider_of(name: str) -> str:

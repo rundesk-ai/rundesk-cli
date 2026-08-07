@@ -59,7 +59,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, NamedTuple, Op
 
 from rundesk.agents import directory, records
 from rundesk.channels import arriving
-from rundesk.providers import adapters, environment, instructions, kept, protocol, streaming
+from rundesk.providers import adapters, environment, instructions, kept, protocol, streaming, team
 from rundesk.skills import grants
 from rundesk.utils import lines, locking, logs
 
@@ -70,6 +70,7 @@ NotRunnable = adapters.NotRunnable
 #: lifecycle bookkeeping about an execution rather than a new shape of owner data.
 SENT = "sent"
 INSTRUCTIONS = "instructions"
+ADMITTED = "admitted"
 LOST = "lost"
 UNKNOWN = "unknown"
 
@@ -87,6 +88,18 @@ AN_EVENT_AT_MOST = 4000
 #: have is not a busy moment to sit out, it is the answer — something else is already answering in
 #: this conversation, and a second turn must not begin.
 NEVER_WAITS = 0.0
+
+#: How often an active delegated turn looks for durable guidance written by another process. Short
+#: enough to steer the work in progress, but not a busy loop against the agent's SQLite account.
+GUIDANCE_EVERY = 0.2
+
+#: Pending delegation words placed into one provider turn. At least the oldest whole message is
+#: always kept, even when that message exceeds this soft aggregate bound.
+DELEGATED_PROMPT_AT_MOST = 128 * 1024
+
+#: Pending messages one delegated pickup may claim. Kept far below every supported SQLite variable
+#: ceiling because the exact ids become one atomic `UPDATE`.
+DELEGATED_MESSAGES_AT_MOST = 200
 
 
 class Busy(Exception):
@@ -130,6 +143,9 @@ class Request(NamedTuple):
     #: `situation` is `AGENT_TO_AGENT`**: that block is four sentences about who asked and where
     #: the answer goes, and without this every one of them reaches the brain saying `{caller_agent}`.
     caller_agent: Optional[str] = None
+    #: Inbound messages this turn is answering. Delegated guidance uses this durable boundary so a
+    #: reply cannot accidentally consume guidance that arrived after the turn began.
+    inbound_messages: Tuple[int, ...] = ()
 
 
 class Outcome(NamedTuple):
@@ -159,7 +175,7 @@ class Outcome(NamedTuple):
 
 
 @contextlib.contextmanager
-def claiming(agent: str, conversation: int) -> Iterator[int]:
+def claiming(agent: str, conversation: int, waiting: bool = False) -> Iterator[int]:
     """Take this conversation's claim for the length of the block. `Busy` when somebody has it.
 
     **The claim is the check.** Anything that asked whether a turn was running and then started one
@@ -177,7 +193,7 @@ def claiming(agent: str, conversation: int) -> Iterator[int]:
     held = os.open(at, os.O_CREAT | os.O_RDWR, 0o600)
     try:
         try:
-            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(held, fcntl.LOCK_EX | (0 if waiting else fcntl.LOCK_NB))
         except OSError as why:
             if not locking.busy(why):
                 raise
@@ -209,6 +225,63 @@ def busy(agent: str, conversation: int) -> bool:
     return False
 
 
+class Admission:
+    """Whether a word queued for a live turn actually crossed the provider boundary."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._settled = threading.Event()
+        self._accepted: Optional[bool] = None
+
+    def accepted(self) -> None:
+        """The provider accepted the word. Safe when two teardown paths arrive together."""
+        with self._lock:
+            if self._settled.is_set():
+                return
+            self._accepted = True
+            self._settled.set()
+
+    def refused(self) -> None:
+        """The provider did not accept the word, so its durable owner must fall back."""
+        with self._lock:
+            if self._settled.is_set():
+                return
+            self._accepted = False
+            self._settled.set()
+
+    def wait(self, within: Optional[float] = None) -> Optional[bool]:
+        """`True` accepted, `False` refused, and `None` when the receipt did not arrive in time."""
+        return self._accepted if self._settled.wait(within) else None
+
+
+class Guidance(NamedTuple):
+    """One live word and the durable inbound messages it accounts for, when there are any."""
+
+    text: str
+    messages: Tuple[int, ...] = ()
+    conversation: int = 0
+    admission: Optional[Admission] = None
+
+
+def delegated_prompt(agent: str, conversation: int,
+                     delegator: str) -> Tuple[str, Tuple[int, ...]]:
+    """The pending delegated brief or guidance, oldest first and within the turn's bounds.
+
+    Used both when the turn begins and while it runs. One selector for both moments means polling
+    cannot reorder, clip, or claim a different set than the fallback turn would receive.
+    """
+    selected, used = [], 0
+    for message, body in arriving.pending_from(
+            agent, conversation, delegator, DELEGATED_MESSAGES_AT_MOST):
+        cost = len(body.encode("utf-8")) + (2 if selected else 0)
+        if selected and used + cost > DELEGATED_PROMPT_AT_MOST:
+            break
+        selected.append((message, body))
+        used += cost
+    return ("\n\n".join(body for _message, body in selected),
+            tuple(message for message, _body in selected))
+
+
 class Words:
     """Words for a turn that is already running, and whether it will still take one.
 
@@ -222,17 +295,34 @@ class Words:
     to do something about it rather than being told it was delivered.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, agent: str, conversation: int, turn: int,
+                 caller_agent: Optional[str] = None) -> None:
+        self.agent = agent
+        self.conversation = conversation
+        self.turn = turn
+        #: Only delegated turns receive this. Person-facing turns are steered by their channel's
+        #: in-process delivery and must not poll somebody else's durable messages.
+        self.caller_agent = caller_agent
         self.watching = threading.Condition()
-        self.words: List[str] = []
+        self.words: List[Guidance] = []
+        self._sent = set()
         self.open = True
 
-    def say(self, word: str) -> bool:
-        """Put one word in. **False when the turn will not read it** — and the caller must act."""
+    def say(self, word: str, messages: Tuple[int, ...] = (),
+            admission: Optional[Admission] = None) -> bool:
+        """Put one word in. **False when the turn will not read it** — and leave it pending.
+
+        Durable messages are claimed while this turn is still provably open, under the same lock
+        `close` needs. Once appended, `each` drains the word even if closing begins immediately.
+        The provider feeder releases the claim if its stream has already stopped accepting input.
+        """
         with self.watching:
             if not self.open:
                 return False
-            self.words.append(word)
+            if messages:
+                arriving.handled_by_turn(
+                    self.agent, self.conversation, messages, self.turn)
+            self.words.append(Guidance(word, messages, self.conversation, admission))
             self.watching.notify_all()
             return True
 
@@ -242,17 +332,66 @@ class Words:
             self.open = False
             self.watching.notify_all()
 
-    def each(self):
-        """Every word, as it arrives, until the turn stops taking them."""
+    def accepted(self, guidance: Guidance) -> None:
+        """Remember that this exact durable batch crossed the provider's live input."""
+        with self.watching:
+            self._sent.update(guidance.messages)
+        if guidance.messages:
+            kept.add_turn_record(
+                self.agent, self.turn, ADMITTED, {"messages": list(guidance.messages)})
+        if guidance.admission is not None:
+            guidance.admission.accepted()
+
+    def refuse_unsent(self) -> None:
+        """Close intake and return every claimed batch the provider did not accept.
+
+        A provider can refuse the first batch while later batches are already queued. Releasing only
+        the one in hand strands the rest on a turn that will never read them, so the queue is settled
+        as one unit before the turn may become terminal.
+        """
+        with self.watching:
+            self.open = False
+            unsent = [guidance for guidance in self.words
+                      if any(message not in self._sent for message in guidance.messages)]
+            messages = tuple(dict.fromkeys(
+                message for guidance in unsent for message in guidance.messages))
+            self.watching.notify_all()
+        try:
+            if messages:
+                arriving.released_by_turn(
+                    self.agent, self.conversation, messages, self.turn)
+        finally:
+            for guidance in unsent:
+                if guidance.admission is not None:
+                    guidance.admission.refused()
+
+    def each(self) -> Iterator[Guidance]:
+        """Every word until intake closes, including durable A2A guidance written elsewhere."""
         at = 0
         while True:
             with self.watching:
                 self.watching.wait_for(
-                    lambda so_far=at: so_far < len(self.words) or not self.open)
-                if at >= len(self.words):
+                    lambda so_far=at: so_far < len(self.words) or not self.open,
+                    timeout=GUIDANCE_EVERY if self.caller_agent else None)
+                if at < len(self.words):
+                    word, at = self.words[at], at + 1
+                elif not self.open:
                     return
-                word, at = self.words[at], at + 1
-            yield word
+                else:
+                    word = None
+            if word is not None:
+                yield word
+                continue
+            body, messages = delegated_prompt(
+                self.agent, self.conversation, self.caller_agent or "")
+            if not messages:
+                continue
+            try:
+                self.say(body, messages)
+            except records.Unreadable:
+                # Another exact claimant won between the read and the claim. Read durable state
+                # again rather than queueing a duplicate or treating somebody else's claim as loss.
+                continue
 
 
 #: The turns running right now that will still take a word, by the conversation each is running in.
@@ -349,7 +488,9 @@ def _stoppable(agent: str, conversation: int) -> Iterator[Ours]:
                 del _running[(agent, conversation)]
 
 
-def also_say(agent: str, conversation: int, word: str) -> bool:
+def also_say(agent: str, conversation: int, word: str,
+             messages: Tuple[int, ...] = (),
+             admission: Optional[Admission] = None) -> bool:
     """Put a word into the turn already running in this conversation. **False if none took it.**
 
     False has three causes and one meaning. There may be no turn running here; there may be one
@@ -360,7 +501,7 @@ def also_say(agent: str, conversation: int, word: str) -> bool:
     """
     with _speaking_to_lock:
         speaking = _speaking_to.get((agent, conversation))
-    return bool(speaking and speaking.say(word))
+    return bool(speaking and speaking.say(word, messages, admission))
 
 
 @contextlib.contextmanager
@@ -386,7 +527,9 @@ def _reachable(agent: str, conversation: int, words: Optional[Words]):
 
 
 def run(request: Request, watching: Optional[Callable[[Dict[str, Any]], None]] = None,
-        saying: Optional[Iterable[str]] = None) -> Outcome:
+        saying: Optional[Iterable[str]] = None,
+        admitted: Optional[Callable[[], None]] = None,
+        waiting: bool = False) -> Outcome:
     """Run one turn and write down everything about it. **The claim is taken here.**
 
     `watching` is handed every record the brain reported, as it arrives. `saying` is words to put
@@ -396,16 +539,17 @@ def run(request: Request, watching: Optional[Callable[[Dict[str, Any]], None]] =
     message arriving on a channel mid-turn reaches the brain that is working on it. A caller that
     passes its own — the terminal, which has somebody typing — keeps it and is not published.
     """
-    with claiming(request.agent, request.conversation) as held:
+    with claiming(request.agent, request.conversation, waiting=waiting) as held:
         # **Published as ours from the moment the claim is taken, not from when the brain starts.**
         # Resolving a provider and composing instructions is a second or so on a cold agent, and a
         # `/stop` pressed in that window found nothing to signal.
         with _stoppable(request.agent, request.conversation) as ours:
-            return _held(request, held, watching, saying, ours)
+            return _held(request, held, watching, saying, ours, admitted)
 
 
 def _held(request: Request, held: int, watching, saying,
-          ours: Optional[Ours] = None) -> Outcome:
+          ours: Optional[Ours] = None,
+          admitted: Optional[Callable[[], None]] = None) -> Outcome:
     """One turn, with the conversation already claimed."""
     agent = request.agent
     # **Resolved before anything is written down.** A provider nothing stands behind is a turn that
@@ -415,17 +559,29 @@ def _held(request: Request, held: int, watching, saying,
     adapters.where(provider_name)
     settings = _as_settings(settled.get("agent_settings"))
     can = protocol.parse_capabilities(adapters.capabilities(provider_name, settings))
-    resume = None if request.fresh else kept.get_session(agent, request.conversation, provider_name)
 
+    # A named async handoff is usable only while a person is present and this turn may change
+    # state. Schedules cannot review a later result inside their already-finished report, delegated
+    # turns are depth one, and read mode forbids creating the handoff. Do not spend their prompt or
+    # make them depend on unrelated team state for a capability they cannot use.
+    may_hand_off = (request.situation == instructions.USER_TO_AGENT
+                    and request.access_mode != protocol.ACCESS_READ)
+    teammates = team.for_agent(agent) if may_hand_off else ""
     prompt = instructions.build(situation=request.situation,
                                 variables=_about(request, provider_name),
                                 additions=request.additions,
                                 # Who this agent may hand work to, read now rather than kept: an
                                 # agent added this morning is one it can delegate to this afternoon,
                                 # and a list cached anywhere would be a list that goes stale
-                                # silently. `build` withholds it from a turn already answering a
-                                # delegation, which is where depth one is enforced.
-                                team=directory.a_team_for(agent))
+                                # silently. Illegal situations receive no listing at all.
+                                team=teammates)
+    resume = None if request.fresh else kept.get_session(agent, request.conversation, provider_name)
+    if resume and kept.latest_instructions(agent, request.conversation, provider_name) != prompt.sha256:
+        # Some brains bind the preface when a session starts and accept-but-ignore replacements on
+        # resume. Throw the stale handle away, rather than merely skipping it once: if this fresh
+        # attempt fails before returning a new handle, the next turn must not revive old authority.
+        kept.delete_session(agent, request.conversation, provider_name)
+        resume = None
     # **From admitted to settled** (R-DIS-24) — what somebody waiting actually experienced, which
     # starts here and not when the brain was reached: resolving a provider and building the prompt
     # are part of the wait. Monotonic, so a clock correction mid-turn cannot make it negative.
@@ -447,9 +603,19 @@ def _held(request: Request, held: int, watching, saying,
     })
 
     with _settled_whatever_happens(agent, turn) as settling:
+        arriving.handled_by_turn(agent, request.conversation, request.inbound_messages, turn)
+        if request.inbound_messages:
+            kept.add_turn_record(
+                agent, turn, ADMITTED, {"messages": list(request.inbound_messages)})
+        if admitted is not None:
+            with contextlib.suppress(Exception):
+                admitted()
         kept.add_turn_record(agent, turn, INSTRUCTIONS, {
             "sha256": prompt.sha256,
             "layers": [{"name": one.name, "bytes": one.bytes_used} for one in prompt.layers],
+            # The standing team is volatile. Keep the compact snapshot so a historical instruction
+            # view can recompose the words this turn actually saw.
+            "team": teammates,
         })
         raw = adapters.raw_of(agent, request.conversation)
         began_at = _how_big(raw)
@@ -462,7 +628,11 @@ def _held(request: Request, held: int, watching, saying,
             preface=prompt.text, owners=environment.owners_own())
         # **A turn nobody passed words to is still one a channel can speak into.** The words go
         # somewhere `also_say` can reach for exactly as long as this turn will read them.
-        reachable = Words() if can["steer"] and saying is None else None
+        reachable = (Words(
+            agent, request.conversation, turn,
+            caller_agent=(request.caller_agent
+                          if request.situation == instructions.AGENT_TO_AGENT else None))
+                     if can["steer"] and saying is None else None)
         with _reachable(agent, request.conversation, reachable):
             said, stream = _the_brain(request, provider_name, told, turn, held, can, watching,
                                       saying if saying is not None else
@@ -470,6 +640,20 @@ def _held(request: Request, held: int, watching, saying,
         settling.update(_became(request, turn, said, stream, can, provider_name,
                                 began_at, _how_big(raw), time.monotonic() - began))
     return settling.outcome
+
+
+def admitted_message(agent: str, turn: int, message: int) -> bool:
+    """Whether one durable message crossed this turn's admission boundary."""
+    for record in kept.list_turn_records(agent, turn):
+        if record["record_type"] != ADMITTED:
+            continue
+        try:
+            messages = json.loads(record["event_data"] or "{}").get("messages", [])
+        except (TypeError, ValueError):
+            continue
+        if message in messages:
+            return True
+    return False
 
 
 def _the_brain(request: Request, provider_name: str, told: Dict[str, str], turn: int, held: int,
@@ -495,7 +679,7 @@ def _the_brain(request: Request, provider_name: str, told: Dict[str, str], turn:
             # more — and records rather than plain text, because a brain that reads to the end of its
             # input would wait for an end that is not coming.
             stream.say(protocol.build_say_line(request.prompt))
-            speaking = _speaking(agent, turn, stream, saying)
+            speaking = _speaking(agent, turn, stream, saying, reachable=reachable)
         else:
             # Told there is no more coming, so a brain that reads its input to the end can answer.
             stream.say(request.prompt)
@@ -519,12 +703,22 @@ def _the_brain(request: Request, provider_name: str, told: Dict[str, str], turn:
         if reachable is not None:
             reachable.close()
         if speaking is not None:
-            speaking.join(timeout=1.0)
+            if reachable is not None:
+                # The turn cannot become terminal while durable guidance is still claimed but
+                # neither sent nor released. The feeder owns that settlement boundary, so teardown
+                # waits for it rather than letting collection race ahead.
+                speaking.join()
+            else:
+                # An attended caller owns this iterator: terminal stdin may remain open after the
+                # provider has emitted `done` and exited. Rundesk cannot close it and must not make
+                # provider settlement wait forever for somebody to type another word.
+                speaking.join(timeout=1.0)
         stream.stop()
     return said, stream
 
 
-def _speaking(agent: str, turn: int, stream, saying) -> Optional[threading.Thread]:
+def _speaking(agent: str, turn: int, stream, saying,
+              reachable: Optional[Words] = None) -> Optional[threading.Thread]:
     """Put words into a turn that is already running, from a thread of its own.
 
     On its own thread because the caller's is draining records: a person typing and a brain talking
@@ -539,15 +733,34 @@ def _speaking(agent: str, turn: int, stream, saying) -> Optional[threading.Threa
         return None
 
     def speak() -> None:
+        guidance = Guidance("")
         try:
-            for word in saying:
+            for received in saying:
+                guidance = (received if isinstance(received, Guidance)
+                            else Guidance(str(received)))
                 kept.add_turn_record(agent, turn, SENT,
-                                     _bounded({"text": word, "mid_turn": True}))
-                if not stream.say(protocol.build_say_line(word, protocol.STEERING_CONTEXT)):
+                                     _bounded({"text": guidance.text, "mid_turn": True}))
+                accepted = stream.say(protocol.build_say_line(
+                    guidance.text, protocol.STEERING_CONTEXT))
+                if not accepted:
+                    if reachable is not None:
+                        reachable.refuse_unsent()
+                    elif guidance.messages:
+                        arriving.released_by_turn(
+                            agent, guidance.conversation, guidance.messages, turn)
                     kept.add_turn_record(agent, turn, LOST, {"lost_count": 1,
                                                              "reason": "it had already finished"})
                     return
+                if reachable is not None:
+                    reachable.accepted(guidance)
         except Exception as why:                       # noqa: BLE001 — see the docstring
+            if reachable is not None:
+                with contextlib.suppress(Exception):
+                    reachable.refuse_unsent()
+            elif guidance.messages:
+                with contextlib.suppress(Exception):
+                    arriving.released_by_turn(
+                        agent, guidance.conversation, guidance.messages, turn)
             with contextlib.suppress(Exception):
                 kept.add_turn_record(agent, turn, LOST,
                                      {"lost_count": 1, "reason": f"not said: {why}"})
@@ -592,8 +805,14 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
             elapsed: Optional[float] = None) -> Dict[str, Any]:
     """What this turn came to, and everything the records keep about it."""
     agent = request.agent
-    reply = protocol.reply(said)
-    answered = protocol.has_answer(said)
+    # A person-facing turn is a conversation and keeps everything the brain said. An unattended
+    # schedule or delegation has one report: activity may exist in its stream, but only the last
+    # complete response is what its owner or calling agent receives.
+    unattended = request.situation in (instructions.SCHEDULE_TO_AGENT,
+                                       instructions.AGENT_TO_AGENT)
+    closing = protocol.last_thought(said)
+    reply = closing if unattended else protocol.reply(said)
+    answered = bool(reply.strip()) if unattended else protocol.has_answer(said)
     brain_said = protocol.brain_said_ok(said)
     gone = stream.outcome()
     used = protocol.usage_of(said)
@@ -632,7 +851,7 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
 
     return {
         "outcome": Outcome(turn=turn, turn_status=status, reply=reply,
-                           last_thought=protocol.last_thought(said), failure_code=code,
+                           last_thought=closing, failure_code=code,
                            failure_message=message, usage=used,
                            files=tuple(protocol.file_records(said)),
                            provider_name=provider_name, elapsed_seconds=elapsed),
@@ -703,6 +922,8 @@ def _about(request: Request, provider_name: str) -> Dict[str, object]:
         "access_mode": request.access_mode,
         "schedule_name": _schedule_name(request),
         "conversation_id": request.conversation,
+        "source_kind": request.source,
+        "audience_id": request.place or request.agent,
         "caller_agent": request.caller_agent,
     }
 
@@ -790,4 +1011,3 @@ def note(agent: str, said: str, level: str = logs.INFO) -> None:
     """
     with contextlib.suppress(Exception):
         logs.note(directory.logs(agent), said, level)
-

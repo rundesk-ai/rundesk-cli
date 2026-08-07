@@ -20,6 +20,8 @@ EVERYTHING = {
     "access_mode": "work",
     "schedule_name": "nightly",
     "conversation_id": "7",
+    "source_kind": "terminal",
+    "audience_id": "ava",
 }
 
 #: The three situation blocks, for a case that has to try each. Named here rather than exported by
@@ -88,9 +90,38 @@ class TheCore(support.Isolated):
 
     def test_it_says_what_a_turn_may_never_do(self):
         text = instructions.CORE.lower()
-        for said in ("never invent", "never write a secret", "never dress a failure"):
+        for said in ("never invent", "never write a secret", "never dress a failure",
+                     "never open its databases or lock files directly"):
             with self.subTest(said=said):
                 self.assertIn(said, text)
+
+    def test_it_defines_done_as_verified_against_every_requested_item(self):
+        text = instructions.CORE
+        self.assertIn("Before ending, check every requested item", text)
+        self.assertIn("Unverified is not done", text)
+
+    def test_it_makes_the_requested_access_mode_an_operating_rule(self):
+        for mode in ("read", "work"):
+            with self.subTest(mode=mode):
+                built = instructions.build(variables={**EVERYTHING, "access_mode": mode}).text
+                self.assertIn(f"This turn is {mode}", built)
+        read = instructions.build(variables={**EVERYTHING, "access_mode": "read"}).text
+        self.assertIn("do not edit, change external state", read)
+        self.assertIn("or create a named-agent handoff", read)
+        self.assertIn("not a sandbox", read)
+
+    def test_every_situation_knows_how_to_recover_missing_context(self):
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:24]):
+                built = instructions.build(
+                    situation=situation,
+                    variables={**EVERYTHING, "caller_agent": "bob"}).text
+                self.assertIn('"$RUNDESK_COMMAND" messages ava --search', built)
+                self.assertIn("another audience's history as private", built.lower())
+
+    def test_it_identifies_the_current_audience_for_safe_history_recovery(self):
+        built = instructions.build(variables=EVERYTHING).text
+        self.assertIn("Audience: `terminal:ava`", built)
 
 
 class ExactlyOneSituation(support.Isolated):
@@ -127,17 +158,12 @@ class ExactlyOneSituation(support.Isolated):
 
 
 class WhatThePersonLayerNames(support.Isolated):
-    """The retrieval loop, closed inside a turn."""
+    """What is true only while a person is waiting."""
 
-    def test_it_tells_the_agent_how_to_read_its_own_history_back(self):
+    def test_history_recovery_is_owned_by_the_core_not_repeated_here(self):
         built = instructions.build(variables=EVERYTHING)
-        self.assertIn("rundesk messages ava --search", built.text)
-        self.assertIn("--conversation 7", built.text)
-        self.assertIn("--source schedule", built.text)
-
-    def test_the_schedule_layer_does_not_because_nobody_referred_to_anything(self):
-        built = instructions.build(situation=instructions.SCHEDULE_TO_AGENT, variables=EVERYTHING)
-        self.assertNotIn("rundesk messages", built.text)
+        self.assertIn('"$RUNDESK_COMMAND" messages ava --search', built.text)
+        self.assertNotIn("messages", instructions.USER_TO_AGENT)
 
     def test_the_schedule_layer_forbids_asking_because_nothing_would_answer(self):
         built = instructions.build(situation=instructions.SCHEDULE_TO_AGENT, variables=EVERYTHING)
@@ -163,7 +189,12 @@ class FillingInAVariable(support.Isolated):
 
     def test_a_value_that_is_not_text_is_still_filled(self):
         built = instructions.build(variables=dict(EVERYTHING, conversation_id=412))
-        self.assertIn("--conversation 412", built.text)
+        self.assertIn("conversation 412", built.text)
+
+    def test_a_placeholder_inside_a_value_is_not_filled_a_second_time(self):
+        home = "/agents/{provider_name}/home"
+        built = instructions.build(variables={**EVERYTHING, "agent_home": home})
+        self.assertIn(home, built.text)
 
 
 class Additions(support.Isolated):
@@ -181,9 +212,12 @@ class Additions(support.Isolated):
                          ["core", "situation"])
 
     def test_one_is_bounded_where_it_comes_in(self):
-        built = instructions.build(variables=EVERYTHING,
-                                   additions=[("long", "x" * (instructions.AN_ADDITION_AT_MOST * 2))])
-        self.assertEqual(built.layers[-1].bytes_used, instructions.AN_ADDITION_AT_MOST)
+        built = instructions.build(
+            variables=EVERYTHING,
+            additions=[("long", "\u20ac" * instructions.AN_ADDITION_AT_MOST)])
+        encoded = built.text.split("\n\n")[-1].encode("utf-8")
+        self.assertLessEqual(built.layers[-1].bytes_used, instructions.AN_ADDITION_AT_MOST)
+        self.assertEqual(len(encoded), 3999)
 
     def test_the_finished_stack_is_never_clipped(self):
         """Clipping the whole would silently drop whichever later layers fell past the boundary,
@@ -265,16 +299,51 @@ class WhatATurnMayDelegateTo(support.Isolated):
     def test_a_person_asking_is_shown_the_team(self):
         text = self.built(instructions.USER_TO_AGENT)
         self.assertIn(self.A_TEAM, text)
-        self.assertIn("rundesk ask <agent>", text)
+        self.assertIn('"$RUNDESK_COMMAND" ask <agent>', text)
 
-    def test_a_schedule_is_shown_the_team_too(self):
-        """Nobody is present, but the answer still lands where the schedule announces."""
-        self.assertIn(self.A_TEAM, self.built(instructions.SCHEDULE_TO_AGENT))
+    def test_a_schedule_is_shown_no_team_it_cannot_wait_to_review(self):
+        text = self.built(instructions.SCHEDULE_TO_AGENT)
+        self.assertNotIn(self.A_TEAM, text)
+        self.assertNotIn('"$RUNDESK_COMMAND" ask <agent>', text)
+
+    def test_owner_descriptions_are_data_and_cannot_expand_prompt_placeholders(self):
+        text = instructions.build(
+            variables={**EVERYTHING, "provider_name": "secret-provider"},
+            team="- **bob** — handles literal {provider_name} records").text
+        self.assertIn("handles literal {provider_name} records", text)
+        self.assertNotIn("handles literal secret-provider records", text)
 
     def test_a_turn_answering_another_agent_is_shown_nobody(self):
         text = self.built(instructions.AGENT_TO_AGENT)
         self.assertNotIn(self.A_TEAM, text)
-        self.assertNotIn("rundesk ask <agent>", text)
+        self.assertNotIn('"$RUNDESK_COMMAND" ask <agent>', text)
+
+    def test_it_explains_both_delegation_layers_and_their_lifecycles(self):
+        text = self.built(instructions.USER_TO_AGENT).lower()
+        for phrase in ("named rundesk agent", "asynchronous", "provider-local subagent",
+                       "same turn", "review", "end this turn", "parent task is done"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+
+    def test_a_delegated_turn_routes_independent_heavy_work_to_local_helpers(self):
+        text = self.built(instructions.AGENT_TO_AGENT).lower()
+        self.assertIn("two or more heavy workstreams", text)
+        self.assertIn("instead of doing all sequentially", text)
+        self.assertIn("verify the results", text)
+
+    def test_it_prefers_a_materially_better_specialist_without_delegating_simple_work(self):
+        text = self.built(instructions.USER_TO_AGENT)
+        self.assertIn("materially better equipped", text)
+        self.assertIn("Let them use provider-local helpers", text)
+        self.assertIn("Continue other useful work when justified", text)
+        self.assertIn("Neither its item nor the parent task is done until you review it", text)
+        self.assertIn("Simple or general work", text)
+
+    def test_it_explains_how_to_guide_working_and_answered_delegations(self):
+        text = self.built(instructions.USER_TO_AGENT)
+        self.assertIn("`say` steers its active turn", text)
+        self.assertIn("falls back to its next turn", text)
+        self.assertIn("`resume` continues answered work", text)
 
     def test_an_install_with_no_other_agent_is_offered_no_heading_at_all(self):
         """An empty listing under a heading reads as a team of nobody rather than as no team."""
@@ -295,7 +364,7 @@ class OneRuleLivesInOnePlace(support.Isolated):
 
     #: Rules `CORE` owns outright. A situation saying one again in its own words is a second wording
     #: of one rule — which is what "one rule lives in one place" means when it is not merely prose.
-    THE_CORES_OWN = ("Blocked?", "Never invent a fact", "take the reading it best supports")
+    THE_CORES_OWN = ("Blocked?", "Never invent a fact", "take the best-supported reading")
 
     #: The situations, by the constants rather than by slicing the rendered prompt on a heading.
     #: Headings are wording somebody edits; what belongs to which layer is not.
@@ -316,16 +385,16 @@ class OneRuleLivesInOnePlace(support.Isolated):
                 with self.subTest(phrase=phrase, situation=situation[:24]):
                     self.assertNotIn(phrase, situation)
 
-    def test_both_unattended_blocks_say_only_the_last_message_is_kept(self):
-        """Written into each rather than shared. Two short sentences in two blocks is less to hold
-        in your head than a fragment and the splice that puts it there."""
+    def test_both_unattended_blocks_define_the_final_delivery(self):
         for situation in (instructions.SCHEDULE_TO_AGENT, instructions.AGENT_TO_AGENT):
             with self.subTest(situation=situation):
-                self.assertIn("only your last complete message is kept", self.rendered(situation))
+                self.assertIn("Tool or thinking activity may appear", self.rendered(situation))
+                self.assertIn("sole complete report", self.rendered(situation))
+                self.assertIn("last response alone", self.rendered(situation))
 
     def test_and_a_person_asking_is_told_none_of_it(self):
         """A person is waiting, so none of it is true: they can be asked, and they are reading."""
-        self.assertNotIn("only your last complete message is kept",
+        self.assertNotIn("last response alone",
                          self.rendered(instructions.USER_TO_AGENT))
 
     def test_never_ask_a_question_is_the_schedules_alone(self):
@@ -343,7 +412,27 @@ class OneRuleLivesInOnePlace(support.Isolated):
         one was found, after every case that renders that block had filled it by hand."""
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation):
-                self.assertNotIn("{schedule_name}", self.rendered(situation))
+                self.assertNotIn("{", self.rendered(situation))
+
+
+class PromptBudget(support.Isolated):
+    """The standing words stay compact enough that rules do not crowd out the task."""
+
+    def test_static_layers_have_explicit_byte_ceilings(self):
+        ceilings = {
+            "core": (instructions.CORE, 1900),
+            "person": (instructions.USER_TO_AGENT, 500),
+            "schedule": (instructions.SCHEDULE_TO_AGENT, 700),
+            "agent": (instructions.AGENT_TO_AGENT, 1100),
+            "team": (instructions.AGENTS_LIST, 1250),
+        }
+        for name, (text, ceiling) in ceilings.items():
+            with self.subTest(layer=name):
+                self.assertLessEqual(len(text.encode("utf-8")), ceiling)
+
+    def test_a_maximum_dynamic_team_keeps_the_complete_prompt_bounded(self):
+        built = instructions.build(variables=EVERYTHING, team="x" * 6000)
+        self.assertLessEqual(built.total_bytes, 9200)
 
 
 if __name__ == "__main__":

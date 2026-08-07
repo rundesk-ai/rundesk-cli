@@ -25,7 +25,7 @@ delegation depth is one.
 | `ask <agent> '<brief>'` | During this agent turn, hand work to another agent and return immediately with a delegation id. |
 | `asked` | List this agent's delegations as `working`, `stopping`, or `answered`. |
 | `asked show <id>` | Show one delegation, including its target, conversation, and timestamps. |
-| `asked say <id> '<words>'` | Add guidance to outstanding work; the target reads it at its next turn. |
+| `asked say <id> '<words>'` | Steer outstanding work now; if the active turn is missed, its next turn reads the durable guidance. |
 | `asked stop <id>` | Request a stop without claiming the work has stopped. |
 | `asked resume <id> '<more>'` | Reopen answered work in the target's existing provider session. |
 
@@ -43,6 +43,7 @@ delegating agent with the answer. Do not wait by polling or treat the handoff me
 - `stopping` means a stop was requested but has not yet been proven.
 - `answered` means the delegating agent must evaluate the result.
 
-Use `say` only while work is outstanding; it does not interrupt a provider turn already in progress.
-Use `resume` only after an answer. Review the returned evidence against the original task before
+Use `say` only while work is outstanding. The target gateway offers it to the provider turn already
+running and keeps it for the next turn only when that live steer is missed or refused. Use `resume`
+only after an answer. Review the returned evidence against the original task before
 adopting it, making further changes, or reporting it as fact.

@@ -140,7 +140,8 @@ def recorded_for_a_schedule(agent: str, schedule: str, body: str,
 
 
 def said_by_rundesk_into(agent: str, conversation: int, body: str,
-                          when: Optional[datetime] = None) -> Landed:
+                          when: Optional[datetime] = None,
+                          external_id: Optional[str] = None) -> Landed:
     """Write down something rundesk said, in a conversation already known by its id.
 
     The sibling of `said_by_rundesk`, which finds the conversation from a channel and a place. This
@@ -153,12 +154,14 @@ def said_by_rundesk_into(agent: str, conversation: int, body: str,
     now = _now(when)
     with records.writing(directory.records(agent)) as conn:
         message, fresh = _message(conn, agent, conversation, BY_RUNDESK, "rundesk",
-                                  _bounded(body), None, now)
+                                  _bounded(body), external_id, now)
     return Landed(conversation, message, fresh)
 
 
 def recorded_for_a_delegation(agent: str, delegator: str, parent_turn: int, body: str,
-                              when: Optional[datetime] = None) -> Landed:
+                              when: Optional[datetime] = None,
+                              delegation_id: Optional[str] = None,
+                              legacy_fallback: bool = False) -> Landed:
     """Write down what another agent asked, in a conversation of its own.
 
     **This is the one place a gateway writes an agent's store that is not its own**, and it is a
@@ -166,9 +169,10 @@ def recorded_for_a_delegation(agent: str, delegator: str, parent_turn: int, body
     arrives. What stays the answering agent's own is everything downstream: it makes the turn, it
     records it, and it holds no account of somebody else's delegation.
 
-    **Keyed by who asked and which of their turns**, so two delegations from one turn share a
-    conversation and therefore a provider session, and one from a later turn starts its own. The key
-    is never stored — a stored id would point into a database the delegator may not follow it into.
+    **Keyed by the delegation as well as who asked and which turn**, so two bounded tasks from one
+    turn cannot share a provider session or answer. Guidance and resumed work carry the same id and
+    therefore return to that delegation's session. Old callers with no id retain the earlier key so
+    delegations written before this boundary remain readable.
 
     **The format is spelled here and in `delegations.kept.source_id_for`, and it has to stay the
     same in both.** This layer may not import that one, so the two cannot share a function;
@@ -185,9 +189,18 @@ def recorded_for_a_delegation(agent: str, delegator: str, parent_turn: int, body
     rather than by a prefix somebody has to parse.
     """
     now = _now(when)
+    legacy = f"{delegator}/{parent_turn}"
+    source_id = f"{legacy}/{delegation_id}" if delegation_id else legacy
     with records.writing(directory.records(agent)) as conn:
-        conversation = _conversation(conn, agent, FROM_AGENT, f"{delegator}/{parent_turn}",
-                                     None, now)
+        if delegation_id and legacy_fallback:
+            current = _rows(
+                conn, agent,
+                "SELECT source_id FROM conversations WHERE source = ? AND source_id IN (?, ?)"
+                " ORDER BY CASE source_id WHEN ? THEN 0 ELSE 1 END LIMIT 1",
+                (FROM_AGENT, source_id, legacy, source_id)).fetchone()
+            if current is not None:
+                source_id = str(current["source_id"])
+        conversation = _conversation(conn, agent, FROM_AGENT, source_id, None, now)
         message, fresh = _message(conn, agent, conversation, BY_AGENT, delegator,
                                   _bounded(body), None, now)
     return Landed(conversation, message, fresh)
@@ -262,6 +275,82 @@ def messages(agent: str, conversation: int, most: int = 50) -> List[Dict[str, An
                       "SELECT * FROM conversation_messages WHERE conversation_id = ?"
                       " ORDER BY id DESC LIMIT ?", (conversation, most)).fetchall()
     return [dict(row) for row in reversed(found)]
+
+
+def pending_from(agent: str, conversation: int, author_id: str,
+                 most: int) -> List[Tuple[int, str]]:
+    """Pending inbound messages from one author, oldest first and bounded.
+
+    A delegated turn calls this while it runs so guidance written by another process can enter the
+    same provider turn. Reading does not claim anything: `handled_by_turn` makes the exact atomic
+    claim only after the turn has proved it is still accepting input.
+    """
+    with records.reading(directory.records(agent)) as conn:
+        found = _rows(
+            conn, agent,
+            "SELECT id, body FROM conversation_messages"
+            " WHERE conversation_id = ? AND author_id = ? AND turn_id IS NULL"
+            " ORDER BY id LIMIT ?", (conversation, author_id, most)).fetchall()
+    return [(int(one["id"]), str(one["body"] or "")) for one in found]
+
+
+def turn_for_message(agent: str, conversation: int, message: int) -> Optional[int]:
+    """The turn that admitted one exact message, or `None` while it remains pending."""
+    with records.reading(directory.records(agent)) as conn:
+        found = _rows(
+            conn, agent,
+            "SELECT turn_id FROM conversation_messages WHERE conversation_id = ? AND id = ?",
+            (conversation, message)).fetchone()
+    if found is None:
+        raise records.NotThere(f"message {message} is not in conversation {conversation}")
+    return int(found["turn_id"]) if found["turn_id"] is not None else None
+
+
+def handled_by_turn(agent: str, conversation: int, messages: tuple, turn: int) -> None:
+    """Associate pending inbound `messages` with the turn that received them.
+
+    Delegation guidance can arrive while an earlier turn runs. Leaving every inbound message's
+    `turn_id` empty makes that earlier reply look like it answered later guidance merely because it
+    was written afterward. Exact ids make the boundary durable and race-free.
+    """
+    ids = tuple(dict.fromkeys(int(one) for one in messages))
+    if not ids:
+        return
+    marks = ", ".join("?" for _one in ids)
+    with records.writing(directory.records(agent)) as conn:
+        changed = _rows(
+            conn, agent,
+            f"UPDATE conversation_messages SET turn_id = ? WHERE conversation_id = ?"
+            f" AND turn_id IS NULL AND id IN ({marks})",
+            (turn, conversation, *ids)).rowcount
+        if changed != len(ids):
+            # Inside the transaction so one valid id beside one stale id claims neither. A partial
+            # claim would split one provider prompt across two future turns.
+            raise records.Unreadable(
+                f"{agent} could not associate every inbound message with turn {turn}")
+
+
+def released_by_turn(agent: str, conversation: int, messages: tuple, turn: int) -> None:
+    """Return exact inbound messages to pending when a provider refused their live steer.
+
+    A durable delegation word is claimed before it enters the active turn's in-memory queue. If the
+    provider has already stopped accepting input, that claim must be undone or the word belongs to
+    a turn that never read it and no later turn can recover it. Exact ids and the exact former turn
+    make this the inverse of `handled_by_turn`, not a broad reset of conversation history.
+    """
+    ids = tuple(dict.fromkeys(int(one) for one in messages))
+    if not ids:
+        return
+    marks = ", ".join("?" for _one in ids)
+    with records.writing(directory.records(agent)) as conn:
+        changed = _rows(
+            conn, agent,
+            f"UPDATE conversation_messages SET turn_id = NULL WHERE conversation_id = ?"
+            f" AND turn_id = ? AND id IN ({marks})",
+            (conversation, turn, *ids)).rowcount
+        if changed != len(ids):
+            raise records.Unreadable(
+                f"{agent} could not release every inbound message from turn {turn}")
 
 
 def last_answer(agent: str, source: str, place: str, after: str = "") -> str:

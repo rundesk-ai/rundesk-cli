@@ -531,7 +531,9 @@ class Turn:
         if kind == "agentMessage" and not started:
             text = str(item.get("text") or "")
             if text.strip():
-                say({"type": "text", "text": text, "whole": True})
+                phase = str(item.get("phase") or "")
+                say({"type": "text", "text": text, "whole": True,
+                     **({"final": True} if phase == "final_answer" else {})})
         elif kind == "reasoning" and not started:
             # One record per finished thought rather than one per turn: the brain writes several,
             # and joining them would make one long paragraph out of separate pieces of thinking.

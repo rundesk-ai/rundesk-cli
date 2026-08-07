@@ -30,6 +30,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import support
 from rundesk.agents import directory, records
@@ -721,12 +722,67 @@ class TwoTurnsInOneConversation(Answering):
         self.assertTrue(self.waited_until(lambda: turns.busy(self.agent, landed.conversation)),
                         "no turn ever started to steer")
 
-        answers.answer(self.agent, "discord", "1180", "2207", "the second", "8842", landed)
+        follow_up = arriving.recorded(
+            self.agent, "discord", "1180", "2207", "the second", external_id="8842")
+        answers.answer(
+            self.agent, "discord", "1180", "2207", "the second", "8842", follow_up)
         self.assertTrue(self.waited_until(
             lambda: "said into the turn already running" in self.said()),
             "a message that arrived mid-turn reached nobody")
         # **One turn, not two.** A second turn would answer the same person twice and cost twice.
         self.assertTrue(self.waited_until(lambda: len(kept.list_turns(self.agent)) == 1))
+
+    def test_the_mid_turn_message_changes_the_same_turns_final_answer(self):
+        """Acceptance by the in-process queue is not the guarantee: the provider must hear the
+        word, incorporate it, and finish the original turn with that result in its answer."""
+        marker = "STEERED-PERSON-482"
+        self.a_stand_in_told(self.agent, steer=True, finish_after_steers=1)
+        self.a_channel(saying=self.a_message_arrived(text="the first"))
+        watching = self.hosting_now()
+        self.assertTrue(self.waited_until(self.a_turn_is_running),
+                        "no turn ever started to steer")
+        conversation = arriving.standing_in(self.agent, "1180")
+        self.assertIsNotNone(conversation)
+        follow_up = arriving.recorded(
+            self.agent, "discord", "1180", "2207", marker, external_id="8842")
+
+        answering.OnAChannel(self.where, lambda: watching).answer(
+            self.agent, "discord", "1180", "2207", marker, "8842", follow_up)
+
+        turn = self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: marker in " ".join(self.delivered())),
+                        "the provider heard the steer but its final answer did not include it")
+        self.assertEqual(1, len(kept.list_turns(self.agent)),
+                         "the follow-up started a later turn instead of steering this one")
+        sent = [one for one in kept.list_turn_records(self.agent, turn["id"])
+                if one["record_type"] == turns.SENT]
+        self.assertTrue(any(json.loads(one["event_data"]).get("mid_turn")
+                            and marker in json.loads(one["event_data"]).get("text", "")
+                            for one in sent),
+                        "the original turn has no account of the steer it incorporated")
+        self.assertEqual(turn["id"], next(
+            one for one in arriving.messages(self.agent, conversation)
+            if one["id"] == follow_up.message)["turn_id"])
+
+    def test_a_queued_follow_up_the_provider_refuses_receives_one_fallback_turn(self):
+        landed = arriving.recorded(self.agent, "discord", "1180", "2207", "follow up")
+        answers = answering.OnAChannel(self.where, lambda: hosting.Watching({}, {}, {}))
+        fallback = turns.Outcome(turn=19, turn_status=kept.DONE, reply="done")
+
+        def refused(_agent, _conversation, _body, messages=(), admission=None):
+            self.assertEqual((landed.message,), messages)
+            admission.refused()
+            return True
+
+        with mock.patch.object(turns, "run", side_effect=[turns.Busy(), fallback]) as ran, \
+                mock.patch.object(turns, "also_say", side_effect=refused), \
+                mock.patch.object(answers, "_marked"), \
+                mock.patch.object(answers, "_delivered", return_value=""):
+            answers._answered(
+                self.agent, "discord", "1180", "follow up", "8842", landed)
+
+        self.assertEqual(2, ran.call_count)
+        self.assertEqual((landed.message,), ran.call_args_list[-1].args[0].inbound_messages)
 
     def test_a_claim_no_running_turn_will_take_a_word_from_is_asked_again(self):
         """A conversation can be busy without there being a turn here to speak into — a person at a
@@ -736,15 +792,18 @@ class TwoTurnsInOneConversation(Answering):
         would have stopped there. It is offered again instead, because the way it was refused is
         also the way it stops being refused: the turn in front of it ends.
         """
-        self.a_stand_in_told(self.agent, silent=True)
-        landed = arriving.recorded(self.agent, "discord", "1180", "2207", "the first")
+        landed = arriving.recorded(self.agent, "discord", "1180", "2207", "the second")
         watching = hosting.Watching({}, {}, {})
         answers = answering.OnAChannel(self.where, lambda: watching)
         with turns.claiming(self.agent, landed.conversation):
             answers.answer(self.agent, "discord", "1180", "2207", "the second", "8842", landed)
-            self.assertTrue(self.waited_until(lambda: "stayed busy" in self.said()),
-                            "a message nobody could take was neither answered nor reported")
-        self.assertEqual([], kept.list_turns(self.agent))
+            time.sleep(answering.BEFORE_ASKING_AGAIN * (answering.TRIES + 1))
+            self.assertEqual([], kept.list_turns(self.agent))
+
+        turn = self.waited_for_a_turn()
+        self.assertEqual(1, len(kept.list_turns(self.agent)))
+        self.assertEqual(turn["id"], arriving.turn_for_message(
+            self.agent, landed.conversation, landed.message))
 
     def said(self):
         found = list(self.where.glob("*.log"))
@@ -786,6 +845,105 @@ class AScheduleThatAsksTheAgent(Answering):
         with self.assertRaises(answering.Refused) as refused:
             answering.for_a_schedule(self.agent, "build")
         self.assertIn("rundesk schedules run", str(refused.exception))
+
+
+#: The result envelope is itself steering when the caller is still working. Keep it clear without
+#: repeating the shared mid-turn context on every delegated answer.
+class ADelegatedResultForReview(support.Isolated):
+    def test_it_labels_the_result_unchecked_and_requires_verification(self):
+        said = answering.REVIEW.format(agent="reviewer", answer="three findings")
+        for phrase in ("reviewer", "unchecked", "three findings", "Verify material claims"):
+            self.assertIn(phrase, said)
+        self.assertLessEqual(len(answering.REVIEW.encode("utf-8")), 190)
+
+
+class ADelegatedResultReachesItsParent(Answering):
+
+    def result_messages(self, conversation):
+        return [one for one in arriving.messages(self.agent, conversation)
+                if one["author"] == arriving.BY_RUNDESK]
+
+    def agent_messages(self, conversation):
+        return [one for one in arriving.messages(self.agent, conversation)
+                if one["author"] == arriving.BY_AGENT]
+
+    def test_a_result_steers_the_active_parent_and_changes_that_same_turns_final_answer(self):
+        marker = "DELEGATED-RESULT-731"
+        self.a_stand_in_told(self.agent, steer=True, finish_after_steers=1)
+        self.a_channel(saying=self.a_message_arrived(text="work while bob reviews"))
+        self.hosting_now()
+        self.assertTrue(self.waited_until(self.a_turn_is_running),
+                        "the parent turn never became active")
+        conversation = arriving.standing_in(self.agent, "1180")
+        self.assertIsNotNone(conversation)
+
+        answering.OnADelegation(self.where).review_this(
+            self.agent, conversation, marker, "bob")
+
+        turn = self.waited_for_a_turn()
+        self.assertEqual(1, len(kept.list_turns(self.agent)),
+                         "the result waited for a second parent turn instead of steering")
+        final = " ".join(one["body"] for one in self.agent_messages(conversation)
+                         if one["turn_id"] == turn["id"])
+        self.assertIn(marker, final,
+                      "the active parent finished without incorporating the delegated result")
+        self.assertTrue(any(marker in one["body"] for one in self.result_messages(conversation)),
+                        "the delegated result was not made durable before it was steered")
+        result = next(one for one in self.result_messages(conversation)
+                      if marker in one["body"])
+        self.assertEqual(turn["id"], result["turn_id"])
+
+    def test_a_queued_result_the_provider_refuses_receives_one_fallback_review(self):
+        parent = arriving.asked_at_a_terminal(self.agent, "work while bob reviews")
+        result = "DELEGATED-REFUSED-612"
+        fallback = turns.Outcome(turn=29, turn_status=kept.DONE, reply="reviewed")
+        attempts = 0
+
+        def run(_request, admitted=None):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise turns.Busy()
+            admitted()
+            return fallback
+
+        def refused(_agent, _conversation, _body, messages=(), admission=None):
+            self.assertEqual(1, len(messages))
+            admission.refused()
+            return True
+
+        with mock.patch.object(turns, "run", side_effect=run) as ran, \
+                mock.patch.object(turns, "also_say", side_effect=refused):
+            admitted = answering.OnADelegation(self.where).review_this(
+                self.agent, parent.conversation, result, "bob", "del-1-aabbcc")
+
+        self.assertTrue(admitted)
+        self.assertEqual(2, ran.call_count)
+        message = next(one for one in self.result_messages(parent.conversation)
+                       if result in one["body"])
+        self.assertEqual((message["id"],), ran.call_args_list[-1].args[0].inbound_messages)
+
+    def test_a_result_that_misses_the_parent_wakes_a_new_review_turn(self):
+        marker = "DELEGATED-FALLBACK-914"
+        first = arriving.asked_at_a_terminal(self.agent, "finish before bob returns")
+        original = turns.run(turns.Request(
+            agent=self.agent, prompt="finish before bob returns",
+            conversation=first.conversation, source=arriving.FROM_TERMINAL,
+            place=self.agent, inbound_messages=(first.message,)))
+        self.assertTrue(original.worked)
+        self.assertFalse(turns.busy(self.agent, first.conversation))
+
+        answering.OnADelegation(self.where).review_this(
+            self.agent, first.conversation, marker, "bob")
+
+        turn = self.waited_for_a_turn(which=2)
+        self.assertEqual(2, len(kept.list_turns(self.agent)))
+        final = " ".join(one["body"] for one in self.agent_messages(first.conversation)
+                         if one["turn_id"] == turn["id"])
+        self.assertIn(marker, final,
+                      "a result that missed the active parent did not receive a review turn")
+        self.assertTrue(any(marker in one["body"]
+                            for one in self.result_messages(first.conversation)))
 
 
 if __name__ == "__main__":

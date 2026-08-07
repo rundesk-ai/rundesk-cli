@@ -54,6 +54,27 @@ class Listing(support.Isolated):
         self.assertIn("cole", out)
         self.assertIn("claude", out)
 
+    def test_it_lists_current_skill_names_for_routing(self):
+        catalogs.place_bundled()
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+        code, out, _ = self.rundesk("agents")
+        self.assertEqual(OK, code)
+        self.assertIn("SKILLS", out)
+        self.assertIn("managing-rundesk", out)
+
+    def test_it_says_when_an_agent_has_no_skills(self):
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+        code, out, _ = self.rundesk("agents")
+        self.assertEqual(OK, code)
+        self.assertIn("none", out)
+
+    def test_it_says_when_skill_names_cannot_be_read(self):
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+        with mock.patch("rundesk.commands.agents.grants.held", side_effect=OSError("no")):
+            code, out, _ = self.rundesk("agents")
+        self.assertEqual(OK, code)
+        self.assertIn("cannot be read", out)
+
     def test_the_bare_verb_and_the_named_one_answer_the_same(self):
         self.rundesk("agents", "add", "cole", "--provider", "claude")
         self.assertEqual(self.rundesk("agents"), self.rundesk("agents", "list"))

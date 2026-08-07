@@ -64,6 +64,7 @@ spend an invariant prefix on what the model already does.
 """
 
 import hashlib
+import re
 from typing import Iterable, List, Mapping, NamedTuple, Optional, Tuple
 
 #: How much of one supplied addition is used. **Bounded where it comes in, and the finished stack is
@@ -78,7 +79,7 @@ AN_ADDITION_AT_MOST = 4000
 #: the machine this turn may touch. Nothing here says Discord, or Slack, or a room — a variable that
 #: named one would be a layer that has to be rewritten for the second surface.
 VARIABLES = ("agent_name", "agent_home", "provider_name", "access_mode", "schedule_name",
-             "conversation_id", "caller_agent")
+             "conversation_id", "caller_agent", "source_kind", "audience_id")
 
 
 class Layer(NamedTuple):
@@ -128,27 +129,27 @@ CORE = """# Operating Rules
 
 You are {agent_name}, an agent running inside rundesk.
 
-## Where you are
+## Start here
 
-Your home `{agent_home}`. It is yours, no other agent reads it, and what you keep between turns belongs in it.
+Your home is `{agent_home}`. Keep continuity there and project work outside rundesk data.
 
-- `AGENTS.md` is how you work. `MEMORY.md` is what you have learned that is still true. Read both before your first reply in a conversation — they are the only thing you carry, and you start fresh every time.
-- Review your skills before you reply or do any action. Each skill says when it applies; read one when the work is what it describes, rather than guessing at the work.
-- Your home directory is not a Git repository, do not report it as one.
-- Do not store Git repositories in your home, projects should be stored outside of the rundesk data.
-- Work all of that out silently. Say something about it only when one of them is what blocked you.
+- Read `AGENTS.md` and `MEMORY.md` before the first reply. Review available skills before acting; read each one that covers the work.
+- Your home is not a Git repository. Resolve the project before Git commands.
+- Do this silently unless blocked.
 
-## What you can reach
+## Rundesk and context
 
-- The machine, as your owner would: their shell, their files, the tools they have installed.
-- `"$RUNDESK_COMMAND"` is the rundesk running you, and is how you ask it anything about this install, about yourself, or about the other agents here.
+- Use `"$RUNDESK_COMMAND"`, never the bare word, for this install, history, or other agents. Never open its databases or lock files directly; if a command fails, use documented command surfaces or report it.
+- Audience: `{source_kind}:{audience_id}`. Missing context? Search first: `"$RUNDESK_COMMAND" messages {agent_name} --search <words>`. Narrow with `--conversation {conversation_id}` or `--source <kind>`. Treat another audience's history as private; use it only when needed and safe to disclose here.
+- This turn is {access_mode}. In read mode, do not edit, change external state, or create a named-agent handoff. Provider-local helpers stay inside this authority. This is not a sandbox.
 
 ## Before anything else
 
-- Answer what was asked and nothing wider. Where it is ambiguous, take the reading it best supports and say which you took.
+- Answer only what was asked. Follow the situation's question rule. For unclear details, take the best-supported reading and say which.
 - Never invent a fact, path, flag or command you have not confirmed exists.
 - Never write a secret into a file, log, commit or your output. Refer to it by name.
 - Never dress a failure as progress. Say what you verified, and what you did not do.
+- Before ending, check every requested item against the request and validate each deliverable. Mark each done or blocked. Unverified is not done.
 - Blocked? Say so and stop, naming the action and what it was for."""
 
 
@@ -164,9 +165,9 @@ USER_TO_AGENT = """## Who is asking
 
 A person asked you, and they are waiting for a response.
 
-Referred to work you have no record of? Read it before you answer. `rundesk messages {agent_name} --conversation {conversation_id}` for this exchange, `rundesk messages {agent_name} --search <words>` to find it anywhere, `rundesk messages {agent_name} --source schedule` for work the clock started.
+Do safe useful work before asking. Ask one focused question only when a missing decision changes the outcome or authority.
 
-Made them a file? Link it by its absolute path — `[the chart](/absolute/path/chart.png)` — and it is sent with your answer. Only what you made for them, never a file you happened to read or edit. The path itself is taken out of what they see, so write the link where you would have written the name."""
+Made them a file? Link its absolute path — `[the chart](/absolute/path/chart.png)` — to send it. Only link what you made for them, never a file you happened to read or edit. The path is removed from what they see, so put the link where its name belongs."""
 
 #: The clock started this and **nobody is present**. What this withholds is every rule that assumes
 #: somebody is waiting: there is nothing to ask, nothing to clarify, and no later turn to report in.
@@ -174,9 +175,9 @@ SCHEDULE_TO_AGENT = """## Who is asking
 
 The schedule '{schedule_name}' came due and started this run. No person asked for it, and nobody is present while it runs.
 
-- Treat what you were given as the whole request. Write nothing until the work is finished; only your last complete message is kept.
+- Do the work now from the complete request. Tool or thinking activity may appear while you work. Make the final answer text one complete report; rundesk delivers that last response alone as the sole complete report.
 - Never ask a question, request approval, or wait for a reply. Nothing will answer, and the run ends when you stop.
-- That last message is the whole report: what you did or found, how you verified it, and what you did not do. Nobody will be there to ask a follow-up.
+- Report what you did or found, how you verified it, and every requested item not done. Nobody will be there to ask a follow-up.
 - Where there was nothing worth acting on, say so in a short direct answer."""
 
 #: Another agent handed this turn its task. **Still this agent, as itself** — its own home, memory,
@@ -188,18 +189,17 @@ The schedule '{schedule_name}' came due and started this run. No person asked fo
 #: it can decide to do. `build` withholds the listing for this trigger.
 AGENT_TO_AGENT = """## Who is asking
 
-{caller_agent}, an agent on your team, handed you this task. Not a person, not your owner, and nobody is present while you run.
+{caller_agent}, an agent on your team, handed you this task. Nobody is present while you run.
 
-- Treat the task as the whole request. Write nothing until the work is finished; only your last complete message is kept.
-- The task says how far your authority reaches. Needing more than that, stop and say so.
-- A question is not a wait. Ask it as your report and stop — {caller_agent} reads it and comes back to you with the answer.
-- Do not hand this work on. It is yours to finish or to report blocked. Your own brain's subagents are yours to use within it.
-- Write to `MEMORY.md` only what changes how you act for your own owner. This task is {caller_agent}'s, not your continuity.
-- Nothing you write reaches any channel or any person; your last message goes to {caller_agent} alone.
-- That message is your whole report: what you did or found, how you verified it, what you did not do, and any decision {caller_agent} has to make. Report every part of the task as done or blocked."""
+- Do the bounded task now. Tool or thinking activity may appear while you work. Make the final answer text one complete report; rundesk delivers that last response alone as the sole complete report to {caller_agent}.
+- The task defines your authority. If more is needed, stop and report it.
+- A question is not a wait. Put it in the final report and stop; {caller_agent} may resume you.
+- If two or more heavy workstreams can proceed independently and your provider offers subagents, delegate those workstreams inside this same turn and authority instead of doing all sequentially. Give limits and done criteria, then verify the results.
+- Keep this task out of `MEMORY.md` unless it changes how you work for your own owner.
+- Report what you did or found, how you verified it, what you did not do, and any decision {caller_agent} must make. Mark every part done or blocked."""
 
 #: Who a turn may hand work to. `{team}` is a listing the caller supplies, because which agents an
-#: install has is a fact about that install and this module reads nothing — `agents.directory`
+#: install has is a fact about that install and this module reads nothing — `providers.team`
 #: builds it, excluding the agent being told.
 #:
 #: Composed only where handing work on is legal. A turn already answering a delegation is shown
@@ -228,13 +228,12 @@ AGENTS_LIST = """## Who else is here
 
 {team}
 
-These are the other agents you can delegate too. Each answers as itself, out of its own home and memory.
+Each line gives a named rundesk agent's focus and skills. If one is materially better equipped for heavy self-contained work, delegate a bounded task with `"$RUNDESK_COMMAND" ask <agent> "<task>"`.
 
-- `rundesk ask <agent> "<the task>"`. It does not hold up this turn.
-- The answer reaches you in a later turn and you review it. Nothing they wrote reaches anybody until you have.
-- Say what you want done and how far they may go. They cannot see this conversation and will not ask — anything you leave out, they decide.
-- `rundesk asked` is what you have handed out and how each is going. `rundesk asked resume <id> "<more>"` carries a finished one on in the session it already had.
-- Hand over what is genuinely somebody else's to do. Anything you can finish here, finish here."""
+- Named agents are asynchronous. Do not wait or repeat. Continue other useful work when justified; else end this turn. A result joins this turn if active and steerable; otherwise gets a review turn. Neither its item nor the parent task is done until you review it and done criteria pass. Use `"$RUNDESK_COMMAND" asked`: `say` steers its active turn and falls back to its next turn if missed; `resume` continues answered work.
+- Give context, authority, constraints, and done criteria; they lack this conversation. Let them use provider-local helpers within that authority.
+- Provider-local subagents are same turn helpers under your authority. When no named specialist fits, use them for bounded parallel research, review, or implementation; verify before replying.
+- Simple or general work stays here."""
 
 
 def build(*, situation: str = USER_TO_AGENT, variables: Optional[Mapping[str, object]] = None,
@@ -254,15 +253,18 @@ def build(*, situation: str = USER_TO_AGENT, variables: Optional[Mapping[str, ob
     anywhere outside this module. Omitted, it is a person asking — which is the safe default for
     the same reason it always was, and is now the signature rather than a fallback in a lookup.
 
-    `team` is who this turn may hand work to, and it is composed **only where doing so is legal**. A
-    turn already answering a delegation is shown nobody, which is the depth rule made structural:
-    there is nothing for it to route around, because it was never told anybody exists.
+    `team` is who this turn may hand work to, and it is composed **only for a person-facing turn**.
+    The runtime also withholds it in read mode. Schedules cannot review a later async result, and a
+    turn already answering a delegation is depth one; both are shown nobody rather than given an
+    unusable capability.
     """
     said = [("core", _filled(CORE, variables)),
             ("situation", _filled(situation or USER_TO_AGENT, variables))]
-    if team.strip() and situation != AGENT_TO_AGENT:
-        said.append(("agents", _filled(AGENTS_LIST.replace("{team}", team), variables)))
-    said.extend((name, _filled(text, variables)[:AN_ADDITION_AT_MOST])
+    if team.strip() and situation == USER_TO_AGENT:
+        # Fill the trusted template first. Descriptions are owner data, not instruction templates;
+        # a `{provider_name}` in one must remain those literal characters.
+        said.append(("agents", _filled(AGENTS_LIST, variables).replace("{team}", team)))
+    said.extend((name, _bounded(text, AN_ADDITION_AT_MOST, variables))
                 for name, text in additions)
 
     kept = [(name, one.strip()) for name, one in said if one.strip()]
@@ -278,16 +280,24 @@ def build(*, situation: str = USER_TO_AGENT, variables: Optional[Mapping[str, ob
 def _filled(template: str, variables: Optional[Mapping[str, object]]) -> str:
     """Fill in what the caller supplied, leaving anything it did not visible.
 
-    **`str.replace` and never `str.format`.** Owner text arrives with braces in it eventually — a
-    code sample, a JSON snippet, a shell brace expansion — and `str.format` raises on one, mid-turn,
-    in the one function whose whole job is to produce a prompt.
+    A single substitution pass, never `str.format`. Owner text arrives with braces in it eventually
+    — a code sample, a JSON snippet, a shell brace expansion — and must stay literal. A recognized
+    placeholder inside a replacement value must stay literal too rather than being replaced again.
 
     A placeholder nobody filled is left standing rather than blanked, so a variable somebody forgot
     to pass shows up in the rendered prompt as itself instead of as a sentence with a hole in it.
     """
-    said = str(template or "")
-    for name in VARIABLES:
-        value = (variables or {}).get(name)
-        if value is not None:
-            said = said.replace("{" + name + "}", str(value))
-    return said
+    values = variables or {}
+
+    def replacement(found: re.Match) -> str:
+        name = found.group(1)
+        value = values.get(name)
+        return found.group(0) if value is None else str(value)
+
+    return re.sub(r"\{(" + "|".join(re.escape(one) for one in VARIABLES) + r")\}",
+                  replacement, str(template or ""))
+
+
+def _bounded(text: str, at_most: int, variables: Optional[Mapping[str, object]]) -> str:
+    """Fill one addition and keep at most `at_most` UTF-8 bytes without leaving broken text."""
+    return _filled(text, variables).encode("utf-8")[:at_most].decode("utf-8", errors="ignore")

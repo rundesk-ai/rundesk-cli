@@ -18,6 +18,7 @@ checks that mechanically, because a rule of this kind stops being true quietly.
 | `environment` | everything an adapter is told about one turn, and the whole of it |
 | `streaming` | one adapter that is running: the records off it, the words to it, and ending it |
 | `instructions` | what a brain reads before it reads a word of the task |
+| `team` | which specialists a turn may delegate to, with current skill names |
 | `kept` | what an agent's records hold about its turns, and finding what was said |
 | `turns` | one turn: the claim, what it resolved, what it ran, and how it settled |
 | `answering` | what answers a message, and what starts a scheduled turn |

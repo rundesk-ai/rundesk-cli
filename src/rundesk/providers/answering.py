@@ -35,7 +35,7 @@ import json
 import threading
 import time
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from rundesk import __version__
 from rundesk.agents import directory, records
@@ -94,6 +94,16 @@ TOOLS_KEPT = 200
 #: reduced to a last component before it goes anywhere.
 A_HELPER_AT_MOST = 48
 
+#: Pending delegation words placed into one provider turn. At least the oldest whole message is
+#: always kept, even if that one exceeds this soft aggregate bound; later guidance remains pending
+#: for the next turn rather than being clipped or reordered.
+DELEGATED_PROMPT_AT_MOST = turns.DELEGATED_PROMPT_AT_MOST
+
+#: Pending messages one delegated turn may claim. This is also a bound on the ids handed to one
+#: SQLite `UPDATE`; keeping it far below every supported SQLite variable ceiling means many tiny
+#: guidance messages cannot make the claim itself fail. The rest stay pending for the next turn.
+DELEGATED_MESSAGES_AT_MOST = turns.DELEGATED_MESSAGES_AT_MOST
+
 
 #: How many times a message that found the conversation busy is offered again.
 #:
@@ -106,13 +116,11 @@ A_HELPER_AT_MOST = 48
 #: unchecked** — rundesk summarises nothing and asserts nothing about them, which is the strongest
 #: idea carried over from the previous build. What follows is the one instruction that matters: this
 #: has not been checked, and nobody has been told anything yet.
-REVIEW = """{agent} has answered the work you handed over. Nobody has been told anything about it \
-yet, and none of it has been checked.
+REVIEW = """{agent} returned this unchecked delegated result; nobody has received it onward.
 
 {answer}
 
-Review it before you use it: verify the claims that matter against the work itself rather than \
-taking them, then answer whoever asked you. Say what you checked."""
+Verify material claims before using or reporting them."""
 
 TRIES = 3
 
@@ -120,6 +128,11 @@ TRIES = 3
 #: settling to have settled and let go of the claim, short enough that somebody watching a room does
 #: not see their message sit there.
 BEFORE_ASKING_AGAIN = 0.25
+
+#: How long collection waits for a review worker to prove that a live or newly started turn claimed
+#: its durable result. This is admission, not completion; an idle turn reaches it before its brain
+#: starts, and an external busy turn refuses it on the ordinary bounded retry path.
+REVIEW_ADMITTED_WITHIN = 2.0
 
 
 class Refused(Exception):
@@ -218,7 +231,13 @@ class OnAChannel:
                     got = turns.run(turns.Request(
                         agent=agent, prompt=body, conversation=landed.conversation,
                         situation=instructions.USER_TO_AGENT,
-                        source=arriving.FROM_CHANNEL, place=place), watching=watching.heard)
+                        source=arriving.FROM_CHANNEL, place=place,
+                        inbound_messages=(landed.message,)), watching=watching.heard,
+                        # The final attempt waits on the kernel's conversation claim. This thread
+                        # owns the durable channel message, and without a later gateway sweep it is
+                        # the one place that can guarantee an external active turn is followed by
+                        # exactly one fallback turn rather than an orphaned pending row.
+                        waiting=again + 1 == TRIES)
                     refused = self._delivered(agent, kind, place, got, external_id,
                                               watching.said_already)
                     # **One producer of the mark, and this is still it.** Turning the adapter's
@@ -234,7 +253,11 @@ class OnAChannel:
                     self._marked(agent, kind, place, became, external_id)
                     return
                 except turns.Busy:
-                    if turns.also_say(agent, landed.conversation, body):
+                    admission = turns.Admission()
+                    if turns.also_say(
+                            agent, landed.conversation, body, (landed.message,), admission):
+                        if admission.wait() is not True:
+                            continue
                         # The agent is working and its brain reads while it works, so this reached
                         # the turn already going rather than waiting behind it. What it says next
                         # answers both, which is what somebody adding to their own question means.
@@ -685,6 +708,16 @@ def _what_is_coming(agent: str) -> str:
     return "\n".join(said)
 
 
+def _delegated_prompt(agent: str, conversation: int, delegator: str) -> Tuple[str, Tuple[int, ...]]:
+    """The unanswered brief and guidance, oldest first, with their durable message ids.
+
+    Guidance can land before the gateway starts the first turn. Reading only the newest message
+    would then replace the brief with that guidance. After an answer, only newer delegator messages
+    belong to the resumed turn.
+    """
+    return turns.delegated_prompt(agent, conversation, delegator)
+
+
 class OnADelegation:
     """Runs the two turns a delegation needs. Handed to `delegations.hosting.looked`.
 
@@ -708,7 +741,8 @@ class OnADelegation:
                          args=(agent, conversation, delegation_id, delegator),
                          daemon=True).start()
 
-    def review_this(self, agent: str, conversation: int, answer: str, from_agent: str) -> None:
+    def review_this(self, agent: str, conversation: int, answer: str, from_agent: str,
+                    delegation_id: str = "", answer_id: str = "") -> bool:
         """Put an answer in front of the agent that asked for it.
 
         **Written into that agent's own conversation as `rundesk` first**, so it is history before
@@ -716,8 +750,22 @@ class OnADelegation:
         find, and the review turn is not guaranteed to happen at all if the agent is being torn
         down this second.
         """
+        said = REVIEW.format(agent=from_agent, answer=answer)
+        landed = arriving.said_by_rundesk_into(
+            agent, conversation, said,
+            external_id=f"delegation-result:{delegation_id}:{answer_id}"
+            if delegation_id and answer_id else None)
+        owning_turn = arriving.turn_for_message(agent, conversation, landed.message)
+        if owning_turn is not None:
+            # A Words claim happens before its provider write. Only the durable admission record
+            # proves that write succeeded; otherwise collection must leave the delegation owed
+            # until this worker accepts it or releases it for a fallback turn.
+            return turns.admitted_message(agent, owning_turn, landed.message)
+        admitted = turns.Admission()
         threading.Thread(target=self._reviewed, name=f"review-{from_agent}",
-                         args=(agent, conversation, answer, from_agent), daemon=True).start()
+                         args=(agent, conversation, said, from_agent, landed, admitted),
+                         daemon=True).start()
+        return admitted.wait(REVIEW_ADMITTED_WITHIN) is True
 
     def _answered(self, agent: str, conversation: int, delegation_id: str,
                   delegator: str) -> None:
@@ -728,26 +776,27 @@ class OnADelegation:
         exception out of a thread target reaches nobody and writes nothing anybody will find.
         """
         try:
-            said = arriving.messages(agent, conversation, most=1)
+            body, message_ids = _delegated_prompt(agent, conversation, delegator)
         except Exception as why:  # noqa: BLE001 — a thread, and nobody is above it
             _note(self._where, f"delegation {delegation_id} could not be read ({why})", logs.ERROR)
             return
-        body = str(said[0]["body"]) if said else ""
         self._take(agent, conversation, body,
                    situation=instructions.AGENT_TO_AGENT, answering=delegation_id,
-                   caller_agent=delegator, about=f"delegation {delegation_id}")
+                   caller_agent=delegator, about=f"delegation {delegation_id}",
+                   message_ids=message_ids)
 
-    def _reviewed(self, agent: str, conversation: int, answer: str, from_agent: str) -> None:
+    def _reviewed(self, agent: str, conversation: int, said: str, from_agent: str,
+                  landed: arriving.Landed, admitted: turns.Admission) -> None:
         """One turn reviewing what came back. **Never raises.**"""
-        said = REVIEW.format(agent=from_agent, answer=answer)
-        with contextlib.suppress(Exception):
-            arriving.said_by_rundesk_into(agent, conversation, said)
         self._take(agent, conversation, said, situation=instructions.USER_TO_AGENT,
                    answering=None, caller_agent=None,
-                   about=f"the answer from {from_agent}")
+                   about=f"the answer from {from_agent}",
+                   message_ids=(landed.message,), admitted=admitted)
 
     def _take(self, agent: str, conversation: int, body: str, situation: str,
-              answering: Optional[str], caller_agent: Optional[str], about: str) -> None:
+              answering: Optional[str], caller_agent: Optional[str], about: str,
+              message_ids: Tuple[int, ...] = (),
+              admitted: Optional[turns.Admission] = None) -> bool:
         """Start a turn, or say this into the one already running, or ask again in a moment.
 
         The same three answers `OnAChannel._answered` gives a person's message, and deliberately the
@@ -760,7 +809,9 @@ class OnADelegation:
         stands = arriving.where_it_stands(agent, conversation)
         if stands is None:
             _note(self._where, f"{about} names a conversation that is not there", logs.ERROR)
-            return
+            if admitted is not None:
+                admitted.refused()
+            return False
         source, place = stands
         try:
             for again in range(TRIES):
@@ -769,18 +820,31 @@ class OnADelegation:
                         agent=agent, prompt=body, conversation=conversation,
                         situation=situation,
                         source=source, place=place, answering=answering,
-                        caller_agent=caller_agent))
-                    return
+                        caller_agent=caller_agent, inbound_messages=message_ids),
+                        admitted=admitted.accepted if admitted is not None else None)
+                    return True
                 except turns.Busy:
-                    if turns.also_say(agent, conversation, body):
+                    delivery = turns.Admission()
+                    if turns.also_say(
+                            agent, conversation, body, message_ids, delivery):
+                        if delivery.wait() is not True:
+                            continue
+                        if admitted is not None:
+                            admitted.accepted()
                         _note(self._where, f"{about} reached the turn already running")
-                        return
+                        return True
                     if again + 1 < TRIES:
                         time.sleep(BEFORE_ASKING_AGAIN)
             _note(self._where, f"{about} stayed busy, so it was recorded and not answered",
                   logs.ERROR)
+            if admitted is not None:
+                admitted.refused()
+            return False
         except Exception as why:  # noqa: BLE001 — a thread, and nobody is above it
             _note(self._where, f"{about} went wrong ({why})", logs.ERROR)
+            if admitted is not None:
+                admitted.refused()
+            return False
 
 
 class OnASchedule:

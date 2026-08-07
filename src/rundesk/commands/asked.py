@@ -24,13 +24,11 @@ message into the conversation the work is happening in, and the answering agent'
 it from there. What differs is only which state each is willing to do it in, which is exactly the
 thing a person gets wrong and wants told about.
 
-**What `say` does not do, said plainly: it does not reach a turn that is already running.** Steering
-a live turn is in-process — `providers.turns` holds the words somewhere only the process running
-that turn can reach — and this command is never that process. So the words are written down and the
-answering agent reads them at its next turn on that conversation. For work that will take a while
-that is the difference between now and a few minutes; for work about to finish it is no difference
-at all. Saying otherwise would be the kind of claim this product is written against, and the earlier
-wording here did say otherwise.
+**`say` is durable before it is live.** This command writes the words into the answering agent's
+conversation. Its gateway, which owns the in-process provider turn, steers them into that turn while
+it is still accepting input. The message is claimed by that turn before it enters the live queue;
+if the provider refuses it or the race was already lost, the claim is released or never made and
+the next turn reads it. That ordering is what makes guidance neither lost nor delivered twice.
 """
 
 import argparse
@@ -38,14 +36,17 @@ import argparse
 from rundesk.agents import directory, records
 from rundesk.channels import arriving
 from rundesk.commands import Subcommands, failed
+from rundesk.core import paths
 from rundesk.delegations import admitting
 from rundesk.delegations import kept as delegations
 from rundesk.exits import OK
+from rundesk.utils import locking
 from rundesk.utils.terminal import as_table
 
 #: Everything reading or changing a delegation can end as. `NotThere` is here because a delegation
 #: nobody made and an agent nobody made arrive the same way to somebody who mistyped an id.
-TROUBLE = (delegations.Refused, directory.Refused, records.NotThere, records.Unreadable, OSError)
+TROUBLE = (delegations.Refused, directory.Refused, records.NotThere, records.Unreadable,
+           locking.Stuck, OSError)
 
 
 def register(sub: Subcommands) -> None:
@@ -58,7 +59,8 @@ def register(sub: Subcommands) -> None:
     shown = what.add_parser("show", help="one delegation in full")
     shown.add_argument("delegation", metavar="<id>")
 
-    saying = what.add_parser("say", help="add to work that is still going; read at its next turn")
+    saying = what.add_parser(
+        "say", help="steer work that is still going; fall back to its next turn if missed")
     saying.add_argument("delegation", metavar="<id>")
     saying.add_argument("words", metavar="<words>", nargs="+")
 
@@ -130,19 +132,28 @@ def _shown(agent: str, delegation_id: str) -> int:
 
 
 def _said_into(agent: str, delegation_id: str, words: str) -> int:
-    """Add to work that is still going, for the answering agent to read at its next turn.
+    """Durably guide work; its gateway steers the active turn or leaves it for the next one.
 
-    **Nothing here reaches a brain**, and the line it prints says so rather than implying otherwise
-    — see the module docstring for why a live turn cannot be steered from this process.
+    This process cannot touch the target gateway's in-memory turn. Writing first makes the gateway's
+    next pass the bridge without making process timing a delivery guarantee.
     """
-    one = delegations.one(agent, delegation_id)
     if not words.strip():
         return _failed("there was nothing to say")
-    if one.answered_at:
-        return _failed(f"{delegation_id} is already answered, so there is no work to say this into",
-                       f"carry it on instead with: rundesk asked resume {delegation_id} \"<what more>\"")
-    arriving.recorded_for_a_delegation(one.to_agent, agent, one.parent_turn, words)
-    print(f"added to {delegation_id}  ·  {one.to_agent} reads it at its next turn on this work")
+    # Collection reads the answering agent and then settles the delegator's row. Hold the install's
+    # existing state-change lock across this opposite two-store move, so either guidance lands
+    # before collection decides or collection finishes and this is refused — never an orphaned
+    # message behind a row the gateway has already settled.
+    with locking.only_one(paths.lock(), f"guidance for {delegation_id}"):
+        one = delegations.one(agent, delegation_id)
+        if one.answered_at:
+            return _failed(
+                f"{delegation_id} is already answered, so there is no work to say this into",
+                f"carry it on instead with: rundesk asked resume {delegation_id} \"<what more>\"")
+        arriving.recorded_for_a_delegation(
+            one.to_agent, agent, one.parent_turn, words, delegation_id=delegation_id,
+            legacy_fallback=True)
+    print(f"added to {delegation_id}  ·  active-first: {one.to_agent}'s gateway offers it now; "
+          "if missed or refused, its next turn reads it")
     return OK
 
 
@@ -180,7 +191,9 @@ def _carried_on(agent: str, delegation_id: str, words: str) -> int:
     # beat and find nothing new to answer. Interrupted between the two, what is left is a message in
     # a settled conversation that nothing acts on — while the reverse would leave the delegation
     # reopened and waiting on a further task that was never written.
-    arriving.recorded_for_a_delegation(one.to_agent, agent, one.parent_turn, words)
+    arriving.recorded_for_a_delegation(
+        one.to_agent, agent, one.parent_turn, words, delegation_id=delegation_id,
+        legacy_fallback=True)
     delegations.reopened(agent, delegation_id)
     print(f"{delegation_id} carried on  ·  {one.to_agent} takes it up in the session it had")
     return OK

@@ -91,6 +91,12 @@ class SayingSomethingToARunningBrain(support.Isolated):
         self.assertEqual(record["text"], "stop at five")
         self.assertEqual(record["context"], protocol.STEERING_CONTEXT)
 
+    def test_the_context_preserves_supplement_replace_and_stop_meanings_compactly(self):
+        said = protocol.STEERING_CONTEXT
+        for meaning in ("Integrate", "original work", "replaces", "stops"):
+            self.assertIn(meaning, said)
+        self.assertLessEqual(len(said.encode("utf-8")), 140)
+
     def test_no_context_leaves_the_field_out_rather_than_empty(self):
         self.assertNotIn("context", json.loads(protocol.build_say_line("stop at five")))
 
@@ -298,6 +304,19 @@ class SplittingWhatTheBrainSaid(support.Isolated):
         said = [text("Looking at the logs."), {"type": "tool", "id": "1", "did": "read"},
                 text("Three files changed.")]
         self.assertEqual(protocol.last_thought(said), "Three files changed.")
+
+    def test_activity_before_the_last_tool_is_not_a_closing_thought(self):
+        said = [text("Checking the files.", whole=True),
+                {"type": "tool", "id": "1", "did": "read"},
+                {"type": "result", "id": "1", "ok": True}, done()]
+        self.assertEqual(protocol.last_thought(said), "")
+
+    def test_an_explicit_final_answer_wins_over_other_activity(self):
+        said = [text("Checking one more thing.", whole=True),
+                {"type": "tool", "id": "1", "did": "read"},
+                {**text("The verified report.", whole=True), "final": True},
+                text("An adapter detail after it.", whole=True)]
+        self.assertEqual(protocol.last_thought(said), "The verified report.")
 
     def test_a_turn_that_said_nothing_closes_on_nothing(self):
         self.assertEqual(protocol.last_thought([done()]), "")

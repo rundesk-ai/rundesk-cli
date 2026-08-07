@@ -192,6 +192,16 @@ class WhatIsShipped(Bundled):
 
 
 class WhatAShippedSkillMayClaim(Bundled):
+    def test_managing_rundesk_chooses_the_narrowest_relevant_command(self):
+        said = (self.skills / "managing-rundesk" / library.DECLARED).read_text(encoding="utf-8")
+        self.assertIn("narrowest", said)
+        self.assertNotIn("Start with the essentials", said)
+        self.assertNotIn("Use listing commands before mutations", said)
+
+    def test_managing_rundesk_forbids_raw_database_and_lock_access(self):
+        said = (self.skills / "managing-rundesk" / library.DECLARED).read_text(encoding="utf-8")
+        self.assertIn("Never open or edit rundesk databases or lock files directly", said)
+
     def test_no_shipped_skill_names_a_verb_this_build_does_not_have(self):
         # `AGENTS.md`: a verb rundesk cannot perform is a verb rundesk does not have. A skill is the
         # one place that can be broken with nothing going red — it is read by an agent, on every

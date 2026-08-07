@@ -12,11 +12,12 @@ import json
 import threading
 import time
 import unittest
+from unittest import mock
 
 import support
 from rundesk.agents import directory, records
 from rundesk.channels import arriving
-from rundesk.providers import adapters, kept, protocol, turns
+from rundesk.providers import adapters, instructions, kept, protocol, turns
 
 PATIENCE = 15.0
 
@@ -59,6 +60,44 @@ class ATurnThatAnswers(WithAnAgent):
         answers = [one for one in said if one["author"] == arriving.BY_AGENT]
         self.assertEqual(len(answers), 1)
         self.assertEqual(answers[0]["turn_id"], got.turn)
+
+    def test_an_unattended_turn_delivers_only_its_last_complete_response(self):
+        """Activity may exist in the stream, but it is not the schedule or caller's report."""
+        for situation in (instructions.SCHEDULE_TO_AGENT, instructions.AGENT_TO_AGENT):
+            with self.subTest(situation=situation[:24]):
+                self.a_stand_in_told(self.agent, remarks=["checking the fixture"],
+                                     also_did="read")
+                got = self.run_turn(self.asking(situation=situation))
+                self.assertNotIn("checking the fixture", got.reply)
+                self.assertIn("You asked:", got.reply)
+
+    def test_unattended_activity_without_a_final_report_is_not_success(self):
+        self.a_stand_in_told(self.agent, remarks=["checking the fixture"], also_did="read",
+                             omit_final_response=True)
+        got = self.run_turn(self.asking(situation=instructions.SCHEDULE_TO_AGENT))
+        self.assertEqual(kept.FAILED, got.turn_status)
+        self.assertEqual("", got.reply)
+        self.assertEqual(turns.NOTHING_SAID, got.failure_message)
+
+    def test_an_unattended_file_without_a_final_report_is_not_success(self):
+        for situation in (instructions.SCHEDULE_TO_AGENT, instructions.AGENT_TO_AGENT):
+            with self.subTest(situation=situation[:24]):
+                self.a_stand_in_told(self.agent, made_a_file_and_said_nothing=True)
+                got = self.run_turn(self.asking(situation=situation))
+                self.assertEqual(kept.FAILED, got.turn_status)
+                self.assertEqual("", got.reply)
+                self.assertEqual(turns.NOTHING_SAID, got.failure_message)
+
+    def test_a_person_facing_file_without_text_remains_an_answer(self):
+        self.a_stand_in_told(self.agent, made_a_file_and_said_nothing=True)
+        got = self.run_turn()
+        self.assertEqual(kept.DONE, got.turn_status)
+        self.assertTrue(got.files)
+
+    def test_a_person_facing_turn_keeps_its_interactive_answer_text(self):
+        self.a_stand_in_told(self.agent, remarks=["checking the fixture"], also_did="read")
+        got = self.run_turn()
+        self.assertIn("checking the fixture", got.reply)
 
     def test_the_four_billed_quantities_are_written_apart(self):
         row = kept.get_turn("ava", self.run_turn().turn)
@@ -127,6 +166,33 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
         self.assertEqual(first["record_type"], turns.INSTRUCTIONS)
         said = json.loads(first["event_data"])
         self.assertEqual([one["name"] for one in said["layers"]], ["core", "situation"])
+        self.assertEqual("", said["team"])
+
+    def test_team_state_is_not_read_when_a_named_handoff_cannot_be_used(self):
+        requests = [
+            self.asking(situation=instructions.SCHEDULE_TO_AGENT),
+            self.asking(situation=instructions.AGENT_TO_AGENT, caller_agent="bob"),
+            self.asking(access_mode=protocol.ACCESS_READ),
+        ]
+        for request in requests:
+            with self.subTest(situation=request.situation[:20], access=request.access_mode):
+                with mock.patch.object(turns.team, "for_agent",
+                                       side_effect=AssertionError("team was inspected")):
+                    got = self.run_turn(request)
+                record = kept.list_turn_records("ava", got.turn)[0]
+                said = json.loads(record["event_data"])
+                self.assertNotIn("agents", [one["name"] for one in said["layers"]])
+                self.assertEqual("", said["team"])
+
+    def test_a_person_facing_work_turn_records_the_team_it_was_shown(self):
+        listed = "- **bob** — verifies releases · skills: reviewing-code"
+        with mock.patch.object(turns.team, "for_agent", return_value=listed) as looked:
+            got = self.run_turn()
+        looked.assert_called_once_with("ava")
+        record = kept.list_turn_records("ava", got.turn)[0]
+        said = json.loads(record["event_data"])
+        self.assertIn("agents", [one["name"] for one in said["layers"]])
+        self.assertEqual(listed, said["team"])
 
     def test_what_was_asked_is_written_before_the_brain_is_started(self):
         got = self.run_turn()
@@ -265,6 +331,24 @@ class CarryingAConversationOn(WithAnAgent):
                                         fresh=True, source=arriving.FROM_CHANNEL, place="ops"))
         self.assertEqual(kept.get_turn("ava", again.turn)["session_resumed"], 0)
 
+    def test_changed_instructions_start_fresh_and_the_same_instructions_resume(self):
+        first = self.asking(additions=(("owner", "first rule"),))
+        self.run_turn(first)
+        changed = self.asking(additions=(("owner", "different rule"),))
+        fresh = self.run_turn(changed)
+        same = self.run_turn(self.asking(additions=(("owner", "different rule"),)))
+        self.assertEqual(kept.get_turn("ava", fresh.turn)["session_resumed"], 0)
+        self.assertEqual(kept.get_turn("ava", same.turn)["session_resumed"], 1)
+
+    def test_a_stale_handle_does_not_return_after_a_changed_instruction_turn_failed(self):
+        self.run_turn(self.asking(additions=(("owner", "first rule"),)))
+        self.a_stand_in_told(self.agent, crash_without_finishing=True)
+        failed = self.run_turn(self.asking(additions=(("owner", "different rule"),)))
+        self.a_stand_in_told(self.agent)
+        after = self.run_turn(self.asking(additions=(("owner", "different rule"),)))
+        self.assertEqual(kept.get_turn("ava", failed.turn)["session_resumed"], 0)
+        self.assertEqual(kept.get_turn("ava", after.turn)["session_resumed"], 0)
+
 
 class SayingSomethingIntoARunningTurn(WithAnAgent):
     def test_a_word_reaches_a_brain_that_said_it_can_be_steered(self):
@@ -282,6 +366,202 @@ class SayingSomethingIntoARunningTurn(WithAnAgent):
     def test_a_brain_that_cannot_be_steered_still_answers(self):
         got = self.run_turn(saying=["this will not reach it"])
         self.assertEqual(got.turn_status, kept.DONE)
+
+    def test_an_attended_iterator_left_open_does_not_block_provider_settlement(self):
+        """The terminal owns this iterator, so the provider ending cannot wait for its next word."""
+        self.a_stand_in_told(self.agent, steer=True, say_nothing_and_finish=True)
+        released = threading.Event()
+
+        def still_open():
+            released.wait(PATIENCE)
+            if False:
+                yield "never"
+
+        began = time.monotonic()
+        try:
+            got = self.run_turn(saying=still_open())
+        finally:
+            released.set()
+
+        self.assertLess(time.monotonic() - began, 3.0)
+        self.assertEqual(kept.FAILED, got.turn_status)
+
+
+class DurableGuidanceIntoARunningTurn(WithAnAgent):
+    class Stream:
+        def __init__(self, accepts=True, raises=False):
+            self.accepts = accepts
+            self.raises = raises
+            self.lines = []
+
+        def say(self, line):
+            self.lines.append(line)
+            if self.raises:
+                raise OSError("the provider pipe closed")
+            if isinstance(self.accepts, list):
+                return self.accepts.pop(0)
+            return self.accepts
+
+        def no_more(self):
+            pass
+
+        def records(self):
+            return iter(())
+
+        def stop(self):
+            pass
+
+    def admitted(self):
+        landed = arriving.recorded_for_a_delegation("ava", "bob", 12, "audit it")
+        turn = kept.add_turn("ava", {
+            "conversation_id": landed.conversation,
+            "provider_name": support.A_STAND_IN,
+            "access_mode": protocol.ACCESS_WORK,
+        })
+        arriving.handled_by_turn("ava", landed.conversation, (landed.message,), turn)
+        return landed, turn
+
+    def guidance(self, body="GUIDANCE=EMBER-284"):
+        return arriving.recorded_for_a_delegation("ava", "bob", 12, body)
+
+    def test_a_delegated_provider_turn_incorporates_guidance_written_while_it_runs(self):
+        self.a_stand_in_told(self.agent, steer=True, finish_after_steers=1)
+        brief = arriving.recorded_for_a_delegation("ava", "bob", 12, "audit it")
+        request = turns.Request(
+            agent="ava", prompt="audit it", conversation=brief.conversation,
+            situation=instructions.AGENT_TO_AGENT, caller_agent="bob",
+            source=arriving.FROM_AGENT, place="bob/12",
+            inbound_messages=(brief.message,))
+        answered = []
+        running = threading.Thread(
+            target=lambda: answered.append(turns.run(request)), daemon=True)
+        running.start()
+        self.assertTrue(support.waited_until(
+            lambda: turns.busy("ava", brief.conversation), PATIENCE))
+
+        guidance = self.guidance()
+
+        running.join(PATIENCE)
+        self.assertFalse(running.is_alive(), "the delegated turn did not settle after its steer")
+        self.assertEqual(1, len(kept.list_turns("ava")))
+        self.assertIn("GUIDANCE=EMBER-284", answered[0].reply)
+        self.assertEqual(
+            answered[0].turn,
+            next(one for one in arriving.messages("ava", brief.conversation)
+                 if one["id"] == guidance.message)["turn_id"])
+
+    def test_a_durable_words_feeder_is_a_required_settlement_barrier(self):
+        landed, turn = self.admitted()
+        words = turns.Words("ava", landed.conversation, turn, caller_agent="bob")
+        stream = self.Stream()
+
+        class Feeder:
+            joined = None
+
+            def join(inner, *args, **kwargs):
+                inner.joined = (args, kwargs)
+
+        feeder = Feeder()
+        with mock.patch.object(turns.adapters, "talking_to", return_value=stream), \
+                mock.patch.object(turns, "_speaking", return_value=feeder):
+            turns._the_brain(
+                turns.Request(agent="ava", prompt="audit it", conversation=landed.conversation),
+                support.A_STAND_IN, {}, turn, 0, {"steer": True}, None, words.each(), words)
+
+        self.assertEqual(((), {}), feeder.joined)
+
+    def test_pending_guidance_is_picked_up_by_the_active_turn_without_a_gateway_sweep(self):
+        landed, turn = self.admitted()
+        words = turns.Words("ava", landed.conversation, turn, caller_agent="bob")
+        received = []
+        speaking = threading.Thread(target=lambda: received.append(next(words.each())), daemon=True)
+        speaking.start()
+
+        guidance = self.guidance()
+
+        speaking.join(2)
+        words.close()
+        self.assertFalse(speaking.is_alive(), "the active turn never noticed durable guidance")
+        self.assertEqual("GUIDANCE=EMBER-284", received[0].text)
+        self.assertEqual((guidance.message,), received[0].messages)
+        self.assertEqual(turn, arriving.messages("ava", landed.conversation)[-1]["turn_id"])
+
+    def test_multiple_pending_messages_are_claimed_oldest_first_in_one_bounded_pickup(self):
+        landed, turn = self.admitted()
+        first = self.guidance("first blast")
+        second = self.guidance("second blast")
+        words = turns.Words("ava", landed.conversation, turn, caller_agent="bob")
+
+        guidance = next(words.each())
+
+        words.close()
+        self.assertEqual("first blast\n\nsecond blast", guidance.text)
+        self.assertEqual((first.message, second.message), guidance.messages)
+
+    def test_guidance_is_claimed_by_the_active_turn_before_it_is_queued(self):
+        landed, turn = self.admitted()
+        guidance = self.guidance()
+        words = turns.Words("ava", landed.conversation, turn)
+        with turns._reachable("ava", landed.conversation, words):
+            self.assertTrue(turns.also_say(
+                "ava", landed.conversation, "GUIDANCE=EMBER-284", (guidance.message,)))
+        self.assertEqual(
+            turn, arriving.messages("ava", landed.conversation)[-1]["turn_id"])
+
+    def test_a_provider_refusal_or_exception_releases_every_claimed_unsent_batch(self):
+        for failing in (self.Stream(False), self.Stream(raises=True)):
+            with self.subTest(raises=failing.raises):
+                landed, turn = self.admitted()
+                first = self.guidance("first blast")
+                second = self.guidance("second blast")
+                words = turns.Words("ava", landed.conversation, turn)
+                self.assertTrue(words.say("first blast", (first.message,)))
+                self.assertTrue(words.say("second blast", (second.message,)))
+
+                speaking = turns._speaking(
+                    "ava", turn, failing, words.each(), reachable=words)
+                speaking.join(2)
+
+                pending = arriving.messages("ava", landed.conversation)[-2:]
+                self.assertEqual([None, None], [one["turn_id"] for one in pending])
+                self.assertFalse(words.open)
+                lost = [one for one in kept.list_turn_records("ava", turn)
+                        if one["record_type"] == turns.LOST]
+                self.assertEqual(1, len(lost))
+
+    def test_a_duplicate_claim_is_refused_without_queueing_the_message_twice(self):
+        landed, turn = self.admitted()
+        guidance = self.guidance()
+        words = turns.Words("ava", landed.conversation, turn)
+        self.assertTrue(words.say("GUIDANCE=EMBER-284", (guidance.message,)))
+        with self.assertRaises(records.Unreadable):
+            words.say("GUIDANCE=EMBER-284", (guidance.message,))
+        self.assertEqual(1, len(words.words))
+
+    def test_a_later_refusal_does_not_release_a_batch_the_provider_already_accepted(self):
+        landed, turn = self.admitted()
+        first = self.guidance("first blast")
+        second = self.guidance("second blast")
+        words = turns.Words("ava", landed.conversation, turn)
+        self.assertTrue(words.say("first blast", (first.message,)))
+        self.assertTrue(words.say("second blast", (second.message,)))
+
+        speaking = turns._speaking(
+            "ava", turn, self.Stream([True, False]), words.each(), reachable=words)
+        speaking.join(2)
+
+        messages = arriving.messages("ava", landed.conversation)[-2:]
+        self.assertEqual([turn, None], [one["turn_id"] for one in messages])
+
+    def test_guidance_that_missed_the_active_turn_stays_pending(self):
+        landed, turn = self.admitted()
+        guidance = self.guidance()
+        words = turns.Words("ava", landed.conversation, turn)
+        with turns._reachable("ava", landed.conversation, words):
+            words.close()
+            self.assertFalse(turns.also_say(
+                "ava", landed.conversation, "GUIDANCE=EMBER-284", (guidance.message,)))
+        self.assertIsNone(arriving.messages("ava", landed.conversation)[-1]["turn_id"])
 
 
 class ATurnIsAlwaysSettled(WithAnAgent):

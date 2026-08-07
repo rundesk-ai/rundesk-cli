@@ -11,7 +11,7 @@ in `src/providers/`, and the suites in `tests/` say so.
 |---|---|---|
 | `codex` | `codex app-server`, JSON-RPC over a pipe | yes |
 | `claude` | `claude -p`, streaming JSON both ways | yes |
-| `grok` | `grok agent stdio`, the Agent Client Protocol | no — nothing in that protocol was measured to take more words into a turn already running |
+| `grok` | `grok agent stdio`, the Agent Client Protocol | yes |
 
 **Every turn runs with the whole machine available to it**, on all three. `RUNDESK_ACCESS_MODE` is
 still carried and is still what this page says it is below — a request rather than containment, which
@@ -59,13 +59,14 @@ descriptor is passed to the adapter's child process, so the claim is held for ex
 adapter tree lives — through a `SIGKILL`, through a gateway that died without unwinding. There is no
 pid written down anywhere, because a written-down pid gets reused and a reused pid gets signalled.
 
-### The four callers, and why they are not one
+### The five callers, and why they are not one
 
 | Caller | Runs the turn | Can steer | Conversation |
 |---|---|---|---|
-| `rundesk ask` | in the terminal's own process | **yes** — it is the only one with anybody to take a word from | one per agent |
-| a channel | on a thread of its own | no | one per place |
+| `rundesk ask` | in the terminal's own process | yes — it reads later typed words | one per agent |
+| a channel | on a thread of its own | yes — later messages prefer its active turn | one per place |
 | a schedule (the gateway) | in a process of its own, `rundesk providers run` | no | one per schedule |
+| a delegation (the gateway) | on a thread of its own | yes — durable `asked say` guidance is polled into its active turn | one per delegation |
 | `rundesk providers run` | there | no | the schedule's |
 
 A channel turn runs on a thread because the thread that reads a channel adapter **cannot fall
@@ -100,6 +101,12 @@ is not in here — see below.
 
 **`provider_sessions`** — where a conversation got to on a brain, keyed by `(conversation,
 provider)`. Opaque to rundesk and never parsed.
+
+A saved handle is resumed only when this provider's latest turn has the same instruction
+fingerprint as the prompt being composed now. A changed access mode, operating rule, owner addition,
+or eligible-team snapshot starts a fresh provider session and discards the stale handle. This is
+required for brains that bind instructions when the session is created and silently ignore a
+replacement on resume.
 
 **`conversation_messages`** — what was said, kept for ever, with a full-text index over it.
 

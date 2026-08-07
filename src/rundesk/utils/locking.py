@@ -85,6 +85,27 @@ def busy(why: OSError) -> bool:
     return why.errno in (errno.EWOULDBLOCK, errno.EAGAIN)
 
 
+def is_held(at: Path) -> Optional[bool]:
+    """Whether another process holds `at`, without creating it or waiting.
+
+    `False` means the file is absent or a shared probe could take it. `None` means it could not be
+    opened or asked about, which must never be treated as either free or held.
+    """
+    try:
+        asked = os.open(at, os.O_RDONLY)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+    try:
+        fcntl.flock(asked, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except OSError as why:
+        return True if busy(why) else None
+    finally:
+        os.close(asked)
+    return False
+
+
 @contextlib.contextmanager
 def only_one(at: Path, guarding: Optional[str] = None,
              waiting: Optional[float] = None) -> Iterator[None]:

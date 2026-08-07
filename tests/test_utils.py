@@ -444,6 +444,17 @@ class TakingTurns(support.Isolated):
         with locking.only_one(self.at):
             pass
 
+    def test_a_non_creating_probe_distinguishes_missing_free_and_held(self):
+        self.assertFalse(locking.is_held(self.at))
+        self.at.touch()
+        self.assertFalse(locking.is_held(self.at))
+        self.held_by_something_else()
+        self.assertTrue(locking.is_held(self.at))
+
+    def test_a_probe_error_is_unknown_and_never_mistaken_for_offline(self):
+        with mock.patch.object(locking.os, "open", side_effect=PermissionError("no")):
+            self.assertIsNone(locking.is_held(self.at))
+
     def test_it_is_let_go_of_afterwards(self):
         with locking.only_one(self.at):
             pass

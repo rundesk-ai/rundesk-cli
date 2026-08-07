@@ -19,11 +19,13 @@ import unittest
 from unittest import mock
 
 import support
-from rundesk.agents import directory
+from rundesk.agents import directory, records
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
+from rundesk.gateways import standing
 from rundesk.providers import adapters, instructions, kept
 from rundesk.schedules import kept as schedules_kept
+from rundesk.skills import grants
 
 #: The smallest legitimate adapter: it answers `--capabilities` and can do nothing.
 SAYS_NOTHING = """#!/bin/sh
@@ -133,9 +135,33 @@ class Instructions(Providers):
                                         "--situation", "schedule")
         self.assertNotEqual(asked, due)
 
+    def test_the_preview_includes_current_teammate_skill_names(self):
+        agent = self.an_agent("ava")
+        directory.made("reviewer", support.A_STAND_IN, "Reviews production risk.")
+        skill = grants.where("reviewer") / "senior-code-reviewer"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: senior-code-reviewer\n"
+                                         "description: Reviews risk.\n---\n", encoding="utf-8")
+        with standing.holding(directory.where("reviewer")):
+            code, out, err = self.rundesk("providers", "instructions", agent)
+        self.assertEqual(OK, code, err)
+        self.assertIn("Reviews production risk.", out)
+        self.assertIn("skills: senior-code-reviewer", out)
+
+    def test_schedule_and_delegation_previews_do_not_scan_or_show_the_team(self):
+        agent = self.an_agent("ava")
+        for situation in ("schedule", "agent"):
+            with self.subTest(situation=situation):
+                with mock.patch("rundesk.commands.providers.team.for_agent",
+                                side_effect=AssertionError("team was inspected")):
+                    code, out, err = self.rundesk(
+                        "providers", "instructions", agent, "--situation", situation)
+                self.assertEqual(OK, code, err)
+                self.assertNotIn("Who else is here", out)
+                self.assertNotIn("\nagents", out)
+
     def test_a_past_turn_is_recomposed_and_compared_rather_than_read_back(self):
-        """Nothing stores what was sent. The fingerprint is re-derived, so a release that composes
-        something different **says so** rather than quietly showing today's words as yesterday's."""
+        """The fingerprint is re-derived, so changed composition is never shown as historical."""
         agent = self.an_agent()
         code, _out, err = self.rundesk("ask", agent, "what changed today?")
         self.assertEqual(OK, code, err)
@@ -145,10 +171,34 @@ class Instructions(Providers):
         self.assertIn("unchanged since it ran", out)
         self.assertIn(agent, out)
 
+    def test_a_past_turn_uses_its_teammate_snapshot_after_the_gateway_stops(self):
+        agent = self.an_agent("ava")
+        directory.made("reviewer", support.A_STAND_IN, "Reviews production risk.")
+        with standing.holding(directory.where("reviewer")):
+            code, _out, err = self.rundesk("ask", agent, "what changed today?")
+        self.assertEqual(OK, code, err)
+
+        code, out, err = self.rundesk("providers", "instructions", agent, "--turn", "1")
+        self.assertEqual(OK, code, err)
+        self.assertIn("Reviews production risk.", out)
+        self.assertIn("unchanged since it ran", out)
+
+    def test_a_historical_record_without_a_team_snapshot_reports_drift(self):
+        agent = self.an_agent("ava")
+        directory.made("reviewer", support.A_STAND_IN, "Reviews production risk.")
+        with standing.holding(directory.where("reviewer")):
+            code, _out, err = self.rundesk("ask", agent, "what changed today?")
+        self.assertEqual(OK, code, err)
+        with records.writing(directory.records(agent)) as conn:
+            conn.execute("UPDATE turn_records SET event_data = '{}'"
+                         " WHERE turn_id = 1 AND record_type = 'instructions'")
+
+        code, out, err = self.rundesk("providers", "instructions", agent, "--turn", "1")
+        self.assertEqual(OK, code, err)
+        self.assertIn("composes a different prompt", out)
+
     def test_a_release_that_composes_something_else_says_so_rather_than_showing_today(self):
-        """**The whole reason nothing stores the prompt.** A stored copy survives a change to the
-        composer; a fingerprint detects one — and a reader shown today's words as yesterday's has
-        been told something untrue about a turn that has already happened."""
+        """A fingerprint catches changed static composition around the stored volatile inputs."""
         agent = self.an_agent()
         self.rundesk("ask", agent, "what changed today?")
         with mock.patch.object(instructions, "CORE", instructions.CORE + "\n\nAnd one more rule."):

@@ -1,7 +1,7 @@
 # MEMORY
 
-What you have learned, across conversations you can no longer see. You write this file; the rules
-are in `AGENTS.md`, under Memory.
+What you learned and need available without searching prior conversations. You write this file; the
+rules are in `AGENTS.md`, under Memory.
 
 ## Who you work for
 

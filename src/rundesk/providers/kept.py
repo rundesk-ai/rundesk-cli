@@ -15,7 +15,8 @@ only one swept — `turn_records` is diagnostic and a conversation is history.
 
 **A provider session** is where one conversation got to on one brain. Three columns, because a
 session belongs to a conversation and a brain and not to a model, which can change under a resumed
-session without invalidating it.
+session without invalidating it. Its current instruction boundary is the fingerprint on that
+provider's latest turn; a changed fingerprint makes the opaque handle stale.
 
 **The search** is over what was said, and it is the agent's own tool before it is the owner's: an
 owner refers to work the agent has no record of, and the agent reads its own history back before
@@ -249,6 +250,27 @@ def get_session(agent: str, conversation: int, provider_name: str) -> Optional[s
                     f"SELECT session_id FROM {SESSIONS} WHERE conversation_id = ? AND provider_name = ?",
                     (conversation, provider_name)).fetchone()
     return str(got["session_id"]) if got is not None else None
+
+
+def latest_instructions(agent: str, conversation: int,
+                        provider_name: str) -> Optional[str]:
+    """The instruction fingerprint on this brain's latest turn in the conversation.
+
+    A session handle does not carry that fingerprint itself, so the turn that last used the
+    conversation is the durable boundary. Some brains bind instructions when a session is created
+    and silently ignore replacements on resume; a missing or different fingerprint therefore means
+    the saved handle is not safe to carry into the next turn.
+    """
+    with records.reading(directory.records(agent)) as conn:
+        got = _rows(
+            conn, agent,
+            f"SELECT instructions_sha256 FROM {TURNS} "
+            "WHERE conversation_id = ? AND provider_name = ? ORDER BY id DESC LIMIT 1",
+            (conversation, provider_name),
+        ).fetchone()
+    if got is None or got["instructions_sha256"] is None:
+        return None
+    return str(got["instructions_sha256"])
 
 
 def save_session(agent: str, conversation: int, provider_name: str, session_id: str) -> None:

@@ -34,9 +34,9 @@ reached a terminal status. Work that was admitted and then vanished is not a sta
 ## Finding the work without keeping a pointer to it
 
 `conversations` has `UNIQUE (source, source_id)`, so the conversation a delegation's work happens in
-is found by a key that is **constructed rather than stored** — `('agent', '<delegator>/<parent turn>')`
-in the answering agent's database. A stored id would be a second source of truth, and it would point
-into a database this one may not follow it into.
+is found by a key that is **constructed rather than stored** —
+`('agent', '<delegator>/<parent turn>/<delegation>')` in the answering agent's database. A stored id
+would be a second source of truth, and it would point into a database this one may not follow it into.
 
 May depend on `agents`, `core` and `utils`.
 """
@@ -56,17 +56,21 @@ TABLE = "delegations"
 FROM_AGENT = "agent"
 
 
-def source_id_for(delegator: str, parent_turn: int) -> str:
+def source_id_for(delegator: str, parent_turn: int,
+                  delegation_id: Optional[str] = None) -> str:
     """The `conversations.source_id` this delegation's work stands under.
 
-    Keyed by **who asked and which turn of theirs**, so two delegations from one turn share a
-    conversation and therefore a provider session, and one from a later turn starts its own.
+    Keyed by **the delegation as well as who asked and which turn of theirs**. This keeps two asks
+    from one turn from sharing an answer while `resume` still returns to the one session it names.
+    With no delegation id it spells the legacy key, so work admitted before ids joined the
+    conversation boundary remains readable.
 
     Constructed rather than stored — see the module docstring. Whoever delivers the brief and
     whoever looks the work up later both build it, so there is no pointer to keep true, and none
     that could point into a database this agent may not follow it into.
     """
-    return f"{delegator}/{parent_turn}"
+    legacy = f"{delegator}/{parent_turn}"
+    return f"{legacy}/{delegation_id}" if delegation_id else legacy
 
 
 class Refused(Exception):

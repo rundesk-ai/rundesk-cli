@@ -28,7 +28,7 @@ from rundesk.channels import arriving
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import OK
-from rundesk.providers import adapters, answering, instructions, kept, protocol, turns
+from rundesk.providers import adapters, answering, instructions, kept, protocol, team, turns
 from rundesk.utils.terminal import as_table
 
 TROUBLE = (adapters.NotRunnable, answering.Refused, directory.Refused,
@@ -162,8 +162,10 @@ def _instructions(agent: str, situation: str, only_layers: bool,
             return _failed("a turn belongs to an agent, so say which one",
                            "rundesk providers instructions <agent> --turn <turn>")
         return _what_a_turn_was_sent(agent, turn, only_layers)
-    return _shown(instructions.build(situation=SITUATIONS[situation], variables=_about(agent)),
-                  only_layers)
+    may_hand_off = bool(agent and situation == BY_A_PERSON)
+    return _shown(instructions.build(
+        situation=SITUATIONS[situation], variables=_about(agent),
+        team=team.for_agent(agent) if may_hand_off else ""), only_layers)
 
 
 def _what_a_turn_was_sent(agent: str, turn: int, only_layers: bool) -> int:
@@ -179,7 +181,8 @@ def _what_a_turn_was_sent(agent: str, turn: int, only_layers: bool) -> int:
     """
     row = kept.get_turn(agent, turn)
     built = instructions.build(situation=_the_situation_it_ran_in(agent, row),
-                               variables=_as_that_turn_saw_it(agent, row))
+                               variables=_as_that_turn_saw_it(agent, row),
+                               team=_team_that_turn_saw(agent, turn))
     print(f"turn {turn}, {row['created_at']}")
     if built.sha256 != row["instructions_sha256"]:
         print(f"\nthis release composes a different prompt for these inputs "
@@ -211,14 +214,31 @@ def _the_situation_it_ran_in(agent: str, row: Dict[str, Any]) -> str:
 def _as_that_turn_saw_it(agent: str, row: Dict[str, Any]) -> Dict[str, object]:
     """The variables as they stood for that turn, off the turn's own columns."""
     said = dict(_about(agent))
+    stood = arriving.where_it_stands(agent, int(row["conversation_id"]))
+    caller = stood[1].split("/", 1)[0] if stood and stood[0] == arriving.FROM_AGENT else ""
     said.update({"provider_name": row["provider_name"], "access_mode": row["access_mode"],
                  "conversation_id": row["conversation_id"],
+                 "caller_agent": caller,
+                 "source_kind": stood[0] if stood else "unknown",
+                 "audience_id": stood[1] if stood else "unknown",
                  # **Read off the turn, never looked up again.** This scanned every schedule for a
                  # matching id, which answered nothing at all once that schedule had been taken
                  # away — so a turn re-read after a tidy-up claimed nobody had scheduled it. The
                  # turn writes the name down at admission; what that turn saw is on the turn.
                  "schedule_name": row["schedule_name"] or ""})
     return said
+
+
+def _team_that_turn_saw(agent: str, turn: int) -> str:
+    """The compact team snapshot recorded with `turn`; old turns predate that field."""
+    for record in kept.list_turn_records(agent, turn):
+        if record["record_type"] != turns.INSTRUCTIONS:
+            continue
+        try:
+            return str(json.loads(record["event_data"]).get("team") or "")
+        except (TypeError, ValueError):
+            return ""
+    return ""
 
 
 def _shown(built: instructions.Prompt, only_layers: bool) -> int:
@@ -269,9 +289,11 @@ def _about(agent: str) -> Dict[str, object]:
         "access_mode": protocol.ACCESS_WORK,
         "schedule_name": "<the schedule>",
         "conversation_id": "<id>",
+        "caller_agent": "<caller agent>",
+        "source_kind": "<source>",
+        "audience_id": "<audience>",
     }
 
 
 def _failed(why: str, *and_so: str) -> int:
     return failed(f"providers: FAILED — {why}", *and_so)
-

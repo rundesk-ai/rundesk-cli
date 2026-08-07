@@ -172,10 +172,13 @@ nine times in ten.
 ```console
 $ rundesk agents
 agents in /Users/you/.rundesk/data/agents
-AGENT  PROVIDER
-ada    claude
-cole   openai
+AGENT  PROVIDER  SKILLS
+ada    claude    managing-rundesk, researching-topics
+cole   openai    managing-rundesk, reviewing-code
 ```
+
+Skill names are current grants. They are shown so a person or routing agent can tell which standing
+specialty belongs behind a name without loading any skill body.
 
 Where they stand is printed even when there are none, and an install nobody has added one to says
 so rather than printing an empty table:
@@ -1055,9 +1058,9 @@ Nothing urgent — three merged pull requests and one rename.
 ```
 
 The attended way in: a gateway answers a channel and the clock starts a schedule, and this is a
-person typing. **It is the only caller that can steer** — put a word into a turn that is already
-running — because it is the only one with anybody to get one from. Type while it works and the words
-reach the brain, if that brain said it can be steered.
+person typing. Type while it works and the words are offered to the active brain, if that brain said
+it can be steered. Messages arriving through a channel and guidance sent with `asked say` use the
+same active-first rule; anything that misses or is refused stays durable for a following turn.
 
 Tools are shown by what they **did** rather than by whatever the vendor calls them, so a `Bash`, a
 `shell` and a `run_terminal_command` all read as `ran`. Prose is shown when it is finished and never
@@ -1080,7 +1083,7 @@ it hands the work over and returns at once:
 ```console
 $ rundesk ask bob "audit the exporter retention policy and report what you find"
 handed to bob  ·  del-1-6c9092
-  no answer comes back in this turn — you are woken to review one later
+  asynchronous — the result reaches this turn if active and steerable; otherwise wakes a review turn
 ```
 
 This is the front door rather than a second command, and it is not a convenience. Left alone, an
@@ -1088,10 +1091,11 @@ agent could run a whole turn on somebody else's agent from inside its own — no
 and nobody owed a review. The build this replaces shipped exactly that and found every rule the
 feature is made of was one command away from being bypassed.
 
-**Nothing waits.** Bob's own gateway picks the work up, answers it as itself out of its own home and
-memory, and the answer reaches ava in a later turn. What ava gets is bob's last complete message,
-verbatim and labelled unchecked — rundesk summarises nothing and asserts nothing about it — and
-nothing bob wrote reaches any person until ava has reviewed it.
+**Nothing waits.** Bob's own gateway picks the work up and answers it as itself out of its own home
+and memory. The result reaches ava's current turn if it is still running and steerable; otherwise it
+wakes a review turn. What ava gets is bob's last complete message, verbatim and labelled unchecked — rundesk
+summarises nothing and asserts nothing about it — and nothing bob wrote reaches any person until ava
+has reviewed it.
 
 **Four things are refused**, each with what to type instead:
 
@@ -1107,6 +1111,13 @@ gateway running.** Its own gateway is what picks the work up, so `rundesk gatewa
 prerequisite, and launchd brings it back at every login afterwards. A delegation to an agent nothing
 is running would otherwise wait for ever while the agent that made it believed it had handed work
 over, which is a success nothing earned.
+
+`rundesk asked --agent ava` lists ava's work. `asked say <id> <words>` durably adds guidance to
+working work. The recipient's gateway offers it to the active provider turn immediately; if that
+turn has just ended or cannot be steered, the guidance remains for its next turn on the same
+delegation. `asked stop <id>` requests an early end. `asked resume <id>
+<words>` continues answered work in the provider session it already had. Each delegation has its own
+conversation, so two tasks handed to the same specialist by one parent turn cannot share an answer.
 
 **The depth is one.** An agent answering a delegation is shown no team in its instructions and is
 refused here if it tries anyway, so `ava → bob → ava` has no path to exist and there is no chain to

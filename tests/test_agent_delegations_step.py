@@ -197,51 +197,5 @@ class WhatAnAgentIsFor(support.Isolated):
         self.assertEqual(("a-stand-in", "One."), tuple(said))
 
 
-class TheTeamAnAgentIsShown(support.Isolated):
-    """What one agent is told about the others, and the one it is never told about."""
-
-    def setUp(self):
-        super().setUp()
-        paths.agents().mkdir(parents=True, exist_ok=True)
-
-    def add(self, name, describes=None):
-        said = ["agents", "add", name, "--provider", "a-stand-in"]
-        if describes is not None:
-            said += ["--describes", describes]
-        self.assertEqual(0, self.rundesk(*said)[0])
-
-    def test_it_lists_the_others_and_what_each_is_for(self):
-        self.add("ava", "Keeps billing.")
-        self.add("bob", "Runs deploys.")
-        self.assertEqual("- **bob** — Runs deploys.", directory.a_team_for("ava"))
-
-    def test_it_never_lists_the_agent_being_told(self):
-        """An agent shown its own name tries to hand work to itself, and the refusal for that
-        arrives a whole turn later — after the brain has spent tokens deciding to do it."""
-        self.add("ava", "Keeps billing.")
-        self.add("bob", "Runs deploys.")
-        self.assertNotIn("ava", directory.a_team_for("ava"))
-        self.assertNotIn("bob", directory.a_team_for("bob"))
-
-    def test_an_agent_nobody_described_is_left_out_rather_than_listed_blank(self):
-        """The description is the whole of what a reader goes on. A bare name in a list of
-        specialists is an invitation to guess, which is what `describes` exists to prevent."""
-        self.add("ava", "Keeps billing.")
-        self.add("nobody")
-        self.assertEqual("", directory.a_team_for("ava"))
-
-    def test_an_install_with_one_agent_offers_nothing(self):
-        self.add("ava", "Keeps billing.")
-        self.assertEqual("", directory.a_team_for("ava"))
-
-    def test_a_colleague_whose_store_cannot_be_read_is_skipped_rather_than_raising(self):
-        """One broken agent must not stop every other agent taking a turn."""
-        self.add("ava", "Keeps billing.")
-        self.add("bob", "Runs deploys.")
-        self.add("broken", "Also here.")
-        directory.records("broken").write_bytes(b"not a database")
-        self.assertEqual("- **bob** — Runs deploys.", directory.a_team_for("ava"))
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -139,14 +139,17 @@ def _handed_over(asking: admitting.Asking, to_agent: str, task: str) -> int:
         # rather than guessed at. An agent delegating from a channel is answering somebody there,
         # and a review that arrived in its terminal conversation instead would reach nobody.
         was = kept.get_turn(asking.agent or "", asking.run or 0)
-        arriving.recorded_for_a_delegation(to_agent, asking.agent or "", asking.run or 0, task)
+        arriving.recorded_for_a_delegation(
+            to_agent, asking.agent or "", asking.run or 0, task,
+            delegation_id=delegation_id)
         admitting.admitted(asking, delegation_id, to_agent, int(was["conversation_id"]))
     except (admitting.Refused, delegations.Refused, directory.Refused, kept.Refused,
             records.NotThere, records.Unreadable, OSError) as why:
         return _failed(str(why), "nothing was handed over")
 
     print(f"handed to {to_agent}  ·  {delegation_id}")
-    print(terminal.dim("  no answer comes back in this turn — you are woken to review one later"))
+    print(terminal.dim(
+        "  asynchronous — the result reaches this turn if active, otherwise wakes a review turn"))
     print(terminal.dim(f"  guide, end or carry it on:  rundesk asked {asking.agent} "
                        f"say|stop|resume {delegation_id}"))
     return OK

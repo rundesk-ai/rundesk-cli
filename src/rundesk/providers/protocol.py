@@ -95,9 +95,8 @@ SAY = "say"
 #: refused by real brains as suspected prompt injection, which is a failure observed in the wild by
 #: a comparable product and fixed there the same way.
 STEERING_CONTEXT = (
-    "This is mid-turn guidance within the original request. After addressing it, continue "
-    "working toward and finish the original request unless this guidance explicitly stops "
-    "or replaces that work."
+    "Mid-turn guidance for the current request. Integrate it, then continue the original work "
+    "unless it explicitly replaces or stops it."
 )
 
 
@@ -449,16 +448,27 @@ def reply(said: Iterable[Dict[str, Any]]) -> str:
 def last_thought(said: Iterable[Dict[str, Any]]) -> str:
     """The last whole thing the brain said — what a turn nobody watched answers with.
 
-    **Decided after the turn is over, which is the only moment it is a fact.** A brain cannot mark
-    its own final message: it says something, then decides whether to call another tool, and only if
-    it does not does that thought turn out to have been the last.
+    **Decided after the turn is over, which is the only moment it is a fact.** A provider that
+    explicitly distinguishes its final answer wins; otherwise the last post-tool thought is the
+    closing response.
 
     A turn somebody is watching shows its working as it goes and its last thought is already the
     answer, because the surface sends each earlier one on as it is finished. A turn nobody watched
     never passes that way — what it said is read back out of one row afterwards, so everything it
     thought aloud on the way would arrive as a report with the report buried at the end of it.
     """
-    each = thoughts(said)
+    # Text before the last tool boundary is activity, not a closing response. If the brain went to
+    # work and then stopped without saying anything else, there is no final report to publish.
+    records = list(said)
+    explicit = [one for one in records if one.get("type") == "text" and one.get("final") is True]
+    if explicit:
+        each = thoughts(explicit)
+        return each[-1] if each else ""
+    after = 0
+    for at, one in enumerate(records):
+        if one.get("type") in WENT_TO_WORK:
+            after = at + 1
+    each = thoughts(records[after:])
     return each[-1] if each else ""
 
 
