@@ -164,6 +164,12 @@ def note(into: Path, said: str, level: str = INFO,
     swallowed. The reader is where somebody finds out, which is why `tail` keeps "could not be read"
     as an answer of its own.
 
+    **Only the log directory itself may be made.** Its parent is the thing the log belongs to — an
+    agent, a channel, or another durable owner — and recreating that parent because it disappeared
+    would leave a half-made owner behind. This is also the race-safe half of callers checking that
+    owner before they write: if it goes after their check, this `mkdir` fails rather than recursively
+    putting it back.
+
     Opened `O_APPEND` and written once, then closed: see the module docstring for why nothing is
     held open between lines and why one write is the whole guarantee.
 
@@ -182,7 +188,7 @@ def note(into: Path, said: str, level: str = INFO,
                        level=f"{_how_serious(level)}:".ljust(WIDEST),
                        said=said.rstrip("\n"))
     try:
-        into.mkdir(parents=True, exist_ok=True)
+        into.mkdir(exist_ok=True)
         # Created at the mode it should have rather than tightened afterwards — a log holds what a
         # program was doing and for whom, and the lines are already in it by the second step.
         holding = os.open(into / named_for(moment), os.O_WRONLY | os.O_CREAT | os.O_APPEND,
