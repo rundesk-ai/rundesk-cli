@@ -26,7 +26,7 @@ from unittest import mock
 
 import support
 from rundesk.agents import directory
-from rundesk.channels import adapters, hosting, kept
+from rundesk.channels import adapters, credentials, hosting, kept
 from rundesk.commands import channels
 from rundesk.core import paths, secrets
 
@@ -76,6 +76,15 @@ exit 0
 #: case asserting the whole thing never appears is asserting something that could fail.
 A_TOKEN = "MTIzNDU2Nzg5-a-real-looking-bot-token"
 
+#: A second one, so a case proving two agents get two bots can fail. Two agents handed the same
+#: string would pass a check written against either of them.
+ANOTHER_TOKEN = "OTg3NjU0MzIx-a-second-real-looking-bot-token"
+
+#: Where the adapter's declared name really stands for `alan`, and the name the adapter itself never
+#: sees. Written out rather than composed from `credentials`, so a case cannot agree with a bug in
+#: the very function it is checking.
+ALANS_OWN = "A_TOKEN__ALAN"
+
 
 class Channels(support.Isolated):
     """A scratch install with an agent, and somewhere for adapters to stand that is not the repo."""
@@ -117,6 +126,17 @@ class Channels(support.Isolated):
         self.an_adapter(kind)
         code, _out, err = self.connect(*more, kind=kind)
         self.assertEqual(0, code, err)
+
+    def no_token_anywhere(self):
+        """Empty this agent's own name, and the plain one beside it.
+
+        The plain one is emptied too even though nothing reads it any more — a case that left a
+        value standing there and went green would be silent about a fallback creeping back in, and
+        this is the exact assertion the removal is worth.
+        """
+        for name in (ALANS_OWN, "A_TOKEN"):
+            if secrets.placed(name):
+                secrets.cleared(name)
 
 
 class WhatAnEmptyInstallSays(Channels):
@@ -218,7 +238,99 @@ class ConnectingAnAgent(Channels):
         # channel that passes `--check` and finds nothing when it is hosted.
         self.a_channel()
         self.assertEqual(["A_TOKEN"], json.loads(kept.one("alan", "chat")["secret_names"]))
-        self.assertTrue(secrets.placed("A_TOKEN"))
+
+    def test_the_record_keeps_the_adapters_name_and_the_value_stands_under_the_agents(self):
+        # The two halves of this, and they are deliberately different names. What the adapter
+        # declared is what the record holds and what the adapter is handed; where the value is
+        # *kept* is the agent's own, or two agents on one platform are one bot answering twice.
+        self.a_channel()
+        self.assertEqual(["A_TOKEN"], json.loads(kept.one("alan", "chat")["secret_names"]))
+        self.assertTrue(secrets.placed(ALANS_OWN),
+                        "what was typed was not kept under this agent's own name")
+        self.assertFalse(secrets.placed("A_TOKEN"),
+                         "the install-wide name was written over, so every agent shares one bot")
+
+    def test_two_agents_on_one_platform_get_a_bot_each(self):
+        # The whole point. One Discord application is one identity: two agents behind one token
+        # receive the same messages and nobody reading the room can tell which of them replied.
+        directory.made("cole", "claude")
+        self.an_adapter()
+        with self.typing(A_TOKEN):
+            code, _out, err = self.rundesk("channels", "add", "alan", "chat", "--allow", "1180")
+        self.assertEqual(0, code, err)
+        with self.typing(ANOTHER_TOKEN):
+            code, _out, err = self.rundesk("channels", "add", "cole", "chat", "--allow", "2207")
+        self.assertEqual(0, code, err)
+
+        self.assertEqual(A_TOKEN, secrets.value(ALANS_OWN))
+        self.assertEqual(ANOTHER_TOKEN, secrets.value("A_TOKEN__COLE"))
+
+    def test_an_agent_named_something_a_profile_cannot_be_is_refused_before_it_is_asked(self):
+        # Never mangled: `a-b` and `a_b` both fold to `A_B` under any sanitising, and two agents
+        # would then quietly share one bot. With no fallback left there is nothing to downgrade to,
+        # so this is a refusal — and it comes *before* the prompt, because asking somebody to paste
+        # a bot token into a name nothing will ever read is worse than telling them.
+        directory.made("a-b", "claude")
+        self.an_adapter()
+        with self.typing():                     # any prompt at all raises StopIteration
+            code, out, err = self.rundesk("channels", "add", "a-b", "chat", "--allow", "1180")
+        self.assertEqual(1, code)
+        self.assertEqual("", out)
+        self.assertIn("cannot hold a credential of its own", err)
+        self.assertIn("nothing was added", err)
+        self.assertEqual([], kept.all("a-b"))
+        self.assertEqual([], secrets.names(), "a value was kept for an agent that cannot read one")
+
+    def test_an_agent_that_cannot_be_scoped_may_still_have_a_channel_needing_nothing(self):
+        # The refusal is about credentials, not about the agent. An adapter that needs no account
+        # is unaffected, and refusing it would take a working thing away for no reason.
+        directory.made("a-b", "claude")
+        self.an_adapter(body=AN_ADAPTER_THAT_NEEDS_NOTHING)
+        with self.typing():
+            code, out, err = self.rundesk("channels", "add", "a-b", "chat", "--allow", "1180")
+        self.assertEqual(0, code, err)
+        self.assertIn("a thing with no account", out)
+
+    def test_an_agent_whose_name_cannot_be_a_profile_never_reaches_another_agents_bot(self):
+        # The collision that would exist if the name were folded rather than refused: `a_b` has a
+        # name of its own, `a-b` has none and gets nothing, and neither can see the other's.
+        directory.made("a_b", "claude")
+        directory.made("a-b", "claude")
+        self.an_adapter()
+        with self.typing(A_TOKEN):
+            self.assertEqual(0, self.rundesk("channels", "add", "a_b", "chat",
+                                             "--allow", "1180")[0])
+        self.assertEqual(A_TOKEN, secrets.value("A_TOKEN__A_B"))
+
+        with self.typing():
+            code, _out, err = self.rundesk("channels", "add", "a-b", "chat", "--allow", "2207")
+        self.assertEqual(1, code, err)
+        self.assertEqual(["A_TOKEN__A_B"], secrets.names())
+        self.assertEqual(A_TOKEN, secrets.value("A_TOKEN__A_B"),
+                         "one agent's bot token was written over by another agent's")
+
+    def test_a_plain_install_wide_value_no_longer_connects_anybody(self):
+        # The removed fallback, at the verb. A release that still read this would connect alan on
+        # whatever bot the shared name holds — which for a second agent is the first agent's.
+        secrets.stated("A_TOKEN", A_TOKEN)
+        self.an_adapter()
+        with self.typing(None):
+            code, out, err = self.rundesk("channels", "add", "alan", "chat", "--allow", "1180")
+        self.assertEqual(1, code)
+        # Prompted for its own name and told nothing is kept there — the plain value standing
+        # beside it is not offered, not mentioned, and not used.
+        self.assertIn(ALANS_OWN, out)
+        self.assertNotIn("already set", out)
+        self.assertIn(f"rundesk env set {ALANS_OWN}", err)
+        self.assertEqual([], kept.all("alan"))
+
+    def test_only_this_agents_own_name_is_what_the_adapter_is_started_with(self):
+        # A plain value standing beside it changes nothing at all, which is the strongest form of
+        # the guarantee: there is no order to get wrong because there is one name.
+        secrets.stated("A_TOKEN", ANOTHER_TOKEN)
+        self.a_channel()
+        self.assertEqual({"A_TOKEN": A_TOKEN},
+                         credentials.handed("alan", ["A_TOKEN"]))
 
     def test_nothing_is_written_down_when_the_adapter_will_not_connect(self):
         self.an_adapter(body=AN_ADAPTER_THAT_REFUSES)
@@ -244,15 +356,16 @@ class ConnectingAnAgent(Channels):
         self.assertIn("rundesk env set A_TOKEN", err)
         self.assertEqual([], kept.all("alan"))
 
-    def test_a_value_this_install_already_keeps_is_said_out_loud_and_kept_by_typing_nothing(self):
-        # The name belongs to the adapter and is the same for every agent using it, so a second
-        # channel naming it is a second channel using one credential. Said rather than written over.
-        secrets.stated("A_TOKEN", A_TOKEN)
+    def test_a_value_this_agent_already_keeps_is_said_out_loud_and_kept_by_typing_nothing(self):
+        # Its own name, and the only one read. Said rather than written over, so somebody who did
+        # not mean to rotate the token does not have to paste it again.
+        secrets.stated(ALANS_OWN, A_TOKEN)
         self.an_adapter()
         with self.typing(None):
             code, out, err = self.rundesk("channels", "add", "alan", "chat", "--allow", "1180")
         self.assertEqual(0, code, err)
-        self.assertIn("already set on this install", out)
+        self.assertIn("already set", out)
+        self.assertEqual(A_TOKEN, secrets.value(ALANS_OWN))
 
     def test_what_the_adapter_can_do_is_asked_offline_and_reported(self):
         # Asked with no credential anywhere near it, so that a fidelity difference is a fact rather
@@ -340,14 +453,30 @@ class WhatOneChannelSays(Channels):
         self.assertIn(str(self.shipped / "chat"), out)
 
     def test_a_credential_is_described_as_set_and_never_shown(self):
+        # And the name shown is the one really holding it, so somebody can see at a glance that
+        # this agent has a bot of its own rather than sharing the install-wide one.
         _code, out, err = self.rundesk("channels", "show", "alan", "chat")
-        self.assertIn("A_TOKEN (set)", out)
+        self.assertIn(f"{ALANS_OWN} (set)", out)
         self.assertNotIn(A_TOKEN, out + err)
 
-    def test_a_credential_that_is_no_longer_readable_says_so_rather_than_nothing(self):
-        secrets.cleared("A_TOKEN")
+    def test_a_credential_nothing_holds_says_not_set_rather_than_nothing(self):
+        self.no_token_anywhere()
         _code, out, _err = self.rundesk("channels", "show", "alan", "chat")
-        self.assertIn("A_TOKEN (NOT SET)", out)
+        self.assertIn(f"{ALANS_OWN} (NOT SET)", out)
+
+    def test_a_readout_names_the_one_place_a_missing_value_would_be_kept(self):
+        # One name, because there is one. Naming the plain one as well would send somebody to set a
+        # value this release ignores.
+        self.no_token_anywhere()
+        _code, out, _err = self.rundesk("channels", "show", "alan", "chat")
+        self.assertIn(f"{ALANS_OWN} (NOT SET)", out)
+        self.assertNotIn("or A_TOKEN", out)
+
+    def test_a_plain_install_wide_value_is_never_reported_as_this_channels_credential(self):
+        self.no_token_anywhere()
+        secrets.stated("A_TOKEN", A_TOKEN)
+        _code, out, _err = self.rundesk("channels", "show", "alan", "chat")
+        self.assertIn(f"{ALANS_OWN} (NOT SET)", out)
 
     def test_a_platform_this_agent_is_not_connected_to_is_refused(self):
         code, _out, err = self.rundesk("channels", "show", "alan", "slack")
@@ -430,11 +559,25 @@ class AskingItToConnectAgain(Channels):
         self.assertEqual(["1180"], kept.who_may_reach(kept.one("alan", "chat")))
 
     def test_a_credential_that_is_gone_is_a_failure_rather_than_a_quiet_pass(self):
-        secrets.cleared("A_TOKEN")
+        self.no_token_anywhere()
         code, out, err = self.rundesk("channels", "test", "alan", "chat")
         self.assertEqual(1, code)
         self.assertEqual("", out)
         self.assertIn("A_TOKEN", err)
+
+    def test_this_agents_own_credential_is_the_only_one_the_adapter_is_asked_with(self):
+        # The fixture refuses with no token, so both halves of this can fail. Emptying the agent's
+        # own name and leaving a plain one standing must now be a failure — before the fallback was
+        # removed it connected, on a bot this agent is not hosted as.
+        secrets.stated("A_TOKEN", A_TOKEN)
+        secrets.cleared(ALANS_OWN)
+        code, _out, err = self.rundesk("channels", "test", "alan", "chat")
+        self.assertEqual(1, code, err)
+
+        secrets.cleared("A_TOKEN")
+        secrets.stated(ALANS_OWN, A_TOKEN)
+        code, _out, err = self.rundesk("channels", "test", "alan", "chat")
+        self.assertEqual(0, code, err)
 
     def test_an_adapter_that_has_gone_is_named_rather_than_crashed_on(self):
         (self.shipped / "chat").unlink()
@@ -457,17 +600,20 @@ class TakingAChannelAway(Channels):
         self.assertEqual(["chat"], [str(one["kind"]) for one in kept.all("alan")])
 
     def test_the_preview_says_what_it_would_keep_as_well_as_what_it_would_take(self):
+        # The name it really stands under, because that is the name somebody would have to type to
+        # `rundesk env unset` it afterwards.
         _code, _out, err = self.rundesk("channels", "remove", "alan", "chat")
-        self.assertIn("A_TOKEN", err)
+        self.assertIn(ALANS_OWN, err)
         self.assertIn(str(hosting.at("alan", "chat")), err)
 
     def test_with_confirm_it_takes_the_connection_and_keeps_the_credential(self):
         code, out, err = self.rundesk("channels", "remove", "alan", "chat", "--confirm")
         self.assertEqual(0, code, err)
         self.assertIn("no longer connected to chat", out)
+        self.assertIn(ALANS_OWN, out)
         self.assertEqual([], kept.all("alan"))
-        self.assertTrue(secrets.placed("A_TOKEN"),
-                        "removing one channel took the shared credential with it")
+        self.assertTrue(secrets.placed(ALANS_OWN),
+                        "removing one channel took the credential with it")
 
     def test_removing_one_that_is_not_there_is_a_failure(self):
         code, _out, err = self.rundesk("channels", "remove", "alan", "slack", "--confirm")
@@ -487,11 +633,66 @@ class WhatCannotBeUsed(Channels):
         self.assertIn("all 1 of them are ready", out)
 
     def test_a_missing_credential_is_blocked_and_names_the_command_that_sets_it(self):
-        secrets.cleared("A_TOKEN")
+        self.no_token_anywhere()
         code, out, err = self.rundesk("channels", "doctor")
         self.assertEqual(1, code)
         self.assertIn("BLOCKED", out)
-        self.assertIn("rundesk env set A_TOKEN", err)
+        self.assertIn(f"rundesk env set {ALANS_OWN}", err)
+
+    def test_the_install_wide_name_alone_is_no_longer_enough_to_be_ready(self):
+        # The removed fallback, asked of the verb a script gates on — and the one that has to be
+        # loudest, because a `READY` here is what somebody trusts before walking away.
+        self.no_token_anywhere()
+        secrets.stated("A_TOKEN", A_TOKEN)
+        code, out, err = self.rundesk("channels", "doctor")
+        self.assertEqual(1, code)
+        self.assertIn("BLOCKED", out)
+        self.assertIn(ALANS_OWN, out)
+        self.assertIn(f"rundesk env set {ALANS_OWN}", err)
+
+    def test_what_doctor_calls_usable_is_what_a_gateway_would_really_start_it_with(self):
+        # Written as an equality rather than as two assertions about words, because the failure
+        # this guards is the two sides drifting apart rather than either of them being wrong on
+        # its own: a `READY` for a channel no gateway can host is the worst answer this verb has.
+        self.no_token_anywhere()
+        secrets.stated(ALANS_OWN, A_TOKEN)
+        code, _out, err = self.rundesk("channels", "doctor")
+        self.assertEqual(0, code, err)
+        self.assertEqual({"A_TOKEN": A_TOKEN}, credentials.handed("alan", ["A_TOKEN"]))
+
+        # And the mirror: the plain name alone is blocked, and a gateway would resolve nothing.
+        self.no_token_anywhere()
+        secrets.stated("A_TOKEN", A_TOKEN)
+        self.assertEqual(1, self.rundesk("channels", "doctor")[0])
+        self.assertEqual({}, credentials.handed("alan", ["A_TOKEN"]))
+
+    def test_an_agent_that_can_hold_no_credential_is_blocked_with_no_command_to_type(self):
+        # `Found.fix` is empty exactly for the verdicts nothing can be typed at, and this is one:
+        # there is no rename verb, so suggesting `rundesk env set` anything would be a lie.
+        directory.made("a-b", "claude")
+        kept.added("a-b", "chat", {"describes": "chat", "allowed": json.dumps(["1180"]),
+                                   "secret_names": json.dumps(["A_TOKEN"])})
+        code, out, err = self.rundesk("channels", "doctor", "a-b")
+        self.assertEqual(1, code)
+        self.assertIn("BLOCKED", out)
+        self.assertIn("cannot hold a credential of its own", out)
+        self.assertNotIn("rundesk env set", err)
+
+    def test_an_unreadable_value_of_this_agents_own_is_never_answered_from_the_shared_one(self):
+        # Set and unreadable is a third state, and reading past it would start this agent as
+        # whatever bot the install-wide name holds — the one outcome all of this exists to prevent.
+        secrets.stated("A_TOKEN", ANOTHER_TOKEN)
+        held = secrets.where()
+        said = json.loads(held.read_text(encoding="utf-8"))
+        said[ALANS_OWN] = "v2:AAAA:AAAA:AAAA"
+        held.write_text(json.dumps(said), encoding="utf-8")
+
+        code, out, err = self.rundesk("channels", "doctor")
+        self.assertEqual(1, code)
+        self.assertIn("BLOCKED", out)
+        self.assertIn(ALANS_OWN, out)
+        self.assertNotIn(ANOTHER_TOKEN, out + err)
+        self.assertEqual({}, credentials.handed("alan", ["A_TOKEN"]))
 
     def test_an_adapter_that_has_gone_is_dangling(self):
         (self.shipped / "chat").unlink()
@@ -533,7 +734,7 @@ class WhatCannotBeUsed(Channels):
     def test_the_findings_are_on_stdout_and_the_summary_on_stderr(self):
         # So a script can read one and ignore the other — and the findings are flushed first, or the
         # summary appears above what it summarises when both are merged into one pipe.
-        secrets.cleared("A_TOKEN")
+        self.no_token_anywhere()
         _code, out, err = self.rundesk("channels", "doctor")
         self.assertIn("BLOCKED", out)
         self.assertNotIn("BLOCKED", err)

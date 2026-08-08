@@ -11,6 +11,7 @@ Run directly: `python3 tests/test_delegations_kept.py`
 
 import sqlite3
 import unittest
+from datetime import datetime, timedelta, timezone
 
 import support
 from rundesk.agents import directory, records
@@ -114,6 +115,67 @@ class DeliveringExactlyOnce(TwoAgents):
 
     def test_delivering_one_nobody_made_says_so_rather_than_claiming_it_did(self):
         self.assertFalse(kept.answered("ava", "del-9-zzzz"))
+
+
+class WhenThePhaseOfWorkBegan(TwoAgents):
+    """`working_since`, and the one verb that is allowed to move it.
+
+    A resumed delegation is new work in an old row, and before this column existed there was nothing
+    written down that said so: every elapsed time was counted from `created_at`, so a room watching
+    an hour-old delegation get carried on was told *"still working · 1h"* on the next beat, before
+    the agent had done a second of it.
+
+    The rule has two halves and both are here, because a fix that only did the first would be worse
+    than the defect — a clock that any steer restarted would make busy work look permanently new.
+    """
+
+    def moment(self, minutes_ago):
+        return datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+
+    def test_a_delegation_begins_its_first_phase_when_it_is_made(self):
+        self.ava_delegates()
+        one = kept.one("ava", "del-1-aaaa")
+        self.assertEqual(one.created_at, one.working_since)
+
+    def test_carrying_work_on_begins_a_new_phase(self):
+        self.ava_delegates(now=self.moment(60))
+        began = kept.one("ava", "del-1-aaaa")
+        kept.answered("ava", "del-1-aaaa", now=self.moment(55))
+        self.assertTrue(kept.reopened("ava", "del-1-aaaa", now=self.moment(1)))
+
+        carried = kept.one("ava", "del-1-aaaa")
+        self.assertEqual(began.created_at, carried.created_at, "the original moment was rewritten")
+        self.assertNotEqual(began.working_since, carried.working_since)
+        self.assertEqual(carried.latest_at, carried.working_since,
+                         "a resume has to leave both on the same moment — see `_what_just_happened`")
+
+    def test_words_said_into_running_work_leave_the_phase_where_it_is(self):
+        self.ava_delegates(now=self.moment(60))
+        began = kept.one("ava", "del-1-aaaa").working_since
+        self.assertTrue(kept.guided("ava", "del-1-aaaa"))
+
+        one = kept.one("ava", "del-1-aaaa")
+        self.assertEqual(began, one.working_since, "a steer restarted the clock the work is timed by")
+        self.assertNotEqual(began, one.latest_at, "the steer moved nothing at all")
+
+    def test_asking_running_work_to_stop_leaves_the_phase_where_it_is(self):
+        self.ava_delegates(now=self.moment(60))
+        began = kept.one("ava", "del-1-aaaa").working_since
+        self.assertTrue(kept.stop_asked("ava", "del-1-aaaa"))
+
+        one = kept.one("ava", "del-1-aaaa")
+        self.assertEqual(began, one.working_since, "a stop restarted the clock the work is timed by")
+        self.assertNotEqual(began, one.latest_at)
+
+    def test_a_row_written_before_the_column_existed_reads_as_its_own_first_phase(self):
+        """An agent carried forward from 0.40.0. Step `0006` backfills, and this is the reader's own
+        half of the same answer — a `NULL` is never handed to anything that has to subtract from it.
+        """
+        self.ava_delegates()
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute("UPDATE delegations SET working_since = NULL")
+        one = kept.one("ava", "del-1-aaaa")
+        self.assertEqual(one.created_at, one.working_since)
 
 
 class AskingOneToStop(TwoAgents):

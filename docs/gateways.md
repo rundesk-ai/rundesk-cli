@@ -34,6 +34,22 @@ and how long it took. That is the gateway's to say rather than `rundesk ask`'s: 
 process with no channel connection and nothing to post through, so the only thing able to report a
 delegation is whatever is already watching, which is this loop.
 
+**And a line each time somebody reaches into it** — `rundesk asked say` reads as *updated dev*,
+`stop` as *asked dev to stop*, `resume` as *carried on with dev*. Those verbs run in command
+processes with nothing to post through either, so each of them moves the delegation's own row and
+this loop notices it moved. **Never what was said**: guidance is between two agents, and a room shown
+it would be reading somebody's private direction to their colleague back to them. At most one line
+per delegation per beat, and what just happened wins over a check-in that fell due at the same
+moment.
+
+**Carrying work on starts the clock again, and steering does not.** How long work has been out is
+counted from the phase it is in — when it went out, or when it was last resumed — so an hour-old
+delegation carried on reads as *carried on with dev* and then nothing until the new work is twenty
+minutes old, and the answer that follows says how long *that* took. Counted from the original ask it
+said *"dev still working · 1h"* on the beat after the resume, before the agent had done a second of
+it. A steer or a stop request moves neither clock: somebody saying a word into running work has not
+restarted that work, and a person who has been waiting an hour has been waiting an hour.
+
 Underneath both is the part that had to be right before either could be trusted: a gateway starts,
 holds its agent's name, says every fifteen seconds that it is still working, stops when it is asked
 to, and can be told apart from one that has died.

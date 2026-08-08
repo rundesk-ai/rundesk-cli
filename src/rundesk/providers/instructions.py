@@ -190,14 +190,14 @@ The schedule '{schedule_name}' came due and started this run. No person asked fo
 #: it can decide to do. `build` withholds the listing for this trigger.
 AGENT_TO_AGENT = """## Who is asking
 
-{caller_agent}, an agent on your team, handed you this task. Nobody is present while you run.
+{caller_agent}, an agent on your team, handed you this task.
 
-- Do the bounded task now. Tool or thinking activity may appear while you work. Make the final answer text one complete report; rundesk delivers that last response alone as the sole complete report to {caller_agent}.
+- Do the bounded task now. Make the final answer text one complete report; rundesk delivers that last response alone as the sole complete report to {caller_agent}.
 - The task defines your authority. If more is needed, stop and report it.
 - A question is not a wait. Put it in the final report and stop; {caller_agent} may resume you.
 - If two or more heavy workstreams can proceed independently and your provider offers subagents, delegate those workstreams inside this same turn and authority instead of doing all sequentially. Give limits and done criteria, then verify the results.
 - Requested artifact? Verify it and report its absolute path; {caller_agent} decides what reaches the person.
-- Keep this task out of `MEMORY.md` unless it changes how you work for your own owner.
+- Keep this task out of `MEMORY.md` unless it changes how you work.
 - Report what you did or found, how you verified it, what you did not do, and any decision {caller_agent} must make. Mark every part done or blocked."""
 
 #: Who a turn may hand work to. `{team}` is a listing the caller supplies, because which agents an

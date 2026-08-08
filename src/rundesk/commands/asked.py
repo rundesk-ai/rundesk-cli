@@ -152,6 +152,13 @@ def _said_into(agent: str, delegation_id: str, words: str) -> int:
         arriving.recorded_for_a_delegation(
             one.to_agent, agent, one.parent_turn, words, delegation_id=delegation_id,
             legacy_fallback=True)
+        # **The message first, the moment second**, and inside the same lock. The row is what the
+        # asking agent's gateway watches to tell its room the work was updated, and what the
+        # retention window is counted from — so guidance that moved neither would be words nobody
+        # is shown, on a delegation that ages as though nobody had been near it. Stamped after the
+        # message so a crash between the two leaves guidance waiting rather than a moment that
+        # claims words which were never written.
+        delegations.guided(agent, delegation_id)
     print(f"added to {delegation_id}  ·  active-first: {one.to_agent}'s gateway offers it now; "
           "if missed or refused, its next turn reads it")
     return OK

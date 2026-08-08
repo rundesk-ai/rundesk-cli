@@ -42,13 +42,21 @@ recorded name back with its value under that same name, so the recorded name and
 adapter looks in are one fact — a name worked out a second time, anywhere, is a channel that passes
 `--check` and finds nothing when it is hosted.
 
-**It is therefore not made per-agent, and that is a limitation rather than an oversight.** Deriving
-one from the agent's name is the obvious thing to want — two agents, two bots, two tokens — and it
-cannot be done from here: an agent may be called things an environment variable may not
-(`^[A-Z][A-Z0-9_]*$`), sanitising collides (`a-b` and `a_b` both become `A_B`, which is two agents
-quietly sharing one token), and the adapter reads a name of its own choosing in any case. So the
-name is the adapter's, the prompt says out loud when this install already keeps a value under it,
-and two channels naming one credential are two channels using one credential.
+**Where the value is *kept* is the agent's own, though, and that is `channels.credentials`.** One
+bot is one identity, so two agents behind one token are one presence that answers twice and cannot
+be told apart. A value is kept under `DISCORD_BOT_TOKEN__ALAN` — the profile convention
+`skills.needs` already uses, on a name `rundesk env set` already accepts — and **a plain
+`DISCORD_BOT_TOKEN` is not read at all**. There is no fallback and no second name to try.
+
+Two refusals follow from that and both are said here rather than discovered later. An agent whose
+name cannot carry a credential — folding `a-b` and `a_b` would make them one bot — is refused by
+`add` **before anything is typed**, because prompting for a value nothing will ever read is worse
+than saying so. And a channel whose scoped name holds nothing is `BLOCKED`, where the release before
+this would have quietly connected it on the shared value.
+
+Every verb here reads that through the one module, so what `add` writes, what `show` and `test`
+describe, what `doctor` calls blocked and what a gateway really starts an adapter with are one
+answer. **No value is printed by any of them** — only which name holds it.
 
 ## What leaves this machine arrives as an argument
 
@@ -69,7 +77,7 @@ import sys
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from rundesk.agents import directory, migration, records
-from rundesk.channels import adapters, hosting, kept
+from rundesk.channels import adapters, credentials, hosting, kept
 from rundesk.commands import Subcommands, as_written, env, failed
 from rundesk.core import paths, secrets
 from rundesk.exits import FAILED, OK
@@ -515,14 +523,14 @@ def _reached(agent: str, kind: str, allow: Sequence[str], options: Sequence[str]
     the asking itself could not finish. The first answer comes back with that sentence rather than
     nothing, so that a caller has only one shape to read whichever way this went.
     """
-    said = adapters.checked(kind, options, _handed(allow, []), reaching)
+    said = adapters.checked(kind, options, _handed(agent, allow, []), reaching)
     if said.ok or not said.secret_names:
         return said, [], ""
 
     trouble = _asked_for(agent, kind, said.secret_names)
     if trouble:
         return said, [], trouble
-    return (adapters.checked(kind, options, _handed(allow, said.secret_names), reaching),
+    return (adapters.checked(kind, options, _handed(agent, allow, said.secret_names), reaching),
             list(said.secret_names), "")
 
 
@@ -534,32 +542,54 @@ def _asked_for(agent: str, kind: str, names: Sequence[str]) -> str:
     `ps` to every other user on the machine while the command runs. `commands.env.typed` is the one
     right way to do that and is reused rather than copied.
 
-    **A name this install already keeps is said out loud rather than written over.** The name belongs
-    to the adapter and is the same for every agent using it, so a second channel naming it is a
-    second channel using one credential — see the module docstring on why it is not made per-agent.
-    Somebody who meant a different token can type one; typing nothing keeps what is there.
+    **What is typed is kept under this agent's own name**, so a second agent on the same platform is
+    a second bot rather than the same one answering twice. There is no other name: an install-wide
+    value is not read, so nothing typed here can end up shared.
+
+    **Refused before the first prompt for an agent whose name cannot carry one.** Asking somebody to
+    paste a bot token into a name this release will never look in is worse than telling them, and
+    they would find out at three in the morning instead of now.
+
+    **Whatever is already kept is said out loud rather than written over.** Somebody who meant a
+    different token types one; typing nothing keeps what is there.
     """
-    held = set(secrets.names())
+    trouble = credentials.name_trouble(agent)
+    if trouble:
+        return trouble
+    found = credentials.standing(agent, names)
     print(f"the {kind} adapter needs {len(names)} value"
           f"{'s' if len(names) != 1 else ''} before {agent} can use it")
-    for name in names:
-        already = name in held and secrets.placed(name)
-        print(f"        {name}   the {kind} adapter reads its credential from this name"
-              + (" — already set on this install; type nothing to keep it" if already else ""))
+    for one in found:
+        print(f"        {one.scoped}   {_what_a_name_is_for(agent, kind, one)}")
         typed = env.typed("        > ")
         if typed is None:
-            if already:
+            if one.holding:
                 continue
-            return (f"nothing was typed for {name}, so there is nothing to connect with — "
-                    f"keep it separately with: rundesk env set {name}")
+            return (f"nothing was typed for {one.scoped}, so there is nothing to connect with — "
+                    f"keep it separately with: rundesk env set {one.scoped}")
         try:
-            secrets.stated(name, typed)
+            secrets.stated(one.scoped, typed)
         except (secrets.Refused, secrets.Stuck, OSError) as why:
             return str(why)
     return ""
 
 
-def _handed(allow: Sequence[str], names: Sequence[str]) -> Dict[str, str]:
+def _what_a_name_is_for(agent: str, kind: str, one: credentials.Standing) -> str:
+    """The sentence beside a name somebody is being asked to type a value for.
+
+    Three cases, and each changes what a person should do: a value that cannot be opened has to be
+    typed over, one that is there is kept by saying nothing, and one that is not there has to be
+    typed. An agent that can hold no credential never reaches here — `_asked_for` refuses first.
+    """
+    reads = f"the {kind} adapter reads {one.declared}"
+    if one.trouble:
+        return f"{reads} — {one.trouble}, so a value has to be typed over it"
+    if one.holding:
+        return f"{reads}, and this is {agent}'s own — already set; type nothing to keep it"
+    return f"{reads}, and this is {agent}'s own"
+
+
+def _handed(agent: str, allow: Sequence[str], names: Sequence[str]) -> Dict[str, str]:
     """What an adapter is asked its question with: who it may answer, and each named credential.
 
     **`RUNDESK_ALLOW` is here and not only at hosting time**, and it is not decoration: an adapter
@@ -568,18 +598,20 @@ def _handed(allow: Sequence[str], names: Sequence[str]) -> Dict[str, str]:
     signed in. `channels.hosting` builds the same variable from the same list for the long-lived
     half.
 
-    Reading a whole value is what `secrets.value` exists for — the programs rundesk starts — and this
-    is one of the two places that starts one. Nothing here prints it.
+    The credentials are `channels.credentials`' to resolve, and are resolved by the same call
+    `channels.hosting` makes — so a `--check` that connected and an adapter that is really serving
+    were handed the same value, out of the same name, for the same agent.
+
+    Reading a whole value is what `secrets.value` exists for — the programs rundesk starts — and a
+    `--check` is one of them. Nothing here prints it.
     """
     built = {"RUNDESK_ALLOW": ",".join(allow)}
-    for name in names:
-        value = secrets.value(name)
-        if value is not None:
-            built[name] = value
+    built.update(credentials.handed(agent, names))
     return built
 
 
-def _reconnected(kind: str, row: Dict[str, Any], reaching: Optional[Reaching]) -> adapters.Checked:
+def _reconnected(agent: str, kind: str, row: Dict[str, Any],
+                 reaching: Optional[Reaching]) -> adapters.Checked:
     """Ask an adapter to reach again what its channel already has on record.
 
     **The shape `test` and `doctor` share, and it is the whole of what they share.** Both ask with no
@@ -587,8 +619,12 @@ def _reconnected(kind: str, row: Dict[str, Any], reaching: Optional[Reaching]) -
     what the channel is really running on — and both hand it the allow list and the credentials the
     row names. `add` is deliberately not written in terms of this: it asks twice, prompts between the
     two, and passes the options somebody typed.
+
+    **Whose channel it is has to be carried in**, because which value answers a declared name is an
+    agent's own fact: a `test` that resolved without the agent would connect as whatever the
+    install-wide name holds and report a bot that is not the one this agent is hosted as.
     """
-    return adapters.checked(kind, (), _handed(kept.who_may_reach(row), _named_secrets(row)),
+    return adapters.checked(kind, (), _handed(agent, kept.who_may_reach(row), _named_secrets(row)),
                             reaching)
 
 
@@ -623,7 +659,7 @@ def _described(agent: str, kind: str, able: Dict[str, Any]) -> int:
     print(f"        allowed   {_who(row)}")
     print(f"        told      {as_written(bool(row.get('notified')))}"
           f"{_where_it_writes(row)}")
-    print(f"        needs     {_credentials(row)}")
+    print(f"        needs     {_credentials(agent, row)}")
     print(f"        settings  {as_written(row.get('settings'))}")
     if able:
         print(f"        can       {', '.join(f'{one}={able[one]}' for one in sorted(able))}")
@@ -648,12 +684,29 @@ def _where_it_writes(row: Dict[str, Any]) -> str:
     return f" — unprompted things go to {as_written(row.get('notify_place'))}"
 
 
-def _credentials(row: Dict[str, Any]) -> str:
-    """Each credential this channel names, and whether it is set — never what it holds."""
+def _credentials(agent: str, row: Dict[str, Any]) -> str:
+    """Each credential this channel names, and whether it is set — never what it holds.
+
+    **The name shown is this agent's own**, which is the only name a value is read from. It is named
+    whether or not anything is kept under it, because that is the name somebody has to set.
+    """
     names = _named_secrets(row)
     if not names:
         return "nothing"
-    return ", ".join(f"{one} ({'set' if secrets.placed(one) else 'NOT SET'})" for one in names)
+    try:
+        found = credentials.standing(agent, names)
+    except TROUBLE as why:
+        return f"cannot be read — {why}"
+    return ", ".join(_one_credential(one) for one in found)
+
+
+def _one_credential(one: credentials.Standing) -> str:
+    """One credential in the words a readout uses: the name that holds it, and how it stands."""
+    if one.holding:
+        return f"{one.holding} (set)"
+    if one.trouble:
+        return one.trouble
+    return f"{one.scoped} (NOT SET)"
 
 
 def _named_secrets(row: Dict[str, Any]) -> List[str]:
@@ -668,6 +721,26 @@ def _named_secrets(row: Dict[str, Any]) -> List[str]:
     except (TypeError, ValueError):
         return []
     return [str(one) for one in held] if isinstance(held, list) else []
+
+
+def _kept_under(agent: str, row: Dict[str, Any]) -> List[str]:
+    """The name each of this channel's credentials really stands under, for a removal to name.
+
+    **The name that is really still there afterwards**, which is this agent's own: telling somebody
+    `DISCORD_BOT_TOKEN` is kept, when what is kept is `DISCORD_BOT_TOKEN__ALAN`, sends them to
+    `rundesk env unset` a name holding nothing.
+
+    Nothing is named for an agent that can hold no credential, because nothing was ever kept for it.
+    Falls back to the declared names when the store will not answer: this is a line describing what
+    a removal left behind, and by the time it prints the removal has already happened — a readout
+    that cannot be composed must not turn a completed removal into a traceback.
+    """
+    names = _named_secrets(row)
+    try:
+        return [one.holding or one.scoped
+                for one in credentials.standing(agent, names) if one.holding or one.scoped]
+    except TROUBLE:
+        return names
 
 
 def _the_program_behind(kind: str) -> str:
@@ -726,7 +799,7 @@ def _tested(agent: str, kind: str, reaching: Optional[Reaching]) -> int:
     try:
         row = kept.one(agent, kind)
         adapters.where(kind)
-        said = _reconnected(kind, row, reaching)
+        said = _reconnected(agent, kind, row, reaching)
     except TROUBLE as why:
         return _failed(str(why), "nothing was tried")
 
@@ -735,7 +808,7 @@ def _tested(agent: str, kind: str, reaching: Optional[Reaching]) -> int:
                        "what the channel is configured with is unchanged — see it with: "
                        f"rundesk channels show {agent} {kind}")
     print(f"{agent}'s {kind} channel reached {said.describes}")
-    print(f"        needs     {_credentials(row)}")
+    print(f"        needs     {_credentials(agent, row)}")
     print(f"        standing  {_how(agent, kind)}")
     return OK
 
@@ -768,7 +841,7 @@ def _removed(agent: str, kind: str, confirm: bool) -> int:
     print(f"{agent} is no longer connected to {kind}")
     print(f"        kept   {hosting.at(agent, kind)} — what arrived through it, and what its "
           "adapter wrote")
-    for name in _named_secrets(row):
+    for name in _kept_under(agent, row):
         print(f"        kept   {name} — rundesk env forgets nothing here")
     if _still_hosted(agent, kind):
         # Said rather than refused. Nothing here can stop an adapter another process started, and a
@@ -789,7 +862,7 @@ def _would_remove(agent: str, kind: str, row: Dict[str, Any]) -> int:
               "it would then write nowhere", file=sys.stderr)
     print(f"        keep     {hosting.at(agent, kind)} — what arrived through it, and what its "
           "adapter wrote", file=sys.stderr)
-    for name in _named_secrets(row):
+    for name in _kept_under(agent, row):
         print(f"        keep     {name} — rundesk env forgets nothing here", file=sys.stderr)
     print("        nothing was removed. To go ahead:", file=sys.stderr)
     print(f"        rundesk channels remove {agent} {kind} --confirm", file=sys.stderr)
@@ -896,16 +969,25 @@ def _looked_over(agent: str, row: Dict[str, Any], reaching: Optional[Reaching]) 
         return Found(agent, kind, DANGLING, str(why),
                      f"rundesk channels remove {agent} {kind} --confirm")
 
-    names = _named_secrets(row)
-    missing = [one for one in names if not secrets.placed(one)]
+    try:
+        found = credentials.standing(agent, _named_secrets(row))
+    except TROUBLE as why:
+        return Found(agent, kind, BLOCKED, str(why), "rundesk env list")
+    missing = [one for one in found if not one.holding]
     if missing:
-        return Found(agent, kind, BLOCKED,
-                     f"{', '.join(missing)} — nothing this install can read is kept under "
-                     f"{'those names' if len(missing) > 1 else 'that name'}",
-                     f"rundesk env set {missing[0]}")
+        # **Resolved by the same call that starts an adapter**, so a channel this says is blocked is
+        # one a gateway really cannot host, and one it passes is one whose credential a gateway
+        # really finds. Two answers to *which name holds this* is how a `READY` verdict comes to
+        # describe a channel that has never connected.
+        #
+        # **No command for an agent that can hold no credential**, because there is not one: setting
+        # any name would not help, and `Found.fix` is empty exactly for the verdicts nothing can be
+        # typed at.
+        return Found(agent, kind, BLOCKED, "; ".join(_nothing_kept(one) for one in missing),
+                     f"rundesk env set {missing[0].scoped}" if missing[0].scoped else "")
 
     try:
-        said = _reconnected(kind, row, reaching)
+        said = _reconnected(agent, kind, row, reaching)
     except TROUBLE as why:
         return Found(agent, kind, UNREACHABLE, str(why),
                      f"rundesk channels show {agent} {kind}")
@@ -919,6 +1001,18 @@ def _looked_over(agent: str, row: Dict[str, Any], reaching: Optional[Reaching]) 
                      f"before it will try",
                      f"rundesk gateways restart {agent}")
     return Found(agent, kind, READY, said.describes, "")
+
+
+def _nothing_kept(one: credentials.Standing) -> str:
+    """Why one credential cannot be used, naming the one place its value is kept.
+
+    One place, because there is one: a plain `{declared}` is not read and saying it was looked for
+    would send somebody to set a name this release ignores. An agent that can hold no credential
+    says that instead, in `credentials.name_trouble`'s own words.
+    """
+    if one.trouble:
+        return one.trouble
+    return f"{one.scoped} — nothing this install can read is kept under that name"
 
 
 def _by_agent(found: Sequence[Found], unreadable: Sequence[Tuple[str, str]]) -> List[str]:

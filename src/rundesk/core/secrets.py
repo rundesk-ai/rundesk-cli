@@ -93,6 +93,22 @@ ONLY_MINE = 0o700
 #: is used in another is a value nobody can find again.
 NAMED = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
+#: What separates a name from the profile it belongs to — `JIRA_API_TOKEN__ACME`,
+#: `DISCORD_BOT_TOKEN__ALAN`. Two underscores rather than one, because a single one is ordinary
+#: inside a name and `JIRA_API_TOKEN` would then appear to be `JIRA_API` in a profile called
+#: `TOKEN`.
+#:
+#: **Here rather than in either layer that writes one.** A profile is a naming convention on names
+#: `rundesk env set` already accepts, and two layers now build one: `skills.needs`, for a skill with
+#: three Jira sites, and `channels.credentials`, for an agent with a bot of its own. Neither may
+#: import the other, so a separator spelled out in both is one that can drift — and the drift is
+#: silent, because a value written under one spelling is simply never found under the other.
+#:
+#: Not called `BETWEEN`, which is taken by the filler in a hint a few lines down — two constants of
+#: one name in one module is the second one silently winning, which is exactly what happened while
+#: this was being written and cost a suite to find.
+PROFILED_BY = "__"
+
 #: How much of a value is ever shown, at each end.
 SHOWN = 3
 
@@ -149,6 +165,16 @@ def name_trouble(key: str) -> str:
         return (f"{key} is not a name a program can be given — capitals, digits and underscores, "
                 "starting with a letter, the way a shell variable is written")
     return ""
+
+
+def profiled(key: str, profile: str) -> str:
+    """The name `key` is kept under for `profile`, or the plain name when there is no profile.
+
+    Joined here and nowhere else, so what a profile looks like is decided by the module that
+    decides what a name may be at all. Nothing is validated: a caller that has not already checked
+    `profile` against `NAMED` would produce a name `stated` refuses, which is the refusal it wants.
+    """
+    return f"{key}{PROFILED_BY}{profile}" if profile else key
 
 
 def kept(at: Optional[Path] = None) -> Dict[str, Held]:

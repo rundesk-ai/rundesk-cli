@@ -39,7 +39,7 @@ import support
 from rundesk.agents import directory
 from rundesk.channels import arriving, delivery, hosting, kept
 from rundesk.channels import files as arrivals
-from rundesk.core import paths
+from rundesk.core import paths, secrets
 from rundesk.utils import programs
 
 #: How long a case will wait for a real child to do something. Generous, because it is a real fork
@@ -91,6 +91,25 @@ print(json.dumps({"say": "arrived", "conversation": "1180", "user": "2207",
                   "text": "have a look", "external_id": "8841",
                   "attachments": [{"name": "report.csv", "at": str(into / "0"), "bytes": 8}]}),
       flush=True)
+for line in sys.stdin:
+    try:
+        if json.loads(line).get("do") == "stop":
+            break
+    except ValueError:
+        continue
+"""
+
+#: One that reports its own environment before doing anything else, so a case can prove **which**
+#: name answered and under which name the value arrived. It reads the declared name with no
+#: fallback, exactly as a real adapter does — the resolution is rundesk's business and the far side
+#: of the seam has never heard of it.
+AN_ADAPTER_THAT_REPORTS_ITS_CREDENTIAL = """#!/usr/bin/env python3
+import json, os, sys
+settings = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
+with open(settings["told"], "a") as writing:
+    writing.write(json.dumps({"read": os.environ.get("A_TOKEN"),
+                              "scoped": os.environ.get("A_TOKEN__COLE")}) + "\\n")
+print(json.dumps({"say": "ready"}), flush=True)
 for line in sys.stdin:
     try:
         if json.loads(line).get("do") == "stop":
@@ -361,9 +380,10 @@ class Hosting(support.Isolated):
         at.chmod(0o755)
         return at
 
-    def a_channel(self, kind="discord", allowed=("2207",), told=False, saying=""):
+    def a_channel(self, kind="discord", allowed=("2207",), told=False, saying="", needing=()):
         kept.added(self.agent, kind, {
             "describes": kind, "allowed": json.dumps(list(allowed)),
+            "secret_names": json.dumps(list(needing)),
             "settings": json.dumps({"saying": saying, "heard": str(self.heard),
                                     "told": str(self.told)})})
         if told:
@@ -1035,6 +1055,95 @@ class TalkingToOne(Hosting):
                          if one.get("do") == "deliver"]) == 3, PATIENCE))
         delivered = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
         self.assertEqual([False, False, True], [bool(one.get("files")) for one in delivered])
+
+
+class WhatCredentialAnAdapterIsStartedWith(Hosting):
+    """Per-agent resolution, proved through a real child's own environment.
+
+    **One bot is one identity**, so two agents on one platform have to be two applications with two
+    tokens — and the only place that is really true is the environment of the program that signs in.
+    A case asserting on a dict built in this process would pass over a gateway that hands the child
+    something else entirely, which is the whole hazard of a value that crosses a `fork` and an
+    `exec`.
+
+    **There is one name and no fallback.** A plain `A_TOKEN` standing in the store is not read, so
+    an agent whose own name holds nothing is started without a credential — which is the outcome
+    this asserts, because the alternative it replaced was starting it as another agent's bot.
+    """
+
+    #: Two values, so a case can fail. Handed the same string, an assertion about which name
+    #: answered would pass whichever one really did.
+    MINE = "MTIzNDU2Nzg5-coles-own-bot-token"
+    SHARED = "OTg3NjU0MzIx-the-install-wide-bot-token"
+
+    def a_reporting_channel(self):
+        self.an_adapter(body=AN_ADAPTER_THAT_REPORTS_ITS_CREDENTIAL)
+        self.a_channel(needing=("A_TOKEN",))
+
+    def what_it_was_handed(self):
+        """What the child said about its own environment, once it has had a chance to say it."""
+        self.assertTrue(support.waited_until(lambda: bool(self.what_it_was_told()), PATIENCE),
+                        f"the adapter never reported anything. It said: {self.said_in_the_log()}")
+        return self.what_it_was_told()[0]
+
+    def test_this_agents_own_value_is_what_the_adapter_is_really_started_with(self):
+        secrets.stated("A_TOKEN", self.SHARED)
+        secrets.stated("A_TOKEN__COLE", self.MINE)
+        self.a_reporting_channel()
+        self.hosting_now()
+
+        said = self.what_it_was_handed()
+        self.assertEqual(self.MINE, said["read"],
+                         "the adapter signed in as whatever the shared name holds")
+
+    def test_the_name_the_adapter_reads_is_the_one_it_declared_and_nothing_else(self):
+        # Where rundesk found the value is rundesk's business. An adapter told to look in a name it
+        # never published is an adapter every author would have to be told about.
+        secrets.stated("A_TOKEN__COLE", self.MINE)
+        self.a_reporting_channel()
+        self.hosting_now()
+
+        self.assertIsNone(self.what_it_was_handed()["scoped"],
+                          "the agent-scoped name itself crossed the seam")
+
+    def test_a_plain_install_wide_value_never_reaches_an_adapter(self):
+        # The removed fallback, at the one place it would really matter: a live child signing in.
+        secrets.stated("A_TOKEN", self.SHARED)
+        self.a_reporting_channel()
+        self.hosting_now()
+
+        self.assertIsNone(self.what_it_was_handed()["read"],
+                          "the adapter signed in on the shared value this release must not read")
+
+    def test_a_credential_nothing_holds_is_left_out_rather_than_handed_over_empty(self):
+        # An adapter refuses for want of a token and says which name it looked in, which is a
+        # better answer than a gateway inventing an empty string that reads as a set value.
+        self.a_reporting_channel()
+        self.hosting_now()
+
+        self.assertIsNone(self.what_it_was_handed()["read"])
+
+    def test_a_stop_and_a_fresh_start_resolve_it_again_rather_than_carrying_it_over(self):
+        # **Nothing is cached across a gateway's life**, and this is the case that says so. A value
+        # read once and held in memory would survive a restart, so a token rotated between the two
+        # would go on being the old one — and the symptom is a channel that works right up until
+        # the day somebody resets it in a portal and restarts to pick the new one up.
+        secrets.stated("A_TOKEN__COLE", self.MINE)
+        self.a_reporting_channel()
+        watching = self.hosting_now()
+        self.assertEqual(self.MINE, self.what_it_was_handed()["read"])
+
+        hosting.stopping(self.agent, self.where, watching, 4.0)
+        self.assertTrue(support.waited_until(
+            lambda: not hosting.still_running(self.agent, "discord"), PATIENCE),
+            "the adapter never let go of its claim, so nothing could start in its place")
+        self.told.unlink()
+        secrets.stated("A_TOKEN__COLE", self.SHARED)
+
+        # A `Watching` of its own, which is exactly what the gateway after this one would have.
+        self.hosting_now()
+        self.assertEqual(self.SHARED, self.what_it_was_handed()["read"],
+                         "the adapter was started again on the value the last gateway had read")
 
 
 class WhatAPreviousGatewayLeft(Hosting):

@@ -13,7 +13,7 @@ IDs, credential name, and whether unsolicited notifications go there.
 | `channels configure <agent> <adapter> [--allow <id> ...] [--deny <id> ...] [--notify]` | Add or remove allowed senders or choose the notification channel. |
 | `channels test <agent> <adapter>` | Connect again and report what the adapter reached. |
 | `channels remove <agent> <adapter> [--confirm]` | Preview removal; `--confirm` removes the connection. |
-| `channels doctor [<agent>]` | Diagnose every channel or one agent's as READY, BLOCKED, UNREACHABLE, or DANGLING. |
+| `channels doctor [<agent>]` | Diagnose every channel or one agent's as READY, BLOCKED, UNREACHABLE, DANGLING, or GIVEN UP. |
 
 Prefix every command with `"$RUNDESK_COMMAND"`.
 
@@ -21,7 +21,11 @@ Prefix every command with `"$RUNDESK_COMMAND"`.
 
 1. Run `channels doctor <agent>` and `env check <credential-name>` when the adapter's required name
    is known.
-2. Have the owner run `env set <NAME>` at their own terminal. Never receive or pass the value.
+2. Have the owner run `env set <NAME>__<AGENT>` at their own terminal. Never receive or pass the
+   value. **The name is per-agent and there is no shared fallback**: the adapter declares
+   `DISCORD_BOT_TOKEN`, the value is kept under `DISCORD_BOT_TOKEN__ALAN`, and a plain
+   `DISCORD_BOT_TOKEN` is not read at all. One Discord application per agent — two agents behind one
+   token are one bot answering twice.
 3. Add at least one exact platform sender ID with repeatable `--allow`. An empty allow list is
    refused so a connected agent cannot silently answer nobody.
 4. **Pass `--notify` on the first channel, and make it the owner's own direct message.** See below:
