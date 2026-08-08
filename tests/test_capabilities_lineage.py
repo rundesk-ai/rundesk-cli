@@ -182,8 +182,15 @@ class TheThirdState(unittest.TestCase):
         self.assertEqual(lineage.CANNOT_TELL, found.how)
         self.assertFalse(found.certain)
 
-    def test_the_two_are_not_the_same_answer(self) -> None:
-        self.assertNotEqual(lineage.UNKNOWN, lineage.CANNOT_TELL)
+    def test_no_two_lineages_are_the_same_word(self) -> None:
+        """Every other case here compares a result against `lineage.<NAME>`, so aliasing two of
+        those constants to one string leaves the whole file green while the distinction it protects
+        is gone. The constants have to be compared with each other, once, or nothing checks them."""
+        every = {"GATEWAY": lineage.GATEWAY, "TERMINAL": lineage.TERMINAL,
+                 "REMOTE": lineage.REMOTE, "UNKNOWN": lineage.UNKNOWN,
+                 "CANNOT_TELL": lineage.CANNOT_TELL}
+        self.assertEqual(len(every), len(set(every.values())),
+                         f"two lineages share a word, so nothing tells them apart: {every}")
 
     def test_a_platform_that_will_not_name_a_responsible_process_cannot_tell(self) -> None:
         machine = a_machine(images={100: PYTHON}, parents={100: (1, "launchd")}, responsible={})

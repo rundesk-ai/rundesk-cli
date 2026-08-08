@@ -9,6 +9,7 @@ asks about.
 | Module | Answers |
 |---|---|
 | `lineage` | whose grants an answer here would be a fact about, and how that was decided |
+| `proving` | the one program each capability is settled by, what its answer means, and the one thing to type when it is a no |
 
 May depend on `core` and `utils`. **It may not reach `agents`**, and that restriction is the
 mechanical statement of the thing this package exists to say: *a grant belongs to a machine, not to
