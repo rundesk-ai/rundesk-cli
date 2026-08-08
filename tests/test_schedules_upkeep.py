@@ -11,7 +11,7 @@ from rundesk.agents import directory
 from rundesk.channels import arriving
 from rundesk.providers import kept as turns_kept
 from rundesk.providers import protocol
-from rundesk.schedules import firing, upkeep
+from rundesk.schedules import due, firing, upkeep
 
 UTC = datetime.timezone.utc
 
@@ -175,6 +175,49 @@ class Upkeep(support.Isolated):
             got = upkeep.looked("ava", Path(self.home) / "log", watching, mock.Mock())
         self.assertIs(watching, got)
         managed.assert_not_called()
+
+    def test_a_beat_landing_in_the_spawn_gap_does_not_start_the_same_minute_twice(self):
+        # **The gap `working` cannot cover.** `_fired` writes `last_fired_for` durably *before* it
+        # spawns, and the child writes its own turn row some time after that — so between the two
+        # there is no working turn and the window is still owed, and every beat in that gap used to
+        # start another run of it. Measured on a loaded machine at the fifty-millisecond beat this
+        # suite's gateway case uses: three runs of one window inside a second.
+        #
+        # Written as the claim actually lands rather than by calling `looked` twice, because what is
+        # being proved is that the durable minute is *read* — the write was never in doubt.
+        start = datetime.date(2026, 11, 1)
+        for offset in range(7):
+            self.used(start + datetime.timedelta(days=offset))
+        from rundesk.schedules import kept as schedules_kept
+        moment = datetime.datetime(2026, 11, 9, 9, 30, tzinfo=UTC)
+        upkeep.prepared("ava", "first")
+        schedules_kept.claimed("ava", upkeep.NAME, due.as_minute(moment))
+
+        watching = firing.Watching({}, {})
+        with mock.patch("rundesk.schedules.upkeep.firing.managed") as managed:
+            got = upkeep.looked("ava", Path(self.home) / "log", watching, mock.Mock(),
+                                moment=moment)
+        self.assertIs(watching, got)
+        managed.assert_not_called()
+
+    def test_the_next_minute_may_still_start_one(self):
+        # The other half: the guard is *this* minute and never a latch. A run that could not be
+        # started is owed on the next beat, and a claim that stopped one for ever would be the
+        # silent-never-again failure this codebase names everywhere else.
+        start = datetime.date(2026, 11, 1)
+        for offset in range(7):
+            self.used(start + datetime.timedelta(days=offset))
+        from rundesk.schedules import kept as schedules_kept
+        claimed = datetime.datetime(2026, 11, 9, 9, 30, tzinfo=UTC)
+        upkeep.prepared("ava", "first")
+        schedules_kept.claimed("ava", upkeep.NAME, due.as_minute(claimed))
+
+        watching = firing.Watching({}, {})
+        with mock.patch("rundesk.schedules.upkeep.firing.managed",
+                        return_value=watching) as managed:
+            upkeep.looked("ava", Path(self.home) / "log", watching, mock.Mock(),
+                          moment=claimed + datetime.timedelta(minutes=1))
+        managed.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -94,6 +94,20 @@ def looked(agent: str, where, watching: firing.Watching,
             return watching
         row = prepared(agent, wanted.prompt, moment)
         one = due.understood(row)._replace(enabled=True)
+        # **The minute this row already claimed is the guard, and nothing was reading it.**
+        # `_fired` writes `last_fired_for` durably before it spawns, exactly so a firing survives a
+        # restart and a second gateway — but a cron schedule's due check is what reads it back, and
+        # eligibility here is decided by `window` instead, which reads neither.
+        #
+        # So the only thing standing between two beats and two upkeep runs was `window`'s *is any
+        # turn working* question, and that answers **no** for the whole gap between spawning the
+        # child and the child writing its own turn row. On the gateway's ordinary beat that gap is
+        # narrow; measured on a loaded machine at a fifty-millisecond beat it let three runs of one
+        # window start inside a second. The two guards are complementary and both are needed: this
+        # one covers the spawn gap, and `working` covers a run that outlives its minute.
+        now = moment if moment is not None else datetime.datetime.now()
+        if one.fired_for and one.fired_for == due.as_minute(now):
+            return watching
         return firing.managed(agent, where, watching, one, moment=moment,
                               asking=asking, telling=telling)
     except Exception as why:  # noqa: BLE001 — a bad account must not end a working gateway.
