@@ -18,14 +18,16 @@ this adds to it. The alternative — copy this process's environment and strip w
 a list somebody has to keep true for ever, and a comparable product had to retrofit exactly that
 after handing a coding subprocess every credential it held.
 
-**The owner's own values may never take a name rundesk decided.** The rule is asked as *is this name
-already spoken for*, against the environment as it has just been built, so it cannot come apart from
-the builder as the builder grows — and a variable added here is protected from the moment it lands,
-with nobody re-running anything.
+**The owner's own values may never take a name rundesk decided** — including the names rundesk
+decided to leave *unset*, which is the half this rule was missing. Asked only as *is this name
+already spoken for*, an owner value slipped in under a rundesk name on exactly the turns where
+rundesk had nothing to put there, and a value stored as `RUNDESK_DELEGATION` refused every
+delegation on the install. So the optional names are reserved from one tuple that also decides
+what is set, and a variable added there is protected from the moment it lands, set or not.
 """
 
 from pathlib import Path
-from typing import Dict, Mapping, Optional
+from typing import Dict, Mapping, Optional, Tuple
 
 from rundesk.core import adapters, config, paths, secrets
 
@@ -172,13 +174,19 @@ def for_turn(*, agent: str, home: Path, provider_home: Path, skills: Path, turn:
     # **Absent rather than empty**, each of them. See the module docstring — and for `ANSWERING` it
     # is the whole mechanism rather than a tidiness: a turn nobody delegated must not carry the
     # variable at all, because what reads it treats *present* as "this work was handed to you".
-    for name, value in ((MODEL, model), (RESUME, resume), (SETTINGS, settings),
-                        (RAW, str(raw) if raw is not None else None),
-                        (ANSWERING, answering), (PREFACE, preface.strip() or None)):
+    #
+    # **One tuple decides both halves**: what is set when there is a value, and what an owner may
+    # never be called even when there is not. Deciding to leave one of these unset is still rundesk
+    # deciding — see `_also_the_owners`, which was asking the built dict and so reserved only the
+    # names that always have a value.
+    sometimes = ((MODEL, model), (RESUME, resume), (SETTINGS, settings),
+                 (RAW, str(raw) if raw is not None else None),
+                 (ANSWERING, answering), (PREFACE, preface.strip() or None))
+    for name, value in sometimes:
         if value:
             said[name] = value
     said["PATH"] = _reachable(said.get("PATH", ""))
-    return _also_the_owners(said, owners)
+    return _also_the_owners(said, owners, tuple(name for name, _ in sometimes))
 
 
 def _reachable(inherited: str) -> str:
@@ -200,17 +208,25 @@ def _reachable(inherited: str) -> str:
     return ":".join([*front, inherited]) if inherited else ":".join(front)
 
 
-def _also_the_owners(said: Dict[str, str], owners: Optional[Mapping[str, str]]) -> Dict[str, str]:
+def _also_the_owners(said: Dict[str, str], owners: Optional[Mapping[str, str]],
+                     reserved: Tuple[str, ...] = ()) -> Dict[str, str]:
     """The owner's own values, and **never over one of rundesk's**.
 
-    Asked as `name not in said` rather than against a list kept here: whatever rundesk has just
-    decided a program is told is exactly what a value may not be called, so the two cannot come apart
-    however this file grows, and a name added above is refused from the moment it lands.
+    Two things are refused, not one. `name not in said` covers every name rundesk has just given a
+    value to, so a name added to the block above is refused from the moment it lands. `reserved`
+    covers the ones rundesk decided to leave *unset*, which is a decision as much as any other and
+    was the hole here: asking only the built dict, an owner value slipped in under a rundesk name
+    on precisely the turns where rundesk had nothing to say.
+
+    Measured, on the sharpest of them: a value stored as `RUNDESK_DELEGATION` reached every
+    ordinary turn, and `delegations.admitting` reads *present* as "this work was handed to you" — so
+    one stored value refused every delegation on the install with "this turn is answering …".
+    `RUNDESK_RESUME` is the same shape: every new conversation would carry one fixed handle.
 
     Sorted, so the same set is the same bytes every start and one turn can be compared with another.
     """
     for name in sorted(owners or {}):
-        if name not in said:
+        if name not in said and name not in reserved:
             said[name] = owners[name]
     return said
 

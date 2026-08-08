@@ -92,6 +92,31 @@ class TheOwnersOwnValues(support.Isolated):
                 said = built(owners={name: "hijacked"})
                 self.assertNotEqual(said[name], "hijacked")
 
+    def test_a_name_rundesk_left_unset_is_reserved_just_as_hard(self):
+        """**Deciding to leave one unset is still rundesk deciding.** These are the six names that
+        are absent on an ordinary turn, so asking only the built environment let an owner's value
+        fill every one of them in — which is not a name being free, it is rundesk having nothing to
+        say on this turn.
+
+        Measured before this was closed: a value stored as `RUNDESK_DELEGATION` reached every
+        ordinary turn, and `delegations.admitting` reads *present* as "this work was handed to you",
+        so one stored value refused every delegation on the install.
+        """
+        for name in (environment.MODEL, environment.RESUME, environment.SETTINGS,
+                     environment.RAW, environment.ANSWERING, environment.PREFACE):
+            with self.subTest(name=name):
+                said = built(owners={name: "hijacked"})
+                self.assertNotIn(name, said,
+                                 f"an owner's value took {name}, which rundesk decided to leave "
+                                 "unset on this turn")
+
+    def test_one_rundesk_did_fill_in_is_still_the_one_that_wins(self):
+        """The reservation must not become a way of losing rundesk's own value."""
+        said = built(resume="the-real-handle", model="the-real-model",
+                     owners={environment.RESUME: "hijacked", environment.MODEL: "hijacked"})
+        self.assertEqual(said[environment.RESUME], "the-real-handle")
+        self.assertEqual(said[environment.MODEL], "the-real-model")
+
     def test_the_same_values_are_the_same_bytes_every_turn(self):
         """So one turn can be compared with another."""
         owners = {"B": "2", "A": "1", "C": "3"}

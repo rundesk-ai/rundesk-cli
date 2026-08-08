@@ -597,6 +597,94 @@ class DurableGuidanceIntoARunningTurn(WithAnAgent):
         self.assertIsNone(arriving.messages("ava", landed.conversation)[-1]["turn_id"])
 
 
+class AReasonForFailingOnATurnThatWorked(WithAnAgent):
+    """**The brain is the one thing that knows whether its turn worked.**
+
+    `failure_code` belongs on a `done` that says `ok: false`; a word arriving beside `ok: true` is
+    an adapter breaking the contract. Read as a failure it inverts the answer — measured against a
+    real adapter, an owner was told `FAILED — it did not answer` on the line directly above the
+    answer it had given, and the ledger said `failed` for a turn that was delivered.
+    """
+
+    def setUp(self):
+        support.Isolated.setUp(self)
+        self.agent = "ava"
+        brain = self.home / "a-turn-that-worked-oddly"
+        brain.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            "if '--capabilities' in sys.argv[1:]:\n"
+            "    print(json.dumps({'tools': True})); raise SystemExit(0)\n"
+            "sys.stdin.read()\n"
+            "for one in ({'type': 'text', 'text': 'the answer is 41', 'whole': True},\n"
+            "            {'type': 'done', 'ok': True, 'failure_code': 'upstream_error',\n"
+            "             'failure_message': 'the vendor said no'}):\n"
+            "    sys.stdout.write(json.dumps(one) + '\\n'); sys.stdout.flush()\n",
+            encoding="utf-8")
+        brain.chmod(0o755)
+        directory.made(self.agent, str(brain))
+
+    def test_the_turn_is_recorded_as_done(self):
+        got = self.run_turn()
+        self.assertEqual(kept.DONE, got.turn_status,
+                         "a turn the brain said worked was recorded as failed")
+        self.assertTrue(got.worked)
+
+    def test_the_word_is_dropped_rather_than_acted_on(self):
+        """Kept on the row it would read as a failure from, which is what `ask` and a channel
+        both decide from."""
+        got = self.run_turn()
+        self.assertIsNone(got.failure_code)
+        self.assertIn("the answer is 41", got.reply)
+
+
+class WhenADiagnosticRowCannotBeKept(WithAnAgent):
+    """**The cheapest thing in the turn is the thing that gives way.**
+
+    `kept.add_turn_record` opens a write transaction of its own for every record off the brain, so a
+    store that will not take one threw straight out of the loop reading the stream — and what that
+    cost was never the row it failed on. Measured, on a store made unwritable mid-stream: the
+    brain's finished answer was never written, the turn settled as `stopped`, and on a channel the
+    person was told "I could not answer that" for a turn that had worked.
+    """
+
+    def refusing(self, kind: str):
+        """The store taking every record except one, which is what contention looks like."""
+        keeping = kept.add_turn_record
+
+        def one_it_will_not_take(agent, turn, record_type, *args, **also):
+            if record_type == kind:
+                raise records.Unreadable("the store went away mid-stream")
+            return keeping(agent, turn, record_type, *args, **also)
+
+        return mock.patch.object(turns.kept, "add_turn_record",
+                                 side_effect=one_it_will_not_take)
+
+    def test_the_answer_is_still_kept_and_the_turn_still_settles(self):
+        with self.refusing("tool"):
+            got = self.run_turn()
+        self.assertEqual(got.turn_status, kept.DONE)
+        self.assertIn("what changed today?", got.reply)
+        self.assertEqual(kept.list_unfinished_turns("ava"), [],
+                         "a row nobody could keep left the turn recorded as still working")
+
+    def test_what_the_brain_said_reaches_the_conversation(self):
+        """The half that is invisible from the ledger: a channel reads this, not the turn row."""
+        with self.refusing("tool"):
+            self.run_turn()
+        said = [one["body"] for one in arriving.messages("ava", 1) if one["author"] == "agent"]
+        self.assertTrue(said, "the brain answered and nothing was written down")
+
+    def test_only_the_row_that_could_not_be_kept_is_missing(self):
+        """Not a licence to lose the rest: every other record is still written in order."""
+        with self.refusing("tool"):
+            got = self.run_turn()
+        keeping = [one["record_type"] for one in kept.list_turn_records("ava", got.turn)]
+        self.assertNotIn("tool", keeping)
+        self.assertEqual(keeping, ["instructions", "sent", "think", "result", "limit",
+                                   "usage", "done"])
+
+
 class ATurnIsAlwaysSettled(WithAnAgent):
     def test_nothing_is_left_recorded_as_still_working(self):
         self.run_turn()

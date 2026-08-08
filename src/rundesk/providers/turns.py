@@ -53,6 +53,7 @@ import contextlib
 import fcntl
 import json
 import os
+import sqlite3
 import threading
 import time
 from typing import Any, Callable, Dict, Iterable, Iterator, List, NamedTuple, Optional, Tuple
@@ -789,21 +790,44 @@ def _heard(agent: str, turn: int, one, said: List[Dict[str, Any]], watching) -> 
     an adapter can be ahead of rundesk and a vendor's change shows up as visible drift.
     """
     if isinstance(one, lines.Gap):
-        kept.add_turn_record(agent, turn, LOST,
-                             {"lost_count": one.lost_count, "reason": one.reason})
+        _written_down(agent, turn, LOST, {"lost_count": one.lost_count, "reason": one.reason})
         return
     record = protocol.parse_record(one)
     if record is None:
-        kept.add_turn_record(agent, turn, UNKNOWN, {}, raw_line=str(one)[:AN_EVENT_AT_MOST])
+        _written_down(agent, turn, UNKNOWN, {}, raw_line=str(one)[:AN_EVENT_AT_MOST])
         return
     said.append(record)
     if record["type"] not in ("text",):
         # `text` is gathered and written as one message at the end: a row per fragment is a history
         # nobody can read back and a search that matches half a sentence.
-        kept.add_turn_record(agent, turn, record["type"], _bounded(record))
+        _written_down(agent, turn, record["type"], _bounded(record))
     if watching is not None:
         with contextlib.suppress(Exception):
             watching(record)
+
+
+def _written_down(agent: str, turn: int, kind: str, values: Dict[str, Any],
+                  raw_line: Optional[str] = None) -> None:
+    """One diagnostic row kept — and **the turn carried on when it cannot be.**
+
+    `_heard` says it never raises and did. `kept.add_turn_record` opens a write transaction of its
+    own for every record off the brain, so a store that will not take one — contention outlasting
+    the retries in `records._begun`, a disk that filled, a file made unwritable — threw straight out
+    of the loop reading the stream.
+
+    **What that cost was never the row it failed on.** `_became` never ran, so the brain's answer
+    was not written to `conversation_messages`, the resume handle was dropped, and a turn that had
+    worked settled as `stopped` — on a channel, reported to the person as "I could not answer that".
+    Measured: a store made unwritable mid-stream lost a finished answer and left the turn unsettled.
+
+    So the cheapest thing in the turn is the thing that gives way. The row is noted as missing and
+    the answer survives, which is the opposite of the trade that was being made.
+    """
+    try:
+        kept.add_turn_record(agent, turn, kind, values, raw_line=raw_line)
+    except (kept.Refused, records.NotThere, records.Unreadable, sqlite3.DatabaseError,
+            OSError) as why:
+        note(agent, f"turn {turn}: a {kind} record could not be kept ({why})", logs.WARNING)
 
 
 def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
@@ -842,8 +866,19 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
         code = (protocol.CRASHED if stream.stop_code == streaming.COULD_NOT_BE_READ
                 else protocol.TIMED_OUT)
         message = message or stream.stop_reason
-    elif brain_said is False or code is not None:
+    elif brain_said is False:
         status = kept.FAILED
+    elif brain_said is True and code is not None:
+        # **A reason for failing belongs on a `done` that says `ok: false`, and nowhere else.** The
+        # brain is the one thing that knows whether its turn worked, so a word arriving beside its
+        # own `ok: true` is an adapter breaking the contract — and read as a failure it inverts the
+        # answer: measured, an owner was told `FAILED — it did not answer` on the line above the
+        # answer it gave, and the ledger agreed. The word is dropped rather than acted on, and the
+        # adapter is named in the log, because this is the adapter's defect to fix.
+        note(agent, f"turn {turn}: the adapter reported {code!r} on a turn it said worked, "
+                    "so the word was dropped — a failure_code belongs on a done that is not ok",
+             logs.WARNING)
+        code, message = None, None
     elif brain_said is None:
         # No `done` at all is the shape a killed adapter leaves, and nothing here may declare such a
         # turn over on the brain's behalf.
@@ -905,18 +940,27 @@ def _settled_whatever_happens(agent: str, turn: int) -> Iterator[_Settling]:
     Written even while the process is being taken down, so it is kept as narrow as it can be: one
     row, no reading, and anything that goes wrong swallowed. A settlement that raised on the way out
     of a cancelled turn would replace one bad record with a worse traceback.
+
+    **Swallowed is not unrecorded.** A settlement that never landed leaves the row saying `working`
+    for ever, and `commands/turns` will rightly show it as abandoned — but nothing said why, so the
+    one failure this whole block exists to survive was also the one nobody could see afterwards.
+    `note` is used rather than a raise because it cannot fail: it swallows its own trouble, which is
+    what makes it safe to call from a process on the way down.
     """
     settling = _Settling()
     try:
         yield settling
     finally:
-        with contextlib.suppress(Exception):
+        try:
             if settling.outcome is None:
                 kept.finish_turn(agent, turn, kept.STOPPED,
                                  {"failure_code": protocol.CANCELLED,
                                   "failure_message": "this turn was stopped before it settled"})
             else:
                 kept.finish_turn(agent, turn, settling.outcome.turn_status, settling.values)
+        except Exception as why:                   # noqa: BLE001 — see the docstring
+            note(agent, f"turn {turn}: it could not be settled, so it stays working ({why})",
+                 logs.WARNING)
 
 
 def _about(request: Request, provider_name: str) -> Dict[str, object]:
