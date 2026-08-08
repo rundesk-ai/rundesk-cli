@@ -64,9 +64,50 @@ FAILURE_CODES = {"signed_out", "no_access", "no_credit", "usage_exhausted", "rat
                  "context_exceeded", "upstream_error", "offline", "refused", "cancelled",
                  "timed_out", "crashed"}
 
+#: A scheduler barrier loaded by Python before the adapter starts. It controls only which adapter
+#: thread reaches the turn boundary first; neither side sleeps and the provider stream remains the
+#: same one the real CLI produced. That makes both sides of a concurrency contract reproducible
+#: through the program's actual pipe without importing the adapter as though it were a library.
+ORDERING_BARRIER = '''
+import os
+import sys
+import threading
+
+mode = os.environ.get("CLAUDE_REPLAY_ORDER")
+result_read = threading.Event()
+words_seen = 0
+words_lock = threading.Lock()
+
+
+def ordered(frame, event, arg):
+    global words_seen
+    if not frame.f_code.co_filename.endswith("/src/providers/claude"):
+        return ordered
+    name = frame.f_code.co_name
+    thread = threading.current_thread().name
+    if (mode == "result-before-admission" and event == "call" and
+            thread == "claude-in" and name == "admit_a_queued_steer"):
+        result_read.wait()
+    elif (mode == "steer-after-result" and event == "call" and
+          thread == "rundesk-in" and name == "what_rundesk_said"):
+        with words_lock:
+            words_seen += 1
+            this_word = words_seen
+        if this_word == 2:
+            result_read.wait()
+    elif name == "that_is_the_turn" and event == "return":
+        result_read.set()
+    return ordered
+
+
+if mode:
+    sys.settrace(ordered)
+    threading.settrace(ordered)
+'''
+
 
 def replayed(home, prompt="Read note.txt and tell me the number in it.", captured=CAPTURED,
-             steering=None, **also):
+             steering=None, ordering=None, **also):
     """Run the adapter against the capture and hand back every record it made, in order."""
     where = home / "cwd"
     where.mkdir(parents=True, exist_ok=True)
@@ -81,6 +122,11 @@ def replayed(home, prompt="Read note.txt and tell me the number in it.", capture
             "RUNDESK_CWD": str(where), "RUNDESK_ACCESS_MODE": "work",
             "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1",
             "RUNDESK_CONTINUITY": "AGENTS.md=rules,MEMORY.md=memory"}
+    if ordering:
+        barrier = home / "barrier"
+        barrier.mkdir(parents=True, exist_ok=True)
+        (barrier / "sitecustomize.py").write_text(ORDERING_BARRIER, encoding="utf-8")
+        told.update({"PYTHONPATH": str(barrier), "CLAUDE_REPLAY_ORDER": ordering})
     told.update(also)
     saying = [{"type": "say", "text": prompt}]
     if steering:
@@ -272,6 +318,45 @@ class WhenItIsSteeredMidTurn(support.Isolated):
         it, and the field that used to mark it as a cancellation is no longer sent — so the only
         thing that tells them apart is that an interrupt is pending."""
         self.assertEqual([], [one for one in only(self.said, "result") if not one["ok"]])
+
+
+class AtTheSteeringBoundary(support.Isolated):
+    """The two orderings around a provider result, held still rather than left to scheduling."""
+
+    def test_a_word_already_queued_is_admitted_before_the_result_can_end_the_turn(self):
+        """The output reader reaches the result while the feeder is held immediately before its
+        interrupt request. The queued word still belongs to this active turn, so the stopped
+        request drains and its usage is carried onto the replacement's ending."""
+        said, got = replayed(
+            self.home, prompt="run three long commands", captured=STEERED,
+            steering="stop, say STEERED", ordering="result-before-admission")
+
+        self.assertEqual(0, got.returncode)
+        self.assertEqual("STEERED", only(said, "text")[-1]["text"])
+        self.assertEqual(128, only(said, "usage")[0]["output_tokens"])
+        self.assertEqual([], [one for one in only(said, "result") if not one["ok"]])
+        self.assertEqual(1, len(only(said, "done")))
+        self.assertTrue(said[-1]["ok"])
+
+    def test_a_word_not_queued_until_after_the_result_does_not_reopen_the_turn(self):
+        """The input reader is held before it admits the second word. A successful result that
+        wins that boundary is final; input that becomes visible afterwards is genuinely late and
+        cannot retroactively turn one provider request into two."""
+        captured = self.home / "two-successes.jsonl"
+        captured.write_text("\n".join((
+            *a_turn(it_said("FIRST"), usage={"output_tokens": 122}),
+            *a_turn(it_said("LATE"), usage={"output_tokens": 6}),
+        )) + "\n", encoding="utf-8")
+
+        said, got = replayed(
+            self.home, prompt="first", captured=captured, steering="too late",
+            ordering="steer-after-result")
+
+        self.assertEqual(0, got.returncode)
+        self.assertEqual(["FIRST"], [one["text"] for one in only(said, "text")])
+        self.assertEqual(122, only(said, "usage")[0]["output_tokens"])
+        self.assertEqual(1, len(only(said, "done")))
+        self.assertTrue(said[-1]["ok"])
 
 
 class WhatItAsksTheBrainFor(support.Isolated):

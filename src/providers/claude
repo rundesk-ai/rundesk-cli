@@ -311,6 +311,13 @@ class Turn:
         self.ended = threading.Event()
         self.trouble = []
 
+        #: The next later word that needs an interrupt, and the one admitted before its control
+        #: request could be written. Admission and provider-result classification share this lock;
+        #: otherwise a queued word and a result are left to two threads' scheduling to order.
+        self.admitting = threading.Lock()
+        self.next_steer = 1
+        self.admitted_steer = None
+
         #: Whether the one record that ends a turn has been said, and the lock that makes asking
         #: and answering that one thing. Rundesk reading none at all is a turn nobody can explain
         #: and reading two is a turn it cannot reconcile — see `the_turn_ended`.
@@ -451,10 +458,43 @@ class Turn:
         with contextlib.suppress(Exception):
             self.control.request(self.brain.stdin, "initialize")
             for at, word in enumerate(self.words.each(self.ended)):
-                if at and not self.control.request(self.brain.stdin, "interrupt"):
-                    went_wrong("claude did not accept the interrupt, so this word was not sent")
-                    continue
+                if at:
+                    admitted = self.admit_a_queued_steer(at)
+                    accepted = admitted and self.control.request(
+                        self.brain.stdin, "interrupt", already_admitted=True)
+                    if not accepted:
+                        self.steer_was_sent(at)
+                        went_wrong("claude did not accept the interrupt, so this word was not sent")
+                        continue
                 write_to(self.brain.stdin, a_user_message(word))
+                if at:
+                    self.steer_was_sent(at)
+
+    def admit_a_queued_steer(self, at=None) -> bool:
+        """Mark one queued later word before a provider result may be called final.
+
+        `Words.watching` is held across the queue check and mark. A word appended before this check
+        therefore belongs to the active turn; one appended after it is genuinely late. The feeder
+        and output reader both come through the same lock and can never mark the same word twice.
+        """
+        with self.words.watching:
+            with self.admitting:
+                at = self.next_steer if at is None else at
+                if self.admitted_steer == at:
+                    return True
+                if (self.admitted_steer is not None or at != self.next_steer or
+                        at >= len(self.words.words)):
+                    return False
+                self.control.admit_interrupt()
+                self.admitted_steer = at
+                self.next_steer += 1
+                return True
+
+    def steer_was_sent(self, at: int) -> None:
+        """Let the next queued word be admitted once this one's replacement was sent or refused."""
+        with self.admitting:
+            if self.admitted_steer == at:
+                self.admitted_steer = None
 
     def could_not_read_it(self, said: str) -> None:
         """End the turn because *this side* could not go on. Said as a `done`, because rundesk
@@ -594,6 +634,7 @@ class Turn:
         for block in (said.get("message") or {}).get("content") or []:
             if not isinstance(block, dict) or block.get("type") != "tool_result":
                 continue
+            self.admit_a_queued_steer()
             if block.get("is_error") and self.control.interrupting():
                 # **The one thing an interrupt looks like from here.** Stopping an in-flight tool
                 # makes this brain emit an ordinary-looking failed result for it, and the field that
@@ -629,6 +670,7 @@ class Turn:
         line itself is swallowed. Anything else would report a turn the owner steered as a turn that
         failed.
         """
+        self.admit_a_queued_steer()
         if self.control.interrupted():
             self.control.counted(said)
             return
@@ -726,13 +768,18 @@ class Control:
         #: than flagged because a second steer can arrive before the first has drained.
         self.owed = 0
 
-    def request(self, stream, subtype: str) -> bool:
+    def admit_interrupt(self) -> None:
+        """Mark one queued steer before either adapter thread can classify its result."""
+        with self.watching:
+            self.owed += 1
+
+    def request(self, stream, subtype: str, already_admitted: bool = False) -> bool:
         """One control request, and whether the brain accepted it."""
         with self.watching:
             self.asked += 1
             which = f"rundesk_{self.asked}"
             self.answers[which] = None
-            if subtype == "interrupt":
+            if subtype == "interrupt" and not already_admitted:
                 # **Marked before writing.** The brain may finish the interrupted request before its
                 # acknowledgement reaches the thread reading its output.
                 self.owed += 1
