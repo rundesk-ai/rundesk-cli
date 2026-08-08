@@ -1084,6 +1084,13 @@ def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
                 # Said here only because nobody asked for them. A caller that handed a list in is
                 # going to say what it makes of them, and two accounts of one refusal is one too
                 # many — see the scheduled report, which says which files it then sent without.
+                #
+                # **The drain thread's own `WARNING` still stands beside this, and that is meant.**
+                # `hosting._refused` writes one for every refusal whatever anybody asked for, which
+                # is the record that a delivery was turned away; this is the second half of it —
+                # *and the notice it carried is therefore gone*. The goodbye is the case worth
+                # raising to `ERROR`: it is the last thing a gateway ever says, and nothing comes
+                # round again to notice it never arrived.
                 for why in heard:
                     logs.note(where, f"the notice for {name} was refused — {why}", logs.ERROR)
             return REFUSED

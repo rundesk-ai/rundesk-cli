@@ -250,8 +250,9 @@ One JSON object per line, both ways. Nothing is nested inside anything and nothi
 
 ### What an adapter says — `say:`
 
-Eight are recognised. **Anything else is ignored in silence**, which is deliberate: rundesk may be
-behind an adapter, and a record it does not know is not a channel that has gone wrong.
+Nine are recognised, and the table below has one row for each. **Anything else is ignored in
+silence**, which is deliberate: rundesk may be behind an adapter, and a record it does not know is
+not a channel that has gone wrong.
 
 ```json
 {"say": "ready", "as": "rundesk#4471"}

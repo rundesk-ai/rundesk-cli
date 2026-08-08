@@ -206,7 +206,14 @@ state, history, and delivery.
 → **Writing a channel adapter** — the contract returns with the channel seam
 
 <details>
-<summary><strong>The full feature list</strong></summary>
+<summary><strong>The full feature list</strong> — the published release, not yet checked against this tree</summary>
+
+> **Read this block with the caveat the rest of the page no longer needs.** Everything above was
+> checked line by line against `rundesk --help` on this branch. This list was not, and parts of it
+> are known to be ahead of this tree — a schedule takes no per-schedule provider, model or delivery
+> channel here; a role is a delegation target rather than anything a person can type; and there is no
+> command-reference generator. It is kept because it is an accurate account of the published build
+> and a useful map of where this one is going. `rundesk --help` is the truth about this copy.
 
 ### Agents and gateways
 
@@ -350,10 +357,10 @@ others from being checked or rolling back an otherwise healthy CLI update.
 - **[Working on a checkout](docs/development.md)** — running and testing without installing
 
 > **This branch is a rebuild in progress**, and `rundesk --help` is always the truth about what this
-> copy can do. The sections above are kept to what ships: a verb Rundesk cannot perform is a verb
-> Rundesk does not have, so there is no "coming soon" list here and nothing above describes a
-> release other than this one. Where a feature exists in the published build and not in this tree,
-> it is absent from this page rather than described.
+> copy can do. Every command outside the collapsed feature list above was checked against it: a verb
+> Rundesk cannot perform is a verb Rundesk does not have, so nothing you can copy out of this page
+> and run is a verb this tree lacks. The collapsed list is the one exception and says so where it
+> stands.
 
 ## 🤝 Contributing
 
