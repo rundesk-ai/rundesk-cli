@@ -94,6 +94,20 @@ def a_real_tree(at: Path, marker: str = "a tree") -> Path:
     if (at / "src").exists():
         shutil.rmtree(at / "src")
     shutil.copytree(CHECKOUT / "src", at / "src", ignore=shutil.ignore_patterns("__pycache__"))
+    # A landed release settles in a fresh interpreter, outside run_with's patches. Keep the copied
+    # release's one non-RUNDESK_HOME location inside the scratch root and make launchctl inert.
+    automatic = at / "src" / "rundesk" / "commands" / "automatic_updates.py"
+    if automatic.is_file():
+        source = automatic.read_text()
+        source = source.replace(
+            'else job.job("automatic-update", settled, settled).into)',
+            'else settled / "LaunchAgents")')
+        automatic.write_text(source)
+    launchd = at / "src" / "rundesk" / "gateways" / "job.py"
+    if launchd.is_file():
+        source = launchd.read_text().replace('LAUNCHCTL = "/bin/launchctl"',
+                                             'LAUNCHCTL = "/usr/bin/true"')
+        launchd.write_text(source)
     (at / "README.md").write_text(marker)
     return at
 

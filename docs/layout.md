@@ -9,11 +9,17 @@ is a function of it:
 $RUNDESK_HOME/
   app/            the program itself
   data/           everything you accumulate — agents, logs, skills, configuration, secrets
+    automatic-update.json  the last completed local-day automatic attempt and outcome
+    automatic-update-job.json  receipt for the definition successfully loaded by launchd
+    logs/automatic-updates/ dated outcome logs and bounded launchd captures
     secrets/      sealed values and the key that opens them
   backups/        compressed ZIP copies of data/ (and restorable v0.40 directory copies)
   projects/       the shared directory work is checked out into
   .rundesk.lock   held while one command at a time changes this install
   .rundesk-gateways.lock  held while an update and gateway starts take turns
+  .rundesk-update.lock  held by one manual or automatic update
+  .rundesk-work-admission.lock  closes the automatic-update/new-work race
+  rundesk-automatic-update  stable program launchd invokes across app swaps
 ```
 
 | Below the root | What may reach it |
@@ -24,6 +30,9 @@ $RUNDESK_HOME/
 | `projects/` | yours, never rundesk's to tidy |
 | `.rundesk.lock` | rundesk's own; taken away by an uninstall |
 | `.rundesk-gateways.lock` | rundesk's transient gateway/update barrier; taken away by an uninstall |
+| `.rundesk-update.lock` | serialises manual and automatic updates; taken away by an uninstall |
+| `.rundesk-work-admission.lock` | briefly held while work starts and throughout an automatic update's busy decision |
+| `rundesk-automatic-update` | generated coordinator shim; survives updates and is taken by uninstall |
 
 `.rundesk.lock` is the file one command at a time holds while it changes the install. It stands
 beside the directories rather than inside `data/` on purpose: the operations it makes safe *move
@@ -41,6 +50,13 @@ gateway preflight through the new release settling; a gateway takes it before cl
 gateway that had to wait refreshes its interpreter first, because the modules it imported may have
 been replaced while it waited. It cannot reuse `.rundesk.lock`: the updater's child legitimately
 takes that data lock while settling, and a parent holding it across the handoff would deadlock.
+
+The automatic coordinator is a separate root-fingerprinted launchd calendar job,
+`ai.rundesk.<fingerprint>.update`, whose plist stands in `~/Library/LaunchAgents`. It is not a child
+of a gateway, so standing every gateway down does not stop the daily schedule. Its plist carries the
+one `RUNDESK_HOME` it belongs to; no label or state is shared between installs. launchd interprets
+the configured hour and minute in local time. A completed local calendar day is recorded so a
+repeated firing, including a repeated wall-clock hour, does not perform a second attempt.
 
 **Nothing sweeps it, and a stale file is not a held lock.** The lock is the `flock`, not the file:
 the kernel drops it when the process ends, however it ended — cleanly, on a crash, on `SIGKILL`, on
