@@ -293,11 +293,18 @@ STOP_ASKED_WITH = (signal.SIGHUP, signal.SIGTERM)
 SKILL_GRANTED = "🧩 Skill granted — `{name}`"
 SKILL_REVOKED = "🗑️ Skill revoked — `{name}`"
 
-#: What became of one notice. Three and not two: `TELLS_NOBODY` is settled and `NOT_YET` is a wait,
+#: What became of one notice. Four and not two: `TELLS_NOBODY` is settled and `NOT_YET` is a wait,
 #: and a caller deciding whether to write something down has to tell them apart — see `_told`.
 TOLD = "told"
 TELLS_NOBODY = "tells nobody"
 NOT_YET = "not yet"
+
+#: The platform was reached and said no. **Apart from `TOLD`, because it is the opposite of it**, and
+#: apart from `NOT_YET`, because nothing about waiting longer answers a refusal: a rate limit and a
+#: permission the bot was never granted are both a person's to act on, not a beat's. Only ever
+#: answered where the caller asked to wait — `told` writes into a pipe in microseconds and a refusal
+#: arrives a platform round trip later, so a caller that did not wait has not given one time to.
+REFUSED = "refused"
 
 CAME_UP = "🟢 Gateway online — rundesk is online."
 WENT_DOWN = "🔴 Gateway offline — rundesk has shut down."
@@ -1018,11 +1025,20 @@ def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
           refusals: Optional[List[str]] = None) -> str:
     """Send one notice out through the channel this agent asked to be told things. Never raises.
 
-    Answers which of **three** things happened, because a caller that has to decide whether to write
+    Answers which of **four** things happened, because a caller that has to decide whether to write
     something down cannot act on two. `TELLS_NOBODY` is settled — there is nobody to tell and there
     never will be until a channel is marked — while `NOT_YET` is a wait, and treating them alike
-    either loses a change for ever or repeats one every beat. `CAME_UP` and `WENT_DOWN` ignore the
-    answer, which is why this stayed `None` until something needed it.
+    either loses a change for ever or repeats one every beat.
+
+    **`REFUSED` is the fourth and it was missing, which is the defect this had.** `TOLD` meant *the
+    words were written to a pipe*, and a caller reading it took that for *a person saw this*. The
+    goodbye is the measured case: it waits a platform round trip precisely because the adapter is
+    signalled a moment afterwards, and until now a platform that refused the farewell answered
+    exactly like one that posted it — so a gateway could write down that it had said goodbye when
+    the words had been turned away. Only ever answered where `landed_within` asked this to wait,
+    because a refusal arrives a round trip after the writing and a caller that did not wait has not
+    given one time to. **Silence is not a refusal**: an adapter is free to acknowledge nothing at
+    all, and nothing said goes on reading as `TOLD`.
 
     **Nothing here may end a gateway**, which is why the whole of it stands inside one guard: a
     platform that is down, an adapter that is restarting, a record that will not read — none of them
@@ -1054,10 +1070,23 @@ def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
         going = delivery.notice(name, saying)
         if going is None:
             return TELLS_NOBODY
+        # Collected whenever this waited, whether or not the caller asked for them: what the platform
+        # said is what tells `TOLD` from `REFUSED`, and that answer is owed to every caller. A list of
+        # this call's own when nobody handed one in, so a caller wanting only the answer gets it
+        # without having to know the idiom.
+        heard = refusals if refusals is not None else []
         if hosting.told(name, where, channels_up, going.kind, going.place, going.pieces,
                         landed_within=landed_within, answering=answering, sending=sending,
-                        refusals=refusals):
-            return TOLD
+                        refusals=heard if landed_within > 0 else None):
+            if not heard:
+                return TOLD
+            if refusals is None:
+                # Said here only because nobody asked for them. A caller that handed a list in is
+                # going to say what it makes of them, and two accounts of one refusal is one too
+                # many — see the scheduled report, which says which files it then sent without.
+                for why in heard:
+                    logs.note(where, f"the notice for {name} was refused — {why}", logs.ERROR)
+            return REFUSED
     except Exception:                              # noqa: BLE001 — see the docstring
         return NOT_YET
     return NOT_YET

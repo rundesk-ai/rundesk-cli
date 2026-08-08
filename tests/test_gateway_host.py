@@ -103,6 +103,27 @@ for line in sys.stdin:
             writing.write(record.get("place", "") + " :: " + record.get("text", "") + "\\n")
 """
 
+#: One whose platform says no to everything: every delivery comes back a `failed` carrying a reason
+#: rather than a receipt. A rate limit and a permission the bot was never granted are the two that
+#: really happen, and both arrive in exactly this shape.
+AN_ADAPTER_THAT_IS_REFUSED = """#!/usr/bin/env python3
+import json, os, signal, sys
+if "--capabilities" in sys.argv:
+    print(json.dumps({"stream": True, "max_text": 2000})); raise SystemExit(0)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+print(json.dumps({"say": "ready", "as": "a-bot"}), flush=True)
+for line in sys.stdin:
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    if record.get("do") == "stop":
+        break
+    if record.get("do") == "deliver":
+        print(json.dumps({"say": "failed", "id": record.get("id"),
+                          "why": "would not take it: 429 Too Many Requests"}), flush=True)
+"""
+
 
 class WithAnAgent(support.Isolated):
     """A scratch install with one real agent in it, and the means to host it for real."""
@@ -978,6 +999,65 @@ class TheChannelsItHosts(WithAnAgent):
         passes of a loop the case has already made fast.
         """
         time.sleep(self.A_SHORT_BEAT * 3)
+
+    def a_hosted_channel(self, body: str = AN_ADAPTER) -> hosting.Watching:
+        """The adapter hosted in *this* process, so a case can call `_told` and read its answer.
+
+        Every other case here drives a real gateway subprocess, which is what proves supervision.
+        These two are about what one function answers, and its answer cannot be read across a fork.
+        """
+        self.an_adapter(body=body)
+        self.a_channel()
+        where = standing.logs_at(self.at)
+        watching = hosting.looked(self.name, where, hosting.Watching({}, {}, {}))
+        self.addCleanup(hosting.stopping, self.name, where, watching, 4.0)
+        self.assertTrue(support.waited_until(
+            lambda: hosting.connected(watching, "discord"), self.PATIENCE),
+            "the adapter never connected")
+        return watching
+
+    def where_it_logs(self):
+        return standing.logs_at(self.at)
+
+    def test_a_notice_the_platform_refused_is_not_reported_as_told(self):
+        # **`TOLD` meant *written to a pipe*, and a caller deciding whether to write something down
+        # read it as *a person saw this*.** The goodbye is the measured case: it waits a round trip
+        # precisely because the adapter is signalled a moment later, and a platform refusing it came
+        # back indistinguishable from one that took it — so a gateway could report that it had said
+        # farewell when the words were refused.
+        watching = self.a_hosted_channel(body=AN_ADAPTER_THAT_IS_REFUSED)
+        self.assertEqual(host.REFUSED,
+                         host._told(self.name, self.where_it_logs(), watching, host.WENT_DOWN,
+                                    landed_within=3.0))
+
+    def test_a_notice_nobody_refused_is_still_told(self):
+        # Silence goes on reading as landed: an adapter is free to acknowledge nothing at all, and
+        # this one does exactly that. Treating *nothing said* as a refusal would report a failure
+        # for every whole adapter that simply does not answer.
+        watching = self.a_hosted_channel()
+        self.assertEqual(host.TOLD,
+                         host._told(self.name, self.where_it_logs(), watching, host.WENT_DOWN,
+                                    landed_within=3.0))
+
+    def test_a_refused_notice_is_said_once_and_not_twice(self):
+        # A caller that hands a list in is going to say what it makes of the refusal — the scheduled
+        # report says which files it then went without — so this saying it as well would be two
+        # accounts of one refusal. Said here only when nobody asked.
+        watching = self.a_hosted_channel(body=AN_ADAPTER_THAT_IS_REFUSED)
+        asked_for: List[str] = []
+        self.assertEqual(host.REFUSED,
+                         host._told(self.name, self.where_it_logs(), watching, host.WENT_DOWN,
+                                    landed_within=3.0, refusals=asked_for))
+        self.assertEqual(1, len(asked_for), "the caller that asked for the reason never got it")
+        self.assertNotIn("the notice for", self.its_log(),
+                         "a refusal somebody asked for was announced a second time as well")
+
+        # Asked of this sentence and not of the reason, which `hosting._refused` already writes for
+        # every refusal either way — an assertion on "429" alone would stay green with the whole of
+        # this branch deleted.
+        host._told(self.name, self.where_it_logs(), watching, host.WENT_DOWN, landed_within=3.0)
+        self.assertIn(f"the notice for {self.name} was refused", self.its_log(),
+                      "a refusal nobody asked for reached nobody at all")
 
     def test_a_gateway_starts_the_adapter_for_a_configured_channel(self):
         self.an_adapter()
