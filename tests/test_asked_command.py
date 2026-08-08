@@ -263,7 +263,24 @@ class GuidingWorkingDelegation(support.Isolated):
             self.assertFalse(feeder.is_alive(), "the refusing feeder did not release its claim")
         provider_kept.finish_turn("ava", active, provider_kept.STOPPED)
 
-        hosting._collected_what_came_back("ava", directory.where("ava"), reviews)
+        # **A pass that loses the admission race leaves the row owed on purpose, and the next
+        # gateway beat is what collects it.** `review_this` waits `REVIEW_ADMITTED_WITHIN` — two
+        # seconds — for its worker to prove it owns the durable result, and on a loaded machine the
+        # worker takes longer than that: the turn still runs and still finishes, and the delegation
+        # is deliberately left outstanding rather than marked on a claim that was never proven.
+        # `_collected_what_came_back` says so where it declines to mark one.
+        #
+        # So the beat is modelled here rather than assumed away. One pass winning a two-second race
+        # is a property of the machine this runs on, and asserting it made this the suite's most
+        # frequent failure on a loaded runner — for a design that was working exactly as written.
+        # The retry duplicates nothing: the answer carries a `delegation-result` external id, so the
+        # second pass finds the message already written, and asks the turn that owns it instead of
+        # starting another. The assertions below are what hold that to account.
+        for _ in range(20):
+            hosting._collected_what_came_back("ava", directory.where("ava"), reviews)
+            if kept.one("ava", self.delegation).answered_at is not None:
+                break
+            time.sleep(0.1)
 
         self.assertTrue(support.waited_until(
             lambda: kept.one("ava", self.delegation).answered_at is not None
