@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 import support
-from rundesk.capabilities import lineage
+from rundesk.capabilities import lineage, proving
 from rundesk.core import config
 from rundesk.exits import FAILED, OK
 
@@ -183,20 +183,20 @@ class WhatItKeeps(Permissions):
 class TheGuardItself(Permissions):
     """The suite's own safety net, asserted rather than intended."""
 
-    def test_a_case_that_changed_the_machines_grants_is_caught(self) -> None:
-        """The cleanup that every other case here relies on, driven rather than described."""
-        moved = [("/Library/…/TCC.db", 1, 2)]
-        with self.assertRaises(AssertionError) as caught:
-            self.assert_their_privacy_settings_are_untouched(moved)
-        self.assertIn("changed what this machine allows", str(caught.exception))
+    def test_reaching_the_real_machine_raises_for_any_suite(self) -> None:
+        """The seam is closed at import, for every case here and not only the ones using run_with.
 
-    def test_a_fingerprint_nobody_could_take_is_not_an_unchanged_machine(self) -> None:
-        """The third answer: unreadable and unchanged are not the same claim, so neither fails."""
-        self.assert_their_privacy_settings_are_untouched(None)
-
-    def test_reaching_the_real_machine_raises(self) -> None:
+        A case that calls `proving` directly never goes through `run_with`, and `proved()` resolves
+        the real machine when nobody hands one in. Closing it once, module-wide, is what stops a
+        forgotten argument reaching `osascript` on the developer's own Mac.
+        """
         with self.assertRaises(AssertionError):
-            support.NeverTheRealMachine()
+            proving.by_the_machine()
+
+    def test_a_probe_with_no_machine_handed_in_fails_loudly(self) -> None:
+        """The gap this guard exists for, driven end to end rather than asserted about."""
+        with self.assertRaises(AssertionError):
+            proving.proved(proving.every()[0], A_GATEWAY, self.home)
 
 
 if __name__ == "__main__":

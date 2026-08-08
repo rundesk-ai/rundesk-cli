@@ -279,30 +279,9 @@ class ASupervisor:
         return self.answers.get(verb, ran(0))
 
 
-#: Where the machine keeps every program's privacy grants. **The second thing `RUNDESK_HOME` cannot
-#: isolate**, and the exact sibling of `THEIR_LOGIN_ITEMS`: a grant belongs to a program on a
-#: person's Mac, not to an install, so nothing about a scratch root keeps a case away from it.
-THEIR_PRIVACY = (
-    Path("/Library/Application Support/com.apple.TCC/TCC.db"),
-    Path.home() / "Library" / "Application Support" / "com.apple.TCC" / "TCC.db",
-)
-
-
-def privacy_as_it_stands() -> Optional[List[Tuple[str, int, int]]]:
-    """A fingerprint of the machine's real grants, or `None` where they cannot be read.
-
-    `stat` rather than a read, so this needs no Full Disk Access of its own and raises no dialog.
-    `None` is the third answer and must not be compared as though it were an empty machine — a
-    fingerprint nobody could take proves nothing either way.
-    """
-    found: List[Tuple[str, int, int]] = []
-    for one in THEIR_PRIVACY:
-        try:
-            said = one.stat()
-        except OSError:
-            continue
-        found.append((str(one), said.st_size, said.st_mtime_ns))
-    return found or None
+#: **The real machine, held before the guard below replaces it**, so there is exactly one thing to
+#: patch and a case that genuinely wants the real one can ask for it by name.
+_THE_REAL_MACHINE = proving.by_the_machine
 
 
 class AMachine:
@@ -329,14 +308,33 @@ class AMachine:
         return ran(0)
 
 
-class NeverTheRealMachine:
-    """What `proving.by_the_machine` is replaced with, so nothing can quietly reach the real one."""
+def never_the_real_machine(*_args: object, **_kw: object):
+    """What `proving.by_the_machine` is replaced with, **for the whole run, at import**.
 
-    def __init__(self, *_args: object, **_kw: object) -> None:
-        raise AssertionError(
-            "a case reached the real machine — every case here drives a stand-in, because "
-            "osascript and screencapture answer perfectly well against the developer's own Mac, "
-            "and one of them writes a TCC grant while doing it")
+    Armed here rather than only inside `run_with`, and that closes a real gap: a case that calls
+    `capabilities.proving` directly never goes through `run_with`, and `proved()` resolves the real
+    machine when nobody hands one in. One patch, every suite, and a forgotten argument fails loudly.
+
+    Why it is closed at all: `osascript` and `screencapture` answer perfectly well against a real
+    machine, one of them can raise a consent dialog whose wrong button denies a grant permanently,
+    and — measured — a capture from a process holding no grant makes macOS **write** one. There is
+    no closed port for any of that, which is the same reasoning `ASupervisor` exists for.
+
+    **This replaced a check that measured the weather.** The first version fingerprinted the TCC
+    databases before and after each case and failed on any change — but macOS rewrites that file on
+    its own schedule, so it turned three unrelated suites red on CI for a reason nobody could act
+    on. A gate like that is worse than none; this one cannot be flaky, because it is structural.
+
+    A case that really wants the real thing asks for `_THE_REAL_MACHINE` by name, which is a
+    deliberate act rather than an omission.
+    """
+    raise AssertionError(
+        "a case reached the real machine — every case here drives a stand-in, because osascript "
+        "and screencapture answer against the developer's own Mac, and one of them writes a TCC "
+        "grant while doing it")
+
+
+proving.by_the_machine = never_the_real_machine
 
 
 class NeverTheRealOne:
@@ -389,7 +387,7 @@ def run_with(argv: List[str], **collaborators) -> Tuple[int, str, str]:
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
             mock.patch.object(job, "job", _in_the_scratch_root), \
             mock.patch.object(job, "Launchd", NeverTheRealOne), \
-            mock.patch.object(proving, "by_the_machine", NeverTheRealMachine):
+            mock.patch.object(proving, "by_the_machine", never_the_real_machine):
         try:
             code = cli.main(argv, **collaborators)
         except SystemExit as ended:
@@ -413,7 +411,6 @@ class Isolated(unittest.TestCase):
         # Registered first so that it runs last: cleanups are unwound in reverse, and this one is
         # the report on everything the case did, including whatever the other cleanups undid.
         self.addCleanup(self.assert_their_login_items_are_untouched, login_items_as_they_stand())
-        self.addCleanup(self.assert_their_privacy_settings_are_untouched, privacy_as_it_stands())
         self.home = Path(tempfile.mkdtemp(prefix="rundesk-home-")).resolve()
         self.addCleanup(shutil.rmtree, str(self.home), ignore_errors=True)
         self.addCleanup(scrub_and_point(self.home))
@@ -433,27 +430,6 @@ class Isolated(unittest.TestCase):
             raise AssertionError(
                 f"{THEIR_LOGIN_ITEMS} was changed by this case — it held {as_found} and now "
                 f"holds {now}")
-
-    def assert_their_privacy_settings_are_untouched(self, as_found) -> None:
-        """Fail the case if anything in it changed what this machine allows which program.
-
-        **Asserted, not assumed**, and the sibling of the login-items check above. A probe that
-        escaped the stand-in would answer about the developer's own Mac — and one of them would
-        *change* it: `screencapture` run from a process holding no Screen Recording grant was
-        measured making macOS write an allowed grant, which is a permission nobody gave, granted by
-        a test. A case that reached the real thing passes just as green as one that did not, so this
-        is the proof rather than the intention.
-
-        A fingerprint nobody could take is not an unchanged machine, so an unreadable answer on
-        either side is left alone rather than compared — which keeps this quiet on a machine where
-        the databases cannot be stat'd at all.
-        """
-        now = privacy_as_it_stands()
-        if as_found is None or now is None or now == as_found:
-            return
-        raise AssertionError(
-            "this case changed what this machine allows which program — the TCC databases moved "
-            f"from {as_found} to {now}. Something reached the real machine instead of a stand-in")
 
     def assert_isolated(self) -> None:
         """Fail before the case runs if the product would resolve anywhere but the scratch root.
