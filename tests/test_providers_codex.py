@@ -336,15 +336,17 @@ class WhenTheBrainMakesAnImage(support.Isolated):
 import json, os, sys
 if "--capabilities" in sys.argv[1:]:
     print('{"tools": true}'); raise SystemExit(0)
-ITEM = {"type": "imageGeneration", "id": "exec-317912a2", "status": "in_progress",
-        "revisedPrompt": None, "result": "", "transparentBackground": None}
+ITEM = {"type": "imageGeneration", "id": os.environ.get("DRAWING", "exec-317912a2"),
+        "status": "in_progress", "revisedPrompt": None, "result": "",
+        "transparentBackground": None}
 for line in sys.stdin:
     try:
         said = json.loads(line)
     except ValueError:
         continue
     if said.get("method") == "initialize":
-        print(json.dumps({"id": said["id"], "result": {}}), flush=True)
+        print(json.dumps({"id": said["id"],
+                          "result": {"codexHome": os.environ["BRAIN_HOME"]}}), flush=True)
     elif said.get("method") == "thread/start":
         print(json.dumps({"id": said["id"], "result": {"thread": {"id": "t-1"}}}), flush=True)
     elif said.get("method") == "turn/start":
@@ -357,18 +359,21 @@ for line in sys.stdin:
                                      "turn": {"id": "u-1", "status": "completed"}}}), flush=True)
 '''
 
-    def ran(self):
+    def ran(self, drawing=None):
         where = self.home / "cwd"
         where.mkdir(parents=True, exist_ok=True)
         instead = self.home / "bin"
         instead.mkdir(parents=True, exist_ok=True)
         (instead / "codex").write_text(self.A_BRAIN_THAT_DRAWS, encoding="utf-8")
         (instead / "codex").chmod(0o755)
+        told = {"PATH": f"{instead}:/usr/bin:/bin", "RUNDESK_CWD": str(where),
+                "RUNDESK_ACCESS_MODE": "work", "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1",
+                "BRAIN_HOME": str(self.home / "brain")}
+        if drawing:
+            told["DRAWING"] = drawing
         got = subprocess.run(
             [str(ADAPTER)], input=json.dumps({"type": "say", "text": "draw a cat"}) + "\n",
-            capture_output=True, text=True, timeout=PATIENCE, check=False,
-            env={"PATH": f"{instead}:/usr/bin:/bin", "RUNDESK_CWD": str(where),
-                 "RUNDESK_ACCESS_MODE": "work", "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1"})
+            capture_output=True, text=True, timeout=PATIENCE, check=False, env=told)
         return [json.loads(one) for one in got.stdout.splitlines() if one.strip()]
 
     def test_making_an_image_is_reported_as_making_something(self):
@@ -392,6 +397,36 @@ for line in sys.stdin:
         ended = [one for one in self.ran() if one.get("type") == "done"]
         self.assertEqual(1, len(ended))
         self.assertTrue(ended[0]["ok"])
+
+    def drawn(self, named="exec-317912a2.png"):
+        """The image where the brain really puts one: its own home, this thread, that call's id."""
+        at = self.home / "brain" / "generated_images" / "t-1" / named
+        at.parent.mkdir(parents=True, exist_ok=True)
+        at.write_bytes(b"a picture")
+        return at
+
+    def test_the_image_it_made_is_found_and_reported_as_a_file(self):
+        at = self.drawn()
+        made = [one for one in self.ran() if one.get("type") == "file"]
+        self.assertEqual(1, len(made), "the image was made, saved, and reached nobody")
+        self.assertEqual(str(at), made[0]["at"])
+        self.assertEqual("exec-317912a2.png", made[0]["name"])
+
+    def test_a_file_that_is_not_there_is_never_spoken_of(self):
+        # The whole guard. Every part of that path is the brain's own layout and the brain may
+        # change it — so being wrong has to mean saying nothing, which is what happens today.
+        self.assertEqual([], [one for one in self.ran() if one.get("type") == "file"])
+
+    def test_the_suffix_is_found_rather_than_assumed(self):
+        self.drawn("exec-317912a2.jpeg")
+        made = [one for one in self.ran() if one.get("type") == "file"]
+        self.assertEqual("exec-317912a2.jpeg", made[0]["name"])
+
+    def test_an_id_that_could_reach_outside_that_directory_is_refused(self):
+        # The id crosses a seam. One carrying a separator would look somewhere this is not entitled
+        # to, and `glob` would happily follow it.
+        self.assertEqual([], [one for one in self.ran(drawing="../../../etc/passwd")
+                              if one.get("type") == "file"])
 
 
 class WhenASessionWillNotResume(support.Isolated):

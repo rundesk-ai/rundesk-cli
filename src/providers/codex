@@ -259,6 +259,13 @@ class Turn:
         self.model_name = None
         self.ended = threading.Event()
 
+        #: Where the brain keeps everything of its own, as **it** reported on `initialize` rather
+        #: than as anything here worked out. `None` until it says.
+        self.brain_home = None
+        #: The id of every image this turn asked for. See `anything_it_made`: the path is not in the
+        #: stream and the id is, so the ids are kept and the files looked for once the turn is over.
+        self.drew = []
+
         #: Whether the one record that ends a turn has been said, and the lock that makes asking and
         #: answering that one thing. Rundesk reading none at all is a turn nobody can explain, and
         #: reading two is a turn it cannot reconcile — see `the_turn_ended`.
@@ -456,6 +463,10 @@ class Turn:
             "clientInfo": {"name": CLIENT, "version": rundesk_version()}}), HANDSHAKE_WITHIN)
         if got is None or "error" in got:
             return self.could_not_start("codex app-server did not answer initialize", got)
+        # Taken from the brain's own answer and never from `CODEX_HOME` or a default under a home
+        # directory: this is the one place it says where it keeps things, and a second opinion about
+        # that is how an adapter comes to look in the wrong place on somebody else's machine.
+        self.brain_home = (got.get("result") or {}).get("codexHome") or None
         self.send("initialized", wants_reply=False)
 
         got = self.opening_the_thread()
@@ -719,6 +730,9 @@ class Turn:
         if kind == "webSearch":
             return "search", one_line(str(item.get("query") or "the web"))
         if kind == "imageGeneration":
+            given = str(item.get("id") or "")
+            if given and given not in self.drew:
+                self.drew.append(given)
             # **`make`, and it is the same word this already gave the same act.** Generating an
             # image used to arrive as a `fileChange` whose changes were all `add`, so it showed as
             # *made something* like anything else the agent creates. The brain grew a tool of its
@@ -819,6 +833,42 @@ class Turn:
         self.failure_code = self.failure_code or a_failure_word(trouble.get("codexErrorInfo"))
         self.failure_message = self.failure_message or str(trouble.get("message") or "") or None
 
+    def anything_it_made(self) -> None:
+        """Every image this turn made, as `file` records — found on disk, because it never said.
+
+        **The one thing here that looks for something rather than being told it.** The brain reports
+        this tool as `started` and nothing else: no completion, and on the record it does send the
+        path is an empty string. It writes the path into its own session file instead, where
+        rundesk has no business reading. Measured on a live install — the image was made, saved,
+        and never mentioned, and a person who asked for a picture was handed a sentence saying they
+        had been given one.
+
+        So it is assembled out of three things the brain itself handed over: where it keeps things
+        (`codexHome`, off `initialize`), which conversation this is, and the id of the tool call.
+        The file it wrote is that id with a suffix, and nothing here guesses which suffix.
+
+        **Nothing is reported that is not there.** Every part of this is the brain's own layout and
+        the brain may change it; the guard is that a path is only ever spoken after it has been
+        found. Where the layout moves, this finds nothing and says nothing — which is exactly what
+        happens today, so the failure mode of being wrong is the behaviour of not having tried.
+
+        Called once, as the turn ends, because that is the first moment the file is certainly
+        written: the brain finishes the image seconds before it finishes the turn.
+        """
+        if not self.drew or not self.brain_home or not self.thread_id:
+            return
+        where = Path(self.brain_home) / "generated_images" / str(self.thread_id)
+        for given in self.drew:
+            # A bare name and never a path: the id crosses a seam, and one carrying a separator
+            # would reach outside the directory this is entitled to look in.
+            if not given or "/" in given or os.sep in given or given.startswith("."):
+                continue
+            with contextlib.suppress(OSError):
+                for at in sorted(where.glob(f"{given}.*")):
+                    if at.is_file():
+                        say({"type": "file", "at": str(at), "name": at.name})
+                        break
+
     def that_is_the_turn(self, turn: dict) -> None:
         """The turn ended. Say what it cost, then say what became of it, then stop reading.
 
@@ -830,6 +880,7 @@ class Turn:
         at all as failed. The answer was delivered, and both the ledger and the person were told the
         turn had failed.
         """
+        self.anything_it_made()
         self.the_bill()
         status = turn.get("status")
         worked = status == "completed"
