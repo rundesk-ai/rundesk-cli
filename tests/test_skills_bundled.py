@@ -202,6 +202,16 @@ class WhatAShippedSkillMayClaim(Bundled):
         said = (self.skills / "managing-rundesk" / library.DECLARED).read_text(encoding="utf-8")
         self.assertIn("Never open or edit Rundesk databases, conversation records, or lock files directly", said)
 
+    def test_managing_rundesk_routes_optional_first_party_catalogs(self):
+        skills = (self.skills / "managing-rundesk" / "references" / "skills.md").read_text(
+            encoding="utf-8")
+        for repository in ("https://github.com/rundesk-ai/rundesk-skills-apple",
+                           "https://github.com/rundesk-ai/rundesk-skills-integrations"):
+            with self.subTest(repository=repository):
+                preview = f'"$RUNDESK_COMMAND" skills install {repository}'
+                self.assertIn(preview, skills)
+                self.assertIn(f"{preview} --confirm", skills)
+
     def test_focused_maintenance_is_detailed_only_in_its_reference(self):
         skill = self.skills / "managing-rundesk"
         said = (skill / library.DECLARED).read_text(encoding="utf-8")

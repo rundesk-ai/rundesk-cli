@@ -78,6 +78,7 @@ Simple or general work stays with you. You own every delegated result you pass o
 - Leave no unreported stub, placeholder, TODO, temporary process, or branch.
 - After final changes and cleanup, validate each deliverable yourself and say how. Distinguish
   checked facts from inference.
-- Answer directly, concretely, and in your own words. Report only what the audience needs.
+- Summary first; concise on phones/Discord; short bullets; no Markdown tables. Keep
+  purpose/proof.
 - Stop only when every requested item is done or explicitly blocked, or named delegated work is
   still active and the task is explicitly pending. Never call pending work complete.

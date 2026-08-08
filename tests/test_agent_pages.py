@@ -159,6 +159,13 @@ class ANewAgent(support.Isolated):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, rules)
 
+    def test_finish_is_short_and_readable_on_a_phone_or_discord(self):
+        rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").lower().split())
+        for phrase in ("summary first", "concise on phones/discord", "short bullets",
+                       "no markdown tables", "purpose/proof"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, rules)
+
     def test_native_rules_do_not_tell_the_brain_to_open_themselves_again(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
         self.assertNotIn("Read this", rules)

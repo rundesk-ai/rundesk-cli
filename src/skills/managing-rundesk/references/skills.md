@@ -26,6 +26,25 @@ selected skills visible to an agent; profiles configure the values a skill decla
 
 Prefix every command with `"$RUNDESK_COMMAND"`.
 
+## Optional first-party catalogs
+
+Check `skills catalogs` first. If the requested capability is absent, preview the relevant catalog:
+
+- Apple Calendar, Contacts, Mail, and Messages on macOS:
+  `https://github.com/rundesk-ai/rundesk-skills-apple`
+- Guarded service integrations:
+  `https://github.com/rundesk-ai/rundesk-skills-integrations`
+
+```sh
+"$RUNDESK_COMMAND" skills install https://github.com/rundesk-ai/rundesk-skills-apple
+"$RUNDESK_COMMAND" skills install https://github.com/rundesk-ai/rundesk-skills-apple --confirm
+"$RUNDESK_COMMAND" skills install https://github.com/rundesk-ai/rundesk-skills-integrations
+"$RUNDESK_COMMAND" skills install https://github.com/rundesk-ai/rundesk-skills-integrations --confirm
+```
+
+Treat the unconfirmed preview as authoritative for the catalog's current skills. Add `--confirm`
+only after its source, name, and skills match the request.
+
 ## Safe workflow
 
 1. Run `skills catalogs` and `skills list` before changing the library.
