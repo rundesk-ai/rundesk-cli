@@ -10,7 +10,7 @@ $RUNDESK_HOME/
   app/            the program itself
   data/           everything you accumulate — agents, logs, skills, configuration, secrets
     secrets/      sealed values and the key that opens them
-  backups/        copies of data/
+  backups/        compressed ZIP copies of data/ (and restorable v0.40 directory copies)
   projects/       the shared directory work is checked out into
   .rundesk.lock   held while one command at a time changes this install
   .rundesk-gateways.lock  held while an update and gateway starts take turns

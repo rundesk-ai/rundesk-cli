@@ -1335,7 +1335,7 @@ wants nine times in ten.
 $ rundesk backups
 copies in /Users/you/.rundesk/backups
 BACKUP
-2026-08-04T03-00-00Z
+2026-08-04T03-00-00Z.zip
 2026-07-28T03-00-00Z
 ```
 
@@ -1349,18 +1349,26 @@ moment they are merely unplugged, and what that person does next is act on it.
 
 ### backups save
 
-Copies `data/` whole, under a name that says when it was made, and says what it is called.
+Copies `data/` whole into one compressed ZIP, under a name that says when it was made, and says what
+it is called.
 
 ```console
 $ rundesk backups save
-saved 2026-08-04T03-00-00Z
+saved 2026-08-04T03-00-00Z.zip
         from   /Users/you/.rundesk/data
         in     /Users/you/.rundesk/backups
-        let go of 2026-07-21T03-00-00Z
+        let go of 2026-07-21T03-00-00Z.zip
 ```
 
-The copy is built under a name no finished copy wears and renamed into place only once all of it is
-there, so an interruption leaves litter rather than a copy that is not one.
+The data is first made consistent in a private staging directory, then written beneath `data/` in an
+archive with a root `manifest.json`. The manifest records the backup format and version, when it was
+made, and any source file removed by supported concurrent cleanup before its turn to be copied. That
+file is omitted and named in the command output rather than making every other healthy file go
+uncopied. Other read errors still fail the save. The archive is verified and renamed into place only
+once all of it is there, so an interruption never leaves a finished `.zip` name on a partial copy.
+
+File and directory modes are recorded explicitly, and symbolic links remain links rather than
+copies of what they point at.
 
 The copy includes `data/secrets/`: sealed values and the key that opens them. Treat backup storage as
 credential-bearing data. The files remain private, but sealing does not protect a complete copy from
@@ -1378,17 +1386,21 @@ so restoring the wrong name costs a command rather than everything you had. With
 says exactly what it would do and does none of it.
 
 ```console
-$ rundesk backups restore 2026-07-28T03-00-00Z --confirm
-        kept 2026-08-04T03-00-00Z — a copy of /Users/you/.rundesk/data as it was
-restored 2026-07-28T03-00-00Z
+$ rundesk backups restore 2026-07-28T03-00-00Z.zip --confirm
+        kept 2026-08-04T03-00-00Z.zip — a copy of /Users/you/.rundesk/data as it was
+restored 2026-07-28T03-00-00Z.zip
         into   /Users/you/.rundesk/data
 ```
 
 The copy that was kept is named before the swap starts rather than in a summary afterwards, because
 every failure from that point on is one where knowing the name is the way back.
 
-A directory with no readable `config.json` is refused: it is not a copy of an install's data whatever
-it is named, and putting it back would leave rundesk unable to tell how far it had been carried.
+A current archive is checked completely before a safety copy or live-data change: its manifest,
+single `data/` root, member names, entry types, modes, and duplicate/path-escape hazards must all be
+valid. A copy with no readable `config.json` is refused, as is one whose secret store contains a
+link. Existing v0.40 directory copies remain restorable and appear in the same chronological list as
+new ZIPs. Pre-v0.40 `rundesk-data-*.zip` archives used a different format and are explicitly refused;
+this release does not guess that they are compatible or report them as missing.
 
 **A copy older than this release is carried forward once it lands.** The copy holds the migration mark
 it had when it was taken, so the steps that run are exactly the ones it missed — and never the ones it
@@ -1402,7 +1414,7 @@ Moves the copies to another directory and links `backups/` at it.
 
 ```console
 $ rundesk backups set-location /Volumes/Big/rundesk-backups
-        moved 2026-08-04T03-00-00Z
+        moved 2026-08-04T03-00-00Z.zip
 rundesk keeps its copies in /Volumes/Big/rundesk-backups
         linked /Users/you/.rundesk/backups → /Volumes/Big/rundesk-backups
 ```
