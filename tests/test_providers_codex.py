@@ -651,6 +651,149 @@ class AStreamThisSideCannotRead(support.Isolated):
         self.assertTrue(said[-1]["ok"], "a line nobody could hold ended a turn that was fine")
 
 
+class ATurnEndsExactlyOnce(support.Isolated):
+    """**Exactly one `done`, and always one.** Rundesk reads the last one it is given, so a second
+    does not add to the first — it replaces it.
+
+    Measured before the ending was a claim: a server refusing `initialize` produced two. The real
+    message went first, then `heard`'s own guard saw a bare flag still false and said `codex ended
+    without finishing the turn` — so the one sentence naming what a person could act on was the one
+    thrown away.
+    """
+
+    def refusing_the_handshake(self):
+        at = self.home / "refuses-initialize.jsonl"
+        at.write_text(json.dumps(
+            {"id": 1, "error": {"code": -32000, "message": "this build refuses to initialize"}}
+        ) + "\n", encoding="utf-8")
+        return replayed(self.home, captured=at)
+
+    def test_a_handshake_that_failed_says_done_once(self):
+        said, _got = self.refusing_the_handshake()
+        self.assertEqual(1, len([one for one in said if one.get("type") == "done"]),
+                         "the turn was ended twice, and rundesk keeps only the last")
+
+    def test_and_the_one_it_says_is_the_one_worth_reading(self):
+        said, got = self.refusing_the_handshake()
+        self.assertIn("did not answer initialize", said[-1]["failure_message"])
+        self.assertIn("this build refuses to initialize", said[-1]["failure_message"])
+        self.assertEqual(1, got.returncode, "this side could not go on, so the program failed")
+
+
+class ATurnThatRecoveredIsNotAFailedTurn(support.Isolated):
+    """`failure_code` belongs on a `done` that says `ok: false`, and nowhere else.
+
+    An error this brain reports and then goes on from is kept while the turn runs, because at the
+    moment it arrives nobody knows yet whether the turn recovers. A turn that *did* recover must
+    not carry it out: rundesk records a turn with any code at all as failed, so this reached an
+    owner as `FAILED — it did not answer` printed directly above the answer it gave.
+    """
+
+    def recovered(self):
+        rows = [json.loads(one) for one in CAPTURED.read_text(encoding="utf-8").splitlines()
+                if one.strip()]
+        at = next(nth for nth, one in enumerate(rows) if one.get("method") == "turn/completed")
+        thread = rows[at]["params"]["threadId"]
+        rows.insert(at, {"method": "error", "params": {
+            "threadId": thread, "willRetry": False,
+            "error": {"message": "the vendor said no", "codexErrorInfo": "internalServerError"}}})
+        where = self.home / "recovered.jsonl"
+        where.write_text("".join(json.dumps(one) + "\n" for one in rows), encoding="utf-8")
+        return replayed(self.home, captured=where)[0][-1]
+
+    def test_it_reports_no_reason_for_failing(self):
+        done = self.recovered()
+        self.assertTrue(done["ok"])
+        self.assertNotIn("failure_code", done)
+        self.assertNotIn("failure_message", done)
+
+
+class WhatACommandCameTo(support.Isolated):
+    """**A command's `status` is about the item, not about the program inside it.**
+
+    A `commandExecution` reaches `completed` whatever it exited with, so reading only the status
+    reported every failed command as a success — and `answering` renders a failed tool on a channel
+    off exactly this field. Found by the record: `ok: true` beside a summary reading `exit 1`.
+    """
+
+    def result_of(self, code):
+        rows = [json.loads(one) for one in CAPTURED.read_text(encoding="utf-8").splitlines()
+                if one.strip()]
+        for one in rows:
+            item = (one.get("params") or {}).get("item") or {}
+            if item.get("type") == "commandExecution" and item.get("status") == "completed":
+                item["exitCode"] = code
+        where = self.home / f"exited-{code}.jsonl"
+        where.write_text("".join(json.dumps(one) + "\n" for one in rows), encoding="utf-8")
+        said, _got = replayed(self.home, captured=where)
+        return next(one for one in said if one.get("type") == "result")
+
+    def test_a_command_that_exited_non_zero_did_not_succeed(self):
+        result = self.result_of(1)
+        self.assertFalse(result["ok"])
+        self.assertIn("exit 1", result["summary"])
+
+    def test_a_command_that_exited_zero_still_did(self):
+        self.assertTrue(self.result_of(0)["ok"])
+
+
+class WhenTheServerAsksThisSideForSomething(support.Isolated):
+    """**A request that goes unanswered is a server waiting for ever.**
+
+    This client offers no services, so a request it did not expect is refused rather than dropped —
+    which turns an unbounded wait into something the server can act on. `approvalPolicy: never`
+    settles the approval requests and nothing else: 0.147.0 also declares `currentTime/read`,
+    `mcpServer/elicitation/request`, `attestation/generate` and
+    `account/chatgptAuthTokens/refresh`, and no policy suppresses any of them. Dropped, one of
+    those meant a silent turn that rundesk ended half an hour later with nothing written down.
+    """
+
+    def test_it_is_answered_with_a_refusal_rather_than_left_waiting(self):
+        replied = self.home / "replied.json"
+        brain = self.home / "bin" / "codex"
+        brain.parent.mkdir(parents=True, exist_ok=True)
+        brain.write_text(A_SERVER_THAT_ASKS.replace("REPLIED", str(replied)), encoding="utf-8")
+        brain.chmod(0o755)
+        where = self.home / "cwd"
+        where.mkdir(parents=True, exist_ok=True)
+        subprocess.run([str(ADAPTER)], input=json.dumps({"type": "say", "text": "hello"}) + "\n",
+                       capture_output=True, text=True, timeout=PATIENCE, check=False,
+                       env={"PATH": f"{brain.parent}:/usr/bin:/bin", "RUNDESK_CWD": str(where),
+                            "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1"})
+        self.assertTrue(replied.exists(),
+                        "the server asked for something and was never answered")
+        said = json.loads(replied.read_text(encoding="utf-8"))
+        self.assertEqual(-32601, said["error"]["code"])
+
+
+#: A server that sends one request nobody asked it for, and writes down whatever answer arrives.
+#: Its own program rather than a capture, because `a-captured-brain` renumbers every line carrying
+#: an id onto the client's own requests — which is right for a reply and wrong for a request.
+A_SERVER_THAT_ASKS = '''#!/usr/bin/env python3
+import json, sys, threading, time
+if "--capabilities" in sys.argv[1:]:
+    print('{"tools": true}'); raise SystemExit(0)
+seen = []
+def listen():
+    for line in sys.stdin:
+        try: said = json.loads(line)
+        except ValueError: continue
+        if said.get("id") == 9001 and said.get("method") is None:
+            open("REPLIED", "w").write(json.dumps(said))
+        elif said.get("id") is not None and said.get("method"):
+            seen.append(said["id"])
+threading.Thread(target=listen, daemon=True).start()
+def send(one):
+    sys.stdout.write(json.dumps(one) + "\\n"); sys.stdout.flush()
+for nth, result in enumerate([{}, {"thread": {"id": "t-1"}, "model": "m-1"}, {}]):
+    while len(seen) <= nth:
+        time.sleep(0.01)
+    send({"id": seen[nth], "result": result})
+send({"id": 9001, "method": "currentTime/read", "params": {}})
+time.sleep(3.0)
+'''
+
+
 class TheVersionItWasWrittenAgainst(support.Isolated):
     """A fixture nobody can date is a fixture nobody can act on when it goes red."""
 

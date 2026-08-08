@@ -215,9 +215,13 @@ def one_turn() -> int:
     try:
         return turn.run()
     except Exception as why:                       # noqa: BLE001 — a turn that dies silently is a
-        # turn rundesk can only call `crashed` with nothing to read. Whatever this was, it is said.
-        finished(False, failure_code="crashed",
-                 failure_message=f"the codex adapter went wrong: {type(why).__name__}: {why}")
+        # turn rundesk can only call `crashed` with nothing to read. Whatever this was, it is said —
+        # but through the turn's own claim, because the reader thread may already have explained
+        # this better. The likeliest way here is a write to a brain that has just died, which that
+        # thread sees first.
+        if turn.the_turn_ended():
+            finished(False, failure_code="crashed",
+                     failure_message=f"the codex adapter went wrong: {type(why).__name__}: {why}")
         return 1
     finally:
         turn.take_the_brain_away()
@@ -241,9 +245,11 @@ class Turn:
         self.model_name = None
         self.ended = threading.Event()
 
-        #: Whether the one record that ends a turn has been said. Rundesk reading none at all is a
-        #: turn nobody can explain, so this is what makes "always one" true rather than intended.
+        #: Whether the one record that ends a turn has been said, and the lock that makes asking and
+        #: answering that one thing. Rundesk reading none at all is a turn nobody can explain, and
+        #: reading two is a turn it cannot reconcile — see `the_turn_ended`.
         self.said_done = False
+        self.finishing = threading.Lock()
 
         #: Whether *this side* is what went wrong, as against the brain reporting a failure it
         #: handled correctly. The exit code says what became of the program and nothing else, so a
@@ -277,10 +283,35 @@ class Turn:
         if wants_reply:
             self.asked += 1
             said["id"] = self.asked
-        with self.saying:
-            self.brain.stdin.write(json.dumps(said) + "\n")
-            self.brain.stdin.flush()
+        self.write(said)
         return said.get("id")
+
+    def refuse(self, which) -> None:
+        """Say no to something the server asked *us* to do.
+
+        **A request that goes unanswered is a server waiting for ever.** This client offers no
+        services, so every request it did not expect gets an answer and the answer is no — which
+        turns an unbounded wait into an ordinary refusal the server can act on.
+
+        `approvalPolicy: never` settles the approval requests and nothing else. At 0.147.0 this
+        server also declares `currentTime/read`, `mcpServer/elicitation/request`,
+        `attestation/generate` and `account/chatgptAuthTokens/refresh`, none of which any policy
+        suppresses. Before this, one of those arriving meant a silent turn that rundesk ended half
+        an hour later at its silence window with nothing written down.
+        """
+        self.write({"id": which, "error": {"code": -32601,
+                                           "message": "rundesk offers no client services"}})
+
+    def write(self, one: dict) -> None:
+        """One line to the server, under the lock.
+
+        Behind the lock because two threads write here — the one draining the server and the one
+        reading what rundesk is saying — and two interleaved halves of two JSON objects is a stream
+        neither end can recover.
+        """
+        with self.saying:
+            self.brain.stdin.write(json.dumps(one) + "\n")
+            self.brain.stdin.flush()
 
     def waited_for(self, asked: int, within: float):
         """The reply to one request, or `None` if the server never sent one."""
@@ -318,16 +349,24 @@ class Turn:
                     said = json.loads(line)
                 except ValueError:
                     continue
+                if not isinstance(said, dict):
+                    continue
                 if "id" in said and ("result" in said or "error" in said):
                     self.answers[said["id"]] = said
+                elif said.get("method") is not None and said.get("id") is not None:
+                    # Something the server is asking *us* for. Answered rather than dropped — see
+                    # `refuse`: a request nobody replies to is a server that waits for ever.
+                    self.refuse(said["id"])
                 elif said.get("method") in LISTENED:
                     with contextlib.suppress(Exception):
                         self.a_notification(said["method"], said.get("params") or {})
         except Exception as why:                   # noqa: BLE001 — see the docstring
             self.could_not_read_it(f"reading codex went wrong ({type(why).__name__}: {why})")
         finally:
-            if not self.said_done:
-                self.could_not_read_it("codex ended without finishing the turn")
+            # Said unconditionally: `could_not_read_it` claims the ending itself and does nothing
+            # when the turn already has one, which is the only way two paths can both arrive here
+            # without one of them inventing a second ending.
+            self.could_not_read_it("codex ended without finishing the turn")
             self.ended.set()
 
     def read_a_line(self):
@@ -366,14 +405,34 @@ class Turn:
     def could_not_read_it(self, said: str) -> None:
         """End the turn because *this side* could not go on. Said as a `done`, because rundesk
         reading none at all is a turn nobody can explain — and remembered, because the exit code
-        says what became of the **program** and this is the program going wrong."""
+        says what became of the **program** and this is the program going wrong.
+
+        **Does nothing when the turn already has an ending**, which is what lets the one guard in
+        `heard`'s `finally` be said unconditionally.
+        """
+        if not self.the_turn_ended():
+            return
         self.could_not_go_on = True
-        self.the_turn_ended()
         finished(False, session_id=self.thread_id, failure_code="crashed", failure_message=said)
 
-    def the_turn_ended(self) -> None:
-        """Say that the record which ends a turn is about to be said, **once**."""
-        self.said_done = True
+    def the_turn_ended(self) -> bool:
+        """Claim the right to say the record that ends a turn. **True for the first caller only.**
+
+        Checked and set as one thing, under a lock, because more than one path reaches here and a
+        brain that dies mid-turn brings two at once: the thread reading its output sees the pipe
+        close, and the main thread sees the process go at the same instant.
+
+        Measured before this was a claim: a server refusing `initialize` produced **two** `done`
+        records — the real one from `could_not_start`, then a second from `heard`'s `finally`, which
+        saw a bare `said_done` still false. Rundesk reads the last, so `codex app-server did not
+        answer initialize: …` was replaced by `codex ended without finishing the turn`, and the one
+        thing a person could have acted on was the thing thrown away.
+        """
+        with self.finishing:
+            if self.said_done:
+                return False
+            self.said_done = True
+            return True
 
     # ── the turn ──────────────────────────────────────────────────────────────────────────────
 
@@ -395,8 +454,9 @@ class Turn:
 
         prompt = self.first_thing_rundesk_says()
         if prompt is None:
-            finished(False, failure_code="crashed",
-                     failure_message="rundesk sent no prompt", session_id=self.thread_id)
+            if self.the_turn_ended():
+                finished(False, failure_code="crashed",
+                         failure_message="rundesk sent no prompt", session_id=self.thread_id)
             return 1
         threading.Thread(target=self.what_rundesk_says_next, name="codex-in", daemon=True).start()
 
@@ -461,7 +521,13 @@ class Turn:
                 "sandboxPolicy": dict(SANDBOX_POLICY)}
 
     def could_not_start(self, said: str, got) -> int:
-        """A turn that never began, said in the one way rundesk can act on."""
+        """A turn that never began, said in the one way rundesk can act on.
+
+        **Claims the ending first**, so the reader thread's own guard finds the turn already ended
+        rather than replacing this — the actionable message — with a generic one.
+        """
+        if not self.the_turn_ended():
+            return 1
         trouble = (got or {}).get("error") or {}
         message = trouble.get("message") or ""
         finished(False, failure_code="crashed",
@@ -563,11 +629,28 @@ class Turn:
             return
         status = item.get("status")
         record = {"type": "result", "id": given,
-                  "ok": status in (None, "completed") and not item.get("error")}
+                  "ok": (status in (None, "completed") and not item.get("error")
+                         and self.a_command_worked(item))}
         summary = self.what_it_reported(kind, item)
         if summary:
             record["summary"] = summary
         say(record)
+
+    @staticmethod
+    def a_command_worked(item: dict) -> bool:
+        """Whether a command this brain ran actually succeeded, by its exit code.
+
+        **`status` is about the item, not about the command.** A `commandExecution` reaches
+        `completed` whatever the program inside it exited with — measured, and confirmed against
+        the capture — so reading only the status reports every failed command as a success. The
+        exit code is right there on the item and `what_it_reported` already puts it in the summary,
+        which is how this was found: a record saying `ok: true` beside a summary reading `exit 1`.
+
+        Absent means this is not a command and there is nothing to disagree with, so the caller's
+        other two checks stand alone.
+        """
+        code = item.get("exitCode")
+        return code == 0 if isinstance(code, int) else True
 
     def what_it_did(self, kind: str, item: dict):
         """Which of the ten words this was, and what to call it on a line somebody reads.
@@ -669,19 +752,33 @@ class Turn:
         self.failure_message = self.failure_message or str(trouble.get("message") or "") or None
 
     def that_is_the_turn(self, turn: dict) -> None:
-        """The turn ended. Say what it cost, then say what became of it, then stop reading."""
+        """The turn ended. Say what it cost, then say what became of it, then stop reading.
+
+        **A turn that completed carries no reason for failing.** An error the brain reported and
+        then went on from is kept by `an_error` — because at the time it arrives nobody yet knows
+        whether the turn recovers — and a turn that *did* recover must not carry it out. Measured:
+        one non-retried `internalServerError` before a `turn/completed` produced
+        `{"ok": true, "failure_code": "upstream_error"}`, and rundesk records a turn with any code
+        at all as failed. The answer was delivered, and both the ledger and the person were told the
+        turn had failed.
+        """
         self.the_bill()
         status = turn.get("status")
+        worked = status == "completed"
         trouble = turn.get("error") or {}
-        message = self.failure_message or str(trouble.get("message") or "") or None
-        code = self.failure_code or a_failure_word(trouble.get("codexErrorInfo"))
+        message = None if worked else (self.failure_message
+                                       or str(trouble.get("message") or "") or None)
+        code = None if worked else (self.failure_code
+                                    or a_failure_word(trouble.get("codexErrorInfo")))
         if status == "interrupted":
             code = code or "cancelled"
-        elif status not in ("completed", None) and code is None and message is None:
+        elif not worked and status is not None and code is None and message is None:
             message = f"codex ended the turn as {status}"
-        self.the_turn_ended()
-        finished(status == "completed", session_id=self.thread_id,
-                 failure_code=code, failure_message=message)
+        # **`ended` is set whichever way this goes.** It is what `run` is waiting on, and a turn
+        # whose ending some other path already claimed is still a turn that is over.
+        if self.the_turn_ended():
+            finished(worked, session_id=self.thread_id,
+                     failure_code=code, failure_message=message)
         self.ended.set()
 
     def the_bill(self) -> None:
