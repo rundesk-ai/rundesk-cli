@@ -86,7 +86,13 @@ jobs:
           ruff check src tests scripts/suites rundesk
 
   required-pr-gate:
-    name: required
+    # **The name is the contract.** `main` is protected on a required context spelled
+    # `required PR gate`, and a check run is matched by the name it publishes — so this job
+    # answering to `required` meant the context nothing produced stayed pending for ever, and
+    # every pull request was BLOCKED with six green checks above it. `enforce_admins` is on, so
+    # there was nobody who could merge past it either. Renaming here rather than loosening the
+    # protection: the gate is what the branch asks for, and it is this file that had it wrong.
+    name: required PR gate
     runs-on: ubuntu-latest
     needs: [tests, style]
     steps:
