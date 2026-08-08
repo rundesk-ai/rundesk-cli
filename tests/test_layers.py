@@ -98,8 +98,12 @@ MAY_IMPORT = {
     # reach here, so an agent is still something that can be made, carried and removed by code that
     # has never heard of a skill, and presenting a new agent's skills is done in `commands`.
     "skills": ("agents", "core", "utils"),
+    # `commands` reaches `capabilities` and is the **only** package that does. That is what makes
+    # the restriction below it enforceable: `capabilities` may not import `gateways` or `agents`, so
+    # the shim prefix a lineage is recognised by and the agent a process was started for are
+    # resolved here, where both are legal, and handed down as arguments.
     "commands": ("skills", "providers", "channels", "schedules", "delegations", "gateways",
-                 "lifecycle", "agents", "core", "utils"),
+                 "capabilities", "lifecycle", "agents", "core", "utils"),
 }
 
 #: Below the layers rather than in them: the version this is, and what a command may exit with.
