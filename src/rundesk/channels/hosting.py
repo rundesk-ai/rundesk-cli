@@ -79,6 +79,7 @@ handed in, so every case here runs with no supervisor anywhere near it.
 
 import contextlib
 import fcntl
+import itertools
 import json
 import os
 import threading
@@ -156,6 +157,22 @@ SEEN = "seen"
 #: adapter that never acknowledges one from leaving an entry behind for every delivery in a gateway
 #: that has been up for a month.
 IN_FLIGHT_KEPT = 200
+
+#: The serial on the end of every delivery id, so that two deliveries are never one.
+#:
+#: **The moment a delivery was written is not a name for it.** `awaiting`, `posted` and `refused` are
+#: all held by that id alone, so two that collide answer each other's questions — the refusal
+#: belonging to one turn is popped by the other, which reports a failure it never had while the turn
+#: that really failed is marked ✅. A stamp of microseconds looks unique and is not: `time.time` is
+#: `CLOCK_REALTIME` and **adjustable**, so one step backwards — NTP correcting, a laptop waking —
+#: replays a whole window of ids while as many as `IN_FLIGHT_KEPT` of them are still in flight, with
+#: no race between threads needed to reach it.
+#:
+#: Counted for this process rather than per adapter, which is stronger and simpler both: a bound
+#: method off one `count` cannot be left out by a caller the way a mutable field on `Running` could,
+#: and `itertools.count` advances under the interpreter's own lock — the idiom `threading` itself
+#: uses to name a thread. The stamp stays in front of it because it is what makes a log readable.
+_a_serial = itertools.count().__next__
 
 #: What somebody may ask an agent to *do* without saying anything to its brain. **Closed, and that
 #: is the whole of its value**: a surface offers gestures, and a gesture whose name is whatever the
@@ -701,7 +718,8 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
     saying = list(pieces) or ([""] if carrying else [])
     written = []
     for nth, piece in enumerate(saying):
-        record = {"do": "deliver", "id": f"{time.time():.6f}-{nth}", "place": place, "text": piece}
+        record = {"do": "deliver", "id": f"{time.time():.6f}-{nth}-{_a_serial()}",
+                  "place": place, "text": piece}
         if carrying and nth == len(saying) - 1:
             record["files"] = carrying
         # The quote and the cost go on the **first** piece only. A long answer split into four is one
@@ -730,7 +748,8 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
 
 
 def announced(agent: str, where: Path, watching: Watching, kind: str, place: str,
-              pieces: List[str], within: float) -> Optional[str]:
+              pieces: List[str], within: float,
+              refusals: Optional[List[str]] = None) -> Optional[str]:
     """Say something, and hand back the platform's own id for the **first** message of it.
 
     `None` when nobody can say.
@@ -743,11 +762,23 @@ def announced(agent: str, where: Path, watching: Watching, kind: str, place: str
     So this waits, where `told` does not: the id crosses the seam on the adapter's acknowledgement,
     which is a platform round trip away, and a caller that did not wait would always be told `None`.
 
-    **`None` is an ordinary answer and has three causes, all of them survivable**: the adapter is not
-    up, it never acknowledged inside `within`, or it acknowledged without an id — a platform that has
-    no ids, or an adapter that does not pass one. Every one of them means *this cannot be quoted*,
-    and the caller's business is to go on and post its report unanchored rather than to fail. That is
-    why they are one answer rather than three: nothing downstream does anything different about them.
+    **`None` is an ordinary answer and has four causes, all of them survivable**: the adapter is not
+    up, it never acknowledged inside `within`, it acknowledged without an id — a platform that has
+    no ids, or an adapter that does not pass one — or the platform refused the announcement outright.
+    Every one of them means *this cannot be quoted*, and the caller's business is to go on and post
+    its report unanchored rather than to fail. That is why they are one answer rather than four:
+    nothing downstream does anything different about them.
+
+    **The last of the four is the one worth telling somebody about, though, and that is what
+    `refusals` is for.** A refusal is the platform saying no — a rate limit, a permission the bot was
+    never granted — and it is news an owner can act on, where the other three are conditions that
+    pass. It is the same idiom as `told`'s: a list handed in and appended to, because what this
+    function *returns* is the id to quote, and that is what almost every caller is asking. Left out,
+    nothing changes and nothing is collected.
+
+    **Nothing appended still does not mean landed** — see `told`. An adapter is free to acknowledge
+    nothing at all, so an empty list means *nobody said this was refused*, which is the honest
+    reading of silence and the one every caller here must keep.
 
     **Already-split pieces, and the first one is what is handed back.** What comes in is what
     `delivery.split` produced, sent as the several messages a platform will accept — never rejoined,
@@ -767,7 +798,7 @@ def announced(agent: str, where: Path, watching: Watching, kind: str, place: str
         return None
     written: List[str] = []
     if not told(agent, where, watching, kind, place, pieces, noting=written,
-                landed_within=within):
+                landed_within=within, refusals=refusals):
         return None
     # One indivisible read of a dict two threads share, which is the only safe operation on it.
     # Nothing was acknowledged, or it was acknowledged with no id: both are `None`, and the caller

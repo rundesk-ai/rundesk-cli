@@ -33,6 +33,7 @@ import os
 import signal
 import time
 import unittest
+from unittest import mock
 
 import support
 from rundesk.agents import directory
@@ -96,6 +97,25 @@ for line in sys.stdin:
             break
     except ValueError:
         continue
+"""
+
+#: One that acknowledges every delivery with a **refusal** instead of a receipt, which is the shape
+#: a platform saying no arrives in: a `failed` carrying the reason, against the delivery's own id. A
+#: rate limit and a permission the bot was never granted both come back exactly like this.
+AN_ADAPTER_THAT_REFUSES = """#!/usr/bin/env python3
+import json, os, sys
+settings = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
+print(json.dumps({"say": "ready", "as": "a-bot"}), flush=True)
+for line in sys.stdin:
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    if record.get("do") == "stop":
+        break
+    if record.get("do") == "deliver":
+        print(json.dumps({"say": "failed", "id": record.get("id"),
+                          "why": "would not take it: 429 Too Many Requests"}), flush=True)
 """
 
 #: One that says its configuration is what is wrong and exits `78` — `EX_CONFIG`, the code an
@@ -1285,6 +1305,30 @@ class WhatThePlatformCalledWhatWeSent(Hosting):
         one = watching.running["discord"]
         self.assertIn("8841", one.posted.values())
 
+    def test_a_refused_announcement_says_why_rather_than_only_that_it_cannot_be_quoted(self):
+        # **`None` had two meanings and the caller could act on only one of them.** Nothing to say it
+        # through, nobody acknowledged, and *the platform refused it outright* all arrived as `None`,
+        # so a schedule went on to post its report unanchored — the right move — while the reason the
+        # anchor never existed reached nobody who could act on it. A rate limit and a missing
+        # permission are the two that really happen, and they want different answers from a person.
+        watching = self.a_connected_channel(body=AN_ADAPTER_THAT_REFUSES)
+        why = []
+        became = hosting.announced(self.agent, self.where, watching, "discord", "1180",
+                                   ["💻 Working on 'review'"], within=5.0, refusals=why)
+        self.assertIsNone(became, "a refused announcement is still nothing that can be quoted")
+        self.assertEqual(1, len(why), f"the platform's reason reached nobody: {why}")
+        self.assertIn("429", why[0])
+
+    def test_an_announcement_nobody_refused_leaves_the_list_alone(self):
+        # Silence must go on reading as landed — an adapter is free to acknowledge nothing at all,
+        # and a caller that treated *nothing said* as a refusal would report a failure for every
+        # whole adapter that simply does not answer.
+        watching = self.a_connected_channel()
+        why = []
+        hosting.announced(self.agent, self.where, watching, "discord", "1180", ["a notice"],
+                          within=5.0, refusals=why)
+        self.assertEqual([], why)
+
 
 class WhoSaidItAndWhere(unittest.TestCase):
     """R-CH-21, R-DIS-21. **Both fields crossed the seam already and nothing read either**, so in a
@@ -1386,6 +1430,72 @@ class WhatAReplyPutsInFrontOfABrain(unittest.TestCase):
     def test_a_message_replying_to_nothing_is_left_exactly_as_it_was(self):
         for said in (None, {}, {"resolved": True}, "not an object", []):
             self.assertEqual("just a message", hosting._also_replying("just a message", said))
+
+
+class _AStoppedClock:
+    """What `hosting` asks of `time`, with the wall clock stopped and the monotonic one real.
+
+    The module's own reference is replaced rather than `time.time` itself, because the real thing is
+    a module every thread in this process shares — and this suite runs real adapters on real threads.
+    `monotonic` and `sleep` are handed through untouched: the hold-off arithmetic and the waiting are
+    not what is being held still.
+    """
+
+    STOPPED = 1754431200.123456
+
+    monotonic = staticmethod(time.monotonic)
+    sleep = staticmethod(time.sleep)
+
+    @staticmethod
+    def time():
+        return _AStoppedClock.STOPPED
+
+
+class WhatEachDeliveryIsCalled(Hosting):
+    """Two deliveries may never be one, because three dicts are held by this id alone."""
+
+    def test_two_deliveries_minted_in_the_same_moment_are_still_two(self):
+        # `awaiting`, `posted` and `refused` are all keyed on the delivery id, so two that collide
+        # answer each other's questions: the refusal belonging to one turn is popped by the other,
+        # which then reports a failure it did not have while the turn that really failed wears a ✅.
+        #
+        # A stopped clock is the ordinary hazard written large rather than an invented one.
+        # `time.time` is `CLOCK_REALTIME` and adjustable, so a step backwards — NTP, a laptop waking
+        # — replays a whole window of ids while as many as `IN_FLIGHT_KEPT` of them are still live,
+        # and no race between threads is needed to reach it.
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+
+        with mock.patch.object(hosting, "time", _AStoppedClock):
+            hosting.told(self.agent, self.where, watching, "discord", "1180", ["first"])
+            hosting.told(self.agent, self.where, watching, "discord", "1180", ["second", "third"])
+
+        self.assertTrue(support.waited_until(
+            lambda: len([one for one in self.what_it_was_told()
+                         if one.get("do") == "deliver"]) == 3, PATIENCE),
+            "the three deliveries never reached the adapter")
+        named = [one["id"] for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertEqual(3, len(set(named)),
+                         f"two deliveries minted in one moment were given one id: {named}")
+
+    def test_what_is_awaited_is_one_entry_for_each_delivery(self):
+        # The same failure read from the other side: a collision does not merely repeat a name, it
+        # silently drops what the first delivery was answering, so the acknowledgement for one is
+        # recorded against the message the other replied to.
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        one = watching.running["discord"]
+
+        with mock.patch.object(hosting, "time", _AStoppedClock):
+            hosting.told(self.agent, self.where, watching, "discord", "1180", ["for Ada"],
+                         answering="8841")
+            hosting.told(self.agent, self.where, watching, "discord", "1180", ["for Grace"],
+                         answering="8842")
+
+        self.assertEqual({"8841", "8842"}, set(one.awaiting.values()),
+                         "one delivery's answered-id was written over by the other's")
 
 
 if __name__ == "__main__":
