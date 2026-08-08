@@ -1,0 +1,67 @@
+# An adapter is an executable with a shebang and no `.py`, so a directory scan skips it — and the
+# gate everybody runs is a directory scan. Named on the command line it was checked; named in the
+# gate it was invisible, so the one adapter that ships was unlinted and unparsed and a syntax error
+# in it would have gone green. Measured: `ruff check src tests` saw 109 files and none of them was
+# `src/channels/discord`.
+#
+# **It happened again, the same way, one directory along.** This list said `src/channels/*` and
+# nothing else, so every provider adapter — 2,800 lines of it — was invisible to the gate from the
+# day the first one shipped. The gate reported clean while reading none of them. A list of the
+# places this rule applies is a list somebody has to remember to add to, and nobody did; each line
+# below is here because a file of that shape was already being written when it was added, so the
+# next kind of extensionless program will be missed too unless whoever adds it reads this.
+extend-include = ["src/channels/*", "src/providers/*", "tests/samples/*"]
+
+# What lives beside those programs and is **not** one. `tests/samples/` holds both the stand-in
+# brains — extensionless executables, which is why the directory is included above — and the
+# captured vendor streams they replay. A capture is JSON, so reading one as Python reports several
+# hundred errors about a file nobody wrote by hand. Matched on the extension, because that is the
+# thing that actually tells a program from a recording here.
+extend-exclude = ["tests/samples/*.json", "tests/samples/*.jsonl"]
+
+# How this code is written, in the one place a machine can check it.
+#
+# Its own file rather than a `pyproject.toml`, deliberately: rundesk has no build step and nothing to
+# package, and a `pyproject.toml` in the root is the first thing a tool reads as "this is installable".
+# Nothing here is a dependency of the product — `requirements.txt` stays empty, which is what keeps an
+# install from building a virtualenv at all. This is checked in CI, where a linter may be fetched, and
+# never by anything a person installs.
+#
+# The rules chosen are the ones that catch a mistake or settle an argument. Formatting opinions that
+# do neither are left out: this file is not here to relitigate the style, which is already consistent.
+
+line-length = 100
+target-version = "py39"
+
+[lint]
+# The blank-line rules are still preview in ruff, and `explicit-preview-rules` is what lets this
+# take those five without also taking every other unfinished rule along with them. They are worth
+# having: merging three modules into one left three- and four-line gaps that nothing complained
+# about, because plain `E` does not include them.
+preview = true
+explicit-preview-rules = true
+
+select = [
+    "E",    # pycodestyle — the layout this code already keeps
+    "W",    # pycodestyle warnings — trailing whitespace, a missing final newline
+    "F",    # pyflakes — an unused import, a name that is not defined, an unused variable
+    "I",    # isort — standard library, then this product; one order, not one per file
+    "B",    # bugbear — the mutable default argument, and the loop variable captured by a closure
+    "A",    # a name that shadows a builtin, which is how `id` came to be a parameter here once
+    "C4",   # a comprehension written the long way round
+    "BLE",  # a bare `except Exception`, which is deliberate exactly once here and marked where it is
+    "E301", "E302", "E303", "E305", "E306",  # blank lines around a definition
+    "RUF",  # ruff's own, including a `noqa` for a rule that is no longer switched on
+]
+
+ignore = [
+    # Width is the one convention here with a soft edge: the code is written to a hundred columns and
+    # a handful of lines run to a hundred and four, all of them sentences in a docstring. Nearly
+    # everything this module explains is explained in prose somebody wrote and wrapped by hand, and
+    # having a linter rewrap it would cost more than the ragged edge does. Everything below this line
+    # catches a mistake; this one only settles a preference, and the preference is already settled.
+    "E501",
+]
+
+[lint.isort]
+known-first-party = ["rundesk", "support"]

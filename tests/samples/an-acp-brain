@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""Stand in for a brain spoken to over ACP, saying exactly what a real one said once.
+
+**No account, no token, no network.** The capture named in `CAPTURED` is what a real `grok agent
+stdio` said during one real turn, kept whole and scrubbed of anything naming a machine or an owner.
+So every reading the grok adapter makes is checked against the vendor rather than against a stand-in
+written to agree with it — which is the one thing a hand-written fake cannot do — and the suite still
+never reaches a vendor, which is both this repository's rule and a terms one.
+
+## Why this is not `a-captured-brain`
+
+Both replay JSON-RPC over a pipe, and the sibling looks close enough to share. It is not, and the
+difference is the whole point of a fixture.
+
+`a-captured-brain` holds back only the *replies*: everything between one reply and the next is
+written as soon as the reply before it goes out. That is right for a server whose notifications
+follow the request they were caused by, and wrong here. In this protocol the notifications that
+report a turn — what the agent thought, what it called, what it cost — sit between the reply that
+opened the conversation and the reply that ends the turn, and they are caused by the *prompt*, which
+has not been sent yet at the moment the sibling would release them.
+
+Releasing them early is an ordering no real server can produce, and a fixture that produces one
+teaches an adapter to survive something that never happens — or, worse, hides something that does.
+It hid exactly one such thing here: an adapter that decided what belonged to its turn *after* the
+conversation opened rather than *before* it asked had a race between two of its own threads, and the
+early release is what made it visible.
+
+So the rule here is one step stricter: **nothing is written until the request that causes it
+arrives.** On the nth request, everything up to and including the nth reply is released — the
+notifications first, in the order they were captured, then the reply.
+
+**Replies carry the id the client actually used.** A capture was made by some other client that
+numbered its requests its own way, and a fixture that insisted on those numbers would be testing
+that two clients happen to count alike.
+
+It never exits on its own. The adapter under test ends this program itself, and one that closed the
+pipe underneath it would prove something about a broken pipe rather than about the translation.
+"""
+
+import json
+import os
+import queue
+import sys
+import threading
+
+#: How long a run of the capture waits for the request that releases it before it is dropped. Long
+#: enough for a client that is about to ask, short enough that a capture the client outgrew does not
+#: hang a suite.
+GRACE = 5.0
+
+if "--capabilities" in sys.argv[1:]:
+    print('{"tools": true}')
+    raise SystemExit(0)
+
+asked: "queue.Queue" = queue.Queue()
+ended = threading.Event()
+
+
+def listened():
+    """Every request the client sends, in the order it sends them."""
+    for line in sys.stdin:
+        try:
+            said = json.loads(line)
+        except ValueError:
+            continue
+        # A client *reply* to something this side asked carries an id and no method, and releases
+        # nothing: only a request does.
+        if said.get("id") is not None and said.get("method") is not None:
+            asked.put(said["id"])
+    ended.set()
+
+
+threading.Thread(target=listened, daemon=True).start()
+
+
+def a_reply(one):
+    """Whether this captured line is an answer to something the client asked.
+
+    A line with a method **and** an id is the server asking the client something, which is not a
+    reply and must keep its own id — renumbering one would answer it with a number belonging to a
+    request nobody made.
+    """
+    return one.get("id") is not None and one.get("method") is None
+
+
+# **Bytes, not text.** A capture may hold a byte that is not valid UTF-8 — a real server relays
+# whatever a tool printed — and a replay that decoded it here would fail on this side instead of
+# handing the adapter under test the thing it has to survive.
+def write(line):
+    sys.stdout.buffer.write(line)
+    sys.stdout.buffer.flush()
+
+
+holding = []
+with open(os.environ["CAPTURED"], "rb") as captured:
+    for line in captured:
+        if not line.strip():
+            continue
+        try:
+            said = json.loads(line)
+        except ValueError:
+            said = None
+        if not isinstance(said, dict) or not a_reply(said):
+            holding.append(line)
+            continue
+        # A reply, so this whole run was caused by one request. Wait for it, then let the run go
+        # in the order it was captured, and answer with the number the client actually used.
+        try:
+            said["id"] = asked.get(timeout=GRACE)
+        except queue.Empty:
+            # A reply nobody ever asks for is dropped, because that is what a real server does with
+            # a request it never received: nothing. Whatever was waiting on it is dropped with it —
+            # those notifications were that request's answer too.
+            holding = []
+            continue
+        for waiting in holding:
+            write(waiting)
+        holding = []
+        write((json.dumps(said) + "\n").encode())
+
+for waiting in holding:
+    write(waiting)
+
+if os.environ.get("THEN_DIE"):
+    # A server that fell over: it stops mid-record and its pipe closes, which is what the reader on
+    # the other side actually sees. Staying alive instead would test a *wedged* server, which is a
+    # different thing and is rundesk's silence window to answer, not the adapter's.
+    raise SystemExit(1)
+
+ended.wait()

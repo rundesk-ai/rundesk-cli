@@ -1,9 +1,0 @@
-{
-  "description": "Answer one bounded question from evidence — every claim sourced, every gap named, nothing changed.",
-  "skills": [
-    "python-patterns",
-    "laravel-patterns",
-    "vue-patterns"
-  ],
-  "posture": "read"
-}

@@ -2,13 +2,15 @@
 # own .venv — never into the machine's Python. An empty file here means no virtualenv is made
 # at all, which is the state to return to if a dependency ever stops earning its place.
 #
-# discord.py is here ahead of the channel that will import it: Python's standard library has
-# no websocket client, so a Discord gateway cannot be reached without one. Pinned exactly,
-# because an install that resolves differently on two machines is two different products.
+# discord.py is imported by src/channels/discord, and by nothing under src/rundesk/. The
+# standard library ships no websocket client and Discord's gateway is websocket-only, so
+# reaching it needs one — writable in about 900 stdlib lines, which is a cost this build
+# chose not to own. Pinned exactly, because an install that resolves differently on two
+# machines is two different products.
 discord.py==2.7.1
 
-# slack_sdk is here for the same reason and on the same terms. Its *built-in* Socket Mode
-# client implements the websocket protocol itself, so this line adds exactly one package
-# and nothing behind it — the aiohttp, websockets and websocket-client variants are all
-# optional extras and none of them is installed.
-slack_sdk==3.43.0
+# slack_sdk was pinned here ahead of a Slack adapter and has been taken out again. Nothing
+# under src/channels/ imports it, so every `rundesk install` and `rundesk update` was
+# fetching and building a package for a channel this build cannot reach, configure, or
+# name. A pin is a thing a user pays for on every install; it goes in when the adapter
+# that imports it does, and not before.

@@ -1,0 +1,16 @@
+# Which version of each vendor's own CLI a shipped provider adapter was written against, and
+# which captured stream stands in for it so that the suite never needs an account, a token or a
+# network.
+#
+# **This is the file to read when a codex suite goes red after an upgrade.** An adapter is written
+# against a stream shape nobody controls, so the shape moves; a capture with no version beside it is
+# a fixture nobody can act on. Re-probe with `codex app-server generate-json-schema --out <dir>`,
+# capture a fresh turn, and change both lines together.
+#
+# adapter  version           captured                                measured
+codex      codex-cli 0.146.0 tests/samples/codex-app-server-0.146.0.jsonl         2026-08-06
+codex      codex-cli 0.146.0 tests/samples/codex-app-server-0.146.0-resumed.jsonl 2026-08-06
+grok       grok 0.2.118      tests/samples/grok-acp-0.2.118.jsonl                 2026-08-06
+grok       grok 0.2.118      tests/samples/grok-acp-0.2.118-resumed.jsonl         2026-08-06
+claude     claude 2.1.223    tests/samples/claude-2.1.223.jsonl                   2026-08-06
+claude     claude 2.1.223    tests/samples/claude-2.1.223-steered.jsonl           2026-08-06

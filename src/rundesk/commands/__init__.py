@@ -1,116 +1,90 @@
-"""The command groups: one module per family of verbs, and the little they share.
+"""One command group per module, and the only layer that may know argparse.
 
-A layer of its own. Everything under `src/rundesk/` proper holds one concern and knows
-nothing of how it was invoked; a module in here is the exception on purpose — it takes an
-`argparse.Namespace` and hands back an exit code, which is what a command *is*. `cli.py`
-above it owns the parser and the dispatch and nothing else; the modules below it own locks,
-records and process groups and have never heard of a flag.
+A group takes an `argparse.Namespace` and hands back an exit code. It does the work of one verb and
+nothing else; it never builds a parser for another group, and it never calls a group that calls it.
 
-What each group acts on — the gateways, the machine, the agents, the skills — arrives as an
-argument from `cli.main`, so every verb is exercised with none of them anywhere near it.
+May depend on `lifecycle`, `core` and `utils`. Nothing in any of them may depend on this.
 
-This file holds what more than one group needs and nothing below the surface wants: how a
-table is printed, how a change is written into an agent's log, how a call that may block
-inside the operating system is given up on, and how a long-running command says where it
-has got to. A group may still *call* another group — an update refreshes skill catalogs,
-which is the skills group's job and prints like one — but only one way, never in a cycle.
+Columns are laid out by `utils.terminal`, so every listing in the product lines up the same way. What a
+value *says* is `as_written` below, and it is here rather than there on purpose: aligning columns is
+something any program does, and choosing the words this one speaks is not.
 """
 
-from __future__ import annotations
-
-import queue
+import argparse
 import sys
-import threading
+from typing import Any
 
-#: What a command that exists but is not built yet exits with. Not 0, which a script
-#: would take as done; not 1, which is reserved for a command that ran and failed; and
-#: not 2, which argparse already spends on a usage error. Those last two are different
-#: situations wearing one number: "this rundesk does not have that yet" is worth waiting
-#: for or upgrading to, and "you typed it wrong" is worth reading the help for, and a
-#: script that cannot tell them apart can do neither. 69 is `EX_UNAVAILABLE`, which is
-#: what the BSD table has always called this. See `PLANNED`.
-NOT_AVAILABLE = 69
+from rundesk.exits import FAILED
 
-
-def _as_table(head: tuple, rows: list) -> None:
-    """Columns wide enough for what is in them. Written once, so the two things that
-    list something in columns cannot come to disagree about how."""
-    if not rows:
-        return
-    widths = [max(len(row[i]) for row in [head] + rows) for i in range(len(head))]
-    for row in [head] + rows:
-        print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
+#: What `add_subparsers()` hands back, and what a verb is given to register itself on.
+#:
+#: argparse offers no public name for it, so the private one is named **here, once**, rather than
+#: spelled out at each verb — and `cli.offered` reads the same private shape to walk the surface. If
+#: a future Python renames it, this import fails loudly at start-up, which is the failure worth
+#: having: the alternative is a walk that quietly finds no verbs and a suite that proves nothing.
+#:
+#: Stays here rather than in `utils` because it is argparse's, and argparse is this layer's alone.
+Subcommands = argparse._SubParsersAction
 
 
-def _note(gateways, name: str, said: str, whose=None) -> int:
-    """Say what was changed, in the log of the agent it was changed for, and say so out
-    loud when it could not be written (R-GW-37).
+def failed(saying: str, *and_so: str) -> int:
+    """Say what went wrong on stderr, then what it leaves, indented under it. Returns `FAILED`.
 
-    A schedule that appears or vanishes is as much a part of what happened to an agent
-    as anything it ran, and the log is the only account that outlives the gateway. The
-    change itself stands either way — it is already on disk by the time this is called,
-    and unwinding a good mutation because its audit line failed would be the worse of
-    the two outcomes. What must not happen is the command reporting a plain success:
-    that is a mutation and its history disagreeing, with nobody told.
+    The mechanics only — the stream, the indent, the exit code — because that is the part every verb
+    repeats and the part nobody should be able to get subtly different from everybody else. A failure
+    on stdout is a failure a script reads as output.
 
-    The code it returns is what the command exits with, so a caller adds it to nothing
-    and simply returns it.
+    **`saying` is the whole first line, and the caller words it.** Not "the reason, and this adds the
+    prefix": `update` says `NOT APPLIED` where the others say `FAILED`, and that is deliberate — an
+    update that correctly declined to move is not a command that broke, and flattening the two into
+    one word would be this function changing what commands mean rather than how they print.
+
+    `and_so` is what the failure leaves behind, which is the half a person actually needs: knowing a
+    restore failed is worth much less than knowing whether anything was replaced. Every caller here
+    passes it, and a failure that says only what went wrong is one worth looking at twice.
     """
-    logs = whose.logs if whose else None
-    why = gateways.note(name, said, logs)
-    if why is None:
-        return 0
-    print(f"{name}: WARNING — change applied, but not logged: "
-          f"{gateways.log_path(name, logs)}: {why}", file=sys.stderr)
-    return 1
+    print(saying, file=sys.stderr)
+    for line in and_so:
+        print(f"        {line}", file=sys.stderr)
+    return FAILED
 
 
-def _answered_within(patience: float, work, called: str) -> tuple:
-    """Do something that may block inside the operating system, and give up on it.
+def the_reason(said: str) -> str:
+    """One sentence out of whatever a subprocess wrote to its error stream.
 
-    Returns `(True, what it gave back)`, or `(False, None)` when it did not answer in
-    time or failed. **The bound belongs to every command that touches the directory, not
-    only to health (R-BKP-29).** `status` grew this guard first, for a backup directory
-    symlinked into cloud storage that blocks in `opendir` forever; `backups` then sat on
-    the identical call with no bound at all, which is the one command that cannot answer
-    without it.
+    Two things run in an interpreter of their own here — the release settling the install it has
+    just landed in, and the placed command being asked to prove it answers — and whatever they
+    write is the only account of what went wrong. Forwarded whole it reads badly in both
+    directions: a settle that failed already says `update: NOT APPLIED — …`, so wrapping that in
+    `install: FAILED — …` says the same thing twice under two names, and a genuine crash arrives
+    as a stack trace with internal paths in it, printed verbatim to whoever ran the installer.
 
-    A Python thread cannot interrupt an operating-system `opendir`, but a daemon does not
-    keep this one-shot CLI process alive: the blocked call is abandoned with the process
-    rather than turning one unreachable filesystem into a command that never returns.
+    So: the last thing said, with any `verb: STATUS — ` prefix taken off. On a traceback the last
+    line is the exception's own message, which is the one line of it worth reading; on an ordinary
+    worded failure it is the sentence that was already written for a person.
     """
-    answered: queue.Queue = queue.Queue(maxsize=1)
-
-    def carry() -> None:
-        try:
-            answered.put((True, work()))
-        except BaseException:                           # pragma: no cover - defensive boundary
-            answered.put((False, None))
-
-    threading.Thread(target=carry, name=called, daemon=True).start()
-    try:
-        return answered.get(timeout=patience)
-    except queue.Empty:
-        return (False, None)
+    lines = [one.rstrip() for one in said.splitlines() if one.strip()]
+    if not lines:
+        return ""
+    last = lines[-1].strip()
+    return last.split(" — ", 1)[1] if " — " in last else last
 
 
-def cmd_not_available(name: str, act: str | None = None) -> int:
-    """Say that this rundesk does not have that yet, and name what it does have.
+def as_written(value: Any) -> str:
+    """One configured value as a person reads it, and as they would type it back.
 
-    The action is said back when one was given (R-CMD-10): `agents` and `agents show` are
-    different things to want, and being told only that "agents" is planned reads as though
-    the whole noun is missing rather than that one thing about it is.
+    The one place that decision is made, so `status` and `configure` cannot come to disagree about
+    how the same install reads — which is the kind of difference nobody notices and everybody
+    distrusts once they do. A value nothing has set yet says so rather than printing `None`, which
+    is Python's word for it and not anybody else's.
 
-    Ends on `NOT_AVAILABLE` rather than argparse's usage code (R-CMD-8), and names a
-    command that does work (R-CMD-9), because being told what is missing and nothing else
-    leaves a reader exactly where they started.
+    **Here rather than in `utils`, though it looks like a formatter.** Choosing "not yet" over
+    "unset" over "—" is choosing the words this product speaks, and a program's voice is not common
+    functionality another project could pick up unchanged. `utils.terminal` lays the columns out; this
+    decides what is in them.
     """
-    asked = f"{name} {act}" if act else name
-    print(f"{asked}: NOT AVAILABLE — planned, not built yet", file=sys.stderr)
-    print("        what this rundesk can do:  rundesk --help", file=sys.stderr)
-    return NOT_AVAILABLE
-
-
-def _out_loud(said: str) -> None:
-    """Each agent as it is reached, so a long update is not a silent one."""
-    print(f"        {said}")
+    if value is None:
+        return "not yet"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return str(value)

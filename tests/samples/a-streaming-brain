@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Stand in for a brain that streams a turn, saying exactly what a real one said once.
+
+**No account, no token, no network.** The capture named in `CAPTURED` is what a real `claude -p`
+said during one real turn, kept whole and scrubbed of anything naming a machine or an owner. So
+every reading the claude adapter makes is checked against the vendor rather than against a stand-in
+written to agree with it — which is the one thing a hand-written fake cannot do — and the suite still
+never reaches a vendor, which is both this repository's rule and a terms one.
+
+## Why this is neither of the other two
+
+The other two stand in for servers that answer requests, so what they replay is keyed to a request
+id. This brain has no ids. It is a **conversation**: it is told something, it works, it says a
+`result`, and then it waits to be told something else. Its whole turn structure is *how many things
+it has been told*, which is also the only thing that makes steering observable.
+
+So the capture is cut into turns at its `result` lines, and one turn is released each time this side
+is told something. That is exactly what the real program does, and it is what makes the difference
+between a prompt and a steer visible: a steered exchange replays as two turns because it really was
+two, the first ending `error_during_execution` because it was interrupted.
+
+**Control requests are answered, not counted.** The adapter sends `initialize` before it says
+anything and `interrupt` before every later word, and each one blocks it until this side
+acknowledges — so a fixture that ignored them would hang the adapter rather than test it. They are
+answered with the same `request_id` and never consume a turn.
+
+It never exits on its own while it has turns left. The adapter under test closes this side's input
+when the turn is over, which is what a real one has to do too — a brain whose input is held open for
+steering does not end by itself, and an adapter that forgot would hang against a real brain exactly
+as it would here.
+"""
+
+import json
+import os
+import sys
+import threading
+
+#: What ends a turn in this brain's stream. Everything up to and including one is what it said in
+#: answer to one thing it was told.
+ENDS_A_TURN = "result"
+
+
+def turns_in(captured):
+    """The capture, cut into what this brain said for each thing it was told."""
+    said, one = [], []
+    for line in open(captured, "rb"):
+        if not line.strip():
+            continue
+        one.append(line)
+        try:
+            if json.loads(line).get("type") == ENDS_A_TURN:
+                said.append(one)
+                one = []
+        except ValueError:
+            continue
+    if one:
+        said.append(one)
+    return said
+
+
+def write(line):
+    # **Bytes, not text.** A capture may hold a byte that is not valid UTF-8 — a real brain relays
+    # whatever a tool printed — and a replay that decoded it here would fail on this side instead of
+    # handing the adapter under test the thing it has to survive.
+    sys.stdout.buffer.write(line)
+    sys.stdout.buffer.flush()
+
+
+def main() -> int:
+    if "--capabilities" in sys.argv[1:]:
+        print('{"tools": true}')
+        return 0
+    if "--version" in sys.argv[1:]:
+        print(os.environ.get("SAY_VERSION", "0.0.0 (a stand-in)"))
+        return 0
+    if os.environ.get("HEARD"):
+        with open(os.environ["HEARD"], "a", encoding="utf-8") as writing:
+            writing.write(json.dumps({"argv": sys.argv[1:]}) + "\n")
+
+    left = turns_in(os.environ["CAPTURED"])
+    ended = threading.Event()
+
+    for line in sys.stdin:
+        if os.environ.get("HEARD"):
+            with open(os.environ["HEARD"], "a", encoding="utf-8") as writing:
+                writing.write(line)
+        try:
+            said = json.loads(line)
+        except ValueError:
+            continue
+        if said.get("type") == "control_request":
+            # Answered rather than counted. The adapter blocks on each of these, so a fixture that
+            # let one go unanswered would be testing a hang.
+            write((json.dumps({"type": "control_response", "response": {
+                "subtype": "success", "request_id": said.get("request_id")}}) + "\n").encode())
+            continue
+        if said.get("type") != "user":
+            continue
+        if not left:
+            # Told more than the capture has answers for. Saying nothing is what a real brain does
+            # with a turn it has no more to say about, and the adapter's own bounds are what answer
+            # it — inventing an extra turn here would prove a reading against words no brain said.
+            continue
+        for one in left.pop(0):
+            write(one)
+        if os.environ.get("THEN_DIE"):
+            # A brain that fell over: it stops mid-record and its pipe closes, which is what the
+            # reader on the other side actually sees. Staying alive instead would test a *wedged*
+            # brain, which is rundesk's silence window to answer and not the adapter's.
+            return 1
+    ended.set()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

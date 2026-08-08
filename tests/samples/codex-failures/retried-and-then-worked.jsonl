@@ -1,0 +1,6 @@
+{"id": 1, "result": {}}
+{"id": 2, "result": {"thread": {"id": "t-1"}}}
+{"id": 3, "result": {}}
+{"method": "error", "params": {"threadId": "t-1", "turnId": "u-1", "willRetry": true, "error": {"message": "a blip", "codexErrorInfo": "serverOverloaded"}}}
+{"method": "item/completed", "params": {"threadId": "t-1", "turnId": "u-1", "item": {"type": "agentMessage", "id": "m", "text": "done anyway"}}}
+{"method": "turn/completed", "params": {"threadId": "t-1", "turn": {"id": "u-1", "status": "completed", "error": null}}}

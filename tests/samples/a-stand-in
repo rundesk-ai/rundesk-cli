@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""A provider adapter that answers without a brain, for proving the seam.
+
+It is not a mock: it is a whole adapter, written to the same contract a vendor's is, and every case
+that drives it is driving the real path. What it does not have is a vendor — so it never needs an
+account, a network or a token, and the suite it serves can run anywhere.
+
+Its behaviour is set by `RUNDESK_SETTINGS`, so one program covers every shape a turn has to survive:
+a brain that answers, one that says nothing, one that fails, one that never finishes, one that says
+things this release has never heard of, and one that can be steered.
+"""
+
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+
+def say(**it):
+    sys.stdout.write(json.dumps(it) + "\n")
+    sys.stdout.flush()
+
+
+def settings():
+    try:
+        return json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
+    except ValueError:
+        return {}
+
+
+def capabilities(how):
+    said = {"tools": True, "resume": True, "usage": True, "model": True,
+            "steer": bool(how.get("steer")), "version": "a-stand-in/1"}
+    said.update(how.get("capabilities") or {})
+    return said
+
+
+def main():
+    how = settings()
+    if "--capabilities" in sys.argv[1:]:
+        print(json.dumps(capabilities(how)))
+        return 0
+
+    if how.get("refuse_to_start"):
+        print("this adapter will not start", file=sys.stderr)
+        return 3
+
+    # Everything the brain says goes to RUNDESK_RAW too, when rundesk offered somewhere to put it.
+    raw = os.environ.get("RUNDESK_RAW")
+
+    asked = ""
+    if capabilities(how)["steer"]:
+        first = sys.stdin.readline()
+        asked = (json.loads(first).get("text") or "") if first.strip() else ""
+    else:
+        asked = sys.stdin.read()
+    if raw:
+        with open(raw, "a", encoding="utf-8") as writing:
+            writing.write(json.dumps({"asked": asked}) + "\n")
+
+    if how.get("silent"):
+        time.sleep(float(how.get("silent")))
+        return 0
+    if how.get("say_nothing_and_finish"):
+        say(type="usage", input_tokens=0, output_tokens=0)
+        say(type="done", ok=True, session_id="thread-quiet")
+        return 0
+    if how.get("fail_with"):
+        say(type="done", ok=False, failure_code=how["fail_with"],
+            failure_message="the stand-in was told to fail")
+        return 0
+    if how.get("crash_without_finishing"):
+        say(type="text", text="half a th")
+        print("the stand-in fell over", file=sys.stderr)
+        return 1
+    if how.get("say_something_unknown"):
+        sys.stdout.write('{"type": "telepathy", "text": "not a record"}\n')
+        sys.stdout.write("this is not json at all\n")
+        sys.stdout.flush()
+
+    if how.get("linked_a_file_it_made"):
+        # **How a brain actually says *send this*.** No shipped adapter emits a `file` record, so the
+        # convention is a link in the answer — which is the only place the intent exists.
+        made = Path(os.environ.get("RUNDESK_CWD") or ".") / "a-chart.png"
+        made.write_bytes(b"not really a chart")
+        say(type="text", text=f"Here is what you asked for: [the chart]({made})", whole=True)
+        say(type="done", ok=True, session_id="thread-9")
+        return 0
+
+    if how.get("made_a_file_and_said_nothing"):
+        # Something delivered *is* an answer even when nothing was typed about it — which is the
+        # one shape of successful turn that has no reply text to fall back on.
+        made = Path(os.environ.get("RUNDESK_CWD") or ".") / "a-chart.png"
+        made.write_bytes(b"not really a chart")
+        say(type="file", at=str(made), name=made.name)
+        say(type="done", ok=True, session_id="thread-9")
+        return 0
+
+    say(type="think", text="reading what was asked", whole=True)
+    say(type="tool", id="1", name="Read", did="read")
+    say(type="result", id="1", ok=True, summary="one file")
+    # A brain that says several *finished* things as it works, rather than one at the end. Each is
+    # whole, so a surface may show it the moment the next one proves it was not the last.
+    for nth, remark in enumerate(how.get("remarks") or []):
+        say(type="text", text=remark, whole=True)
+        if how.get("also_did"):
+            say(type="tool", id=f"r{nth}", name="Bash", did=how["also_did"])
+    if not how.get("omit_final_response"):
+        say(type="text", text="You asked: " + asked.strip(), whole=True)
+
+    if capabilities(how)["steer"]:
+        # Anything said after the prompt reaches a running turn, and is answered as it arrives.
+        heard = 0
+        finish_after = int(how.get("finish_after_steers") or 0)
+        for line in sys.stdin:
+            if not line.strip():
+                continue
+            word = json.loads(line)
+            say(type="text", text="heard " + (word.get("text") or "").strip(), whole=True)
+            heard += 1
+            if finish_after and heard >= finish_after:
+                break
+
+    # Account state, which is news about the account and never about the work — a turn carrying one
+    # may have succeeded, so it is said on the way to a `done` that says `ok`.
+    say(type="limit", percent_left=73, resets_at="2026-08-08T03:33:24Z")
+
+    say(type="usage", input_tokens=20, output_tokens=1510, cache_read_tokens=302567,
+        cache_write_tokens=17453, context_tokens=9200,
+        model_name=how.get("model") or "a-stand-in-1")
+    say(type="done", ok=True, session_id=how.get("session") or "thread-9")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

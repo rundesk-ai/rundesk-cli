@@ -1,76 +1,142 @@
 #!/usr/bin/env python3
-"""Grok, as a brain behind rundesk's provider seam.
+"""Grok, as an agent thinks with it.
 
-A program, never a module. Rundesk runs this, hands it a turn through the environment and
-stdin, reads whole records off stdout and ends it — nothing here is imported by anything,
-and nothing here imports rundesk. Every fact about this vendor lives in this file.
+Everything about this brain is in this file and nowhere else. A JSON-RPC method name, a session id,
+the spelling of a permission mode, the fact that its input token count already has the cached reads
+inside it — none of it appears anywhere under `src/rundesk/`, nothing there imports this, and
+nothing here imports rundesk. The seam is a pipe carrying newline-delimited records, and it is what
+lets a product that names no vendor reach one.
 
-The contract is `.knowledge/guides/write-a-provider-adapter.md`. What is measured about
-this CLI is `.knowledge/research/2026-07-26-grok-cli-as-a-brain.md`.
+**rundesk runs the vendor's own published CLI, as the owner, through the interface the vendor
+documents.** `grok agent stdio` is that interface — the Agent Client Protocol, JSON-RPC 2.0 over a
+pipe. No credential is read, copied or moved; the owner signs in with `grok login` and this never
+learns how that worked.
 
-Grok's one-shot `streaming-json` is deliberately not used. Measured at 0.2.112: a turn
-that ran `list_dir` emitted only `thought`, `text` and `end`, while the same session's ACP
-updates carried `tool_call` and `tool_call_update` records with a stable id, input, status
-and output. `grok agent stdio` is the vendor's documented integration surface and preserves
-those records while keeping the prompt off the process list.
+Two invocations, sharing almost nothing:
 
-Four flags decide whether this adapter is honest, and three of them are traps:
+    --capabilities   what this can do — offline, no account, the same answer every time
+    (no argument)    one turn: the prompt arrives as records on stdin, records come back on stdout
 
-**`--permission-mode dontAsk` is accepted and silently ignored.** It shipped once in the
-build this replaces: an agent given every write tool was then denied all of them, wrote
-nothing, explained itself in prose, and the turn reported success. Nothing in a test suite
-could see it. `session/new._meta.agentProfile` scopes what the CLI may do;
-`bypassPermissions` lets those tools run headlessly instead of cancelling when nobody is
-there to approve them.
+## Why not the one-shot stream
 
-**`--tools` is accepted by this process and reaches no ACP turn.** The vendor documents it
-as headless-only; `grok agent stdio` prints no warning and hands the turn every built-in.
-It shipped that way, so a read-posture turn ran `run_terminal_command` and returned the
-working directory while the argv looked deliberate (#250) — the `dontAsk` failure exactly,
-on the flag that had been the fix for it. The same is true of the `--allow` / `--deny`
-permission rules, measured in the same run. What holds is an agent profile handed over
-where the conversation is created, which is `scoped` below.
+`--output-format streaming-json` exists and is not used. Measured: a turn that read a file emitted
+`thought`, `text` and `end` and **not one tool event**, while the same work over ACP carried
+`tool_call` and `tool_call_update` with a stable id, its input, its status and its output. An
+adapter on that transport would have to answer `tools: false`, and an agent whose work nobody can
+see is an agent nobody can supervise.
 
-**`--sandbox` is a no-op headless.** Under `read-only` it created a file through its own
-tool and through a shell redirect; under `strict` it read a planted marker well outside the
-working directory. It is never passed, because a flag that reads like a guarantee and
-enforces nothing is worse than no flag.
+## What was measured rather than assumed
 
-**`--no-memory` is not optional.** Measured while probing the resume round trip: a turn in
-a *fresh* session answered a question only the previous conversation could have set up,
-saying so as it went — "checking recent sessions for what 'the second one' refers to". One
-conversation reading another's contents is what a per-conversation handle exists to
-prevent, and a private home does not stop it because both conversations live in the same
-home.
+Probed against `grok 0.2.118` on 2026-08-06, because the notes this was written from describe
+0.2.111 and every one of these is a thing a release moves:
+
+- **`--permission-mode bypassPermissions` is the one that applies.** `dontAsk` is accepted and
+  silently ignored — it shipped once, and an agent holding every write tool was then denied all of
+  them, wrote nothing, explained itself in prose, and *the turn reported success*. Without a mode
+  that applies, a headless turn reaching any tool ends as `cancelled` with exit 0, because there is
+  nobody at a terminal to approve it.
+
+- **`--tools`, `--allow`, `--deny` and `--sandbox` do nothing here.** All four are headless-only or
+  inert: `agent stdio` takes them in silence and hands the turn every built-in anyway, and
+  `--sandbox read-only` was measured creating files. None is passed, because a flag that reads like
+  a guarantee and enforces nothing is worse than no flag at all. The only thing that ever scoped a
+  turn on this brain was `session/new._meta.agentProfile`, and this adapter deliberately sends none
+  — see `opening` on why every turn gets the whole tool set.
+
+- **`inputTokens` already contains `cachedReadTokens`.** One turn made two model requests of 6,156
+  and 172 fresh input against 6,144 cache reads, and reported `inputTokens: 12472` — which is
+  6,328 + 6,144 and not 6,328. Reporting it as sent would bill the cache twice at the standard rate.
+
+- **`cacheCreationTokens` exists**, which the notes this was written from say it does not. It is
+  reported when the brain reports it and left out when it does not.
+
+- **A resumed turn's usage is its own**, not the conversation's running total: turn two of the same
+  session reported 6,502 where turn one had reported 12,472. So nothing is subtracted here, unlike
+  the shipped codex adapter, whose brain reports the other way round.
+
+- **`session/load` replays the previous turn.** Loading a conversation re-sends its updates,
+  `turn_completed` and all — so a turn that reported them would repeat the last reply and mark
+  itself finished before its prompt had been sent. They go to the raw stream and to nobody else.
+
+- **`--no-memory` is not optional.** Without it this brain answers out of *other* conversations in
+  the same home, which makes a resume handle meaningless and lets one agent's turn read another's.
+
+## What this deliberately does not report
+
+**No `file` records.** This brain reports where a tool worked (`locations[].path`), never a thing it
+made for a person. A `file` record is what gets attached to a message on a channel, so guessing here
+would mail somebody their own repository.
+
+**No `limit` records.** Nothing in this stream says how much of an allowance is left or when it
+comes back. Saying nothing is the honest answer; inventing a percentage would be a number somebody
+plans around.
 """
 
-from __future__ import annotations
-
+import contextlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import threading
+import time
 
-GROK = os.environ.get("RUNDESK_GROK_BIN", "grok")
+#: The program, and the surface. `agent … stdio` is the vendor's documented integration point;
+#: `--always-approve` belongs after `agent` and before its transport.
+GROK = "grok"
+AGENT = ("agent", "--always-approve", "stdio")
 
-#: What this brain can do, and only what was measured of it.
+#: How long `grok --version` may take when `--capabilities` is asked. A local exec with no network
+#: in it; a machine where that takes longer has something else wrong.
+VERSION_WITHIN = 10.0
+
+#: How long to wait for the brain to answer `initialize`, `authenticate` and the call that opens a
+#: conversation. **Not a turn timeout** — rundesk owns the silence window and the ceiling, and
+#: duplicating them here would mean two policies disagreeing. This covers only the handshake, where
+#: a hang has no records to explain it.
+HANDSHAKE_WITHIN = 120.0
+
+#: How much of one line is read at once. Not a limit on what the brain may say — only on what is
+#: held while it is being read, which is what makes the bound true rather than aspirational.
+A_LINE_AT_MOST = 1024 * 1024
+
+#: How much of what a tool reported goes in its `result` summary. The whole of it is in the raw
+#: stream; this is what belongs on a line somebody is watching go past. A tool's raw output carries
+#: absolute paths and file contents, so this is a privacy bound as much as a readability one.
+A_SUMMARY_AT_MOST = 400
+
+#: How long to wait for the brain to end after its input is closed, at each of two steps.
+GOING_WITHIN = 5.0
+
+#: How long a cancel may take to settle the ask it stopped. Not a turn timeout — rundesk owns the
+#: silence window and the ceiling. This bounds only the gap between asking the brain to stop and it
+#: having stopped, where a replacement sent too early queues behind the thing it was replacing.
+CANCEL_WITHIN = 120.0
+
+#: How long to wait for rundesk to say the first thing. Its prompt is written as soon as the adapter
+#: starts, so this only ever expires when nothing is coming.
+THE_PROMPT_WITHIN = 60.0
+
+#: How often anything here looks again at something another thread will set. Small enough that a
+#: turn does not sit finished for a noticeable moment, large enough that waiting costs nothing.
+WATCHING_EVERY = 0.01
+
+#: What this brain calls a turn that finished the way it was asked to. Anything else is a turn that
+#: did not, and is reported as one.
+FINISHED = "end_turn"
+
+#: The notification methods this release reads. Everything else the brain says is written to the raw
+#: stream and reported to nobody, which is what keeps a vendor adding one from breaking a turn.
+#: Three spellings because all three were observed carrying updates this turn depends on.
+LISTENED = ("session/update", "_x.ai/session/update", "_x.ai/session_notification")
+
+#: What one of this brain's tools did, in rundesk's words rather than its own. Deliberately not the
+#: whole tool list: an unknown tool still gets a `tool` record with **no** `did`, so a built-in
+#: added next release is never handed a meaning somebody guessed.
 #:
-#: `tools` is true because the ACP stream reports each call and its terminal update with
-#: the same `toolCallId`. The one-shot streaming format still reports none; using it would
-#: make this claim false.
-#:
-#: `resume` is true because the round trip was run and controlled, not because a flag
-#: exists: turn two, told only "the second one", named a codeword from turn one that a
-#: control session could not. Claiming it on a flag would cost the next turn its context
-#: silently.
-CAN = {"tools": True, "resume": True, "usage": True, "model": True, "steer": False}
-
-#: What a Grok tool did, in Rundesk's words rather than the vendor's. This is deliberately
-#: not the whole tool list: an unknown tool still gets a `tool` record, with no `did`, so a
-#: new built-in never gets assigned a meaning somebody guessed.
-DID = {
+#: Keyed on the machine name and never on the title. The two are the same word when a call starts
+#: (`read_file`) and are not when it is updated (``Read `note.txt` ``), so a table keyed on what a
+#: person reads would stop matching the moment the vendor made it friendlier.
+DID_FOR = {
     "read_file": "read",
     "list_dir": "list",
     "grep": "search",
@@ -79,379 +145,1006 @@ DID = {
     "run_terminal_command": "run",
     "edit_file": "edit",
     "search_replace": "edit",
-    # Measured creating a new file; existing-file changes used `search_replace`.
     "write": "make",
     "create_file": "make",
+    "image_gen": "make",
 }
 
-#: Which tools a turn may reach for, per posture (R-PRV-18).
-#:
-#: `run_terminal_command` is deliberately absent from `read`: it is the only shell this CLI
-#: offers and it cannot be scoped to a command prefix the way another brain scopes its
-#: shell, so there is no partial version of it to grant — and the sandbox that would have
-#: contained it does not hold.
-#:
-#: **Delivered through ACP, never through the root command line.** Root `--tools` is this
-#: CLI's own documented headless-only flag: `grok agent stdio` accepts it, says nothing,
-#: and hands the turn every built-in anyway. Measured 2026-08-02 against 0.2.112 — a read
-#: turn opened with `--tools read_file,list_dir,grep` listed all 31 built-ins, called
-#: `run_terminal_command` and returned the working directory (#250). What holds is
-#: `session/new._meta.agentProfile`, below.
-ALLOWED = {
-    "read": ("read_file", "list_dir", "grep"),
+#: What this brain says when the home it was handed has no login in it.
+LOGGED_OUT = ("not signed in", "authenticate", "no credentials")
+
+#: Which of the closed words each way of stopping means. **Nothing is inferred from the prose beside
+#: it** — a word guessed from a message is a word that is wrong on the first vendor that rewords
+#: one. A reason absent from here is reported with no word at all rather than a wrong one.
+FAILURE_FOR_STOP = {
+    "cancelled": "cancelled",
+    "refusal": "refused",
 }
 
-#: The two an allowlist alone leaves standing. Documented as the always-on MCP meta-tools
-#: and measured to survive `tools`: a scoped turn came back naming `read_file, list_dir,
-#: grep, search_tool, use_tool`. They are the route an owner's globally configured MCP
-#: server would still be reachable through, so they are named to `disallowedTools` — which
-#: this vendor documents as winning over the allowlist — and the same turn then named
-#: exactly the three. They are asked for by their built-in ids: `MCPTool` is a
-#: permission-rule class, and permission rules do not reach this transport either.
-BESIDES = ("search_tool", "use_tool")
 
-#: The posture that is not a list. `work` opens its conversation as no agent of ours at
-#: all, which is this CLI's way of saying "every built-in". A list of names cannot stay
-#: complete, and a tool this CLI gains next release would be one a working turn was
-#: silently refused.
-FULLY = "work"
-
-#: What this CLI says when the home it was given has no login in it. Measured against a
-#: fresh `GROK_HOME`: it exits 1 and names the command to run, which is what an owner needs
-#: to hear rather than a credential quietly copied in on their behalf.
-LOGGED_OUT = "not signed in"
-
-#: How a turn ends when nothing went wrong. Anything else — a limit, an interruption, an
-#: error — is a turn that did not finish, and is reported as one.
-FINISHED = "end_turn"
-
-#: How much of anything this brain hands back is passed on, and how many of its last
-#: complaints are kept to explain a turn that stopped without saying it had.
-SUMMARY_CHARS = 200
-TROUBLE_KEPT = 20
-
-#: How long to wait for the last of what the brain said went wrong, once its records have
-#: run out. Short: the program has already finished, and this is a pipe emptying.
-GOING_SECONDS = 5.0
+def main() -> int:
+    if "--capabilities" in sys.argv[1:]:
+        say(what_this_can_do())
+        return 0
+    return one_turn()
 
 
-def say(**it) -> None:
-    """One record, one line, flushed — because a turn is watched while it happens."""
-    sys.stdout.write(json.dumps(it) + "\n")
-    sys.stdout.flush()
+# ── What this can do ──────────────────────────────────────────────────────────────────────────
+
+def what_this_can_do() -> dict:
+    """Asked offline, with no account and no network, and the same answer every time.
+
+    `steer` is stated as a **no** rather than left out, because the two are the same answer to
+    rundesk and not the same answer to a person reading `rundesk providers check`. It is no because
+    nothing in this brain's protocol was measured to take more words into a turn already running,
+    and holding input open for a brain that will never read again is a turn that never ends.
+
+    The version is volunteered beside the five: rundesk keeps whatever an adapter says here against
+    every turn, so a vendor upgrade that changes behaviour is visible in the record afterwards
+    rather than being a thing somebody has to remember.
+    """
+    can = {"tools": True, "resume": True, "model": True, "usage": True, "steer": True}
+    version = the_version()
+    if version:
+        can["grok_cli"] = version
+    return can
 
 
-def went_wrong(said: str) -> None:
-    """Something to tell whoever is reading the run, on the stream that is ours."""
-    sys.stderr.write(said.rstrip() + "\n")
-    sys.stderr.flush()
-
-
-def _settings() -> dict:
-    """Whatever the owner set, as they set it."""
+def the_version() -> str:
+    """What `grok --version` says, or nothing. **Never a reason to fail** — a version this could not
+    read does not change what the adapter can do."""
     try:
-        given = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
-    except ValueError:
-        went_wrong("what was set for this brain is not readable JSON, so none of it was used")
-        return {}
-    if not isinstance(given, dict):
-        went_wrong("what was set for this brain is not a JSON object, so none of it was used")
-        return {}
-    return given
+        got = subprocess.run([GROK, "--version"], capture_output=True, text=True,
+                             timeout=VERSION_WITHIN, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return got.stdout.strip().splitlines()[0] if got.stdout.strip() else ""
 
 
-def _flags(extra: dict) -> list:
-    """The owner's own flags, passed through as they gave them."""
-    given = extra.get("flags")
-    if given is None:
-        return []
-    if not isinstance(given, list) or not all(isinstance(one, str) for one in given):
-        went_wrong("`flags` is passed to this brain as a list of strings; it was not, "
-                   "so it was ignored")
-        return []
-    return list(given)
+# ── What a turn is asked for ──────────────────────────────────────────────────────────────────
 
-
-def opening(model, extra: dict) -> list:
+def opening(model) -> list:
     """Everything after the program's name, and why each part of it is there.
 
-    Kept in one function with no side effects so a test can read the whole command line
-    without starting anything — which is what holds the two silent traps above to what was
-    measured rather than to what somebody remembered.
-
-    **The posture is deliberately not an argument.** Nothing this command line can carry
-    scopes an ACP turn, so a parameter here would read like a boundary and be none.
+    **`RUNDESK_ACCESS_MODE` is read by nothing here, and that is the owner's decision.** Every turn
+    runs with this brain's whole tool set. The seam still carries the word — `docs/providers.md`
+    says plainly that it is a request rather than containment and that an adapter may ignore it —
+    so what is written down and what happens agree, which is the part that matters. Nothing here
+    implies a boundary it does not keep.
     """
-    argv = ["--no-auto-update"]
-
-    # Not optional, and not a preference. Without it this brain answers from conversations
-    # it was never handed, which makes a resume handle mean nothing and lets one agent's
-    # turn read another's.
-    argv += ["--no-memory"]
-
-    # Headless means there is nobody at a terminal to approve a tool. Without this, Grok
-    # emits `stopReason: Cancelled` with exit 0 as soon as a turn reaches one — a working
-    # posture that cannot inspect a file. This mode is measured to apply; `dontAsk` is not.
-    # What the turn may touch is decided where the conversation is created, by `scoped`
-    # below, because nothing on this command line reaches ACP to decide it.
-    argv += ["--permission-mode", "bypassPermissions"]
-
+    argv = [
+        "--no-auto-update",
+        # Not a preference. Without it this brain answers from conversations it was never handed.
+        "--no-memory",
+        # Headless means nobody is at a terminal to approve a tool. Without this, a turn that
+        # reaches one ends as `cancelled` with exit 0 — an agent that cannot even read a file.
+        "--permission-mode", "bypassPermissions",
+    ]
     if model:
         argv += ["-m", model]
-
-    argv += _flags(extra)
-    # ACP is the vendor's integration surface. `--always-approve` belongs after `agent`
-    # and before its transport; the root permission mode above is kept too because it is
-    # the exact headless policy measured to prevent a tool turn ending as Cancelled.
-    argv += ["agent", "--always-approve", "stdio"]
-    return argv
+    return argv + list(AGENT)
 
 
-def scoped(posture: str):
-    """The agent an ACP conversation is opened as, when its posture is narrower than
-    every built-in — or nothing at all, which is how `work` says "every built-in".
+# ── One turn ──────────────────────────────────────────────────────────────────────────────────
 
-    This is the whole of how a posture is honoured on this brain (R-PRV-18). ACP resolves
-    a session's agent definition when the conversation is made, and `_meta.agentProfile`
-    is where a client hands one over — the same seam standing rules already arrive by
-    (R-PRV-23), and for the same reason: the root command line does not reach this
-    transport. Measured 2026-08-02 against 0.2.112, on both `session/new` and
-    `session/load`.
+def one_turn() -> int:
+    """Start the brain, open or carry on a conversation, run the turn, and report what happened.
 
-    `injectDefaultTools` is what makes `tools` an allowlist rather than an addition: this
-    vendor documents a stock profile as injecting its optional tools *before* the
-    allowlist is applied, and only a curated one as staying strict.
-
-    Pure and side-effect free, so the exact object crossing the seam is readable offline.
-
-    **Its one drift signal is on stderr and nowhere else.** A profile this vendor cannot
-    parse is not refused — `session/new` succeeds and the conversation quietly gets the
-    default agent, which is every tool there is. The only thing said is
-    `Failed to parse _meta.agentProfile JSON object, falling back to default agent`, on
-    the stream `_drained` passes straight on. Re-probe with
-    `.knowledge/scripts/probe-grok --acp-tools` when this CLI's version moves.
+    **A turn always ends with a `done`**, whatever went wrong, because rundesk reading no `done` at
+    all is a turn nobody can explain. The one exception is a process killed outright, which is
+    rundesk's own to classify and the only case it can classify correctly.
     """
-    if posture not in ALLOWED:
+    where = os.environ.get("RUNDESK_CWD") or os.getcwd()
+    raw = os.environ.get("RUNDESK_RAW")
+    present_the_skills(where)
+    try:
+        brain = subprocess.Popen(
+            [GROK, *opening(os.environ.get("RUNDESK_MODEL"))],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1, cwd=where, env=os.environ.copy(),
+            # **`errors="replace"`, and it is not tidiness.** A coding agent reads binary files and
+            # what a tool printed comes back inside `rawOutput`, so one stray byte is a
+            # `UnicodeDecodeError` raised *inside* the read, past every guard a caller can put
+            # around a record. Strict decoding kills the reading thread, nothing ends the turn, and
+            # it sits in silence until rundesk's own window ends it half an hour later.
+            errors="replace")
+    except OSError as why:
+        finished(False, failure_code="crashed", failure_message=f"grok could not be started: {why}")
+        return 1
+    turn = Turn(brain, where, raw)
+    try:
+        return turn.run()
+    except Exception as why:                       # noqa: BLE001 — a turn that dies silently is a
+        # turn rundesk can only call `crashed` with nothing to read. Whatever this was, it is said —
+        # but **through the same claim every other ending goes through**, because the likeliest way
+        # to arrive here is a brain that died, and the thread reading it has already said so. Saying
+        # it again from this side reports one turn ending twice: measured, as a `done` for the brain
+        # ending and a second `done` for the broken pipe that writing to it then raised.
+        turn.could_not_read_it(f"the grok adapter went wrong: {type(why).__name__}: {why}")
+        return 1
+    finally:
+        turn.take_the_brain_away()
+
+
+class Turn:
+    """One turn on one conversation, from `initialize` to `done`."""
+
+    def __init__(self, brain, where: str, raw):
+        self.brain = brain
+        self.where = where
+        # Held open for the length of the turn and closed in `take_the_brain_away`: a file reopened
+        # per line is a turn that spends its time on `open` rather than on work.
+        self.raw = kept_at(raw)
+        self.asked = 0
+        self.answers = {}
+        self.saying = threading.Lock()
+
+        self.session_id = None
+        self.ended = threading.Event()
+
+        #: Whether what this brain is saying belongs to this turn at all. `session/load` replays the
+        #: previous turn's updates — its reply and its `turn_completed` — so reporting while that
+        #: is arriving would repeat the last answer and end this turn before its prompt was sent.
+        self.reporting = False
+
+        #: Whether the one record that ends a turn has been said, and the lock that makes asking and
+        #: answering that one thing. Rundesk reading none at all is a turn nobody can explain and
+        #: reading two is a turn it cannot reconcile — see `the_turn_ended`.
+        self.said_done = False
+        self.finishing = threading.Lock()
+
+        #: Everything rundesk says, and what a word arriving mid-turn leaves behind.
+        self.words = Words(sys.stdin)
+        self.steering = Steering()
+        self.asking = None
+
+        #: Whether *this side* is what went wrong, as against the brain reporting a failure it
+        #: handled correctly. The exit code says what became of the program and nothing else.
+        self.could_not_go_on = False
+
+        #: The run of reasoning the brain is in the middle of, gathered rather than reported as it
+        #: arrives. See `thought_so_far` for why this is held instead of streamed.
+        self.thinking = ""
+
+        self.context_tokens = None
+        self.tools = {}
+        self.results = set()
+        self.trouble = []
+
+    # ── the wire ──────────────────────────────────────────────────────────────────────────────
+
+    def send(self, method: str, params=None, wants_reply: bool = True):
+        """One request or notification to the brain. Returns the id, or `None` for a notification."""
+        said = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            said["params"] = params
+        if wants_reply:
+            self.asked += 1
+            said["id"] = self.asked
+        self.write(said)
+        return said.get("id")
+
+    def refuse(self, which) -> None:
+        """Say no to something the brain asked *us* to do.
+
+        Rundesk advertises no client capabilities at all — no filesystem, no terminal — because
+        advertising one makes this brain send work back and wait for it. A request that goes
+        unanswered is a brain waiting for ever, so every one gets an answer and the answer is no.
+        """
+        self.write({"jsonrpc": "2.0", "id": which,
+                    "error": {"code": -32601, "message": "rundesk offers no client services"}})
+
+    def write(self, one: dict) -> None:
+        """One line to the brain, under the lock.
+
+        Behind the lock because two threads write here — the one draining the brain and the one
+        answering a request it sent back — and two interleaved halves of two JSON objects is a
+        stream neither end can recover.
+        """
+        with self.saying:
+            self.brain.stdin.write(json.dumps(one) + "\n")
+            self.brain.stdin.flush()
+
+    def waited_for(self, asked: int, within: float):
+        """The reply to one request, or `None` if the brain never sent one."""
+        until = time.monotonic() + within
+        while time.monotonic() < until:
+            if asked in self.answers:
+                return self.answers.pop(asked)
+            if self.brain.poll() is not None:
+                return None
+            time.sleep(WATCHING_EVERY)
         return None
-    return {
-        "name": f"rundesk-{posture}",
-        "description": f"A Rundesk turn admitted to {posture} only.",
-        # Added to what this brain was built with, never in place of it. The neighbouring
-        # trap on Codex — an instruction field that silently replaced the vendor's own
-        # prompt and left the model looking broken — is the same shape.
-        "promptMode": "extend",
-        "injectDefaultTools": False,
-        "tools": list(ALLOWED[posture]),
-        "disallowedTools": list(BESIDES),
-    }
+
+    def waited_out_the_turn(self) -> None:
+        """Wait for the turn to end, however it ends. **Unbounded, and deliberately.**
+
+        A turn may legitimately run for hours; what bounds one is silence and a far-off ceiling, and
+        both of those are rundesk's. A second policy here would be a second policy to disagree with
+        the first.
+
+        Two things can end a turn and either may come first. The brain usually says
+        `turn_completed` as a notification, which ends it on the reading thread. It also answers the
+        request that started it, and a brain that answered without ever sending the notification
+        must still end honestly rather than have zeros invented for it — so both are watched, and
+        whichever arrives first is the one that counts.
+        """
+        while not self.ended.wait(WATCHING_EVERY):
+            # **The ask that is live now**, which a steer replaces. `None` while one is in flight:
+            # between cancelling and re-asking there is no ask whose ending would be this turn's.
+            asked = self.asking
+            if asked is not None and asked in self.answers:
+                self.that_is_the_turn(what_the_reply_said(self.answers.pop(asked)))
+                return
+            if self.brain.poll() is not None:
+                return
+
+    def heard(self):
+        """Every line the brain says, for as long as it says anything. **Never raises.**
+
+        **Written to the raw stream before it is read**, so a line this release cannot understand is
+        still on disk to compare against when somebody asks why records went missing.
+
+        **One guard, at the end, covering every way this can stop.** Reading can end because the
+        turn completed, because the brain closed its pipe, because it died mid-record, or because a
+        read failed outright — and only the first of those has said what became of the turn. So the
+        `finally` asks whether anything did, and says so if nothing has. Guarding only the
+        exceptions would leave the likeliest failure of all — the brain simply exiting before it
+        completed a turn — reaching rundesk as an adapter that exited cleanly having said nothing.
+        """
+        try:
+            for line in self.read_a_line():
+                line = line.rstrip("\n")
+                if self.raw is not None:
+                    with contextlib.suppress(OSError):
+                        self.raw.write(line + "\n")
+                        self.raw.flush()
+                try:
+                    said = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(said, dict):
+                    continue
+                if said.get("method") is None and "id" in said:
+                    self.answers[said["id"]] = said
+                elif said.get("method") is not None and said.get("id") is not None:
+                    self.refuse(said["id"])
+                elif said.get("method") in LISTENED:
+                    with contextlib.suppress(Exception):
+                        self.an_update(said.get("params") or {})
+        except Exception as why:                   # noqa: BLE001 — see the docstring
+            self.could_not_read_it(f"reading grok went wrong ({type(why).__name__}: {why})")
+        finally:
+            # Said unconditionally: `could_not_read_it` claims the ending itself and does nothing
+            # when the turn already has one, which is the only way two threads can both arrive here
+            # without one of them inventing a second ending.
+            self.could_not_read_it("grok ended without finishing the turn")
+            self.ended.set()
+
+    def read_a_line(self):
+        """Every line the brain sends, **bounded**, and never half of one.
+
+        `for line in stdout` is `readline()` with no size, which pulls until it meets a newline — so
+        a check on how long a line is happens only once the whole of it is held. A comparable
+        process went from 17 MB to 735 MB on a program that wrote without ever ending a line.
+
+        Two shapes are dropped rather than handed on, and for one reason: **half a record is not a
+        smaller record, it is a corrupt one**, and nothing downstream could tell that apart from the
+        brain talking nonsense. A line past the ceiling is read to its end and dropped whole; a
+        stream that stops mid-record ends the reading.
+        """
+        while True:
+            said = self.brain.stdout.readline(A_LINE_AT_MOST + 1)
+            if not said:
+                return
+            if not said.endswith("\n"):
+                if len(said) > A_LINE_AT_MOST:
+                    self.thrown_away()
+                    continue
+                return
+            yield said
+
+    def thrown_away(self) -> None:
+        """Read the rest of a line already too long, and keep none of it. Bounded on every call, for
+        the reason the caller is: what is being skipped past is by definition a stream writing
+        without ever ending a line."""
+        while True:
+            more = self.brain.stdout.readline(A_LINE_AT_MOST + 1)
+            if not more or more.endswith("\n"):
+                return
+
+    def noticed(self, stream) -> None:
+        """Everything the brain says went wrong, passed straight on and the tail of it kept.
+
+        Passed on as it arrives rather than at the end, because it is the only thing an owner has to
+        read while a turn is still running — and because anything written to either stream is what
+        tells rundesk this turn has not gone quiet.
+
+        **Drained for the brain's whole life, in its own thread.** A second pipe with nothing
+        reading it fills its buffer and stops the program dead, which presents half an hour later as
+        a brain that simply went silent and sends you looking anywhere but here.
+        """
+        with contextlib.suppress(Exception):
+            for line in stream:
+                sys.stderr.write(line)
+                sys.stderr.flush()
+                self.trouble.append(line.strip())
+                del self.trouble[:-20]
+
+    def could_not_read_it(self, said: str) -> None:
+        """End the turn because *this side* could not go on. Said as a `done`, because rundesk
+        reading none at all is a turn nobody can explain — and remembered, because the exit code
+        says what became of the **program** and this is the program going wrong.
+
+        **Nothing at all when the turn already ended**, including the exit code: a brain that
+        answered and was reported, and only then went wrong on the way out, is a turn that was
+        delivered. Saying so afterwards would report a failure nobody suffered.
+        """
+        if not self.the_turn_ended():
+            return
+        self.could_not_go_on = True
+        finished(False, session_id=self.session_id, failure_code=self.a_sign_in_word(),
+                 failure_message=said)
+
+    def a_sign_in_word(self):
+        """`signed_out` when the brain said so on its error stream, and no word otherwise.
+
+        Being unable to sign in arrives here rather than as an outcome: the handshake fails and the
+        conversation is never created, so there is no turn to carry a reason. The prose is the
+        brain's own and is matched against the little of it that was measured — never guessed at.
+        """
+        said = " ".join(self.trouble).lower()
+        if any(one in said for one in LOGGED_OUT):
+            went_wrong(f"this machine has no grok login — run:\n  {GROK} login --device-code")
+            return "signed_out"
+        return "crashed"
+
+    def the_turn_ended(self) -> bool:
+        """Claim the right to say the record that ends a turn. **True for the first caller only.**
+
+        Checked and set as one thing, under a lock, because two threads reach here and a brain that
+        dies mid-turn brings them both at once: the thread reading it sees its output close, and the
+        main thread sees the process go at the same instant. Asked as a plain `if not self.said_done`
+        in each of them, both pass before either sets it and rundesk is handed **two** endings for
+        one turn — which it cannot reconcile, and which would not reproduce often enough to be
+        found by running the suite again.
+        """
+        with self.finishing:
+            if self.said_done:
+                return False
+            self.said_done = True
+            return True
+
+    # ── the turn ──────────────────────────────────────────────────────────────────────────────
+
+    def run(self) -> int:
+        threading.Thread(target=self.heard, name="grok-out", daemon=True).start()
+        threading.Thread(target=self.noticed, args=(self.brain.stderr,),
+                         name="grok-err", daemon=True).start()
+
+        got = self.waited_for(self.send("initialize", {
+            # **Deliberately empty.** Advertising a filesystem or a terminal makes this brain send
+            # the work back and wait for us to do it. rundesk wants this brain's own scoped tools,
+            # which is what `scoped` decides.
+            "protocolVersion": 1, "clientCapabilities": {}}), HANDSHAKE_WITHIN)
+        if got is None or "error" in got:
+            return self.could_not_start("grok did not answer initialize", got)
+        self.sign_in(got.get("result") or {})
+
+        if not self.opening_the_conversation():
+            return 1
+
+        prompt = self.first_thing_rundesk_says()
+        if prompt is None:
+            finished(False, failure_code="crashed", failure_message="rundesk sent no prompt",
+                     session_id=self.session_id)
+            return 1
+
+        # **Nothing that arrived before this turn's own prompt belongs to this turn.** Carrying a
+        # conversation on replays every update the previous one made — its reply and its
+        # `turn_completed` — so a turn that reported them would say the last answer again and mark
+        # itself finished before it had asked anything.
+        #
+        # Set here, immediately before the asking, rather than when the conversation opened. The
+        # thread reading this brain runs the whole time, so a flag set after a reply is a flag the
+        # reader may already have run past; the moment the prompt goes out is the only boundary
+        # both threads agree on without one of them waiting for the other.
+        self.reporting = True
+        self.ask(prompt)
+        threading.Thread(target=self.what_rundesk_says_next, name="grok-in", daemon=True).start()
+        self.waited_out_the_turn()
+        self.could_not_read_it("grok stopped before the turn was finished")
+        # The exit code says what became of the **program**. A brain that reported a failure is an
+        # adapter that did its job; a stream this side could not go on reading is not.
+        return 1 if self.could_not_go_on else 0
+
+    def ask(self, prompt: str) -> int:
+        """Put one thing to the brain, and remember which asking is the live one."""
+        self.asking = self.send("session/prompt", {
+            "sessionId": self.session_id, "prompt": [{"type": "text", "text": prompt}]})
+        return self.asking
+
+    def what_rundesk_says_next(self) -> None:
+        """Everything rundesk says after the prompt, as this brain takes it.
+
+        **A second prompt does not steer this brain, it queues behind the first.** Measured: sending
+        one mid-turn left it in the queue with the first still running, and it ran afterwards as a
+        turn of its own — two `turn_completed`, two answers. That is the right behaviour for a
+        message nobody wanted to interrupt with and the wrong one for a steer, which is meant to
+        change what the brain is doing *now*.
+
+        So a later word cancels first. `session/cancel` was measured stopping the running ask, which
+        settles as `stop_reason: cancelled`; the replacement is sent once that has drained, exactly
+        as the sibling adapter does it. **Waiting for the drain is not optional** — sent before it,
+        the replacement lands in the queue behind the ask it was meant to replace, which is the same
+        failure as not cancelling at all.
+        """
+        with contextlib.suppress(Exception):
+            for at, word in enumerate(self.words.each(self.ended)):
+                if not at:
+                    continue                       # the prompt, already asked
+                if not self.steering.cancel(self):
+                    went_wrong("grok did not stop the turn, so this word was not sent")
+                    continue
+                self.ask(with_context(word))
+
+    def could_not_start(self, said: str, got) -> int:
+        """The handshake did not happen, so there is no conversation and no turn to explain."""
+        why = ""
+        if isinstance(got, dict):
+            why = str((got.get("error") or {}).get("message") or "")
+        if not self.the_turn_ended():
+            return 1
+        self.could_not_go_on = True
+        finished(False, failure_code=self.a_sign_in_word(),
+                 failure_message=one_line(f"{said}{': ' + why if why else ''}"))
+        return 1
+
+    def sign_in(self, initialized: dict) -> None:
+        """Use the login this brain itself advertises, without reading or copying a credential.
+
+        Nothing here learns how the owner signed in. The brain says which methods it accepts and
+        which it would use by default, and this takes that answer — falling back to the cached token
+        it keeps for itself, and to an API key only when the owner has plainly put one in the
+        environment for it.
+        """
+        methods = initialized.get("authMethods")
+        if not isinstance(methods, list) or not methods:
+            return
+        offered = {str(one.get("id")) for one in methods if isinstance(one, dict) and one.get("id")}
+        which = str((initialized.get("_meta") or {}).get("defaultAuthMethodId") or "")
+        if which not in offered:
+            which = "cached_token" if "cached_token" in offered else ""
+        if not which and os.environ.get("XAI_API_KEY") and "xai.api_key" in offered:
+            which = "xai.api_key"
+        if which:
+            self.waited_for(self.send("authenticate", {"methodId": which,
+                                                       "_meta": {"headless": True}}),
+                            HANDSHAKE_WITHIN)
+
+    def opening_the_conversation(self) -> bool:
+        """`session/load` when rundesk gave a handle, and `session/new` when it did not.
+
+        **The preface goes on the new one and never on the load.** Standing instructions bind when a
+        conversation is created, so a resumed one already has the ones it was opened with and
+        re-sending them would be words nobody reads. No agent profile is sent either way: a
+        conversation opened as no agent of ours gets this brain's whole tool set, which is what the
+        owner asked every turn to have.
+        """
+        params = {"cwd": self.where, "mcpServers": []}
+        resume = os.environ.get("RUNDESK_RESUME")
+        if resume:
+            params["sessionId"] = str(resume)
+            got = self.waited_for(self.send("session/load", params), HANDSHAKE_WITHIN)
+            if got is None or "error" in got:
+                self.could_not_start("grok would not carry the conversation on", got)
+                return False
+            self.session_id = str(resume)
+            return True
+
+        preface = (os.environ.get("RUNDESK_PREFACE") or "").strip()
+        if preface:
+            # Appends to what this brain was built with. The field that *replaces* its instructions
+            # is deliberately never used: an argument that deletes the brain and leaves a paragraph
+            # reports nothing and merely behaves oddly, which is what gets blamed on the model.
+            params["_meta"] = {"rules": preface}
+        got = self.waited_for(self.send("session/new", params), HANDSHAKE_WITHIN)
+        if got is None or "error" in got:
+            self.could_not_start("grok would not open a conversation", got)
+            return False
+        self.session_id = str((got.get("result") or {}).get("sessionId") or "")
+        if not self.session_id:
+            self.could_not_start("grok opened a conversation and did not name it", got)
+            return False
+        return True
+
+    def first_thing_rundesk_says(self):
+        """The prompt, off rundesk's own input. `None` when nothing was said at all.
+
+        Records rather than plain text, because this adapter declares `steer`: its input stays open
+        for the whole turn, so nothing means "the prompt ended" any more and a brain reading to the
+        end of its input would wait for an end that is not coming.
+        """
+        word = self.words.first(THE_PROMPT_WITHIN)
+        return with_context(word) if word else None
+
+    # ── what the brain said ───────────────────────────────────────────────────────────────────
+
+    def an_update(self, params: dict) -> None:
+        """One notification, as the records rundesk understands — or as nothing at all."""
+        if not self.reporting:
+            return
+        # Provider-local helpers are separate Grok sessions multiplexed onto the parent's stream.
+        # Their tools, answer, usage, and `turn_completed` belong to the helper. Accepting the last
+        # one settles the outward turn before the parent's wait receives the helper result. Spawn,
+        # progress, and result updates that the parent needs still arrive under the parent session.
+        # Keep an absent id compatible with older shapes rather than making silence out of one.
+        whose = str(params.get("sessionId") or "")
+        if whose and self.session_id and whose != str(self.session_id):
+            return
+        update = params.get("update")
+        if not isinstance(update, dict):
+            return
+        self.how_big_it_is_now(params)
+        kind = update.get("sessionUpdate")
+        if kind == "agent_message_chunk":
+            # A fragment, and never `whole`: this brain writes its reply a token at a time and
+            # nothing in the stream ever restates it, so nothing it says is finished until the turn
+            # is. Marking one `whole` would show a sentence that then changed under whoever read it.
+            self.the_thought_ended()
+            say({"type": "text", "text": text_of(update)})
+        elif kind == "agent_thought_chunk":
+            self.thinking += text_of(update)
+        elif kind == "tool_call":
+            self.the_thought_ended()
+            self.a_tool(update)
+        elif kind == "tool_call_update":
+            self.what_it_came_to(update)
+        elif kind == "turn_completed":
+            self.that_is_the_turn(update)
+
+    def the_thought_ended(self) -> None:
+        """Say the run of reasoning that has just finished, as **one** finished thought.
+
+        Reasoning arrives a token at a time and nothing in this stream ever restates it, so there
+        are only two ways to report it and one of them is wrong twice over. Saying each fragment as
+        it comes writes a row per token into the turn's records — `text` is the one kind gathered
+        into a message rather than kept as rows, and this is not it. Saying only the first fragment
+        keeps the row count down and reduces a paragraph of reasoning to the word `The`, which is
+        what the build this replaces did.
+
+        So the run is gathered and said once, when the brain stops reasoning and starts doing
+        something else. That is one row, carrying the whole thought, marked `whole` because by the
+        time it is said it genuinely is — which is what lets a surface show each one as it lands.
+        """
+        thought = self.thinking
+        self.thinking = ""
+        if thought.strip():
+            say({"type": "think", "text": thought, "whole": True})
+
+    def how_big_it_is_now(self, params: dict) -> None:
+        """How large the conversation is, as this brain gauges it on every update.
+
+        A **level and not a cost**: it goes down when a conversation is compacted, so the last one
+        is how big it ended and adding them would invent a number nothing measured. Taken only from
+        the conversation this process was asked to carry, because a delegated one reports its own.
+        """
+        meta = params.get("_meta")
+        value = meta.get("totalTokens") if isinstance(meta, dict) else None
+        whose = str(params.get("sessionId") or "")
+        if isinstance(value, int) and not isinstance(value, bool):
+            if not self.session_id or whose == str(self.session_id):
+                self.context_tokens = value
+
+    def a_tool(self, update: dict) -> None:
+        """A tool as it starts, once, named the way a person would look it up."""
+        which = str(update.get("toolCallId") or "")
+        if not which or which in self.tools:
+            return
+        name = named_in(update)
+        self.tools[which] = name
+        record = {"type": "tool", "id": which, "name": name}
+        did = DID_FOR.get(name)
+        if did:
+            record["did"] = did
+        say(record)
+
+    def what_it_came_to(self, update: dict) -> None:
+        """A tool's one terminal update, paired to its call by the brain's own id.
+
+        Only a terminal one is a result. This brain sends a second `tool_call_update` on the way —
+        the one that puts a readable title and the paths on the call — and reporting that as an
+        outcome would say a tool had finished while it was still running.
+        """
+        if update.get("status") not in ("completed", "failed", "cancelled"):
+            return
+        which = str(update.get("toolCallId") or "")
+        if not which or which in self.results:
+            return
+        self.results.add(which)
+        # A tool already over by the time this process heard of it arrives as an ending alone, and
+        # the seam still has to be found. **The terminal update carries no name**, so one
+        # synthesised here is nameless rather than mislabelled with the title of something else.
+        if which not in self.tools:
+            self.the_thought_ended()
+            self.a_tool(update)
+        say({"type": "result", "id": which, "ok": update.get("status") == "completed",
+             "summary": one_line(what_it_reported(update))})
+        self.anything_it_made(update)
+
+    def anything_it_made(self, update: dict) -> None:
+        """A file this brain made *for the person who asked*, said as a `file` record.
+
+        **The one tool where a path is the deliverable rather than a file that was touched.** Every
+        other tool here reports `locations` — what it read, what it edited — and none of those is
+        something to send anybody: that is why no adapter reports files in general, and the answer's
+        own links are what say *send this*. Generating an image is the exception and it is not a
+        close call. The tool makes exactly one file, it exists only because somebody asked for it,
+        and it is written somewhere nobody would ever look — under the brain's own session
+        directory, with the agent's home URL-encoded into a path element.
+
+        Measured on a live install: without this the image was made, saved, and never mentioned, and
+        a person who asked for a picture was handed a sentence saying they had been given one.
+        `locations` is empty on that same update, so this reads the brain's own output where the
+        path really is.
+        """
+        made = update.get("rawOutput")
+        if not isinstance(made, dict) or made.get("type") != "ImageGen":
+            return
+        at = str(made.get("path") or "")
+        # Absolute or nothing: `protocol.file_records` refuses a relative one downstream, and a
+        # record rundesk will drop is worth not making.
+        if not at or not os.path.isabs(at):
+            return
+        record = {"type": "file", "at": at}
+        name = str(made.get("filename") or "")
+        if name:
+            record["name"] = name
+        say(record)
+
+    def that_is_the_turn(self, ended: dict) -> None:
+        """The turn ended. Say what it cost, then say what became of it, then stop reading.
+
+        **Claimed before any of it happens**, because this is reached from the thread reading the
+        brain and from the one that asked, and whichever gets here second would otherwise say a
+        second cost and a second ending for the same turn.
+        """
+        counted = ended.get("usage")
+        counted = counted if isinstance(counted, dict) else {}
+        if self.steering.stopped_by_us():
+            # An ask rundesk cancelled to make room for a later word. It is not this turn's ending:
+            # it is the part of the work that was stopped, so its cost is carried onto the real
+            # ending and the ending itself is swallowed. Anything else would report a turn the owner
+            # steered as a turn that was cancelled.
+            self.steering.counted(counted)
+            return
+        if not self.the_turn_ended():
+            return
+        # A brain that reasoned right up to the end has a thought still being gathered, and a turn
+        # that ended is the last thing that can finish one.
+        self.the_thought_ended()
+        self.the_bill(self.steering.with_usage(counted))
+        # Both spellings are live: the notification says `stop_reason` and the reply to the request
+        # says `stopReason`, and this is reached from each.
+        stopped = ended.get("stop_reason") or ended.get("stopReason")
+        if stopped == FINISHED:
+            finished(True, session_id=self.session_id)
+        else:
+            finished(False, session_id=self.session_id,
+                     failure_code=FAILURE_FOR_STOP.get(stopped),
+                     failure_message=(f"grok ended the turn as {stopped}" if stopped
+                                      else "grok ended the turn without saying why"))
+        self.ended.set()
+        self.words.wake()
+
+    def the_bill(self, counted: dict) -> None:
+        """What this turn cost, and **only what was actually measured**.
+
+        Every quantity is left out when the brain did not report it, because a cost of nothing and a
+        cost nobody counted are different answers and only one of them is ever true here.
+
+        **The fresh input is a subtraction, and that is the measured part.** This brain's
+        `inputTokens` already contains its cached reads — one turn reported 12,472 for 6,328 fresh
+        against 6,144 cached — so passing it through as sent would bill the cache twice at the
+        standard rate.
+        """
+        record = {"type": "usage"}
+        cached = counted.get("cachedReadTokens")
+        if a_count(cached):
+            record["cache_read_tokens"] = cached
+        if a_count(counted.get("inputTokens")):
+            record["input_tokens"] = max(0, counted["inputTokens"] - whole(cached))
+        if a_count(counted.get("outputTokens")):
+            record["output_tokens"] = counted["outputTokens"]
+        if a_count(counted.get("cacheCreationTokens")):
+            record["cache_write_tokens"] = counted["cacheCreationTokens"]
+        if self.context_tokens is not None:
+            record["context_tokens"] = self.context_tokens
+        # Which model *answered*, read back rather than echoed from what was asked for — a silent
+        # substitution would show up here and nowhere else.
+        used = counted.get("modelUsage")
+        if isinstance(used, dict) and used:
+            record["model_name"] = str(next(iter(used)))
+        if len(record) > 1:
+            say(record)
+
+    def take_the_brain_away(self) -> None:
+        """End the brain, whatever happened. A brain left running is a brain nobody will reap."""
+        with contextlib.suppress(Exception):
+            if self.brain.stdin and not self.brain.stdin.closed:
+                self.brain.stdin.close()
+        with contextlib.suppress(Exception):
+            self.brain.wait(timeout=GOING_WITHIN)
+        with contextlib.suppress(Exception):
+            self.brain.terminate()
+            self.brain.wait(timeout=GOING_WITHIN)
+        with contextlib.suppress(Exception):
+            self.brain.kill()
+        if self.raw is not None:
+            with contextlib.suppress(OSError):
+                self.raw.close()
 
 
-def records(line: str, seen: dict) -> list:
-    """One line of this brain's stream, as the records rundesk understands — or none.
+# ── Reading one update ────────────────────────────────────────────────────────────────────────
 
-    Pure, so the mapping is driven offline against captured ACP notifications. Anything
-    else is dropped and kept in the raw beside the run, so vendor drift remains evidence
-    rather than becoming a meaning invented here.
+
+def kept_at(raw):
+    """Where the brain's own stream is kept, or nothing when it cannot be.
+
+    **Offered, never required**, and that has to be true of the failure as well as of the absence.
+    Opened bare, this raises out of the one place a turn has nothing to say for itself: the brain is
+    already started, `Turn` is not yet built, so the guard that promises a `done` has not been
+    entered and the `finally` that reaps the brain never runs either. Measured with `RUNDESK_RAW`
+    pointed at a directory that is not there: no records at all, a traceback, and a vendor process
+    left behind. A turn that could not keep a copy of what its brain said is a whole turn.
+    """
+    if not raw:
+        return None
+    try:
+        return open(raw, "a", encoding="utf-8")
+    except OSError as gone:
+        went_wrong(f"what this brain said could not be kept at {raw}: {gone}")
+        return None
+
+
+class Steering:
+    """What rundesk stopping a turn leaves behind, and how the ending it caused is told apart.
+
+    This brain has no interrupt that leaves the ask running. What it has is a cancel: the ask ends,
+    settling as `cancelled`, and the replacement is a fresh ask on the same conversation. So a
+    steered turn produces **more than one** `turn_completed`, and only the last of them is this
+    turn's ending — the others are the parts of the work that were stopped, whose cost the owner was
+    still charged for.
+    """
+
+    def __init__(self):
+        self.watching = threading.Condition()
+
+        #: How many endings are still owed by asks that rundesk cancelled. Counted rather than
+        #: flagged because a second steer can arrive before the first has settled.
+        self.owed = 0
+
+        #: What the stopped asks cost, kept so the one ending carries all of it.
+        self.usage = {}
+
+    def cancel(self, turn) -> bool:
+        """Stop what the brain is doing, and wait until it has actually stopped."""
+        # **No ask is the live one from here until the replacement is sent.** A cancelled ask
+        # settles *twice* — once as a `turn_completed` notification and once as the reply to the
+        # request that started it — and only one of those is owed a mark. Measured: the reader
+        # swallowed the notification and the main thread then ended the turn on the reply, so a
+        # steered turn came back `cancelled` and the replacement was never asked.
+        turn.asking = None
+        with self.watching:
+            # **Marked before the cancel goes out.** The brain can settle the ask before this side
+            # has finished asking it to.
+            self.owed += 1
+        try:
+            turn.send("session/cancel", {"sessionId": turn.session_id}, wants_reply=False)
+        except (OSError, ValueError):
+            with self.watching:
+                self.no_longer_owed()
+            return False
+        with self.watching:
+            drained = self.watching.wait_for(lambda: self.owed == 0, timeout=CANCEL_WITHIN)
+            if not drained:
+                # Giving up gives the mark back: keeping it would make every later ending look like
+                # one rundesk had caused, so the turn's own would be swallowed and never said.
+                self.no_longer_owed()
+            return drained
+
+    def no_longer_owed(self) -> None:
+        """Give one mark back. **Never below zero** — a negative count is truthy, and one would make
+        every later ending look as though steering had caused it."""
+        if self.owed > 0:
+            self.owed -= 1
+
+    def stopped_by_us(self) -> bool:
+        """Whether this ending is one rundesk asked for, rather than the turn's own."""
+        with self.watching:
+            if self.owed <= 0:
+                return False
+            self.owed -= 1
+            self.watching.notify_all()
+            return True
+
+    def counted(self, usage: dict) -> None:
+        """Add one stopped ask's cost to this turn's. Work done before a steer is work the owner is
+        still billed for, so dropping it would under-report every steered turn."""
+        for name, value in (usage or {}).items():
+            if a_count(value):
+                self.usage[name] = self.usage.get(name, 0) + value
+
+    def with_usage(self, usage: dict) -> dict:
+        """This turn's own cost, carrying everything the stopped asks cost as well."""
+        if not self.usage:
+            return usage
+        self.counted(usage)
+        return dict(self.usage)
+
+
+class Words:
+    """Everything rundesk says, kept in the order it said it.
+
+    One thread owns rundesk's input for the adapter's whole life, so a word that arrives while the
+    brain is working is held here until the thread that speaks to the brain is ready for it.
+    """
+
+    def __init__(self, stream):
+        self.words = []
+        self.closed = False
+        self.watching = threading.Condition()
+        threading.Thread(target=self.read, args=(stream,), name="rundesk-in", daemon=True).start()
+
+    def read(self, stream) -> None:
+        try:
+            for line in stream:
+                word = what_rundesk_said(line)
+                if word is None:
+                    continue
+                with self.watching:
+                    self.words.append(word)
+                    self.watching.notify_all()
+        except Exception:                          # noqa: BLE001 — rundesk's input ending badly is
+            pass                                   # the same as it ending: there are no more words.
+        finally:
+            with self.watching:
+                self.closed = True
+                self.watching.notify_all()
+
+    def first(self, within: float):
+        """The prompt. `None` when rundesk said nothing at all before giving up on it."""
+        with self.watching:
+            self.watching.wait_for(lambda: self.words or self.closed, timeout=within)
+            return self.words[0] if self.words else None
+
+    def each(self, stopping: threading.Event):
+        """Every word, from the first, until the turn ends or rundesk stops speaking."""
+        at = 0
+        while True:
+            with self.watching:
+                # `so_far=at` binds where the loop is *now*. A plain closure over `at` reads it when
+                # the condition is evaluated, on another thread, after this loop has moved on.
+                self.watching.wait_for(
+                    lambda so_far=at: so_far < len(self.words) or self.closed or stopping.is_set())
+                if stopping.is_set() or at >= len(self.words):
+                    return
+                word, at = self.words[at], at + 1
+            yield word
+
+    def wake(self) -> None:
+        """Let go of anything waiting here, because the thing it was waiting for has happened."""
+        with self.watching:
+            self.watching.notify_all()
+
+
+def what_rundesk_said(line: str):
+    """One record from rundesk, as the words to send — or `None` if it was not one.
+
+    An adapter that declares `steer` is only ever sent records, so a line that is not one is a
+    contract this side cannot honour and is better dropped visibly than guessed at.
     """
     try:
         one = json.loads(line)
     except ValueError:
-        return []
-    if not isinstance(one, dict):
-        return []
-    if one.get("method") not in (
-            "session/update", "_x.ai/session/update", "_x.ai/session_notification"):
-        return []
-    params = one.get("params") or {}
-    update = params.get("update")
-    if not isinstance(update, dict):
-        return []
-    # ACP reports the parent conversation's current context as a gauge on each update.
-    # Keep the last value, including a lower one after compaction, and accept it only
-    # from the session this process was asked to carry (R-USE-14, R-USE-15).
-    meta = params.get("_meta")
-    value = meta.get("totalTokens") if isinstance(meta, dict) else None
-    belongs_to = str(params.get("sessionId") or "")
-    if isinstance(value, int) and not isinstance(value, bool) \
-            and (not seen.get("session") or belongs_to == str(seen["session"])):
-        seen["session_tokens"] = value
-    kind = update.get("sessionUpdate")
-
-    if kind == "agent_message_chunk":
-        # A fragment, and never `whole`: this brain writes its reply a token at a time and
-        # nothing in the stream ever restates it, so nothing it says is finished until the
-        # turn is. Marking one `whole` would show a sentence that then changed underneath
-        # whoever was reading it.
-        seen["thinking"] = False
-        return [{"type": "text", "text": _content(update)}]
-
-    if kind == "agent_thought_chunk":
-        # One contiguous block is one activity, not one per token-sized fragment. A tool
-        # or spoken chunk resets it, so reasoning on each side of visible work remains two
-        # phases rather than disappearing behind the first one.
-        if seen.get("thinking"):
-            return []
-        seen["thinking"] = True
-        return [{"type": "think", "text": _content(update)}]
-
-    if kind == "tool_call":
-        return _tool(update, seen)
-    if kind == "tool_call_update":
-        return _result(update, seen)
-    if kind == "turn_completed":
-        return _ended(update, seen)
-
-    return []
+        return None
+    if not isinstance(one, dict) or one.get("type") != "say":
+        return None
+    return (str(one.get("text") or ""), str(one.get("context") or ""))
 
 
-def _content(update: dict) -> str:
+def with_context(word) -> str:
+    """One thing rundesk said, as the brain reads it.
+
+    rundesk's own words go **first and marked**, so a brain reads them as framing rather than as
+    something the person tacked on — and so what the person actually said is unaltered beneath it.
+    """
+    text, context = word
+    return f"[rundesk] {context}\n\n{text}" if context else text
+
+
+def text_of(update: dict) -> str:
+    """What the brain said on this fragment, whether it wrapped it or not."""
     content = update.get("content")
     if isinstance(content, dict):
         return str(content.get("text") or "")
     return str(content or "")
 
 
-def _tool(update: dict, seen: dict) -> list:
-    """A tool as it starts, once, with the vendor name translated where measured."""
-    at = str(update.get("toolCallId") or "")
-    if not at:
-        return []
-    tools = seen.setdefault("tools", {})
-    if at in tools:
-        return []
-    name = str(update.get("title") or "")
-    tools[at] = name
-    seen["thinking"] = False
-    said = {"type": "tool", "id": at, "name": name}
-    if name in DID:
-        said["did"] = DID[name]
-    return [said]
+def what_the_reply_said(got: dict) -> dict:
+    """The end of a turn as it arrives on the *reply*, in the shape it has as a *notification*.
 
-
-def _result(update: dict, seen: dict) -> list:
-    """A tool's one terminal update, paired to the call by Grok's stable id."""
-    status = update.get("status")
-    if status not in ("completed", "failed", "cancelled"):
-        return []
-    at = str(update.get("toolCallId") or "")
-    if not at:
-        return []
-    results = seen.setdefault("results", set())
-    if at in results:
-        return []
-    results.add(at)
-    said = []
-    if at not in seen.setdefault("tools", {}):
-        said.extend(_tool(update, seen))
-    seen["thinking"] = False
-    said.append({"type": "result", "id": at, "ok": status == "completed",
-                 "summary": _summary(update.get("rawOutput"))})
+    The two carry the same two facts in two places: a notification puts `stop_reason` and `usage`
+    side by side, while the reply puts `stopReason` at the top and files the cost one level down
+    under `_meta`. Levelling them here is what lets one reading end a turn either way, instead of
+    two that would drift apart the first time one of them was corrected.
+    """
+    result = got.get("result")
+    if not isinstance(result, dict):
+        return {}
+    meta = result.get("_meta")
+    counted = meta.get("usage") if isinstance(meta, dict) else None
+    said = {"stopReason": result.get("stopReason")}
+    if isinstance(counted, dict):
+        said["usage"] = counted
     return said
 
 
-def _summary(value) -> str:
-    """A bounded account of a result; surfaces still keep successful results quiet."""
-    if isinstance(value, (dict, list)):
-        try:
-            return json.dumps(value, sort_keys=True)[:SUMMARY_CHARS]
-        except (TypeError, ValueError):
-            pass
-    return str(value or "")[:SUMMARY_CHARS]
+def named_in(update: dict) -> str:
+    """What to call this tool: the machine name where the brain gives one, and the title otherwise.
 
-
-def _ended(one: dict, seen: dict) -> list:
-    """What the turn cost and that it is over — the only line either is taken from."""
-    if seen.get("ended"):
-        return []
-    counted = one.get("usage") or {}
-
-    # ACP's camel-case `inputTokens` includes `cachedReadTokens`, unlike the one-shot
-    # stream's snake-case input count. Measured on the same 0.2.112 build: 26,797 input,
-    # 24,448 cached and 81 output made 26,878 total, so fresh is their difference.
-    #
-    # There is no cache-*creation* figure at all. It is left out rather than guessed: an
-    # absent number means we could not tell, which is different from zero.
-    cached = _n(counted, "cachedReadTokens")
-    usage = {"type": "usage", "input": max(0, _n(counted, "inputTokens") - cached),
-             "output": _n(counted, "outputTokens"), "cached": cached}
-    named = _model(counted)
-    if named:
-        usage["model"] = named
-    if isinstance(seen.get("session_tokens"), int):
-        usage["session"] = seen["session_tokens"]
-
-    return [usage, _finished(one.get("stop_reason"), seen)]
-
-
-def _finished(stopped, seen: dict) -> dict:
-    """The terminal record, also usable when ACP omits its optional usage update."""
-    seen["ended"] = True
-    ended = {"type": "done", "ok": stopped == FINISHED,
-             "session": seen.get("session") or ""}
-    if stopped != FINISHED:
-        ended["why"] = f"the turn ended as {stopped}" if stopped else "the turn did not finish"
-    return ended
-
-
-def _model(counted: dict) -> str:
-    """Which model answered, as this brain reported it rather than as it was asked for.
-
-    A silent substitution would show up here and nowhere else, which is the whole reason
-    this is read back rather than echoed from `RUNDESK_MODEL`.
+    **The two are not the same word.** A call starts as `read_file` and is updated to
+    ``Read `note.txt` ``, so the machine name is what stays stable across a release making its
+    titles friendlier — and it is what `DID_FOR` is keyed on.
     """
-    used = counted.get("modelUsage")
-    if not isinstance(used, dict):
-        return ""
-    for named in used:
-        return str(named)
-    return ""
+    ours = (update.get("_meta") or {}).get("x.ai/tool")
+    if isinstance(ours, dict) and ours.get("name"):
+        return str(ours["name"])
+    return str(update.get("title") or "")
 
 
-def _n(counted: dict, what: str) -> int:
-    value = counted.get(what)
-    return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
+def what_it_reported(update: dict) -> str:
+    """A bounded account of what a tool came to, for a line somebody is watching go past."""
+    got = update.get("rawOutput")
+    if isinstance(got, (dict, list)):
+        with contextlib.suppress(TypeError, ValueError):
+            return json.dumps(got, sort_keys=True)
+    return str(got or "")
 
 
-#: Where this brain looks for skills, relative to the directory a turn stands in.
-#:
-#: **Measured, not read off the documentation** — one canary planted per candidate
-#: directory, each declaring its own unguessable code. This brain reads its own `.grok/skills` and, unusually, three other vendors'
-#: roots as well — `.agents`, `.claude` and `.cursor` — deduplicating by name. Only its
-#: own is written to: a skill placed for another brain is that brain's adapter's to
-#: place, and relying on this one reading it would couple two files that must not know
-#: about each other. It does not read `.codex/skills`, and no brain reads a bare
-#: `skills/`. Measured 2026-07-27 against 0.2.112.
-#: Re-probe with `.knowledge/scripts/probe-skills` when the version moves.
-#:
-#: Relative to `RUNDESK_CWD`, which is the agent's own home — so what one agent is given
-#: is inside that agent's directory and no other agent stands anywhere near it.
+# ── The skills an agent was granted ───────────────────────────────────────────────────────────
+
+#: Where this brain looks for skills, relative to the directory a turn stands in. Measured with one
+#: canary planted per candidate directory: this brain reads its own and, unusually, three other
+#: vendors' roots as well, deduplicating by name. **Only its own is written to** — a skill placed
+#: for another brain is that brain's adapter's to place, and relying on this one reading it would
+#: couple two files that must not know about each other.
 SKILLS_ROOT = os.path.join(".grok", "skills")
 
 
-def _present(where: str) -> None:
-    """Stand this agent's granted skills where this brain will find them (R-PRV-24).
+def present_the_skills(where: str) -> None:
+    """Stand this agent's granted skills where this brain will find them.
 
-    Links rather than copies, so an owner editing the library edits what every agent
-    holding that skill reads, with nothing to re-run. Measured: this brain follows a
-    symlink, follows a link to a link, and indexes a skill once even when the same target
-    is reachable from more than one place.
+    Links rather than copies, so an owner editing the library edits what every agent holding that
+    skill reads, with nothing to re-run.
 
-    **Never a link to the whole directory.** That would make a path this vendor owns an
-    alias for the library itself — so its own skill-installer would write into the source
-    of truth, and anything aimed at this directory would destroy it.
+    **Never a link to the whole directory.** That would make a path this vendor owns an alias for
+    the library itself — so its own skill installer would write into the source of truth, and
+    anything aimed at this directory would destroy it.
 
-    Idempotent, and the pruning is deliberately narrow: an entry goes only when it is a
-    link *we* made whose skill is no longer granted. A directory somebody wrote by hand
-    and a link pointing somewhere else are things this did not put there.
+    Idempotent, and the pruning is deliberately narrow: an entry goes only when it is a link *this*
+    put there whose skill is no longer granted. **Ours is decided by where it points, not by it
+    being broken** — an owner may hand-place a link here to a skill of their own, and a target
+    briefly away, on an unmounted drive or mid-move, looks exactly like a grant that was revoked.
+    Deleting on dangling alone took those.
     """
     granted = os.environ.get("RUNDESK_SKILLS")
     standing = []
     if granted and os.path.isdir(granted):
-        standing = sorted(one for one in os.listdir(granted)
-                          if not one.startswith("."))
+        standing = sorted(one for one in os.listdir(granted) if not one.startswith("."))
     root = os.path.join(where, SKILLS_ROOT)
-    # Nothing granted and nothing placed before: make no directory at all. An agent with
-    # no skills should not have a vendor's directory in its home to explain.
+    # Nothing granted and nothing placed before: make no directory at all. An agent with no skills
+    # should not have a vendor's directory in its home to explain.
     if not standing and not os.path.isdir(root):
         return
     try:
@@ -464,273 +1157,71 @@ def _present(where: str) -> None:
                     continue
                 os.unlink(link)
             elif os.path.exists(link):
-                continue          # somebody else's, and not ours to replace
+                continue                       # somebody else's, and not ours to replace
             os.symlink(target, link)
         for name in os.listdir(root):
             link = os.path.join(root, name)
             if not os.path.islink(link) or os.path.exists(link):
                 continue
-            # **Ours is decided by where it points, not by it being broken.** An owner may
-            # hand-place a link here to a skill of their own, and a target that is briefly
-            # away — an unmounted drive, a file mid-move — makes it look exactly like a
-            # grant that was revoked. Deleting on dangling alone took those. What is ours
-            # is a link into the directory rundesk was told to present from.
             points_at = os.readlink(link)
             if not os.path.isabs(points_at):
                 points_at = os.path.normpath(os.path.join(root, points_at))
-            if granted and os.path.commonpath([os.path.abspath(granted), points_at]) == \
-                    os.path.abspath(granted):
-                os.unlink(link)   # granted once, revoked since
-    except OSError as gone:
-        # A turn without its skills is a whole turn. Say so and carry on rather than
-        # failing a turn over what is, at worst, a brain that is less well informed.
+            if granted and os.path.commonpath(
+                    [os.path.abspath(granted), points_at]) == os.path.abspath(granted):
+                os.unlink(link)                # granted once, revoked since
+    except (OSError, ValueError) as gone:
+        # A turn without its skills is a whole turn. Say so and carry on rather than failing one
+        # over what is, at worst, a brain that is less well informed.
         went_wrong(f"this agent's skills could not be presented: {gone}")
 
 
-def carry() -> int:
-    """One turn, from what rundesk set to what this brain said about it."""
-    where = os.environ.get("RUNDESK_CWD") or os.getcwd()
-    posture = os.environ.get("RUNDESK_POSTURE") or FULLY
-    if posture not in ALLOWED and posture != FULLY:
-        posture = FULLY
+# ── Saying it ─────────────────────────────────────────────────────────────────────────────────
 
-    if shutil.which(GROK) is None and not (os.sep in GROK and os.access(GROK, os.X_OK)):
-        went_wrong(f"there is no {GROK} on this machine's path — install the Grok CLI, or "
-                   f"point RUNDESK_GROK_BIN at where it stands")
-        say(type="done", ok=False, why="the Grok CLI is not on this machine's path")
-        return 1
-
-    asked = sys.stdin.read()
-    if not asked.strip():
-        say(type="done", ok=False, why="nothing was asked")
-        return 1
-
-    argv = [GROK] + opening(os.environ.get("RUNDESK_MODEL"), _settings())
-
-    # **`GROK_HOME` is deliberately not set, and the working directory is why.** Measured:
-    # this brain files its conversations under the directory a turn was run in —
-    # `~/.grok/sessions/%2FUsers%2F…%2F<agent home>` — exactly as Claude files them under
-    # `~/.claude/projects/<cwd slug>`. Rundesk already stands each turn in its own agent's
-    # home, so conversations, project state and the files a brain auto-loads are separated
-    # by that alone. Relocating the *home* on top of it adds nothing except a second login
-    # to create, and the shipped codex adapter has never set its own either.
-    #
-    # An owner who wants a genuinely separate identity passes one through `--set`, which
-    # reaches this brain unread like any other flag.
-    _present(where)
-
-    preface = (os.environ.get("RUNDESK_PREFACE") or "").strip()
-    return _turn(
-        argv, where, dict(os.environ), asked, os.environ.get("RUNDESK_RESUME"), preface,
-        scoped(posture),
-    )
+def one_line(said: str) -> str:
+    """A thing to put on a line somebody reads: no newlines, and bounded."""
+    said = " ".join(str(said).split())
+    return said if len(said) <= A_SUMMARY_AT_MOST else said[:A_SUMMARY_AT_MOST - 1] + "…"
 
 
-class _ACP:
-    """The one sequential ACP conversation a Rundesk turn needs."""
-
-    def __init__(self, brain, raw, seen: dict):
-        self.brain = brain
-        self.raw = raw
-        self.seen = seen
-        self.next_id = 0
-
-    def request(self, method: str, params: dict, emit: bool = True) -> dict:
-        self.next_id += 1
-        wanted = self.next_id
-        self._send({"jsonrpc": "2.0", "id": wanted, "method": method, "params": params})
-        for line in self.brain.stdout:
-            if self.raw:
-                self.raw.write(line)
-                self.raw.flush()
-            try:
-                message = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(message, dict):
-                continue
-            if emit:
-                for it in records(line, self.seen):
-                    say(**it)
-            # No client-side filesystem or terminal service was advertised. Refuse any
-            # extension request explicitly instead of leaving Grok waiting forever.
-            if message.get("method") and "id" in message:
-                self._send({"jsonrpc": "2.0", "id": message["id"],
-                            "error": {"code": -32601, "message": "method not supported"}})
-                continue
-            if message.get("id") != wanted:
-                continue
-            if isinstance(message.get("error"), dict):
-                detail = str(message["error"].get("message") or message["error"])
-                raise RuntimeError(f"{method}: {detail}")
-            result = message.get("result")
-            return result if isinstance(result, dict) else {}
-        raise RuntimeError(f"Grok closed its ACP stream during {method}")
-
-    def _send(self, message: dict) -> None:
-        if self.brain.stdin is None:
-            raise RuntimeError("Grok's ACP input is not available")
-        self.brain.stdin.write(json.dumps(message) + "\n")
-        self.brain.stdin.flush()
+def a_count(value) -> bool:
+    """Whether this is a number of things. `True` is an `int` to Python and is not a count."""
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _turn(argv: list, where: str, env: dict, asked: str, resume, preface: str,
-          profile) -> int:
-    """Run one ACP session, and report what it said as it says it."""
-    raw = _raw()
-    seen = {"session": str(resume or ""), "ended": False}
-    trouble = []
-    try:
-        brain = subprocess.Popen(
-            argv, cwd=where, env=env, text=True, bufsize=1,
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except OSError as gone:
-        went_wrong(f"the Grok CLI would not start: {gone}")
-        say(type="done", ok=False, why="the Grok CLI would not start")
-        if raw:
-            raw.close()
-        return 1
-
-    # Drained for the brain's whole life, in its own thread. A second pipe with nothing
-    # reading it fills its buffer and stops the program dead — which presents half an hour
-    # later as a brain that simply went quiet, and sends you looking anywhere but here.
-    draining = threading.Thread(target=_drained, args=(brain.stderr, trouble), daemon=True)
-    draining.start()
-    acp = _ACP(brain, raw, seen)
-    try:
-        initialized = acp.request("initialize", {
-            "protocolVersion": 1,
-            # Advertising client filesystem or terminal services makes Grok send requests
-            # back and wait for us to execute them. Rundesk wants Grok's own scoped tools,
-            # which are what `scoped` above controls, so the client offers none.
-            "clientCapabilities": {},
-        })
-        _authenticate(acp, initialized)
-
-        session_params = {"cwd": where, "mcpServers": []}
-        if resume:
-            session_params["sessionId"] = str(resume)
-            # R-PRV-18 — and unlike the rules below, this is sent again. A posture is the
-            # owner's current answer about the machine, not the conversation's: an agent
-            # narrowed to `read` after a working conversation was opened would otherwise
-            # carry that conversation's whole tool set for as long as it is resumed.
-            # Measured on `session/load`: a conversation created with no agent of ours came
-            # back naming exactly the three read tools and could not run a shell command.
-            if profile:
-                session_params["_meta"] = {"agentProfile": profile}
-            # Loading replays the saved turn as ordinary session updates, including its
-            # text and `turn_completed`. They belong in the raw evidence, not in this new
-            # turn's live records; emitting them repeats the prior reply and marks this
-            # turn finished before its prompt is even sent.
-            acp.request("session/load", session_params, emit=False)
-            session = str(resume)
-        else:
-            # R-PRV-23 — ACP owns conversation creation, so its session metadata is the
-            # only place Grok applies standing instructions separately from the prompt.
-            # Root `--rules` is accepted by the process but ignored by `agent stdio`.
-            # `_meta.rules` appends to the built-in system prompt; the replacement field
-            # is deliberately never used. A resumed conversation already keeps the rules
-            # it was opened with and therefore receives none again.
-            meta = {}
-            if preface:
-                meta["rules"] = preface
-            if profile:
-                meta["agentProfile"] = profile
-            if meta:
-                session_params["_meta"] = meta
-            made = acp.request("session/new", session_params)
-            session = str(made.get("sessionId") or "")
-            if not session:
-                raise RuntimeError("Grok created no ACP session")
-        seen["session"] = session
-
-        completed = acp.request("session/prompt", {
-            "sessionId": session,
-            "prompt": [{"type": "text", "text": asked}],
-        })
-        if not seen["ended"]:
-            # `turn_completed` carries the measured usage. If a compatible ACP server
-            # returns only the prompt response, finish honestly without inventing zeros.
-            say(**_finished(completed.get("stopReason"), seen))
-        return 0
-    except (BrokenPipeError, OSError, RuntimeError) as gone:
-        said = " ".join(trouble + [str(gone)]).lower()
-        if LOGGED_OUT in said or "authenticate" in said:
-            went_wrong(f"this machine has no Grok login — run:\n  {GROK} login --device-code")
-        if not seen["ended"]:
-            say(type="done", ok=False, why=str(gone)[:SUMMARY_CHARS])
-        return 1
-    finally:
-        if brain.stdin is not None and not brain.stdin.closed:
-            try:
-                brain.stdin.close()
-            except OSError:
-                pass
-        try:
-            brain.wait(timeout=GOING_SECONDS)
-        except subprocess.TimeoutExpired:
-            brain.terminate()
-            try:
-                brain.wait(timeout=GOING_SECONDS)
-            except subprocess.TimeoutExpired:
-                brain.kill()
-                brain.wait()
-        if brain.stdout is not None:
-            brain.stdout.close()
-        draining.join(timeout=GOING_SECONDS)
-        if raw:
-            raw.close()
+def whole(value) -> int:
+    """A count, or zero."""
+    return value if a_count(value) else 0
 
 
-def _authenticate(acp: _ACP, initialized: dict) -> None:
-    """Use the login Grok itself advertises, without reading or copying a credential."""
-    methods = initialized.get("authMethods")
-    if not isinstance(methods, list) or not methods:
-        return
-    offered = {
-        str(one.get("id")) for one in methods
-        if isinstance(one, dict) and one.get("id")
-    }
-    preferred = str((initialized.get("_meta") or {}).get("defaultAuthMethodId") or "")
-    if preferred not in offered:
-        preferred = "cached_token" if "cached_token" in offered else ""
-    if not preferred and os.environ.get("XAI_API_KEY") and "xai.api_key" in offered:
-        preferred = "xai.api_key"
-    if not preferred:
-        raise RuntimeError("Grok offered no usable authentication method")
-    acp.request("authenticate", {"methodId": preferred, "_meta": {"headless": True}})
+def finished(ok: bool, session_id=None, failure_code=None, failure_message=None) -> None:
+    """The record that ends a turn. Exactly one is said, and one always is.
 
-
-def _drained(stream, keep: list) -> None:
-    """Everything the brain says went wrong, passed straight on and the tail of it kept.
-
-    Passed on as it arrives rather than at the end, because it is the only thing an owner
-    has to read while a turn is still running — and because anything written to either
-    stream is what tells rundesk this turn has not gone quiet.
+    **The handle is reported whether the turn worked or not**, and that is deliberate: this brain
+    mints its own conversation id and hands it back, so it names a conversation that demonstrably
+    exists. A turn that failed halfway is one somebody will want to carry on from rather than begin
+    again — which is the opposite of a brain whose id the client mints before anything is created.
     """
-    for line in stream:
-        went_wrong(line)
-        keep.append(line.rstrip())
-        if len(keep) > TROUBLE_KEPT:
-            del keep[0]
-    stream.close()
+    record = {"type": "done", "ok": bool(ok)}
+    for name, value in (("session_id", session_id), ("failure_code", failure_code),
+                        ("failure_message", failure_message)):
+        if value:
+            record[name] = value
+    say(record)
 
 
-def _raw():
-    """Where this brain's own stream is kept, if rundesk offered somewhere."""
-    at = os.environ.get("RUNDESK_RAW")
-    if not at:
-        return None
-    try:
-        os.makedirs(os.path.dirname(at) or ".", exist_ok=True)
-        return open(at, "a", encoding="utf-8")
-    except OSError as gone:
-        went_wrong(f"what this brain said could not be kept at {at}: {gone}")
-        return None
+def say(record: dict) -> None:
+    """One record to rundesk, flushed, because a record held in a buffer is a record nobody saw."""
+    with contextlib.suppress(OSError, ValueError):
+        sys.stdout.write(json.dumps(record) + "\n")
+        sys.stdout.flush()
+
+
+def went_wrong(said: str) -> None:
+    """Something for whoever is reading this turn, on the stream that is the adapter's own."""
+    with contextlib.suppress(OSError, ValueError):
+        sys.stderr.write(said.rstrip() + "\n")
+        sys.stderr.flush()
 
 
 if __name__ == "__main__":
-    if "--capabilities" in sys.argv:
-        print(json.dumps(CAN))
-        raise SystemExit(0)
-    raise SystemExit(carry())
+    sys.exit(main())

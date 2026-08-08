@@ -1,0 +1,348 @@
+"""How this install is configured, as opposed to how any one agent is.
+
+One file — `data/config.json` — holding every install-wide value, and the source of all of them.
+It sits under `data/` rather than beside the program, because it is something the owner made: an
+update replaces the program and must not be able to reach it.
+
+Two kinds of thing live in it, and they are told apart by who owns them:
+
+**What the owner states** — whether backups are kept and for how long, whether rundesk updates itself
+and at what hour. These are edited freely, by hand or by a command, and nothing rundesk does
+overwrites a value somebody stated.
+
+**How far the install has been carried** — `migration`, the last migration step applied to this
+install. Nobody edits it by hand; the migration runner writes it, and it is here rather than in a
+file of its own because "what state is this install in" is one question and deserves one place to
+look.
+
+An install writes this file complete. An update **adds values a newer release introduces and changes
+nothing already stated** — a release that starts offering a setting must reach installs that predate
+it, and an owner who turned something off must find it still off afterwards.
+"""
+
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from rundesk.core import paths
+from rundesk.utils import files, locking
+
+#: What a fresh install is written with, and the whole list of what an install may be configured with.
+#: A key added here reaches existing installs through `fill_in`, which never touches a stated value.
+INITIAL = {
+    # Copies of what the owner keeps.
+    "backup_enabled": True,
+    "backup_retention": 7,
+
+    # Keeping this copy of rundesk current.
+    "update_enabled": True,
+    "update_time": "03:00",
+
+    # How many days of what a turn *did* to keep. Not how long a conversation is kept, and not how
+    # long a turn's own row is kept: what was said is the owner's history and a turn's cost is the
+    # ledger, and both stay. This is the one table that grows with tool calls, and a fortnight after
+    # the fact it has been read if it was ever going to be.
+    "turn_records_days": 14,
+
+    # How far this install has been carried. Written by the migration runner, never by hand.
+    "migration": None,
+
+    # Where the install put the `rundesk` command on a PATH. Written by the installer so that
+    # removal takes back exactly what was placed: the directory is chosen at install time and can
+    # be anywhere, so an uninstall that only knew the usual places would leave a dangling link
+    # behind and report an ordinary success.
+    "command_link": None,
+
+    # When a version last actually arrived on this install — the moment it was installed, or the
+    # moment an update moved it. Which version that was is `rundesk version`, so it is not repeated
+    # here. Written only by the two paths that really place a program, never by a run of `update`
+    # that found nothing newer: otherwise the answer drifts to "just now" every time anybody checks.
+    "last_updated_at": None,
+
+    # What `rundesk permissions check` last found, so that "what is still not allowed" can be asked
+    # without running anything. **A report of what was true when it was last asked, and never a
+    # cache anything decides on** — TCC state is the machine's, and the owner ticks a box or a
+    # `brew upgrade` moves the interpreter with nothing telling rundesk. So `check` always re-proves
+    # and nothing reads this to decide whether it may act.
+    #
+    # It carries the lineage it was proved in, because that is what makes an answer mean anything:
+    # the same probe run from a terminal and from a gateway gives opposite results, so a result
+    # without the process it was about is a claim about nobody.
+    #
+    # Install-wide rather than per-agent, and that is measured rather than convenient: every gateway
+    # on a machine is one TCC client, so there is exactly one answer and a per-agent copy would
+    # invent several.
+    "permissions": None,
+}
+
+#: The values nobody states, so `fill_in` can leave the owner's alone and still manage these.
+MANAGED = ("migration", "command_link", "last_updated_at", "permissions")
+
+#: What each stated value has to look like, in the words somebody would use to correct it.
+WANTED = {
+    "backup_enabled": "yes or no",
+    "backup_retention": "how many copies to keep, a whole number of at least 1",
+    "update_enabled": "yes or no",
+    "update_time": "a time of day as HH:MM, such as 03:00",
+    "turn_records_days": "how many days of what a turn did to keep, a whole number of at least 1",
+}
+
+_YES = ("yes", "true", "on", "1")
+_NO = ("no", "false", "off", "0")
+
+
+class Refused(Exception):
+    """A value that may not be set, or may not be set to that."""
+
+
+#: The configuration is there and cannot be understood.
+#:
+#: `files`' own answer, named here as well. Raised rather than defaulted: treating an unreadable
+#: file as an unwritten one would answer every question with the factory setting — so an owner who
+#: turned automatic updates off would find them on again, and nothing would have said so.
+#:
+#: **The same name for the read and for the write.** `read` used to translate it and the three
+#: functions that *write* did not, so a value nobody could read came back as a sentence from one
+#: and as a traceback from the others. One name, one answer, whichever way the file was touched.
+Unreadable = files.Unreadable
+
+
+#: Something else is changing the configuration and did not finish. The same answer `files` gives,
+#: named here as well because this file is the one every command changes, so every command that
+#: writes has to be able to say it — and none of them should have to know which module it came from.
+Stuck = files.Stuck
+
+
+#: The shape of a moment that is **stored for a machine** — UTC, to the second, with the `Z` that
+#: says so. Anything a program will later order, compare or restore on another machine is written
+#: like this, and that is the whole reason for UTC: a copy of this data taken here and put back
+#: somewhere else must still sort the same way.
+#:
+#: Named rather than spelled at each place that writes one. The agent level records the moment a
+#: step landed in this same shape and used to say so only in a sentence, and an invariant asserted
+#: in prose holds exactly until somebody edits one of the two.
+#:
+#: Not the shape a person reads — that is `utils.logs.stamp`, which is local and carries its offset.
+#: And not `lifecycle.backups.WHEN`, which is deliberately this with dashes, because that one has to
+#: be a filename and a colon is not one everywhere.
+MOMENT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def moment_of(when: Optional[datetime] = None, days_ago: int = 0) -> str:
+    """One moment, as everything this product stores writes them: UTC, to the second.
+
+    Here rather than in each store because there were four copies of it — `channels.kept`,
+    `channels.arriving`, `schedules.kept` and now the turns — and four copies of a format string is
+    four things that can come to disagree about what a stored moment looks like. When they do, the
+    symptom is a range query that silently matches nothing.
+
+    `days_ago` is for a sweep asking what "older than a fortnight" means. Subtracted from the same
+    clock the moment is taken on, so the two cannot drift apart between the reading and the
+    arithmetic.
+    """
+    at = (when or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if days_ago:
+        at = at - timedelta(days=days_ago)
+    return at.strftime(MOMENT)
+
+
+def read_moment(said: str) -> Optional[datetime]:
+    """One stored moment read back, or `None` where that is not what it is.
+
+    The other half of `moment_of`, here for the reason that one is here: the format is named once,
+    and something that wrote through this and read through its own `strptime` would be two things
+    that can come to disagree about what a stored moment looks like.
+
+    **`None` rather than an exception**, because every caller so far is a sweep asking how long ago
+    something was, on a row it does not own and cannot repair. A moment nobody can read is not a
+    moment of zero seconds ago, and it is not a reason to stop the pass either — so it is answered
+    as the third thing it actually is, and the caller decides.
+    """
+    try:
+        return datetime.strptime(str(said), MOMENT).replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def moved(when: Optional[datetime] = None, data: Optional[Path] = None) -> str:
+    """Record that a version has just arrived on this install. Returns the moment recorded.
+
+    Called only by the two paths that really place a program — an install, and an update that
+    actually moved. A run of `update` that found nothing newer must never call it, or the answer
+    drifts to "just now" every time anybody checks for an update.
+
+    `when` is the clock, passed in rather than read here, so what is recorded is the caller's
+    decision and a test can assert an exact value rather than a range.
+    """
+    stamped = (when or datetime.now(timezone.utc)).strftime(MOMENT)
+    stated("last_updated_at", stamped, data)
+    return stamped
+
+
+def settable() -> List[str]:
+    """Every value somebody may state, in a settled order.
+
+    Walked off `INITIAL` rather than listed, so a value a release starts offering is configurable the
+    day it lands. `MANAGED` values are not here: `migration` is how far the install has been carried,
+    and a person setting it by hand would make rundesk skip or repeat a step.
+    """
+    return [key for key in sorted(INITIAL) if key not in MANAGED]
+
+
+def understood(key: str, said: str) -> Any:
+    """What a typed value means, or `Refused` saying what was wanted instead.
+
+    Checked here rather than where it was typed, because the answer belongs to whoever owns the
+    setting: a command that parsed its own booleans would be a second opinion about what `off` means.
+    """
+    if key not in INITIAL:
+        raise Refused(f"{key} is not a value rundesk is configured with")
+    wanted = INITIAL[key]
+    given = said.strip()
+
+    if isinstance(wanted, bool):
+        if given.lower() in _YES:
+            return True
+        if given.lower() in _NO:
+            return False
+    elif isinstance(wanted, int):
+        try:
+            settled = int(given)
+        except ValueError:
+            settled = None
+        if settled is not None and settled >= 1:
+            return settled
+    elif key == "update_time":
+        if _a_time_of_day(given):
+            return given
+    else:
+        if given:
+            return given
+
+    raise Refused(f"{key} wants {WANTED.get(key, 'a value')}, and was given {said!r}")
+
+
+def _a_time_of_day(said: str) -> bool:
+    """Whether this is `HH:MM` on a twenty-four hour clock."""
+    hours, _, minutes = said.partition(":")
+    if not (hours.isdigit() and minutes.isdigit()) or len(minutes) != 2 or len(hours) > 2:
+        return False
+    return 0 <= int(hours) <= 23 and 0 <= int(minutes) <= 59
+
+
+def where(data: Optional[Path] = None) -> Path:
+    """The configuration file, below the install's data."""
+    return (data or paths.data()) / "config.json"
+
+
+def read(data: Optional[Path] = None) -> Dict[str, Any]:
+    """Every effective value, with anything a newer release added filled in from `INITIAL`.
+
+    Filled in **for the read only** — asking how rundesk is configured never writes. A release that
+    added a setting answers for it immediately; the file catches up the next time something changes
+    it, or at the next update.
+    """
+    how, said = files.read_json(where(data))
+    if how == files.UNREADABLE:
+        raise Unreadable(f"{where(data)} is there and cannot be read")
+    settled = dict(INITIAL)
+    if how == files.READ and isinstance(said, dict):
+        settled.update(said)
+    return settled
+
+
+def write_fresh(data: Optional[Path] = None) -> Dict[str, Any]:
+    """Write the configuration a new install starts with, and refuse to flatten one already there.
+
+    Installing over an existing install must not reset what its owner stated, so this writes only
+    when there is nothing to write over; otherwise it fills in and leaves the rest alone.
+    """
+    at = where(data)
+    if at.exists():
+        return fill_in(data)
+    files.write_json(at, dict(INITIAL))
+    return dict(INITIAL)
+
+
+def fill_in(data: Optional[Path] = None) -> Dict[str, Any]:
+    """Add values this release knows about and the file does not. Change nothing already stated.
+
+    What an update calls. The asymmetry is the whole point: a missing key is this release offering
+    something the file predates, and a present key is somebody's answer — including a `false` that
+    looks exactly like a default nobody set.
+    """
+    at = where(data)
+    # The lock of the install this file belongs to, not of whichever one `RUNDESK_HOME` names.
+    # Held at the install level as well as at the file level. `files`' own lock guards this file
+    # against another writer of this file; it cannot guard it against `data/` being renamed out from
+    # under it by a restore, which is the race that lost a stated value entirely.
+    with locking.only_one(paths.lock(at.parent.parent), "this install",
+                          locking.WHILE_A_DIRECTORY_MOVES), \
+            files.changing_json(at, empty={}) as held:
+        settled = dict(held[0]) if isinstance(held[0], dict) else {}
+        for key, value in INITIAL.items():
+            settled.setdefault(key, value)
+        held[0] = settled
+        return dict(settled)
+
+
+def stated(key: str, value: Any, data: Optional[Path] = None) -> None:
+    """Set one value, leaving every other exactly as it was."""
+    stated_all({key: value}, data)
+
+
+def stated_all(values: Dict[str, Any], data: Optional[Path] = None) -> None:
+    """Set several values at once, leaving every other exactly as it was.
+
+    **One write, not one per value.** Setting three settings as three separate changes is three
+    chances to be interrupted between them, and what is left behind is a configuration nobody typed:
+    two of the three answers somebody gave, and no record that the third was ever asked for. Half of
+    what was meant is not a smaller change — it is a different one.
+
+    Every name is checked before anything is written, for the same reason: a mapping naming one value
+    rundesk does not have changes none of them.
+    """
+    unknown = [key for key in sorted(values) if key not in INITIAL]
+    if unknown:
+        raise Refused(f"{unknown[0]} is not a value rundesk is configured with")
+    at = where(data)
+    with locking.only_one(paths.lock(at.parent.parent), "this install",
+                          locking.WHILE_A_DIRECTORY_MOVES), \
+            files.changing_json(at, empty=dict(INITIAL)) as held:
+        settled = dict(held[0]) if isinstance(held[0], dict) else dict(INITIAL)
+        settled.update(values)
+        held[0] = settled
+
+
+def where_the_command_stands() -> List[Path]:
+    """Every directory **this install's own** `rundesk` may stand in, best first.
+
+    Two, because there are two arrangements and a checkout is one of them. An **install** links the
+    command somewhere on a path and records where; a **checkout** has never been installed, so
+    nothing is linked and the launcher beside the code is the only `rundesk` there is.
+
+    One answer in one place, because two callers ask it for two different reasons — an agent running
+    `rundesk` from inside its own turn, and a gateway spawning one for a scheduled turn — and a
+    machine with two installs must not have one of them reach one install and the other the other.
+    That split is recorded one level up as having "silently split the machine in two".
+
+    A configuration that cannot be read is not a reason to refuse anything: the launcher is still
+    where it stands, whether or not anything was ever linked.
+    """
+    standing = []
+    try:
+        linked = read(paths.data()).get("command_link")
+    except Exception:                              # noqa: BLE001 — see the docstring
+        linked = None
+    if linked:
+        standing.append(Path(str(linked)).expanduser().parent)
+    standing.append(paths.program())
+    return standing
+
+
+def the_command() -> str:
+    """The `rundesk` to start, as a path. **This install's, never another one on the machine.**"""
+    for at in where_the_command_stands():
+        if (at / "rundesk").exists():
+            return str(at / "rundesk")
+    return str(paths.program() / "rundesk")

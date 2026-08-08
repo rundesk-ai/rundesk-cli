@@ -1,521 +1,950 @@
-"""The surfaces an agent is reachable on, and who on them may be answered.
+"""How an agent is reached, and the seven things anybody does with a channel.
 
-What is written down about a channel is part of what its agent keeps, asked for through
-`store.py`; this only decides what an owner is asking for and hands it over. The seam itself
-— resolving an adapter, framing a record each way — is `channel.py`, which knows nothing of
-any platform, and neither does this.
+`rundesk channels` on its own lists every one there is, the way `agents`, `gateways` and `schedules`
+do, because listing is what somebody wants nine times in ten. The other six are named: `add`, `show`,
+`configure`, `test`, `remove` and `doctor` — and `list`, which is the bare verb said out loud, so
+that naming one agent is spelled the way naming one of anything else is.
+
+This decides only how a person types it and what they are shown. What a channel *is* belongs to
+`channels.kept`, the program behind one belongs to `channels.adapters`, and whether one is connected
+right now belongs to `channels.hosting` — and nothing here reaches past them to a database, a lock or
+a child process.
+
+## A channel is a connection, not a place
+
+The channel **is** its adapter, so there is nothing to name and nothing to disambiguate: `add alan
+discord` gives alan a channel called `discord`, and that one connection carries private messages and
+every room the bot was invited to. One list of ids says who may reach the agent and it says so
+wherever they say it — which is why `--allow` is repeatable and why an empty one is refused rather
+than read as "anybody".
+
+**`--allow` is required by the verb rather than by argparse**, the same decision `--provider` and
+`--confirm` already carry: argparse's own refusal names a flag and does not say what to type, and
+this guards an effect rather than describing one. An agent connected to a platform with nobody
+allowed is an agent that answers no one, and being told *"the following arguments are required:
+--allow"* does not tell somebody whose id to go and find.
+
+## Nothing about a channel is written down until the adapter says it reached something
+
+`add` resolves the adapter, asks it offline what it can do, asks it to connect, and writes the row
+only once `--check` has come back `ok`. An agent whose channel is misconfigured has to find that out
+while somebody is standing at a terminal, not at three in the morning when they ask it something.
+
+The one thing that *is* written before then is the credential itself, and deliberately: somebody who
+has just pasted a bot token into a prompt should not have to paste it again because the connection
+was refused for an unrelated reason. `rundesk env unset <name>` empties it.
+
+## The env name a credential is kept under is recorded, and never re-derived
+
+What comes back from `--check` is the name the adapter reads its credential from, and that name is
+written into the channel's record exactly as it arrived. `channels.hosting` hands the adapter each
+recorded name back with its value under that same name, so the recorded name and the name the
+adapter looks in are one fact — a name worked out a second time, anywhere, is a channel that passes
+`--check` and finds nothing when it is hosted.
+
+**It is therefore not made per-agent, and that is a limitation rather than an oversight.** Deriving
+one from the agent's name is the obvious thing to want — two agents, two bots, two tokens — and it
+cannot be done from here: an agent may be called things an environment variable may not
+(`^[A-Z][A-Z0-9_]*$`), sanitising collides (`a-b` and `a_b` both become `A_B`, which is two agents
+quietly sharing one token), and the adapter reads a name of its own choosing in any case. So the
+name is the adapter's, the prompt says out loud when this install already keeps a value under it,
+and two channels naming one credential are two channels using one credential.
+
+## What leaves this machine arrives as an argument
+
+`reaching` is what runs an adapter, and it is resolved **inside** the body rather than bound in a
+signature. It has no stand-in of its own, exactly as `asking` and `fetching` have none: a case that
+forgets it gets the real thing, and the real thing reaching Discord fails against the closed proxy
+the suite runs behind rather than passing quietly on somebody's laptop.
+
+**No value is ever printed.** The credential is read from the terminal without echoing, handed to the
+adapter by name, and described only ever as set or not set — `commands.env` says why at length.
 """
 
-from __future__ import annotations
-
 import argparse
-import asyncio
-import contextlib
-import getpass
-import os
+import json
+import shlex
+import sqlite3
 import sys
-from pathlib import Path
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
-from rundesk import channel
-from rundesk import gateway as _gateway
-from rundesk import migration
-from rundesk import secret
-from rundesk import standing
-from rundesk import store
-from rundesk.commands import _as_table, _note
+from rundesk.agents import directory, migration, records
+from rundesk.channels import adapters, hosting, kept
+from rundesk.commands import Subcommands, as_written, env, failed
+from rundesk.core import paths, secrets
+from rundesk.exits import FAILED, OK
+from rundesk.utils import files, locking, programs
+from rundesk.utils.terminal import NOTHING, as_table
 
+#: What runs an adapter. Handed in so that no case here reaches a platform by forgetting it, and
+#: **with no default of its own** — see the module docstring on why that is the same decision
+#: `asking` and `fetching` already carry rather than a different one.
+Reaching = Callable[..., programs.Ran]
 
-#: What the credential a surface reads is kept in, beside that channel's own things. The
-#: adapters that need one look here, so this is where one taken at the terminal is put.
+#: Everything a verb here can be stopped by. One tuple, because eight verbs catch the same set and
+#: eight copies of it is seven chances for one to fall behind.
 #:
-#: **Decided by the seam now, not here** — the adapter that reads it back cannot import
-#: this module, so the name belongs where the contract can state it (`channel.SECRET_FILE`).
-#: Re-exported under the name this module has always used, so nothing that reaches for
-#: `channels.SECRET_FILE` has to change.
-SECRET_FILE = channel.SECRET_FILE
+#: Spelled out rather than caught as `Exception`, because these are different situations: something
+#: that may not be done to a channel, no program behind one, records that are not there or cannot be
+#: understood, an agent whose name reaches outside where agents are kept, a migration that has not
+#: run, a credential store that will not answer, the install lock held by something else, and the
+#: ordinary failures of a disk.
+TROUBLE = (kept.Refused, adapters.NotRunnable, directory.Refused, records.NotThere,
+           records.Unreadable, records.Refused, migration.Ahead, migration.Broken,
+           secrets.Refused, secrets.Stuck, locking.Stuck, OSError, sqlite3.Error)
+
+#: What `doctor` can say about one channel, one word per thing there is to do about it.
+READY = "READY"
+BLOCKED = "BLOCKED"
+UNREACHABLE = "UNREACHABLE"
+DANGLING = "DANGLING"
+#: A channel whose adapter answers every question here correctly and which the gateway hosting it has
+#: stopped trying to start. **The one verdict that cannot be reached by asking the adapter**, because
+#: `doctor` asks it in a process of its own: a failure that shows itself only at `serve` time leaves
+#: every check below satisfied, and this said `READY` for a channel that had been abandoned for hours.
+GIVEN_UP = "GIVEN UP"
+
+#: What a listing says about a channel nothing is hosting, and about one nobody could ask about.
+NOT_CONNECTED = "not connected"
+CANNOT_TELL = "cannot tell"
+
+#: What it says about one a gateway has stopped trying to start. **Apart from `NOT_CONNECTED`,
+#: because only one of the two is somebody's to act on**: no gateway at all, a gateway that has not
+#: reached this channel yet, and a ten-second hold-off are all conditions that pass on their own,
+#: and this one never does.
+GAVE_UP = "given up"
 
 
-def cmd_channels(args: argparse.Namespace, gateways, agents) -> int:
-    """The surfaces an agent is reachable on — list them, or change them."""
-    if not agents.exists(args.name):
-        print(f"{args.name}: NO SUCH AGENT", file=sys.stderr)
-        print("        what there is:  rundesk agents", file=sys.stderr)
-        return 1
-    # What a channel may be called is checked here, the way an agent's name is checked
-    # before any verb acts on it. A channel's name becomes a directory, so one that could
-    # climb out of where channels are kept is refused — and refused in our words, because
-    # every other verb answers that way and a traceback is not an answer.
-    named = getattr(args, "channel", None)
-    if named is not None:
-        try:
-            gateways.checked(named)
-        except gateways.NotAName as why:
-            print(f"{args.name}/{named}: INVALID NAME — {why}", file=sys.stderr)
-            return 1
-    # What this agent keeps, resolved once and handed to whichever of the five acts on
-    # it — the same reason the three directories are resolved once (R-AGT-9). A listing
-    # only asks, so it is opened for reading and never built.
+class Found(NamedTuple):
+    """What `doctor` made of one channel: the verdict, why, and the one command that answers it.
+
+    `fix` is `""` where there is nothing to type. Not every verdict has a command behind it, and a
+    heading reading "2 of 3 cannot be used:" with nothing under it reads like output that went
+    missing — `skills doctor` writes the same rule down.
+    """
+
+    agent: str
+    kind: str
+    verdict: str
+    said: str
+    fix: str
+
+
+def register(sub: Subcommands) -> None:
+    """Put `channels` on the parser, one sub-verb for each thing that happens to a channel.
+
+    **Nothing here is `required=True`, including `--allow` and `--confirm`.** argparse's own refusal
+    is a usage error naming a flag, and neither of these is a value the command needs in order to
+    work: one stands between an agent and answering nobody, the other between a person and a
+    connection they would have to set up again. Both are guards on an effect, so the verb refuses
+    instead, in a sentence ending with the whole command to run.
+
+    **`--with` takes one string and never reaches a shell**, exactly as `schedules --run` does and
+    for the same reason: it is split into words the way a shell would split them and handed to the
+    adapter as a list, so nothing in it is globbed, expanded, or read as `;`, `&&` or a redirection.
+    Rundesk parses none of what is in it and has no list of what any platform wants — what comes back
+    in `settings` is the adapter's own normalised account, which is what an owner will still be
+    running on in a year.
+
+    It is a flag rather than a bare `--` passthrough, and that is argparse rather than taste:
+    argparse matches positionals in contiguous runs, so `add <agent> <adapter> --allow <id> --
+    <opts>` puts a flag between the two runs and the words after `--` are then matched against no
+    positional at all — `unrecognized arguments`, exit `2`, on the most natural spelling there is.
+    A flag parses in every order, and this product already had the same problem and the same answer.
+    """
+    said = sub.add_parser("channels", help="how each agent is reached, and how it reaches back")
+    what = said.add_subparsers(dest="what", metavar="<what>")
+
+    every = what.add_parser("list", help="one agent's channels, or every agent's")
+    every.add_argument("agent", metavar="<agent>", nargs="?", default=None,
+                       help="which agent — with none, every agent on this install")
+
+    new = what.add_parser("add", help="connect an agent to a platform")
+    _named(new)
+    new.add_argument("--allow", metavar="<id>", action="append", default=[],
+                     help="required — an id that may reach this agent here, as that platform writes "
+                          "it; say it again for each person")
+    new.add_argument("--notify", action="store_true",
+                     help="make this the channel unprompted things go to")
+    new.add_argument("--with", dest="options", metavar="<adapter opts>", default="",
+                     help="anything the adapter itself takes, as one quoted string — rundesk parses "
+                          "none of it and it never reaches a shell")
+
+    shown = what.add_parser("show", help="everything one channel was given")
+    _named(shown)
+
+    changed = what.add_parser("configure", help="change who may reach an agent here, or what is told")
+    _named(changed)
+    changed.add_argument("--allow", metavar="<id>", action="append", default=[],
+                         help="somebody else who may reach this agent here")
+    changed.add_argument("--deny", metavar="<id>", action="append", default=[],
+                         help="somebody who may no longer")
+    changed.add_argument("--notify", action="store_true",
+                         help="make this the channel unprompted things go to")
+
+    tried = what.add_parser("test", help="ask the adapter to connect again, and say what it reached")
+    _named(tried)
+
+    gone = what.add_parser("remove", help="take a channel away")
+    _named(gone)
+    gone.add_argument("--confirm", action="store_true",
+                      help="required — without it, nothing is taken")
+
+    checked = what.add_parser("doctor", help="what cannot be used, and exactly why")
+    checked.add_argument("agent", metavar="<agent>", nargs="?", default=None,
+                         help="whose channels to check; without one, every agent's")
+
+
+def _named(one: argparse.ArgumentParser) -> None:
+    """The two positionals every sub-verb but `list` and `doctor` takes.
+
+    A channel is addressed by its platform because a channel *is* its platform — there is one Discord
+    connection per agent, so the adapter's name is the channel's name and there is nothing to invent.
+    """
+    one.add_argument("agent", metavar="<agent>", help="which agent, as `rundesk agents` lists it")
+    one.add_argument("adapter", metavar="<adapter>",
+                     help="which platform — the adapter's own name, which is the channel's name")
+
+
+def cmd_channels(args: argparse.Namespace, reaching: Optional[Reaching] = None) -> int:
+    """Answer whichever of the seven was asked for; with none of them, list what there is.
+
+    `reaching` is the one thing here that leaves the machine, resolved inside the body rather than
+    bound in the signature so that the whole group is driven against a program on disk instead of
+    against somebody else's uptime.
+    """
     try:
-        whose = (agents.reading(args.name) if getattr(args, "act", None) in (None, "show")
-                 else agents.records(args.name))
-    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
-        print(f"{args.name}: RECORDS UNREADABLE — {why}", file=sys.stderr)
-        return 1
-    act = getattr(args, "act", None)
-    doing = {"add": _add_channel, "remove": _remove_channel, "show": _show_channel,
-             "allow": _allow_channel,
-             "instructions": _channel_instructions}.get(act, _list_channels)
+        paths.home()
+    except paths.Refused as why:
+        return _failed(str(why))
+
+    what = getattr(args, "what", None)
+    if what in (None, "list"):
+        return _listed(getattr(args, "agent", None))
+    if what == "add":
+        return _added(args, reaching)
+    if what == "show":
+        return _shown(args.agent, args.adapter)
+    if what == "configure":
+        return _configured(args)
+    if what == "test":
+        return _tested(args.agent, args.adapter, reaching)
+    if what == "remove":
+        return _removed(args.agent, args.adapter, args.confirm)
+    if what == "doctor":
+        return _doctored(args.agent, reaching)
+
+    # Unreachable while every sub-verb above is answered, and that is the point: one registered on
+    # the parser and wired to nothing fails here loudly rather than exiting 0 having done nothing.
+    raise AssertionError(f"channels {what} is registered on the parser and answered by nothing")
+
+
+def allow_trouble(said: Sequence[str], typed: str) -> str:
+    """Why this is not a list of people who may reach an agent, or `""` when it is.
+
+    **Required by the verb, and the sentence ends in the whole command to type.** An empty list
+    authorises nobody rather than everybody — `channels.kept` refuses one at the records and this
+    refuses it earlier, in words about what somebody typed rather than about a constraint they have
+    never seen.
+
+    Nothing said and nothing *in* what was said are different mistakes with different sentences: one
+    is a flag left off, the other is almost always a shell variable that was never set, which is
+    exactly the case where being told to type the flag again does not help.
+    """
+    if not said:
+        return ("nothing said who may reach this agent — a channel with an empty list answers "
+                f"nobody, so say at least your own id with: {typed} --allow <id>")
+    blank = [one for one in said if not one.strip()]
+    if blank:
+        return ("an id with nothing in it is not one — that is usually a shell variable that was "
+                f"never set, so say it plainly with: {typed} --allow <id>")
+    return ""
+
+
+def options_trouble(said: str, typed: str) -> str:
+    """Why what was given to `--with` is not an adapter's options, or `""` when it is.
+
+    An unbalanced quote is the only way this goes wrong, and it goes wrong **silently**: `shlex`
+    hands back nothing at all, which is indistinguishable here from having said nothing — so the
+    adapter would be asked its question with none of what somebody meant to point it at, and would
+    answer perfectly well about a connection they had not described.
+    """
+    if not said.strip():
+        return ""
     try:
-        return doing(args, gateways, agents, whose)
-    except Exception as why:   # noqa: BLE001 — a command boundary, reporting truthfully
-        # **A write that could not happen is a refusal, not a traceback.** What this
-        # replaced answered `False` when the record could not be written, and the command
-        # said so and failed; asking the store instead means the failure arrives as an
-        # exception, and one that reached here uncaught would tell an owner adding a
-        # channel to read a stack trace. Caught broadly because *what* went wrong with
-        # somebody else's disk matters far less than the channel not having been added.
-        print(f"{args.name}: NOT CHANGED — {why}", file=sys.stderr)
-        print(f"        what stands in the way:  rundesk doctor {args.name}",
-              file=sys.stderr)
-        return 1
-
-
-def _wants_a_secret(said: dict) -> bool:
-    """Whether this check failed for want of a credential, asked of what it named.
-
-    Read off `secret` — the *names* of the places the adapter reads one from — and never
-    off `why`, which is the platform's own words and this command's to print rather than
-    to parse (R-CAD-13).
-    """
-    return bool((said.get("secret") or {}).get("env"))
-
-
-def _took_a_secret(args: argparse.Namespace, said: dict, home: Path) -> bool:
-    """Take every credential this surface named, and keep each where the surface looks.
-
-    From a pipe when asked for that, and otherwise from a terminal with echo off. Neither
-    is an argument, so neither reaches `ps` or a shell history. Says whether it got any:
-    a check that failed for want of a credential nobody can supply is a refusal, not a
-    prompt in a script that would hang waiting for one.
-
-    **One prompt each, because one value cannot be two credentials.** This read a single
-    value however many were named, joined every name into one question — `slack needs a
-    credential (SLACK_BOT_TOKEN, SLACK_APP_TOKEN):` — and wrote what it got into one file.
-    So a surface that opens its connection with one credential and calls its API with
-    another could never be added by the command that exists to add one: the second was
-    left for the owner to place by hand, which is the exact thing R-CAD-11 says must not
-    happen. `channel.named` has always kept a list and said why; this is the half that had
-    not caught up. A pipe supplies them in the order they were named, one to a line.
-    """
-    # Never `secret` — the module of that name is what writes each value below, and a local
-    # shadowing it would make `secret.write_private` an attribute of a dictionary.
-    asked = channel.named(said.get("secret")) or {}
-    wanted = asked.get("env") or []
-    files = asked.get("files") or []
-    piped = getattr(args, "token_stdin", False)
-    if not piped and not sys.stdin.isatty():
-        return False
-    took = 0
-    home.mkdir(parents=True, exist_ok=True)
-    for at, one in enumerate(wanted):
-        if piped:
-            given = sys.stdin.readline().strip()
-        else:
-            # Named one at a time, so an owner pasting two tokens knows which is being
-            # asked for. Whichever is missing is what the adapter will say next.
-            given = getpass.getpass(
-                f"        {args.kind} needs a credential ({one}): ").strip()
-        if not given:
-            continue
-        kept = home / (files[at] if at < len(files) else channel.SECRET_FILE)
-        # Nobody else's to read, **from the moment it exists**. What is kept about a channel
-        # says a credential is present and never what it is (R-CAD-12); this file is the
-        # credential, so the mode is the guard — and a `write_text` narrowed by a `chmod`
-        # afterwards leaves a window in which anybody on the machine can read it.
-        # `secret.write_private` is the shared form that opens with the mode and refuses to
-        # follow a link planted at the path.
-        secret.write_private(kept, given + "\n")
-        took += 1
-    return took > 0
-
-
-def _credential_files(said: dict, home: Path) -> list:
-    """Which of the files this surface's credentials are kept in are really there.
-
-    Read off what the adapter named rather than off a filename this module holds, so a
-    surface needing two is carried whole and one needing none costs nothing.
-    """
-    asked = channel.named(said.get("secret")) or {}
-    return [one for one in
-            (home / name for name in asked.get("files") or []) if one.is_file()]
-
-
-def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
-    """Put this agent on a channel, once the channel has proved it works (R-CAD-9).
-
-    In this order, and the order is the requirement: the kind resolves, somebody is
-    allowed, the adapter connects and reports what it can see, and only then is anything
-    written. An agent whose channel is misconfigured finds out while a person is standing
-    at the terminal, rather than at three in the morning when somebody asks it something.
-    """
-    if not [one for one in args.allow if one]:
-        # The grammar already refuses the flag being absent. This catches it being there
-        # and empty, which allows exactly as many people. Never defaulted, and there is
-        # deliberately no way to say "anybody" — that is the shortest path to the worst
-        # outcome this product has (R-CAD-10).
-        print(f"{args.name}/{args.channel}: NOT ADDED — nobody is allowed to use it",
-              file=sys.stderr)
-        print(f"        say who:  rundesk channels {args.name} add {args.channel} "
-              f"--kind {args.kind} --allow <user>", file=sys.stderr)
-        return 1
-    try:
-        at = channel.program(args.kind)
-    except channel.NotRunnable as why:
-        print(f"{args.name}/{args.channel}: NOT ADDED — {why}", file=sys.stderr)
-        return 1
-
-    # Somewhere for the check to work in, under the name that was typed. What each
-    # channel is finally given is made below, once the adapter has said what it reached.
-    home = agents.channel_home(args.name, args.channel)
-    home.mkdir(parents=True, exist_ok=True)
-    # What follows `--` is taken off before the parser sees it, for the same reason a
-    # schedule's program is: a tail with an option in it is unparseable on the oldest
-    # Python this runs on.
-    carried = list(args.options) + list(getattr(args, "handed_on", []))
-
-    def checking() -> dict:
-        return asyncio.run(channel.checked(at, carried, channel.environment(
-            home=agents.paths(args.name)["run"], channel=args.channel, agent=args.name,
-            channel_home=home, allow=args.allow, checking=True)))
-
-    said = checking()
-    if not said["ok"] and _wants_a_secret(said):
-        # **The one credential it named, taken and kept, and then asked again.** Exporting a
-        # variable before typing a command is friction that ends in the command failing after
-        # everything else about it worked — but a token given as an argument is in `ps` for
-        # every user on the machine and in a shell history for ever (R-CAD-11). So it is read
-        # from a terminal that is not echoing it, or from a pipe, and written where this
-        # adapter already looks. Asked *again* rather than assumed: the credential being
-        # present is not the channel being reachable, and only the adapter can say which.
-        if _took_a_secret(args, said, home):
-            said = checking()
-    if not said["ok"]:
-        # Nothing is written for a channel that has not proved itself, and the adapter's
-        # own words are the whole of the owner's diagnosis.
-        print(f"{args.name}/{args.channel}: NOT ADDED — {said['why'] or 'it could not be reached'}",
-              file=sys.stderr)
-        return 1
-    # **What one `add` makes is the adapter's to say** (R-CAD-15). A platform is rarely
-    # one place — Discord has private messages and rooms full of people, and they are not
-    # the same thing to talk in — so an adapter reports the kinds of place its options
-    # actually reached and each becomes a channel of its own. One that reports none gets
-    # exactly one channel, under the name that was typed, as every adapter did before.
-    making = said[channel.SHAPES] or [{
-        channel.SHAPE_AT: "", "settings": said["settings"],
-        "describes": said["describes"], channel.FILLS: [], channel.INSTRUCTIONS: ""}]
-    named = []
-    for shape in making:
-        one = args.channel + (f"-{shape[channel.SHAPE_AT]}" if shape[channel.SHAPE_AT] else "")
-        try:
-            gateways.checked(one)
-        except gateways.NotAName as why:
-            print(f"{args.name}/{one}: NOT ADDED — {why}", file=sys.stderr)
-            return 1
-        if whose.channel(one) is not None:
-            # Checked for every one of them *before* any is written, so a second shape
-            # colliding does not leave the first half-added.
-            print(f"{args.name}/{one}: EXISTS — remove it first, or use a different name",
-                  file=sys.stderr)
-            return 1
-        named.append((one, shape))
-    unlogged = 0
-    for one, shape in named:
-        # **Its own home, under its own name** (R-CAD-15). The check ran under the name
-        # that was typed, which is the right place for a question asked before any channel
-        # exists — but what a channel is *given* at start-up is the home of the name it was
-        # written under, and one `add` may write several. Made here, so a channel whose
-        # name gained a suffix is not handed a directory that was never created: the token
-        # an owner put beside it, and anything a person attaches, both live there.
-        beside = agents.channel_home(args.name, one)
-        beside.mkdir(parents=True, exist_ok=True)
-        # The credential goes with the channel that was written, not with the name that was
-        # checked. One `add` may write several, and each is started with the home of the
-        # name it was written under — so a token left only in the check's directory is a
-        # channel that proved itself at the terminal and cannot sign in at start-up.
-        # Every one of them, not only the first. A surface needing two credentials that
-        # was handed one is a channel that proved itself at the terminal and cannot sign
-        # in at start-up — the same failure this copy exists to prevent, one credential
-        # further along.
-        if beside != home:
-            for kept_secret in _credential_files(said, home):
-                # Written rather than copied: `copy2` creates at the umask and the mode
-                # arrives afterwards, so the value is briefly readable by anybody on the
-                # machine — on a path a person never typed and would not think to look at.
-                secret.write_private(beside / kept_secret.name,
-                                     kept_secret.read_text(encoding="utf-8"))
-        # **A new channel has introduced this agent to nobody**, written down before the
-        # record exists so that everybody in the list that follows is owed one (R-CH-33).
-        # This is also what tells a channel added today from one an older release wrote:
-        # no record at all means the people on it have been reaching this agent for
-        # months, and greeting them after an update would be rundesk claiming something
-        # happened that did not.
-        gateways.remember_no_one_welcomed(beside)
-        whose.remember_channel(one, args.kind, args.allow, store.stamped(),
-                               settings=shape["settings"], secret=said["secret"],
-                               describes=shape["describes"],
-                               instructions=shape[channel.INSTRUCTIONS] or None,
-                               fills=shape[channel.FILLS], activity=args.activity)
-        unlogged |= _note(gateways, args.name, f"channel '{one}' added ({args.kind})",
-                          agents.resolved(args.name))
-        print(f"{args.name}/{one}: ADDED — {shape['describes'] or args.kind}")
-    if not any(one == args.channel for one, _ in named):
-        # The check's own directory, when no channel ended up under that name. Removed only
-        # if it is empty, so anything an owner had already put there is theirs and stays.
-        # The credential is the one thing carried across for them, because a channel that
-        # cannot sign in at start-up is one that proved itself and then went quiet.
-        with contextlib.suppress(OSError):
-            home.rmdir()
-        if home.is_dir():
-            beside = ", ".join(one for one, _ in named)
-            carried = _credential_files(said, home)
-            if carried:
-                print(f"        {'the credential' if len(carried) == 1 else 'the credentials'}"
-                      f" in {home} {'was' if len(carried) == 1 else 'were'}"
-                      f" carried to {beside}")
-            print(f"        {home} is not empty — what else is in it belongs beside "
-                  f"{beside} now")
-    if len(named) > 1:
-        # Said out loud, because they were made together and share the one allow-list that
-        # was typed — and the whole reason they are separate channels is that a room and a
-        # private conversation usually should not.
-        print(f"        {len(named)} channels, one for each kind of place — "
-              f"each has its own allowed list and its own instructions")
-    if not standing.of(args.name, gateways, agents).running:
-        # An agent that is not running is not reachable, and saying so here is the
-        # difference between a channel that is quiet and one that is deaf (R-CAD-8).
-        print(f"        not reachable yet:  rundesk start {args.name}")
-    return unlogged
-
-
-def _schedules_reporting_to(kept, channel: str) -> list:
-    """Which of this agent's schedules say what they came to on this surface.
-
-    Asked before the surface is taken away, because the reference is what stops one outliving
-    the other and the database refuses in its own words: an owner saw `FOREIGN KEY constraint
-    failed` and was sent to `doctor`, which does not look at schedules at all.
-    """
-    return sorted(one["name"] for one in kept.schedules() if one.get("channel") == channel)
-
-
-def _remove_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
-    if whose.channel(args.channel) is None:
-        print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
-              file=sys.stderr)
-        return 1
-    reporting = _schedules_reporting_to(whose, args.channel)
-    if reporting:
-        # Named, so the owner knows what to change. Refused rather than passed to the database
-        # to refuse: it would, and in its own words — `FOREIGN KEY constraint failed`, followed
-        # by advice to run `doctor`, which does not look at schedules at all.
-        print(f"{args.name}/{args.channel}: NOT REMOVED — "
-              f"{'schedule' if len(reporting) == 1 else 'schedules'} "
-              f"{', '.join(repr(one) for one in reporting)} still report here", file=sys.stderr)
-        print(f"        point them elsewhere or take them away:  "
-              f"rundesk schedules {args.name}", file=sys.stderr)
-        return 1
-    whose.forget_channel(args.channel)
-    unlogged = _note(gateways, args.name, f"channel '{args.channel}' removed",
-                     agents.resolved(args.name))
-    print(f"{args.name}/{args.channel}: REMOVED")
-    return unlogged
-
-
-def _allow_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
-    """Who may reach this agent here — shown, or changed (R-CAD-19).
-
-    **Changed on the channel that is already there.** Who is responsible for an agent
-    changes over its life, and the only way to say so was to take the agent off the
-    surface and add it again — which throws away its instructions, its settings and
-    whatever the adapter had kept for it, to change one line.
-
-    With nothing to change this shows the list, one id to a line, so a script reads it
-    without parsing a table. What is added and what is removed are decided in one hold
-    below this, so replacing one person with another is never a moment with nobody
-    allowed in it and never a change two owners can lose between them.
-    """
-    it = whose.channel(args.channel)
-    if it is None:
-        print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
-              file=sys.stderr)
-        return 1
-    adding = [one for one in (args.add or []) if one is not None]
-    removing = [one for one in (args.remove or []) if one is not None]
-    if not adding and not removing:
-        allowed = it.get("allow") or []
-        if not allowed:
-            # Nothing writes this and nothing should ever read it as a mode. Said rather
-            # than printed as an empty list, which reads as a command that did nothing.
-            print(f"{args.name}/{args.channel}: NO ONE ALLOWED")
-            return 0
-        for one in allowed:
-            print(one)
-        return 0
-    was = list(it.get("allow") or [])
-    try:
-        resulting = whose.allow_channel(args.channel, add=adding, remove=removing)
+        shlex.split(said)
     except ValueError as why:
-        print(f"{args.name}/{args.channel}: NOT CHANGED — {why}", file=sys.stderr)
-        print(f"        who is allowed now:  rundesk channels {args.name} allow "
-              f"{args.channel}", file=sys.stderr)
-        return 1
-    if resulting == sorted(was):
-        print(f"{args.name}/{args.channel}: UNCHANGED — {', '.join(resulting)}")
-        return 0
-    gone = [one for one in was if one not in resulting]
-    if gone:
-        # Forgotten here as well as by the gateway, because the gateway is exactly what is
-        # *not* running while somebody rearranges who may reach an agent. Without it,
-        # taking a person off and putting them back while nothing was up would leave them
-        # written down as already introduced, and they would never be greeted (R-CH-33).
+        return (f"{said!r} could not be read as an adapter's options ({why}) — check the quoting, "
+                f"and say all of it as one quoted string: {typed} --with '<adapter opts>'")
+    return ""
+
+
+def _words(said: str) -> List[str]:
+    """What was given to `--with`, as the list an adapter is handed. **Never through a shell.**
+
+    Split the way a shell would word-split it, so an owner writing `--with '--room 9930'` gets the
+    two words they meant — and then handed to the adapter as a list, so nothing in it is globbed,
+    expanded, or read as `;`, `&&` or a redirection. `schedules.firing.argv_of` says the same thing
+    about a schedule's program, and is deliberately not reused: reaching into the schedules layer to
+    split a string would be a command group importing a sibling's private reasoning to get at
+    `shlex`.
+    """
+    return shlex.split(said) if said.strip() else []
+
+
+def change_trouble(add: Sequence[str], remove: Sequence[str], notify: bool, typed: str) -> str:
+    """Why this is not a change anybody could make to a channel, or `""` when it is.
+
+    **Naming nothing to change is refused rather than reported as a success**, the decision `agents
+    configure` and `schedules update` already make: a command that says it worked having changed
+    nothing teaches somebody it worked, and the next thing they do rests on a change that never
+    happened.
+
+    One id named on both sides is refused before anything is written, because `kept.allowing` applies
+    the removals first and would answer that it had done exactly what was asked — leaving somebody
+    believing they had taken access away from a person who still has it.
+    """
+    if not add and not remove and not notify:
+        return (f"nothing was named to change about this channel — change who may reach it with: "
+                f"{typed} --allow <id>")
+    blank = [one for one in list(add) + list(remove) if not one.strip()]
+    if blank:
+        return ("an id with nothing in it is not one — that is usually a shell variable that was "
+                f"never set, so say it plainly with: {typed} --allow <id>")
+    both = sorted(set(add) & set(remove))
+    if both:
+        return (f"{both[0]} was named both to allow and to deny, which are two different "
+                "operations — say one of them, not both")
+    return ""
+
+
+def _listed(agent: Optional[str]) -> int:
+    """Every channel there is, or one agent's, and how each one stands.
+
+    Where they are kept is printed even when there are none, for the reason `agents` prints it: "no
+    channels" and "no channels *for this agent*" are different things to learn, and somebody looking
+    at the wrong install needs to see which directory was just found empty.
+
+    An agent whose channels cannot be read is listed saying so rather than left out. Leaving it out
+    would say the agent has none, which is a different and worse thing to be told.
+    """
+    if agent is not None:
+        gone_wrong = directory.not_an_agent(agent)
+        if gone_wrong:
+            return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was listed")
+        names = [agent]
+    else:
         try:
-            gateways.forget_welcomed(
-                agents.channel_home(args.name, args.channel), gone)
-        except (OSError, _gateway.Unreadable) as why:
-            # The change itself is written and stands. Only the note of who has already
-            # been introduced could not be brought up to date, and the worst it costs is
-            # one greeting somebody has had before.
-            print(f"        who has been introduced could not be updated: {why}")
-    print(f"{args.name}/{args.channel}: ALLOWED — {', '.join(resulting)}")
-    unlogged = _note(gateways, args.name,
-                     f"channel '{args.channel}' now allows {', '.join(resulting)}",
-                     agents.resolved(args.name))
-    if [one for one in resulting if one not in was]:
-        # **What is written down is not what the adapter is holding.** A surface is handed
-        # who it may listen to when it starts, so somebody added while the agent is running
-        # is allowed by the record and still unknown to the program — and the introduction
-        # rundesk owes them waits for the same moment. Said, because a new owner messaging
-        # an agent that ignores them has no way to know why.
-        print(f"        in effect when the channel next starts:  "
-              f"rundesk restart {args.name}")
-    return unlogged
+            names = directory.known()
+        except OSError as why:
+            return _failed(str(why), "nothing was listed")
+
+    print(f"channels for {agent}" if agent else f"channels in {paths.agents()}")
+    rows: List[Tuple[str, ...]] = []
+    for name in names:
+        rows.extend(_rows_for(name, showing_who=agent is None))
+    if not rows:
+        print("        nothing is connected yet — connect one with: rundesk channels add "
+              "<agent> <adapter> --allow <id>")
+        return OK
+    head = ("CHANNEL", "REACHES", "ALLOWED", "TOLD", "STANDING")
+    as_table(("AGENT", *head) if agent is None else head, rows)
+    return OK
 
 
-def _channel_instructions(args: argparse.Namespace, gateways, agents, whose) -> int:
-    """What this agent is told about the situation it is answering in (R-CH-22).
+def _rows_for(agent: str, showing_who: bool) -> List[Tuple[str, ...]]:
+    """One agent's channels as lines of a table, or one line saying why they could not be read."""
+    try:
+        found = kept.all(agent)
+    except TROUBLE as why:
+        return [((agent,) if showing_who else ()) + ("?", f"cannot be read — {why}", "?", "?", "?")]
 
-    Checked before it is written, and that is the point of writing it here rather than by
-    hand: a name misspelled in a template is an instruction that goes quietly blank at
-    every turn from then on, and says nothing about having done so. With nothing to set,
-    this shows what is already there — so an owner can read back exactly what their agent
-    will be told before anyone says anything to it.
+    rows = []
+    for row in found:
+        kind = str(row.get("kind") or "")
+        rows.append(((agent,) if showing_who else ())
+                    + (kind, str(row.get("describes") or NOTHING), _who_many(row),
+                       as_written(bool(row.get("notified"))), _how(agent, kind)))
+    return rows
+
+
+def _who_many(row: Dict[str, Any]) -> str:
+    """How many people may reach the agent here, or that the list cannot be read.
+
+    A list nobody can read is never shown as zero: an empty one authorises nobody, so a column that
+    said `0` for a column that is merely unreadable would report a channel as switched off when it
+    may be working perfectly.
     """
-    it = whose.channel(args.channel)
-    if it is None:
-        print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
-              file=sys.stderr)
-        return 1
-    if args.said is None:
-        standing = it.get(channel.INSTRUCTIONS)
-        if not standing:
-            print(f"{args.name}/{args.channel}: NO INSTRUCTIONS — rundesk says where it "
-                  f"is and no more")
-            print(f"        write your own:  rundesk channels {args.name} instructions "
-                  f"{args.channel} \"<text>\"")
-            return 0
-        print(standing)
-        return 0
-    wrong = channel.wrong_with_instructions(args.said, it.get(channel.FILLS)) if args.said else ""
-    if wrong:
-        print(f"{args.name}/{args.channel}: NOT CHANGED — {wrong}", file=sys.stderr)
-        return 1
-    whose.tell_channel(args.channel, (args.said or "").strip() or None)
-    unlogged = _note(gateways, args.name,
-                     f"channel '{args.channel}' was given instructions"
-                     if args.said else f"channel '{args.channel}' had its instructions taken off",
-                     agents.resolved(args.name))
-    print(f"{args.name}/{args.channel}: "
-          + ("INSTRUCTED" if args.said else "INSTRUCTIONS TAKEN OFF"))
-    # **New conversations, not the next turn.** A brain is told this where its conversation
-    # is *opened*, which is the only place a brain of this shape reads it — measured against
-    # a real one, where the same instruction was obeyed at the start of a thread and ignored
-    # on every resume after. So an owner rewording something must be told which
-    # conversations it reaches, or they will reword it, watch the open one carry on exactly
-    # as before, and have nothing to tell them why.
-    print("        in effect for new conversations — say /new to start one")
-    return unlogged
+    try:
+        return str(len(kept.who_may_reach(row)))
+    except TROUBLE:
+        return "?"
 
 
-def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
-    """One channel, and who may reach the agent through it.
+def _how(agent: str, kind: str) -> str:
+    """How one channel stands, asked of the kernel through the lock and never of the record.
 
-    The secret is named as present and never shown (R-CAD-12). Nothing here has ever held
-    one — the record keeps the name of a variable the adapter itself said it read, so
-    there is no value to print by accident.
+    **The lock first, the record only after** — the rule `gateways` already keeps. A record holds a
+    pid, and a pid whose process is gone is a number that now belongs to something else; the claim an
+    adapter holds is dropped by the kernel however the adapter ended, so it is the only thing that
+    answers whether one is really there.
+
+    `cannot tell` is a first-class answer. `hosting.still_running` deliberately re-raises anything
+    that is not ordinary contention, so a permissions failure or a filesystem that will not lock
+    would otherwise read as a channel that is connected — which is a claim nothing has made.
+
+    **And `given up` is the other one.** `not connected` covered four different conditions and only
+    the last of them is somebody's to act on: no gateway, a gateway that has not reached this channel
+    yet, a channel inside its hold-off, and one this gateway will never start again. Asked only once
+    the lock has said nothing is there, because an adapter that is running is the answer whatever a
+    previous gateway left behind.
     """
-    it = whose.channel(args.channel)
-    if it is None:
-        print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
-              file=sys.stderr)
-        return 1
-    # However many a surface needs — one that opens a connection with one credential and
-    # calls its API with another names both, and an owner has to be told which of them is
-    # missing rather than that "the secret" is.
-    asked = channel.named(it.get("secret")) or {}
-    named = asked.get("env") or []
-    files = asked.get("files") or []
-    home = agents.channel_home(args.name, args.channel)
-
-    def stands(at: int, one: str) -> str:
-        """Whether this credential is really there — **asked of both places it may be**.
-
-        The flow the documentation recommends never exports anything: `--token-stdin`
-        writes the value beside the channel, which is where the adapter reads it. Asked
-        only of this command's own shell, a channel that signs in perfectly reported
-        `not set` and sent an owner to fix something that was not wrong.
-
-        **What this install keeps is deliberately not consulted** (R-SEC-29). A value of
-        the same name is never given to this adapter — two agents may hold two different
-        bots — so counting one here would report a credential that does not arrive.
-        """
-        if os.environ.get(one):
-            return "present"
-        kept = files[at] if at < len(files) else channel.SECRET_FILE
-        # Never opened, only looked for: what is kept about a channel says a credential is
-        # present and never what it is (R-CAD-12).
-        with contextlib.suppress(OSError):
-            if (home / kept).is_file():
-                return "present"
-        return "not set"
-
-    rows = [
-        ("kind", str(it.get("kind", "-"))),
-        ("points at", str(it.get("describes") or "-")),
-        ("allowed", ", ".join(it.get("allow") or []) or "nobody"),
-        ("secret", ", ".join(
-            f"{one} — {stands(at, one)}" for at, one in enumerate(named))
-            or "none needed"),
-        ("instructions", str(it.get(channel.INSTRUCTIONS)
-                     or "nothing of its own — rundesk says where it is")),
-        ("activity", "shown while it works" if it.get("activity")
-                     else "only the answer"),
-        ("reachable", "yes" if standing.of(args.name, gateways, agents).running
-            else "no — the agent is not running"),
-    ]
-    _as_table(("WHAT", "IS"), rows)
-    return 0
+    try:
+        if not hosting.still_running(agent, kind):
+            gave_up = hosting.will_not_start(agent, kind)
+            return f"{GAVE_UP} — {gave_up}" if gave_up else NOT_CONNECTED
+    except OSError as why:
+        return f"{CANNOT_TELL} — {why}"
+    return f"connected{_a_pid(_recorded_pid(agent, kind))}"
 
 
-def _list_channels(args: argparse.Namespace, gateways, agents, whose) -> int:
-    reachable = whose.channels()
-    if not reachable:
-        print(f"{args.name}: NO CHANNELS")
-        print(f"        put it on one:  rundesk channels {args.name} add <channel> "
-              f"--kind <kind> --allow <user>")
-        return 0
-    up = standing.of(args.name, gateways, agents).running
-    _as_table(("CHANNEL", "KIND", "POINTS AT", "ALLOWED", "REACHABLE"), [
-        (it["name"], str(it.get("kind", "-")), str(it.get("describes") or "-"),
-         str(len(it.get("allow") or [])), "yes" if up else "no")
-        for it in reachable
-    ])
-    return 0
+def _recorded_pid(agent: str, kind: str) -> Optional[int]:
+    """Which process an adapter said it was, read only once the lock has said one is there."""
+    how, said = files.read_json(hosting.record_of(agent, kind))
+    if how != files.READ or not isinstance(said, dict):
+        return None
+    return programs.a_pid(said.get("pid"))
+
+
+def _a_pid(pid: Optional[int]) -> str:
+    """` (pid N)`, or nothing when the adapter had nothing readable to say about itself."""
+    return f" (pid {pid})" if pid else ""
+
+
+def _added(args: argparse.Namespace, reaching: Optional[Reaching]) -> int:
+    """Connect an agent to a platform, or refuse having written nothing down.
+
+    In the order the module docstring gives, and the order is the whole of it: the flags are checked,
+    the agent is checked, the program is found, it is asked offline what it can do, it is asked to
+    connect, and only an `ok` from that last question writes a row.
+    """
+    typed = f"rundesk channels add {args.agent} {args.adapter}"
+    trouble = allow_trouble(args.allow, typed) or options_trouble(args.options, typed)
+    if trouble:
+        return _failed(trouble, "nothing was added")
+
+    gone_wrong = directory.not_an_agent(args.agent)
+    if gone_wrong:
+        return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was added")
+
+    try:
+        adapters.where(args.adapter)
+        # Asked before anything connects and with no credential anywhere near it, so that a fidelity
+        # difference is a fact rather than a guess.
+        #
+        # **Printed here and kept nowhere**, and this said otherwise for a while — it claimed the
+        # answer was written into the record, which is a mechanism that does not exist: `values`
+        # below has no such key, the `channels` table has no column, and `kept.SETTABLE` names none.
+        # The one capability anything reads is `max_text`, and it is read out of `settings`, where a
+        # `--check` may put it. `docs/adapters.md` says so under *what is not built yet*; a docstring
+        # asserting the opposite is worse than the gap, because nobody re-checks it.
+        able = adapters.capabilities(args.adapter, reaching)
+    except TROUBLE as why:
+        return _failed(str(why), "nothing was added")
+
+    said, wanted, trouble = _reached(args.agent, args.adapter, args.allow, _words(args.options),
+                                     reaching)
+    if trouble:
+        return _failed(trouble, "nothing was added")
+    if not said.ok:
+        return _failed(said.why,
+                       "nothing was added — a channel is written down only once its adapter says it "
+                       "reached something")
+
+    values = {
+        "describes": said.describes,
+        "notify_place": said.notify_place,
+        "settings": said.settings,
+        # **The final answer's names, falling back to the ones just filled in.** An adapter that
+        # names its credential on the refusal and not on the success is not making a mistake, and
+        # recording nothing there would leave a channel whose token is kept on this install and
+        # handed to nobody — a channel that passes `--check` and cannot be hosted.
+        "secret_names": json.dumps(said.secret_names or wanted),
+        "allowed": json.dumps(list(args.allow)),
+    }
+
+    marked = ""
+    try:
+        with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+            kept.added(args.agent, args.adapter, values)
+            if args.notify:
+                # Inside the same lock and after the row, because there is nothing to mark until the
+                # row is there. Its own guard, because by here the channel really has been added:
+                # reporting the whole thing as a failure would send somebody to add a channel that
+                # is already standing.
+                try:
+                    kept.telling(args.agent, args.adapter, said.notify_place)
+                except TROUBLE as why:
+                    marked = str(why)
+    except TROUBLE as why:
+        return _failed(str(why), "nothing was added")
+
+    print(f"{args.agent} is connected to {args.adapter}")
+    went = _described(args.agent, args.adapter, able)
+    if said.invite:
+        print(f"        invite    {said.invite}")
+        print("        the bot is not in any server until somebody with permission adds it there")
+    if marked:
+        return _failed(
+            f"{args.adapter} was added and is not the channel {args.agent} writes to when nobody "
+            f"has asked — {marked}",
+            f"mark it with: rundesk channels configure {args.agent} {args.adapter} --notify")
+    return went
+
+
+def _reached(agent: str, kind: str, allow: Sequence[str], options: Sequence[str],
+             reaching: Optional[Reaching]) -> Tuple[adapters.Checked, List[str], str]:
+    """Ask an adapter to connect, taking the credential it names on the way through.
+
+    Two questions where it looks like one, and the first is the reason there is a second: an adapter
+    asked to connect with nothing set answers `ok: false` **and names the variable it looked in**,
+    which is the whole of how rundesk knows what to ask somebody for without holding a list of what
+    any platform wants.
+
+    Hands back what the adapter said, the names that were filled in on the way, and a sentence when
+    the asking itself could not finish. The first answer comes back with that sentence rather than
+    nothing, so that a caller has only one shape to read whichever way this went.
+    """
+    said = adapters.checked(kind, options, _handed(allow, []), reaching)
+    if said.ok or not said.secret_names:
+        return said, [], ""
+
+    trouble = _asked_for(agent, kind, said.secret_names)
+    if trouble:
+        return said, [], trouble
+    return (adapters.checked(kind, options, _handed(allow, said.secret_names), reaching),
+            list(said.secret_names), "")
+
+
+def _asked_for(agent: str, kind: str, names: Sequence[str]) -> str:
+    """Read each credential this adapter named, one at a time. `""` when there is something to try.
+
+    Read from the terminal without echoing, or from a pipe when something else is driving — never
+    from `argv`, which is in the shell's history the moment somebody presses return and is visible in
+    `ps` to every other user on the machine while the command runs. `commands.env.typed` is the one
+    right way to do that and is reused rather than copied.
+
+    **A name this install already keeps is said out loud rather than written over.** The name belongs
+    to the adapter and is the same for every agent using it, so a second channel naming it is a
+    second channel using one credential — see the module docstring on why it is not made per-agent.
+    Somebody who meant a different token can type one; typing nothing keeps what is there.
+    """
+    held = set(secrets.names())
+    print(f"the {kind} adapter needs {len(names)} value"
+          f"{'s' if len(names) != 1 else ''} before {agent} can use it")
+    for name in names:
+        already = name in held and secrets.placed(name)
+        print(f"        {name}   the {kind} adapter reads its credential from this name"
+              + (" — already set on this install; type nothing to keep it" if already else ""))
+        typed = env.typed("        > ")
+        if typed is None:
+            if already:
+                continue
+            return (f"nothing was typed for {name}, so there is nothing to connect with — "
+                    f"keep it separately with: rundesk env set {name}")
+        try:
+            secrets.stated(name, typed)
+        except (secrets.Refused, secrets.Stuck, OSError) as why:
+            return str(why)
+    return ""
+
+
+def _handed(allow: Sequence[str], names: Sequence[str]) -> Dict[str, str]:
+    """What an adapter is asked its question with: who it may answer, and each named credential.
+
+    **`RUNDESK_ALLOW` is here and not only at hosting time**, and it is not decoration: an adapter
+    that opens a private conversation to report where unprompted things would land has to know whose
+    conversation, so a `--check` handed no allow list is refused by the adapter before it has even
+    signed in. `channels.hosting` builds the same variable from the same list for the long-lived
+    half.
+
+    Reading a whole value is what `secrets.value` exists for — the programs rundesk starts — and this
+    is one of the two places that starts one. Nothing here prints it.
+    """
+    built = {"RUNDESK_ALLOW": ",".join(allow)}
+    for name in names:
+        value = secrets.value(name)
+        if value is not None:
+            built[name] = value
+    return built
+
+
+def _reconnected(kind: str, row: Dict[str, Any], reaching: Optional[Reaching]) -> adapters.Checked:
+    """Ask an adapter to reach again what its channel already has on record.
+
+    **The shape `test` and `doctor` share, and it is the whole of what they share.** Both ask with no
+    options — what an adapter made of the ones it was given at `add` came back as `settings` and is
+    what the channel is really running on — and both hand it the allow list and the credentials the
+    row names. `add` is deliberately not written in terms of this: it asks twice, prompts between the
+    two, and passes the options somebody typed.
+    """
+    return adapters.checked(kind, (), _handed(kept.who_may_reach(row), _named_secrets(row)),
+                            reaching)
+
+
+def _shown(agent: str, kind: str) -> int:
+    """Everything one channel was given, read back whole. Changes nothing."""
+    gone_wrong = directory.not_an_agent(agent)
+    if gone_wrong:
+        return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was shown")
+    try:
+        kept.one(agent, kind)
+    except TROUBLE as why:
+        return _failed(str(why), "nothing was shown")
+    print(f"{kind} channel for {agent}")
+    return _described(agent, kind, {})
+
+
+def _described(agent: str, kind: str, able: Dict[str, Any]) -> int:
+    """The whole of one channel, in the shape `agents add` and `schedules add` report what they made.
+
+    Read back out of the records rather than out of whatever was just handed in, so what somebody is
+    shown is what was actually written down.
+
+    **A credential is described and never shown.** `set` and `not set` is the whole of what this can
+    say about one, which is what `commands.env` promises of every listing in this product.
+    """
+    try:
+        row = kept.one(agent, kind)
+    except TROUBLE as why:
+        return _failed(str(why), "nothing was shown")
+
+    print(f"        reaches   {as_written(row.get('describes'))}")
+    print(f"        allowed   {_who(row)}")
+    print(f"        told      {as_written(bool(row.get('notified')))}"
+          f"{_where_it_writes(row)}")
+    print(f"        needs     {_credentials(row)}")
+    print(f"        settings  {as_written(row.get('settings'))}")
+    if able:
+        print(f"        can       {', '.join(f'{one}={able[one]}' for one in sorted(able))}")
+    print(f"        adapter   {_the_program_behind(kind)}")
+    print(f"        keeps     {hosting.at(agent, kind)}")
+    print(f"        standing  {_how(agent, kind)}")
+    return OK
+
+
+def _who(row: Dict[str, Any]) -> str:
+    """Everybody who may reach the agent here, or that the list cannot be read."""
+    try:
+        return ", ".join(kept.who_may_reach(row)) or NOTHING
+    except TROUBLE as why:
+        return f"cannot be read — {why}"
+
+
+def _where_it_writes(row: Dict[str, Any]) -> str:
+    """Where unprompted things land, said only about the channel that is really the notified one."""
+    if not row.get("notified"):
+        return ""
+    return f" — unprompted things go to {as_written(row.get('notify_place'))}"
+
+
+def _credentials(row: Dict[str, Any]) -> str:
+    """Each credential this channel names, and whether it is set — never what it holds."""
+    names = _named_secrets(row)
+    if not names:
+        return "nothing"
+    return ", ".join(f"{one} ({'set' if secrets.placed(one) else 'NOT SET'})" for one in names)
+
+
+def _named_secrets(row: Dict[str, Any]) -> List[str]:
+    """The environment names this channel's credentials are kept under, as the record holds them.
+
+    A record that will not parse names nothing, which is the least this can claim: it is read the
+    same way `channels.hosting` reads it, so what `doctor` reports missing is what an adapter would
+    really be started without.
+    """
+    try:
+        held = json.loads(row.get("secret_names") or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [str(one) for one in held] if isinstance(held, list) else []
+
+
+def _the_program_behind(kind: str) -> str:
+    """Where the adapter for this channel stands, or that there is not one."""
+    try:
+        return str(adapters.where(kind))
+    except adapters.NotRunnable as why:
+        return str(why)
+
+
+def _configured(args: argparse.Namespace) -> int:
+    """Change who may reach an agent here, or which channel is the one it writes to unprompted."""
+    typed = f"rundesk channels configure {args.agent} {args.adapter}"
+    trouble = change_trouble(args.allow, args.deny, args.notify, typed)
+    if trouble:
+        return _failed(trouble, "nothing was changed")
+
+    gone_wrong = directory.not_an_agent(args.agent)
+    if gone_wrong:
+        return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was changed")
+
+    try:
+        with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+            if args.allow or args.deny:
+                # Read, decided and written inside one transaction by `kept.allowing`, which is why
+                # the whole list is never handed back and forth: two commands racing each other over
+                # a rewritten list lose one of the two changes, and this is the list that decides
+                # who may reach the agent.
+                kept.allowing(args.agent, args.adapter, add=args.allow, remove=args.deny)
+            if args.notify:
+                # No place said, so whatever the channel already knows is kept — re-marking a channel
+                # that already knows where to write does not make somebody name the place again.
+                kept.telling(args.agent, args.adapter)
+    except TROUBLE as why:
+        return _failed(str(why), "nothing was changed")
+
+    print(f"{args.agent}'s {args.adapter} channel changed")
+    return _described(args.agent, args.adapter, {})
+
+
+def _tested(agent: str, kind: str, reaching: Optional[Reaching]) -> int:
+    """Ask the adapter to connect again with what the channel already has, and say what it reached.
+
+    **Changes nothing, including the record of what it found.** A credential that was reset in
+    somebody's developer portal is the case this exists for, and the answer to that is a sentence at
+    a terminal rather than a channel quietly rewritten underneath whoever is reading it.
+
+    The options an owner typed after `--` when the channel was added are deliberately not replayed:
+    what an adapter made of them came back as `settings` and is what the channel is really running
+    on, and a second copy of the words that produced it is a second thing to keep in step.
+    """
+    gone_wrong = directory.not_an_agent(agent)
+    if gone_wrong:
+        return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was tried")
+
+    try:
+        row = kept.one(agent, kind)
+        adapters.where(kind)
+        said = _reconnected(kind, row, reaching)
+    except TROUBLE as why:
+        return _failed(str(why), "nothing was tried")
+
+    if not said.ok:
+        return _failed(f"{agent}'s {kind} channel could not reach anything — {said.why}",
+                       "what the channel is configured with is unchanged — see it with: "
+                       f"rundesk channels show {agent} {kind}")
+    print(f"{agent}'s {kind} channel reached {said.describes}")
+    print(f"        needs     {_credentials(row)}")
+    print(f"        standing  {_how(agent, kind)}")
+    return OK
+
+
+def _removed(agent: str, kind: str, confirm: bool) -> int:
+    """Take a channel away, or say what taking it away would cost.
+
+    **`--confirm` is required here and is not on `configure`**, and the line between them is the one
+    `skills` draws: would somebody want to read this before it happened. Setting up a channel is a
+    credential, an allow list and a round trip to a platform. A backup can restore those pieces, but
+    taking the live channel away is still a user-visible destructive change worth confirming.
+    """
+    gone_wrong = directory.not_an_agent(agent)
+    if gone_wrong:
+        return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was removed")
+    try:
+        row = kept.one(agent, kind)
+    except TROUBLE as why:
+        return _failed(str(why), "nothing was removed")
+
+    if not confirm:
+        return _would_remove(agent, kind, row)
+
+    try:
+        with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+            kept.forgotten(agent, kind)
+    except TROUBLE as why:
+        return _failed(str(why), "nothing was removed")
+
+    print(f"{agent} is no longer connected to {kind}")
+    print(f"        kept   {hosting.at(agent, kind)} — what arrived through it, and what its "
+          "adapter wrote")
+    for name in _named_secrets(row):
+        print(f"        kept   {name} — rundesk env forgets nothing here")
+    if _still_hosted(agent, kind):
+        # Said rather than refused. Nothing here can stop an adapter another process started, and a
+        # gateway that is hosting one will let it go when it next looks; what must not happen is
+        # somebody reading "no longer connected" and believing the connection is already down.
+        print(f"        note   an adapter for {kind} is still connected — the gateway hosting "
+              f"{agent} lets it go when it next looks, and nothing starts another")
+    return OK
+
+
+def _would_remove(agent: str, kind: str, row: Dict[str, Any]) -> int:
+    """What removing this channel would take, on stderr, having taken none of it."""
+    print(f"remove: this would take {agent}'s {kind} channel", file=sys.stderr)
+    print(f"        take     the connection — {agent} would no longer be reachable on {kind}, and "
+          f"{_who(row)} could no longer reach it there", file=sys.stderr)
+    if row.get("notified"):
+        print(f"        take     this is the channel {agent} writes to when nobody has asked, so "
+              "it would then write nowhere", file=sys.stderr)
+    print(f"        keep     {hosting.at(agent, kind)} — what arrived through it, and what its "
+          "adapter wrote", file=sys.stderr)
+    for name in _named_secrets(row):
+        print(f"        keep     {name} — rundesk env forgets nothing here", file=sys.stderr)
+    print("        nothing was removed. To go ahead:", file=sys.stderr)
+    print(f"        rundesk channels remove {agent} {kind} --confirm", file=sys.stderr)
+    return FAILED
+
+
+def _still_hosted(agent: str, kind: str) -> bool:
+    """Whether something is still holding this channel's claim. `False` when nobody can tell.
+
+    Only ever used to add a sentence to a removal that has already happened, so being unable to ask
+    is not worth a failure — and it is never the other way round: nothing here decides whether to act
+    on this answer.
+    """
+    try:
+        return hosting.still_running(agent, kind)
+    except OSError:
+        return False
+
+
+def _doctored(agent: Optional[str], reaching: Optional[Reaching]) -> int:
+    """Say what cannot be used and why, and exit non-zero when anything is wrong.
+
+    The verb a script gates on, the way `env check` and `skills doctor` are — which is why it exits
+    non-zero for a channel it could not reach even though the question it was asked was answered
+    perfectly well.
+
+    **It really connects.** A credential that is set and no longer accepted is the failure this
+    exists to find, and nothing on this machine can tell that from one that is: the adapter has to be
+    asked. So a channel whose credential is missing is `BLOCKED` without a round trip, and everything
+    else pays for one.
+    """
+    if agent is not None:
+        gone_wrong = directory.not_an_agent(agent)
+        if gone_wrong:
+            return _failed(gone_wrong, "see what there is with: rundesk agents",
+                           "nothing was checked")
+        names = [agent]
+    else:
+        try:
+            names = directory.known()
+        except OSError as why:
+            return _failed(str(why), "nothing was checked")
+
+    found: List[Found] = []
+    unreadable: List[Tuple[str, str]] = []
+    for name in names:
+        try:
+            rows = kept.all(name)
+        except TROUBLE as why:
+            # Reported rather than dropped, and counted as trouble: an agent whose channels cannot be
+            # read is not an agent with no channels, and answering "nothing to check" would say so.
+            unreadable.append((name, str(why)))
+            continue
+        for row in rows:
+            found.append(_looked_over(name, row, reaching))
+
+    if not found and not unreadable:
+        who = agent or "any agent"
+        print(f"nothing is connected for {who}, so there is nothing to check")
+        return OK
+
+    for line in _by_agent(found, unreadable):
+        print(line)
+
+    trouble = [one for one in found if one.verdict != READY]
+    if not trouble and not unreadable:
+        print(f"all {len(found)} of them are ready")
+        return OK
+
+    # Flushed before anything goes to stderr. The findings are on stdout so a script can read them
+    # and the summary is on stderr so a script can ignore it — but stdout is block-buffered into a
+    # pipe and stderr is not, so `rundesk channels doctor | less` would otherwise show the summary
+    # above the findings it summarises.
+    sys.stdout.flush()
+    typing = [one.fix for one in trouble if one.fix]
+    # The colon is only earned when something follows it: a heading reading "1 of 2 cannot be used:"
+    # with nothing under it reads like output that went missing.
+    ending = ":" if typing else " — each of them says what is in the way"
+    print(f"channels: {len(trouble) + len(unreadable)} of {len(found) + len(unreadable)} cannot be "
+          f"used{ending}", file=sys.stderr)
+    for line in typing:
+        print(f"        {line}", file=sys.stderr)
+    return FAILED
+
+
+def _looked_over(agent: str, row: Dict[str, Any], reaching: Optional[Reaching]) -> Found:
+    """What is wrong with one channel, in the order the answers rule each other out.
+
+    The program first, because a channel whose adapter is gone cannot be asked anything; then the
+    credential, because an adapter asked to connect without one refuses for a reason nobody has to
+    pay a round trip to learn; then the connection itself, which is the only question left.
+
+    **`GIVEN_UP` is asked last, and only of a channel that answered everything else correctly.** It
+    is the one verdict here that does not come from the adapter: this verb asks in a process of its
+    own, so a failure that shows itself only once an adapter is really serving — a close code the
+    platform will answer with for ever — satisfies every check above. Where the adapter *does* refuse,
+    its own reason is the more specific one and is worth more than this, which is why this stands
+    below rather than in front.
+    """
+    kind = str(row.get("kind") or "")
+    try:
+        adapters.where(kind)
+    except adapters.NotRunnable as why:
+        return Found(agent, kind, DANGLING, str(why),
+                     f"rundesk channels remove {agent} {kind} --confirm")
+
+    names = _named_secrets(row)
+    missing = [one for one in names if not secrets.placed(one)]
+    if missing:
+        return Found(agent, kind, BLOCKED,
+                     f"{', '.join(missing)} — nothing this install can read is kept under "
+                     f"{'those names' if len(missing) > 1 else 'that name'}",
+                     f"rundesk env set {missing[0]}")
+
+    try:
+        said = _reconnected(kind, row, reaching)
+    except TROUBLE as why:
+        return Found(agent, kind, UNREACHABLE, str(why),
+                     f"rundesk channels show {agent} {kind}")
+    if not said.ok:
+        return Found(agent, kind, UNREACHABLE, said.why,
+                     f"rundesk channels test {agent} {kind}")
+    gave_up = hosting.will_not_start(agent, kind)
+    if gave_up:
+        return Found(agent, kind, GIVEN_UP,
+                     f"{gave_up}, and it checks out from here — a gateway has to be started again "
+                     f"before it will try",
+                     f"rundesk gateways restart {agent}")
+    return Found(agent, kind, READY, said.describes, "")
+
+
+def _by_agent(found: Sequence[Found], unreadable: Sequence[Tuple[str, str]]) -> List[str]:
+    """The findings as lines, grouped under each agent's own name.
+
+    **Measured rather than guessed.** Fixed widths are wrong the first time a real adapter is
+    installed — a channel named for a path somebody is writing right now is far wider than `discord`
+    — and running one column into the next is the kind of defect a test asserting `assertIn` never
+    sees.
+    """
+    kind = max((len(one.kind) for one in found), default=0) + 2
+    verdict = max((len(one.verdict) for one in found), default=0) + 2
+
+    lines: List[str] = []
+    standing = ""
+    for one in found:
+        if one.agent != standing:
+            standing = one.agent
+            lines.append(standing)
+        lines.append(f"  {one.kind:<{kind}}{one.verdict:<{verdict}}{one.said}")
+    for agent, why in unreadable:
+        lines.append(agent)
+        lines.append(f"  {agent}'s channels cannot be read — {why}")
+    return lines
+
+
+def _failed(why: str, *and_so: str) -> int:
+    """Say what went wrong, and what that leaves — never one without the other."""
+    return failed(f"channels: FAILED — {why}", *and_so)

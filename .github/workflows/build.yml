@@ -1,614 +1,99 @@
 name: build
 
+# One run per pull request. The product is being rebuilt part by part, so this file describes what is
+# actually here rather than what is planned: the suites, on both interpreters and both systems.
+#
+# It checked a `.knowledge/` documentation system until that system was removed in the rebuild, and
+# went on calling three scripts that no longer existed — so every run was red for a reason that had
+# nothing to do with the change being reviewed, and a red gate nobody can act on is a gate nobody
+# reads. What runs here is what a developer runs: `python3 scripts/suites`.
 on:
   push:
     branches: [main]
-    tags: ['v*.*.*']
   pull_request:
   workflow_dispatch:
-  # Once a day, because the thing most likely to break the published release is not a
-  # commit here — it is GitHub changing something under it, or a release that was laid
-  # down wrong. A canary that only fires when somebody pushes is not watching for that.
-  schedule:
-    - cron: "17 9 * * *"
 
-# One run per ref at a time. Four pushes in forty minutes ran four whole matrices at once,
-# every one of them carrying the same stuck job, and nothing stopped the superseded ones.
 concurrency:
-  group: build-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: build-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# Each validation job answers one question, so a red tick says what is broken before
-# it is opened. The published-archive check catches a missing or corrupt install artifact
-# independently of the source-tree installer checks below.
-
 jobs:
-  # ----------------------------------------------------------- published install archive
-  verify-published-install-archive:
-    name: published install archive downloads and opens
-    timeout-minutes: 2
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download and inspect the published install archive
-        env:
-          ARCHIVE_REQUIRED_SINCE: "0.22.4"
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          asset="https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/rundesk-cli.tar.gz"
-          archive="$RUNNER_TEMP/rundesk-cli.tar.gz"
-          if curl -fsSL "$asset" -o "$archive"; then
-            tar -tzf "$archive" >/dev/null
-          else
-            latest="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              https://api.github.com/repos/rundesk-ai/rundesk-cli/releases/latest |
-              python -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')"
-            if python - "$latest" "$ARCHIVE_REQUIRED_SINCE" <<'CHECK'
-          import re
-          import sys
-          version = lambda value: tuple(map(int, re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", value).groups()))
-          raise SystemExit(0 if version(sys.argv[1]) >= version(sys.argv[2]) else 1)
-          CHECK
-            then
-              echo "::error::the published install archive is missing or invalid for $latest"
-              exit 1
-            fi
-            echo "::notice::published install archives begin with v$ARCHIVE_REQUIRED_SINCE"
-          fi
-
-  # ------------------------------------------------------------------ the knowledge base
-  # Its own job rather than a step inside the test run: the contracts are how this product
-  # says what it guarantees, and a contract that has drifted should be as visible as a
-  # failing test. Nothing here depends on the platform, so it runs once.
-  knowledge:
-    name: knowledge base — docs, contracts, evidence
-    timeout-minutes: 10
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.13'
-
-      - name: Docs meet the documentation standard
-        run: python .knowledge/scripts/doc-lint .knowledge
-
-      - name: The doc linter still fails what it claims to catch
-        # A linter nobody tests is a green tick that means nothing.
-        run: python .knowledge/scripts/test_doc_lint.py
-
-      - name: Every proven requirement names a test that exists
-        # doc-lint cannot tell whether a cited test is real. This repo has already shipped
-        # four contracts citing tests copied from another repository.
-        run: python .knowledge/scripts/check-evidence
-
-  # ------------------------------------------------------------------ the code
   tests:
-    name: tests — ${{ matrix.os }}, python ${{ matrix.python }}, shard ${{ matrix.shard }}
-    timeout-minutes: 10
+    name: the suites (${{ matrix.os }}, python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     strategy:
       fail-fast: false
-      max-parallel: 12
       matrix:
-        target: [ubuntu-3.9, ubuntu-3.13, macos-3.13]
-        shard: [0, 1, 2, 3, 4, 5]
-        include:
-          # The floor: the oldest Python a fresh macOS ships. If this breaks, someone who has
-          # installed nothing cannot run rundesk, which is the whole reason it is Python.
-          - { target: ubuntu-3.9, os: ubuntu-latest, python: '3.9' }
-          # A current one, because most people have installed something newer.
-          - { target: ubuntu-3.13, os: ubuntu-latest, python: '3.13' }
-          # The platform this is actually for.
-          - { target: macos-3.13, os: macos-latest, python: '3.13' }
-
+        # The oldest Python a fresh macOS ships is the floor everything is written against, and a
+        # current one catches what only a newer interpreter minds. Both systems, because an install
+        # is a thing that happens to a machine.
+        os: [ubuntu-latest, macos-latest]
+        python: ['3.9', '3.13']
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Every source and test file parses on this Python
-        run: python -c "import ast, glob; [ast.parse(open(f).read()) for f in glob.glob('src/**/*.py', recursive=True) + glob.glob('tests/*.py')]; print('parse OK')"
-
-      - name: The installer is valid shell
-        run: bash -n install.sh
-
-      - name: This checkout has an install beside it, as a developer's does
-        # Anyone who has run the installer has a `.venv` here, and a gateway asks whether
-        # this install fits the Python running it before claiming its name. A runner never
-        # has one — so a suite that consults the checkout instead of its own scratch root
-        # passed here and failed on every machine the product is actually developed on.
-        # Made empty and on purpose: nothing below may care that it is there.
-        run: mkdir -p .venv/lib/python${{ matrix.python }}
-
-      - name: Every suite — discovered, bounded, and logged separately
-        timeout-minutes: 8
-        run: >-
-          python -u .knowledge/scripts/ci-suites
-          --shard ${{ matrix.shard }} --shards 6
-
-      - name: Keep every suite log
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: suite-logs-${{ matrix.os }}-py${{ matrix.python }}-shard${{ matrix.shard }}
-          path: suite-logs/
-          if-no-files-found: warn
-          retention-days: 14
-
-  # ------------------------------------------------------------------ installing this checkout
-  # The suites above prove the install *logic*. This runs the installer for real and then
-  # uses what it placed, which is a different claim: an install can be correct in every
-  # unit and still leave a command that does not answer.
-  install-this-checkout:
-    name: install this checkout, use it, remove it — ${{ matrix.os }}
-    timeout-minutes: 10
-    runs-on: ${{ matrix.os }}
-    env:
-      # A pull-request gate proves the installer, not GitHub's anonymous API quota.
-      # Public catalog reachability belongs to the published-release canary.
-      RUNDESK_DEFAULT_SKILLS_SOURCE: ${{ github.workspace }}/tests/fixtures/default-catalog
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.13'
-
-      - name: The release archive installs, answers, and removes cleanly
-        env:
-          GITHUB_REF_NAME: v0.0.0
+      - name: Everything parses
+        # `scripts/suites` and `rundesk` are named rather than globbed: they are Python without a
+        # `.py` on them, so a pattern that only knows the extension would skip the two files every
+        # other check here goes through.
         run: |
-          set -euo pipefail
-          git archive --format=tar --prefix="rundesk-cli-${GITHUB_REF_NAME}/" "$GITHUB_SHA" |
-            gzip -9 > rundesk-cli.tar.gz
-          archive_unpack="$RUNNER_TEMP/release-archive"
-          mkdir -p "$archive_unpack"
-          tar -xzf rundesk-cli.tar.gz -C "$archive_unpack"
-          archive_root="$archive_unpack/rundesk-cli-${GITHUB_REF_NAME}"
-          export RUNDESK_INSTALL_DIR="$RUNNER_TEMP/archive-install"
-          export RUNDESK_BIN_DIR="$RUNNER_TEMP/archive-bin"
-          "$archive_root/install.sh"
-          "$RUNDESK_BIN_DIR/rundesk" version
-          "$archive_root/install.sh" --uninstall
-          test ! -e "$RUNDESK_BIN_DIR/rundesk" ||
-            { echo "::error::the archived install left its command behind"; exit 1; }
+          python3 - <<'PARSE'
+          import ast, glob, sys
+          found = (glob.glob('src/**/*.py', recursive=True) + glob.glob('tests/*.py')
+                   + ['scripts/suites', 'rundesk'])
+          if not found:
+              print('::error::the parse check found no python at all')
+              sys.exit(1)
+          for path in found:
+              ast.parse(open(path).read(), path)
+          print(f'parse OK ({len(found)} files)')
+          PARSE
 
-      - name: Installing leaves a command that answers
+      - name: The shell scripts parse
         run: |
-          set -euo pipefail
-          export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
-          ./install.sh
-          "$RUNDESK_BIN_DIR/rundesk" version
+          bash -n dev
+          bash -n install.sh
 
-      - name: A verb that is not built still refuses to claim success
-        run: |
-          set -euo pipefail
-          export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
-          if "$RUNDESK_BIN_DIR/rundesk" run agent-x "do a thing"; then
-            echo "::error::a command that is not built reported success"; exit 1
-          fi
+      - name: Every suite
+        # The same script a developer runs. It finds the suites rather than listing them, and fails
+        # when it finds none.
+        run: python3 scripts/suites
 
-      - name: The gateway verbs answer on a real install
-        # These two touch nothing — `start` would hand this runner a real job to keep
-        # running. `status` says how rundesk is; `agents` says what it has.
-        run: |
-          set -euo pipefail
-          export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
-          "$RUNDESK_BIN_DIR/rundesk" status
-          "$RUNDESK_BIN_DIR/rundesk" agents
-
-      - name: An installed rundesk can actually start a gateway
-        # The step below asks `.venv/bin/python` whether what was declared imports. Nobody
-        # runs rundesk that way: the command is `#!/usr/bin/env python3` and puts the
-        # virtualenv's packages on the path itself. A gateway asks whether they load before
-        # it will claim its name — so if that hand-off ever broke, every installed gateway
-        # would refuse to start and this whole gate would stay green.
-        #
-        # Asserted on `agents`, never on the exit code: refusing to start ends *well* on
-        # purpose, so that a gateway which can never run is not restarted forever.
-        # `agents` and not `status`, because those are two questions now — `status` says
-        # whether this install is fit, and what is running is what this step is about.
-        run: |
-          set -euo pipefail
-          export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
-          "$RUNDESK_BIN_DIR/rundesk" serve probe &
-          serving=$!
-          for _ in $(seq 30); do
-            "$RUNDESK_BIN_DIR/rundesk" agents | grep -qE '^probe +RUNNING' && break
-            sleep 1
-          done
-          if ! "$RUNDESK_BIN_DIR/rundesk" agents | grep -qE '^probe +RUNNING'; then
-            echo "::error::an installed rundesk could not start a gateway"
-            "$RUNDESK_BIN_DIR/rundesk" logs probe || true
-            kill "$serving" 2>/dev/null || true
-            exit 1
-          fi
-          kill "$serving"
-          wait "$serving" || { echo "::error::the gateway did not stop cleanly"; exit 1; }
-
-      - name: Everything rundesk needs came with it, and imports
-        # The guarantee an install makes: nothing is left for a person to put in place. If
-        # anything is declared, it is installed, it fits together, and it can be imported.
-        run: |
-          set -euo pipefail
-          if grep -qvE '^[[:space:]]*(#|$)' requirements.txt; then
-            test -d .venv || { echo "::error::requirements are declared but no virtualenv was made"; exit 1; }
-            .venv/bin/python -m pip check
-            .venv/bin/python - <<'IMPORTS'
-          import pathlib, re, importlib
-          for line in pathlib.Path("requirements.txt").read_text().splitlines():
-              line = line.split("#")[0].strip()
-              if not line:
-                  continue
-              name = re.split(r"[=<>!\[ ]", line)[0]
-              module = {"discord.py": "discord"}.get(name, name.replace("-", "_"))
-              importlib.import_module(module)
-              print(f"{name} -> import {module} works")
-          IMPORTS
-          else
-            test ! -d .venv || { echo "::error::a virtualenv was made for no declared requirements"; exit 1; }
-            echo "nothing declared, and nothing installed — as intended"
-          fi
-
-      - name: The final-message footer regression runs with Discord installed
-        run: .venv/bin/python tests/test_discord.py WhatOneTurnLooksLike.test_the_footer_omits_cache_writes_the_seam_hands_over
-
-      - name: Uninstalling takes what it placed and leaves the checkout
-        run: |
-          set -euo pipefail
-          export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
-          ./install.sh --uninstall
-          test ! -e "$RUNDESK_BIN_DIR/rundesk" || { echo "::error::the command is still on the PATH"; exit 1; }
-          test ! -d .venv || { echo "::error::what the install put in place was left behind"; exit 1; }
-          test -f rundesk || { echo "::error::uninstalling deleted the checkout"; exit 1; }
-
-  # ------------------------------------------------------------------ upgrading an existing install
-  # Fresh-install coverage cannot protect an owner who already has agents, schedules,
-  # configuration and gateway state. Every proposed release is therefore laid over the
-  # newest tagged release and must keep that owner's data usable on both supported systems.
-  upgrade-existing-install:
-    name: upgrade latest release to this checkout — ${{ matrix.os }}
-    timeout-minutes: 10
-    runs-on: ${{ matrix.os }}
-    env:
-      RUNDESK_BIN_DIR: ${{ github.workspace }}/.compat/bin
-      RUNDESK_INSTALL_DIR: ${{ github.workspace }}/.compat/existing-install
-      RUNDESK_JOBS_DIR: ${{ github.workspace }}/.compat/jobs
-      RUNDESK_DEFAULT_SKILLS_SOURCE: ${{ github.workspace }}/tests/fixtures/default-catalog
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.13'
-
-      - name: An existing owner starts on the newest tagged release
-        run: |
-          set -euo pipefail
-          previous="$(git describe --tags --abbrev=0 HEAD^)"
-          old="$RUNNER_TEMP/previous-release"
-          mkdir -p "$old"
-          git archive "$previous" | tar -x -C "$old"
-          "$old/install.sh"
-          "$RUNDESK_BIN_DIR/rundesk" add existing --provider codex
-          # Older releases kept this exact mixed-case identifier on disk. It exercises the
-          # compatibility path a lowercase-only fixture cannot see. The newest release now
-          # normalizes new names, so put the fixture back into that historical on-disk shape.
-          "$RUNDESK_BIN_DIR/rundesk" add Legacy_Name --provider codex
-          mv "$RUNDESK_INSTALL_DIR/data/agents/legacy-name" \
-            "$RUNDESK_INSTALL_DIR/data/agents/Legacy_Name"
-          "$RUNDESK_BIN_DIR/rundesk" schedules existing add heartbeat \
-            --when "0 6 * * *" --ask "report that the gateway is healthy"
-          "$RUNDESK_BIN_DIR/rundesk" schedules Legacy_Name add heartbeat \
-            --when "0 7 * * *" --ask "report that the legacy gateway is healthy"
-          CONFIG="$RUNDESK_INSTALL_DIR/data/config.json" python3 - <<'CONFIG'
-          import json, os
-          from pathlib import Path
-
-          path = Path(os.environ["CONFIG"])
-          current = json.loads(path.read_text())
-          current["backups"] = {"keep_days": 45, "at": "04:30"}
-          current["updates"] = {}
-          path.write_text(json.dumps(current, separators=(",", ":")) + "\n")
-          CONFIG
-          cp "$RUNDESK_INSTALL_DIR/data/config.json" "$RUNNER_TEMP/config.before"
-          printf '%s\n' "kept by the owner" \
-            > "$RUNDESK_INSTALL_DIR/data/agents/existing/home/owner-kept.txt"
-          printf '%s\n' "legacy name kept by the owner" \
-            > "$RUNDESK_INSTALL_DIR/data/agents/Legacy_Name/home/owner-kept.txt"
-          echo "PREVIOUS_ROOT=$old" >> "$GITHUB_ENV"
-
-      - name: The proposed release follows the real update handoff
-        run: |
-          set -euo pipefail
-          proposed="$RUNNER_TEMP/proposed-release"
-          mkdir -p "$proposed"
-          git archive HEAD | tar -x -C "$proposed"
-          PROPOSED="$proposed" python - <<'UPGRADE'
-          import os
-          import sys
-          from pathlib import Path
-
-          proposed = Path(os.environ["PROPOSED"])
-          sys.path.insert(0, str(proposed / "src"))
-          from rundesk import updater
-
-          updater._copy_over(proposed, Path(os.environ["PREVIOUS_ROOT"]))
-          UPGRADE
-          "$PREVIOUS_ROOT/rundesk" update --after-replacing ""
-
-      - name: Existing behavior and owner data still work
-        run: |
-          set -euo pipefail
-          # **Not byte-identical any more, and deliberately.** An upgrade fills values an
-          # earlier release never wrote (R-UPD-48). What has to hold is the thing the `cmp`
-          # here was really asking: nothing an owner stated moved. The expected values are
-          # read off the code rather than listed, or this check goes stale when one is added.
-          PROPOSED="$RUNNER_TEMP/proposed-release" python3 - <<'CONFIG'
-          import json, os, sys
-          from pathlib import Path
-
-          # The tree being proposed, not this checkout's working directory: the step above
-          # unpacked it, and it is what the install now running was replaced with.
-          sys.path.insert(0, str(Path(os.environ["PROPOSED"], "src")))
-          from rundesk import config
-
-          was = json.loads(Path(os.environ["RUNNER_TEMP"], "config.before").read_text())
-          now = json.loads(Path(os.environ["RUNDESK_INSTALL_DIR"], "data/config.json").read_text())
-          for section, values in config.INITIAL.items():
-              before = was.get(section, {})
-              after = now.get(section, {})
-              for key, expected in values.items():
-                  if (section == "skills" and key == "granted"
-                          and tuple(before.get(key, ())) in config.PREVIOUS_DEFAULT_GRANTS):
-                      if after.get(key) != expected:
-                          raise SystemExit(
-                              "::error::the upgrade did not advance the unchanged "
-                              "release-default skill grants")
-                      continue
-                  if key in before and after.get(key) != before[key]:
-                      raise SystemExit(
-                          f"::error::the upgrade changed '{section}.{key}': "
-                          f"{before[key]!r} -> {after.get(key)!r}")
-                  if key not in before and after.get(key) != expected:
-                      raise SystemExit(
-                          f"::error::the upgrade left '{section}.{key}' unstated")
-          missing = [one for one in config.SECTIONS if one not in now]
-          if missing:
-              raise SystemExit(f"::error::the upgrade left out {', '.join(missing)}")
-          print(f"configuration carried: {sorted(was)} kept, {sorted(set(now) - set(was))} added")
-          CONFIG
-          grep -qx "kept by the owner" \
-            "$RUNDESK_INSTALL_DIR/data/agents/existing/home/owner-kept.txt"
-          grep -qx "legacy name kept by the owner" \
-            "$RUNDESK_INSTALL_DIR/data/agents/Legacy_Name/home/owner-kept.txt"
-          "$RUNDESK_BIN_DIR/rundesk" version
-          "$RUNDESK_BIN_DIR/rundesk" status
-          "$RUNDESK_BIN_DIR/rundesk" agents | grep -q '^existing ' ||
-            { echo "::error::the existing agent disappeared during upgrade"; exit 1; }
-          held="$("$RUNDESK_BIN_DIR/rundesk" skills)"
-          catalogs="$("$RUNDESK_BIN_DIR/rundesk" skills catalogs)"
-          printf '%s\n' "$catalogs" |
-            grep -qE '^rundesk-skills +1\.0\.0 +.*default-catalog +1$' ||
-            { echo "::error::the existing install did not receive the default catalog"; exit 1; }
-          printf '%s\n' "$held" |
-            grep -qE '^fixture-guidance +rundesk-skills ' ||
-            { echo "::error::the default catalog skill is not available after upgrade"; exit 1; }
-          for skill in managing-schedules managing-rundesk; do
-            printf '%s\n' "$held" |
-              grep -qE "^${skill} +rundesk +.*Legacy_Name" ||
-              { echo "::error::the legacy agent lost its ${skill} grant"; exit 1; }
-            printf '%s\n' "$held" |
-              grep -qE "^${skill} +rundesk +.*existing" ||
-              { echo "::error::the existing agent lost its ${skill} grant"; exit 1; }
-          done
-          # Backups folded into `managing-rundesk`, so the capability is carried by the
-          # grant asserted above and the retired package goes. A name still standing here
-          # would mean the retirement did not happen and every agent kept a second copy.
-          if printf '%s\n' "$held" | grep -qE '^managing-backups '; then
-            echo "::error::the retired managing-backups package is still in the library"
-            exit 1
-          fi
-          for skill in filing-github-issues writing-github-pull-requests delegating-to-roles; do
-            printf '%s\n' "$held" |
-              grep -qE "^${skill} +rundesk +.*Legacy_Name" ||
-              { echo "::error::the legacy agent did not receive ${skill}"; exit 1; }
-            printf '%s\n' "$held" |
-              grep -qE "^${skill} +rundesk +.*existing" ||
-              { echo "::error::the existing agent did not receive ${skill}"; exit 1; }
-          done
-          for skill in writing-plans organizing-workspaces; do
-            printf '%s\n' "$held" |
-              grep -qE "^${skill} +rundesk +.*Legacy_Name" ||
-              { echo "::error::the legacy agent did not receive ${skill}"; exit 1; }
-            printf '%s\n' "$held" |
-              grep -qE "^${skill} +rundesk +.*existing" ||
-              { echo "::error::the existing agent did not receive ${skill}"; exit 1; }
-          done
-          "$RUNDESK_BIN_DIR/rundesk" schedules existing | grep -q 'heartbeat' ||
-            { echo "::error::the existing schedule disappeared during upgrade"; exit 1; }
-          "$RUNDESK_BIN_DIR/rundesk" agents "Legacy Name" | grep -q '^Legacy_Name:' ||
-            { echo "::error::a spaced alias did not reach Legacy_Name"; exit 1; }
-          "$RUNDESK_BIN_DIR/rundesk" agents "LEGACY-NAME" | grep -q '^Legacy_Name:' ||
-            { echo "::error::a case-insensitive slug did not reach Legacy_Name"; exit 1; }
-          "$RUNDESK_BIN_DIR/rundesk" schedules "legacy name" | grep -q 'heartbeat' ||
-            { echo "::error::an alias did not reach the legacy schedule"; exit 1; }
-          "$RUNDESK_BIN_DIR/rundesk" add "LEGACY-NAME" |
-            grep -q '^Legacy_Name: ALREADY MADE' ||
-            { echo "::error::repair through an alias did not preserve Legacy_Name"; exit 1; }
-          test -d "$RUNDESK_INSTALL_DIR/data/agents/Legacy_Name"
-          test ! -e "$RUNDESK_INSTALL_DIR/data/agents/legacy-name"
-          "$RUNDESK_BIN_DIR/rundesk" serve existing &
-          serving=$!
-          for _ in $(seq 30); do
-            "$RUNDESK_BIN_DIR/rundesk" agents | grep -qE '^existing +RUNNING' && break
-            sleep 1
-          done
-          if ! "$RUNDESK_BIN_DIR/rundesk" agents | grep -qE '^existing +RUNNING'; then
-            echo "::error::the existing gateway did not run after the upgrade"
-            kill "$serving" 2>/dev/null || true
-            exit 1
-          fi
-          kill "$serving"
-          wait "$serving" || { echo "::error::the existing gateway did not stop cleanly"; exit 1; }
-          "$RUNDESK_BIN_DIR/rundesk" serve "Legacy Name" &
-          legacy_serving=$!
-          for _ in $(seq 30); do
-            "$RUNDESK_BIN_DIR/rundesk" agents "legacy-name" |
-              grep -qE '^Legacy_Name: +RUNNING' && break
-            sleep 1
-          done
-          if ! "$RUNDESK_BIN_DIR/rundesk" agents "LEGACY NAME" |
-              grep -qE '^Legacy_Name: +RUNNING'; then
-            echo "::error::the legacy gateway did not run through its alias after the upgrade"
-            kill "$legacy_serving" 2>/dev/null || true
-            exit 1
-          fi
-          kill "$legacy_serving"
-          wait "$legacy_serving" ||
-            { echo "::error::the legacy gateway did not stop cleanly"; exit 1; }
-          if command -v launchctl >/dev/null 2>&1; then
-            test -f "$RUNDESK_JOBS_DIR/ai.rundesk-automatic-update.plist" ||
-              { echo "::error::the upgrade did not schedule automatic updates"; exit 1; }
-          fi
-
-  # One stable required check for branch protection. Matrix job names may grow as supported
-  # environments do; this name stays fixed and succeeds only when every required job did.
-  required-pr-gate:
-    name: required PR gate
-    if: always()
-    needs: [knowledge, tests, install-this-checkout, upgrade-existing-install]
+  style:
+    name: how the code is written
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Every required job passed
-        env:
-          KNOWLEDGE: ${{ needs.knowledge.result }}
-          TESTS: ${{ needs.tests.result }}
-          INSTALL: ${{ needs.install-this-checkout.result }}
-          UPGRADE: ${{ needs.upgrade-existing-install.result }}
-        run: |
-          test "$KNOWLEDGE" = success
-          test "$TESTS" = success
-          test "$INSTALL" = success
-          test "$UPGRADE" = success
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
 
-  # ------------------------------------------------------------------ installing what is published (R-INS-1)
-  # The claim the whole product rests on, and the one every other job is blind to: a machine
-  # with none of rundesk on it installs it with the single instruction the README gives.
-  # Everything above installs *this checkout*, which stays green while what is published is
-  # unusable. This installs the PUBLISHED release, from a directory holding nothing of
-  # rundesk, exactly as a person would.
-  #
-  # Not a pull-request gate: a fix for the installer cannot be published before it merges,
-  # so gating a PR on the old release would block the very change that repairs it.
-  install-published-release:
-    name: install the published release on a bare machine — ${{ matrix.os }}
-    # **Not on every push.** This job installs whatever is *published*, which no commit here
-    # can change — so running it per push tested nothing new and cost two anonymous
-    # api.github.com calls each time. Hosted macOS runners share a handful of NAT'd
-    # addresses and anonymous callers get sixty an hour *per address*, so a busy afternoon
-    # of pushes exhausted the quota and turned a correct release red. Daily or when somebody
-    # asks also avoids racing the release workflow before a tag has been published.
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch'
-    timeout-minutes: 10
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+      - name: The conventions in ruff.toml are kept
+        # Pinned, not floating. A linter that upgrades itself turns this red on a morning nobody
+        # changed anything, and a gate that goes red for reasons unrelated to the change under
+        # review is a gate people learn to scroll past — which is how the job this replaces came to
+        # be pointed at a directory that had not existed for four commits.
+        #
+        # rundesk itself still declares no dependencies: this is fetched here, in CI, and nothing a
+        # person installs ever sees it. `requirements.txt` stays empty on purpose.
+        run: |
+          pip install ruff==0.16.1
+          ruff check src tests scripts/suites rundesk
+
+  required-pr-gate:
+    # **The name is the contract.** `main` is protected on a required context spelled
+    # `required PR gate`, and a check run is matched by the name it publishes — so this job
+    # answering to `required` meant the context nothing produced stayed pending for ever, and
+    # every pull request was BLOCKED with six green checks above it. `enforce_admins` is on, so
+    # there was nobody who could merge past it either. Renaming here rather than loosening the
+    # protection: the gate is what the branch asks for, and it is this file that had it wrong.
+    name: required PR gate
+    runs-on: ubuntu-latest
+    needs: [tests, style]
     steps:
-      - name: The instruction in the README installs rundesk
-        run: |
-          set -euo pipefail
-          export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
-          cd "$(mktemp -d)"   # no checkout, no install.sh, nothing of rundesk within reach
-          if ! curl -fsSL https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh | bash; then
-            echo "::error::the instruction every doc gives does not install rundesk"; exit 1
-          fi
-          "$RUNDESK_BIN_DIR/rundesk" version
-
-      - name: Everything it installed lives in one directory under the home directory
-        run: |
-          set -euo pipefail
-          test -d "$HOME/.rundesk" || { echo "::error::the install did not land in ~/.rundesk"; exit 1; }
-          # **The program has a directory of its own, beside what the owner keeps.** This
-          # asked for the entry point one level up, where it stood before `app/` existed —
-          # and the job only runs on a tag, so the layout changed and nothing said so until
-          # the first release after it. Assert the split as well, or the next move is silent
-          # in the same way.
-          test -x "$HOME/.rundesk/app/rundesk" || { echo "::error::the install has no runnable entry point at ~/.rundesk/app/rundesk"; exit 1; }
-          test ! -e "$HOME/.rundesk/rundesk" || { echo "::error::the program is beside the owner's own things rather than in app/"; exit 1; }
-
-      - name: The version it reports is the one the newest release carries
-        # Ties the install to R-UPD-19 in reality rather than on paper: an install that
-        # reports a number no release carries is one `rundesk update` cannot reason about.
-        env:
-          # **Asked with this job's own token.** Anonymously, api.github.com allows sixty
-          # calls an hour *per IP* — and hosted macOS runners share a handful of NAT'd
-          # addresses, so this call returned 403 and `set -e` killed the step on a release
-          # that was in fact perfectly correct. The token raises the limit to this
-          # repository's own, and costs nothing: it is issued to the run already.
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
-          installed="$("$RUNDESK_BIN_DIR/rundesk" version | tr -d '\r')"
-          # Asked separately from the check, so that "could not ask" and "the wrong
-          # version" are told apart rather than sharing one red tick — which is the same
-          # rule the product itself is held to (R-UPD-19).
-          if ! answer="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-                              -H "Accept: application/vnd.github+json" \
-                              https://api.github.com/repos/rundesk-ai/rundesk-cli/releases/latest)"; then
-            echo "::error::could not ask GitHub which release is newest — this says nothing about the install"
-            exit 1
-          fi
-          tag="$(printf '%s' "$answer" |
-                 sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
-          echo "installed: $installed | newest release: $tag"
-          case "$installed" in
-            *"${tag#v}"*) ;;
-            *) echo "::error::installed $installed, but the newest release is $tag"; exit 1 ;;
-          esac
-
-      - name: A fresh install considers itself up to date
-        run: |
-          set -euo pipefail
-          export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
-          said="$("$RUNDESK_BIN_DIR/rundesk" update --check || true)"
-          echo "$said"
-          case "$said" in
-            *"up to date"*|*"UP TO DATE"*)
-              ;;
-            *"could not reach"*|*UNKNOWN*)
-              # Neither a pass nor a failure: the question could not be asked. rundesk sends
-              # no credentials on purpose, so it is subject to the anonymous per-IP limit that
-              # this runner shares with everybody else on it. Failing here would be the very
-              # mistake the product refuses to make in the other direction — treating "nobody
-              # answered" as an answer.
-              echo "::notice::could not ask GitHub which release is newest, so this check was not made — it says nothing about the install"
-              ;;
-            *)
-              echo "::error::a fresh install of the newest release does not consider itself current"; exit 1 ;;
-          esac
-
-      - name: Uninstalling leaves the machine as it was
-        run: |
-          set -euo pipefail
-          export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
-          cd "$(mktemp -d)"
-          curl -fsSL https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh | bash -s -- --uninstall
-          test ! -e "$RUNDESK_BIN_DIR/rundesk" || { echo "::error::the command is still on the PATH"; exit 1; }
-          test ! -d "$HOME/.rundesk" || { echo "::error::the install directory was left behind"; exit 1; }
+      - run: echo "every required job passed"

@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+#
+# Run this checkout against a scratch root, never against the owner's install.
+#
+#     ./dev status
+#     ./dev --home /tmp/somewhere version
+#
+# The danger was never the program — it is that every location defaults under the owner's home, so a
+# command run from a checkout to try a change out answers against their live install and writes into
+# it. This closes that in the only way that holds: it removes every RUNDESK_* variable from the
+# environment *first*, and only then sets the one the product reads.
+#
+# That ordering is the whole point. Writing an override in front of a scrubbing prefix — the shape
+# `RUNDESK_HOME=/tmp/x env -u RUNDESK_HOME ... rundesk` — sets the variable and then takes it away
+# again, so the default wins and the command reports an ordinary success while working on the live
+# install. It has happened, and nothing in the output said which directory had been used. So this
+# prints the root on every run.
+
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SCRATCH="${HERE}/.scratch/rundesk-home"
+
+if [[ "${1:-}" == "--home" ]]; then
+  [[ -n "${2:-}" ]] || { echo "dev: --home needs a directory" >&2; exit 2; }
+  SCRATCH="$2"
+  shift 2
+fi
+
+case "$SCRATCH" in
+  /*) ;;
+  *) SCRATCH="$(pwd -P)/$SCRATCH" ;;
+esac
+
+if [[ "$SCRATCH" == "$HOME" || "$SCRATCH" == "$HOME/.rundesk" ]]; then
+  echo "dev: refusing to point a scratch run at ${SCRATCH}" >&2
+  exit 2
+fi
+
+mkdir -p "$SCRATCH"
+
+# `install` with no --bin-dir writes a `rundesk` link into a real directory on the owner's PATH,
+# and that is the one thing pinning the root does not cover: the root moves, the link does not.
+# Somebody trying an install out from a checkout has already said which directory they mean by
+# running this script, so say it for them rather than leaving it as a rule to remember at the one
+# moment it matters. Named explicitly on the command line, never defaulted quietly, so the output
+# says where the link went.
+for arg in ${1+"$@"}; do
+  if [[ "$arg" == "--bin-dir" ]]; then PINNED=yes; fi
+done
+if [[ "${1:-}" == "install" && -z "${PINNED:-}" ]]; then
+  mkdir -p "${SCRATCH}/bin"
+  set -- "$@" --bin-dir "${SCRATCH}/bin"
+  echo "dev: --bin-dir=${SCRATCH}/bin (pinned, so nothing lands on your PATH)" >&2
+fi
+
+# Scrub first, set second. `env -i` is deliberately not used: PATH, HOME and TERM are what makes the
+# command behave like one somebody typed, and dropping them would test a machine nobody has.
+scrubbed=()
+while IFS= read -r name; do
+  scrubbed+=("-u" "$name")
+done < <(env | sed -n 's/^\(RUNDESK_[A-Za-z0-9_]*\)=.*/\1/p')
+
+echo "dev: RUNDESK_HOME=${SCRATCH}" >&2
+# `${a[@]+"${a[@]}"}` rather than `"${a[@]}"`: macOS ships bash 3.2, where an empty array under
+# `set -u` is an unbound variable — so a machine with no RUNDESK_* set at all, which is the ordinary
+# one, would fail here rather than run.
+exec env ${scrubbed[@]+"${scrubbed[@]}"} RUNDESK_HOME="$SCRATCH" "${HERE}/rundesk" "$@"

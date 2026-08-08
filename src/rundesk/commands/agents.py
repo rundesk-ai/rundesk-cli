@@ -1,667 +1,609 @@
-"""The named identity work is run for: making one, configuring it, asking it, diagnosing it.
+"""The agents this install keeps, and the four things anybody does with them.
 
-An agent sits **above** the gateway and never beside it, and that direction holds here: this
-resolves what an owner meant by a name and hands the rest over. `rundesk ask` runs a turn in
-the terminal that asked rather than inside the agent's gateway — there is nothing to ask a
-gateway with yet, and inventing one is not what the verb is for.
+`rundesk agents` on its own lists them, the way `backups` and `env` do, because listing is what
+somebody wants nine times in ten and a verb they have to remember for it is a verb they will not
+remember. The other three are named: `add`, `configure` and `remove`.
+
+This decides only how a person types it and what they are shown. What an agent *is* — a directory
+holding `state.db`, standing under `data/agents/` — belongs to `agents.directory`, and this module
+never reaches past it to the disk.
+
+**A provider is recorded and it is not proven.** Nothing in this release runs one: a gateway can be
+started for an agent, and what that gateway hosts is not a provider yet — no credential is checked
+and no request is made. So `add` and `configure` say so out loud on the line that reports success.
+An agent added with a provider nobody has ever spelled correctly looks exactly like one that works,
+and letting the wording imply otherwise would be claiming a success this release did not earn —
+which is the one thing this product is written against.
+
+**`remove` asks for `--confirm`**, and a flag rather than a prompt for the reason `uninstall` gives:
+a prompt in a script is a command that hangs, and one that assumes yes with no terminal is worse
+than no prompt at all. It takes an agent's whole memory, which is the thing here that no backup of
+`data/` taken afterwards can bring back.
+
+**And it refuses while anything is running for that agent**, which is a check that can only be
+made here: `agents/` sits below `gateways/`, `schedules/` and `channels/` and may not import any of
+them, so the layer that removes an agent cannot ask, and `directory.forgotten` says as much in its
+own docstring. Three things to ask about and one reason behind all three — a gateway hosting an
+agent that no longer exists, a firing whose lock this removal would hand away, and an adapter still
+connected to a platform as an agent that is gone.
 """
 
-from __future__ import annotations
-
 import argparse
-import asyncio
-import json
-import os
+import sqlite3
 import sys
-import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-from rundesk import ROOT as REPO_ROOT
-from rundesk import __version__
-from rundesk import agent as _agent
-from rundesk import config
-from rundesk import gateway as _gateway
-from rundesk import migration
-from rundesk import provider
-from rundesk import schedule as schedules
-from rundesk import standing
-from rundesk import store
-from rundesk import turn
-from rundesk.commands import _as_table
+from rundesk.agents import directory, migration, pages, records
+from rundesk.channels import hosting
+from rundesk.commands import Subcommands, as_written, failed
+from rundesk.core import paths
+from rundesk.exits import FAILED, OK
+from rundesk.gateways import job, standing
+from rundesk.schedules import firing, kept
+from rundesk.skills import grants, library
+from rundesk.utils import locking
+from rundesk.utils.terminal import as_table
+
+#: What is true of a provider in this release, said wherever one is recorded.
+#:
+#: One string rather than a sentence written twice, because `add` and `configure` make exactly the
+#: same claim and two wordings of it would eventually become two different claims.
+NOT_PROVEN = ("the provider is recorded and not proven — check it with: "
+              "rundesk providers check")
+
+#: What `--describes` is for, said once for the same reason `NOT_PROVEN` is: `add` and `configure`
+#: offer the identical field, and two wordings of it would eventually become two different claims
+#: about what belongs in it.
+WHAT_IT_IS_FOR = ("what it is for, in one sentence — what another agent reads while deciding "
+                  "whether to delegate to it")
+
+#: The same spellings every yes-or-no setting on the install accepts. Kept here because this value
+#: belongs to one agent's SQLite configuration, not to the install-wide JSON configuration.
+YES = ("yes", "true", "on", "1")
+NO = ("no", "false", "off", "0")
+
+#: What a name outside `job.IN_A_LABEL` costs, said where the name is chosen rather than where it is
+#: next needed. `agents` allows any name a directory may have and launchd's labels are narrower, so
+#: this is an agent no job can ever be placed for — and the moment somebody finds that out must not
+#: be the moment they cannot stop it.
+NO_JOB_EVER = ("this name cannot be a launchd label, so no job can ever be placed for it — nothing "
+               "starts its gateway at login and nothing brings it back when it stops. Run it with "
+               "`rundesk gateways run` and stop it with `rundesk gateways stop`, or add the agent "
+               "again under a name of letters, digits, a dot, a dash or an underscore")
+
+#: Everything making, changing or taking an agent away can end as.
+#:
+#: Named once because three verbs catch the same set, and spelled out because `agents/` hands back
+#: several different kinds of trouble rather than one: a refusal it decided itself, records that are
+#: not there or cannot be understood, a migration step that will not load, the install lock held by
+#: something else, and the ordinary failures of a disk. `sqlite3.Error` is here for the same reason
+#: as the rest — `records` turns a file that is not a database into `Unreadable` at open time, but a
+#: writer that waits out its whole busy timeout against a gateway still surfaces SQLite's own error,
+#: and a traceback is not an answer somebody can act on.
+TROUBLE = (directory.Refused, records.NotThere, records.Unreadable, records.Refused,
+           migration.Ahead, migration.Broken, locking.Stuck, OSError, sqlite3.Error)
+
+#: Everything giving a new agent the skill it operates this install with can be stopped by.
+#:
+#: **Kept apart from `TROUBLE`, which fails the verb.** By the time this runs the agent has been
+#: built and renamed into place, so a failure here may not report that nothing happened — that sends
+#: somebody to make an agent that already exists. Spelled out rather than folded in, because
+#: `TROUBLE` names no kind the skills layer raises and an unguarded grant would reach a person as a
+#: traceback out of a command that had already succeeded.
+GRANTING_TROUBLE = (library.Refused, grants.Refused, grants.NotPresented, grants.HalfCopied,
+                    locking.Stuck, OSError)
 
 
-#: How many lines of what a brain said went wrong a failed turn puts on the screen. A tail
-#: rather than all of it: a brain that failed noisily can say a great deal, and what is
-#: worth reading is almost always the last of it.
-_TROUBLE_LINES = 6
+def register(sub: Subcommands) -> None:
+    """Put `agents` on the parser, with one sub-verb for each thing that happens to an agent.
 
-def _brain_already_named(name: str, agents) -> bool:
-    """Does this agent already say which brain answers for it?
+    **`--provider` is registered as an ordinary option rather than as `required=True`, and
+    `--confirm` as a flag rather than as a positional.** argparse's own `required` would refuse the
+    command line itself — exit `2`, in argparse's words, which name the flag and do not say what to
+    type. Both of these guard an effect rather than describe one, so they are refused by the verb,
+    at exit `1`, in a sentence that ends with the command somebody should run. That is the shape
+    `uninstall --confirm` already has, and there is no reason for this to be the second shape.
+    """
+    # `kept_here` rather than `kept`, which is the name of the schedules store this module now
+    # imports. The shadow would be local to this function and harmless today, and the day somebody
+    # adds a line here that wants the store it would be a `NoneType has no attribute` from a parser.
+    kept_here = sub.add_parser("agents", help="the agents this install keeps")
+    what = kept_here.add_subparsers(dest="what", metavar="<what>")
 
-    Records this rundesk will not read are **not** an answer of no. Asking them opens the
-    store, which refuses what it does not understand — and asked without a guard, the
-    ordinary repair (`rundesk add <name>`, no `--provider`, because the brain is already
-    remembered) came out as a raw traceback for exactly the agent an owner was repairing.
-    The refusal itself is reported a few lines below, by the code that already knows how to
-    say it; this only decides whether to demand a brain, and a store nobody can read is not
-    a reason to demand one.
+    what.add_parser("list", help="every agent this install keeps, and what is behind it")
+
+    new = what.add_parser("add", help="make an agent")
+    new.add_argument("agent", metavar="<agent>", help="what to call it")
+    new.add_argument("--provider", metavar="<provider>", default=None,
+                     help="required — what is behind it; recorded, and not proven")
+    new.add_argument("--describes", metavar="<text>", default=None, help=WHAT_IT_IS_FOR)
+
+    changed = what.add_parser("configure", help="change what an agent is configured with")
+    changed.add_argument("agent", metavar="<agent>", help="which one, as `rundesk agents` lists it")
+    changed.add_argument("--provider", metavar="<provider>", default=None,
+                         help="what is behind it; recorded, and not proven")
+    changed.add_argument("--describes", metavar="<text>", default=None, help=WHAT_IT_IS_FOR)
+    changed.add_argument("--self-improve", metavar="<true|false>", default=None,
+                         help="whether Rundesk runs automatic self improvement; yes or no")
+
+    gone = what.add_parser("remove", help="take an agent away, and everything it remembers")
+    gone.add_argument("agent", metavar="<agent>", help="which one, as `rundesk agents` lists it")
+    gone.add_argument("--confirm", action="store_true",
+                      help="required — removal does nothing without it")
+
+
+def cmd_agents(args: argparse.Namespace) -> int:
+    """Answer whichever of the four was asked for; with none of them, list what there is."""
+    try:
+        paths.home()
+    except paths.Refused as why:
+        return _failed(str(why))
+
+    what = getattr(args, "what", None)
+    if what in (None, "list"):
+        return _listed()
+    if what == "add":
+        return _made(args.agent, args.provider, args.describes)
+    if what == "configure":
+        return _configured(args.agent, args.provider, args.describes, args.self_improve)
+    if what == "remove":
+        return _forgotten(args.agent, args.confirm)
+
+    # Unreachable while every sub-verb above is answered, and that is the point: one registered on
+    # the parser and wired to nothing fails here loudly rather than exiting 0 having done nothing.
+    raise AssertionError(f"agents {what} is registered on the parser and answered by nothing")
+
+
+def _listed() -> int:
+    """Every agent there is, in name order, with what is recorded behind it.
+
+    Where they stand is printed even when there are none, for the reason `backups` prints it: "no
+    agents" and "no agents *here*" are different things to learn, and somebody looking at the wrong
+    root needs to see which directory was just found empty.
+
+    An agent whose records cannot be read is listed with a provider nobody can answer for rather
+    than left out. Leaving it out would say the agent is not there, which is a different and worse
+    thing to be told — the directory is on the disk and something has to be done about it.
+    """
+    at = paths.agents()
+    try:
+        there = directory.known()
+    except OSError as why:
+        return _failed(str(why), "nothing was listed")
+
+    print(f"agents in {at}")
+    if not there:
+        print("        no agents yet — add one with: "
+              "rundesk agents add <agent> --provider <provider>")
+        return OK
+    rows = []
+    for name in there:
+        provider, self_improve = _configuration_of(name)
+        rows.append((name, provider, _skills_of(name), self_improve))
+    as_table(("AGENT", "PROVIDER", "SKILLS", "SELF-IMPROVE"), rows)
+    return OK
+
+
+def _skills_of(name: str) -> str:
+    """Current skill names for routing, or why they could not be read."""
+    try:
+        return ", ".join(one.name for one in grants.held(name)) or "none"
+    except OSError:
+        return "? — cannot be read"
+
+
+def _configuration_of(name: str) -> Tuple[str, str]:
+    """The two listed settings of one agent, or why they could not be answered.
+
+    The two ways it cannot be answered are kept apart, because they are different situations:
+    records that have gone away between the listing and the reading, and records that are there and
+    cannot be understood. Collapsing them would tell somebody with a corrupt database that their
+    agent is simply missing, and what they do next is make a new one over it.
     """
     try:
-        return bool((agents.chosen(name) or {}).get("provider"))
-    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed):
-        return True
+        settled = records.read(directory.records(name))
+        return str(settled["provider_name"]), as_written(bool(settled["self_improve"]))
+    except records.NotThere:
+        return "? — its records are not there", "?"
+    except (directory.Refused, records.Unreadable, OSError, sqlite3.Error, KeyError):
+        return "? — its records cannot be read", "?"
 
 
-def _identities(agents, machine) -> list[str]:
-    """Every persisted spelling that command resolution must not split."""
-    return sorted({*agents.identities(), *machine.described(root=REPO_ROOT)})
+def _the_skill_every_agent_holds(agent: str) -> str:
+    """Give a new agent the skill it operates this install with. Hands back the line to print.
 
+    **Here rather than in `agents/`**, because `agents` may not reach `skills` — an agent stays
+    something that can be made, carried and taken away by code that has never heard of a skill, and
+    the layer table says presenting a new agent's skills is done here. This is that seam.
 
-def cmd_add(args: argparse.Namespace, gateways, machine, agents) -> int:
-    """Make an agent, and the one gateway that runs it (R-AGW-1).
+    **After the agent has been made, so the grant cannot un-make it.** The directory has been renamed
+    into place and the install lock is free by then, so the two writes are ordered rather than nested.
 
-    Making one that already exists puts back only what is missing (R-AGT-4). That is how an
-    owner repairs a home they half deleted, and it must not be how they lose the rules they
-    spent a month writing — so nothing that is there is written over, whatever is in it.
+    **Best-effort, and it may never fail the agent.** An install whose catalog has not been placed
+    yet — a checkout, a scratch root, an install interrupted before its catalogs were checked — has
+    no such skill to grant, and refusing to make an agent over that would be refusing the thing that
+    always works because of the thing that sometimes does not. So it answers a sentence naming
+    `rundesk update`, which is the sweep that grants it. The same reasoning as reading what a skill
+    needs only after the grant has landed.
 
-    Given the name of a gateway that has been running since before there were agents, this
-    is also how that gateway gets one: what it wrote moves into the agent's own directories,
-    so that afterwards there is one place rather than two that disagree. It moves nothing
-    while that gateway is running, because a gateway reading one directory while every
-    command reads another is the fault that makes a schedule silently never run.
+    **Always a line, never silence.** An install that quietly stopped granting the floor is a feature
+    that silently never fires, which is the failure this product is written against.
     """
-    given = args.name
-    if not given:
-        print("add: NAME REQUIRED — say what to call the agent", file=sys.stderr)
-        print("        what there is already: rundesk agents", file=sys.stderr)
-        return 1
     try:
-        name = agents.creation_name(given, _identities(agents, machine))
-    except agents.NotAnAgentName as why:
-        print(f"{given}: INVALID NAME — {why}", file=sys.stderr)
-        return 1
-    knew = agents.exists(name)
-    pending = agents.creation_pending(name)
-    if knew and not pending and any((
-        args.provider, args.model, getattr(args, "settings", None),
-        getattr(args, "says", None) is not None,
-    )):
-        print(f"{name}: ALREADY MADE — use configure to change its defaults",
-              file=sys.stderr)
-        print(f"        like this:  rundesk configure {name} --provider <provider>",
-              file=sys.stderr)
-        return 1
-    # **An agent with no brain cannot take a turn**, so it is not a thing to make. Asked here
-    # rather than left to the first `ask`: a half-made agent that reports MADE and then
-    # refuses everything is worse than a refusal now, and an owner who has to be told twice
-    # was told the wrong thing first. Making one that *already* has a brain is a repair and
-    # must not demand it again (R-AGT-4, R-AGT-18).
-    if not args.provider and not (knew and _brain_already_named(name, agents)):
-        print(f"{name}: NO BRAIN — say which one answers for this agent", file=sys.stderr)
-        print(f"        like this:  rundesk add {name} --provider <provider>",
-              file=sys.stderr)
-        print("        a shipped one, or the path to a program you wrote", file=sys.stderr)
-        return 1
-    # Validate everything we can before making, adopting or changing anything. Provider
-    # settings are deliberately opaque, but their shape and the adapter's executability
-    # are ours to prove. A refusal leaves the previous whole configuration intact
-    # (R-AGT-32).
+        held = grants.granted(agent, library.look_up(library.REQUIRED))
+    except GRANTING_TROUBLE as why:
+        return f"note      it has no {library.REQUIRED} yet ({why}) — rundesk update gives it"
+    return f"skill     {held.catalog}/{held.skill} — how it operates this install"
+
+
+def _the_pages_it_lives_by(home: Path) -> str:
+    """Say which files this agent was given, or which it did not get. Never silence.
+
+    `agents.directory` places them inside the staging and lets a release that ships none go past —
+    the fault would be in the tree the command was run from, and refusing to make an agent over it
+    helps nobody. **This is the half that makes that visible.** An agent whose rules are missing
+    behaves like an agent with different rules rather than like one that failed, so nothing else
+    would ever say so.
+    """
+    missing = pages.wanted(home)
+    if not missing:
+        return (f"rules     {', '.join(sorted(pages.CONTINUITY))} — how it works, and what it "
+                "learns")
+    return (f"note      it has no {', '.join(missing)} yet — this release shipped none, and "
+            "rundesk update gives it them")
+
+
+def _made(name: str, provider: Optional[str], describes: Optional[str] = None) -> int:
+    """Make an agent, and say what was made — one named thing at a time.
+
+    The provider is checked here before anything is built, so somebody who left it out is told what
+    to type rather than told by argparse which flag is missing. `directory.made` refuses an empty
+    one too, and refuses it again inside the install lock where the name is checked; this is the
+    refusal worded for a person, not a second opinion about the rule.
+
+    `describes` gets no such pre-check, and the difference is the point: `_provider_trouble` says
+    something `directory.made` cannot — the command to type — so it earns its place, while a second
+    call to `describes_trouble` here would produce the identical sentence a moment earlier.
+    """
+    trouble = _provider_trouble(provider, f"rundesk agents add {name} --provider <provider>")
+    if trouble:
+        return _failed(trouble, "nothing was made")
+
     try:
-        settings = _given(getattr(args, "settings", None))
-        if args.provider:
-            provider.program(args.provider)
-    except (ValueError, provider.NotRunnable) as why:
-        print(f"{name}: NOT SET — {why}", file=sys.stderr)
-        return 1
-    wrote = agents.standing_before(name)
-    # Whether or not the agent already exists. An adoption that was refused leaves the
-    # files where they were, and asking again is how an owner retries it — conditioning
-    # this on the agent being new would make one refusal permanent, since the home would
-    # exist ever after and nothing would look at the old directory again.
-    if wrote:
-        now = standing.of(name, gateways, agents)
-        if now.running:
-            print(f"{name}: NOT MADE — a gateway of that name is running (pid {now.pid})",
-                  file=sys.stderr)
-            print(f"        it has things to move, so stop it first: rundesk stop {name}",
-                  file=sys.stderr)
-            return 1
+        at = directory.made(name, provider or "", describes or "")
+    except TROUBLE as why:
+        return _failed(str(why), "nothing was made")
+
+    print(f"agent {name} added")
+    print(f"        provider  {provider}")
+    print(f"        home      {at / directory.HOME}")
+    print(f"        logs      {at / directory.LOGS}")
+    print(f"        records   {at / directory.RECORDS}")
+    print(f"        {_the_pages_it_lives_by(at / directory.HOME)}")
+    print(f"        workspace {', '.join(f'{area}/' for area in pages.AREAS)} — agent-owned work, organized")
+    print(f"        {_the_skill_every_agent_holds(name)}")
+    if job.name_trouble(name):
+        print(f"        note      {NO_JOB_EVER}")
+    print(f"        note      {NOT_PROVEN}")
+    return OK
+
+
+def _configured(name: str, provider: Optional[str], describes: Optional[str] = None,
+                self_improve: Optional[str] = None) -> int:
+    """Change what one agent is configured with, or refuse having changed nothing.
+
+    **Naming nothing to change is refused rather than reported as a success.** `configure` makes the
+    same decision one layer up and for the same reason: a command that reports success having
+    changed nothing teaches somebody that it worked, and the next thing they do rests on a change
+    that never happened. Showing what the agent is configured with instead is a listing wearing the
+    name of a change, and `rundesk agents` already answers that question.
+
+    **Any combination of flags moves in one write.** Two `stated` calls would be two chances to
+    half-succeed, and an agent left with a new description and its old provider is a state nobody
+    asked for.
+
+    An empty `--describes` takes the description away rather than storing a blank. That is the one
+    way back for somebody who wrote the wrong thing, and it is why `""` and *not given* have to stay
+    different answers here — `None` means the flag was absent, and `""` means somebody typed it.
+    """
+    if provider is None and describes is None and self_improve is None:
+        return _failed(f"nothing was named to change about {name}",
+                       f"change one with: rundesk agents configure {name} --provider <provider>",
+                       f"or: rundesk agents configure {name} --describes <text>",
+                       f"or: rundesk agents configure {name} --self-improve <true|false>",
+                       "nothing was changed")
+    if provider is not None:
+        trouble = _provider_trouble(provider,
+                                    f"rundesk agents configure {name} --provider <provider>")
+        if trouble:
+            return _failed(trouble, "nothing was changed")
+    if describes is not None:
+        trouble = directory.describes_trouble(describes)
+        if trouble:
+            return _failed(trouble, "nothing was changed")
+    improving = None
+    if self_improve is not None:
+        improving = _yes_or_no(self_improve)
+        if improving is None:
+            return _failed(f"self improvement wants yes or no, and was given {self_improve!r}",
+                           "nothing was changed")
+
+    gone_wrong = directory.not_an_agent(name)
+    if gone_wrong:
+        return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was changed")
+
+    moving: Dict[str, Any] = {}
+    if provider is not None:
+        moving["provider_name"] = provider
+    if describes is not None:
+        # `None` rather than `""`, so an agent nobody has described and one described as nothing
+        # stay the same answer — which is what taking a description away has to mean.
+        moving["describes"] = describes.strip() or None
+    if improving is not None:
+        moving["self_improve"] = improving
+
     try:
-        made = agents.add(name, display_name=given)
-    except config.Unreadable as why:
-        # A configuration that cannot be read is never treated as absent: the skills this
-        # agent would be given are stated there, and making it without them would be an
-        # owner's decision silently ignored.
-        print(f"{name}: NOT MADE — {why}", file=sys.stderr)
+        records.stated(directory.records(name), moving)
+    except TROUBLE as why:
+        return _failed(str(why), "nothing was changed")
+
+    if provider is not None:
+        print(f"{name}: provider is now {provider}")
+        print(f"        {NOT_PROVEN}")
+    if describes is not None:
+        said = describes.strip()
+        print(f"{name}: is for {said}" if said else f"{name}: is described by nothing now")
+    if improving is not None:
+        print(f"{name}: self improvement is now {'on' if improving else 'off'}")
+    return OK
+
+
+def _yes_or_no(said: str) -> Optional[int]:
+    """One SQLite boolean from the accepted command spellings, or no answer when invalid."""
+    settled = said.strip().lower()
+    if settled in YES:
         return 1
-    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
-        # Repairing an agent whose records this rundesk will not read must say so rather
-        # than raise: the one thing an owner does when an agent is broken is make it again,
-        # and a traceback tells them nothing about which of the four this is.
-        print(f"{name}: NOT MADE — {why}", file=sys.stderr)
-        print(f"        its records are at {store.path_for(agents.directory(name))}",
-              file=sys.stderr)
-        return 1
-    try:
-        moved = agents.adopt(name) if wrote else []
-    except agents.InUse as why:
-        # The name was claimed between asking and moving. Nothing moved, and saying so is
-        # the whole point: a half-adopted agent is the split this refuses to create.
-        print(f"{name}: NOT ADOPTED — {why}", file=sys.stderr)
-        print(f"        stop it and ask again: rundesk stop {name} && rundesk add {name}",
-              file=sys.stderr)
-        return 1
-    chose = _chose(args, agents, name, settings)
-    if knew and not made and not moved and not chose:
-        print(f"{name}: ALREADY MADE — its home is as you left it")
+    if settled in NO:
         return 0
-    print(f"{name}: MADE" if not knew else f"{name}: REPAIRED")
-    print(f"        home: {agents.home(name)}")
-    if made:
-        print(f"        put there: {', '.join(made)}")
-    if moved:
-        print(f"        brought in what it wrote before it was an agent: {', '.join(moved)}")
-    if chose:
-        print(f"        reaches for: {chose}")
-    return 0
+    return None
 
 
-def cmd_configure(args: argparse.Namespace, agents) -> int:
-    """Change an existing agent's durable defaults without replacing it (R-AGT-31)."""
-    name = args.name
-    if not name:
-        print("configure: NAME REQUIRED — say which agent to change", file=sys.stderr)
-        return 1
+def _forgotten(name: str, confirming: bool) -> int:
+    """Take an agent away, or — with nothing confirming it — say exactly what that would take."""
+    gone_wrong = directory.not_an_agent(name)
+    if gone_wrong:
+        # Checked before the confirmation is asked for, so somebody who mistyped the name finds out
+        # now rather than after typing `--confirm` for an agent that was never there.
+        return _failed(gone_wrong, "nothing was removed")
+    if not confirming:
+        return _needs_confirming(name)
+
+    # Whether a gateway is running is checked *here*, and it cannot be checked anywhere lower:
+    # `agents/` sits below `gateways/` and may not import it, which `tests/test_layers.py`
+    # enforces, and `directory.forgotten`'s own docstring says the caller must do it. Below the
+    # confirmation rather than above it, because a description of a removal describes what would be
+    # taken while this decides whether it may happen at all — and a gateway can come up between the
+    # two commands anyway, so the only moment worth asking in is the moment of acting.
+    running = _its_gateway_is_up(name)
+    if running:
+        return _failed(running, f"stop it with: rundesk gateways stop {name}", "nothing was removed")
+
+    # And whether any of its *schedules* is running, which is a different question with the same
+    # answer. A schedule run by hand holds only its own lock and never `gateway.lock`, so an agent
+    # with no gateway at all can still have work in flight — and this removal takes `schedules/`
+    # with everything else. See `_its_schedules_are_running`.
+    working = _its_schedules_are_running(name)
+    if working:
+        return _failed(working, f"see what it is doing with: rundesk schedules list {name}",
+                       "nothing was removed")
+
+    # And whether any of its *channels* has an adapter connected, which is the same question again
+    # about the other thing a gateway hosts. An adapter holds its channel's lock and never
+    # `gateway.lock`, and one adopted from a gateway that is gone outlives every gateway there has
+    # been — so an agent that reads as free to both checks above can still have a program connected
+    # to a platform as it. See `_its_channels_are_running`.
+    connected = _its_channels_are_running(name)
+    if connected:
+        return _failed(connected, f"see what is connected with: rundesk channels list {name}",
+                       "nothing was removed")
+
+    at = paths.agents() / name
     try:
-        agents.checked(name)
-    except agents.NotAnAgentName as why:
-        print(f"{name}: INVALID NAME — {why}", file=sys.stderr)
-        return 1
-    if not agents.exists(name):
-        print(f"{name}: NO AGENT — make it first with rundesk add", file=sys.stderr)
-        return 1
-    if not any((args.provider, args.model, getattr(args, "settings", None) is not None,
-                getattr(args, "says", None) is not None)):
-        print(f"{name}: NOTHING TO CHANGE — name a provider, model, setting, or instructions",
-              file=sys.stderr)
-        return 1
-    try:
-        settings = _given(getattr(args, "settings", None))
-        if args.provider:
-            provider.program(args.provider)
-        chose = _chose(args, agents, name, settings)
-    except (ValueError, provider.NotRunnable, store.Unreadable, store.TooNew,
-            store.Behind, migration.Failed) as why:
-        print(f"{name}: NOT CONFIGURED — {why}", file=sys.stderr)
-        return 1
-    print(f"{name}: CONFIGURED")
-    print(f"        reaches for: {chose}")
-    return 0
+        gone = directory.forgotten(name)
+    except TROUBLE as why:
+        return _failed(str(why), f"{at} is not fully taken away")
+
+    print(f"agent {name} removed")
+    for one in gone:
+        print(f"        took   {one}")
+    if at not in gone:
+        # `directory.forgotten` removes the agent's own directory only when it is then empty.
+        # Something the owner put in there is kept, along with the directory holding it — and the
+        # removal is still a removal, because everything that made this an agent is gone.
+        print(f"        kept   {at} — something you put in there is still there")
+    return OK
 
 
-def _chose(args: argparse.Namespace, agents, name: str, settings: dict) -> str:
-    """Keep whichever of provider, model and settings was named, and say what it is now.
+def _skills_it_holds(name: str) -> List[str]:
+    """What this agent holds, for the removal to name. Empty when it holds nothing or cannot be read.
 
-    What was not named is left as it was, because naming a model later must not quietly
-    forget the brain. Changing providers clears its old provider-specific defaults.
-    """
-    # `None` is "not named" and `""` is "take it off", which is why this asks whether it was
-    # given rather than whether it is truthy: an owner clearing what an agent is told has
-    # said something, and reading that as silence would leave the old text in place.
-    says = getattr(args, "says", None)
-    settings_were_given = getattr(args, "settings", None) is not None
-    if not (args.provider or args.model or settings_were_given or says is not None):
-        return ""
-    keeping = agents.remember(name, provider=args.provider, model=args.model,
-                              settings=settings if settings_were_given else None,
-                              instructions=says,
-                              replace_brain=bool(args.provider))
-    said = keeping.get("provider") or "no brain yet"
-    return f"{said} ({keeping['model']})" if keeping.get("model") else said
-
-
-def _given(pairs) -> dict:
-    """What an owner set, in either of the two ways it is worth being able to type.
-
-    `--set effort=high` for one thing, and `--set '{"flags": ["--no-color"]}'` for a shape
-    that is not one thing. **Nothing here reads what it means**: a value is taken as JSON
-    when it parses as JSON and as the text that was typed when it does not, and that is
-    the whole of the interpretation. Which of it a brain understands is between the owner
-    and their brain, and rundesk being wrong about it is not a failure worth inventing.
-    """
-    given: dict = {}
-    for one in pairs or []:
-        said = one.strip()
-        if said.startswith("{"):
-            try:
-                whole = json.loads(said)
-            except ValueError:
-                raise ValueError(f"'{said}' starts like an object and is not one")
-            if not isinstance(whole, dict):
-                raise ValueError(f"'{said}' is not a set of settings")
-            given.update(whole)
-            continue
-        key, sep, value = said.partition("=")
-        if not sep or not key.strip():
-            raise ValueError(f"'{said}' is not <key>=<value>, nor an object")
-        try:
-            given[key.strip()] = json.loads(value)
-        except ValueError:
-            given[key.strip()] = value
-    return given
-
-
-def cmd_ask(args: argparse.Namespace, agents) -> int:
-    """One turn for this agent, streamed to this terminal.
-
-    It runs **here**, in the terminal that asked, rather than inside the agent's gateway —
-    for the same reason a schedule run by hand does: there is nothing to ask a gateway
-    with yet, and inventing one is not what this is for. Ending this command ends the
-    brain and everything it started, because the whole tree is its own process group.
-
-    What is shown and what is written down are not the same thing. The account keeps every
-    record, whole; the terminal gets the answer, with what the brain was doing beside it —
-    and never a tool's output, which can be a file's contents, a private path or a
-    credential, and is not this command's to put on somebody's screen.
-    """
-    name, prompt = args.name, args.prompt
-    if not name or not prompt:
-        print("ask: WHO AND WHAT — say which agent, and what to ask it", file=sys.stderr)
-        print('        for example: rundesk ask ava "what changed today?"', file=sys.stderr)
-        return 1
-    if not agents.exists(name):
-        print(f"{name}: NO SUCH AGENT — nothing of that name has been made", file=sys.stderr)
-        print(f"        make it: rundesk add {name} --provider <provider>", file=sys.stderr)
-        return 1
-    reaches = agents.chosen(name)
-    named = args.provider or reaches.get("provider")
-    if not named:
-        print(f"{name}: NO BRAIN — nothing says which one answers for this agent",
-              file=sys.stderr)
-        print(f"        say which: rundesk add {name} --provider <provider>", file=sys.stderr)
-        print(f"        or just this turn: rundesk ask {name} \"…\" --provider <provider>",
-              file=sys.stderr)
-        return 1
-    try:
-        settings = _given(getattr(args, "settings", None)) or reaches.get("settings")
-    except ValueError as why:
-        print(f"{name}: NOT ASKED — {why}", file=sys.stderr)
-        return 1
-
-    # **The clock's work, or a person's.** A schedule that names `rundesk ask` rather than a
-    # prompt is still the clock's, and the gateway says which schedule through the one
-    # variable it adds to a scheduled program's environment. Read here, where the command
-    # adapts what it was invoked as, and handed on as an argument rather than reached for
-    # further in.
-    #
-    # An explicit `--conversation` wins: somebody who named one has said where this belongs.
-    # Otherwise a scheduled turn gets a conversation of its own, named for the schedule, and
-    # **starts fresh every firing** — untouched, it landed in the terminal's own conversation,
-    # so a run at three in the morning resumed the session its owner types into and left its
-    # prompt and answer in the middle of it.
-    clock = (os.environ.get(_gateway.SCHEDULE_IS) or "").strip()
-    by_the_clock = bool(clock) and not args.conversation
-
-    said = _Shown()
-    try:
-        outcome = asyncio.run(turn.carry(
-            name, prompt, named,
-            model=args.model or reaches.get("model"),
-            settings=settings,
-            posture=provider.READ if args.read_only else provider.WORK,
-            conversation=clock if by_the_clock else (args.conversation or turn.TERMINAL),
-            on=turn.SCHEDULE if by_the_clock else turn.TERMINAL,
-            kind=turn.SCHEDULE if by_the_clock else turn.TERMINAL,
-            fresh=args.fresh or by_the_clock,
-            watching=said,
-            steering=_steering() if args.steer else None,
-            # What it is told before it reads a word: this turn's own, then the agent's
-            # (R-AGT-16) — and, where the clock started this, what rundesk says about that
-            # situation whatever they wrote (R-AGT-34). For a person at a terminal there is
-            # nothing to add, because they are here.
-            preface=agents.told(name, said=args.says,
-                                regardless=schedules.by_default(clock) if clock else ""),
-            source=turn.SCHEDULE if clock else None,
-        ))
-    except provider.NotRunnable as why:
-        print(f"{name}: NO BRAIN THERE — {why}", file=sys.stderr)
-        print(f"        what stands in the way: rundesk doctor {name}", file=sys.stderr)
-        return 1
-    said.done()
-    print(f"        {name}/{outcome.run} — {_cost(outcome.tokens)}", file=sys.stderr)
-    if not outcome.ok:
-        print(f"{name}: TURN FAILED — {outcome.why or outcome.reason}", file=sys.stderr)
-        # What the brain said went wrong, on the screen rather than only in a file. It is
-        # kept apart from what the brain *reported* — that is the whole point of the two
-        # streams — but keeping it apart is not the same as keeping it secret, and a turn
-        # that failed with its one actionable line filed somewhere nobody looks is a turn
-        # somebody is stuck on.
-        for line in outcome.trouble[-_TROUBLE_LINES:]:
-            print(f"        {line}", file=sys.stderr)
-        print(f"        the whole of it: rundesk agents {name}", file=sys.stderr)
-    return 0 if outcome.ok else 1
-
-
-async def _steering():
-    """Whatever else is typed while the turn runs, a line at a time.
-
-    Read off a thread, because reading a terminal blocks and the turn is running on this
-    loop — a blocking read here would stop the very thing the words are meant to reach.
-    Ends when the input does, which closes what rundesk is saying and lets the brain
-    finish.
-    """
-    loop = asyncio.get_event_loop()
-    while True:
-        line = await loop.run_in_executor(None, sys.stdin.readline)
-        if not line:
-            return
-        said = line.strip()
-        if said:
-            yield said
-
-
-class _Shown:
-    """A turn as it happens, on a terminal.
-
-    The answer goes to stdout so it can be piped; everything else goes to stderr, so what
-    comes out of `rundesk ask ava "…" > answer.txt` is the answer and not a commentary
-    around it.
-    """
-
-    def __init__(self):
-        self._answered = False
-
-    def __call__(self, said: dict) -> None:
-        kind = said.get("type")
-        if kind == "text":
-            self._answered = True
-            sys.stdout.write(said.get("text") or "")
-            sys.stdout.flush()
-        elif kind == "tool":
-            did = said.get("did") or "using"
-            if did in provider.CONTINUITY.values():
-                # What changed, and not which tool changed it (R-PRV-29). These four name
-                # a file rather than an act, so the vendor's own word beside one reads as
-                # `rules Write` — and which tool wrote it is the half nobody wanted.
-                print(f"        · updated {did}", file=sys.stderr)
-                return
-            print(f"        · {did} {said.get('name') or ''}".rstrip(), file=sys.stderr)
-        elif kind == "result" and not said.get("ok"):
-            print("        · that did not work", file=sys.stderr)
-
-    def done(self) -> None:
-        if self._answered:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-
-
-def _cost(tokens: dict) -> str:
-    """What a turn cost, or that nobody said — never a cost of nothing (R-USE-7)."""
-    if not tokens.get("reported"):
-        return "what it cost was never reported"
-    said = (f"{tokens.get('input', 0)} in, {tokens.get('output', 0)} out, "
-            f"{tokens.get('cached', 0)} cached")
-    # Only where the brain reported the split. Most do not, and a `0 written` on every one
-    # of them would read as "wrote nothing to the cache" rather than "does not say".
-    if tokens.get("written") is not None:
-        said += f", {tokens['written']} written"
-    return f"{said}, {tokens['model']}" if tokens.get("model") else said
-
-
-def _running_old_code(name, gateways, agents) -> list:
-    """Is this agent's gateway serving the release that is actually installed (R-AGT-21)?
-
-    **A gateway holds the modules it imported when it started.** Replacing the files under
-    a running one changes nothing it has already loaded, so it goes on serving the old code
-    for everything it has and reads the new files only for whatever it has not imported
-    yet — which is a version nobody can see it is on. An update stands them all down for
-    exactly this reason, and the case that gets past it is the one an owner caused: a
-    gateway started before the code was last replaced.
-
-    Asked of the version the gateway wrote down when it started rather than of a file's
-    modification time. It is the thing itself rather than a proxy for it, it costs a record
-    this command already reads, and a checkout whose files are touched by anything at all
-    would make the proxy cry wolf for ever.
-
-    Reported as a fault rather than a note: the whole trap is that nothing says anything.
+    Answered as nothing rather than raised. This is one line of a description somebody is about to
+    agree to, and a listing that could not be built is not a reason to refuse to describe the
+    removal — the removal itself does not depend on it.
     """
     try:
-        it = standing.of(name, gateways, agents)
-    except Exception as why:   # noqa: BLE001 — a boundary; a diagnosis reports, never raises
-        # **Said, not swallowed.** `gateway._held` deliberately re-raises an OSError that is
-        # not a lock being held, so returning nothing here would let `doctor` print READY
-        # for an agent whose gateway could not be looked at — a truthful-looking silence,
-        # which is the one thing this command must never produce.
-        return [_agent.Complaint(str(why), "what this agent's gateway is doing cannot be read",
-                                 f"rundesk status {name}")]
-    if not it.running or not it.version or it.version == __version__:
+        return [one.name for one in grants.held(name)]
+    except (grants.Refused, directory.Refused, OSError):
         return []
-    return [_agent.Complaint(
-        f"it started on {it.version} and this install is {__version__}",
-        "this agent's gateway is running code that is no longer installed",
-        f"rundesk stop {name} && rundesk start {name}",
-    )]
 
 
-def cmd_doctor(args: argparse.Namespace, gateways, agents) -> int:
-    """Say what stands between an agent and a working turn (R-AGT-11).
+def _what_it_has_scheduled(name: str) -> int:
+    """How many schedules this agent keeps, for the removal to name. `0` when it cannot be read.
 
-    Starts no provider and changes nothing (R-AGT-12): an owner asking what is wrong is
-    usually asking because something already is, and a check that repaired what it found
-    would answer a different question the next time it was asked.
-    """
-    names = [args.name] if args.name else agents.known()
-    if not names:
-        print("no agents")
-        return 0
-    worst = 0
-    for name in names:
-        try:
-            said = agents.diagnosed(name, runnable=provider.program)
-        except agents.NotAnAgentName as why:
-            print(f"{name}: INVALID NAME — {why}", file=sys.stderr)
-            worst = 1
-            continue
-        said = said + _running_old_code(name, gateways, agents)
-        if not said:
-            print(f"{name}: READY")
-            continue
-        worst = 1
-        print(f"{name}: NOT READY", file=sys.stderr)
-        for one in said:
-            print(f"        {one.said}: {one.about}", file=sys.stderr)
-            # What to do about it, under the thing it is about (R-AGT-19). An owner running
-            # this is already asking because something is wrong; leaving them to work the
-            # command out from the fault is asking them to diagnose it twice.
-            if one.fix:
-                print(f"            fix: {one.fix}", file=sys.stderr)
-    # Per page, where a *new* agent's would come from (R-AGT-26). Said once for the install
-    # rather than once per agent, because it is a fact about this machine and not about any
-    # one of them — and said only when an owner has overridden something, since a list of
-    # five identical "install" lines every time is a list nobody reads.
-    from_each = agents.where_each_page_comes_from()
-    if any(whose == "owner" for _called, whose, _at in from_each):
-        print("templates a new agent would be made from:")
-        for called, whose, at in from_each:
-            print(f"        {called}: {whose} ({at})")
-    if _cannot_search(names, agents):
-        # A fact about the machine rather than a fault of any agent, so it is said here
-        # and is not a complaint: this SQLite was built without FTS5. Said by the command
-        # an owner runs to find out what is wrong, because the alternative is `search`
-        # answering nothing and reading exactly like there being nothing to find (R-STO-8).
-        print("searching: UNAVAILABLE — this machine's sqlite cannot search by the words "
-              "in something")
-        print("        every run is still listed, read and queried:  rundesk runs <agent>")
-    return worst
-
-
-def _cannot_search(names, agents) -> bool:
-    """Whether this machine can search at all, asked of the first agent that can answer.
-
-    Asked rather than assumed, and asked once: it is a property of the SQLite this Python
-    was built against, so every agent on the machine gives the same answer, and an agent
-    whose records cannot be opened has no answer to give rather than a negative one.
-    """
-    for name in names:
-        try:
-            return not agents.reading(name).searchable()
-        except Exception:   # noqa: BLE001 — an agent that cannot answer is not an answer
-            continue
-    return False
-
-
-def cmd_agents(args: argparse.Namespace, gateways, machine, agents) -> int:
-    """Every agent, and what each is doing. The table you look at first.
-
-    Answered by the gateways themselves rather than by the machine, because the machine
-    cannot tell a gateway that is working from one that is up and stuck (R-GW-9).
-
-    A gateway that has been running since before there were agents is listed too, marked
-    as having none. Leaving it out would be the worst of both: still running, still holding
-    a name, and invisible to the one command that says what this install has.
-    """
-    if args.name:
-        return _one_agent(args.name, gateways, machine, agents)
-    has_supervisor = machine.available()
-    described = set(machine.described()) if has_supervisor else set()
-    found = {name: standing.of(name, gateways, agents)
-             for name in standing.every_name(gateways, machine, agents)}
-    if not found:
-        print("no agents")
-        print("        make one:  rundesk add <agent>")
-        return 0
-    rows, orphaned = [], []
-    for name in sorted(found):
-        it = found[name]
-        if not agents.exists(name):
-            orphaned.append(name)
-        # Whether the supervisor is keeping this gateway is asked of the supervisor. A
-        # job description sitting in a directory is not a job being kept, and the two
-        # come apart exactly when something has gone wrong — which is when it is read.
-        try:
-            kept = has_supervisor and name in described and machine.loaded(name)
-        except machine.Unsure:
-            kept = None   # asked, and not told — which is not the same as "no"
-        run_home = agents.resolved(name).run
-        doing = gateways.what_is_working(name, run_home) if it.running else {}
-        turning = gateways.what_is_turning(name, run_home)
-        # A loaded job is one fact; the gateway process and PID are another (R-GW-34).
-        # Calling the first "supervised" claimed a relationship the machine never proved:
-        # a manually started same-name process can coexist with a loaded dormant job.
-        job = "LOADED" if kept else ("UNKNOWN" if kept is None else "NOT LOADED")
-        rows.append((
-            # The name, and only the name. A marker in this cell makes the column stop
-            # holding what it says it holds — anything reading the table by name stops
-            # finding one, which is exactly how CI came to report a running gateway as
-            # never started. Which of them have no agent is said under the table, where
-            # there is room to say what to do about it.
-            name,
-            ("WEDGED" if it.stale else "RUNNING") if it.running else "STOPPED",
-            str(it.pid) if it.running else "-",
-            _how_long(it.started) if it.running else "-",
-            job,
-            _version_of(it),
-            # "?" rather than a count where the record could not be read: counting the
-            # marker would report one process that may not exist.
-            ("?" if gateways.could_not_be_read(doing)
-             else str(len(doing))) if it.running else "-",
-            str(len(turning)) or "-",
-            # What never finished, counted where somebody looks (R-GW-39). The store
-            # answering that question has existed since work could be interrupted at
-            # all, and nothing in the product ever read it back: "what did not finish"
-            # meant reading JSON out of a directory by hand, during an incident.
-            str(len(gateways.what_was_interrupted(name, agents.resolved(name).logs)) or "-"),
-        ))
-    _as_table(("AGENT", "STATE", "PID", "UPTIME", "LAUNCHD JOB", "VERSION",
-               "PROCESSES", "TURNS", "UNFINISHED"),
-              rows)
-    for name in sorted(found):
-        run_home = agents.resolved(name).run
-        it = found[name]
-        working = gateways.what_is_working(name, run_home) if it.running else {}
-        turning = gateways.what_is_turning(name, run_home)
-        if not working and not turning:
-            continue
-        print()
-        print(f"{name}:")
-        details = [
-            ("ADAPTER" if work.startswith("channel:") else "PROCESS",
-             work.removeprefix("channel:"), "-", str(how.get("pgid") or "-"), "-")
-            for work, how in sorted(working.items())
-        ]
-        details.extend((
-            "TURN",
-            f"{row['source']}:{row['surface']}",
-            row["conversation"],
-            str(row["pid"]),
-            _how_long(row.get("since")),
-        ) for row in turning)
-        _as_table(("KIND", "SOURCE", "CONVERSATION", "PID", "ELAPSED"), details)
-    if orphaned:
-        print()
-        print(f"no agent yet — running since before there were any: {', '.join(orphaned)}")
-        print(f"  give one an agent:  rundesk add {orphaned[0]}")
-    return 0
-
-
-def _one_agent(name: str, gateways, machine, agents) -> int:
-    """What one agent is, and every place it resolves.
-
-    The paths are the point. Which install, which run state, which schedules and which log
-    are authoritative is otherwise something an owner works out by reading the source, and
-    it is exactly what they need when a supervised agent and a command disagree.
+    Answered as nothing rather than raised, for the reason `_skills_it_holds` gives: this is one line
+    of a description somebody is about to agree to, and a count that could not be taken is not a
+    reason to refuse to describe the removal.
     """
     try:
-        where_it_is = agents.paths(name)
-    except agents.NotAnAgentName as why:
-        print(f"{name}: INVALID NAME — {why}", file=sys.stderr)
-        return 1
-    if not agents.exists(name):
-        print(f"{name}: NO SUCH AGENT", file=sys.stderr)
-        print(f"        what there is:  rundesk agents", file=sys.stderr)
-        return 1
-    it = standing.of(name, gateways, agents)
-    print(f"{name}: " + (("WEDGED" if it.stale else f"RUNNING (pid {it.pid})")
-                         if it.running else "STOPPED"))
-    _as_table(("WHAT", "WHERE"),
-              [(what, str(at)) for what, at in sorted(where_it_is.items())])
-    # What never finished, with the time and the reason for each (R-GW-39). Told apart by
-    # whether rundesk could show the work was definitely gone: one of them is over, and
-    # the other may still be running with nobody owning it, which is a different problem
-    # and a different thing to do about it.
-    unfinished = gateways.what_was_interrupted(name, agents.resolved(name).logs)
-    if unfinished:
-        print()
-        _as_table(("UNFINISHED", "AT", "ENDED", "WHY"), [
-            (work, str(how.get("at", "-")),
-             "yes" if how.get("ended") else "unproven", str(how.get("why", "-")))
-            for work, how in sorted(unfinished.items())
-        ])
-    return 0
+        return len(kept.all(name))
+    except (kept.Refused, records.NotThere, records.Unreadable, directory.Refused,
+            migration.Ahead, OSError, sqlite3.Error):
+        return 0
 
 
-def _version_of(it) -> str:
-    """Which version this gateway is actually running (R-GW-9).
+def _needs_confirming(name: str) -> int:
+    """Say exactly what a removal would take, and take none of it.
 
-    Asked of the gateway's own record rather than of this install, because the two come
-    apart exactly when it matters: an update replaces the files while a gateway keeps the
-    code it already imported, so `rundesk version` says one thing and the thing actually
-    serving is another. Marked rather than merely shown, since a number a reader has to
-    compare against another number by eye is a difference nobody notices.
+    Every line names one thing, the way `uninstall` does, because a removal described as a sweep is
+    a removal nobody can check before they agree to it.
     """
-    if not it.running or not it.version:
-        return "-"
-    return it.version if it.version == __version__ else f"{it.version} (old)"
+    at = paths.agents() / name
+    print(f"remove: this would take the agent {name} from {paths.agents()}", file=sys.stderr)
+    print(f"        take   {at / directory.RECORDS} — everything {name} remembers, and what "
+          "SQLite keeps beside it", file=sys.stderr)
+    print(f"        take   {at / directory.HOME} — where {name} started, and what it put there",
+          file=sys.stderr)
+    held = _skills_it_holds(name)
+    if held:
+        # Named separately although `home/` already covers it. A grant is a link inside that
+        # directory, so it goes with it either way — and somebody reading a line about "where the
+        # agent started" has no way to know that the skills they granted are inside it. What is
+        # *not* taken is the skill itself, and saying so is the point: this reads as though a
+        # removal could cost them a catalog.
+        print(f"        take   {len(held)} skill grant(s) — {', '.join(held)}; the skills "
+              "themselves stay in the library", file=sys.stderr)
+    print(f"        take   {at / directory.LOGS}", file=sys.stderr)
+    if (at / directory.CHANNELS).is_dir():
+        # Named for the reason the schedules line below is, and only when it is there: `forgotten`
+        # really does take this directory, and everything that ever arrived through a channel is
+        # inside it — a preview that left it out would describe a smaller removal than the one
+        # about to happen.
+        print(f"        take   {at / directory.CHANNELS} — every channel it is reached on, what "
+              "arrived through each, and what their adapters wrote", file=sys.stderr)
+    scheduled = _what_it_has_scheduled(name)
+    if scheduled:
+        # Named because `directory.forgotten` really does take this directory, and a preview that
+        # left it out would describe a smaller removal than the one about to happen — which is the
+        # one thing this list exists not to do. What goes with it is everything every firing of
+        # those schedules wrote.
+        print(f"        take   {at / directory.SCHEDULES} — {scheduled} schedule(s), what each has "
+              "already done, and everything their runs wrote", file=sys.stderr)
+    for one in (at / directory.GATEWAY_RECORD, at / directory.GATEWAY_LOCK):
+        # Named only when it is there. Listing what a gateway *might* have left would describe a
+        # removal larger than the one that would happen, and this list is what somebody checks
+        # before they agree to it.
+        if one.exists():
+            print(f"        take   {one} — what a gateway left behind", file=sys.stderr)
+    print(f"        keep   anything else you put in {at}", file=sys.stderr)
+    print("        nothing was removed. To go ahead:", file=sys.stderr)
+    print(f"        rundesk agents remove {name} --confirm", file=sys.stderr)
+    return FAILED
 
 
-def _how_long(started: float | None) -> str:
-    """How long it has been up, in the shortest form that is still exact enough."""
-    if not started:
-        return "-"
-    seconds = max(0, int(time.time() - started))
-    if seconds < 60:
-        return f"{seconds}s"
-    if seconds < 3600:
-        return f"{seconds // 60}m"
-    if seconds < 86400:
-        return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
-    return f"{seconds // 86400}d{(seconds % 86400) // 3600:02d}h"
+def _its_gateway_is_up(name: str) -> str:
+    """Why this agent may not be taken away yet, or `""` when it may.
+
+    **Removing an agent whose gateway is up leaves a running program with no records**: the process
+    goes on holding the name, writing into a directory that is no longer there, hosting an agent
+    that no longer exists — and launchd puts it back when it dies, because the job outlives the
+    records the removal took.
+
+    Asked of the kernel through `gateways.standing`, and never of the record beside the lock. Its
+    third answer is kept as a third answer here too: an agent nobody can ask about is not an agent
+    that is safe to remove, and reporting it as free is how a second gateway comes to be started
+    beside a first — or, here, how a live one is quietly orphaned.
+    """
+    how = standing.standing(directory.where(name))
+    if how.how == standing.ONLINE:
+        return (f"a gateway is running for {name}"
+                + (f" as pid {how.pid}" if how.pid else "")
+                + " — removing it now would leave a running program with no records")
+    if how.how == standing.CANNOT_TELL:
+        return f"nobody can tell whether a gateway is running for {name} — {how.why}"
+    return ""
+
+
+def _its_schedules_are_running(name: str) -> str:
+    """Why this agent may not be taken away yet because work is in flight, or `""` when it may.
+
+    **A schedule running by hand holds only its own lock, never `gateway.lock`**, so an agent with no
+    gateway anywhere reads as free to `_its_gateway_is_up` and can still have a program running. This
+    removal takes `schedules/` with everything else — and unlinking a lock while something holds it
+    hands the name away, so a later agent and schedule of the same names claim a *fresh* inode and
+    lock that, while the original child is still holding the old one. Two firings of one schedule,
+    running at once, which is the single thing the whole locking design exists to prevent.
+
+    Asked of the kernel through the lock files rather than of the records, so it is still answerable
+    when the database cannot be read — which is one of the states somebody removes an agent in.
+    """
+    try:
+        working = firing.in_flight(name)
+    except (directory.Refused, OSError):
+        # Not a reason to refuse a removal on its own: an agent whose directory cannot be listed has
+        # bigger problems, and `directory.forgotten` will raise about the same thing in a moment with
+        # a sentence about what it could not take.
+        return ""
+    if not working:
+        return ""
+    return (f"{name} has work still running: {', '.join(working)} — removing it now would take the "
+            "lock that work is holding, and a schedule of the same name later would start a second "
+            "copy beside it")
+
+
+def _its_channels_are_running(name: str) -> str:
+    """Why this agent may not be taken away yet because it is still connected, or `""` when it may.
+
+    **An adapter holds its channel's own lock, never `gateway.lock`**, so an agent with no gateway
+    anywhere reads as free to `_its_gateway_is_up` and can still have a program connected to a
+    platform as it — an adopted one outlives every gateway there has been. This removal takes
+    `channels/` with everything else, and unlinking a lock while something holds it hands the name
+    away, so a later agent and channel of the same names claim a *fresh* inode and lock that, while
+    the original adapter is still holding the old one. Two adapters connected as one agent, both
+    answering the people on its allow list, which is the single thing the whole locking design
+    exists to prevent.
+
+    Asked of the kernel through the lock files rather than of the records, so it is still answerable
+    when the database cannot be read — which is one of the states somebody removes an agent in.
+
+    **A claim nobody can ask about is refused, not read as free**, which is `_its_gateway_is_up`'s
+    third answer kept as a third answer here too. `hosting.still_running` deliberately re-raises
+    anything that is not ordinary contention — a permission problem, a filesystem that will not lock
+    — and treating that as "nothing is connected" is exactly how a live adapter comes to be orphaned
+    by a removal. A channels directory that cannot be *listed* is the other thing and is not this
+    one: `hosting.in_flight` answers nothing for it, and `directory.forgotten` will raise about the
+    same directory in a moment with a sentence about what it could not take.
+    """
+    try:
+        connected = hosting.in_flight(name)
+    except directory.Refused:
+        # A name that reaches outside where agents are kept. `forgotten` refuses the same name a
+        # moment later and says so in words about the name rather than about a lock.
+        return ""
+    except OSError as why:
+        return (f"nobody can tell whether {name} is still connected — {why}")
+    if not connected:
+        return ""
+    return (f"{name} is still connected: {', '.join(connected)} — removing it now would take the "
+            "lock that adapter is holding, and a channel of the same name later would connect a "
+            "second one beside it")
+
+
+def _provider_trouble(said: Optional[str], typed: str) -> str:
+    """Why this is not a provider, or `""` when it is.
+
+    Nothing said and nothing *in* what was said are different mistakes and get different sentences:
+    one is a flag somebody left off, and the other is a flag they gave an empty value to — usually
+    a shell variable that was not set, which is exactly the case where being told what to type again
+    does not help.
+    """
+    if said is None:
+        return f"nothing said which provider — say which with: {typed}"
+    if not said.strip():
+        return "a provider with nothing in it is not one — an agent with nothing behind it cannot answer"
+    return ""
+
+
+def _failed(why: str, *and_so: str) -> int:
+    """Say what went wrong, and what that leaves — never one without the other."""
+    return failed(f"agents: FAILED — {why}", *and_so)

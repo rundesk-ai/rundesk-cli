@@ -28,3 +28,16 @@ suite-logs/
 node_modules/
 ui/
 site/
+
+# The build this one replaces, kept on the working machine to read while rebuilding and
+# deliberately never committed: it is already in this branch's history, so a second copy in
+# the tree would be two answers to "what does rundesk do today". Nothing here is imported,
+# and every one of these directories goes when Part 1 is finished.
+src_old/
+tests_old/
+docs_old/
+.knowledge_old/
+old/
+
+# Where `./dev` points a run that must not reach the owner's install.
+.scratch/

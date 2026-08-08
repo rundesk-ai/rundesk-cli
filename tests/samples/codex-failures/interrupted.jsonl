@@ -1,0 +1,4 @@
+{"id": 1, "result": {}}
+{"id": 2, "result": {"thread": {"id": "t-1"}}}
+{"id": 3, "result": {}}
+{"method": "turn/completed", "params": {"threadId": "t-1", "turn": {"id": "u-1", "status": "interrupted", "error": null}}}

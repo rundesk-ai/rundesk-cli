@@ -1,348 +1,180 @@
-"""The values every program rundesk starts is given — placed, replaced and told apart.
+"""The values this install hands to the things it talks to — a Discord token, a Slack app's key.
 
-**No form of this command ever prints a value** (R-SEC-4). What it prints instead is a
-masked hint and a mark, which together answer which value this is and whether it changed.
-An owner asking what one actually is is asking something nothing on the machine can answer,
-and there is no flag that changes that — a value that can be read back off a machine is one
-its owner has to assume has been.
+Four verbs: list them, check one, set one, empty one. What is kept and why it is kept where it is
+belongs to `core.secrets`; this decides only how a person types it and what they are shown.
 
-A value is never an argument either (R-SEC-8). It is typed at a terminal that is not echoing
-it, or piped in — the same shape `channels add --token-stdin` already has, and for the same
-reason: an option's value is in `ps` for every user on the machine and in a shell history
-for ever.
+**A value is never typed as an argument, and this is the security of the command.** `argv` is in the
+shell's history file the moment you press return, and it is visible in `ps` to every other user on
+the machine for as long as the command runs — so there is no `env set KEY value`, and there is no
+flag that takes one. The value is read from the terminal without echoing it, or from a pipe when
+something else is driving. Both are deliberate: a prompt in a script is a command that hangs, and
+this product refuses those everywhere else it meets them.
 
-Imports `secret` directly rather than taking it as a collaborator, the way this layer already
-imports `config` and `backup`. Everything it touches is under one directory named by one
-variable, so a suite isolates the whole of it by pointing that variable somewhere — and a
-stand-in would prove the mode, the refusal and the value that never prints against the
-stand-in rather than against the module that has to hold them.
+**Nothing here ever prints a whole value.** Not in the table, not in an error, not in a refusal that
+quotes what was typed. `secrets.hinted` is the only description of a value this command can produce.
 """
-
-from __future__ import annotations
 
 import argparse
 import getpass
-import os
-import shlex
 import sys
-from datetime import datetime, timezone
+from typing import Optional
 
-from rundesk import secret
-from rundesk.commands import _as_table, _out_loud
+from rundesk.commands import Subcommands, failed
+from rundesk.core import paths, secrets
+from rundesk.exits import FAILED, OK
+from rundesk.utils.terminal import as_table
 
 
-#: What is shown where a value would be, so a column is never empty and never a value.
-NOT_PRODUCED = "—"
+def register(sub: Subcommands) -> None:
+    """Put `env` on the parser, with one sub-verb for each thing done to a value.
+
+    Note what is *not* here: no verb takes a value. `set` takes a name and reads the value itself.
+    """
+    said = sub.add_parser("env", help="the values rundesk hands to what it talks to")
+    what = said.add_subparsers(dest="what", metavar="<what>")
+
+    what.add_parser("list", help="every value this install keeps, shown only as a hint")
+
+    asked = what.add_parser("check", help="whether one value is set")
+    asked.add_argument("key", metavar="<key>", help="the name, as a shell variable is written")
+
+    put = what.add_parser("set", help="keep a value under a name, typed rather than passed")
+    put.add_argument("key", metavar="<key>", help="the name, as a shell variable is written")
+
+    gone = what.add_parser("unset", help="empty a name, leaving the name")
+    gone.add_argument("key", metavar="<key>", help="the name, as a shell variable is written")
 
 
 def cmd_env(args: argparse.Namespace) -> int:
-    """The values this install keeps, and what may be done to one."""
-    act = getattr(args, "act", None)
-    if getattr(args, "where", False):
-        # **Refused with an action rather than quietly winning over one.** This printed the
-        # directory and returned before `act` was read at all, so `rundesk env --where check`
-        # exited 0 having checked nothing — which a script reads as every value being
-        # reachable. One line and nothing else is the whole of what this flag is for, and a
-        # verb asked to do two things answers neither well (R-SEC-31).
-        if act:
-            print(f"env: NOT DONE — --where prints where values are kept and does nothing "
-                  f"else, so it cannot be asked for `{act}` in the same breath",
-                  file=sys.stderr)
-            print(f"        one at a time:  rundesk env --where  then  rundesk env {act}",
-                  file=sys.stderr)
-            return 1
-        print(secret.home())
-        return 0
+    """Answer whichever of the four was asked for; with none of them, list what there is."""
     try:
-        if act == "set":
-            return _set(args)
-        if act == "show":
-            return _show(args)
-        if act == "unset":
-            return _unset(args)
-        if act == "check":
-            return _check(args)
+        paths.home()
+    except paths.Refused as why:
+        return _failed(str(why))
+
+    what = getattr(args, "what", None)
+    if what in (None, "list"):
         return _listed()
-    except secret.Unreadable as why:
-        print(f"env: UNREADABLE — {why}", file=sys.stderr)
-        print("        nothing is given out and nothing is written over it — what is in "
-              "that file is still recoverable text", file=sys.stderr)
-        return 1
+    if what == "check":
+        return _checked(args.key)
+    if what == "set":
+        return _stated(args.key)
+    if what == "unset":
+        return _emptied(args.key)
 
-
-def _now() -> str:
-    """When this happened, as something a person reads and a file keeps."""
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-def in_a_turn() -> bool:
-    """Whether an agent is running this rather than a person at a terminal.
-
-    `RUNDESK_RUN` is in every program a gateway starts and in nothing a person types. It
-    decides two things: what is recorded as having made the change, and what may be placed
-    at all — a turn keeps only what is plainly a credential, because the names that are not
-    are the ones a denylist keeps turning out to have missed.
-
-    **It is a guard against the ordinary path, not a boundary.** The variable is in the
-    caller's own environment and a brain determined to get round it can clear one, exactly
-    as it can already reach every other verb this command offers — the same thing
-    `RUNDESK_ROLE_RUN` says about itself. What it buys is that no ordinary path, and no
-    adapter's own subagent, places a name nobody meant it to.
-    """
-    return bool(os.environ.get("RUNDESK_RUN"))
-
-
-def kept_from() -> str:
-    """Where a change was made from — the only account a set an agent may run can have."""
-    if not in_a_turn():
-        return "this terminal"
-    named = os.environ.get("RUNDESK_AGENT_NAME") or os.environ.get("RUNDESK_AGENT")
-    return f"{named}'s gateway" if named else "an agent's turn"
-
-
-def _shown(kept: secret.Kept) -> str:
-    """A value as it is ever shown: the end of it, and a mark of it."""
-    return f"{kept.hint}  {kept.mark}" if kept.mark else kept.hint
+    # Unreachable while every sub-verb above is answered, and that is the point.
+    raise AssertionError(f"env {what} is registered on the parser and answered by nothing")
 
 
 def _listed() -> int:
-    """Everything kept, and **nothing produced to answer it** (R-SEC-23)."""
-    kept = secret.listed()
-    if not kept:
-        print("NO VALUES KEPT — every program rundesk starts is given nothing of its own")
-        print("        keep one:  rundesk env set <name>")
-        return 0
-    _as_table(("NAME", "KEPT AS", "VALUE", "MARK", "LAST SEEN"),
-              [(one.name, one.kept_as, one.hint, one.mark,
-                one.last_seen or one.kept_at) for one in kept])
-    print(f"\n{len(kept)} kept, and every program rundesk starts is given them")
-    return 0
-
-
-def _show(args: argparse.Namespace) -> int:
-    """One value: how it is kept, and what tells it apart from another."""
+    """Every name, in order, with only a hint of what it holds."""
     try:
-        one = secret.described(args.value_name)
-    except secret.Unknown:
-        return _no_such(args.value_name)
-    rows = [("name", one.name)]
-    if one.kept_as == secret.FETCHED:
-        rows.append(("kept as", "a command, run again each time a program starts"))
-        # The words of a command, which are not a value — and are shown for exactly that
-        # reason: it is the one thing about a fetched value an owner can check and correct.
-        rows.append(("fetched by", " ".join(shlex.quote(word) for word in one.command)))
-        rows.append(("value", f"{_shown(one)}, as last produced"))
-        rows.append(("last seen", one.last_seen or "not yet"))
-    else:
-        rows.append(("kept as", "here, readable only by you"))
-        rows.append(("value", _shown(one)))
-    rows.append(("kept", one.kept_at))
-    rows.append(("kept from", one.kept_from or "not recorded"))
-    rows.append(("given to", "every program rundesk starts"))
-    _as_table(("WHAT", "IS"), rows)
-    return 0
+        held = secrets.kept()
+    except secrets.Refused as why:
+        return _failed(str(why), "nothing was listed")
+
+    if not held:
+        print(f"no values kept in {paths.secrets()}")
+        print("        keep one with: rundesk env set <key>")
+        return OK
+
+    print(f"values in {paths.secrets()}")
+    as_table(("NAME", "VALUE"),
+             [(key, secrets.hinted(held[key])) for key in sorted(held)])
+    return OK
 
 
-def _taken(name: str, piped: bool):
-    """The value itself, from a terminal that does not echo it or from a pipe.
+def _checked(key: str) -> int:
+    """Whether one name holds a value — an answer a script reads from the exit code.
 
-    Never an argument, and **never a wait nobody is there to end** (R-SEC-9, R-SEC-10).
-
-    **Reading standard input is asked for, never inferred**, which is the shape
-    `_took_a_secret` already has one verb over and is not a stylistic echo of it. Inferring
-    it from "stdin is not a terminal" reads an *open pipe with nothing in it* — which is
-    exactly what a brain's tool shell hands its children — and `readline` on one blocks
-    until the far end closes, which may be never. An agent running this would hang its own
-    turn, and a suite walking the surface would hang the gate, with nothing anywhere saying
-    what it was waiting for.
-
-    **The whole of standard input, never one line of it.** A private key is four lines and
-    this verb exists to place credentials, so a `readline` here kept
-    `-----BEGIN RSA PRIVATE KEY-----` and nothing else, said `KEPT`, and took the hint and
-    the mark off the truncation — which is what made it invisible afterwards. `--from` reads
-    the whole of a command's output, and the two ways of placing one value have to agree.
-    `secret.carried` refuses anything past the size a program can be started with on the way
-    in, so the cap and the empty check both still do their work.
-
-    Answers `None` when there is nobody to ask and nothing was piped, so the caller can say
-    which of those it was.
+    Exits non-zero when it is not set, so `rundesk env check DISCORD_TOKEN && ...` does the right
+    thing in a shell. A name that was never placed and one that was emptied are told apart in the
+    words, because they are different situations, and reported the same way to a script, because a
+    script only wants to know whether it can go ahead.
     """
-    if piped:
-        return sys.stdin.read()
-    if not sys.stdin.isatty():
-        return None
-    return getpass.getpass(f"        the value for {name} (it will not be echoed): ")
-
-
-def _set(args: argparse.Namespace) -> int:
-    """Keep a value under a name, or replace the one already kept there."""
-    name = args.value_name
-    fetched_by = getattr(args, "fetched_by", None)
-    turn = in_a_turn()
-    # **Two ways of giving one value is a question, never a precedence.** `--from` was tested
-    # first and simply won, so a script piping a credential in *and* naming a command kept
-    # the command, never read the pipe, and said `KEPT` — with the value the author meant
-    # nowhere and nothing saying which of the two had been believed.
-    if fetched_by and getattr(args, "stdin", False):
-        return _not_kept(
-            name, "--stdin and --from each say where the value comes from, and they "
-                  "disagree",
-            f"keep what is piped in:  … | rundesk env set {name} --stdin\n"
-            f"        keep the command instead:  rundesk env set {name} --from '<command>'")
-    try:
-        secret.checked(name, turn)
-    except (secret.NotAName, secret.Refused) as why:
-        return _not_kept(
-            name, str(why),
-            f"ask your owner to run it at theirs:  rundesk env set {name}"
-            if turn and not secret.a_credential(name) else "")
-
-    try:
-        if fetched_by:
-            command = shlex.split(fetched_by)
-            if not command:
-                return _not_kept(name, "no command was given to fetch it with")
-            _out_loud(f"asking: {' '.join(shlex.quote(word) for word in command)}")
-            change = secret.remember_command(name, command, now=_now(),
-                                             kept_from=kept_from(), replace=True,
-                                             in_a_turn=turn)
-        else:
-            given = _taken(name, getattr(args, "stdin", False))
-            if given is None:
-                return _not_kept(
-                    name,
-                    "there is no terminal to type it at and it was not asked to read one",
-                    f"pipe it in:  printf '%s' \"$TOKEN\" | rundesk env set {name} --stdin")
-            if not given.strip("\n"):
-                return _not_kept(
-                    name, "nothing was given, and an empty value is not a value",
-                    f"take it away instead:  rundesk env unset {name}")
-            change = secret.remember(name, given, now=_now(), kept_from=kept_from(),
-                                     replace=True, in_a_turn=turn)
-    except (secret.NotKept, secret.NotAName, secret.Refused) as why:
-        return _not_kept(name, str(why))
-    except OSError as why:
-        return _not_kept(name, f"it could not be written: {why}")
-
-    if change.unchanged:
-        print(f"{name}: UNCHANGED — {_shown(change.kept)}")
-        return 0
-    if change.before is not None:
-        print(f"{name}: REPLACED — was {_shown(change.before)}, "
-              f"now {_shown(change.kept)}")
-        # A program already running holds the environment it was started with, and nothing
-        # can change one. Every program started from here on gets the new value, which for
-        # a brain is the next turn and for a channel adapter is its next start.
-        print("        every program started from here on is given the new one")
-        return 0
-    print(f"{name}: KEPT — {_shown(change.kept)}")
-    if change.kept.kept_as == secret.FETCHED:
-        print("        the command is kept and run again each time a program starts; "
-              "what it printed is not")
-    else:
-        print("        every program rundesk starts is given it from now on")
-    return 0
-
-
-def _unset(args: argparse.Namespace) -> int:
-    """Take one value away, and only that one."""
-    try:
-        gone = secret.forget(args.value_name)
-    except secret.Unknown:
-        return _no_such(args.value_name)
-    except (secret.NotAName, OSError) as why:
-        return _not_kept(args.value_name, str(why))
-    print(f"{gone.name}: TAKEN AWAY — {_shown(gone)} is gone")
-    print("        no copy of it is kept anywhere, and programs started from here on "
-          "are not given it")
-    return 0
-
-
-def _check(args: argparse.Namespace) -> int:
-    """Whether each kept value can still be produced — **without showing one**.
-
-    The one verb that runs a fetching command **and writes nothing down** — `set --from`
-    runs one too, once, to earn the hint before anything is recorded. It is a verb rather
-    than something the listing does because a vault that wants a fingerprint would
-    otherwise be asked for one every time somebody looked at what they had, and because
-    asking after one value must not fetch every other (R-SEC-22, R-SEC-23).
-    """
-    named = getattr(args, "value_name", None)
-    try:
-        kept = [secret.described(named)] if named else secret.listed()
-    except secret.Unknown:
-        return _no_such(named)
-    if not kept:
-        print("NO VALUES KEPT — there is nothing to reach")
-        return 0
-    for one in kept:
-        if one.kept_as == secret.FETCHED:
-            _out_loud(f"asking: {' '.join(shlex.quote(word) for word in one.command)}")
-    # **Only the names asked after** — checking one value must not run every other
-    # keeper this install has, unannounced and possibly with side effects of its own.
-    said = secret.resolve(only=[one.name for one in kept])
-    trouble = {one.name: one for one in said.trouble}
-    if named:
-        return _checked_one(kept[0], trouble.get(named))
-    rows = []
-    for one in kept:
-        went = trouble.get(one.name)
-        rows.append((one.name, one.kept_as,
-                     one.hint if went is None else NOT_PRODUCED,
-                     "yes" if went is None else f"NO — {_went(went)}"))
-    _as_table(("NAME", "KEPT AS", "VALUE", "REACHED"), rows)
+    trouble = secrets.name_trouble(key)
     if trouble:
-        print(f"\n{len(trouble)} of {len(kept)} is not something a program would be given"
-              if len(trouble) == 1 else
-              f"\n{len(trouble)} of {len(kept)} are not something a program would be given")
-        return 1
-    print(f"\nall {len(kept)} would be given to a program starting now")
-    return 0
+        return _failed(trouble)
+    try:
+        held = secrets.kept()
+    except secrets.Refused as why:
+        return _failed(str(why))
+
+    if key not in held:
+        print(f"{key} has never been set here", file=sys.stderr)
+        return FAILED
+    if held[key].trouble:
+        # Not "not set". Telling somebody that would send them to type a new value over one they
+        # may still want back.
+        return _failed(f"{key} {held[key].trouble}")
+    if held[key].value is None:
+        print(f"{key} is set to nothing", file=sys.stderr)
+        return FAILED
+    print(f"{key} is set — {secrets.hinted(held[key])}")
+    return OK
 
 
-def _checked_one(one: secret.Kept, went) -> int:
-    if went is None:
-        print(f"{one.name}: REACHED — {_shown(one)}")
-        return 0
-    _said_first()
-    print(f"{one.name}: NOT REACHED — {_went(went)}", file=sys.stderr)
-    print(f"        what rundesk asks for it:  rundesk env show {one.name}",
-          file=sys.stderr)
-    return 1
+def _stated(key: str) -> int:
+    """Read a value from whoever is typing and keep it under this name."""
+    trouble = secrets.name_trouble(key)
+    if trouble:
+        return _failed(trouble)
+
+    said = typed(f"{key}: ")
+    if said is None:
+        return _failed("nothing was typed", "nothing was kept")
+
+    try:
+        secrets.stated(key, said)
+    except (secrets.Refused, secrets.Stuck, OSError) as why:
+        return _failed(str(why), "nothing was kept")
+
+    print(f"{key} is set — {secrets.hinted(secrets.Held(said, None))}")
+    return OK
 
 
-def _went(went: secret.Trouble) -> str:
-    """Which of the two kinds of not-given this was, in three words rather than one.
+def _emptied(key: str) -> int:
+    """Empty a name, leaving the name so it is visible as switched off rather than absent."""
+    trouble = secrets.name_trouble(key)
+    if trouble:
+        return _failed(trouble)
+    try:
+        secrets.cleared(key)
+    except (secrets.Refused, secrets.Stuck, OSError) as why:
+        return _failed(str(why), "nothing was changed")
+    print(f"{key} is set to nothing")
+    return OK
 
-    **A command that could not answer is not one that answered no** — the value may exist
-    and be perfectly good, and reading a timeout as "there is no value" is how a working
-    credential comes to be replaced by somebody who believed it had gone.
+
+def typed(asking: str) -> Optional[str]:
+    """A value from the person at the terminal, or from whatever is piping into this. `None` when
+    there was nothing.
+
+    **Public because `skills configure` reads a value the same way**, and there is exactly one right
+    way to do it: everything in this docstring is the reason, and a second copy of it beside a second
+    copy of the code is how one of them comes to be missing the `sys.stdin is None` case. The build
+    this replaces reached across command modules for a *private* and its own notes recorded that as a
+    trap; the fix is to say plainly that this is shared, not to duplicate it.
+
+    Not echoed when there is a terminal, so it is not left on screen or in a scrollback buffer. Read
+    as an ordinary line when there is not, so `printf %s "$TOKEN" | rundesk env set K` works in an
+    installer — which is the case a prompt would turn into a command that hangs for ever.
+
+    Either way it never touches `argv`, and that is the point of reading it here at all.
     """
-    said = went.why or "it gave nothing back"
-    return said if went.answered else f"could not answer: {said}"
+    if sys.stdin is None:
+        # Not the same as an empty pipe. With fd 0 closed outright, CPython sets `sys.stdin` to
+        # `None` at start-up, and asking it anything is an `AttributeError` — which is not an
+        # `OSError` and reached the person as a traceback.
+        return None
+    try:
+        said = getpass.getpass(asking) if sys.stdin.isatty() else sys.stdin.readline()
+    except (EOFError, KeyboardInterrupt, OSError, AttributeError):
+        return None
+    said = said.rstrip("\n")
+    return said or None
 
 
-def _said_first() -> None:
-    """Put out what was already printed before saying what went wrong.
-
-    Standard output is buffered a block at a time when it is piped and standard error is
-    not, so a progress line written first arrives *after* the refusal — which reads as a
-    command that reported a failure and then went on working.
-    """
-    sys.stdout.flush()
-
-
-def _no_such(name) -> int:
-    _said_first()
-    print(f"{name}: NO SUCH VALUE — nothing is kept under that name", file=sys.stderr)
-    print("        what there is:  rundesk env", file=sys.stderr)
-    return 1
-
-
-def _not_kept(name: str, why: str, hint: str = "") -> int:
-    _said_first()
-    print(f"{name}: NOT KEPT — {why}", file=sys.stderr)
-    print(f"        {hint}" if hint else
-          "        nothing was written, so no program is given a value that is not there",
-          file=sys.stderr)
-    return 1
+def _failed(why: str, and_so: Optional[str] = None) -> int:
+    """Say what went wrong — never quoting a value, only ever a name."""
+    return failed(f"env: FAILED — {why}", *([and_so] if and_so else []))

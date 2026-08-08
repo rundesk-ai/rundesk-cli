@@ -1,0 +1,4 @@
+{"id": 1, "result": {}}
+{"id": 2, "result": {"thread": {"id": "t-1"}, "model": "m-1"}}
+{"id": 3, "result": {}}
+{"method":"item/completed","params":{"threadId":"t-1","turnId":"u-1","item":{"type":"agen
