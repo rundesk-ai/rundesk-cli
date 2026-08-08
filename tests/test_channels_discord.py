@@ -29,6 +29,7 @@ import time
 import unittest
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from unittest import mock
 
 #: The adapter is an executable with a shebang and no `.py`, so it is loaded by path rather than
 #: imported by name — and under a name of this suite's own, because `discord` is the vendor
@@ -900,6 +901,39 @@ class WhatADeliveryQuotes(Records):
         self.assertTrue([one for one in records if one.get("say") == "failed"])
         place = self.client.places.get(500)
         self.assertTrue(place is None or not place.sent)
+
+    def test_a_snapshot_that_cannot_be_made_still_says_the_delivery_failed(self) -> None:
+        # **The one failure in this function that was not turned into a `Refused`.** Everything
+        # inside the walk converts, but the snapshot was opened above the `try`, so a `TMPDIR` that
+        # is full or unwritable raised an `OSError` straight past `_deliver` — whose `except` names
+        # only `Refused`, `TypeError` and `ValueError` — and into `_reading`, which logs and reads
+        # on. No `failed` was ever emitted, so rundesk's id stayed in `awaiting`, `_landed` sat out
+        # its whole ceiling, nothing was collected into `refusals`, and `told` answered `True`:
+        # the answer was reported delivered when not one byte of it was sent.
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
+        at = Path(project.name).resolve() / "preview.png"
+        at.write_bytes(b"pixels")
+        said = {"do": "deliver", "id": "no-room-1", "place": "500", "text": "preview",
+                "files": [{"name": "preview.png", "at": str(at), "bytes": 6,
+                           "sha256": hashlib.sha256(b"pixels").hexdigest()}]}
+
+        def no_room(*_args: Any, **_kwargs: Any) -> Any:
+            raise OSError(28, "No space left on device")
+
+        async def exchange(reaching: Any) -> None:
+            with mock.patch.object(adapter.tempfile, "TemporaryFile", no_room):
+                await reaching._deliver(said)
+
+        records = self.during(exchange)
+        refused = [one for one in records if one.get("say") == "failed"]
+        self.assertEqual(1, len(refused),
+                         f"nothing said the delivery failed, so it reads as sent: {records}")
+        self.assertEqual("no-room-1", refused[0].get("id"),
+                         "the refusal named no delivery, so nothing could be released by it")
+        place = self.client.places.get(500)
+        self.assertTrue(place is None or not place.sent,
+                        "words went out for a delivery whose file was never verified")
 
     def test_discord_file_verification_leaves_the_event_loop_free(self) -> None:
         entered = threading.Event()

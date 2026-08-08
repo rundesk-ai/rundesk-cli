@@ -707,12 +707,18 @@ def a_verified_file(said: Dict[str, Any]):
     if not path.is_absolute() or not path.parts[1:]:
         raise Refused(f"could not attach {at}: it is not an absolute path to a file")
 
-    snapshot = tempfile.TemporaryFile()
     digest = hashlib.sha256()
     size = 0
+    snapshot = None
     directory = None
     descriptor = None
     try:
+        # **Opened inside the guard, like every other thing here that can fail.** A `TMPDIR` that is
+        # full or unwritable raises exactly what a file that will not open raises, and standing above
+        # this line it was the one `OSError` in this function that never became a `Refused`: it went
+        # straight past `_deliver`, which names only `Refused`, `TypeError` and `ValueError`, so
+        # nothing said the delivery had failed and rundesk reported it as sent.
+        snapshot = tempfile.TemporaryFile()
         directory = os.open(path.parts[0], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         for part in path.parts[1:-1]:
             below = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
@@ -735,7 +741,8 @@ def a_verified_file(said: Dict[str, Any]):
                 digest.update(block)
                 snapshot.write(block)
     except (OSError, ValueError) as why:
-        snapshot.close()
+        if snapshot is not None:
+            snapshot.close()
         raise Refused(f"could not attach {at}: {why}") from why
     finally:
         if directory is not None:
@@ -1429,7 +1436,13 @@ class Reaching:
                 raise Refused("there was nothing to deliver: no text, and no file")
             reference, tint = self._quoting(it.get("reply_to"), place)
             where = self.client.get_partial_messageable(place)
-        except (Refused, TypeError, ValueError) as why:
+        # `OSError` is the backstop rather than a fourth expected case. Everything raised below is
+        # meant to arrive as `Refused`, and one that did not — the snapshot, opened above its own
+        # guard — escaped to `_reading`, which logs and goes on reading. **The delivery then had no
+        # answer of any kind**, which is the one outcome this seam has no word for: rundesk holds
+        # the id, waits out its whole ceiling, collects no refusal, and reports the answer as sent.
+        # Named here so that the next one converts to a refusal instead of to silence.
+        except (Refused, TypeError, ValueError, OSError) as why:
             closed(files)
             say({"say": "failed", "id": given, "why": str(why)})
             return
