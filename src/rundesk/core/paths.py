@@ -195,6 +195,16 @@ def gateway_transition_lock(root: Optional[Path] = None) -> Path:
     return (root or home()) / ".rundesk-gateways.lock"
 
 
+def update_lock(root: Optional[Path] = None) -> Path:
+    """The per-install claim shared by manual and automatic updates."""
+    return (root or home()) / ".rundesk-update.lock"
+
+
+def work_admission_lock(root: Optional[Path] = None) -> Path:
+    """The barrier between admitting new work and an automatic update's busy decision."""
+    return (root or home()) / ".rundesk-work-admission.lock"
+
+
 def program() -> Path:
     """Where *this* copy of the program is running from, resolved rather than assumed.
 

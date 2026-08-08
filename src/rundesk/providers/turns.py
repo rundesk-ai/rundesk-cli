@@ -60,6 +60,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, NamedTuple, Op
 
 from rundesk.agents import directory, records
 from rundesk.channels import arriving
+from rundesk.core import paths
 from rundesk.providers import adapters, environment, instructions, kept, protocol, streaming, team
 from rundesk.skills import grants
 from rundesk.utils import lines, locking, logs
@@ -189,16 +190,21 @@ def claiming(agent: str, conversation: int, waiting: bool = False) -> Iterator[i
     **The file itself is left alone.** A lock lives on the inode, so unlinking it hands the name away
     and lets the next claim lock a fresh inode while this one is still held.
     """
-    at = adapters.lock_of(agent, conversation)
-    at.parent.mkdir(parents=True, exist_ok=True)
-    held = os.open(at, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
+    with locking.only_one(paths.work_admission_lock(), guarding="admitting provider work"):
+        at = adapters.lock_of(agent, conversation)
+        at.parent.mkdir(parents=True, exist_ok=True)
+        held = os.open(at, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            fcntl.flock(held, fcntl.LOCK_EX | (0 if waiting else fcntl.LOCK_NB))
-        except OSError as why:
-            if not locking.busy(why):
-                raise
-            raise Busy(f"something is already answering in conversation {conversation}") from why
+            try:
+                fcntl.flock(held, fcntl.LOCK_EX | (0 if waiting else fcntl.LOCK_NB))
+            except OSError as why:
+                if not locking.busy(why):
+                    raise
+                raise Busy(f"something is already answering in conversation {conversation}") from why
+        except BaseException:
+            os.close(held)
+            raise
+    try:
         yield held
     finally:
         os.close(held)
@@ -213,17 +219,35 @@ def busy(agent: str, conversation: int) -> bool:
     **Never creates the file.** A lock that is not there means this conversation has never had a
     turn, and a question that writes is a question that fails on a read-only disk.
     """
+    return standing(agent, conversation) is True
+
+
+def standing(agent: str, conversation: int) -> Optional[bool]:
+    """Whether this conversation is active; ``None`` when the kernel cannot be asked."""
+    return locking.is_held(adapters.lock_of(agent, conversation))
+
+
+def activity(agent: str) -> Optional[List[str]]:
+    """Every held conversation claim, or ``None`` when all claims cannot be inspected.
+
+    Enumerates lock files rather than unfinished database rows. The kernel claim is taken before
+    the row is written, deliberately, and an updater observing that admission window must still see
+    the turn that already owns its conversation.
+    """
     try:
-        asked = os.open(adapters.lock_of(agent, conversation), os.O_RDONLY)
+        conversations = list(directory.conversations(agent).iterdir())
+    except FileNotFoundError:
+        return []
     except OSError:
-        return False
-    try:
-        fcntl.flock(asked, fcntl.LOCK_SH | fcntl.LOCK_NB)
-    except OSError as why:
-        return locking.busy(why)
-    finally:
-        os.close(asked)
-    return False
+        return None
+    active = []
+    for conversation in conversations:
+        held = locking.is_held(conversation / adapters.LOCK)
+        if held is None:
+            return None
+        if held:
+            active.append(conversation.name)
+    return sorted(active)
 
 
 class Admission:

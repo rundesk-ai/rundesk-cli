@@ -35,8 +35,11 @@ Automatic upkeep is per-agent rather than an install setting. Inspect `agents`, 
 A pre-policy owner schedule already using that name remains ordinary owner work and blocks the
 automatic policy until the owner removes it; Rundesk never adopts or overwrites it.
 
-The current release stores `update_enabled` and `update_time` but does not itself schedule automatic
-update jobs from them. Use `update` for an update that exists today.
+`update_enabled` and `update_time` control a root-specific launchd job immediately. It makes one
+local-time attempt per day, outside every gateway process tree. An active provider turn or schedule,
+or activity Rundesk cannot inspect safely, defers without fetching, stopping gateways, or forcing
+work down. `status` reports configured intent and measured supervisor placement; a reconciliation
+failure is non-zero and is repaired idempotently by repeating the same `configure` command.
 
 ## Credential values
 
