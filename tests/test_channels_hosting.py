@@ -284,6 +284,40 @@ class _AnsweringStub:
         return self._busy
 
 
+class _SteeringStub:
+    """The `Steering` shape, so a case can prove the gesture seam without a `providers` layer.
+
+    A stand-in for the same reason `_AnsweringStub` is one: `channels` may not reach `providers`, so
+    what this module does with a gesture has to be provable with nothing of that layer present.
+    Every method records what it was handed and answers a sentence, because what crosses back is a
+    sentence — this seam has no codes in it.
+    """
+
+    def __init__(self, answering="done", raising=None):
+        self._answering = answering
+        self._raising = raising
+        self.controlled_with = []
+        self.asked_with = []
+        self.configured_with = []
+
+    def _answer(self, said):
+        if self._raising is not None:
+            raise self._raising
+        return said
+
+    def controlled(self, agent, kind, place, who, control):
+        self.controlled_with.append((agent, kind, place, who, control))
+        return self._answer(f"{self._answering}: {control}")
+
+    def asked(self, agent, who, query):
+        self.asked_with.append((agent, who, query))
+        return self._answer(f"{self._answering}: {query}")
+
+    def configured(self, agent, kind, place, who, provider):
+        self.configured_with.append((agent, kind, place, who, provider))
+        return self._answer(f"{self._answering}: {provider}")
+
+
 class Hosting(support.Isolated):
 
     def setUp(self):
@@ -360,8 +394,9 @@ class Hosting(support.Isolated):
         said.update(also)
         return json.dumps(said)
 
-    def hosting_now(self):
-        watching = hosting.looked(self.agent, self.where, hosting.Watching({}, {}, {}))
+    def hosting_now(self, answering=None, steering=None):
+        watching = hosting.looked(self.agent, self.where, hosting.Watching({}, {}, {}),
+                                  answering=answering, steering=steering)
         self.started.append(watching)
         self.remember(watching)
         return watching
@@ -1463,6 +1498,147 @@ class WhatAReplyPutsInFrontOfABrain(unittest.TestCase):
     def test_a_message_replying_to_nothing_is_left_exactly_as_it_was(self):
         for said in (None, {}, {"resolved": True}, "not an object", []):
             self.assertEqual("just a message", hosting._also_replying("just a message", said))
+
+
+class WhatAGestureReaches(Hosting):
+    """The seam a gesture crosses, which both sides were proved on and the join was not.
+
+    The adapter's half is proved in `tests/test_channels_discord.py` and what a control *does* is
+    proved in `tests/test_providers_answering.py`. What was never proved is this — that a word
+    somebody pressed reaches `Steering` at all, and that its answer gets back to the person waiting
+    on it. Every one of these cases fails with `_gestured` deleted, and none of them did before.
+    """
+
+    def a_gesture(self, **also):
+        said = {"say": "control", "conversation": "1180", "user": "2207",
+                "control": hosting.STOP, "ref": "i-1"}
+        said.update(also)
+        return json.dumps(said)
+
+    def gesturing(self, gesture, steering, allowed=("2207",)):
+        self.an_adapter()
+        self.a_channel(allowed=allowed, saying=gesture)
+        watching = self.hosting_now(steering=steering)
+        self.assertTrue(support.waited_until(
+            lambda: hosting.connected(watching, "discord"), PATIENCE), "it never connected")
+        return watching
+
+    def answered(self):
+        return [one for one in self.what_it_was_told() if one.get("do") == "answered"]
+
+    def test_a_control_reaches_steering_and_its_answer_goes_back_to_who_asked(self):
+        steering = _SteeringStub()
+        self.gesturing(self.a_gesture(), steering)
+
+        self.assertTrue(support.waited_until(lambda: steering.controlled_with, PATIENCE),
+                        "a control somebody pressed never reached anything")
+        self.assertEqual((self.agent, "discord", "1180", "2207", hosting.STOP),
+                         steering.controlled_with[0])
+        self.assertTrue(support.waited_until(lambda: self.answered(), PATIENCE),
+                        "the answer never went back, so the gesture hangs for ever")
+        self.assertEqual("i-1", self.answered()[0]["ref"],
+                         "the answer named no question, so nothing could be completed by it")
+        self.assertIn(hosting.STOP, self.answered()[0]["text"])
+
+    def test_a_query_is_asked_of_steering_rather_than_of_a_turn(self):
+        steering = _SteeringStub()
+        self.gesturing(self.a_gesture(say="query", query=hosting.STATUS, control=None), steering)
+
+        self.assertTrue(support.waited_until(lambda: steering.asked_with, PATIENCE))
+        self.assertEqual((self.agent, "2207", hosting.STATUS), steering.asked_with[0])
+        self.assertTrue(support.waited_until(lambda: self.answered(), PATIENCE))
+
+    def test_changing_the_brain_carries_what_was_typed(self):
+        steering = _SteeringStub()
+        self.gesturing(self.a_gesture(say="configure", provider="codex", control=None), steering)
+
+        self.assertTrue(support.waited_until(lambda: steering.configured_with, PATIENCE))
+        self.assertEqual((self.agent, "discord", "1180", "2207", "codex"),
+                         steering.configured_with[0])
+
+    def test_a_word_outside_the_closed_set_is_nothing_this_gateway_does(self):
+        # A gesture whose name is whatever the caller typed is a command runner with a chat window
+        # in front of it, and the adapter is the wrong place to be sure it never becomes one.
+        steering = _SteeringStub()
+        self.gesturing(self.a_gesture(control="rm -rf /"), steering)
+        self.several_passes()
+
+        self.assertEqual([], steering.controlled_with,
+                         "a word rundesk does not know was passed on anyway")
+        self.assertEqual([], self.answered())
+
+    def test_a_stranger_is_never_steered_and_never_told_they_are_one(self):
+        # R-CH-23. Answering a stranger at all confirms the agent is listening.
+        steering = _SteeringStub()
+        self.gesturing(self.a_gesture(user="9999"), steering, allowed=("2207",))
+        self.several_passes()
+
+        self.assertEqual([], steering.controlled_with)
+        self.assertEqual([], self.answered(), "a stranger was answered, which says an agent is here")
+
+    def test_steering_that_goes_wrong_still_answers_and_never_ends_the_channel(self):
+        # Somebody is waiting on a spinner. A gesture that raised used to leave them there for ever,
+        # and taking the channel down with it would be worse still.
+        steering = _SteeringStub(raising=RuntimeError("the records are locked"))
+        watching = self.gesturing(self.a_gesture(), steering)
+
+        self.assertTrue(support.waited_until(lambda: self.answered(), PATIENCE),
+                        "a gesture that went wrong left somebody waiting on it for ever")
+        self.assertIn("could not be done", self.answered()[0]["text"])
+        self.assertIn("discord", self.looked_again(watching).running,
+                      "one gesture going wrong took the whole channel down")
+
+    def test_a_gesture_with_nothing_answering_it_is_said_rather_than_dropped(self):
+        self.gesturing(self.a_gesture(), None)
+        self.assertTrue(support.waited_until(
+            lambda: "asked for something" in self.said_in_the_log(), PATIENCE),
+            "a gesture nothing could answer went nowhere at all")
+
+    def several_passes(self):
+        """A window rather than a question, for the cases about something that must *not* happen."""
+        time.sleep(1.0)
+
+
+class WhenAPlatformWillNotTakeIt(Hosting):
+    """`{"say": "failed"}` — the record a rate limit arrives in, and nothing exercised it."""
+
+    def test_a_refusal_is_written_down_against_the_delivery_it_refuses(self):
+        self.an_adapter(body=AN_ADAPTER_THAT_REFUSES)
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        one = watching.running["discord"]
+
+        why = []
+        hosting.told(self.agent, self.where, watching, "discord", "1180", ["the daily report"],
+                     landed_within=5.0, refusals=why)
+
+        self.assertEqual(1, len(why), "the platform's reason reached nobody")
+        self.assertIn("429", why[0])
+        self.assertEqual({}, one.awaiting,
+                         "a refused delivery was left in flight, so nothing waiting on it can end")
+
+    def test_a_refusal_reaches_the_agents_own_log(self):
+        self.an_adapter(body=AN_ADAPTER_THAT_REFUSES)
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        hosting.told(self.agent, self.where, watching, "discord", "1180", ["the daily report"],
+                     landed_within=5.0)
+        self.assertIn("could not deliver", self.said_in_the_log())
+
+    def test_a_refusal_answers_one_question_once(self):
+        # Taken out as it is read, or it would answer the next delivery that happened to reuse the
+        # moment in its id.
+        self.an_adapter(body=AN_ADAPTER_THAT_REFUSES)
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+
+        first, second = [], []
+        hosting.told(self.agent, self.where, watching, "discord", "1180", ["one"],
+                     landed_within=5.0, refusals=first)
+        self.assertEqual(1, len(first))
+        hosting.told(self.agent, self.where, watching, "discord", "1180", ["two"],
+                     landed_within=5.0, refusals=second)
+        self.assertEqual(1, len(second), "a second delivery collected the first one's refusal")
 
 
 class _AStoppedClock:
