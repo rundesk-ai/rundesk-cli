@@ -429,6 +429,89 @@ for line in sys.stdin:
                               if one.get("type") == "file"])
 
 
+class WhenTheBrainCitesAFileItMade(support.Isolated):
+    """The brain's own citation syntax, which reached a person as markup and attached nothing.
+
+    Rundesk asks a brain to link a file it made. This one writes
+    `:codex-file-citation{path="…" purpose="output"}` inline in its prose instead — so the answer
+    went out with that verbatim in it, and the PDF it named was never sent. Taken off a live run on
+    2026-08-08, path and all.
+    """
+
+    SAID = (':codex-file-citation{path="%s" purpose="output"}')
+
+    A_BRAIN_THAT_CITES = '''#!/usr/bin/env python3
+import json, os, sys
+if "--capabilities" in sys.argv[1:]:
+    print('{"tools": true}'); raise SystemExit(0)
+for line in sys.stdin:
+    try:
+        said = json.loads(line)
+    except ValueError:
+        continue
+    if said.get("method") == "initialize":
+        print(json.dumps({"id": said["id"], "result": {}}), flush=True)
+    elif said.get("method") == "thread/start":
+        print(json.dumps({"id": said["id"], "result": {"thread": {"id": "t-1"}}}), flush=True)
+    elif said.get("method") == "turn/start":
+        print(json.dumps({"id": said["id"], "result": {}}), flush=True)
+        print(json.dumps({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "id": "m1", "phase": "final_answer",
+            "text": os.environ["SAYING"]}}}), flush=True)
+        print(json.dumps({"method": "turn/completed",
+                          "params": {"threadId": "t-1",
+                                     "turn": {"id": "u-1", "status": "completed"}}}), flush=True)
+'''
+
+    def ran(self, saying):
+        where = self.home / "cwd"
+        where.mkdir(parents=True, exist_ok=True)
+        instead = self.home / "bin"
+        instead.mkdir(parents=True, exist_ok=True)
+        (instead / "codex").write_text(self.A_BRAIN_THAT_CITES, encoding="utf-8")
+        (instead / "codex").chmod(0o755)
+        got = subprocess.run(
+            [str(ADAPTER)], input=json.dumps({"type": "say", "text": "make a pdf"}) + "\n",
+            capture_output=True, text=True, timeout=PATIENCE, check=False,
+            env={"PATH": f"{instead}:/usr/bin:/bin", "RUNDESK_CWD": str(where),
+                 "RUNDESK_ACCESS_MODE": "work", "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1",
+                 "SAYING": saying})
+        return [json.loads(one) for one in got.stdout.splitlines() if one.strip()]
+
+    def a_pdf(self):
+        at = self.home / "out" / "test.pdf"
+        at.parent.mkdir(parents=True, exist_ok=True)
+        at.write_bytes(b"%PDF-1.4")
+        return at
+
+    def test_a_cited_output_is_reported_as_a_file(self):
+        at = self.a_pdf()
+        said = self.ran(f"Created and verified a one-page PDF: {self.SAID % at}")
+        made = [one for one in said if one.get("type") == "file"]
+        self.assertEqual([str(at)], [one["at"] for one in made])
+        self.assertEqual("test.pdf", made[0]["name"])
+
+    def test_the_markup_never_reaches_a_person(self):
+        at = self.a_pdf()
+        text = next(one for one in self.ran(f"Here it is: {self.SAID % at}")
+                    if one.get("type") == "text")["text"]
+        self.assertNotIn("codex-file-citation", text)
+        self.assertIn("test.pdf", text)
+
+    def test_a_file_it_only_read_is_not_a_deliverable(self):
+        at = self.a_pdf()
+        cited = f'I looked at :codex-file-citation{{path="{at}" purpose="context"}}'
+        said = self.ran(cited)
+        self.assertEqual([], [one for one in said if one.get("type") == "file"])
+
+    def test_a_path_that_is_not_there_loses_neither_the_words_nor_lies_about_a_file(self):
+        said = self.ran(f"Done: {self.SAID % '/nowhere/at/all/test.pdf'}")
+        self.assertEqual([], [one for one in said if one.get("type") == "file"])
+        text = next(one for one in said if one.get("type") == "text")["text"]
+        self.assertIn("test.pdf", text)
+        self.assertNotIn("codex-file-citation", text)
+
+
 class WhenASessionWillNotResume(support.Isolated):
     """A handle that has gone bad is a turn that answers anyway, in a thread of its own.
 
