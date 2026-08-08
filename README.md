@@ -179,8 +179,17 @@ retry rather than a broken agent at three in the morning.
 Then:
 
 ```sh
-rundesk channels add ava discord --allow <your-discord-user-id>
+rundesk channels add ava discord --allow <your-discord-user-id> --notify
 ```
+
+**Set `--notify` on the first channel you add, and let that be your own DM.** The two flags
+answer different questions: `--allow` is who may *reach* the agent, and `--notify` is where the
+agent *speaks first*. Without it you get an agent that answers when spoken to and never says
+anything on its own — no "gateway came up", no "gateway going down", no schedule report, nothing
+a delegation hands back. There is no error, because an agent that tells nobody is a legitimate
+thing to want; the only sign is `told no` in the block `add` prints. Your own DM is the right
+first choice: it exists before any server does, only you can read it, and it is where you want
+the news that the thing is running.
 
 It asks for the token without echoing it, connects, and only then writes the channel down.
 On success it prints an **invite** URL — the bot is in no server until somebody with
@@ -195,7 +204,9 @@ rundesk gateways start ava
 ```
 
 Then say hello to the bot in a DM. If nothing answers, `rundesk channels doctor` and
-`rundesk gateways logs ava` are the two things to read.
+`rundesk gateways logs ava` are the two things to read. If it answers you but never speaks
+first, it is the paragraph above: `rundesk channels configure ava discord --notify`, then
+restart the gateway so the notice it announces itself with has somewhere to go.
 
 ### Custom channels are first-class
 

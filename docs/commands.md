@@ -896,6 +896,18 @@ lock and after the row, and it has its own guard: where the channel was added an
 failed, the failure says so and names `rundesk channels configure <agent> <adapter> --notify` rather
 than sending somebody to add a channel that is already standing.
 
+**`--notify` is the other half of a first setup, and nothing refuses its absence.** `--allow` is who
+may *reach* the agent; `--notify` is where the agent *speaks first*. Left off, the channel connects
+and answers when spoken to and never says anything unprompted — no gateway coming up or going down,
+no schedule report, no delegation handing back a result. That is a legitimate thing to want, so it
+is not an error; the only sign is `told no` in the block above. The up-notice is gated on the
+notified channel having reached its platform, and an agent with no notified channel counts as ready
+rather than waiting for a connection that will never exist.
+
+So **make the owner's own direct message the notified channel on the first channel added**. Adding
+it later is `channels configure <agent> <adapter> --notify`, followed by a gateway restart: the
+up-notice is said once per gateway, and one already running has said it.
+
 **An empty allow list authorises nobody, never everybody**, so leaving `--allow` off is refused —
 by the verb rather than by argparse, in a sentence ending with the whole command to type. An agent
 connected to a platform with nobody allowed is an agent that answers no one, and a stranger's message
