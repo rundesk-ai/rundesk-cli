@@ -106,6 +106,7 @@ last_updated_at   2026-08-04T20:48:04Z
 migration         nothing to carry — this release ships no migration steps
 update_enabled    yes
 update_time       03:00
+automatic update  scheduled daily at 03:00 local time
 ```
 
 `last_updated_at` is when a version last actually arrived — the install, or an update that really
@@ -160,6 +161,11 @@ the day it lands. Yes-or-no values accept `yes/no`, `true/false`, `on/off` and `
 
 **Naming two settings and getting one wrong changes neither.** Half-applied configuration leaves an
 install in a state nobody typed.
+
+Changing `update_enabled` or `update_time` immediately reconciles the root-specific launchd job.
+The settings are saved atomically first; if launchd cannot be reconciled, `configure` exits non-zero
+and says that the settings were saved, so repeating the command is an honest idempotent repair.
+Disabling removes the job and its generated shim; changing the time replaces the loaded definition.
 
 How far the install has been carried (`migration`) is shown by `status` but is not settable: setting
 it by hand would make rundesk skip or repeat a migration step.
@@ -1623,6 +1629,14 @@ whose code is current and whose configuration and migrations belong to the relea
 `rundesk update` settles the install even when it reports `UP TO DATE`; everything it does is
 idempotent, and running it again is how you finish an update that stopped halfway.
 
+When `update_enabled` is on, launchd makes one attempt per local calendar day at `update_time`.
+The coordinator is outside every gateway process tree and uses the same update transaction as this
+command. Before asking for a release it closes work admission and inspects kernel-held provider and
+schedule claims. Active work, or activity that cannot be inspected safely, produces a logged
+`DEFERRED` outcome and no fetch, gateway stop, or forced termination; the next attempt is the next
+local day. Repeated launchd starts on the same day are logged and skipped. Failures remain non-zero
+and recover through the same rerunnable settlement path as a manual update.
+
 ## uninstall
 
 `--confirm` is required. Without it, the command says exactly what it would take and what it would
@@ -1644,6 +1658,7 @@ with no terminal is worse than no prompt at all.
 
 What it takes, one named thing at a time, never a sweep:
 
+- the root-specific automatic update job and generated shim, before `app/` goes
 - **every gateway job this root placed, by the full name launchd knows it by, one agent at a time —
   and before `app/` goes.** A job that outlived the program it points at is a machine trying to
   start a command that is not there, at every login, for ever. And it is one label at a time and
@@ -1670,7 +1685,7 @@ What `install.sh` runs after it has fetched a copy. Usable by hand from a checko
 ```
 
 It places the program, lays down the directories and their notes, writes or fills in the
-configuration, carries the migrations, links the command, and then **proves the installed command
+configuration, carries the migrations, reconciles the daily update job, links the command, and then **proves the installed command
 answers** — an installer that reports success without checking has told somebody their machine is
 ready when it is not.
 

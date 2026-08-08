@@ -9,10 +9,12 @@ usually has just before they change something.
 """
 
 import argparse
+from typing import Optional
 
 from rundesk.commands import Subcommands, as_written, failed
 from rundesk.core import config, paths
 from rundesk.exits import OK
+from rundesk.gateways import job
 from rundesk.utils.terminal import as_table
 
 
@@ -29,7 +31,8 @@ def register(sub: Subcommands) -> None:
                           help=f"{config.WANTED.get(key, 'a value')} (now: {config.INITIAL[key]})")
 
 
-def cmd_configure(args: argparse.Namespace) -> int:
+def cmd_configure(args: argparse.Namespace,
+                  supervising: Optional[job.Supervising] = None) -> int:
     """Set what was named and leave everything else alone; with nothing named, show it all."""
     try:
         paths.home()
@@ -60,6 +63,13 @@ def cmd_configure(args: argparse.Namespace) -> int:
 
     for key in sorted(settled):
         print(f"{key} is now {as_written(settled[key])}")
+    if "update_enabled" in settled or "update_time" in settled:
+        from rundesk.commands import automatic_updates
+        scheduled = automatic_updates.reconcile(supervising)
+        if scheduled.how == job.CANNOT_TELL:
+            return failed(f"configure: FAILED — settings were saved, but automatic update "
+                          f"scheduling could not be reconciled — {scheduled.why}",
+                          "run the same configure command again after resolving the supervisor")
     return OK
 
 

@@ -227,9 +227,9 @@ def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshin
         parser.print_help()
         return OK
     if args.command == "status":
-        return cmd_status(args)
+        return cmd_status(args, supervising)
     if args.command == "configure":
-        return cmd_configure(args)
+        return cmd_configure(args, supervising)
     if args.command == "agents":
         return cmd_agents(args)
     if args.command == "gateways":
