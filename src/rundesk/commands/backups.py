@@ -173,8 +173,8 @@ def _saved() -> int:
     return OK
 
 
-def _as_they_stood(could_not_be_read: List[str]) -> None:
-    """Say which records went into the copy as their bytes rather than as a snapshot. Silent when none.
+def _as_they_stood(warnings: List[str]) -> None:
+    """Say each save warning, and distinguish copied records from an omitted vanished member.
 
     Every one of them, never a count: a summary saying "2 agents" hides the one somebody has to look
     at, which is the same reason `update` names each agent it could not carry.
@@ -184,9 +184,9 @@ def _as_they_stood(could_not_be_read: List[str]) -> None:
     that a copy holds records rundesk could not read. When the journal lands, these lines are written
     there too, and that is what makes the fact survive an unattended run nobody was watching.
     """
-    for one in could_not_be_read:
+    for one in warnings:
         print(f"backups: {one}", file=sys.stderr)
-    if could_not_be_read:
+    if any("copied as it stood" in one for one in warnings):
         print("        the copy is there and holds those records exactly as they stood — it is a "
               "copy of records rundesk could not read, not a snapshot of working ones",
               file=sys.stderr)
@@ -363,11 +363,9 @@ def _needs_confirming(name: str, at: Path, data: Path) -> int:
     than after.
     """
     try:
-        there = backups.kept(at)
+        backups._a_copy(at, name)
     except backups.Refused as why:
         return _failed(str(why), "nothing was restored")
-    if name not in there:
-        return _failed(f"there is no copy called {name} in {_where(at)}", "nothing was restored")
 
     try:
         up = _not_plainly_offline()

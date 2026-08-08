@@ -1,18 +1,19 @@
 """Copies of what the owner keeps, and where they are kept.
 
-A copy is the whole of `data/` under a name that says when it was made. Four things happen to them —
-they are listed, one is made, one is put back, and the directory holding them is moved somewhere with
-more room — and every one of them is written around the same fear: **a copy is the thing somebody
-reaches for on the worst day they have had with this product.** Anything that leaves one damaged,
+A copy is the whole of `data/` under a name that says when it was made. New copies are compressed ZIP
+archives; v0.40 directory copies remain valid restore inputs. Four things happen to them — they are
+listed, one is made, one is put back, and the directory holding them is moved somewhere with more
+room — and every one of them is written around the same fear: **a copy is the thing somebody reaches
+for on the worst day they have had with this product.** Anything that leaves one damaged,
 half-written, or quietly absent has failed at the only moment it existed for.
 
 ## A copy that did not finish is never named like one that did
 
-Every copy is built under a `.incoming` name and renamed into place only once all of it is there, so
-nothing in `backups/` under a copy's name is ever partial. This is the layer's shared convention and
-the reasoning is in `lifecycle/__init__.py`; it matters more here than anywhere else it is used,
-because a half-copy that is *named* like a finished one is worse than no copy at all — it is the one
-that gets restored.
+Every data snapshot and archive is built under a `.incoming` name, and the archive is renamed into
+place only once all of it is there and verified. Nothing in `backups/` under a copy's name is ever
+partial. This is the layer's shared convention and the reasoning is in `lifecycle/__init__.py`; it
+matters more here than anywhere else it is used, because a half-copy that is *named* like a finished
+one is worse than no copy at all — it is the one that gets restored.
 
 ## Putting one back keeps what it replaces
 
@@ -88,14 +89,17 @@ look — which is the defect this whole rebuild exists to have removed.
 """
 
 import contextlib
+import json
 import os
 import re
 import shutil
 import sqlite3
 import stat
+import tempfile
+import zipfile
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Callable, ContextManager, List, NamedTuple, Optional
+from pathlib import Path, PurePosixPath
+from typing import Callable, ContextManager, Dict, Iterator, List, NamedTuple, Optional, Tuple
 
 from rundesk.agents import directory, records
 from rundesk.agents import migration as agent_migration
@@ -107,12 +111,25 @@ from rundesk.utils import files, locking
 #:
 #: Hyphens where a clock has colons, because a colon in a filename is a path separator to some tools
 #: and a directory Finder will not show you to others. The shape sorts lexically into the order it
-#: happened, which is what lets "newest first" be a `sorted()` and not a parse.
+#: happened. The suffix now distinguishes archive from directory, so ordering parses this value
+#: rather than trusting the whole stored name lexically.
 WHEN = "%Y-%m-%dT%H-%M-%SZ"
 
 #: What counts as a copy. Nothing else in the directory is ever listed, moved, put back or removed —
 #: an owner may keep their own things in here and rundesk is not entitled to any of them.
-NAMED = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(-\d{2})?$")
+NAMED = re.compile(
+    r"^(?P<when>\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)"
+    r"(?:-(?P<again>\d{2}))?(?P<archive>\.zip)?$")
+
+#: The contract at the root of every archive this release writes and reads.
+MANIFEST = "manifest.json"
+FORMAT = "rundesk-backup"
+FORMAT_VERSION = 1
+DATA_PREFIX = "data/"
+
+#: Archives from before the v0.40 rebuild used another layout. A matching name is called out rather
+#: than reported missing, because guessing at old backup compatibility is a destructive mistake.
+OLD_ARCHIVE = re.compile(r"^rundesk-data-.*\.zip$")
 
 #: The write-ahead log, as `agents.records` names it — the first of the two files SQLite keeps
 #: beside a database, the other being the shared-memory index. Named here rather than reached for by
@@ -204,12 +221,26 @@ def kept(backups: Optional[Path] = None) -> List[str]:
     _reachable(at)
     try:
         there = [one.name for one in at.iterdir()
-                 if not files.staged(one.name) and NAMED.match(one.name) and one.is_dir()]
+                 if not files.staged(one.name) and _identity(one.name) is not None
+                 and ((one.name.endswith(".zip") and one.is_file())
+                      or (not one.name.endswith(".zip") and one.is_dir()))]
     except FileNotFoundError:
         return []
     except OSError as why:
         raise Refused(f"{at} is there and cannot be read: {why}") from why
-    return sorted(there, reverse=True)
+    return sorted(there, key=lambda name: _identity(name), reverse=True)
+
+
+def _identity(name: str) -> Optional[Tuple[datetime, int]]:
+    """The chronological identity carried by a directory or archive name."""
+    matched = NAMED.fullmatch(name)
+    if matched is None:
+        return None
+    try:
+        made = datetime.strptime(matched.group("when"), WHEN).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return made, int(matched.group("again") or "1")
 
 
 def _reachable(at: Path) -> None:
@@ -244,21 +275,30 @@ def named(when: Optional[datetime] = None, backups: Optional[Path] = None) -> st
     """
     at = backups or paths.backups()
     stamp = (when or datetime.now(timezone.utc)).strftime(WHEN)
-    if not (at / stamp).exists():
-        return stamp
+    if not _taken(at, stamp):
+        return f"{stamp}.zip"
     for again in range(2, 100):
         taken = f"{stamp}-{again:02d}"
-        if not (at / taken).exists():
-            return taken
+        if not _taken(at, taken):
+            return f"{taken}.zip"
     raise Refused(f"there are already a hundred copies made in the second {stamp} names")
+
+
+def _taken(at: Path, stem: str) -> bool:
+    """Whether either representation has reserved this chronological identity."""
+    directory_copy = at / stem
+    archive_copy = at / f"{stem}.zip"
+    return (directory_copy.exists() or directory_copy.is_symlink()
+            or archive_copy.exists() or archive_copy.is_symlink())
 
 
 def save(data: Optional[Path] = None, backups: Optional[Path] = None,
          when: Optional[datetime] = None, saying: Optional[Callable[[str], None]] = None) -> str:
     """Copy what the owner keeps, and hand back what the copy is called.
 
-    Staged under a name no copy has and renamed into place once all of it is there, so an
-    interruption leaves litter rather than a copy that is not one.
+    The consistent directory snapshot and its archive are staged under names no copy has. Only the
+    verified archive is renamed into place, so an interruption leaves litter rather than a copy that
+    is not one.
 
     **Every agent's records in the copy are a snapshot SQLite itself took**, not the bytes of a file
     somebody may be writing to — see the module docstring on why this is consistent rather than
@@ -286,23 +326,129 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
         # The name and the staging under it are one decision: worked out separately, two callers
         # land on the same second, stage into the same directory, and discard each other's work.
         name = named(when, at)
-        pending = files.incoming_of(at / name)
+        pending = files.incoming_of(at / name[:-4])
+        archive = files.incoming_of(at / name)
         files.discard(pending)
+        files.discard(archive)
+        vanished: List[str] = []
         try:
-            shutil.copytree(from_where, pending, symlinks=True)
+            shutil.copytree(
+                from_where, pending, symlinks=True,
+                copy_function=_copying(from_where, vanished, said))
             _without_update_intents(pending)
             # **Before the rename, so a copy is never named like one until every database in it is
             # a snapshot.** After it, the window between a copy appearing under its own name and
             # its records being made consistent is a window a restore can happen in.
             _snapshotted(from_where, pending, said)
             _private_secrets(pending / "secrets")
-            os.rename(pending, at / name)
+            _packed(pending, archive, when, vanished)
+            _verified(archive)
+            os.rename(archive, at / name)
         except BaseException:
             # `BaseException`: a Ctrl-C, or a closed terminal turned into one, is not an
             # `Exception`, and this leaves a staging entry rather than a copy either way.
             files.discard(pending)
+            files.discard(archive)
             raise
+        files.discard(pending)
     return name
+
+
+def _copying(from_where: Path, vanished: List[str], said: Callable[[str], None]
+             ) -> Callable[..., str]:
+    """A copy operation that distinguishes supported cleanup from every other read failure."""
+    def copy(source: str, target: str, *, follow_symlinks: bool = True) -> str:
+        try:
+            return str(shutil.copy2(source, target, follow_symlinks=follow_symlinks))
+        except FileNotFoundError:
+            if Path(source).exists() or Path(source).is_symlink():
+                raise
+            under = Path(source).relative_to(from_where).as_posix()
+            vanished.append(under)
+            said(f"{under} was removed while the copy was being written — it is not in this copy")
+            return str(target)
+    return copy
+
+
+def _packed(data: Path, archive: Path, when: Optional[datetime], vanished: List[str]) -> None:
+    """Pack a finished staged data tree with the metadata restore needs to reproduce it."""
+    made = when or datetime.now(timezone.utc)
+    manifest = {
+        "format": FORMAT,
+        "version": FORMAT_VERSION,
+        "created_at": made.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "data_prefix": DATA_PREFIX,
+        "vanished": sorted(vanished),
+    }
+    # Private from the first byte, not tightened afterwards: this archive carries sealed values and
+    # the key that opens them, so a permissive umask must never create a readable window.
+    descriptor = os.open(archive, os.O_CREAT | os.O_EXCL | os.O_RDWR, files.ONLY_MINE)
+    with os.fdopen(descriptor, "w+b") as stream:
+        with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as opened:
+            _written(opened, MANIFEST,
+                     json.dumps(manifest, indent=2, sort_keys=True).encode() + b"\n",
+                     stat.S_IFREG | 0o600, made)
+            _written(opened, DATA_PREFIX, b"",
+                     stat.S_IFDIR | (data.lstat().st_mode & 0o7777), made)
+            for one in sorted(data.rglob("*")):
+                under = DATA_PREFIX + one.relative_to(data).as_posix()
+                mode = one.lstat().st_mode
+                if stat.S_ISDIR(mode):
+                    _written(opened, under + "/", b"", mode, made)
+                elif stat.S_ISLNK(mode):
+                    _written(opened, under, os.readlink(one).encode(), mode, made)
+                elif stat.S_ISREG(mode):
+                    _written_file(opened, under, one, mode, made)
+                else:
+                    raise Refused(f"{one} is not a file, directory or link and cannot be copied")
+
+
+def _zip_time(stamp: float, fallback: datetime) -> Tuple[int, int, int, int, int, int]:
+    """A local filesystem time within ZIP's representable range."""
+    held = datetime.fromtimestamp(stamp)
+    if held.year < 1980 or held.year > 2107:
+        held = fallback.astimezone().replace(tzinfo=None)
+    return held.timetuple()[:6]
+
+
+def _info(name: str, mode: int, made: datetime, stamp: Optional[float] = None) -> zipfile.ZipInfo:
+    """One Unix ZIP member carrying its type and mode explicitly."""
+    info = zipfile.ZipInfo(name, date_time=_zip_time(stamp if stamp is not None else made.timestamp(),
+                                                    made))
+    info.create_system = 3
+    info.external_attr = (mode & 0xFFFF) << 16
+    if stat.S_ISDIR(mode):
+        info.external_attr |= 0x10
+    return info
+
+
+def _written(opened: zipfile.ZipFile, name: str, content: bytes, mode: int,
+             made: datetime) -> None:
+    """Write one small or metadata-only member."""
+    info = _info(name, mode, made)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    opened.writestr(info, content)
+
+
+def _written_file(opened: zipfile.ZipFile, name: str, source: Path, mode: int,
+                  made: datetime) -> None:
+    """Stream one regular file rather than holding credential-bearing data in memory."""
+    info = _info(name, mode, made, source.lstat().st_mtime)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    with open(source, "rb") as reading, opened.open(info, "w") as writing:
+        shutil.copyfileobj(reading, writing)
+
+
+def _verified(archive: Path) -> None:
+    """Close and reread an archive before its finished name can appear."""
+    try:
+        with zipfile.ZipFile(archive) as opened:
+            bad = opened.testzip()
+            if bad is not None:
+                raise Refused(f"the copy could not be verified: {bad} is damaged")
+            _archive_members(opened, archive.name)
+    except zipfile.BadZipFile as why:
+        raise Refused(f"the copy could not be verified: {why}") from why
 
 
 def _snapshotted(from_where: Path, pending: Path, said: Callable[[str], None]) -> None:
@@ -451,7 +597,7 @@ def prune(keeping: int, backups: Optional[Path] = None,
     with _one_at_a_time(at.parent):
         for name in [one for one in kept(at) if restorable(at, one)][keeping:]:
             try:
-                shutil.rmtree(at / name)
+                files.remove_one(at / name)
                 said(f"let go of {name}")
             except OSError:
                 stuck.append(name)
@@ -464,11 +610,9 @@ def restorable(at: Path, name: str) -> bool:
     The question retention has to ask before it lets anything go, and the question a listing has to
     ask before it lets somebody believe they are covered.
     """
-    where = at / name
-    if not where.is_dir() or not _has_the_mark(where):
-        return False
     try:
-        _valid_secrets(where / "secrets")
+        with _opened_copy(at, name):
+            pass
     except (Refused, OSError):
         return False
     return True
@@ -520,21 +664,21 @@ def restore(name: str, data: Optional[Path] = None, backups: Optional[Path] = No
 def _put_back_now(name: str, at: Path, into: Path, when: Optional[datetime],
                   steps: Optional[Path], said: Callable[[str], None]) -> Restored:
     """The restore itself, with the install already held. See `restore`."""
-    a_copy = _a_copy(at, name)
-    safety = save(into, at, when, said) if into.is_dir() else None
-    if safety:
-        # Said **before** anything is replaced, not in a summary afterwards. Every failure from here
-        # on is one where knowing this name is the way back, and a summary is exactly the thing that
-        # does not get printed when something goes wrong on the line above it.
-        said(f"kept {safety} — a copy of {into} as it was")
+    with _opened_copy(at, name) as a_copy:
+        safety = save(into, at, when, said) if into.is_dir() else None
+        if safety:
+            # Said **before** anything is replaced, not in a summary afterwards. Every failure from
+            # here on is one where knowing this name is the way back, and a summary is exactly the
+            # thing that does not get printed when something goes wrong on the line above it.
+            said(f"kept {safety} — a copy of {into} as it was")
 
-    try:
-        _swap(a_copy, into)
-    except HalfRestored as why:
-        # The one failure with nothing left to try, so the message has to carry the way out of it.
-        # Naming the copy here rather than where the swap gave up, because this is the level that
-        # knows there is one: `_swap` replaces a directory and has never heard of a safety copy.
-        raise HalfRestored(f"{why}, and that copy is {safety}") from why
+        try:
+            _swap(a_copy, into)
+        except HalfRestored as why:
+            # The one failure with nothing left to try, so the message has to carry the way out.
+            # Naming the copy here rather than where the swap gave up, because this is the level that
+            # knows there is one: `_swap` replaces a directory and has never heard of a safety copy.
+            raise HalfRestored(f"{why}, and that copy is {safety}") from why
     return Restored(name, safety, _settle(into, steps, said))
 
 
@@ -692,20 +836,155 @@ def _a_copy(at: Path, name: str) -> Path:
     has made, and a directory that is there and is not a copy of an install's data are three
     different mistakes, and the person reading has to know which one they made.
     """
-    if not NAMED.match(name):
+    if OLD_ARCHIVE.fullmatch(name):
+        raise Refused(
+            f"{name} is a pre-v0.40 backup archive whose layout this release does not support — "
+            "it was not treated as a current copy and nothing was restored")
+    if _identity(name) is None:
         raise Refused(f"{name} is not the name of a copy — `rundesk backups` lists what there is")
     # Before "there is no copy called that": on an unplugged disk every name is missing, and telling
     # somebody their copy does not exist is the worst available answer at the worst moment.
     _reachable(at)
     where = at / name
-    if not where.is_dir():
+    expected = where.is_file() if name.endswith(".zip") else where.is_dir()
+    if not expected:
         raise Refused(f"there is no copy called {name} in {at}")
+    if name.endswith(".zip"):
+        try:
+            with zipfile.ZipFile(where) as opened:
+                _archive_members(opened, name)
+        except (OSError, zipfile.BadZipFile) as why:
+            raise Refused(f"{name} is not a readable Rundesk backup archive: {why}") from why
+        return where
     if not _has_the_mark(where):
         raise Refused(
             f"{name} has no readable {THE_MARK}, so it is not a copy of an install's data — "
             "putting it back would leave rundesk unable to tell how far it has been carried")
     _valid_secrets(where / "secrets")
     return where
+
+
+@contextlib.contextmanager
+def _opened_copy(at: Path, name: str) -> Iterator[Path]:
+    """Yield either a v0.40 directory or a safely extracted current archive."""
+    where = _a_copy(at, name)
+    if where.is_dir():
+        yield where
+        return
+
+    with tempfile.TemporaryDirectory(prefix="rundesk-restore-") as held:
+        root = Path(held)
+        try:
+            with zipfile.ZipFile(where) as opened:
+                members, _manifest = _archive_members(opened, name)
+                _unpacked(opened, members, root)
+        except (OSError, UnicodeError, zipfile.BadZipFile, ValueError) as why:
+            raise Refused(f"{name} could not be safely read: {why}") from why
+        data = root / DATA_PREFIX.rstrip("/")
+        if not _has_the_mark(data):
+            raise Refused(
+                f"{name} has no readable {DATA_PREFIX}{THE_MARK}, so it is not a copy of an "
+                "install's data")
+        _valid_secrets(data / "secrets")
+        yield data
+
+
+def _archive_members(opened: zipfile.ZipFile, name: str
+                     ) -> Tuple[List[zipfile.ZipInfo], Dict[str, object]]:
+    """Validate every archive member and manifest before extraction writes anything."""
+    members = opened.infolist()
+    seen = set()
+    links = set()
+    has_data_root = False
+    manifest_member: Optional[zipfile.ZipInfo] = None
+
+    for member in members:
+        raw = member.filename
+        written = raw[:-1] if raw.endswith("/") else raw
+        path = PurePosixPath(written)
+        canonical = path.as_posix()
+        if (not written or raw.startswith("/") or "\\" in raw
+                or any(part in ("", ".", "..") for part in written.split("/"))
+                or canonical in ("", ".")):
+            raise Refused(f"{name} has an unsafe or malformed member name: {raw!r}")
+        if canonical in seen:
+            raise Refused(f"{name} contains the member {canonical} more than once")
+        seen.add(canonical)
+        mode = member.external_attr >> 16
+        kind = stat.S_IFMT(mode)
+        if member.create_system != 3 or kind not in (stat.S_IFREG, stat.S_IFDIR, stat.S_IFLNK):
+            raise Refused(f"{name} contains unsupported or malformed metadata for {raw}")
+        if (kind == stat.S_IFDIR) != raw.endswith("/"):
+            raise Refused(f"{name} contains contradictory directory metadata for {raw}")
+
+        if canonical == MANIFEST:
+            if kind != stat.S_IFREG:
+                raise Refused(f"{name} has a malformed {MANIFEST} member")
+            manifest_member = member
+        elif canonical == DATA_PREFIX.rstrip("/"):
+            if kind != stat.S_IFDIR:
+                raise Refused(f"{name} has a malformed {DATA_PREFIX} root")
+            has_data_root = True
+        elif not canonical.startswith(DATA_PREFIX):
+            raise Refused(f"{name} contains an entry outside {DATA_PREFIX}: {raw}")
+
+        if kind == stat.S_IFLNK:
+            links.add(canonical)
+
+    for canonical in seen:
+        parents = list(PurePosixPath(canonical).parents)[:-1]
+        if any(parent.as_posix() in links for parent in parents):
+            raise Refused(f"{name} contains {canonical} beneath a symbolic link")
+
+    if manifest_member is None:
+        raise Refused(f"{name} has no {MANIFEST}, so it is not a current Rundesk backup")
+    if not has_data_root:
+        raise Refused(f"{name} has no single {DATA_PREFIX} root")
+    try:
+        manifest = json.loads(opened.read(manifest_member))
+    except (UnicodeError, ValueError) as why:
+        raise Refused(f"{name} has an unreadable {MANIFEST}: {why}") from why
+    if not isinstance(manifest, dict):
+        raise Refused(f"{name} has a {MANIFEST} that is not an object")
+    if manifest.get("format") != FORMAT or manifest.get("version") != FORMAT_VERSION:
+        raise Refused(f"{name} uses an unsupported backup format or version")
+    if manifest.get("data_prefix") != DATA_PREFIX:
+        raise Refused(f"{name} names an unsupported data prefix")
+    created = manifest.get("created_at")
+    if not isinstance(created, str):
+        raise Refused(f"{name} has no valid creation moment in {MANIFEST}")
+    try:
+        datetime.strptime(created, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as why:
+        raise Refused(f"{name} has no valid creation moment in {MANIFEST}") from why
+    vanished = manifest.get("vanished")
+    if not isinstance(vanished, list) or not all(isinstance(one, str) for one in vanished):
+        raise Refused(f"{name} has a malformed vanished-members list in {MANIFEST}")
+    return members, manifest
+
+
+def _unpacked(opened: zipfile.ZipFile, members: List[zipfile.ZipInfo], root: Path) -> None:
+    """Recreate validated members without delegating paths to `ZipFile.extract`."""
+    directories: List[Tuple[Path, int]] = []
+    for member in members:
+        at = root.joinpath(*PurePosixPath(member.filename.rstrip("/")).parts)
+        mode = member.external_attr >> 16
+        if stat.S_ISDIR(mode):
+            at.mkdir(parents=True, exist_ok=True)
+            directories.append((at, stat.S_IMODE(mode)))
+        elif stat.S_ISLNK(mode):
+            at.parent.mkdir(parents=True, exist_ok=True)
+            target = opened.read(member).decode("utf-8")
+            if "\x00" in target:
+                raise Refused(f"{member.filename} has a malformed symbolic-link target")
+            at.symlink_to(target)
+        else:
+            at.parent.mkdir(parents=True, exist_ok=True)
+            with opened.open(member) as reading, open(at, "xb") as writing:
+                shutil.copyfileobj(reading, writing)
+            at.chmod(stat.S_IMODE(mode))
+    for at, mode in reversed(directories):
+        at.chmod(mode)
 
 
 def _has_the_mark(where: Path) -> bool:

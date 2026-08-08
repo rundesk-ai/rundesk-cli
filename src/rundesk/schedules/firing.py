@@ -365,16 +365,21 @@ def claiming(agent: str, name: str) -> Iterator[int]:
     **The file itself is left alone.** A lock lives on the inode, so unlinking it hands the name
     away and lets the next claim lock a fresh inode while this one is still held.
     """
-    at = directory.schedules(agent)
-    at.mkdir(parents=True, exist_ok=True)
-    held = os.open(at / f"{name}{LOCK_ENDS}", os.O_CREAT | os.O_RDWR, 0o600)
-    try:
+    with locking.only_one(paths.work_admission_lock(), guarding="admitting scheduled work"):
+        at = directory.schedules(agent)
+        at.mkdir(parents=True, exist_ok=True)
+        held = os.open(at / f"{name}{LOCK_ENDS}", os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as why:
-            if not locking.busy(why):
-                raise
-            raise Occupied(f"what {name} started last time is still running") from why
+            try:
+                fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as why:
+                if not locking.busy(why):
+                    raise
+                raise Occupied(f"what {name} started last time is still running") from why
+        except BaseException:
+            os.close(held)
+            raise
+    try:
         yield held
     finally:
         os.close(held)
@@ -461,6 +466,22 @@ def in_flight(agent: str) -> List[str]:
         return []
     return [one.name[:-len(LOCK_ENDS)] for one in locks
             if still_running(agent, one.name[:-len(LOCK_ENDS)])]
+
+
+def activity(agent: str) -> Optional[List[str]]:
+    """Active schedule claims, or ``None`` when every claim cannot be inspected safely."""
+    try:
+        locks = sorted(directory.schedules(agent).glob(f"*{LOCK_ENDS}"))
+    except OSError:
+        return None
+    active = []
+    for one in locks:
+        held = locking.is_held(one)
+        if held is None:
+            return None
+        if held:
+            active.append(one.name[:-len(LOCK_ENDS)])
+    return active
 
 
 # -- coming up, and looking at the clock -----------------------------------------------

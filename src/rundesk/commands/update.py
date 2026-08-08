@@ -115,6 +115,19 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
     somebody else's repository and it changes on its own schedule. It happens last, it cannot change
     this command's exit code, and `commands.skills.refreshed` says why.
     """
+    try:
+        with locking.only_one(paths.update_lock(), guarding="updating this install"):
+            return _cmd_update(_args, asking, fetching, refreshing, building, gateways)
+    except locking.Stuck as why:
+        return _failed(str(why))
+
+
+def _cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = None,
+                fetching: Optional[Fetching] = None,
+                refreshing: Optional[Refreshing] = None,
+                building: Optional[Callable[..., programs.Ran]] = None,
+                gateways: Optional[Gateways] = None) -> int:
+    """The update transaction, with its per-install claim already held."""
     line, published, could_ask = release.standing(__version__, asking)
     if not could_ask:
         print(line, file=sys.stderr)
@@ -425,6 +438,10 @@ def settle(gateways: Optional[Gateways] = None) -> int:
         # is what reaches an agent made by a release that shipped no pages at all, and a home
         # somebody deleted a file out of.
         pages.everybody_has_theirs(directory.known(), directory.home, _out_loud)
+        from rundesk.commands import automatic_updates
+        scheduled = automatic_updates.reconcile()
+        if scheduled.how == job.CANNOT_TELL:
+            return _failed(f"automatic update scheduling could not be reconciled — {scheduled.why}")
     except (config.Unreadable, config.Stuck, migration.Broken, OSError) as why:
         # Every write below `settle` goes through the configuration, including the stamp each
         # migration step lands with, so all of these are caught in one place rather than at each

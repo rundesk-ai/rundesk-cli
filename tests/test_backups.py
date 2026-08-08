@@ -16,10 +16,13 @@ Run directly: `python3 tests/test_backups.py`
 import argparse
 import contextlib
 import io
+import json
 import os
 import shutil
 import sqlite3
 import unittest
+import warnings
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -57,6 +60,7 @@ def carry(data):
 #: takes its clock as an argument for exactly this reason.
 A_MOMENT = datetime(2026, 8, 4, 3, 0, 0, tzinfo=timezone.utc)
 ITS_NAME = "2026-08-04T03-00-00Z"
+ITS_ARCHIVE = f"{ITS_NAME}.zip"
 
 #: An agent step — two arguments rather than one, because an agent step is handed a connection and
 #: the agent's own directory so it can change tables and files together.
@@ -132,6 +136,16 @@ class Copies(support.Isolated):
     def entries(self):
         return sorted(one.name for one in self.at.iterdir())
 
+    @contextlib.contextmanager
+    def opened_copy(self, name: str):
+        """The data tree inside either copy representation, for assertions made while it exists."""
+        with backups._opened_copy(self.at, name) as data:
+            yield data
+
+    def manifest(self, name: str):
+        with zipfile.ZipFile(self.at / name) as opened:
+            return json.loads(opened.read(backups.MANIFEST))
+
 
 class WhereTheCopiesAre(Copies):
     """`location` — where the bytes are, which is not always where rundesk looks."""
@@ -182,6 +196,18 @@ class WhatThereIs(Copies):
         self.given_copies(ITS_NAME, f"{ITS_NAME}-02", f"{ITS_NAME}-10")
         self.assertEqual([f"{ITS_NAME}-10", f"{ITS_NAME}-02", ITS_NAME], backups.kept(self.at))
 
+    def test_directories_and_archives_share_one_chronological_order(self):
+        self.given_copy("2026-08-03T03-00-00Z")
+        archive = backups.save(self.data, self.at, A_MOMENT)
+        self.given_copy("2026-08-05T03-00-00Z")
+        self.assertEqual(["2026-08-05T03-00-00Z", archive, "2026-08-03T03-00-00Z"],
+                         backups.kept(self.at))
+
+    def test_unrelated_and_impossible_dated_zip_files_are_not_copies(self):
+        (self.at / "notes.zip").write_bytes(b"not ours")
+        (self.at / "2026-99-99T03-00-00Z.zip").write_bytes(b"not a possible date")
+        self.assertEqual([], backups.kept(self.at))
+
     def test_nobody_having_made_one_is_no_copies(self):
         shutil.rmtree(self.at)
         self.assertEqual([], backups.kept(self.at))
@@ -217,15 +243,19 @@ class WhatACopyIsCalled(Copies):
     """`named` — the moment it was made, and a counter only when that is taken."""
 
     def test_it_is_the_moment_it_was_made(self):
-        self.assertEqual(ITS_NAME, backups.named(A_MOMENT, self.at))
+        self.assertEqual(ITS_ARCHIVE, backups.named(A_MOMENT, self.at))
 
     def test_a_second_copy_in_the_same_second_is_counted(self):
         self.given_copies(ITS_NAME)
-        self.assertEqual(f"{ITS_NAME}-02", backups.named(A_MOMENT, self.at))
+        self.assertEqual(f"{ITS_NAME}-02.zip", backups.named(A_MOMENT, self.at))
+
+    def test_an_archive_and_directory_reserve_the_same_identity(self):
+        (self.at / ITS_ARCHIVE).write_bytes(b"already there")
+        self.assertEqual(f"{ITS_NAME}-02.zip", backups.named(A_MOMENT, self.at))
 
     def test_the_counter_is_two_digits_so_newest_first_stays_right(self):
         self.given_copies(ITS_NAME, *[f"{ITS_NAME}-{n:02d}" for n in range(2, 10)])
-        self.assertEqual(f"{ITS_NAME}-10", backups.named(A_MOMENT, self.at))
+        self.assertEqual(f"{ITS_NAME}-10.zip", backups.named(A_MOMENT, self.at))
 
     def test_a_hundred_in_one_second_is_refused_rather_than_named_wrongly(self):
         self.given_copies(ITS_NAME, *[f"{ITS_NAME}-{n:02d}" for n in range(2, 100)])
@@ -241,12 +271,14 @@ class MakingOne(Copies):
 
     def test_it_copies_what_the_owner_keeps_and_says_what_it_is_called(self):
         name = backups.save(self.data, self.at, A_MOMENT)
-        self.assertEqual(ITS_NAME, name)
-        self.assertEqual("what the owner keeps", (self.at / name / "marker.txt").read_text())
+        self.assertEqual(ITS_ARCHIVE, name)
+        with self.opened_copy(name) as copied:
+            self.assertEqual("what the owner keeps", (copied / "marker.txt").read_text())
 
     def test_the_copy_holds_the_configuration_too(self):
         name = backups.save(self.data, self.at, A_MOMENT)
-        self.assertTrue((self.at / name / "config.json").is_file())
+        with self.opened_copy(name) as copied:
+            self.assertTrue((copied / "config.json").is_file())
 
     def test_a_copy_omits_the_transient_gateway_update_notice(self):
         agent = directory.made("cole", "anthropic")
@@ -255,12 +287,13 @@ class MakingOne(Copies):
         name = backups.save(self.data, self.at, A_MOMENT)
 
         self.assertTrue((agent / maintenance.MARKER).is_file(), "the live intent was changed")
-        self.assertFalse((self.at / name / "agents" / "cole" / maintenance.MARKER).exists())
+        with self.opened_copy(name) as copied:
+            self.assertFalse((copied / "agents" / "cole" / maintenance.MARKER).exists())
 
     def test_it_makes_the_directory_when_there_is_not_one_yet(self):
         shutil.rmtree(self.at)
         backups.save(self.data, self.at, A_MOMENT)
-        self.assertEqual([ITS_NAME], backups.kept(self.at))
+        self.assertEqual([ITS_ARCHIVE], backups.kept(self.at))
 
     def test_there_being_nothing_to_copy_is_refused(self):
         shutil.rmtree(self.data)
@@ -292,6 +325,94 @@ class MakingOne(Copies):
         self.assertIn("2020-01-01T00-00-00Z", backups.kept(self.at))
 
 
+class TheArchiveFormat(Copies):
+    """The finished ZIP boundary: layout, metadata, interruption, and concurrent cleanup."""
+
+    def test_it_is_one_zip_with_a_versioned_manifest_and_data_root(self):
+        name = backups.save(self.data, self.at, A_MOMENT)
+
+        self.assertEqual([ITS_ARCHIVE], self.entries())
+        self.assertEqual(0o600, (self.at / name).stat().st_mode & 0o777)
+        with zipfile.ZipFile(self.at / name) as opened:
+            self.assertIn(backups.MANIFEST, opened.namelist())
+            self.assertIn(backups.DATA_PREFIX, opened.namelist())
+            self.assertIn(f"{backups.DATA_PREFIX}config.json", opened.namelist())
+        self.assertEqual({
+            "format": backups.FORMAT,
+            "version": backups.FORMAT_VERSION,
+            "created_at": "2026-08-04T03:00:00Z",
+            "data_prefix": backups.DATA_PREFIX,
+            "vanished": [],
+        }, self.manifest(name))
+
+    def test_the_credential_bearing_archive_is_private_from_its_first_byte(self):
+        seen = []
+        real_open = os.open
+
+        def watching(path, flags, mode=0o777, **options):
+            if str(path).endswith(".zip.incoming"):
+                seen.append(mode)
+            return real_open(path, flags, mode, **options)
+
+        with mock.patch.object(backups.os, "open", side_effect=watching):
+            backups.save(self.data, self.at, A_MOMENT)
+
+        self.assertEqual([0o600], seen)
+
+    def test_modes_and_symbolic_links_survive_a_save_and_restore(self):
+        executable = self.data / "run-me"
+        executable.write_text("#!/bin/sh\n")
+        executable.chmod(0o751)
+        (self.data / "run-link").symlink_to("run-me")
+        name = backups.save(self.data, self.at, A_MOMENT)
+        shutil.rmtree(self.data)
+
+        backups.restore(name, self.data, self.at, A_MOMENT)
+
+        self.assertEqual(0o751, executable.stat().st_mode & 0o777)
+        self.assertTrue((self.data / "run-link").is_symlink())
+        self.assertEqual("run-me", os.readlink(self.data / "run-link"))
+
+    def test_a_pack_failure_leaves_no_archive_or_staging_litter(self):
+        with mock.patch.object(backups, "_written_file", side_effect=OSError("the disk filled")):
+            with self.assertRaises(OSError):
+                backups.save(self.data, self.at, A_MOMENT)
+        self.assertEqual([], self.entries())
+
+    def test_an_interrupt_while_packing_leaves_no_archive_or_staging_litter(self):
+        with mock.patch.object(backups, "_written_file", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                backups.save(self.data, self.at, A_MOMENT)
+        self.assertEqual([], self.entries())
+
+    def test_a_source_member_removed_mid_copy_is_omitted_named_and_manifested(self):
+        doomed = self.data / "old-run.jsonl"
+        doomed.write_text("retired")
+        real_copy = shutil.copy2
+
+        def cleanup_then_copy(source, target, *, follow_symlinks=True):
+            if doomed.exists():
+                doomed.unlink()
+            return real_copy(source, target, follow_symlinks=follow_symlinks)
+
+        with mock.patch.object(backups.shutil, "copy2", side_effect=cleanup_then_copy):
+            code, _out, err = self.rundesk("backups", "save")
+
+        self.assertEqual(OK, code)
+        name = backups.kept(self.at)[0]
+        self.assertEqual(["old-run.jsonl"], self.manifest(name)["vanished"])
+        with self.opened_copy(name) as copied:
+            self.assertFalse((copied / "old-run.jsonl").exists())
+        self.assertIn("old-run.jsonl was removed", err)
+        self.assertNotIn("holds those records exactly as they stood", err)
+
+    def test_another_source_read_error_still_aborts_the_copy(self):
+        with mock.patch.object(backups.shutil, "copy2", side_effect=PermissionError("no")):
+            with self.assertRaises(shutil.Error):
+                backups.save(self.data, self.at, A_MOMENT)
+        self.assertEqual([], self.entries())
+
+
 class LettingGoOfOldOnes(Copies):
     """`prune` — the only thing in this product that removes a copy."""
 
@@ -299,6 +420,17 @@ class LettingGoOfOldOnes(Copies):
         self.given_copies("2026-08-01T03-00-00Z", "2026-08-02T03-00-00Z", "2026-08-03T03-00-00Z")
         self.assertEqual([], backups.prune(2, self.at))
         self.assertEqual(["2026-08-03T03-00-00Z", "2026-08-02T03-00-00Z"], backups.kept(self.at))
+
+    def test_mixed_retention_removes_only_the_oldest_restorable_copy(self):
+        self.given_copy("2026-08-01T03-00-00Z")
+        archive = backups.save(self.data, self.at, A_MOMENT)
+        broken = self.at / "2026-08-05T03-00-00Z.zip"
+        broken.write_bytes(b"not a zip")
+
+        backups.prune(1, self.at)
+
+        self.assertEqual([broken.name, archive], backups.kept(self.at))
+        self.assertTrue(broken.exists(), "an invalid archive was removed by retention")
 
     def test_it_removes_nothing_when_there_are_fewer_than_that(self):
         self.given_copies(ITS_NAME)
@@ -439,6 +571,71 @@ class WhetherSomethingIsACopy(Copies):
         self.assertEqual(self.at / ITS_NAME, backups._a_copy(self.at, ITS_NAME))
 
 
+class ReadingAnArchiveSafely(Copies):
+    """A ZIP is completely refused before a safety copy or live-data change when unsafe."""
+
+    def written_archive(self, *extra) -> Path:
+        archive = self.at / ITS_ARCHIVE
+        manifest = {
+            "format": backups.FORMAT,
+            "version": backups.FORMAT_VERSION,
+            "created_at": "2026-08-04T03:00:00Z",
+            "data_prefix": backups.DATA_PREFIX,
+            "vanished": [],
+        }
+        with zipfile.ZipFile(archive, "w") as opened:
+            backups._written(opened, backups.MANIFEST, json.dumps(manifest).encode(),
+                             0o100600, A_MOMENT)
+            backups._written(opened, backups.DATA_PREFIX, b"", 0o040700, A_MOMENT)
+            for name, content, mode in extra:
+                backups._written(opened, name, content, mode, A_MOMENT)
+        return archive
+
+    def assert_refused_without_change(self):
+        with self.assertRaises(backups.Refused):
+            backups.restore(ITS_ARCHIVE, self.data, self.at, A_MOMENT)
+        self.assertEqual("what the owner keeps", (self.data / "marker.txt").read_text())
+        self.assertEqual([ITS_ARCHIVE], backups.kept(self.at),
+                         "an invalid archive caused a safety copy")
+
+    def test_a_path_escape_is_refused(self):
+        self.written_archive(("data/../escape", b"outside", 0o100600))
+        self.assert_refused_without_change()
+        self.assertFalse((self.home / "escape").exists())
+
+    def test_a_duplicate_member_is_refused(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            self.written_archive(("data/config.json", b"{}", 0o100600),
+                                 ("data/config.json", b"{}", 0o100600))
+        self.assert_refused_without_change()
+
+    def test_a_truncated_zip_is_refused(self):
+        (self.at / ITS_ARCHIVE).write_bytes(b"PK\x03\x04not a complete archive")
+        self.assert_refused_without_change()
+
+    def test_an_unreadable_configuration_is_refused(self):
+        self.written_archive(("data/config.json", b"{ not json", 0o100600))
+        self.assert_refused_without_change()
+
+    def test_a_linked_secret_store_is_refused(self):
+        source = self.home / "archive-data"
+        shutil.copytree(self.data, source)
+        outside = self.home / "outside-secrets"
+        outside.mkdir()
+        (source / "secrets").symlink_to(outside)
+        backups._packed(source, self.at / ITS_ARCHIVE, A_MOMENT, [])
+        self.assert_refused_without_change()
+
+    def test_a_pre_v040_archive_is_refused_as_unsupported(self):
+        old = self.at / "rundesk-data-2025-01-01.zip"
+        old.write_bytes(b"an older format")
+        with self.assertRaises(backups.Refused) as refused:
+            backups.restore(old.name, self.data, self.at, A_MOMENT)
+        self.assertIn("pre-v0.40", str(refused.exception))
+        self.assertIn("does not support", str(refused.exception))
+
+
 class PuttingOneBack(Copies):
     """`restore` — and the copy it takes of what it replaces, before it replaces it."""
 
@@ -463,8 +660,8 @@ class PuttingOneBack(Copies):
         self.given_data("what was there before")
         done = backups.restore(ITS_NAME, self.data, self.at, A_MOMENT, self.steps)
         self.assertIsNotNone(done.safety)
-        self.assertEqual("what was there before",
-                         (self.at / done.safety / "marker.txt").read_text())
+        with self.opened_copy(done.safety) as copied:
+            self.assertEqual("what was there before", (copied / "marker.txt").read_text())
 
     def test_the_copy_it_keeps_is_not_the_one_being_put_back(self):
         self.given_copies(ITS_NAME)
@@ -816,8 +1013,8 @@ class WithRealAgents(Copies):
         """One step more than every agent made so far has run."""
         (self.agent_steps / "0002_x.py").write_text(body or AN_AGENT_STEP, encoding="utf-8")
 
-    def in_the_copy(self, name: str, agent: str = "cole") -> Path:
-        return self.at / name / "agents" / agent / directory.RECORDS
+    def records_in(self, copied: Path, agent: str = "cole") -> Path:
+        return copied / "agents" / agent / directory.RECORDS
 
     @contextlib.contextmanager
     def a_gateway_writing_to(self, name: str = "cole"):
@@ -854,7 +1051,7 @@ class AnAgentInsideACopy(WithRealAgents):
         self.an_agent()
         with self.a_gateway_writing_to():
             name = backups.save(self.data, self.at, A_MOMENT, self.said.append)
-        self.assertEqual(ITS_NAME, name)
+        self.assertEqual(ITS_ARCHIVE, name)
 
     def test_the_records_in_that_copy_hold_what_was_only_in_the_write_ahead_log(self):
         """The torn copy, in the two assertions that between them say it is not one.
@@ -871,9 +1068,11 @@ class AnAgentInsideACopy(WithRealAgents):
             self.assertTrue(records.beside(directory.records("cole"))[1].exists(),
                             "there is no write-ahead log, so nothing here is torn to begin with")
 
-        log = self.in_the_copy(name).with_name(directory.RECORDS + backups.WAL)
-        self.assertEqual(0, log.stat().st_size, "the copy carries a log with frames in it")
-        self.assertEqual(WRITTEN_LIVE, records.read(self.in_the_copy(name))["owner_name"])
+        with self.opened_copy(name) as copied:
+            held = self.records_in(copied)
+            log = held.with_name(directory.RECORDS + backups.WAL)
+            self.assertEqual(0, log.stat().st_size, "the copy carries a log with frames in it")
+            self.assertEqual(WRITTEN_LIVE, records.read(held)["owner_name"])
 
     def test_the_copy_keeps_the_log_and_never_the_shared_memory_index(self):
         # An archived `-shm` is a stale claim about processes that stopped running long ago, and the
@@ -883,7 +1082,8 @@ class AnAgentInsideACopy(WithRealAgents):
         with self.a_gateway_writing_to():
             name = backups.save(self.data, self.at, A_MOMENT, self.said.append)
 
-        left = sorted(one.name for one in (self.at / name / "agents" / "cole").iterdir())
+        with self.opened_copy(name) as copied:
+            left = sorted(one.name for one in (copied / "agents" / "cole").iterdir())
         self.assertIn(directory.RECORDS, left)
         self.assertIn(f"{directory.RECORDS}{backups.WAL}", left)
         self.assertNotIn(f"{directory.RECORDS}-shm", left)
@@ -908,12 +1108,14 @@ class AnAgentInsideACopy(WithRealAgents):
         """
         self.an_agent()
         name = backups.save(self.data, self.at, A_MOMENT, self.said.append)
-        self.assertEqual("cole", records.read(self.in_the_copy(name))["agent_name"])
+        with self.opened_copy(name) as copied:
+            self.assertEqual("cole", records.read(self.records_in(copied))["agent_name"])
 
     def test_the_copy_leaves_nothing_staged_beside_the_records_it_replaced(self):
         self.an_agent()
         name = backups.save(self.data, self.at, A_MOMENT, self.said.append)
-        left = [one.name for one in (self.at / name / "agents" / "cole").iterdir()]
+        with self.opened_copy(name) as copied:
+            left = [one.name for one in (copied / "agents" / "cole").iterdir()]
         self.assertEqual([], [one for one in left if files.staged(one)])
 
     def test_the_live_records_are_never_written_to_by_a_copy_being_taken(self):
@@ -936,7 +1138,8 @@ class AnAgentInsideACopy(WithRealAgents):
 
         name = backups.save(self.data, self.at, A_MOMENT, self.said.append)
 
-        self.assertEqual(b"this is not a database", self.in_the_copy(name).read_bytes())
+        with self.opened_copy(name) as copied:
+            self.assertEqual(b"this is not a database", self.records_in(copied).read_bytes())
         self.assertTrue(any("copied as it stood" in one for one in self.said), self.said)
 
     def test_a_restore_puts_back_records_that_can_still_be_read(self):
@@ -1520,6 +1723,14 @@ class CarryingThemAcross(Copies):
         self.assertCountEqual(["2026-08-01T03-00-00Z", "2026-08-02T03-00-00Z", "README.md"], landed)
         self.assertEqual(len(landed), len(said))
 
+    def test_it_moves_an_archive_byte_for_byte(self):
+        name = backups.save(self.data, self.at, A_MOMENT)
+        before = (self.at / name).read_bytes()
+
+        backups._copy_across(self.at, self.elsewhere, lambda _line: None)
+
+        self.assertEqual(before, (self.elsewhere / name).read_bytes())
+
     def test_it_takes_back_what_it_wrote_when_part_of_it_fails(self):
         self.given_copies("2026-08-01T03-00-00Z", "2026-08-02T03-00-00Z")
         really = shutil.copytree
@@ -1677,6 +1888,20 @@ class TheCommand(Copies):
         self.assertEqual(1, len(backups.kept(self.at)))
         self.assertIn(backups.kept(self.at)[0], out)
 
+    def test_save_and_restore_report_the_exact_archive_name(self):
+        code, saved, _ = self.rundesk("backups", "save")
+        self.assertEqual(OK, code)
+        name = backups.kept(self.at)[0]
+        self.assertTrue(name.endswith(".zip"), name)
+        self.assertIn(name, saved)
+        self.given_data("changed since")
+
+        code, restored, _ = self.rundesk("backups", "restore", name, "--confirm")
+
+        self.assertEqual(OK, code)
+        self.assertIn(f"restored {name}", restored)
+        self.assertEqual("what the owner keeps", (self.data / "marker.txt").read_text())
+
     def test_save_lets_go_of_the_oldest_past_what_is_configured(self):
         config.stated("backup_retention", 1, self.data)
         self.given_copies("2020-01-01T00-00-00Z")
@@ -1705,6 +1930,15 @@ class TheCommand(Copies):
         code, _, err = self.rundesk("backups", "restore", ITS_NAME)
         self.assertEqual(FAILED, code)
         self.assertIn("there is no copy called", err)
+
+    def test_restore_of_a_pre_v040_archive_names_the_unsupported_format(self):
+        old = self.at / "rundesk-data-2025-01-01.zip"
+        old.write_bytes(b"an older format")
+        code, _, err = self.rundesk("backups", "restore", old.name)
+        self.assertEqual(FAILED, code)
+        self.assertIn("pre-v0.40", err)
+        self.assertIn("does not support", err)
+        self.assertNotIn("there is no copy called", err)
 
     def test_restore_with_confirming_puts_it_back_and_keeps_what_it_replaced(self):
         self.given_copies(ITS_NAME)

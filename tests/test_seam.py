@@ -245,8 +245,9 @@ class RemovingAnInstallThatHasAgents(AnInstallWithAgentsInIt):
         self.uninstall("--purge")
 
         self.assertEqual([name], backups.kept(paths.backups()))
-        self.assertTrue((paths.backups() / name / "agents" / "alpha" / directory.RECORDS).is_file(),
-                        "a purge took the agents inside the copies with it")
+        with backups._opened_copy(paths.backups(), name) as copied:
+            self.assertTrue((copied / "agents" / "alpha" / directory.RECORDS).is_file(),
+                            "a purge took the agents inside the copies with it")
 
     def test_a_purge_says_it_took_the_data_and_kept_the_copies(self):
         backups.save(paths.data(), paths.backups())

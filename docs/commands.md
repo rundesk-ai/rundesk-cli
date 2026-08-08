@@ -106,6 +106,7 @@ last_updated_at   2026-08-04T20:48:04Z
 migration         nothing to carry — this release ships no migration steps
 update_enabled    yes
 update_time       03:00
+automatic update  scheduled daily at 03:00 local time
 ```
 
 `last_updated_at` is when a version last actually arrived — the install, or an update that really
@@ -160,6 +161,11 @@ the day it lands. Yes-or-no values accept `yes/no`, `true/false`, `on/off` and `
 
 **Naming two settings and getting one wrong changes neither.** Half-applied configuration leaves an
 install in a state nobody typed.
+
+Changing `update_enabled` or `update_time` immediately reconciles the root-specific launchd job.
+The settings are saved atomically first; if launchd cannot be reconciled, `configure` exits non-zero
+and says that the settings were saved, so repeating the command is an honest idempotent repair.
+Disabling removes the job and its generated shim; changing the time replaces the loaded definition.
 
 How far the install has been carried (`migration`) is shown by `status` but is not settable: setting
 it by hand would make rundesk skip or repeat a migration step.
@@ -1459,7 +1465,7 @@ wants nine times in ten.
 $ rundesk backups
 copies in /Users/you/.rundesk/backups
 BACKUP
-2026-08-04T03-00-00Z
+2026-08-04T03-00-00Z.zip
 2026-07-28T03-00-00Z
 ```
 
@@ -1473,18 +1479,26 @@ moment they are merely unplugged, and what that person does next is act on it.
 
 ### backups save
 
-Copies `data/` whole, under a name that says when it was made, and says what it is called.
+Copies `data/` whole into one compressed ZIP, under a name that says when it was made, and says what
+it is called.
 
 ```console
 $ rundesk backups save
-saved 2026-08-04T03-00-00Z
+saved 2026-08-04T03-00-00Z.zip
         from   /Users/you/.rundesk/data
         in     /Users/you/.rundesk/backups
-        let go of 2026-07-21T03-00-00Z
+        let go of 2026-07-21T03-00-00Z.zip
 ```
 
-The copy is built under a name no finished copy wears and renamed into place only once all of it is
-there, so an interruption leaves litter rather than a copy that is not one.
+The data is first made consistent in a private staging directory, then written beneath `data/` in an
+archive with a root `manifest.json`. The manifest records the backup format and version, when it was
+made, and any source file removed by supported concurrent cleanup before its turn to be copied. That
+file is omitted and named in the command output rather than making every other healthy file go
+uncopied. Other read errors still fail the save. The archive is verified and renamed into place only
+once all of it is there, so an interruption never leaves a finished `.zip` name on a partial copy.
+
+File and directory modes are recorded explicitly, and symbolic links remain links rather than
+copies of what they point at.
 
 The copy includes `data/secrets/`: sealed values and the key that opens them. Treat backup storage as
 credential-bearing data. The files remain private, but sealing does not protect a complete copy from
@@ -1502,17 +1516,21 @@ so restoring the wrong name costs a command rather than everything you had. With
 says exactly what it would do and does none of it.
 
 ```console
-$ rundesk backups restore 2026-07-28T03-00-00Z --confirm
-        kept 2026-08-04T03-00-00Z — a copy of /Users/you/.rundesk/data as it was
-restored 2026-07-28T03-00-00Z
+$ rundesk backups restore 2026-07-28T03-00-00Z.zip --confirm
+        kept 2026-08-04T03-00-00Z.zip — a copy of /Users/you/.rundesk/data as it was
+restored 2026-07-28T03-00-00Z.zip
         into   /Users/you/.rundesk/data
 ```
 
 The copy that was kept is named before the swap starts rather than in a summary afterwards, because
 every failure from that point on is one where knowing the name is the way back.
 
-A directory with no readable `config.json` is refused: it is not a copy of an install's data whatever
-it is named, and putting it back would leave rundesk unable to tell how far it had been carried.
+A current archive is checked completely before a safety copy or live-data change: its manifest,
+single `data/` root, member names, entry types, modes, and duplicate/path-escape hazards must all be
+valid. A copy with no readable `config.json` is refused, as is one whose secret store contains a
+link. Existing v0.40 directory copies remain restorable and appear in the same chronological list as
+new ZIPs. Pre-v0.40 `rundesk-data-*.zip` archives used a different format and are explicitly refused;
+this release does not guess that they are compatible or report them as missing.
 
 **A copy older than this release is carried forward once it lands.** The copy holds the migration mark
 it had when it was taken, so the steps that run are exactly the ones it missed — and never the ones it
@@ -1526,7 +1544,7 @@ Moves the copies to another directory and links `backups/` at it.
 
 ```console
 $ rundesk backups set-location /Volumes/Big/rundesk-backups
-        moved 2026-08-04T03-00-00Z
+        moved 2026-08-04T03-00-00Z.zip
 rundesk keeps its copies in /Volumes/Big/rundesk-backups
         linked /Users/you/.rundesk/backups → /Volumes/Big/rundesk-backups
 ```
@@ -1747,6 +1765,14 @@ whose code is current and whose configuration and migrations belong to the relea
 `rundesk update` settles the install even when it reports `UP TO DATE`; everything it does is
 idempotent, and running it again is how you finish an update that stopped halfway.
 
+When `update_enabled` is on, launchd makes one attempt per local calendar day at `update_time`.
+The coordinator is outside every gateway process tree and uses the same update transaction as this
+command. Before asking for a release it closes work admission and inspects kernel-held provider and
+schedule claims. Active work, or activity that cannot be inspected safely, produces a logged
+`DEFERRED` outcome and no fetch, gateway stop, or forced termination; the next attempt is the next
+local day. Repeated launchd starts on the same day are logged and skipped. Failures remain non-zero
+and recover through the same rerunnable settlement path as a manual update.
+
 ## uninstall
 
 `--confirm` is required. Without it, the command says exactly what it would take and what it would
@@ -1768,6 +1794,7 @@ with no terminal is worse than no prompt at all.
 
 What it takes, one named thing at a time, never a sweep:
 
+- the root-specific automatic update job and generated shim, before `app/` goes
 - **every gateway job this root placed, by the full name launchd knows it by, one agent at a time —
   and before `app/` goes.** A job that outlived the program it points at is a machine trying to
   start a command that is not there, at every login, for ever. And it is one label at a time and
@@ -1794,7 +1821,7 @@ What `install.sh` runs after it has fetched a copy. Usable by hand from a checko
 ```
 
 It places the program, lays down the directories and their notes, writes or fills in the
-configuration, carries the migrations, links the command, and then **proves the installed command
+configuration, carries the migrations, reconciles the daily update job, links the command, and then **proves the installed command
 answers** — an installer that reports success without checking has told somebody their machine is
 ready when it is not.
 

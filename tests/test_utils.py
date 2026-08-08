@@ -1600,8 +1600,22 @@ class ADayOfLines(WithSomewhereToWrite):
         self.assertIn("[2026-08-04 20:30:00-07:00]", (self.where / "2026-08-04.log").read_text())
 
     def test_it_makes_the_directory_it_writes_into(self):
-        logs.note(self.home / "not" / "yet", "the first thing that happened")
-        self.assertTrue((self.home / "not" / "yet").is_dir())
+        owner = self.home / "an-owner"
+        owner.mkdir()
+        logs.note(owner / "logs", "the first thing that happened")
+        self.assertTrue((owner / "logs").is_dir())
+
+    def test_it_never_recreates_the_missing_owner_of_a_log(self):
+        """An agent removed between a caller's existence check and this write stays removed.
+
+        `note` used to make every parent recursively, so an ordinary warning rebuilt
+        `agents/cole/logs` and left a half-agent for every other process to discover.
+        """
+        owner = self.home / "removed-agent"
+
+        logs.note(owner / "logs", "there is nobody left to say this about")
+
+        self.assertFalse(owner.exists())
 
     def test_a_line_that_could_not_be_written_never_fails_what_was_being_done(self):
         # A log is an account of the work, not the work. A backup that could not write its own note

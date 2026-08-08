@@ -18,7 +18,10 @@ from unittest import mock
 import support
 from rundesk.agents import directory, records
 from rundesk.channels import arriving
+from rundesk.commands import automatic_updates
+from rundesk.core import paths
 from rundesk.providers import adapters, instructions, kept, protocol, turns
+from rundesk.utils import locking
 
 PATIENCE = 15.0
 
@@ -244,6 +247,38 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
 
 
 class OneTurnAtATimeInOneConversation(WithAnAgent):
+    def test_an_update_sees_the_kernel_claim_before_the_unfinished_row_exists(self):
+        """Deterministically occupy run's claim-to-row gap and make the updater inspect it."""
+        request = self.asking()
+        before_row = threading.Event()
+        let_the_row_land = threading.Event()
+        answered = []
+        adding = turns.kept.add_turn
+
+        def paused(*args, **kwargs):
+            before_row.set()
+            let_the_row_land.wait(PATIENCE)
+            return adding(*args, **kwargs)
+
+        reason = ""
+        running = None
+        try:
+            with mock.patch.object(turns.kept, "add_turn", side_effect=paused):
+                running = threading.Thread(
+                    target=lambda: answered.append(turns.run(request)), daemon=True)
+                running.start()
+                self.assertTrue(before_row.wait(PATIENCE), "the turn never reached the row gap")
+                self.assertEqual([], kept.list_unfinished_turns(self.agent))
+                with locking.only_one(paths.work_admission_lock(), waiting=0):
+                    reason = automatic_updates._busy_reason()
+        finally:
+            let_the_row_land.set()
+            if running is not None:
+                running.join(PATIENCE)
+        self.assertIn("active provider turn", reason)
+        self.assertFalse(running.is_alive(), "the turn did not finish after the row gap was released")
+        self.assertEqual(1, len(answered))
+
     def test_the_claim_is_held_while_a_turn_runs(self):
         request = self.asking()
         holding = threading.Event()

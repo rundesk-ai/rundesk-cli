@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from rundesk.agents import directory
-from rundesk.commands import failed
+from rundesk.commands import automatic_updates, failed
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job, standing
@@ -71,7 +71,11 @@ def cmd_uninstall(args: argparse.Namespace,
         return _failed(str(why))
 
     app = paths.app()
-    if not app.exists() and not paths.data().exists():
+    automatic = automatic_updates.coordinator()
+    locally_absent = (not app.exists() and not paths.data().exists()
+                      and not automatic_updates.plist_of(automatic).exists()
+                      and not automatic_updates.shim_of(automatic).exists())
+    if locally_absent and not args.confirm:
         # Removing something that was never installed is not a failure; it is the state asked for.
         print(f"rundesk is not installed at {root}")
         return OK
@@ -81,6 +85,17 @@ def cmd_uninstall(args: argparse.Namespace,
 
     taken, kept = [], []
 
+    automatic_standing = automatic_updates.standing(supervising)
+    if locally_absent and automatic_standing.how == job.NOT_PLACED:
+        print(f"rundesk is not installed at {root}")
+        return OK
+    automatic_wrong = automatic_updates.remove(supervising)
+    if automatic_wrong:
+        return _failed(f"the automatic update coordinator could not be removed — "
+                       f"{automatic_wrong}")
+    if automatic_standing.how != job.NOT_PLACED:
+        taken.append(f"{automatic.label} — the automatic update job")
+
     # **First, and before `app/` is touched.** A job left behind points at a shim that hands off to
     # a release that is no longer on the disk, and launchd starts it at every login for ever —
     # failing, being throttled, and saying so only in the unified log. Nothing else here can be
@@ -89,7 +104,7 @@ def cmd_uninstall(args: argparse.Namespace,
     gone_wrong, jobs, by_hand = _the_jobs_taken_back(root, supervising)
     taken.extend(jobs)
     if gone_wrong:
-        return _failed(gone_wrong, *(f"took   {one}" for one in jobs))
+        return _failed(gone_wrong, *(f"took   {one}" for one in taken))
     for one in by_hand:
         # Said now rather than in the summary at the end: this is a job that really is gone, with one
         # thing left that somebody may have to finish by hand, and it belongs beside the removal it
@@ -299,6 +314,8 @@ def _needs_confirming(root: Path, purging: bool) -> int:
     the confirmation for a removal that was never going to run.
     """
     print(f"uninstall: this would remove rundesk from {root}", file=sys.stderr)
+    print(f"        take   {automatic_updates.coordinator().label} — the automatic update job",
+          file=sys.stderr)
     for name, label in _the_jobs(root):
         # Named one at a time, before the program they point at: a job that outlived its program is
         # a machine starting a command that is gone, at every login.
@@ -339,7 +356,8 @@ def _let_go_of_the_lock() -> None:
     no reason to have heard of it — but removed all the same, because a root left standing over one
     dotfile is a removal that visibly did not finish.
     """
-    for one in (paths.lock(), paths.gateway_transition_lock()):
+    for one in (paths.lock(), paths.gateway_transition_lock(), paths.update_lock(),
+                paths.work_admission_lock()):
         try:
             one.unlink()
         except OSError:
