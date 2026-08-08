@@ -98,6 +98,21 @@ LOCK = "lock"
 RECORD = "record.json"
 ERRORS = "stderr.log"
 
+#: What a gateway leaves behind for a channel it has stopped trying to start — see `NEVER_AGAIN`.
+#:
+#: **Written down because the decision is not, and every command reads the disk.** The hold-off it
+#: records lives in one process's memory, so a channel this gateway will never start again answered
+#: `channels show` exactly as one whose gateway is simply not running: `still_running` asks the lock,
+#: the lock is gone, and both are `not connected`. The single `ERROR` line is said once and never
+#: repeated — deliberately — so on a gateway that has been up a week it has long scrolled past any
+#: tail an owner would run. This is the one channel failure somebody has to act on, and it was the
+#: one with no surface a person would think to look at.
+#:
+#: Beside the record and the error log rather than in the agent's database: it describes *this*
+#: gateway's opinion of an adapter, it is worthless the moment one starts, and `_started` removes it
+#: for exactly that reason.
+WILL_NOT_START = "will-not-start.json"
+
 #: When an adapter's error file is worth moving aside, and how many are kept. The same shape and the
 #: same reasoning as everywhere else: a channel that reconnects noisily for a week must not be able
 #: to fill a disk, and the beginning of the trouble is the part worth keeping.
@@ -452,6 +467,29 @@ def record_of(agent: str, kind: str) -> Path:
 
 def errors_of(agent: str, kind: str) -> Path:
     return at(agent, kind) / ERRORS
+
+
+def will_not_start_of(agent: str, kind: str) -> Path:
+    return at(agent, kind) / WILL_NOT_START
+
+
+def will_not_start(agent: str, kind: str) -> str:
+    """Why a gateway gave up on this channel, or `""` where none has. **Never raises.**
+
+    `""` for every ordinary condition — nobody ever gave up, the note cannot be read, the note is not
+    an object — because all of them mean the same thing to a caller: *there is nothing here saying
+    this channel was abandoned*. A command that could not read the note must not tell an owner their
+    credential is wrong, and one that is merely between gateways must not either.
+
+    **A channel in its ten-second hold-off is not one anybody gave up on.** Only `_will_not_come_right`
+    writes this, and only for `WILL_NOT_FIX` — an adapter saying that starting it again cannot help.
+    Everything else is coming back on its own and saying otherwise would send somebody to fix a
+    credential that is perfectly good.
+    """
+    how, said = files.read_json(will_not_start_of(agent, kind))
+    if how != files.READ or not isinstance(said, dict):
+        return ""
+    return str(said.get("why") or "")
 
 
 def still_running(agent: str, kind: str) -> bool:
@@ -938,6 +976,13 @@ def _started(agent: str, where: Path, kind: str, watching: Watching,
         errors = errors_of(agent, kind)
         errors.parent.mkdir(parents=True, exist_ok=True)
         logs.rotated(errors, ERRORS_OVER, ERRORS_KEPT)
+        # **Taken away the moment one starts, because it describes a gateway's opinion and not a
+        # channel.** An owner puts the credential right and restarts, the adapter comes up — and a
+        # note left behind would have every command go on reporting a channel abandoned by a process
+        # that no longer exists. Removed before the spawn rather than after it succeeds: this is the
+        # point at which somebody has decided to try again, which is the whole of what it recorded.
+        with contextlib.suppress(OSError):
+            files.remove_one(will_not_start_of(agent, kind))
         # Written before the spawn, carrying everything known then. A gateway killed in the window
         # before the pid lands can still *see* the adapter — the lock says so — and still refuses to
         # start a second; writing it afterwards would lose the adapter entirely.
@@ -1292,6 +1337,21 @@ def _also_attached(body: str, here: List[Path]) -> str:
     return f"{body}\n\nAttached to this message, on this machine:\n{named}".strip()
 
 
+def _flattened(said: Any, at_most: int) -> str:
+    """A stranger's text, forced onto one line and clipped, before any of it can reach a prompt.
+
+    **One line is the guard and the clip is only the bound.** A display name, a room's name and the
+    id of a message are all places somebody may write something shaped like an instruction, and a
+    newline in one is how they end rundesk's sentence and begin one that reads like rundesk's. The
+    two steps belong together because leaving out the first is the failure and the second on its own
+    looks like it did the job.
+
+    Written four times in this file before it was written once, which is three chances for the next
+    copy to be pasted as a bare slice.
+    """
+    return " ".join(str(said or "").split())[:at_most]
+
+
 def _also_who(body: str, display: Any, where: Any) -> str:
     """What somebody typed, and who said it and where (R-CH-21, R-DIS-21).
 
@@ -1312,8 +1372,8 @@ def _also_who(body: str, display: Any, where: Any) -> str:
     Both are a stranger's text: an account name and a room name are chosen by whoever made them, and
     both are bounded here whatever the adapter did.
     """
-    who = " ".join(str(display or "").split())[:A_NAME_AT_MOST]
-    stood = " ".join(str(where or "").split())[:A_PLACE_AT_MOST]
+    who = _flattened(display, A_NAME_AT_MOST)
+    stood = _flattened(where, A_PLACE_AT_MOST)
     if not who and not stood:
         return body
     if not stood:
@@ -1353,13 +1413,13 @@ def _also_replying(body: str, said: Any) -> str:
         # every platform anybody has written for — and it arrives from the far side of a seam, which
         # is the whole reason the rest of this function does not trust what it is handed. Left raw, a
         # newline in one ends rundesk's sentence and starts something that reads like rundesk's.
-        named = " ".join(which.split())[:A_NAME_AT_MOST]
+        named = _flattened(which, A_NAME_AT_MOST)
         return f"{body}\n\n--\n\nThis replies to an earlier message ({named}) that could not be " \
                "read.".strip()
     quoted = str(said.get("text") or "")
     if len(quoted) > A_QUOTE_AT_MOST:
         quoted = quoted[:A_QUOTE_AT_MOST] + A_QUOTE_CUT
-    who = " ".join(str(said.get("author") or "").split())[:A_NAME_AT_MOST]
+    who = _flattened(said.get("author"), A_NAME_AT_MOST)
     naming = f" from {who}" if who else ""
     if not quoted:
         return f"{body}\n\n--\n\nThis replies to an earlier message{naming}, which had no text " \
@@ -1393,7 +1453,7 @@ def _reaped(agent: str, where: Path, watching: Watching) -> None:
             _said_on_the_way_out(agent, where, kind)
             if gone.code == WILL_NOT_FIX:
                 _let_go(agent, where, one, watching)
-                _will_not_come_right(where, watching, kind)
+                _will_not_come_right(agent, where, watching, kind)
                 continue
         else:
             if still_running(agent, kind):
@@ -1528,7 +1588,7 @@ def _let_go(agent: str, where: Path, one: Running, watching: Watching) -> None:
     watching.waiting[one.kind] = time.monotonic()
 
 
-def _will_not_come_right(where: Path, watching: Watching, kind: str) -> None:
+def _will_not_come_right(agent: str, where: Path, watching: Watching, kind: str) -> None:
     """Stop starting a channel whose adapter said starting it again cannot help. **Said loudly.**
 
     `WILL_NOT_FIX` is `EX_CONFIG`, and an adapter answers with it for the failures where trying
@@ -1538,14 +1598,23 @@ def _will_not_come_right(where: Path, watching: Watching, kind: str) -> None:
 
     Said at `ERROR` and said once, because it is the one channel failure an owner has to act on and
     nothing here will mention it again — there will be no second attempt to report.
+
+    **And written down as well as said, which the log alone could not do.** Said once is the right
+    number for a log and the wrong number for a state: the decision holds for the rest of this
+    gateway's life, and until it was on disk the only account of it was a line that scrolls away.
+    See `WILL_NOT_START`. A note that cannot be written is not a reason to fail — the sentence above
+    has already gone out, and what is lost is a column in a listing rather than the news itself.
     """
     watching.waiting[kind] = NEVER_AGAIN
     watching.complained[kind] = ""            # the next real complaint is a different sentence
-    _note(where, f"channel {kind}: the adapter exited {WILL_NOT_FIX} (EX_CONFIG), which is how it "
-                 f"says that starting it again cannot help — its credential or its configuration is "
-                 f"what is wrong. This gateway will not start it again; put it right with `rundesk "
-                 f"channels` and restart the gateway. What it said before it stopped is above.",
-          logs.ERROR)
+    said = (f"the adapter exited {WILL_NOT_FIX} (EX_CONFIG), which is how it says that starting it "
+            f"again cannot help — its credential or its configuration is what is wrong")
+    _note(where, f"channel {kind}: {said}. This gateway will not start it again; put it right with "
+                 f"`rundesk channels` and restart the gateway. What it said before it stopped is "
+                 f"above.", logs.ERROR)
+    with contextlib.suppress(Exception):
+        files.write_json(will_not_start_of(agent, kind), {"kind": kind, "why": said,
+                                                          "since": logs.stamp()})
 
 
 def _said_on_the_way_out(agent: str, where: Path, kind: str) -> None:

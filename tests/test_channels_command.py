@@ -27,6 +27,7 @@ from unittest import mock
 import support
 from rundesk.agents import directory
 from rundesk.channels import adapters, hosting, kept
+from rundesk.commands import channels
 from rundesk.core import paths, secrets
 
 #: An adapter that answers everything, and answers it out of what it was actually handed.
@@ -353,6 +354,20 @@ class WhatOneChannelSays(Channels):
         self.assertEqual(1, code)
         self.assertIn("alan has no slack channel", err)
 
+    def test_a_channel_the_gateway_gave_up_on_reads_apart_from_one_merely_stopped(self):
+        # `not connected` covered four different things and an owner could act on only one of them:
+        # no gateway, a gateway that never started this, a ten-second hold-off, and *this gateway
+        # will never start it again*. Only the last is somebody's to fix.
+        at = hosting.will_not_start_of("alan", "chat")
+        at.parent.mkdir(parents=True, exist_ok=True)
+        at.write_text(json.dumps({"kind": "chat", "why": "the adapter exited 78 (EX_CONFIG)"}),
+                      encoding="utf-8")
+
+        _code, out, _err = self.rundesk("channels", "show", "alan", "chat")
+        self.assertIn("given up", out)
+        self.assertIn("EX_CONFIG", out)
+        self.assertNotIn("not connected", out)
+
 
 class ChangingWhoMayReachIt(Channels):
     def setUp(self) -> None:
@@ -494,6 +509,26 @@ class WhatCannotBeUsed(Channels):
         self.assertIn("UNREACHABLE", out)
         self.assertIn("that token is not a bot", out)
         self.assertIn("rundesk channels test alan chat", err)
+
+    def test_a_channel_the_gateway_gave_up_on_is_found_even_though_it_checks_out(self):
+        # **The blind spot this verb had.** `doctor` asks the adapter in a process of its own, so a
+        # failure that only shows itself at `serve` time — a close code the platform will answer with
+        # for ever — leaves every question here answered correctly and the channel reported READY,
+        # while the gateway hosting it gave up hours ago and is hosting nothing.
+        self.gave_up_on("chat")
+        code, out, err = self.rundesk("channels", "doctor")
+        self.assertEqual(1, code)
+        self.assertIn(channels.GIVEN_UP, out)
+        self.assertNotIn("READY", out)
+        self.assertIn("rundesk gateways restart alan", err,
+                      "nothing named the one thing that starts this channel again")
+
+    def gave_up_on(self, kind: str) -> None:
+        """Leave behind what a gateway leaves when it stops trying to start a channel."""
+        at = hosting.will_not_start_of("alan", kind)
+        at.parent.mkdir(parents=True, exist_ok=True)
+        at.write_text(json.dumps({"kind": kind, "why": "the adapter exited 78 (EX_CONFIG)",
+                                  "since": "2026-08-07T00:00:00Z"}), encoding="utf-8")
 
     def test_the_findings_are_on_stdout_and_the_summary_on_stderr(self):
         # So a script can read one and ignore the other — and the findings are flushed first, or the

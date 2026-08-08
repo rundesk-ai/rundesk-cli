@@ -98,10 +98,21 @@ READY = "READY"
 BLOCKED = "BLOCKED"
 UNREACHABLE = "UNREACHABLE"
 DANGLING = "DANGLING"
+#: A channel whose adapter answers every question here correctly and which the gateway hosting it has
+#: stopped trying to start. **The one verdict that cannot be reached by asking the adapter**, because
+#: `doctor` asks it in a process of its own: a failure that shows itself only at `serve` time leaves
+#: every check below satisfied, and this said `READY` for a channel that had been abandoned for hours.
+GIVEN_UP = "GIVEN UP"
 
 #: What a listing says about a channel nothing is hosting, and about one nobody could ask about.
 NOT_CONNECTED = "not connected"
 CANNOT_TELL = "cannot tell"
+
+#: What it says about one a gateway has stopped trying to start. **Apart from `NOT_CONNECTED`,
+#: because only one of the two is somebody's to act on**: no gateway at all, a gateway that has not
+#: reached this channel yet, and a ten-second hold-off are all conditions that pass on their own,
+#: and this one never does.
+GAVE_UP = "given up"
 
 
 class Found(NamedTuple):
@@ -381,10 +392,17 @@ def _how(agent: str, kind: str) -> str:
     `cannot tell` is a first-class answer. `hosting.still_running` deliberately re-raises anything
     that is not ordinary contention, so a permissions failure or a filesystem that will not lock
     would otherwise read as a channel that is connected — which is a claim nothing has made.
+
+    **And `given up` is the other one.** `not connected` covered four different conditions and only
+    the last of them is somebody's to act on: no gateway, a gateway that has not reached this channel
+    yet, a channel inside its hold-off, and one this gateway will never start again. Asked only once
+    the lock has said nothing is there, because an adapter that is running is the answer whatever a
+    previous gateway left behind.
     """
     try:
         if not hosting.still_running(agent, kind):
-            return NOT_CONNECTED
+            gave_up = hosting.will_not_start(agent, kind)
+            return f"{GAVE_UP} — {gave_up}" if gave_up else NOT_CONNECTED
     except OSError as why:
         return f"{CANNOT_TELL} — {why}"
     return f"connected{_a_pid(_recorded_pid(agent, kind))}"
@@ -555,6 +573,19 @@ def _handed(allow: Sequence[str], names: Sequence[str]) -> Dict[str, str]:
     return built
 
 
+def _reconnected(kind: str, row: Dict[str, Any], reaching: Optional[Reaching]) -> adapters.Checked:
+    """Ask an adapter to reach again what its channel already has on record.
+
+    **The shape `test` and `doctor` share, and it is the whole of what they share.** Both ask with no
+    options — what an adapter made of the ones it was given at `add` came back as `settings` and is
+    what the channel is really running on — and both hand it the allow list and the credentials the
+    row names. `add` is deliberately not written in terms of this: it asks twice, prompts between the
+    two, and passes the options somebody typed.
+    """
+    return adapters.checked(kind, (), _handed(kept.who_may_reach(row), _named_secrets(row)),
+                            reaching)
+
+
 def _shown(agent: str, kind: str) -> int:
     """Everything one channel was given, read back whole. Changes nothing."""
     gone_wrong = directory.not_an_agent(agent)
@@ -689,8 +720,7 @@ def _tested(agent: str, kind: str, reaching: Optional[Reaching]) -> int:
     try:
         row = kept.one(agent, kind)
         adapters.where(kind)
-        said = adapters.checked(kind, (), _handed(kept.who_may_reach(row), _named_secrets(row)),
-                                reaching)
+        said = _reconnected(kind, row, reaching)
     except TROUBLE as why:
         return _failed(str(why), "nothing was tried")
 
@@ -845,6 +875,13 @@ def _looked_over(agent: str, row: Dict[str, Any], reaching: Optional[Reaching]) 
     The program first, because a channel whose adapter is gone cannot be asked anything; then the
     credential, because an adapter asked to connect without one refuses for a reason nobody has to
     pay a round trip to learn; then the connection itself, which is the only question left.
+
+    **`GIVEN_UP` is asked last, and only of a channel that answered everything else correctly.** It
+    is the one verdict here that does not come from the adapter: this verb asks in a process of its
+    own, so a failure that shows itself only once an adapter is really serving — a close code the
+    platform will answer with for ever — satisfies every check above. Where the adapter *does* refuse,
+    its own reason is the more specific one and is worth more than this, which is why this stands
+    below rather than in front.
     """
     kind = str(row.get("kind") or "")
     try:
@@ -862,13 +899,19 @@ def _looked_over(agent: str, row: Dict[str, Any], reaching: Optional[Reaching]) 
                      f"rundesk env set {missing[0]}")
 
     try:
-        said = adapters.checked(kind, (), _handed(kept.who_may_reach(row), names), reaching)
+        said = _reconnected(kind, row, reaching)
     except TROUBLE as why:
         return Found(agent, kind, UNREACHABLE, str(why),
                      f"rundesk channels show {agent} {kind}")
     if not said.ok:
         return Found(agent, kind, UNREACHABLE, said.why,
                      f"rundesk channels test {agent} {kind}")
+    gave_up = hosting.will_not_start(agent, kind)
+    if gave_up:
+        return Found(agent, kind, GIVEN_UP,
+                     f"{gave_up}, and it checks out from here — a gateway has to be started again "
+                     f"before it will try",
+                     f"rundesk gateways restart {agent}")
     return Found(agent, kind, READY, said.describes, "")
 
 

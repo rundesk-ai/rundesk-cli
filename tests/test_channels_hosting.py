@@ -1144,6 +1144,39 @@ class WhenOneStops(Hosting):
         self.assertIn("Discord refused the token (HTTP 401)", said,
                       "what the adapter said was wrong went nowhere")
 
+    def test_a_channel_it_has_given_up_on_says_so_where_a_command_can_read_it(self):
+        # **The hold-off lives in one process's memory and every command reads the disk**, so a
+        # channel this gateway will never start again looked exactly like one whose gateway is not
+        # running: `still_running` asks the lock, the lock is gone, and the answer is `not
+        # connected`. The one ERROR line is said once and never again, so on a gateway that has been
+        # up a week it has long scrolled off the end of any tail somebody would run. Written down
+        # beside the channel instead, where `channels show` and `channels doctor` can find it.
+        self.a_crashed_adapter(body=AN_ADAPTER_THAT_CANNOT_COME_RIGHT)
+
+        why = hosting.will_not_start(self.agent, "discord")
+        self.assertTrue(why, "nothing on disk says this channel was given up on")
+        self.assertIn("EX_CONFIG", why)
+
+    def test_a_channel_that_starts_again_is_no_longer_given_up_on(self):
+        # Without this the note outlives what it describes: an owner puts the credential right,
+        # restarts the gateway, the adapter comes up — and every command goes on reporting a channel
+        # that was abandoned by a process which no longer exists.
+        self.a_crashed_adapter(body=AN_ADAPTER_THAT_CANNOT_COME_RIGHT)
+        self.assertTrue(hosting.will_not_start(self.agent, "discord"))
+
+        self.an_adapter()
+        fresh = self.hosting_now()
+        self.assertTrue(support.waited_until(
+            lambda: hosting.connected(fresh, "discord"), PATIENCE), "it never came back")
+        self.assertEqual("", hosting.will_not_start(self.agent, "discord"),
+                         "a channel that is up again is still reported as one nobody will start")
+
+    def test_an_ordinary_crash_is_not_a_channel_anybody_gave_up_on(self):
+        # A channel in its ten-second hold-off is coming back. Saying it was given up on would send
+        # an owner to fix a credential that is perfectly good.
+        self.a_crashed_adapter(body=A_DYING_ADAPTER)
+        self.assertEqual("", hosting.will_not_start(self.agent, "discord"))
+
     def test_only_a_bounded_tail_of_it_reaches_the_log(self):
         # The other half of the same function, and the reason it is bounded at all: a program that
         # wrote a megabyte of traceback would roll the rest of the day off the end of the file
