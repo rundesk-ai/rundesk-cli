@@ -669,6 +669,11 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
             # The third tenant, and a sibling of the two above rather than something they contain:
             # the same three seams, and a gateway hosting a list rather than a hierarchy.
             handed = delegations.looked(name, where, handed, answering=on_a_delegation)
+            if knew is None:
+                # Establish the silent baseline before saying the gateway is online. Once a person
+                # can observe `CAME_UP`, a grant they make must be newer than the baseline and must
+                # not disappear into it before the tail's first comparison.
+                knew = _told_what_changed(name, where, channels_up, knew)
             if not said_up and _the_told_channel_is_connected(name, channels_up):
                 # **Once the adapter it leaves through has reached its platform, never merely once
                 # it has been started.** `looked` starts one; starting is a fork, and what follows
@@ -688,8 +693,7 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
             awake.proved(sleep_prevented)
             landing = _still_working(at, where, landing)
             swept_for = _kept_the_days(name, where, swept_for)
-            # In the tail rather than before the sleep, so that on the pass where a gateway both
-            # comes up and finds a change, `CAME_UP` lands first — which is the order a person needs.
+            # In the tail so a change made after `CAME_UP` is always announced after it.
             knew = _told_what_changed(name, where, channels_up, knew)
     except Stopped as why:
         # **Asked once is enough, and from here on another ask may not interrupt anything.** The
