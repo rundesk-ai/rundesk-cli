@@ -7,7 +7,7 @@ context and removes its own scratch; it does not inventory the whole home.
 
 1. Read `MEMORY.md` and only the home indexes it links. Inventory home loose files and scratch
    directories without following symlinks. Reuse the generated `plans/`, `research/`, `scripts/`,
-   and `retros/` areas for durable agent-owned work; keep each README and follow its boundary.
+   `retros/`, and `tasks/` areas for agent-owned work; keep each README and follow its boundary.
    For a symlink, inspect only link metadata and its target spelling; never open the link or target.
    Preserve and list `retros/`, but do not open its entries; the next phase owns that evidence.
 2. Keep compact owner preferences, durable role and responsibilities, reusable cross-project
@@ -17,8 +17,9 @@ context and removes its own scratch; it does not inventory the whole home.
    or authoritative context confirms that; retain an unavailable active mapping and do not add
    availability status. Remove loops explicitly marked completed/delivered.
 4. Remove commands or deliverable paths, working or draft paths, changing project status, report
-   formatting, supersession history, and task-only methods from personal memory; keep them in the
-   project. Preserve a still-open owner commitment until it is closed or safely moved; when several
+   formatting, supersession history, and task-only methods from personal memory. Keep lasting truth
+   in the project; keep only active resumption state in `tasks/` and remove its brief when the task
+   closes. Preserve a still-open owner commitment until it is closed or safely moved; when several
    active commitments outgrow memory, maintain one canonical `OPEN_ITEMS.md` instead of dropping
    them merely because they have dates.
    An earned shared index may keep a stable entrypoint that avoids repeated discovery. Use one
@@ -52,6 +53,7 @@ home/
   research/                 reusable sourced findings
   scripts/                  verified agent-owned automation
   retros/                   dated self-improvement history
+  tasks/                    active resumable briefs, removed when closed
 ```
 
 Project code, current status, and project decisions remain in each external project. A role that

@@ -38,9 +38,10 @@ Rundesk work; generated `--help` is its command contract.
 
 Record in `MEMORY.md` only durable context useful next run: owner preferences, your role and
 responsibilities, cross-project process/gotchas, and small active-project pointers (name, stable
-location, purpose, role, authoritative overview). Project commands, deliverable paths, status,
-decisions, conventions, task methods/checks/done criteria, working paths, report formats, dates, and
-supersession/retirement history stay in the project or a shared index.
+location, purpose, role, authoritative overview). Project commands, paths, status, decisions,
+formats, dates, and history stay in project/shared index. Active
+scope/checks/done criteria may live in `tasks/`; move lasting truth to project and remove its brief
+at close.
 
 Keep only current facts; never narrate or date a correction. Merge, do not append; remove a directly
 superseded fact or closed loop you encounter. Use one shared purpose-named index only when several

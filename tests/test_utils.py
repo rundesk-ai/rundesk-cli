@@ -828,6 +828,12 @@ class StagingACopyOfSomething(support.Isolated):
 class PrintingATable(support.Isolated):
     """`as_table` — columns to their widest cell, and nothing at all when there is nothing."""
 
+    def setUp(self):
+        super().setUp()
+        env_as_it_was(self, "NO_COLOR", "FORCE_COLOR", "TERM")
+        for name in ("NO_COLOR", "FORCE_COLOR", "TERM"):
+            os.environ.pop(name, None)
+
     def test_columns_line_up_to_their_widest_cell(self):
         out = printed(("WHAT", "IS"), [("a", "1"), ("a-much-longer-name", "2")])
         first, second, third = out.splitlines()

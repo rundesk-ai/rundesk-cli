@@ -281,7 +281,7 @@ def _made(name: str, provider: Optional[str], describes: Optional[str] = None) -
     print(f"        logs      {at / directory.LOGS}")
     print(f"        records   {at / directory.RECORDS}")
     print(f"        {_the_pages_it_lives_by(at / directory.HOME)}")
-    print(f"        workspace {', '.join(f'{area}/' for area in pages.AREAS)} — durable work, organized")
+    print(f"        workspace {', '.join(f'{area}/' for area in pages.AREAS)} — agent-owned work, organized")
     print(f"        {_the_skill_every_agent_holds(name)}")
     if job.name_trouble(name):
         print(f"        note      {NO_JOB_EVER}")

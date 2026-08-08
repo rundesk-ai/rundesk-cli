@@ -140,7 +140,7 @@ class Adding(support.Isolated):
         self.assertIn("claude", out)
         for one in ("home", "logs", "state.db"):
             self.assertIn(one, out, f"the line naming {one} is not there")
-        self.assertIn("plans/, research/, scripts/, retros/", out)
+        self.assertIn("plans/, research/, scripts/, retros/, tasks/", out)
 
     def test_it_is_given_the_skill_it_operates_this_install_with(self):
         # Shipped, undeletable as a catalog, and held by nobody was the state this closes: an agent

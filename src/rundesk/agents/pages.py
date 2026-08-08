@@ -61,9 +61,9 @@ CONTINUITY: Dict[str, str] = {
     "MEMORY.md": "MEMORY.md",
 }
 
-#: Purpose-named places for durable agent-owned work. Their notes are deliberately lazy context:
+#: Purpose-named places for agent-owned work. Their notes are deliberately lazy context:
 #: a brain pays for the guidance only when it enters that area, not on every ordinary turn.
-AREAS = ("plans", "research", "scripts", "retros")
+AREAS = ("plans", "research", "scripts", "retros", "tasks")
 
 #: What lands in a home, and which shipped page it comes from. **A table rather than a directory
 #: walk**, because the doubling is the decision: `AGENTS.md` is placed twice, and a walk that put

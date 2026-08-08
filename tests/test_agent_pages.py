@@ -71,9 +71,9 @@ class ANewAgent(support.Isolated):
             with self.subTest(name=name):
                 self.assertTrue((self.home / name).is_file())
 
-    def test_it_starts_with_named_places_for_durable_work(self):
+    def test_it_starts_with_named_places_for_agent_owned_work(self):
         self.assertEqual(
-            {"plans", "research", "scripts", "retros"},
+            {"plans", "research", "scripts", "retros", "tasks"},
             {one.name for one in self.home.iterdir() if one.is_dir()},
         )
         for area in pages.AREAS:
@@ -94,6 +94,12 @@ class ANewAgent(support.Isolated):
                     any(word in note for word in ("project", "secret", "evidence", "owner")),
                     f"{area} does not name a safety boundary",
                 )
+
+    def test_the_task_area_keeps_only_active_resumable_work(self):
+        note = (self.home / "tasks" / "README.md").read_text(encoding="utf-8").lower()
+        for phrase in ("multi-turn or delegated", "canonical", "yyyy-mm-dd", "remove the brief"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, note)
 
     def test_the_rules_it_got_are_byte_identical_under_both_names(self):
         self.assertEqual((self.home / "AGENTS.md").read_bytes(),
@@ -176,10 +182,9 @@ class ANewAgent(support.Isolated):
         for phrase in ("durable context useful next run", "active-project pointers",
                        "owner preferences", "role and responsibilities", "cross-project process",
                        "name, stable location, purpose, role, authoritative overview",
-                       "Project commands, deliverable paths, status, decisions, conventions",
-                       "task methods/checks/done criteria",
-                       "working paths, report formats, dates, and supersession/retirement history",
-                       "stay in the project or a shared index",
+                       "Project commands, paths, status, decisions", "formats, dates, and history",
+                       "stay in project/shared index", "Active scope/checks/done criteria",
+                       "in `tasks/`", "move lasting truth to project", "remove its brief at close",
                        "one shared purpose-named index", "never one note per project",
                        "Keep only current facts", "never narrate or date a correction",
                        "Merge, do not append", "superseded fact or closed loop",
@@ -308,6 +313,16 @@ class TheSweepEveryUpdateRuns(support.Isolated):
             directory.known(), directory.home, said.append))
         self.assertEqual([], pages.wanted(directory.home("ava")))
         self.assertTrue([one for one in said if "ava" in one and "AGENTS.md" in one], said)
+
+    def test_an_agent_from_before_the_task_area_is_given_it(self):
+        shutil.rmtree(directory.home("ava") / "tasks")
+        said = []
+
+        self.assertEqual([], pages.everybody_has_theirs(
+            directory.known(), directory.home, said.append))
+
+        self.assertTrue((directory.home("ava") / "tasks" / "README.md").is_file())
+        self.assertTrue([one for one in said if "ava" in one and "tasks/README.md" in one], said)
 
     def test_an_agent_that_has_them_all_is_not_mentioned(self):
         said = []

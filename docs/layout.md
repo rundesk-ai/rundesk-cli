@@ -93,7 +93,7 @@ agent-created clutter, but an old-looking or unfamiliar
 file is somebody's data, not permission to tidy it away. A purpose-named index such as `PROJECTS.md`
 is ordinary home content: Rundesk does not create, read, or sweep it.
 
-Every agent starts with four purpose-named areas and a compact README in each:
+Every agent starts with five purpose-named areas and a compact README in each:
 
 ```text
 home/
@@ -101,14 +101,16 @@ home/
   research/    reusable, sourced findings owned by the agent
   scripts/     tested agent-owned automation for repeated work
   retros/      dated evidence-based self-improvement entries
+  tasks/       active briefs for resumable multi-turn or delegated work
 ```
 
 The notes are filled in only when absent and never replace an owner-edited answer. The directories
-organize durable work; they are not a reason to move project state home or keep task scratch. A
-focused upkeep may keep `retros/YYYY-MM-DD.md`; the initiator supplies the evidence interval and
-entry date, and a rerun updates that one entry. The bundled maintenance reference bounds each entry
-but keeps the history. Rundesk never sweeps these areas, and an older or unfamiliar file is never
-treated as disposable.
+organize agent-owned work; they are not a reason to move project state home or keep task scratch.
+`tasks/` holds only active resumable briefs, linked to a canonical source when one exists and removed
+when their outcomes close. A focused upkeep may keep `retros/YYYY-MM-DD.md`; the initiator supplies
+the evidence interval and entry date, and a rerun updates that one entry. The bundled maintenance
+reference bounds each entry but keeps the history. Rundesk never sweeps these areas, and an older or
+unfamiliar file is never treated as disposable.
 
 **The names inside are fixed and they are the same for every agent**, which is the whole reason they
 are inside. The build this replaces put them beside the name instead — `<name>.lock`, `<name>.log`,

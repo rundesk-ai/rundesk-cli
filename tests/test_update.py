@@ -505,6 +505,16 @@ class CarryingTheAgentsForward(Updating):
         self.assertIsNotNone(grants.holding("alpha", library.REQUIRED_SKILL),
                              "the update did not give alpha the skill every agent holds")
 
+    def test_an_agent_made_before_the_task_area_is_given_it_by_an_update(self):
+        self.an_agent("alpha")
+        shutil.rmtree(directory.home("alpha") / "tasks")
+
+        code, _out, err = self.update(archive=self.an_archive())
+
+        self.assertEqual(OK, code, err)
+        self.assertTrue((directory.home("alpha") / "tasks" / "README.md").is_file(),
+                        "the update did not give alpha the active task area")
+
     def test_how_far_each_agent_got_is_recorded_in_its_own_records(self):
         self.an_agent("alpha")
         self.update(archive=self.an_archive(agent_steps={"9999_x": AN_AGENT_STEP}))

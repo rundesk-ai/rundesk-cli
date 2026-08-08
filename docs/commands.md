@@ -208,7 +208,7 @@ agent cole added
         logs      /Users/you/.rundesk/data/agents/cole/logs
         records   /Users/you/.rundesk/data/agents/cole/state.db
         rules     AGENTS.md, CLAUDE.md, MEMORY.md — how it works, and what it learns
-        workspace plans/, research/, scripts/, retros/ — durable work, organized
+        workspace plans/, research/, scripts/, retros/, tasks/ — agent-owned work, organized
         skill     rundesk/managing-rundesk — how it operates this install
         note      the provider is recorded and not proven — check it with: rundesk providers check
 ```
@@ -220,18 +220,21 @@ owner's to edit from that moment: **an update fills in one that is missing and n
 that is there**, whatever it has been changed to. A release that shipped none says so on this line
 instead, and the next `rundesk update` gives them.
 
-The home also starts with `plans/`, `research/`, `scripts/`, and `retros/`. Each carries a short
-README describing what belongs there, how to keep it current, and its safety boundary. They hold
-durable agent-owned work without moving project state out of its project or preserving disposable
-task scratch. Updates fill an absent folder note but never replace one already there.
+The home also starts with `plans/`, `research/`, `scripts/`, `retros/`, and `tasks/`. Each carries a
+short README describing what belongs there, how to keep it current, and its safety boundary. The
+first four hold durable agent-owned work. `tasks/` holds active resumable briefs that the agent
+removes after completion; neither kind moves canonical project state out of its project or preserves
+disposable scratch. Updates fill an absent folder note but never replace one already there.
 
 `MEMORY.md` is a compact working index for the next run, not a transcript or project notebook.
 Ordinary work keeps owner preferences, the agent's role and responsibilities, reusable cross-project
 process and gotchas, and a small active-project pointer: name, stable location, purpose, role, and
-authoritative overview. Commands, deliverable paths, changing state, task methods, dates, and change
-history stay with the project or an earned shared index. Memory keeps the current fact instead of a
-dated correction story; a turn that learned nothing durable leaves it alone. Ordinary work removes
-only temporary files and directories that turn created; it does not inventory the home.
+authoritative overview. Commands, deliverable paths, changing state, dates, and change history stay
+with the project or an earned shared index. A substantial open task may keep resumable scope, checks,
+and done criteria in `tasks/`; lasting truth returns to the project and the agent removes the brief
+when the task closes. Memory keeps the current fact instead of a dated correction story; a turn that
+learned nothing durable leaves it alone. Ordinary work removes only temporary files and directories
+that turn created; it does not inventory the home.
 
 When useful durable context would make `MEMORY.md` dense, the agent may link from it to a canonical,
 purpose-named index in its home. `PROJECTS.md`, `CLIENTS.md`, and `OPEN_ITEMS.md` are examples, not
