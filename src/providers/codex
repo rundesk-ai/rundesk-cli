@@ -273,9 +273,7 @@ class Turn:
     def send(self, method: str, params=None, wants_reply: bool = True):
         """One request or notification to the server. Returns the id, or `None` for a notification.
 
-        Behind a lock because two threads write here — the one draining the server and the one
-        reading what rundesk is saying — and two interleaved halves of two JSON objects is a stream
-        neither end can recover.
+        The lock that makes this safe lives in `write`, which every line goes through.
         """
         said = {"method": method}
         if params is not None:
@@ -303,11 +301,12 @@ class Turn:
                                            "message": "rundesk offers no client services"}})
 
     def write(self, one: dict) -> None:
-        """One line to the server, under the lock.
+        """One line to the server, under the lock. **Every line goes through here.**
 
-        Behind the lock because two threads write here — the one draining the server and the one
-        reading what rundesk is saying — and two interleaved halves of two JSON objects is a stream
-        neither end can recover.
+        Behind the lock because three threads write here — the one starting the turn, the one
+        reading what rundesk is saying, and the one draining the server, which answers a request it
+        was sent — and two interleaved halves of two JSON objects is a stream neither end can
+        recover.
         """
         with self.saying:
             self.brain.stdin.write(json.dumps(one) + "\n")
@@ -630,14 +629,14 @@ class Turn:
         status = item.get("status")
         record = {"type": "result", "id": given,
                   "ok": (status in (None, "completed") and not item.get("error")
-                         and self.a_command_worked(item))}
+                         and self.a_command_worked(kind, item))}
         summary = self.what_it_reported(kind, item)
         if summary:
             record["summary"] = summary
         say(record)
 
     @staticmethod
-    def a_command_worked(item: dict) -> bool:
+    def a_command_worked(kind: str, item: dict) -> bool:
         """Whether a command this brain ran actually succeeded, by its exit code.
 
         **`status` is about the item, not about the command.** A `commandExecution` reaches
@@ -646,9 +645,14 @@ class Turn:
         exit code is right there on the item and `what_it_reported` already puts it in the summary,
         which is how this was found: a record saying `ok: true` beside a summary reading `exit 1`.
 
-        Absent means this is not a command and there is nothing to disagree with, so the caller's
-        other two checks stand alone.
+        **Asked of the kind and never of the field.** Only a `commandExecution` has an exit code to
+        mean anything by, and reading the key wherever it appeared would be an assumption about a
+        schema nobody here controls: the day a tool call carries an `exitCode` of its own — nested
+        from an MCP server, or a name a release reuses — every one of them would be reported failed
+        while its own status said otherwise, which is this same defect pointing the other way.
         """
+        if kind != "commandExecution":
+            return True
         code = item.get("exitCode")
         return code == 0 if isinstance(code, int) else True
 

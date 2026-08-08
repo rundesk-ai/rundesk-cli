@@ -736,6 +736,25 @@ class WhatACommandCameTo(support.Isolated):
     def test_a_command_that_exited_zero_still_did(self):
         self.assertTrue(self.result_of(0)["ok"])
 
+    def test_an_exit_code_on_something_that_is_not_a_command_decides_nothing(self):
+        """**Asked of the kind, never of the field.** Only a `commandExecution` has an exit code to
+        mean anything by. Reading the key wherever it appeared would be an assumption about a schema
+        nobody here controls — and the day a tool call carries one of its own, every such call would
+        be reported failed while its own status said it succeeded."""
+        rows = [json.loads(one) for one in CAPTURED.read_text(encoding="utf-8").splitlines()
+                if one.strip()]
+        for one in rows:
+            item = (one.get("params") or {}).get("item") or {}
+            if item.get("type") == "commandExecution":
+                item["type"] = "mcpToolCall"
+                item["exitCode"] = 1
+        where = self.home / "a-tool-call-carrying-one.jsonl"
+        where.write_text("".join(json.dumps(one) + "\n" for one in rows), encoding="utf-8")
+        said, _got = replayed(self.home, captured=where)
+        result = next(one for one in said if one.get("type") == "result")
+        self.assertTrue(result["ok"],
+                        "an exit code on a tool call that completed was read as a failure")
+
 
 class WhenTheServerAsksThisSideForSomething(support.Isolated):
     """**A request that goes unanswered is a server waiting for ever.**

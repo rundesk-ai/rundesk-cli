@@ -868,16 +868,21 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
         message = message or stream.stop_reason
     elif brain_said is False:
         status = kept.FAILED
-    elif brain_said is True and code is not None:
+    elif brain_said is True and (code is not None or message is not None):
         # **A reason for failing belongs on a `done` that says `ok: false`, and nowhere else.** The
-        # brain is the one thing that knows whether its turn worked, so a word arriving beside its
+        # brain is the one thing that knows whether its turn worked, so anything arriving beside its
         # own `ok: true` is an adapter breaking the contract — and read as a failure it inverts the
         # answer: measured, an owner was told `FAILED — it did not answer` on the line above the
-        # answer it gave, and the ledger agreed. The word is dropped rather than acted on, and the
-        # adapter is named in the log, because this is the adapter's defect to fix.
-        note(agent, f"turn {turn}: the adapter reported {code!r} on a turn it said worked, "
-                    "so the word was dropped — a failure_code belongs on a done that is not ok",
-             logs.WARNING)
+        # answer it gave, and the ledger agreed. It is dropped rather than acted on, and the adapter
+        # is named in the log, because this is the adapter's defect to fix.
+        #
+        # **Both fields, not only the word.** `protocol.failure_code` answers `None` for a word this
+        # release does not know as well as for one that was never sent, so an adapter contradicting
+        # itself in prose alone — or with a word rundesk dropped — would otherwise leave a reason
+        # for failing sitting on a turn recorded as done.
+        note(agent, f"turn {turn}: the adapter reported {code or message!r} on a turn it said "
+                    "worked, so it was dropped — a reason for failing belongs on a done that is "
+                    "not ok", logs.WARNING)
         code, message = None, None
     elif brain_said is None:
         # No `done` at all is the shape a killed adapter leaves, and nothing here may declare such a

@@ -637,6 +637,34 @@ class AReasonForFailingOnATurnThatWorked(WithAnAgent):
         self.assertIsNone(got.failure_code)
         self.assertIn("the answer is 41", got.reply)
 
+    def test_a_reason_in_prose_alone_is_dropped_too(self):
+        """**Both fields, not only the word.** `protocol.failure_code` answers `None` for a word
+        this release does not know as well as for one never sent, so an adapter contradicting itself
+        in prose alone — or with a word rundesk dropped — would otherwise leave a reason for failing
+        sitting on a turn recorded as done, which is what every surface reads."""
+        brain = self.home / "a-turn-that-worked-and-complained"
+        brain.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            "if '--capabilities' in sys.argv[1:]:\n"
+            "    print(json.dumps({'tools': True})); raise SystemExit(0)\n"
+            "sys.stdin.read()\n"
+            "for one in ({'type': 'text', 'text': 'the answer is 41', 'whole': True},\n"
+            "            {'type': 'done', 'ok': True,\n"
+            "             'failure_code': 'a-word-nobody-here-knows',\n"
+            "             'failure_message': 'something went wrong'}):\n"
+            "    sys.stdout.write(json.dumps(one) + '\\n'); sys.stdout.flush()\n",
+            encoding="utf-8")
+        brain.chmod(0o755)
+        directory.made("cole", str(brain))
+        landed = arriving.recorded("cole", "discord", "ops", "2207", "what changed today?")
+        got = turns.run(turns.Request(agent="cole", prompt="what changed today?",
+                                      conversation=landed.conversation,
+                                      source=arriving.FROM_CHANNEL, place="ops"))
+        self.assertEqual(kept.DONE, got.turn_status)
+        self.assertIsNone(got.failure_code)
+        self.assertIsNone(got.failure_message)
+
 
 class WhenADiagnosticRowCannotBeKept(WithAnAgent):
     """**The cheapest thing in the turn is the thing that gives way.**
