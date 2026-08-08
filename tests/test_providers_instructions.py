@@ -343,10 +343,10 @@ class WhatATurnMayDelegateTo(support.Isolated):
         self.assertIn(self.A_TEAM, text)
         self.assertIn('"$RUNDESK_COMMAND" ask <agent>', text)
 
-    def test_a_schedule_is_shown_no_team_it_cannot_wait_to_review(self):
+    def test_a_schedule_is_shown_the_team_whose_result_can_resume_its_session(self):
         text = self.built(instructions.SCHEDULE_TO_AGENT)
-        self.assertNotIn(self.A_TEAM, text)
-        self.assertNotIn('"$RUNDESK_COMMAND" ask <agent>', text)
+        self.assertIn(self.A_TEAM, text)
+        self.assertIn('"$RUNDESK_COMMAND" ask <agent>', text)
 
     def test_owner_descriptions_are_data_and_cannot_expand_prompt_placeholders(self):
         text = instructions.build(

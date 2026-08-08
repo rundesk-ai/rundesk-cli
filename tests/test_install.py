@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 import support
+from rundesk.commands import automatic_updates
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.lifecycle import tree
@@ -292,6 +293,19 @@ class Uninstalling(Installing):
         self.install()
         self.uninstall()
         self.assertFalse(paths.app().exists())
+
+    def test_it_refuses_before_removing_the_program_if_a_queued_worker_will_not_stop(self):
+        self.install()
+        one = automatic_updates.coordinator()
+        self.assertTrue(automatic_updates.shim_of(one).exists())
+        with mock.patch.object(automatic_updates, "updates_stopped",
+                               side_effect=automatic_updates.CouldNotStop("worker still active")):
+            code, _, err = self.uninstall()
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("queued update worker", err)
+        self.assertTrue(paths.app().exists())
+        self.assertTrue(automatic_updates.shim_of(one).exists())
 
     def test_it_keeps_what_the_owner_keeps_unless_asked_to_take_it(self):
         self.install()

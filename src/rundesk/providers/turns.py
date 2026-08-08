@@ -130,6 +130,8 @@ class Request(NamedTuple):
     access_mode: str = protocol.ACCESS_WORK
     model_name: Optional[str] = None
     schedule_id: Optional[int] = None
+    #: Stable schedule identity when `place` is an invocation-specific source id.
+    schedule_name: str = ""
     #: Start a new conversation on the brain even if this one has a handle.
     fresh: bool = False
     #: Where the answer is written back, for a conversation that has a place of its own.
@@ -453,6 +455,8 @@ class Ours:
     def __init__(self) -> None:
         self.stream: Optional["streaming.Stream"] = None
         self.asked = False
+        self.ended = threading.Event()
+        self.forget_session = False
 
     def ends(self) -> None:
         """Stop the brain now, or as soon as there is one. Safe to call more than once."""
@@ -511,6 +515,50 @@ def _stoppable(agent: str, conversation: int) -> Iterator[Ours]:
         with _running_lock:
             if _running.get((agent, conversation)) is ours:
                 del _running[(agent, conversation)]
+        ours.ended.set()
+
+
+def running_here(agent: str, conversation: int) -> bool:
+    """Whether this process owns the turn, rather than merely observing an inherited lock."""
+    with _running_lock:
+        return (agent, conversation) in _running
+
+
+def forget_when_done(agent: str, conversation: int) -> bool:
+    """Forget sessions without a live turn being able to restore one across the decision."""
+    with _running_lock:
+        ours = _running.get((agent, conversation))
+        if ours is not None:
+            ours.forget_session = True
+        # Settlement saves under this same lock. Whichever wins, `/new` is final: it either marks
+        # first and no save happens, or waits for the save already underway and removes it.
+        kept.forget_sessions(agent, conversation)
+        return ours is not None
+
+
+def stopping(agent: str, within: float) -> None:
+    """Stop and wait for every provider turn this gateway owns, inside one shared budget."""
+    with _running_lock:
+        running = [one for (owner, _conversation), one in _running.items() if owner == agent]
+    for one in running:
+        one.ends()
+    deadline = time.monotonic() + max(0.0, within)
+    for one in running:
+        one.ended.wait(max(0.0, deadline - time.monotonic()))
+
+
+def settle_abandoned(agent: str) -> int:
+    """Settle unfinished rows once the kernel proves no provider still owns their conversation."""
+    settled = 0
+    for row in kept.list_unfinished_turns(agent):
+        if standing(agent, int(row["conversation_id"])) is not False:
+            continue
+        kept.finish_turn(
+            agent, int(row["id"]), kept.STOPPED,
+            {"failure_code": protocol.CANCELLED,
+             "failure_message": "the gateway ended before this turn settled"})
+        settled += 1
+    return settled
 
 
 def also_say(agent: str, conversation: int, word: str,
@@ -585,11 +633,10 @@ def _held(request: Request, held: int, watching, saying,
     settings = _as_settings(settled.get("agent_settings"))
     can = protocol.parse_capabilities(adapters.capabilities(provider_name, settings))
 
-    # A named async handoff is usable only while a person is present and this turn may change
-    # state. Schedules cannot review a later result inside their already-finished report, delegated
-    # turns are depth one, and read mode forbids creating the handoff. Do not spend their prompt or
-    # make them depend on unrelated team state for a capability they cannot use.
-    may_hand_off = (request.situation == instructions.USER_TO_AGENT
+    # A person-facing or scheduled work turn may hand off mutable work. Delegated turns remain
+    # depth one, and read mode forbids creating a handoff.
+    may_hand_off = (request.situation in (instructions.USER_TO_AGENT,
+                                          instructions.SCHEDULE_TO_AGENT)
                     and request.access_mode != protocol.ACCESS_READ)
     teammates = team.for_agent(agent) if may_hand_off else ""
     prompt = instructions.build(situation=request.situation,
@@ -669,7 +716,7 @@ def _held(request: Request, held: int, watching, saying,
                     saying if saying is not None else (reachable.each() if reachable else None),
                     reachable, ours)
         settling.update(_became(request, turn, said, stream, can, provider_name,
-                                began_at, _how_big(raw), time.monotonic() - began))
+                                began_at, _how_big(raw), time.monotonic() - began, ours=ours))
     return settling.outcome
 
 
@@ -856,7 +903,7 @@ def _written_down(agent: str, turn: int, kind: str, values: Dict[str, Any],
 
 def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
             can: Dict[str, bool], provider_name: str, began_at: int, ended_at: int,
-            elapsed: Optional[float] = None) -> Dict[str, Any]:
+            elapsed: Optional[float] = None, ours: Optional[Ours] = None) -> Dict[str, Any]:
     """What this turn came to, and everything the records keep about it."""
     agent = request.agent
     # A person-facing turn is a conversation and keeps everything the brain said. An unattended
@@ -872,10 +919,15 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
     used = protocol.usage_of(said)
 
     if reply.strip():
-        arriving.said_by_agent(agent, request.source, request.place or agent, reply, turn=turn)
+        arriving.said_by_agent_into(agent, request.conversation, reply, turn=turn)
     handle = protocol.resume_handle(said)
     if handle and can["resume"]:
-        kept.save_session(agent, request.conversation, provider_name, handle)
+        if ours is None:
+            kept.save_session(agent, request.conversation, provider_name, handle)
+        else:
+            with _running_lock:
+                if not ours.forget_session:
+                    kept.save_session(agent, request.conversation, provider_name, handle)
 
     status = kept.DONE
     code = protocol.failure_code(said)
@@ -1018,7 +1070,7 @@ def _schedule_name(request: Request) -> str:
     the turn's own row keeps it so the ledger still says which schedule ran once that schedule has
     been taken away. Two derivations of one fact are two things that can come to disagree.
     """
-    return request.place if request.schedule_id else ""
+    return request.schedule_name or (request.place if request.schedule_id else "")
 
 
 def _as_settings(said: Any) -> Optional[str]:

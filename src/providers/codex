@@ -299,6 +299,8 @@ class Turn:
         self.failure_code = None
         self.failure_message = None
         self.tools = {}
+        self.subagents = {}
+        self.finished_subagents = set()
         self.steers = []
 
     # ── the wire ──────────────────────────────────────────────────────────────────────────────
@@ -643,6 +645,8 @@ class Turn:
         # account events and older compatible shapes remain readable.
         belongs_to = params.get("threadId")
         if belongs_to is not None and self.thread_id is not None and belongs_to != self.thread_id:
+            if method == "turn/completed":
+                self.a_subagent_turn_completed(str(belongs_to), params.get("turn") or {})
             return
         if method == "thread/started":
             # **Taken from whichever says it first.** The reply to `thread/start` also carries it,
@@ -685,6 +689,44 @@ class Turn:
         elif kind in ("commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall",
                       "webSearch", "imageGeneration"):
             self.a_tool(kind, item, started)
+        elif kind == "subAgentActivity":
+            self.a_subagent(item)
+
+    def a_subagent(self, item: dict) -> None:
+        """Publish a provider-local helper as delegation activity on the parent turn.
+
+        Codex reports the activity item on the parent thread even though the child's own tools and
+        answer use another thread and stay private. The item's `kind`, not the enclosing
+        `item/completed` notification, says whether the helper began or ended.
+        """
+        given = str(item.get("id") or item.get("agentThreadId") or "")
+        if not given:
+            return
+        phase = str(item.get("kind") or "")
+        if phase == "started":
+            child = str(item.get("agentThreadId") or "")
+            if child:
+                self.subagents[child] = given
+            say({"type": "tool", "id": given, "did": "delegate",
+                 "name": "provider-local subagent",
+                 "who": one_line(child)})
+        elif phase in ("completed", "stopped"):
+            self.finished_subagent(given, phase == "completed")
+
+    def a_subagent_turn_completed(self, child: str, turn: dict) -> None:
+        """Close only the helper activity whose own thread ended; never settle the parent."""
+        given = self.subagents.pop(child, None)
+        if given is None:
+            return
+        worked = turn.get("status") == "completed" and not turn.get("error")
+        self.finished_subagent(given, worked)
+
+    def finished_subagent(self, given: str, worked: bool) -> None:
+        """Publish one helper ending even when Codex reports it through two compatible shapes."""
+        if not given or given in self.finished_subagents:
+            return
+        self.finished_subagents.add(given)
+        say({"type": "result", "id": given, "ok": worked})
 
     def a_tool(self, kind: str, item: dict, started: bool) -> None:
         """A tool starting, and what it came to. Paired by the brain's own id for the item."""

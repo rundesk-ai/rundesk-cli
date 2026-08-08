@@ -1,6 +1,7 @@
 """One launchd-owned daily update coordinator for each isolated Rundesk install."""
 
 import argparse
+import contextlib
 import datetime
 import hashlib
 import json
@@ -9,25 +10,33 @@ import plistlib
 import shlex
 import sys
 import tempfile
+import time
 from pathlib import Path
-from typing import Dict, NamedTuple, Optional
+from typing import Callable, Dict, Iterator, NamedTuple, Optional
 
 from rundesk.agents import directory
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job
-from rundesk.providers import turns
+from rundesk.providers import environment, turns
 from rundesk.schedules import firing
-from rundesk.utils import locking, logs
+from rundesk.utils import locking, logs, programs
 
 UPDATE = "update"
 CAPTURE_BYTES = 1024 * 1024
 CAPTURES_KEPT = 3
 LOG_DAYS = 30
 AUTOMATIC = "RUNDESK_AUTOMATIC_UPDATE"
+QUEUED = "RUNDESK_QUEUED_UPDATE"
+QUEUE_POLL_SECONDS = 1.0
+QUEUE_RETRY_SECONDS = 60.0
 RUN = (
     "import sys;sys.path.insert(0,sys.argv[1]);"
     "from rundesk.commands.automatic_updates import run;raise SystemExit(run())"
+)
+RUN_QUEUED = (
+    "import sys;sys.path.insert(0,sys.argv[1]);"
+    "from rundesk.commands.automatic_updates import run_queued;raise SystemExit(run_queued())"
 )
 
 
@@ -40,6 +49,10 @@ class Coordinator(NamedTuple):
 class Reconciled(NamedTuple):
     how: str
     why: str = ""
+
+
+class CouldNotStop(Exception):
+    """An uninstall could not exclude every queued or running update."""
 
 
 def coordinator(root: Optional[Path] = None, into: Optional[Path] = None) -> Coordinator:
@@ -70,6 +83,176 @@ def state_at(one: Coordinator) -> Path:
 
 def receipt_at(one: Coordinator) -> Path:
     return one.root / "data" / "automatic-update-job.json"
+
+
+def request_at(one: Coordinator) -> Path:
+    """The durable manual request waiting for a quiet install."""
+    return one.root / "data" / "queued-update.json"
+
+
+def queue_lock_at(one: Coordinator) -> Path:
+    """The claim held by the one detached process waiting to perform the request."""
+    return one.root / ".rundesk-update-queue.lock"
+
+
+def queue_log_at(one: Coordinator) -> Path:
+    """What the detached runner says when nobody is waiting at a terminal."""
+    return logs_at(one) / "queued.log"
+
+
+def _claim_request(one: Coordinator) -> Optional[int]:
+    """Hold the exact queued request this worker observed, or `None` when there was none.
+
+    The open descriptor pins the file identity even if another command atomically replaces its
+    pathname while an update is finishing. That lets settlement remove only the request it served,
+    never a newer promise made after `attempt_update` released its admission/update locks.
+    """
+    try:
+        return os.open(request_at(one), os.O_RDONLY)
+    except FileNotFoundError:
+        return None
+
+
+def _remove_claimed_request(one: Coordinator, claimed: Optional[int]) -> None:
+    """Remove `claimed` only while it is still the request at the durable queue pathname."""
+    if claimed is None:
+        return
+    with locking.only_one(paths.update_lock(), guarding="settling the queued update"):
+        try:
+            current = request_at(one).stat()
+        except FileNotFoundError:
+            return
+        original = os.fstat(claimed)
+        if (current.st_dev, current.st_ino) == (original.st_dev, original.st_ino):
+            request_at(one).unlink()
+
+
+@contextlib.contextmanager
+def updates_stopped(waiting: float = 2.5) -> Iterator[None]:
+    """Cancel queued work and exclude updates for an uninstall's whole transaction."""
+    one = coordinator()
+    held = contextlib.ExitStack()
+    try:
+        request_at(one).unlink(missing_ok=True)
+        held.enter_context(locking.only_one(
+            queue_lock_at(one), guarding="stopping the queued update worker", waiting=waiting))
+        held.enter_context(locking.only_one(
+            paths.update_lock(), guarding="stopping updates for uninstall", waiting=waiting))
+        # A manual update may have queued while this caller waited for its update claim. Remove
+        # that request only after both lifecycle locks belong to the uninstall.
+        request_at(one).unlink(missing_ok=True)
+    except (locking.Stuck, OSError) as why:
+        held.close()
+        raise CouldNotStop(str(why)) from why
+    try:
+        yield
+    finally:
+        held.close()
+
+
+def cancel_queued(waiting: float = 2.5) -> str:
+    """Cancel a durable request and prove no update owns either lifecycle claim."""
+    try:
+        with updates_stopped(waiting):
+            pass
+    except CouldNotStop as why:
+        return str(why)
+    return ""
+
+
+def queued(reason: str, starting=None, environ: Optional[Dict[str, str]] = None) -> str:
+    """Keep one update request and ensure a detached runner is waiting for quiet.
+
+    The request is written before the runner starts. If the process cannot begin, the request stays
+    visible and the daily coordinator can retry it; losing a process must never lose the decision.
+    """
+    one = coordinator()
+    values = os.environ if environ is None else environ
+    request = {
+        "requested_at": config.moment_of(),
+        "reason": str(reason),
+        "agent": str(values.get(environment.AGENT) or "") or None,
+        "turn": (int(values[environment.RUN])
+                 if str(values.get(environment.RUN) or "").isdigit() else None),
+    }
+    try:
+        # Settlement uses this same lock to compare-and-remove its observed request. Without the
+        # writer joining that exclusion it could replace the pathname after the comparison and
+        # before the unlink, reopening the exact completion race the identity check closes.
+        with locking.only_one(paths.update_lock(), guarding="queueing this update"):
+            _written_privately(
+                request_at(one), (json.dumps(request, sort_keys=True) + "\n").encode(), 0o600)
+            if locking.is_held(queue_lock_at(one)) is not True:
+                (starting or _start_queued_runner)(one)
+    except (locking.Stuck, OSError, ValueError, programs.CouldNotStart) as why:
+        return f"the update could not be queued ({why})"
+    return f"update queued until current work finishes — {reason}"
+
+
+def _start_queued_runner(one: Coordinator) -> int:
+    """Start outside every gateway and provider process group, with no inherited turn state."""
+    return programs.start(
+        [sys.executable, "-c", RUN_QUEUED, str(paths.code())],
+        queue_log_at(one), where=one.root,
+        env={paths.HOME_IS: str(one.root), QUEUED: "1", "HOME": str(Path.home()),
+             "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"), "LANG": job.LANG})
+
+
+def run_queued(sleeping: Callable[[float], None] = time.sleep,
+               wait_seconds: Optional[float] = None) -> int:
+    """Wait for every admitted turn and schedule, then perform one queued update.
+
+    The queue claim prevents duplicate detached runners. The work-admission barrier closes the gap
+    between the final quiet check and the update taking gateways down.
+    """
+    # Import the updater before waiting so this long-lived process uses one release generation.
+    # While work remains active every other manual attempt queues behind this request; the queue
+    # lock excludes the daily coordinator, so nobody can replace `app/` underneath this waiter.
+    from rundesk.commands import update
+    one = coordinator()
+    try:
+        with locking.only_one(queue_lock_at(one), guarding="running the queued update", waiting=0):
+            deadline = time.monotonic() + wait_seconds if wait_seconds is not None else None
+            while (request_at(one).is_file()
+                   and (deadline is None or time.monotonic() < deadline)):
+                busy = _busy_reason()
+                if not busy:
+                    # `attempt_update` repeats the quiet check while holding admission. If a turn
+                    # wins this observation gap it says it queued, and this same sole worker keeps
+                    # waiting — it must not exit and strand a request nobody else could start.
+                    claimed = _claim_request(one)
+                    try:
+                        attempt = update.attempt_update(argparse.Namespace())
+                        if attempt.queued:
+                            continue
+                        if attempt.code == OK:
+                            _remove_claimed_request(one, claimed)
+                            return OK
+                        # The foreground command already returned after promising eventual work.
+                        # Keep that promise even when daily updates are disabled: hold off, then
+                        # retry this same durable request until it succeeds or uninstall cancels it.
+                        if not _wait_to_retry(one, sleeping, deadline):
+                            return OK if not request_at(one).is_file() else attempt.code
+                    finally:
+                        if claimed is not None:
+                            os.close(claimed)
+                sleeping(QUEUE_POLL_SECONDS)
+            return OK
+    except locking.Stuck:
+        return OK
+
+
+def _wait_to_retry(one: Coordinator, sleeping: Callable[[float], None],
+                   deadline: Optional[float]) -> bool:
+    """Wait interruptibly after a failed attempt; `False` once cancelled or timed out."""
+    remaining = QUEUE_RETRY_SECONDS
+    while request_at(one).is_file() and remaining > 0:
+        if deadline is not None and time.monotonic() >= deadline:
+            return False
+        pause = min(QUEUE_POLL_SECONDS, remaining)
+        sleeping(pause)
+        remaining -= pause
+    return request_at(one).is_file() and (deadline is None or time.monotonic() < deadline)
 
 
 def document(one: Coordinator, update_time: str) -> Dict[str, object]:
@@ -214,30 +397,51 @@ def run(now: Optional[datetime.datetime] = None, **updating: object) -> int:
     for capture in (logs_at(one) / "launchd.out", logs_at(one) / "launchd.err"):
         logs.rotated(capture, CAPTURE_BYTES, CAPTURES_KEPT)
     try:
-        with locking.only_one(paths.update_lock(), guarding="updating this install"):
-            if _completed(one) == today:
-                _note(one, "SKIPPED — today's automatic update already completed")
+        with locking.only_one(queue_lock_at(one), guarding="running the daily update", waiting=0):
+            return _run(one, today, **updating)
+    except locking.Stuck:
+        _note(one, "SKIPPED — another queued or daily update worker is active")
+        return OK
+    except (config.Unreadable, OSError) as why:
+        _note(one, f"FAILED — {why}", logs.ERROR)
+        return FAILED
+
+
+def _run(one: Coordinator, today: str, **updating: object) -> int:
+    """One serialised daily/queue-recovery attempt."""
+    try:
+        if _completed(one) == today and not request_at(one).is_file():
+            _note(one, "SKIPPED — today's automatic update already completed")
+            return OK
+        configured = config.read(paths.data())
+        if not configured["update_enabled"] and not request_at(one).is_file():
+            _complete(one, today, "DISABLED")
+            _note(one, "DISABLED — automatic updates are not enabled")
+            return OK
+        busy = _busy_reason()
+        if busy:
+            _complete(one, today, "DEFERRED")
+            _note(one, f"DEFERRED — {busy}", logs.WARNING)
+            return OK
+        _note(one, "STARTED")
+        from rundesk.commands import update
+        claimed = _claim_request(one)
+        try:
+            attempt = update.attempt_update(argparse.Namespace(), **updating)
+            if attempt.queued:
+                _complete(one, today, "DEFERRED")
+                _note(one, "DEFERRED — work began before update admission closed", logs.WARNING)
                 return OK
-            configured = config.read(paths.data())
-            if not configured["update_enabled"]:
-                _complete(one, today, "DISABLED")
-                _note(one, "DISABLED — automatic updates are not enabled")
-                return OK
-            with locking.only_one(paths.work_admission_lock(),
-                                   guarding="checking whether automatic update is safe"):
-                busy = _busy_reason()
-                if busy:
-                    _complete(one, today, "DEFERRED")
-                    _note(one, f"DEFERRED — {busy}", logs.WARNING)
-                    return OK
-                _note(one, "STARTED")
-                from rundesk.commands import update
-                result = update.cmd_update(argparse.Namespace(), **updating)
-            outcome = "SUCCEEDED" if result == OK else "FAILED"
-            _complete(one, today, outcome)
-            _note(one, outcome, logs.INFO if result == OK else logs.ERROR)
-            return result
-    except (config.Unreadable, locking.Stuck, OSError) as why:
+            if attempt.code == OK:
+                _remove_claimed_request(one, claimed)
+        finally:
+            if claimed is not None:
+                os.close(claimed)
+        outcome = "SUCCEEDED" if attempt.code == OK else "FAILED"
+        _complete(one, today, outcome)
+        _note(one, outcome, logs.INFO if attempt.code == OK else logs.ERROR)
+        return attempt.code
+    except (config.Unreadable, OSError) as why:
         _note(one, f"FAILED — {why}", logs.ERROR)
         return FAILED
 

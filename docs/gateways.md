@@ -198,11 +198,11 @@ and given the whole of its shutdown window — twenty-five seconds — to finish
 only then does launchd insist. That is the default because a gateway is holding somebody's work, and
 a stop that does not let it finish is a stop that loses some.
 
-**That window is divided, not spent twice.** Both of the things a gateway hosts have children to
-stop, so each is given a share of the twenty seconds the gateway allows itself and divides its share
-again among its own children. A gateway that gave each of them the whole of it would still be
-stopping when launchd ran out of patience and killed it — which orphans every child it had not
-reached yet, each still holding the lock that says its work is going on.
+**That window is divided, not spent repeatedly.** Provider turns owned by the gateway are asked to
+stop first and given their share to settle; schedule children, channel adapters and delegated work
+then receive bounded shares of the same twenty seconds. A gateway that gave each tenant the whole
+window would still be stopping when launchd ran out of patience and killed it — which orphans every
+child it had not reached yet, each still holding the lock that says its work is going on.
 
 **`--force` kills it where it stands, first, and then takes the job back.** It is for a gateway that
 *will not go* — one ignoring `SIGTERM`, so that a graceful stop blocks for the whole window — and

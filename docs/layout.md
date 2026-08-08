@@ -11,6 +11,7 @@ $RUNDESK_HOME/
   data/           everything you accumulate — agents, logs, skills, configuration, secrets
     automatic-update.json  the last completed local-day automatic attempt and outcome
     automatic-update-job.json  receipt for the definition successfully loaded by launchd
+    queued-update.json  a durable manual update request waiting for active work to finish
     logs/automatic-updates/ dated outcome logs and bounded launchd captures
     secrets/      sealed values and the key that opens them
   backups/        compressed ZIP copies of data/ (and restorable v0.40 directory copies)
@@ -18,6 +19,7 @@ $RUNDESK_HOME/
   .rundesk.lock   held while one command at a time changes this install
   .rundesk-gateways.lock  held while an update and gateway starts take turns
   .rundesk-update.lock  held by one manual or automatic update
+  .rundesk-update-queue.lock  held by the queued worker, or by uninstall while excluding it
   .rundesk-work-admission.lock  closes the automatic-update/new-work race
   rundesk-automatic-update  stable program launchd invokes across app swaps
 ```
@@ -31,6 +33,7 @@ $RUNDESK_HOME/
 | `.rundesk.lock` | rundesk's own; taken away by an uninstall |
 | `.rundesk-gateways.lock` | rundesk's transient gateway/update barrier; taken away by an uninstall |
 | `.rundesk-update.lock` | serialises manual and automatic updates; taken away by an uninstall |
+| `.rundesk-update-queue.lock` | ensures one detached queued-update worker and excludes it throughout uninstall; transient and safe to leave empty |
 | `.rundesk-work-admission.lock` | briefly held while work starts and throughout an automatic update's busy decision |
 | `rundesk-automatic-update` | generated coordinator shim; survives updates and is taken by uninstall |
 

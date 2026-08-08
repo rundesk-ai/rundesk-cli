@@ -82,6 +82,23 @@ class AMessageLandsOnce(Arriving):
         self.assertTrue(landed.fresh)
 
 
+class MessagesAReplacementGatewayCanRecover(Arriving):
+
+    def test_an_unclaimed_platform_message_is_returned_with_everything_needed_to_answer(self):
+        landed = self.arrived("please continue", external_id="8841")
+
+        self.assertEqual([
+            arriving.Pending("discord", "1180", "2207", "please continue", "8841", landed)
+        ], arriving.pending_on_channels(self.agent, 4))
+
+    def test_a_message_without_a_platform_id_is_not_replayed_after_restart(self):
+        """Only a platform identity makes replay idempotent. A legacy/id-less row could be an old
+        unanswered record and must never become a surprise new turn merely because a gateway rose."""
+        self.arrived("old message without an id")
+
+        self.assertEqual([], arriving.pending_on_channels(self.agent, 4))
+
+
 class WhatIsWrittenDown(Arriving):
 
     def test_a_message_reads_back_whole(self):

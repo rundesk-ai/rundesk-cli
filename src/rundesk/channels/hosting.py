@@ -215,6 +215,9 @@ QUERIES = (STATUS, VERSION, AGENTS, SKILLS, SCHEDULES)
 #: an adapter that asked and went away would otherwise leave one behind for every question.
 ASKED_KEPT = 64
 
+#: Pending channel messages one gateway pass may recover. The rest remain durable for later beats.
+PENDING_STARTED_AT_MOST = 4
+
 #: The least time any one adapter gets to stop, however many there are. A gateway's whole shutdown
 #: is bounded by the job's `ExitTimeOut`, and channels share that budget with schedules — so the
 #: share is divided rather than spent per child, and never below this.
@@ -283,7 +286,7 @@ class Answering(Protocol):
     """
 
     def answer(self, agent: str, kind: str, place: str, who: str, body: str,
-               external_id: Optional[str], landed: arriving.Landed) -> None:
+               external_id: Optional[str], landed: arriving.Landed) -> bool:
         ...
 
     def busy(self, agent: str, conversation: int) -> bool:
@@ -594,7 +597,32 @@ def looked(agent: str, where: Path, watching: Watching,
         _reaped(agent, where, watching)
     with contextlib.suppress(Exception):
         _started_what_should_be(agent, where, watching, answering, steering)
+    if answering is not None:
+        with contextlib.suppress(Exception):
+            _answered_pending(agent, watching, answering)
     return watching
+
+
+def _answered_pending(agent: str, watching: Watching, answering: Answering) -> None:
+    """Recover messages whose original gateway ended before a turn could claim them."""
+    connected = tuple(kind for kind, running in watching.running.items()
+                      if running.connected is not None and running.connected.is_set())
+    after, started = 0, 0
+    while started < PENDING_STARTED_AT_MOST:
+        pending_page = arriving.pending_on_channels(
+            agent, 32, channels=connected, after=after)
+        if not pending_page:
+            return
+        for pending in pending_page:
+            after = pending.landed.message
+            if answering.busy(agent, pending.landed.conversation):
+                continue
+            if answering.answer(
+                    agent, pending.channel, pending.place, pending.author_id, pending.body,
+                    pending.external_id, pending.landed):
+                started += 1
+                if started >= PENDING_STARTED_AT_MOST:
+                    return
 
 
 def stopping(agent: str, where: Path, watching: Watching, within: float) -> Watching:

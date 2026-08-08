@@ -31,6 +31,7 @@ import fcntl
 import json
 import os
 import signal
+import threading
 import time
 import unittest
 from unittest import mock
@@ -296,11 +297,21 @@ class _AnsweringStub:
 
     def answer(self, agent, kind, place, who, body, external_id, landed):
         self.answered.append((place, body, external_id))
+        return True
 
     def busy(self, agent, conversation):
         if isinstance(self._busy, BaseException):
             raise self._busy
         return self._busy
+
+
+class _Connected:
+    """The one adapter fact pending recovery needs, without starting a subprocess."""
+
+    def __init__(self, connected=True):
+        self.connected = threading.Event()
+        if connected:
+            self.connected.set()
 
 
 class _SteeringStub:
@@ -441,6 +452,61 @@ class Hosting(support.Isolated):
     def said_in_the_log(self):
         found = sorted(self.where.glob("*.log"))
         return "".join(one.read_text(encoding="utf-8") for one in found)
+
+
+class RecoveringARecordedMessage(Hosting):
+
+    def test_a_connected_replacement_gateway_answers_an_unclaimed_platform_message(self):
+        answering = _AnsweringStub()
+        landed = arriving.recorded(
+            self.agent, "discord", "1180", "2207", "please continue", "8841")
+        watching = hosting.Watching({"discord": _Connected()}, {}, {})
+
+        hosting._answered_pending(self.agent, watching, answering)
+
+        self.assertEqual([("1180", "please continue", "8841")], answering.answered)
+        self.assertIsNone(arriving.turn_for_message(self.agent, landed.conversation,
+                                                    landed.message))
+
+    def test_a_replacement_gateway_does_not_answer_until_the_adapter_is_connected(self):
+        answering = _AnsweringStub()
+        arriving.recorded(self.agent, "discord", "1180", "2207", "please continue", "8841")
+        watching = hosting.Watching({"discord": _Connected(False)}, {}, {})
+
+        hosting._answered_pending(self.agent, watching, answering)
+
+        self.assertEqual([], answering.answered)
+
+    def test_old_rows_on_a_disconnected_channel_do_not_starve_a_connected_one(self):
+        for nth in range(6):
+            arriving.recorded(
+                self.agent, "dead", f"old-{nth}", "2207", "old", f"dead-{nth}")
+        arriving.recorded(
+            self.agent, "discord", "1180", "2207", "answer this", "8841")
+        answering = _AnsweringStub()
+        watching = hosting.Watching({"discord": _Connected()}, {}, {})
+
+        hosting._answered_pending(self.agent, watching, answering)
+
+        self.assertEqual([("1180", "answer this", "8841")], answering.answered)
+
+    def test_rejected_old_candidates_do_not_starve_a_later_recoverable_message(self):
+        class Rejecting(_AnsweringStub):
+            def answer(self, agent, kind, place, who, body, external_id, landed):
+                self.answered.append((place, body, external_id))
+                return body == "recover me"
+
+        for nth in range(40):
+            arriving.recorded(
+                self.agent, "discord", "1180", "2207", "reject", f"old-{nth}")
+        arriving.recorded(
+            self.agent, "discord", "1180", "2207", "recover me", "8841")
+        answering = Rejecting()
+
+        hosting._answered_pending(
+            self.agent, hosting.Watching({"discord": _Connected()}, {}, {}), answering)
+
+        self.assertIn(("1180", "recover me", "8841"), answering.answered)
 
 
 class StartingOne(Hosting):

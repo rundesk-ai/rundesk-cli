@@ -37,6 +37,7 @@ from rundesk.channels import arriving, hosting
 from rundesk.channels import files as arrivals
 from rundesk.channels import kept as channels
 from rundesk.core import config, paths, secrets
+from rundesk.delegations import kept as delegations_kept
 from rundesk.exits import OK
 from rundesk.gateways import host, job, maintenance, standing
 from rundesk.providers import kept as turns_kept
@@ -1715,6 +1716,51 @@ class WhatAScheduledRunSaysOnASurface(TheChannelsItHosts):
         self.assertIn("Post the weekday client update.", said,
                       f"the report was not the agent's own answer: {said!r}")
 
+    def test_an_initial_turn_that_delegated_does_not_post_before_its_review(self):
+        began = datetime.datetime(2026, 8, 4, 9, 0, tzinfo=datetime.timezone.utc)
+        landed = arriving.recorded_for_a_schedule(
+            self.name, "nightly", "review overnight work", when=began, invocation="run-1")
+        turn = turns_kept.add_turn(self.name, {
+            "conversation_id": landed.conversation, "schedule_name": "nightly",
+            "provider_name": support.A_STAND_IN, "access_mode": protocol.ACCESS_WORK,
+        }, when=began)
+        delegations_kept.made(
+            self.name, "del-nightly-aabbcc", "trace", landed.conversation, turn, now=began)
+
+        with mock.patch.object(host, "_told") as told:
+            host._Notices(
+                self.name, standing.logs_at(self.at),
+                lambda: hosting.Watching({}, {}, {})).reported(
+                    "nightly", "msg-1", "done", config.moment_of(began))
+
+        told.assert_not_called()
+
+    def test_a_fast_delegation_reviewed_inside_the_initial_turn_reports_normally(self):
+        began = datetime.datetime(2026, 8, 4, 9, 0, tzinfo=datetime.timezone.utc)
+        landed = arriving.recorded_for_a_schedule(
+            self.name, "nightly", "review overnight work", when=began, invocation="run-1")
+        turn = turns_kept.add_turn(self.name, {
+            "conversation_id": landed.conversation, "schedule_name": "nightly",
+            "provider_name": support.A_STAND_IN, "access_mode": protocol.ACCESS_WORK,
+        }, when=began)
+        delegations_kept.made(
+            self.name, "del-nightly-aabbcc", "trace", landed.conversation, turn, now=began)
+        result = arriving.said_by_rundesk_into(
+            self.name, landed.conversation, "trace returned", when=began,
+            external_id="delegation-result:del-nightly-aabbcc:answer-1")
+        arriving.handled_by_turn(self.name, landed.conversation, (result.message,), turn)
+        arriving.said_by_agent_into(
+            self.name, landed.conversation, "Reviewed final report.", turn=turn, when=began)
+
+        with mock.patch.object(host, "_told") as told:
+            host._Notices(
+                self.name, standing.logs_at(self.at),
+                lambda: hosting.Watching({}, {}, {})).reported(
+                    "nightly", "msg-1", "done", config.moment_of(began))
+
+        told.assert_called_once()
+        self.assertEqual("Reviewed final report.", told.call_args.args[3])
+
     def test_a_run_posts_only_a_notice_and_a_report_and_never_its_activity(self):
         """A scheduled turn runs in a process of its own that holds no channel, so there is nothing
         for its working notes to be posted through. The property is where the work runs rather than
@@ -1751,10 +1797,9 @@ class WhatAScheduledRunSaysOnASurface(TheChannelsItHosts):
 
     def test_a_run_that_failed_never_reports_the_last_run_s_answer_as_its_own(self):
         """**The real `_Notices`, against a real database.** A schedule that answered on Monday and
-        failed on Tuesday without saying anything has one agent message in its conversation —
-        Monday's, because every firing shares the conversation and a turn writes only when it really
-        produced words. Reported unbounded, Monday's report goes out under Tuesday's notice and
-        Tuesday's failure is never mentioned: an answer nobody earned, reported as fact."""
+        failed on Tuesday without saying anything must not report Monday's legacy answer as its own.
+        Reported unbounded, the old report goes out under Tuesday's notice and Tuesday's failure is
+        never mentioned: an answer nobody earned, reported as fact."""
         self.an_adapter(body=AN_ADAPTER_THAT_NAMES_WHAT_IT_POSTED)
         self.a_channel()
         monday = datetime.datetime(2026, 8, 3, 9, 0, tzinfo=datetime.timezone.utc)

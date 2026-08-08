@@ -770,9 +770,21 @@ class ATurnThatUsedAProviderLocalHelper(support.Isolated):
         self.assertTrue(self.said[-1]["ok"])
         self.assertEqual("root-thread", self.said[-1]["session_id"])
 
+    def test_the_provider_local_helper_has_its_own_parent_turn_indicator(self):
+        delegated = self.of_type("tool")
+        returned = self.of_type("result")
+        self.assertEqual(1, len(delegated))
+        self.assertEqual(1, len(returned))
+        self.assertEqual("delegate", delegated[0]["did"])
+        self.assertEqual("child-thread", delegated[0]["who"])
+        self.assertEqual(delegated[0]["id"], returned[0]["id"])
+        self.assertTrue(returned[0]["ok"])
+
     def test_child_tools_failures_and_usage_do_not_become_the_parents_records(self):
-        self.assertEqual([], self.of_type("tool"))
-        self.assertEqual([], self.of_type("result"))
+        self.assertEqual([], [one for one in self.of_type("tool")
+                              if one.get("id") == "child-tool"])
+        self.assertEqual([], [one for one in self.of_type("result")
+                              if one.get("id") == "child-tool"])
         self.assertEqual(44, self.of_type("usage")[0]["input_tokens"])
         self.assertEqual(4, self.of_type("usage")[0]["output_tokens"])
         self.assertEqual(22, self.of_type("usage")[0]["cache_read_tokens"])

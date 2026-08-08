@@ -220,9 +220,10 @@ from rundesk.channels import arriving, delivery, hosting
 from rundesk.channels import files as arrivals
 from rundesk.core import config, paths
 from rundesk.delegations import hosting as delegations
+from rundesk.delegations import kept as delegations_kept
 from rundesk.exits import OK
 from rundesk.gateways import awake, maintenance, standing
-from rundesk.providers import answering, kept
+from rundesk.providers import answering, kept, turns
 from rundesk.schedules import firing, upkeep
 from rundesk.skills import grants
 from rundesk.utils import locking, logs
@@ -263,13 +264,13 @@ STOPPING_WITHIN = 20.0
 
 #: How many tenants that stop children share the budget above. **Divided, never handed to both.**
 #:
-#: Two of them — the work this gateway's schedules started, and the adapters its channels are
-#: running — and each divides its own share again among its own children. Giving each the whole of
+#: Four teardown seams — provider turns, delegated work, scheduled work, and channel adapters —
+#: and each divides its own share again among its own children. Giving each the whole of
 #: `STOPPING_WITHIN` is arithmetic that reads as correct at every line and takes forty seconds
 #: against an `ExitTimeOut` of twenty-five: launchd `SIGKILL`s this process partway through the
-#: second tenant, calls it *languishing*, and every child it never reached is orphaned still holding
-#: its lock. A number rather than two literals so that a third tenant is one edit and not a hunt.
-STOPPING_SHARES = 3
+#: later tenant, calls it *languishing*, and every child it never reached is orphaned still holding
+#: its lock. A number rather than literals so that a new seam is one edit and not a hunt.
+STOPPING_SHARES = 4
 
 #: The signals a supervisor or a person asks this gateway to stop with — turned into `Stopped` while
 #: it is working, and ignored once a stop is already under way. Named once because two functions have
@@ -626,6 +627,8 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
         watching = firing.settled(name, where)
         channels_up = hosting.settled(name, where, answering=on_a_channel)
         handed = delegations.settled(name, where)
+        with contextlib.suppress(Exception):
+            turns.settle_abandoned(name)
         # Registered on the stack `run` unwinds however this process leaves, which is the one place
         # a child's stop belongs. Each callback reads its tenant's state as it stands at that moment
         # rather than as it stands now — they close over the names, not over these first values.
@@ -634,6 +637,9 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
         held.callback(lambda: hosting.stopping(name, where, channels_up, each))
         held.callback(lambda: firing.stopping(name, where, watching, each))
         held.callback(lambda: delegations.stopping(name, where, handed, each))
+        # Registered last, so provider turns stop first on unwind while the channel they answer
+        # through is still alive. The bounded wait lets each turn write its terminal row.
+        held.callback(lambda: turns.stopping(name, each))
         notices = _Notices(name, where, lambda: channels_up)
         # **What a gesture asked for, held rather than acted on where it was heard.** A control
         # arrives on the thread draining an adapter's stdout; a gateway torn down from there would
@@ -652,6 +658,8 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
         # down a thing that is still said. Never seeded here: the first pass is the first look.
         knew: Optional[Tuple[str, ...]] = None
         while True:
+            with contextlib.suppress(Exception):
+                turns.settle_abandoned(name)
             watching = firing.looked(name, where, watching, telling=notices,
                                      asking=on_a_schedule)
             watching = upkeep.looked(name, where, watching, telling=notices,
@@ -888,21 +896,37 @@ class _Notices:
         words reports the words. A run that produced none still owes a reply to its own notice, and
         what it has to say is what became of it.
 
-        **`began` is what makes it this run's answer**, and it is not an optimisation. Every firing
-        of one schedule shares a single conversation, and a turn writes a message only when it really
-        produced words — so a schedule that answered yesterday and failed today without saying
-        anything has one agent message in its conversation, yesterday's. Read unbounded, that would
-        be posted under today's notice as today's report, and today's failure would never be
-        mentioned: an answer nobody earned, reported as fact. See `arriving.last_answer`.
+        **`began` is what makes it this run's answer**, and it is not an optimisation. It bounds the
+        schedule-wide turn lookup and protects legacy shared conversations from reporting
+        yesterday's answer as today's. See `arriving.last_schedule_answer`.
 
-        **The activity between the two is never posted, and nothing here suppresses it.** A scheduled
+        **The activity between the two is never posted.** A scheduled
         turn runs in a process of its own that holds no channel, so there is nothing for it to post
         through: the whole of the run is in the agent's records and its log, and this one message is
         the only thing that reaches a person. That is a property of where the work runs rather than a
-        filter somebody has to maintain.
+        filter somebody has to maintain. When it delegates, the initial provisional report is
+        suppressed; the review turn sends the final report after the result returns.
         """
         try:
-            said = arriving.last_answer(self.name, arriving.FROM_SCHEDULE, schedule, after=began)
+            initial = kept.schedule_turn_after(self.name, schedule, began)
+            if initial is not None:
+                initial_turn = int(initial["id"])
+                handed_off = bool(delegations_kept.from_turn(self.name, initial_turn))
+                reviewed_inline = arriving.delegation_result_reached_turn(
+                    self.name, initial_turn)
+                if handed_off and not reviewed_inline:
+                    # A later review turn owns the final DM. A fast result admitted into this same
+                    # turn is already reflected in its report and must not be suppressed.
+                    return
+        except Exception:                          # noqa: BLE001 — reporting retains its fallback
+            pass
+        try:
+            said = arriving.last_schedule_answer(self.name, schedule, after=began)
+            if not said:
+                # A process already running while this release replaces the code can still have
+                # the legacy conversation key. Keep that one in-flight report readable.
+                said = arriving.last_answer(
+                    self.name, arriving.FROM_SCHEDULE, schedule, after=began)
         except Exception:                          # noqa: BLE001 — records that will not read are
             # not a reason to lose the report: the run happened and its outcome is still worth
             # saying. See `_told`, which guards the delivery itself the same way.

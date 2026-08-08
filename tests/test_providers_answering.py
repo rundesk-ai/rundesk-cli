@@ -17,9 +17,8 @@ rather than for the call.
 whether waiting will help — which is the whole point of a closed vocabulary reaching a surface that
 has never heard of a vendor.
 
-**A scheduled turn must not land in the exchange somebody types into.** It gets a conversation of its
-own, keyed by the schedule's name; the build this replaces resumed the owner's own session and left
-its prompt and its answer in the middle of it.
+**A scheduled turn must not land in the exchange somebody types into.** Every invocation gets a
+fresh conversation; a delegated result may resume that invocation, but the next firing may not.
 
 Run directly: `python3 tests/test_providers_answering.py`
 """
@@ -39,6 +38,7 @@ from rundesk.channels import hosting as answering_hosting
 from rundesk.channels import kept as channels_kept
 from rundesk.core import paths
 from rundesk.delegations import hosting as delegations
+from rundesk.delegations import kept as delegations_kept
 from rundesk.providers import answering, kept, turns
 from rundesk.schedules import kept as schedules_kept
 from rundesk.utils import programs
@@ -255,6 +255,70 @@ class Answering(support.Isolated):
 
 
 class AMessageOnAChannelIsAnswered(Answering):
+
+    def test_new_does_not_call_an_inherited_or_orphaned_lock_a_running_turn(self):
+        landed = arriving.recorded(self.agent, "discord", "1180", "2207", "hello", "8841")
+        with turns.claiming(self.agent, landed.conversation):
+            said = self.a_gesture().controlled(
+                self.agent, "discord", "1180", "2207", answering_hosting.FORGET)
+
+        self.assertEqual("🧹 Started fresh. The next message begins a new session.", said)
+
+    def test_new_warns_only_when_this_gateway_really_owns_the_running_turn(self):
+        landed = arriving.recorded(self.agent, "discord", "1180", "2207", "hello", "8841")
+        with turns._stoppable(self.agent, landed.conversation):
+            said = self.a_gesture().controlled(
+                self.agent, "discord", "1180", "2207", answering_hosting.FORGET)
+
+        self.assertIn("A turn is still running", said)
+
+    def test_new_during_a_live_turn_prevents_that_turn_restoring_its_session(self):
+        self.a_stand_in_told(self.agent, silent="2")
+        self.a_channel(saying=self.a_message_arrived(text="old conversation"))
+        self.hosting_now()
+        self.assertTrue(self.waited_until(self.a_turn_is_running))
+        conversation = arriving.standing_in(self.agent, "1180")
+
+        said = self.a_gesture().controlled(
+            self.agent, "discord", "1180", "2207", answering_hosting.FORGET)
+        self.waited_for_a_turn()
+
+        self.assertIn("A turn is still running", said)
+        self.assertIsNone(kept.get_session(self.agent, conversation, support.A_STAND_IN))
+        following = turns.run(turns.Request(
+            agent=self.agent, prompt="new conversation", conversation=conversation,
+            source=arriving.FROM_CHANNEL, place="1180"))
+        self.assertEqual(0, kept.get_turn(self.agent, following.turn)["session_resumed"])
+
+    def test_a_pre_admission_failure_is_not_restarted_on_every_gateway_beat(self):
+        landed = arriving.recorded(
+            self.agent, "discord", "1180", "2207", "hello", "8841")
+        answers = answering.OnAChannel(self.where, lambda: hosting.Watching({}, {}, {}))
+        with mock.patch.object(turns, "run", side_effect=RuntimeError("broken")) as ran:
+            self.assertTrue(answers.answer(
+                self.agent, "discord", "1180", "2207", "hello", "8841", landed))
+            self.assertTrue(self.waited_until(lambda: ran.call_count == 1))
+            self.assertTrue(self.waited_until(lambda: not answers._answering_messages))
+            self.assertFalse(answers.answer(
+                self.agent, "discord", "1180", "2207", "hello", "8841", landed))
+
+        self.assertEqual(1, ran.call_count)
+
+    def test_many_pre_admission_failures_stay_suppressed_for_this_gateway(self):
+        answers = answering.OnAChannel(self.where, lambda: hosting.Watching({}, {}, {}))
+        landed = []
+        for nth in range(300):
+            one = arriving.recorded(
+                self.agent, "discord", "1180", "2207", "hello", f"failed-{nth}")
+            landed.append(one)
+            answers._do_not_repeat_pending(self.agent, one.message)
+
+        with mock.patch.object(threading.Thread, "start") as started:
+            accepted = answers.answer(
+                self.agent, "discord", "1180", "2207", "hello", "failed-0", landed[0])
+
+        self.assertFalse(accepted)
+        started.assert_not_called()
 
     def test_the_turn_runs_and_the_answer_goes_back_down_the_same_pipe(self):
         self.a_channel(saying=self.a_message_arrived())
@@ -1073,13 +1137,53 @@ class AScheduleThatAsksTheAgent(Answering):
         self.assertNotEqual(typed.conversation,
                             kept.get_turn(self.agent, got.turn)["conversation_id"])
 
-    def test_two_runs_of_one_schedule_carry_the_same_conversation_on(self):
-        """Keyed by the schedule's name, so a nightly job remembers last night."""
+    def test_two_runs_of_one_schedule_each_start_a_fresh_session(self):
         name = self.a_schedule()
         first = answering.for_a_schedule(self.agent, name)
         second = answering.for_a_schedule(self.agent, name)
-        self.assertEqual(kept.get_turn(self.agent, first.turn)["conversation_id"],
-                         kept.get_turn(self.agent, second.turn)["conversation_id"])
+        first_row = kept.get_turn(self.agent, first.turn)
+        second_row = kept.get_turn(self.agent, second.turn)
+        self.assertNotEqual(first_row["conversation_id"], second_row["conversation_id"])
+        self.assertEqual((0, 0), (first_row["session_resumed"], second_row["session_resumed"]))
+
+    def test_a_schedule_is_shown_the_team_it_may_delegate_to(self):
+        listed = "- **bob** — verifies releases"
+        with mock.patch.object(turns.team, "for_agent", return_value=listed) as looked:
+            got = answering.for_a_schedule(self.agent, self.a_schedule())
+
+        looked.assert_called_once_with(self.agent)
+        record = kept.list_turn_records(self.agent, got.turn)[0]
+        event = json.loads(record["event_data"])
+        self.assertIn("agents", [one["name"] for one in event["layers"]])
+        self.assertEqual(listed, event["team"])
+
+    def test_a_delegated_result_resumes_that_invocation_and_sends_the_final_report_to_dm(self):
+        self.a_channel()
+        channels_kept.telling(self.agent, "discord", "1180")
+        self.hosting_now()
+        original = answering.for_a_schedule(self.agent, self.a_schedule())
+        parent = kept.get_turn(self.agent, original.turn)
+        delegations_kept.made(
+            self.agent, "del-schedule-aabbcc", "trace",
+            int(parent["conversation_id"]), original.turn)
+        before = len(self.delivered())
+        marker = "SCHEDULE-DELEGATION-RETURN-218"
+
+        admitted = self.a_delegation_tenant().review_this(
+            self.agent, int(parent["conversation_id"]), marker, "trace",
+            "del-schedule-aabbcc", "answer-1")
+
+        self.assertTrue(admitted)
+        review = self.waited_for_a_turn(which=2)
+        self.assertEqual(int(parent["conversation_id"]), review["conversation_id"])
+        self.assertEqual(1, review["session_resumed"])
+        self.assertEqual("nightly", review["schedule_name"])
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) > before))
+        self.assertIn(marker, " ".join(self.delivered()[before:]))
+        later = self.marks()
+        self.assertIn(answering.WORKING, later)
+        self.assertTrue(any(one in (answering.DONE, answering.STOPPED, answering.FAILED)
+                            for one in later))
 
     def test_the_turn_is_tied_to_the_schedule_that_caused_it(self):
         """*What has the nightly schedule been doing?* is a question with one answer only if this
@@ -1093,6 +1197,12 @@ class AScheduleThatAsksTheAgent(Answering):
         with self.assertRaises(answering.Refused) as refused:
             answering.for_a_schedule(self.agent, "build")
         self.assertIn("rundesk schedules run", str(refused.exception))
+
+    def test_the_schedules_slash_query_uses_the_same_local_clock_as_schedule_arithmetic(self):
+        self.a_schedule("weekday-client-update")
+        said = answering._what_is_coming(self.agent)
+        self.assertIn("weekday-client-update", said)
+        self.assertNotIn("TypeError", said)
 
 
 #: The result envelope is itself steering when the caller is still working. Keep it clear without
@@ -1195,6 +1305,25 @@ class ADelegatedResultReachesItsParent(Answering):
                       "a result that missed the active parent did not receive a review turn")
         self.assertTrue(any(marker in one["body"]
                             for one in self.result_messages(first.conversation)))
+
+    def test_a_result_waking_a_channel_conversation_shows_typing_for_its_review_turn(self):
+        self.a_channel(saying=self.a_message_arrived(text="finish before bob returns"))
+        self.hosting_now()
+        self.waited_for_a_turn()
+        conversation = arriving.standing_in(self.agent, "1180")
+        before = self.marks().count(answering.WORKING)
+
+        self.a_delegation_tenant().review_this(
+            self.agent, conversation, "DELEGATED-WAKE-218", "trace")
+
+        self.waited_for_a_turn(which=2)
+        self.assertTrue(self.waited_until(
+            lambda: self.marks().count(answering.WORKING) > before))
+        later = self.marks()[self.marks().index(answering.WORKING, before):]
+        self.assertEqual(answering.WORKING, later[0])
+        self.assertTrue(any(one in (answering.DONE, answering.STOPPED, answering.FAILED)
+                            for one in later[1:]),
+                        "the wake-up typing indicator was never ended")
 
 
 if __name__ == "__main__":

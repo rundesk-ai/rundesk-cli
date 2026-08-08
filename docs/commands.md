@@ -744,9 +744,11 @@ schedule weekday-client-update added for cole
         last      never ran
 ```
 
-A schedule that asks the agent gets **its own conversation**, keyed by its name, so a run at three in
+A schedule that asks the agent gets **a fresh conversation for every invocation**, so a run at three in
 the morning never lands in the exchange somebody types into. It reports where the agent is told
-things — one message when it starts and its answer when it ends, and nothing in between.
+things — one message when it starts and its answer when it ends, and nothing in between. If it
+delegates, the returned result resumes that invocation for review and only the final reviewed answer
+is reported.
 [`schedules.md`](schedules.md#what-a-run-says-on-a-surface-and-the-two-messages-it-is-allowed) is what
 that looks like and what happens when there is nowhere to say it.
 
@@ -1748,6 +1750,15 @@ that landed, never by the updater's cached old job logic. A foreground gateway w
 cannot supervise must be stopped in its terminal first, because an unattended update cannot restore
 it and will not take it offline permanently.
 
+If a provider turn or schedule is active, a manual update is recorded durably and returns without
+fetching or stopping anything. A detached install-level worker waits for the install to become
+quiet, closes new-work admission, and then runs the ordinary update transaction. The worker has no
+agent, conversation, turn, or delegation context, so infrastructure work never appears as activity
+inside a DM. Losing the worker does not lose the request: the daily coordinator sees the same
+`queued-update.json` and retries it. A failed attempt remains owned by the detached worker and is
+retried with a hold-off; uninstall cancels the request and excludes that worker and every other
+update for the full removal transaction before it touches the coordinator or program.
+
 The notified channel receives these maintenance notices around a successful update:
 
 - `🛠️ Installing an update — I'm installing the new rundesk update, be back shortly.`
@@ -1770,8 +1781,9 @@ The coordinator is outside every gateway process tree and uses the same update t
 command. Before asking for a release it closes work admission and inspects kernel-held provider and
 schedule claims. Active work, or activity that cannot be inspected safely, produces a logged
 `DEFERRED` outcome and no fetch, gateway stop, or forced termination; the next attempt is the next
-local day. Repeated launchd starts on the same day are logged and skipped. Failures remain non-zero
-and recover through the same rerunnable settlement path as a manual update.
+local day, unless a durable manual request is already waiting, in which case the coordinator also
+acts as its recovery path. Repeated launchd starts on the same day are logged and skipped. Failures
+remain non-zero and recover through the same rerunnable settlement path as a manual update.
 
 ## uninstall
 

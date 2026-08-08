@@ -167,9 +167,9 @@ class Carrying(NamedTuple):
     a stale or lost entry can do is one repeated line, where a stale entry in the old lists was work
     nobody would ever pick up again.
 
-    That is also why it is not written to disk. A gateway that restarts says "handed to dev" once
-    more, and a line said twice is a far smaller cost than a durable record to keep in step — which
-    is the trade the build this replaces made, in those words, and got right.
+    That is also why it is not written to disk. A gateway restart seeds this process-local view from
+    the retained rows, treating what already exists as a baseline rather than replaying it as new
+    activity. Changes after that baseline are still announced on the next sweep.
 
     `said` maps a delegation's id to where it last stood: one of `STANDS`, or the check-in number
     for `STILL_WORKING`, so the twentieth minute and the fortieth are different answers.
@@ -196,18 +196,27 @@ def settled(name: str, where) -> Carrying:
     The seam exists anyway, and is called anyway, because the shape is the other two tenants' and a
     third that quietly had two of the three would be one somebody has to remember is different.
 
-    **Nothing has been said yet, and it starts saying so.** A gateway coming up to find work already
-    out tells the room it is still out, on its first pass, rather than staying silent about it for
-    ever because a process that is gone had mentioned it once.
+    **Restart is not an event in a delegation's life.** The current standing is used as the new
+    process's baseline, so retained `answered` rows and old hand-offs are not replayed into the room
+    merely because a gateway restarted. A later state change or check-in still differs from this
+    baseline and is shown once.
 
     **What is said about a delegation does not depend on what this process remembers**, and that is
     worth stating because it did once. Telling a delegation somebody *carried on* from one somebody
     *steered* used to be done by remembering that this process last saw it answered, so a gateway
     restarted between the answer and the resume said "guided" where it should have said "carried
     on". `delegations.kept` now writes `working_since` and only a resume moves it, so the record
-    answers that question on its own and a restart costs nothing but a repeated line.
+    answers that question on its own without manufacturing a restart notification.
     """
-    return Carrying(said={}, marked={})
+    said, marked = {}, {}
+    for one in kept.every(name):
+        standing, _since = _how_it_stands(one)
+        happened = _what_just_happened(one)
+        if standing is not None:
+            said[one.delegation_id] = standing
+        if happened is not None:
+            marked[one.delegation_id] = happened
+    return Carrying(said=said, marked=marked)
 
 
 def looked(name: str, where, carrying: Carrying, answering: Answering) -> Carrying:
