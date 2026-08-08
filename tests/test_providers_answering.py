@@ -841,6 +841,100 @@ class TwoTurnsInOneConversation(Answering):
         return "".join(one.read_text(encoding="utf-8") for one in found)
 
 
+class WhatAgentsSays(support.Isolated):
+    """The install-wide agent directory rendered for the shared `/agents` query."""
+
+    def test_it_lists_every_agent_in_case_insensitive_order_with_descriptions_and_skills(self):
+        directory.made("Zulu", support.A_STAND_IN)
+        directory.made("beta", support.A_STAND_IN, describes="Plans difficult work.")
+        (paths.agents() / "not-an-agent").mkdir(parents=True)
+
+        with mock.patch.object(answering, "_granted_skills", side_effect=lambda agent: {
+                "beta": ["Zulu-skill", "beta-skill"],
+                "Zulu": [],
+        }[agent]):
+            said = answering._what_agents_are()
+
+        self.assertEqual(
+            "- **beta** — Plans difficult work.\n"
+            "  - Skills: beta-skill, Zulu-skill\n"
+            "- **Zulu** — no description\n"
+            "  - Skills: none",
+            said,
+        )
+        self.assertNotIn("not-an-agent", said)
+
+    def test_unreadable_description_and_grants_are_independent_and_hide_neither_agent(self):
+        directory.made("ada", support.A_STAND_IN, describes="Coordinates releases.")
+        directory.made("cole", support.A_STAND_IN)
+        reading = records.read
+
+        def read(at):
+            if at == directory.records("cole"):
+                raise records.Unreadable("broken")
+            return reading(at)
+
+        def held(agent):
+            if agent == "ada":
+                raise OSError("denied")
+            return ["reviewing-code"]
+
+        with mock.patch.object(answering.records, "read", side_effect=read), \
+                mock.patch.object(answering, "_granted_skills", side_effect=held):
+            said = answering._what_agents_are()
+
+        self.assertEqual(
+            "- **ada** — Coordinates releases.\n"
+            "  - Skills: cannot be read\n"
+            "- **cole** — description cannot be read\n"
+            "  - Skills: reviewing-code",
+            said,
+        )
+
+    def test_an_install_with_no_agents_says_so(self):
+        self.assertEqual("No agents.", answering._what_agents_are())
+
+    def test_a_multiline_description_is_flattened_into_the_agents_one_description_line(self):
+        directory.made("ada", support.A_STAND_IN, describes="First line\nSecond line.")
+        with mock.patch.object(answering, "_granted_skills", return_value=[]):
+            said = answering._what_agents_are()
+        self.assertEqual("- **ada** — First line Second line.\n  - Skills: none", said)
+
+    def test_markdown_in_dynamic_fields_cannot_break_the_two_bullet_lines(self):
+        directory.made("a*da", support.A_STAND_IN, describes="Uses _care_.")
+        with mock.patch.object(answering, "_granted_skills",
+                               return_value=["plan*work", "code`review"]):
+            said = answering._what_agents_are()
+        self.assertEqual(
+            "- **a\\*da** — Uses \\_care\\_.\n"
+            "  - Skills: code\\`review, plan\\*work",
+            said,
+        )
+
+    def test_an_unreadable_agent_directory_is_not_reported_as_an_empty_one(self):
+        with mock.patch.object(answering.directory, "known", side_effect=OSError("denied")):
+            said = answering._what_agents_are()
+        self.assertEqual("I could not read the agents (OSError).", said)
+        self.assertNotEqual("No agents.", said)
+
+    def test_a_malformed_grants_path_is_unreadable_rather_than_no_grants(self):
+        directory.made("ada", support.A_STAND_IN, describes="Coordinates releases.")
+        answering.grants.where("ada").write_text("not a grants directory", encoding="utf-8")
+        self.assertEqual(
+            "- **ada** — Coordinates releases.\n  - Skills: cannot be read",
+            answering._what_agents_are(),
+        )
+
+    def test_the_query_reads_local_state_without_starting_a_provider_turn(self):
+        directory.made("ada", support.A_STAND_IN)
+        gestures = answering.Gestures(self.home, lambda: hosting.Watching({}, {}, {}),
+                                      lambda word: None, lambda agent: "online")
+        with mock.patch.object(answering.turns, "run") as ran:
+            said = gestures.asked("ada", "2207", hosting.AGENTS)
+        self.assertIn("**ada**", said)
+        ran.assert_not_called()
+
+
 class AScheduleThatAsksTheAgent(Answering):
 
     def a_schedule(self, name="nightly", prompt="what happened overnight?", **also):

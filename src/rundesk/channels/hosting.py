@@ -207,9 +207,10 @@ CONTROLS = (STOP, FORGET, RESTART, SHUTDOWN)
 #: an answer costs nobody's tokens and reaches somebody who has not been charged for it.
 STATUS = "status"
 VERSION = "version"
+AGENTS = "agents"
 SKILLS = "skills"
 SCHEDULES = "schedules"
-QUERIES = (STATUS, VERSION, SKILLS, SCHEDULES)
+QUERIES = (STATUS, VERSION, AGENTS, SKILLS, SCHEDULES)
 
 #: How many gestures waiting on an answer are held. A person cannot type faster than a handful, and
 #: an adapter that asked and went away would otherwise leave one behind for every question.

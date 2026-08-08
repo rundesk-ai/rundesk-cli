@@ -156,8 +156,13 @@ On Discord, Rundesk supports:
 - an explicit allowlist of ids, which nobody outside is ever answered or told about;
 - typing, state reactions, and live activity that batches a burst of tools into one edit;
 - long answers split to Discord's limit, generated files, and inbound attachments; and
-- `/stop`, `/new`, `/restart`, `/shutdown`, `/status`, `/version`, `/skills`, `/schedules`
-  and `/provider` from chat.
+- `/stop`, `/new`, `/restart`, `/shutdown`, `/status`, `/version`, `/agents`, `/skills`,
+  `/schedules` and `/provider` from chat.
+
+Every slash-command answer is private to the authorized person who asked. `/agents` is the
+install-wide directory: it lists every known agent with its description and granted skills without
+starting a provider turn. Long private answers continue across ordered ephemeral followups rather
+than being cut at Discord's message limit.
 
 #### Setting up a Discord bot
 

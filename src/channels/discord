@@ -53,10 +53,11 @@ to ignore. A message from anybody else is dropped in silence, because replying t
 tell them they are a stranger confirms the agent is listening and spends the owner's tokens doing
 it.
 
-**Splitting is rundesk's**, in one place, for every platform. The text handed to `deliver` is
-already inside `MAX_TEXT` and is never re-split here. The build this replaces put the limit in each
-adapter, and the consequence is on the record: Slack fixed a splitting bug and Discord still had
-the original.
+**Turn-answer splitting is rundesk's**, in one place, for every platform. The text handed to
+`deliver` is already inside `MAX_TEXT` and is never re-split here. Private interaction answers do
+not use that delivery path, so this adapter splits those into ordered ephemeral followups. The build
+this replaces put ordinary turn splitting in each adapter, and the consequence is on the record:
+Slack fixed a splitting bug and Discord still had the original.
 
 **Which interpreter runs this is rundesk's.** It arrives on `PATH` — see `channels/adapters.py`.
 The build this replaces had each adapter count parent directories to find the install's virtualenv;
@@ -90,9 +91,9 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 discord = None
 
 #: What Discord takes in one message from a bot. **The four-thousand-character Nitro limit does not
-#: apply to us**, and believing it produces a message the platform refuses outright. Nothing here
-#: splits at this number — it is *checked*, because a text longer than this is rundesk having failed
-#: to split, and cutting it quietly would report a delivery as whole that was not.
+#: apply to us**, and believing it produces a message the platform refuses outright. Ordinary turn
+#: delivery is *checked* at this number, because longer text is rundesk having failed to split.
+#: Private interaction answers bypass that path and are split by `answer_pieces` below.
 MAX_TEXT = 2000
 
 #: What this can do, asked with no network and no account, and the same answer every time. Read when
@@ -271,11 +272,12 @@ CONTROLS = (
     ("shutdown", "Shut this agent's gateway down for good", "shutdown"),
 )
 
-#: The read-only questions (R-DIS-22, R-DIS-36, R-DIS-37). Their names are Discord's; their values
+#: The read-only questions (R-DIS-22, R-DIS-36, R-DIS-37, R-DIS-42). Their names are Discord's; their values
 #: are rundesk's closed vocabulary, so this never becomes a way to run something arbitrary.
 QUERIES = (
     ("status", "Show this agent's gateway status", "status"),
     ("version", "Show the rundesk version this agent is running", "version"),
+    ("agents", "List every agent and the skills each holds", "agents"),
     ("skills", "List the skills this agent holds", "skills"),
     ("schedules", "List what this agent still has to run", "schedules"),
 )
@@ -287,6 +289,10 @@ CONFIGURE = ("provider", "Change which brain answers for this agent")
 #: again and answers a stranger with silence — and it exists so that a deferred question does not
 #: hang for ever for somebody who will correctly never be answered.
 NOT_YOURS = "This command is not available to you."
+
+#: What an interaction says after Discord refused one of its continuation messages. A visible
+#: warning is the difference between a partial install-wide directory and one mistaken for whole.
+INCOMPLETE = "⚠️ This private response is incomplete. Please run the command again."
 
 #: How long a person has to confirm something that cannot be undone, and what they are told. A
 #: gateway shut down from here cannot be started from here: the bot goes offline and there is no
@@ -616,6 +622,30 @@ def _under(text: str, cost: Any) -> str:
     """
     said = str(cost or "").strip()
     return f"{SUBTEXT}{said}\n{text}" if said else text
+
+
+def answer_pieces(said: str) -> List[str]:
+    """A private interaction answer in every bounded piece needed to say it whole.
+
+    Slash answers do not pass through Rundesk's ordinary delivery splitter. Prefer a whole line,
+    then a word boundary, and include that separator in the earlier piece so joining the pieces
+    reproduces the exact answer rather than silently dropping whitespace.
+    """
+    pieces = []
+    rest = said
+    while len(rest) > MAX_TEXT:
+        cut = rest.rfind("\n", 0, MAX_TEXT)
+        if cut < 1:
+            cut = rest.rfind(" ", 0, MAX_TEXT)
+        if cut < 1:
+            cut = MAX_TEXT
+        else:
+            cut += 1
+        pieces.append(rest[:cut])
+        rest = rest[cut:]
+    if rest:
+        pieces.append(rest)
+    return pieces
 
 
 def thread_name(text: Any) -> str:
@@ -1000,7 +1030,7 @@ class Reaching:
         self.tree: Any = None
         #: Whether the commands have been offered to Discord. Once per process: a global sync is
         #: rate-limited hard, and a bot reconnecting through a bad hour must not spend its whole
-        #: allowance re-registering nine commands that have not changed.
+        #: allowance re-registering ten commands that have not changed.
         self.offered = False
         #: Interactions held open while rundesk reads an answer, by the id that is their `ref`.
         self.asked: Dict[str, Any] = {}
@@ -1618,7 +1648,7 @@ class Reaching:
 
         A global sync is rate-limited hard and takes up to an hour to propagate, so it is done on
         the first connection of this process and not on every resume — a bot that reconnects
-        forty times in a bad hour would otherwise spend its whole allowance re-registering nine
+        forty times in a bad hour would otherwise spend its whole allowance re-registering ten
         commands that have not changed.
         """
         if self.offered:
@@ -1747,8 +1777,13 @@ class Reaching:
         said = str(it.get("text") or "")
         if not said:
             return
-        with contextlib.suppress(Exception):
-            await interaction.followup.send(said[:MAX_TEXT], ephemeral=True)
+        try:
+            for piece in answer_pieces(said):
+                await interaction.followup.send(piece, ephemeral=True)
+        except Exception as why:           # noqa: BLE001 — a platform boundary
+            noted(f"private slash answer was incomplete: {type(why).__name__}: {why}")
+            with contextlib.suppress(Exception):
+                await interaction.followup.send(INCOMPLETE, ephemeral=True)
 
     # -- the running commentary, which grows in place while it is still the last thing -----
 

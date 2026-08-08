@@ -720,7 +720,7 @@ show a person.
 | | Words |
 |---|---|
 | `control` | `stop`, `forget`, `restart`, `shutdown` |
-| `query` | `status`, `version`, `skills`, `schedules` |
+| `query` | `status`, `version`, `agents`, `skills`, `schedules` |
 | `configure` | takes `provider` — a value, not a word from a set |
 
 `forget` is the wire word and *new* is what a person is usually offered: the gesture starts the next
@@ -731,6 +731,28 @@ gesture, and rundesk hands it back on `{"do": "answered", "ref": …}`. Without 
 complete, and somebody watches a spinner until their platform gives up. A gesture is answered out of
 what this install already knows and **never by starting a turn**, so the answer comes back in
 milliseconds; a control that really does take time says so through the turn's own outcome instead.
+
+**`agents` is the private, install-wide directory.** An authorized user receives every known agent,
+not only the agent whose Discord connection received the gesture. Each agent is exactly two Markdown
+bullet lines:
+
+```markdown
+- **ava** — coordinates release work
+  - Skills: managing-rundesk, writing-plans
+```
+
+Agent names and each agent's skill names are sorted case-insensitively, with deterministic ordering
+when case alone is not enough. A missing or empty description is `no description`; one that cannot
+be read is `description cannot be read`. No granted skills is `none`; grants that cannot be read is
+`cannot be read`. The zero-agent answer is exactly `No agents.` None of these states starts a
+provider turn, and an unreadable field never makes its agent disappear.
+
+**The shipped Discord adapter never cuts a private slash answer at its message limit.** It sends the
+first piece and every continuation as ordered ephemeral followups to the interaction that supplied
+`ref`, preserving every character in order. This applies to `agents`, `skills`, `schedules`, and any
+other gesture answer long enough to need more than one Discord message. If Discord refuses a
+continuation, the adapter logs the refusal and attempts a private incomplete-response warning so the
+delivered prefix cannot be mistaken for the whole answer.
 
 **A stranger's gesture is dropped in silence**, exactly as a stranger's message is. Narrowing it on
 your side first is worth doing so nobody is shown a spinner for an answer that will never come — but

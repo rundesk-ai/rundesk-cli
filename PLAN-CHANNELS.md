@@ -10,12 +10,13 @@ being true, which makes a plan read as untouched when what is left is only its t
 landed in `a266b0a` (*a reply carries its context, a file goes both ways, and a refusal is not a ✅*);
 the defects found in a later audit landed in the four commits after it.
 
-**What is left is Phase 6, and not all of it:** long `/skills` and `/schedules` answers are still cut
-rather than split (1.3); there are no per-person notices and no greeting for a newly allowed user
-(6.1); rooms cannot be addressed by name (6.3); slash commands are synced globally, so a fresh bot
-waits up to an hour for them (6.5); `retry_after` is emitted and read by nothing — and, on the
-shipped adapter, is not even reachable (6.6); there is no `/agents` or `/help` (6.7);
-`--capabilities` is still asked for and thrown away (6.8); and `allowed_mentions` is unset (6.9).
+**What is left is Phase 6, and not all of it:** there are no per-person notices and no greeting for a
+newly allowed user (6.1); rooms cannot be addressed by name (6.3); slash commands are synced
+globally, so a fresh bot waits up to an hour for them (6.5); `retry_after` is emitted and read by
+nothing — and, on the shipped adapter, is not even reachable (6.6); `/help` remains absent (the
+remaining half of 6.7); `--capabilities` is still asked for and thrown away (6.8); and
+`allowed_mentions` is unset (6.9). `/agents` now supplies the approved private install-wide agent
+directory, and long private slash answers continue losslessly across ordered ephemeral followups.
 
 Read the item statuses below as *what was true when this was written*, and this header as what is
 true now.
@@ -181,13 +182,14 @@ These are correctness bugs in the code the rest of the plan builds on. Do them f
   the one expecting the file.
 - Same class as the known dead `retry_after`.
 
-### [ ] 1.3 Long `/skills` and `/schedules` answers are hard-cut — **important**
+### [x] 1.3 Long private slash answers are split losslessly — **resolved**
 
-- **Now:** `_answered` does `followup.send(said[:MAX_TEXT], ephemeral=True)`
-  (`src/channels/discord:1611-1620`) against an unbounded list built at
-  `answering.py:586-624`. Truncated mid-line, nothing says so. *Reported.*
-- **Previously:** split and sent as further ephemeral followups (`src_old/channels/discord:1041-1048`).
-- **Requirements:** R-DIS-36, R-DIS-37.
+- **Now:** the Discord adapter splits an `answered` result without dropping or reordering any text
+  and sends each piece sequentially as an ephemeral followup to the interaction that asked. A
+  refused continuation is logged and followed by a private incomplete-response warning.
+- **Applies to:** `/skills`, `/schedules`, `/agents`, and every other private slash answer that
+  exceeds Discord's message limit.
+- **Requirements:** R-DIS-11, R-DIS-36, R-DIS-37, R-DIS-42.
 
 ---
 
@@ -389,7 +391,8 @@ Ordered by value. Detail and citations in [`REVIEW.md`](REVIEW.md) §P3 unless n
   (REVIEW P3.8). Small fix, disproportionate first-run impact.
 - [ ] **6.6 `retry_after` is emitted and read by nothing** (REVIEW P4.6) — a rate-limited delivery is
   a WARNING and a lost message. Overlaps 1.1; do them together.
-- [ ] **6.7 Slash surface** — `agents` and `help` have no successor and no note (REVIEW P3.7).
+- [ ] **6.7 Slash surface** — `/agents` now exists as the approved private install-wide directory;
+  `/help` still has no successor or note (REVIEW P3.7).
 - [ ] **6.8 `--capabilities` is asked and thrown away**, so `max_text` is never negotiated
   (`commands/channels.py:427`, `:591-592`). Harmless for Discord (2000 == `MAX_TEXT`), **latent for
   any second adapter** declaring a smaller limit — every answer would be split at 2000 and refused

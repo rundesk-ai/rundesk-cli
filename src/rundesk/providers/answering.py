@@ -32,6 +32,7 @@ The answer goes back through what already exists: cut to the platform's own limi
 import contextlib
 import datetime
 import json
+import stat
 import threading
 import time
 from pathlib import Path, PurePosixPath
@@ -583,6 +584,8 @@ class Gestures:
             return self._standing(agent)
         if query == hosting.VERSION:
             return f"rundesk {__version__}"
+        if query == hosting.AGENTS:
+            return _what_agents_are()
         if query == hosting.SKILLS:
             return _what_it_holds(agent)
         if query == hosting.SCHEDULES:
@@ -691,6 +694,56 @@ def _what_it_holds(agent: str) -> str:
         return f"**{agent}** holds no skills."
     return "\n".join([f"**{agent} holds {len(held)} skill{'s' if len(held) != 1 else ''}:**"]
                      + [f"- {one}" for one in held])
+
+
+def _markdown_text(said: Any) -> str:
+    """One literal line inside Markdown, without letting stored punctuation reshape the list."""
+    flattened = " ".join(str(said or "").split())
+    return "".join(f"\\{one}" if one in "\\`*_~|" else one for one in flattened)
+
+
+def _granted_skills(agent: str) -> List[str]:
+    """Granted names, keeping absent and malformed grant stores as different answers."""
+    at = grants.where(agent)
+    try:
+        mode = at.lstat().st_mode
+    except FileNotFoundError:
+        return []
+    if not stat.S_ISDIR(mode):
+        raise OSError(f"{at} is not a grants directory")
+    return [one.name for one in grants.held(agent)]
+
+
+def _what_agents_are() -> str:
+    """Every agent, what it is for, and the skills it holds (R-DIS-42).
+
+    An unreadable field is one field, never an unreadable agent. The directory is the authority on
+    which agents exist, so a damaged description or grants directory cannot make one disappear from
+    an install-wide listing.
+    """
+    try:
+        agents = sorted(directory.known(), key=lambda name: (name.casefold(), name))
+    except Exception as why:                           # noqa: BLE001 — an inspection boundary
+        return f"I could not read the agents ({type(why).__name__})."
+    if not agents:
+        return "No agents."
+
+    said = []
+    for agent in agents:
+        try:
+            row = records.read(directory.records(agent))
+            description = _markdown_text(row.get("describes")) or "no description"
+        except Exception:                              # noqa: BLE001 — one damaged agent stays listed
+            description = "description cannot be read"
+        try:
+            skills = sorted(_granted_skills(agent),
+                            key=lambda name: (name.casefold(), name))
+            holding = ", ".join(_markdown_text(one) for one in skills) or "none"
+        except Exception:                              # noqa: BLE001 — independent inspection field
+            holding = "cannot be read"
+        said.extend((f"- **{_markdown_text(agent)}** — {description}",
+                     f"  - Skills: {holding}"))
+    return "\n".join(said)
 
 
 def _what_is_coming(agent: str) -> str:

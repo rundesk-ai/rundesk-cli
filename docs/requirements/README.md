@@ -1,72 +1,47 @@
-# The requirements the previous build wrote, and why they are in the tree
+# Product requirements
 
-Six pages the previous build wrote and tracked, moved here from `.knowledge_old/` — which is
-gitignored, reference-only, and expected to be deleted. **That is the whole reason this directory
-exists.** A requirements document nobody can see from the repository is one nobody consults.
+This directory holds the product contracts that explain what Rundesk must do and how that behavior
+is accepted. The current channel requirements were reconciled with the `refactor-2` product on
+2026-08-08. The remaining files are preserved requirements from the previous build and are not
+current promises unless a current PRD links to them.
 
-They are not this build's promises. They are the **previous** build's, and they are kept because a
-rewrite with a working predecessor has a specification already written, and rebuilding from its
-source instead loses everything the source never said.
+| Document | Status | What it owns |
+|---|---|---|
+| [channel-adapter.md](./channel-adapter.md) | current draft | the provider-neutral channel-adapter product boundary and lifecycle |
+| [channel-messaging.md](./channel-messaging.md) | current draft | behavior shared by every channel conversation |
+| [channel-discord.md](./channel-discord.md) | current draft | Discord-specific setup, triggering, rendering, and commands |
+| [channel-slack.md](./channel-slack.md) | predecessor reference | the previous build's Slack behavior; Slack is outside the current channel increment |
+| [agent-delegation.md](./agent-delegation.md) | predecessor draft | the previous build's delegation design |
+| [agent-role.md](./agent-role.md) | predecessor draft | the previous build's role-worker design |
 
-The four channel pages came from `prd/`, where they were ratified. **`agent-delegation.md` and
-`agent-role.md` came from `prd-drafts/`**, and the difference is worth keeping in view: they were
-never ratified, so their evidence columns describe an implementation that existed rather than
-obligations somebody signed off. Read them as the most complete account of what the predecessor did,
-not as a contract this build inherited whole — several of their requirements are deliberately not
-carried, and where that is so the docstring that replaces one says which and why.
+## Status and evidence
 
-## What that cost, measured
+- **Draft** means the direction is written and reviewable but unresolved product choices remain.
+- **Approved** means the product owner accepted the requirements and scope.
+- **Implemented** means the named acceptance evidence was executed successfully against the stated
+  build. A source path or test name alone does not earn this status.
+- **Validated** means real-user or real-platform evidence also supports the intended outcome.
+- **Superseded** means a later approved decision replaced the requirement; repository history keeps
+  the former wording.
 
-**These numbers were counted once, when these pages were moved here, and have not been counted
-again.** Several channel requirements have been met since — inbound replies, attachments in and out,
-who-and-where reaching the brain — and the build now cites requirement ids in its own docstrings,
-so the last row in particular is out of date. Read the table as the measurement that prompted this
-directory rather than as this build's current standing; re-count before quoting it.
+The validation tables distinguish current implementation evidence from executed acceptance. A test
+that exists has not necessarily been run in the documentation task, and an offline adapter test does
+not prove what Discord displayed on its service.
 
-| | |
-|---|---|
-| Requirement rows across the four channel pages | **140** |
-| Met by this build at the time they were found | **34** |
-| Met, excluding Slack — a platform this build does not have | **34 of 95** |
-| Times the previous build cited a requirement id in its own source | **1,109** |
-| Times this build had cited one **at that moment** | **0** |
+## Authority and change control
 
-The one that made it concrete: `R-DIS-1` — *named in a room, the turn happens in a thread* — was
-dropped, and then a docstring was written explaining why not doing it was the right design. Nobody
-was being careless. The rewrite read `src_old/` carefully and reconstructed a specification from an
-implementation, and an implementation does not say which of its behaviours were obligations.
+The Rundesk product owner decides product behavior and approves these PRDs. Code, tests, current
+documentation, predecessor requirements, and research establish facts and constraints; they do not
+silently redefine the desired product. When those sources conflict, the PRD records the conflict and
+the owner decides whether the product or implementation changes.
 
-`docs/research/2026-08-05-the-old-builds-channel-system.md` even quotes R-DIS-1's behaviour, having
-found it by reading the code. It was recorded as a description of what an old build did, not as a
-thing this one owed.
+Requirement IDs remain stable when the same product condition survives revision. New behavior gets a
+new ID. Detailed wire formats and implementation choices belong in [adapters.md](../adapters.md), and
+executed delivery evidence belongs in each PRD's validation table.
 
-## How to use them
+## Historical source
 
-**Cite the id where the requirement is met.** `R-DIS-1` in the docstring of the thing that opens a
-thread. That is the mechanism that makes dropping one a *visible edit* rather than a silent absence,
-and it is the only reason the previous build could answer "is this still true" at all.
-
-**When a requirement will not be met, say so where somebody will look, with the reason.** Several
-here are genuinely unreachable in this build and that is fine — what is not fine is an absence that
-reads as an oversight, or a docstring arguing for a gap nobody chose.
-
-**Some of these are now wrong**, and that is expected of a document describing a build that no longer
-exists. Three known:
-
-- **R-DIS-3** (*answers in its own thread without being named again*) was unreachable until this build
-  enabled `MESSAGE_CONTENT`, and the previous build simply had that intent on. Now met.
-- **R-DIS-30** wants a *"scheduled run began"* message to anchor a report to. `gateways/host.py`
-  deliberately never announces a successful schedule — *a message per successful nightly job is how
-  somebody learns to ignore the channel* — so there is nothing to anchor to.
-- **R-CAD-15** (*each kind of place becomes a channel of its own*) describes a shape deliberately
-  removed: a channel is a connection, not a place.
-
-**The ❌ rows are the more useful half.** Their evidence columns do not say "unproven" — they say what
-kind of proof is missing and why a test cannot supply it. That is a hand-verification protocol, and
-this build has no equivalent.
-
-## The general rule
-
-**A rewrite's specification is its predecessor's requirements, not its predecessor's source.**
-Everything built fresh here came out right; everything that should have been carried across was
-re-derived, and the parts that existed only in prose were lost.
+These documents began as requirements imported from the previous build in commit `217006b`. That
+history remains available in Git. The current PRDs keep requirements that still express product
+intent, revise requirements deliberately changed by this build, and expose unresolved carry-forward
+choices instead of presenting predecessor checkmarks as current proof.

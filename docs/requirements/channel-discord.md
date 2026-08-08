@@ -1,74 +1,113 @@
 ---
 id: DIS
-name: Discord, as an agent is reached on it
-last_verified: 2026-07-30
+name: Discord as an agent is reached on it
+status: draft
+owner: Rundesk product owner
+last_updated: 2026-08-08
 ---
 
-## What this is
+# Discord channel adapter product contract
 
-What a turn looks like on Discord, and how it is shown there. Being named in a server channel opens a
-thread and the turn happens inside it, so one thread is one conversation and one session (R-CH-3). The answer
-arrives as one message at the end, with what it cost above it, and what the agent is doing is shown
-while it works only if the owner asked for it — a reply that rewrites itself in place is unreadable,
-so only a running commentary may grow.
+## Problem and evidence
 
-## Why it exists
+An owner wants the same persistent Rundesk agent available in Discord without turning a shared
+server into an always-listening bot or making long-running work unreadable. Discord adds platform
+constraints—mentions, threads, message limits, interaction deadlines, reactions, presence, and
+permissions—that must preserve the shared channel contract rather than redefine it.
 
-- The owner sees at a glance whether a message was seen, is being worked on, or is finished, and
-  which question an answer belongs to.
-- An agent in a shared server stays quiet until it is spoken to.
-- Steering an agent uses Discord's own commands, which are discoverable, rather than words typed in chat.
+The predecessor Discord requirements established the intended experience. Current behavior is
+described in [adapters.md](../adapters.md), [commands.md](../commands.md#channels), the shipped
+`src/channels/discord` adapter, and focused tests. The product owner added `/agents` on 2026-08-08 as
+an install-wide, private, read-only Discord query.
+
+## Outcome and success
+
+An authorized Discord user can reach the intended agent in a direct message or server conversation,
+understand whether work was seen, is active, or ended, and receive the complete answer and declared
+files. Read-only commands answer privately without starting a provider turn.
+
+Success is accepted through offline scenarios plus a maintained real-Discord verification pass for
+platform-only behavior. No post-release adoption target has been set.
+
+## Product solution
+
+One Discord bot connection serves an agent's direct messages and invited servers. Direct messages
+stay in place. A server mention opens a dedicated thread when Discord permits it, and the agent
+continues in that thread without another mention. Rundesk supplies shared turn records; the Discord
+adapter renders them with Discord's reactions, typing, replies, private command responses, and file
+uploads.
 
 ## Requirements
 
-|  | ID | Requirement | Evidence |
-|:--:|---|---|---|
-| ✅ | R-DIS-1 | Being named in a server channel opens a thread, and the turn happens there | `being named in a server channel opens a thread`, `a thread is named for what was asked`, `a long question is clipped rather than refused`, `a question with nothing in it still gets a name`, `a thread belongs to the channel it was opened in` |
-| ✅ | R-DIS-2 | An agent stays silent in a shared channel until it is named | `an agent stays silent in a shared channel until it is named`, `it does not answer in somebody elses thread unless named`, `an agent confined to a server and no further answers anywhere in it`, `an agent pointed at direct messages answers only those`, `one message in a room is taken by exactly one channel`, `a direct message is taken by the direct message channel only`, `a room channel still answers only in the room it names`, `a room channel given a server answers in every room of it` |
-| ✅ | R-DIS-3 | Inside a thread it opened, an agent answers without being named again | `inside a thread it opened it answers without being named` |
-| ✅ | R-DIS-4 | In a one-to-one conversation an agent answers where it was spoken to | `in a one to one conversation it answers where it was spoken to`, `a direct message is answered only when that is what was asked for` |
-| ❌ | R-DIS-5 | A message that has been taken up is marked as seen | src/channels/discord:399 — proved by hand against a real server; a mark on a real message is what a fake cannot show; .knowledge/scripts/probe-discord says what to do and what to look for |
-| ❌ | R-DIS-6 | A turn shows the typing indicator for as long as it is still running | src/channels/discord:414 — proved by hand; a typing indicator only exists on the platform; .knowledge/scripts/probe-discord says what to do and what to look for |
-| ✅ | R-DIS-7 | A turn that has ended is marked with how it ended | `every state the seam decides has something to show for it` |
-| ✅ | R-DIS-8 | A turn carries one mark at a time, so how it ended replaces that it was seen | `how it ended is told from that it was seen` |
-| ✅ | R-DIS-9 | A turn that failed says what failed | `stopping and failing are not the same mark`, `a tool that failed still says so`, `failed collaboration bookkeeping is not hidden` |
-| ✅ | R-DIS-10 | Stopping and forgetting are offered as Discord's own commands, described where offered | `every command it offers is a gesture the seam defines`, `every command is described where it is offered`, `a new session and stopping a turn are different gestures` |
-| ❌ | R-DIS-11 | A command is answered inside the time Discord allows before it reports an error | src/channels/discord:243 — the three seconds are Discord's, and only Discord can time them; .knowledge/scripts/probe-discord says what to do and what to look for |
-| ❌ | R-DIS-12 | What a command did arrives as the turn's own outcome rather than as the command's answer | src/channels/discord:246 — the seam's half is proved offline; what a command shows is the platform's; .knowledge/scripts/probe-discord says what to do and what to look for |
-| ✅ | R-DIS-13 | Output longer than a Discord message allows is split or attached rather than cut | `an answer that fits is one message`, `an answer too long is broken at a line where there is one`, `an answer with nowhere to break is cut rather than dropped`, `nothing is lost however many messages it takes`, `a long remark is split without losing any of it`, `the limit is under what discord allows` |
-| ❌ | R-DIS-14 | Writes are paced so that Discord does not refuse them | src/channels/discord:69 — whether the pacing is enough is what a real server answers; .knowledge/scripts/probe-discord says what to do and what to look for |
-| ❌ | R-DIS-15 | The owner is told when their agent comes up and when it goes down | src/channels/discord:279 — proved by hand, both coming up and going down; .knowledge/scripts/probe-discord says what to do and what to look for |
-| ❌ | R-DIS-16 | An agent shows as online for as long as the gateway running it is up | src/channels/discord:271 — presence is a thing only the platform shows; .knowledge/scripts/probe-discord says what to do and what to look for |
-| ✅ | R-DIS-17 | An answer arrives as one message, with what it cost above it | `what a turn cost is shown as one line`, `a turn that reported no cost says nothing about it`, `a tool that worked is not a message of its own`, `a small count is not rounded into a zero`, `a count in the millions is not shown in thousands`, `the footer omits cache writes the seam hands over` |
-| ❌ | R-DIS-18 | An answer too long to read as messages is attached as a file instead | src/channels/discord:447 — the splitting is proved offline; uploading is the platform's; .knowledge/scripts/probe-discord says what to do and what to look for |
-| ❌ | R-DIS-19 | A file the agent made is uploaded rather than described | src/channels/discord:470 — the upload is the platform's, and proved by hand; .knowledge/scripts/probe-discord says what to do and what to look for |
-| ✅ | R-DIS-20 | Discord shows broad activity compactly while work runs, and only when the owner asked | `showing the work is off unless the owner asks`, `consecutive activity is one line with a count`, `only consecutive activity is counted`, `a growing message counts across separate writes`, `activity arriving during an edit gets a successor write`, `an intervening message breaks a count that has not flushed yet`, `a subagent start and finish are two broad categories`, `a safe subagent name is shown without its provider path`, `named subagents still collapse as one broad category`, `finish waits for the child turn not the spawn call`, `thinking is a broad category and never the thought itself`, `an unknown tool uses thinking instead of a gear`, `a tool failure never publishes its private details` |
-| ✅ | R-DIS-21 | Discord says which room and which person a message came from, in the words Discord shows | `discord says which room and which person a message came from`, `a direct message is named as one rather than as a channel`, `a thread is named under the channel it was opened in`, `a server with no name to show is not shown as blank`, `discord maps its places to the shared channel hierarchy`, `discord maps an ordinary room without inventing a thread`, `discord maps a direct message without platform containers`, `discords exact legacy defaults are replaced but owner edits are not` |
-| ✅ | R-DIS-22 | Read-only gateway information is offered as Discord's own commands | `read only gateway information is offered as discord commands`, `a gateway answer completes the exact deferred interaction`, `a read only command is deferred and reported for authorization` |
-| ✅ | R-DIS-23 | A Discord command is handled only by the channel whose configured place contains it | `one slash interaction belongs to exactly one configured surface` |
-| ✅ | R-DIS-24 | A completed Discord answer shows compact elapsed time beside any reported token cost | `elapsed time is compact at seconds minutes and hours`, `elapsed time runs from taken until the answer is ready`, `repeated taken does not restart elapsed time`, `provider and elapsed time are shown when usage was not reported` |
-| ✅ | R-DIS-25 | A single-user Discord channel offers a provider change and privately reports its result | `provider is deferred and reported for authorized configuration`, `provider result completes the exact private interaction`, `shared channel provider command is privately refused before reporting` |
-| ✅ | R-DIS-26 | A gateway returning from update maintenance names the version now listening and links its release | `a gateway returning from an update links the version now listening`, `a gateway told only a version still names it` |
-| ✅ | R-DIS-27 | An ordinary gateway startup adds no update wording and no release link | `an ordinary startup adds no update wording and no release link` |
-| ✅ | R-DIS-28 | An answer is a reply to the message that asked, unless that message is not in the conversation the turn is in | `an answer in a direct message is a reply to the message that asked`, `an answer in a channel is a reply to the message that asked`, `an answer does not quote a message from somewhere else`, `only the first piece of a split answer carries the anchor`, `the anchor is read off the attribute a message actually has`, `an answer still arrives when the message it quotes is gone` |
-| ✅ | R-DIS-29 | A completed Discord answer leads its cost line with how big the conversation is, where the provider said so | `the footer leads with how big the conversation is`, `where an answer is posted does not change its usage summary`, `the whole footer an owner reads is the size what was written and the clock`, `a brain that does not report a conversation size gets the footer it always got` |
-| ✅ | R-DIS-30 | Discord holds the message it posted to say a scheduled run began, and posts that run's report as a reply to it | `a scheduled report is a reply to the message that said it started`, `a report for a schedule nobody announced quotes nothing`, `an ordinary remark still quotes nothing`, `a notice is answered once and never by the next firing`, `a notice that could not be posted is not held`, `an anchor is kept for the room being written in not the one named`, `a scheduled report still arrives when its notice is gone` |
-| ✅ | R-DIS-31 | A completed answer mentions its human recipient, and nothing else Discord posts mentions anybody | `an answer in a direct message mentions the person who asked`, `only the first piece of a split answer mentions anybody`, `an answer attached as a file still mentions who asked`, `an answer with no message to reply to mentions nobody`, `an answer whose question is in another room mentions nobody`, `a remark said mid turn mentions nobody`, `a scheduled final mentions its recipient and not the notice author`, `the commentary and the mark on a failure mention nobody`, `a quiet channel still posts one message and it is the mentioned answer`, `a mentioned answer that cannot be delivered is said and the turn goes on`, `a message nobody asked to mention does not` |
-| ✅ | R-DIS-32 | A connected Discord bot keeps the username and profile identity its owner configured in Discord | `connecting never edits the bot profile` |
-| ✅ | R-DIS-33 | A completed Discord answer begins its completion line with the provider that ran the turn | `the whole footer an owner reads is the size what was written and the clock`, `provider and elapsed time are shown when usage was not reported` |
-| ✅ | R-DIS-34 | An inbound Discord reply carries its referenced message into Rundesk's shared reply context | `on message reports the reply on the arrived record`, `a resolved reply carries the parent identity author and body`, `a deleted or unfetched parent still carries its identity`, `a non reply reference is not presented as a reply`, `a message without a reference has no reply context` |
-| ✅ | R-DIS-35 | A terminal Discord notice neither claims an idle turn is running nor erases a newer turn that is running | `a terminal notice does not claim another turn is running`, `a terminal notice does not erase a newer running turn` |
-| ✅ | R-DIS-36 | Discord offers the current agent's granted skills as a read-only command | `skills lists only this agents grants as sorted bullets`, `skills says when this agent has no grants`, `read only gateway information is offered as discord commands`, `a long skills answer keeps every granted skill` |
-| ✅ | R-DIS-37 | Discord offers the schedules this agent can still run as a read-only bullet list, soonest first | `schedules lists what can still run as bullets soonest first`, `schedules leaves out a schedule whose moment has gone`, `schedules says when this agent has nothing left to run`, `schedules names a schedule nobody could understand`, `read only gateway information is offered as discord commands` |
-| ✅ | R-DIS-38 | Discord sends a notice meant for the owner alone as a direct message to them | `a notice for the owner is sent to them and starts no conversation`, `a notice for the owner too long for one message is split`, `a notice for the owner with nothing in it is not sent` |
-| ✅ | R-DIS-39 | Discord sends a notice meant for one named allowed user to that user, and refuses one naming somebody the channel does not allow | `a notice naming somebody is carried to that person`, `a notice naming somebody this channel does not allow is refused`, `a notice naming an allowed person reaches that person` |
-| ✅ | R-DIS-40 | An answer names its recipient outright only where the room holds more than that one person | `a scheduled final mentions nobody in a direct message` |
-| ✅ | R-DIS-41 | A name written into an answer stands under its completion line rather than in front of it | `a mention sits under the stats line rather than in front of it` |
+| ID | Product condition | Acceptance evidence |
+|---|---|---|
+| R-DIS-1 | Mentioning the agent in a server channel opens a thread for the conversation when Discord permits it; if thread creation is refused, the agent answers in the originating channel and reports the degradation. | Exercise successful and permission-refused thread creation on Discord. |
+| R-DIS-2 | In a shared server channel or another party's thread, the agent stays silent until mentioned by an authorized user. | Send mentioned and unmentioned messages in rooms and unrelated threads. |
+| R-DIS-3 | Inside a thread the agent opened, an authorized user can continue without mentioning it again. | Continue a thread across several turns and a gateway restart. |
+| R-DIS-4 | In a direct message, the agent answers in that direct conversation. | Complete new and resumed direct-message turns. |
+| R-DIS-5 | A recorded inbound message is marked with Discord's seen reaction when its external message id is available. | Inspect the real message after admission and after a redelivery. |
+| R-DIS-6 | Discord shows typing while a turn is working and stops renewing it when the turn ends. | Observe a long-running real turn through done, stopped, and failed endings. |
+| R-DIS-7 | A terminal turn is marked with one ending reaction for done, stopped, or failed. | Exercise each ending and inspect the final reaction. |
+| R-DIS-8 | A turn carries one state reaction at a time: the ending reaction is placed before the seen reaction is removed, and a failed replacement leaves the existing reaction rather than erasing state. | Exercise successful and refused reaction replacement and inspect event order. |
+| R-DIS-9 | A failed turn is distinguishable from a stopped turn, and its person-visible result does not expose private tool details. | Exercise provider, tool, and delivery failures plus an explicit stop. |
+| R-DIS-10 | Discord offers `/stop`, `/new`, `/restart`, and `/shutdown` as described controls and `/status`, `/version`, `/agents`, `/skills`, `/schedules`, and `/provider` as described queries/configuration. | Inspect registered commands and exercise each as an authorized user. |
+| R-DIS-11 | A slash command is acknowledged within Discord's interaction window and its final result is private to the invoking user. Results beyond one Discord message continue losslessly across ordered ephemeral followups; if Discord refuses a continuation, a private incomplete-response warning and an adapter log prevent the partial result from looking complete. | Exercise every command on real Discord under ordinary and delayed gateway handling, including complete and refused multi-message results; reconstruct complete results and inspect the warning and log for a refusal. |
+| R-DIS-12 | A control that changes a running turn is reflected by that turn's own state and outcome, not invented by the slash-command acknowledgement. | Stop, restart, and shut down active and idle cases. |
+| R-DIS-13 | Text longer than one Discord message is split without loss at safe boundaries; only the first answer piece carries reply/recipient emphasis, and declared files accompany the last piece. | Compare reconstructed short, multiline, and no-break long answers with the original. |
+| R-DIS-14 | Discord writes are paced and failures are correlated so a refused or rate-limited delivery is never reported as complete. | Exercise burst, rate-limit, forbidden, deleted-channel, and locked-thread cases. |
+| R-DIS-15 | The notified owner receives a gateway-online notice after the Discord connection is ready and a gateway-going-offline notice during graceful shutdown. | Start and stop a gateway on real Discord with and without a notified channel. |
+| R-DIS-16 | The bot presents the agent as online while its channel connection is serving and attempts to present it as offline during graceful shutdown without blocking shutdown indefinitely. | Observe presence across connect, resume, graceful stop, and a presence API refusal. |
+| R-DIS-17 | A completed answer includes one quiet usage summary and omits quantities the provider did not report. | Exercise providers with full, partial, zero, and missing usage. |
+| R-DIS-19 | Each accepted local file explicitly declared by the agent is uploaded with the final answer; a verification or Discord refusal is visible and never leaks the machine path. | Upload representative text/image files and exercise changed, missing, oversized, and permission-refused files. |
+| R-DIS-20 | Discord renders broad activity compactly while work runs, collapses adjacent repeats, and never shows raw arguments, results, or provider tool names. | Run representative read/search/run/edit/make/delegate activity and inspect posts/edits. |
+| R-DIS-21 | The agent is told whether the Discord message came from a direct message, room, or thread, with available server/room/thread and speaker display names in shared platform-neutral context. | Compare prompt context for each Discord place shape and missing display metadata. |
+| R-DIS-22 | Discord exposes the shared authorized queries as private slash commands and correlates each private answer with the interaction that requested it. | Exercise status, version, agents, skills, and schedules concurrently from authorized and unauthorized users. |
+| R-DIS-23 | A Discord interaction is handled only by the configured agent channel whose connection received it. | Configure two agents and ensure one interaction produces one correctly routed answer. |
+| R-DIS-24 | Completion metadata shows compact elapsed time measured from turn admission until the answer is ready. | Exercise second-, minute-, and hour-length examples plus repeated admission records. |
+| R-DIS-25 | `/provider` is available only when the channel has one authorized user; accepted and refused changes are private and start the conversation fresh only on success. | Exercise single-user, multi-user, unauthorized, unavailable-provider, and in-flight cases. |
+| R-DIS-26 | A gateway returning from update maintenance names the installed version now listening and links that release. | Exercise the first startup after update maintenance. |
+| R-DIS-27 | An ordinary gateway startup adds no update wording and no release link. | Compare ordinary startup with the update-maintenance notice. |
+| R-DIS-28 | The final answer replies to the Discord message that asked when it still belongs to that conversation; a missing or cross-channel reference cannot prevent the answer. | Exercise direct, room, thread, deleted-question, and split-answer cases. |
+| R-DIS-29 | When the provider reports conversation size, that size leads the token counts in completion metadata; when it does not, no conversation size is invented. | Exercise complete and missing-context usage reports. |
+| R-DIS-30 | A scheduled agent turn posts one start notice and its final report as a reply to that notice, with no intervening activity posts; an unavailable notice cannot prevent the report. | Run successful, failed, empty, deleted-notice, and overlapping schedule cases. |
+| R-DIS-31 | In a multi-person place, the completed answer identifies its human recipient beneath the completion metadata; direct messages and non-answer notices do not add redundant mentions. | Compare direct, room, thread, split, scheduled, and mid-turn messages. |
+| R-DIS-32 | Connecting never edits the bot username, avatar, or profile identity configured by its owner in Discord. | Snapshot bot identity before and after check, connect, and resume. |
+| R-DIS-33 | Completion metadata begins with the resolved provider name without exposing a path-form provider's filesystem location. | Exercise named and path-form providers. |
+| R-DIS-34 | An inbound Discord reply carries the parent message id and available cached author/text into the shared reply context without fetching an unavailable parent. | Exercise resolved, cached, deleted, forwarded, and ordinary messages. |
+| R-DIS-35 | A terminal notice never claims an idle turn is working and never erases the working indication for a newer turn. | Race two turns and their ending/working state records. |
+| R-DIS-36 | `/skills` privately lists the current agent's granted skills in a complete, readable response. | Exercise no grants, many grants beyond one Discord message, and concurrent requests. |
+| R-DIS-37 | `/schedules` privately lists the current agent's schedules that can still run, soonest first, and says when none remain. | Exercise repeating, future, expired, disabled, and unreadable schedules. |
+| R-DIS-38 | A notice meant for the owner alone is sent as a direct message, starts no conversation, and is not recorded as agent-authored speech. | Exercise short, long, empty, refused, and retried notices. |
+| R-DIS-39 | A notice addressed to one authorized user is sent privately to that user and refused for an identity outside the channel allow list. | Exercise authorized and unauthorized targeted notices. |
+| R-DIS-40 | A completed answer names its recipient only in a place holding more than that one person; a direct message adds no redundant mention. | Compare direct, room, thread, and scheduled answers. |
+| R-DIS-41 | When a completed answer names its recipient, the mention stands beneath the completion metadata rather than before it. | Inspect short and split answers in a multi-person place. |
+| R-DIS-42 | `/agents` privately lists every known agent in deterministic, case-insensitive agent order. Each agent is exactly `- **name** — description` followed by `  - Skills: ...`, with skills in deterministic, case-insensitive order. Missing or empty descriptions say `no description`; unreadable descriptions say `description cannot be read`; no grants says `none`; unreadable grants says `cannot be read`. Zero agents says exactly `No agents.` The query starts no provider turn. | Exercise zero agents, described and undescribed agents, no/one/many grants, unreadable records and grants, case-varied ordering, long output, and concurrent requests; verify the exact Markdown, lossless ordered ephemeral followups, and no provider turn. |
 
-## Open questions
+## Scope
 
-- Whether a mark between seen and finished is worth having for a turn that runs a long time.
-- Whether a thread that has gone quiet is archived, and whether that is Rundesk's to do.
-- Which of an agent's activity belongs in the thread and which belongs in a message to the owner alone.
-- Whether more than one person in a thread may steer the same agent, or only the one who opened it.
-- Whether a surface that cannot show presence should say it is up some other way, or stay quiet.
+**In:** Discord setup and connection; direct/server/thread triggering; state, activity, answer, reply,
+file, presence, notice, and slash-command rendering; the new `/agents` command.
+
+**Out:** Slack; Discord administration beyond the bot's required permissions; automatic thread
+archival; provider behavior; a general web console; public command responses.
+
+## Decisions and open questions
+
+| Item | Status and impact | Decision needed |
+|---|---|---|
+| `/agents` access | **Decided:** it follows the existing read-only query boundary. Any user authorized on this channel may invoke the install-wide query, and only that user sees the response. | None. |
+| `/agents` ordering and empty states | **Decided:** agents and skills sort case-insensitively with deterministic tie-breaking. Missing or empty description is `no description`; unreadable description is `description cannot be read`; no grants is `none`; unreadable grants is `cannot be read`; zero agents is `No agents.` | None. |
+| Very long prose as a file | Current behavior splits text. The predecessor also required an automatic text-file fallback, which is not approved for this revision. | Decide whether and at what threshold Discord should attach prose instead of splitting it. |
+| Activity control | Owned by the shared PRD; current Discord behavior renders the activity it receives. | Resolve the shared activity-policy decision before adding a Discord-specific switch. |
+| Thread lifecycle | Rundesk opens threads but no product direction says whether it archives quiet ones. | Decide only if automatic archival is proposed. |
+| Multi-person steering | Authorization is shared, but who may steer an active turn in a multi-user thread is not separately defined. | Decide before introducing per-turn speaker ownership. |
+| Real-Discord release evidence | Offline suites cannot prove reactions, typing, presence, command timing, permission grants, or upload presentation. | Establish and maintain a scratch-bot verification protocol and its release cadence. |
+
+## Validation
+
+| Requirement area | Current evidence checked | Result | Last checked |
+|---|---|---|---|
+| Routing, replies, rendering, commands | `src/channels/discord`, `tests/test_channels_discord.py` | Offline suite passed on current Python and macOS Python 3.9; real-Discord acceptance was not executed. | 2026-08-08 |
+| Shared delivery and turn composition | `src/rundesk/channels/hosting.py`, `src/rundesk/providers/answering.py`, `tests/test_channels_hosting.py`, `tests/test_providers_answering.py` | Offline suites passed on current Python and macOS Python 3.9. | 2026-08-08 |
+| Gateway and scheduled notices | `src/rundesk/gateways/host.py`, `tests/test_gateway_host.py` | Current mechanics inspected; R-DIS-30 is implemented in this branch, correcting the stale predecessor note. | 2026-08-08 |
+| `/agents` | R-DIS-42; focused Discord, hosting, and provider-answering scenarios plus the full 67-suite runs on current Python and macOS Python 3.9. | Offline acceptance passed for exact nested bullets, escaping/flattening, empty and unreadable states, ordering, authorization, no provider turn, lossless pagination, and visible continuation refusal. Real-Discord presentation remains unvalidated. | 2026-08-08 |

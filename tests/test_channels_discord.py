@@ -274,8 +274,13 @@ class Followup:
 
     def __init__(self, on: "Interaction") -> None:
         self.on = on
+        self.sends = 0
+        self.refuses_on: Optional[int] = None
 
     async def send(self, text: str, ephemeral: bool = False) -> None:
+        self.sends += 1
+        if self.sends == self.refuses_on:
+            raise RuntimeError("Discord refused this continuation")
         self.on.followed.append({"text": text, "ephemeral": ephemeral})
 
 
@@ -1299,12 +1304,12 @@ class HowLongTheIndicatorRuns(Records):
 
 
 class WhatItOffers(unittest.TestCase):
-    """The nine gestures, and the words each speaks. Pure tables — no connection."""
+    """The ten gestures, and the words each speaks. Pure tables — no connection."""
 
     #: Rundesk's own closed vocabularies, written out rather than imported: this suite imports
     #: nothing of rundesk's, because the adapter is a program on the far side of a pipe.
     RUNDESK_CONTROLS = ("stop", "forget", "restart", "shutdown")
-    RUNDESK_QUERIES = ("status", "version", "skills", "schedules")
+    RUNDESK_QUERIES = ("status", "version", "agents", "skills", "schedules")
 
     def test_every_gesture_speaks_a_word_rundesk_knows(self) -> None:
         # A name here that rundesk does not know is a command that appears on the menu, is pressed,
@@ -1312,12 +1317,12 @@ class WhatItOffers(unittest.TestCase):
         self.assertEqual(set(self.RUNDESK_CONTROLS), {one[2] for one in adapter.CONTROLS})
         self.assertEqual(set(self.RUNDESK_QUERIES), {one[2] for one in adapter.QUERIES})
 
-    def test_the_nine_a_person_is_offered(self) -> None:
+    def test_the_ten_a_person_is_offered(self) -> None:
         offered = [one[0] for one in adapter.CONTROLS] + [one[0] for one in adapter.QUERIES]
         offered.append(adapter.CONFIGURE[0])
         self.assertEqual(
-            {"stop", "new", "restart", "shutdown", "status", "version", "skills", "schedules",
-             "provider"}, set(offered))
+            {"stop", "new", "restart", "shutdown", "status", "version", "agents", "skills",
+             "schedules", "provider"}, set(offered))
 
     def test_new_is_what_a_person_sees_and_forget_is_what_rundesk_hears(self) -> None:
         # *New* says what they get; *forget* says what happens to the session. Two words for one
@@ -1387,8 +1392,8 @@ class HowAGestureIsAnswered(Records):
         self.during(exchange)
 
     def test_a_query_is_held_open_and_named_by_its_own_id(self) -> None:
-        said = self.only(self.pressed("skills"), "query")
-        self.assertEqual("skills", said["query"])
+        said = self.only(self.pressed("agents"), "query")
+        self.assertEqual("agents", said["query"])
         self.assertEqual(str(self.interaction.id), said["ref"])
         self.assertIs(self.interaction.deferred, True)
         self.assertIn(str(self.interaction.id), self.reaching.asked)
@@ -1404,6 +1409,58 @@ class HowAGestureIsAnswered(Records):
             self.assertEqual([], first.followed, "the wrong interaction was completed")
 
         self.during(exchange)
+
+    def test_a_long_private_answer_is_split_losslessly_at_line_boundaries(self) -> None:
+        async def exchange(reaching: Any) -> None:
+            interaction = Interaction("agents", Person(22), place=700)
+            await reaching._a_query("agents")(interaction)
+            said = "\n".join(
+                f"- **agent-{number:03d}** — description {number}\n"
+                f"  - Skills: researching-topics, writing-plans"
+                for number in range(70)
+            )
+            self.assertGreater(len(said), adapter.MAX_TEXT * 2)
+
+            await reaching._told({"do": "answered", "ref": str(interaction.id), "text": said})
+
+            pieces = [one["text"] for one in interaction.followed]
+            self.assertGreater(len(pieces), 2)
+            self.assertTrue(all(len(one) <= adapter.MAX_TEXT for one in pieces))
+            self.assertTrue(all(one["ephemeral"] for one in interaction.followed))
+            self.assertEqual(said, "".join(pieces))
+            self.assertTrue(all(one.endswith("\n") for one in pieces[:-1]))
+
+        self.during(exchange)
+
+    def test_a_boundary_at_the_limit_never_makes_a_piece_one_character_too_long(self) -> None:
+        said = "x" * adapter.MAX_TEXT + " " + "tail"
+        pieces = adapter.answer_pieces(said)
+        self.assertEqual(said, "".join(pieces))
+        self.assertTrue(all(len(one) <= adapter.MAX_TEXT for one in pieces))
+
+    def test_a_long_line_prefers_an_in_range_word_boundary_without_losing_the_space(self) -> None:
+        said = "a" * (adapter.MAX_TEXT - 20) + " boundary " + "z" * 100
+        pieces = adapter.answer_pieces(said)
+        self.assertEqual(said, "".join(pieces))
+        self.assertTrue(all(len(one) <= adapter.MAX_TEXT for one in pieces))
+        self.assertTrue(pieces[0].endswith(" "))
+
+    def test_a_refused_continuation_is_visible_in_private_and_in_the_log(self) -> None:
+        async def exchange(reaching: Any) -> None:
+            interaction = Interaction("agents", Person(22), place=700)
+            interaction.followup.refuses_on = 2
+            await reaching._a_query("agents")(interaction)
+            await reaching._told({
+                "do": "answered", "ref": str(interaction.id),
+                "text": "first line\n" + "x" * (adapter.MAX_TEXT * 2),
+            })
+            self.interaction = interaction
+
+        records = self.during(exchange)
+        self.assertEqual(adapter.INCOMPLETE, self.interaction.followed[-1]["text"])
+        self.assertTrue(self.interaction.followed[-1]["ephemeral"])
+        self.assertTrue(any("private slash answer was incomplete" in one
+                            for one in self.noted(records)))
 
     def test_an_answer_for_a_question_nobody_asked_is_dropped(self) -> None:
         async def exchange(reaching: Any) -> None:
@@ -1450,17 +1507,17 @@ class HowAGestureIsAnswered(Records):
         self.assertEqual("codex", said["provider"])
         self.assertEqual(str(self.interaction.id), said["ref"])
 
-    def test_all_nine_are_registered(self) -> None:
+    def test_all_ten_are_registered(self) -> None:
         async def exchange(reaching: Any) -> None:
             reaching.tree = adapter.discord.app_commands.CommandTree(self.client)
             reaching._offers()
-            self.assertEqual(9, len(reaching.tree.commands))
+            self.assertEqual(10, len(reaching.tree.commands))
 
         self.during(exchange)
 
     def test_they_are_offered_once_and_not_on_every_reconnection(self) -> None:
         # A global sync is rate-limited hard, and a bot reconnecting through a bad hour would spend
-        # its whole allowance re-registering nine commands that have not changed.
+        # its whole allowance re-registering ten commands that have not changed.
         async def exchange(reaching: Any) -> None:
             reaching.tree = adapter.discord.app_commands.CommandTree(self.client)
             for _ in range(4):

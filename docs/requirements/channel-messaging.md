@@ -1,62 +1,99 @@
 ---
 id: CH
-name: A channel, and the work that arrives on it
-last_verified: 2026-08-01
+name: A channel conversation and the work that arrives on it
+status: draft
+owner: Rundesk product owner
+last_updated: 2026-08-08
 ---
 
-## What this is
+# Shared channel messaging product contract
 
-A channel is a messaging surface an agent is reached on, and one agent may have several. It connects to
-a platform, turns what arrives into work for that agent, and shows what it can of the turn that follows.
-Platforms differ enormously in what they can show, so a channel renders what its own has and skips what
-it has not — what never differs is that the work runs and is answered.
+## Problem and evidence
 
-## Why it exists
+A person reaching a persistent agent from chat needs the same identity, conversation, authorization,
+and turn outcome they would get from another surface. Messaging services differ in presentation and
+delivery limits, but those differences must not change who may use the agent, what work ran, whether
+it finished, or what was recorded.
 
-- An owner reaches an agent from an app they already have open, and watches it work as it happens.
-- A second platform is a file added beside the first, never a change to what already works.
-- One conversation is one session, so two of them never answer into each other.
+The predecessor contract supplied the original behaviors. Current evidence lives in
+[adapters.md](../adapters.md), the channel/provider seams, and their focused tests. Two predecessor
+directions are not currently reachable and remain product decisions rather than implied promises:
+per-channel activity controls and owner-written channel instructions.
+
+## Outcome and success
+
+An authorized person can continue a durable conversation, see an honest account of the turn, and
+exchange replies and files without cross-conversation leakage or machine-path disclosure. An
+unauthorized person receives no response and causes no provider cost.
+
+Success is accepted through the observable scenarios below. No post-release usage measure has been
+set for this increment.
+
+## Product solution
+
+Every channel maps platform exchanges to durable conversations owned by one agent. Rundesk performs
+authorization before recording or starting work, composes platform-neutral context for the agent,
+and sends shared state and delivery records back to the adapter. The adapter renders those records
+without deciding turn state or exposing private tool details.
 
 ## Requirements
 
-|  | ID | Requirement | Evidence |
-|:--:|---|---|---|
-| ✅ | R-CH-1 | A channel dispatches what arrives on it as work for the agent it belongs to | `a message from somebody allowed is carried through` |
-| ❌ | R-CH-2 | A channel belongs to exactly one agent | src/rundesk/channel.py:246 — the record is one agent's, so nothing can express a channel on two; no test proves what cannot be written |
-| ✅ | R-CH-3 | Each conversation on a channel keeps a provider session of its own | `each conversation keeps a session of its own`, `a conversation is named so two channels cannot collide` |
-| ✅ | R-CH-4 | A message from anyone the channel does not authorize is never dispatched | `a message from anyone the channel does not authorize is never dispatched`, `somebody the channel does not authorize is not dispatched`, `a gesture from somebody not allowed ends nothing`, `nobody in particular is not somebody` |
-| ✅ | R-CH-5 | What a message says cannot change which agent, provider or model answers it | `a message naming a provider or model changes neither` |
-| ✅ | R-CH-6 | A channel shows what an agent is doing and what it says mid-turn, unless its owner turned that off when the channel was added | `what the agent did is shown while the turn is still running`, `what the agent did is shown while it is happening`, `a channel shown what it is doing still hears every thought`, `a surface told not to show what it is doing still answers`, `whether a channel is shown what the agent is doing is settled when it is added`, `what a channel is shown is readable before anyone speaks to it`, `a surface is shown what the agent is doing unless it is told not to be`, `a stale discord off setting does not override the channel choice` |
-| ✅ | R-CH-27 | A channel told not to show what its agent is doing posts one message for a turn, its answer | `a quiet channel posts one message for the whole turn`, `what a quiet channel says at the end is still only its last thought`, `a quiet channels reply written a piece at a time still arrives whole` |
-| ✅ | R-CH-7 | A channel shows only whole units of an agent's output, never a part-written one | `what a brain says is not something an adapter can be shown early`, `a control raised mid turn publishes no half written answer` |
-| ✅ | R-CH-8 | A channel gives an agent's answer whole, once the turn has ended | `the answer arrives whole and once`, `an answer too long for any one message crosses whole`, `a turn that said nothing hands over no empty answer`, `an invalid attachment path does not cost the answer` |
-| ✅ | R-CH-9 | A person can stop the turn running in their own conversation, and what was said behind it stops with it | `a stop ends the turn in that conversation and nothing else`, `a stop ends the backlog and does not promote the next message`, `a stop leaves another conversations backlog alone`, `a brain that can be steered is given the words now`, `a brain that cannot be steered answers the second message after`, `a burst arriving before the turn is admitted still steers it` |
-| ✅ | R-CH-10 | A person can forget their conversation's session, so the next message starts a new one | `forgetting a conversation starts the next one fresh`, `forgetting while a turn runs is not undone when it ends` |
-| ❌ | R-CH-11 | A channel leaves nothing running once the turn it belonged to has ended | src/rundesk/gateway.py — Gateway._go, and src/rundesk/process.py — end_all — inherited from what ends a program at all; no test of its own here; .knowledge/scripts/probe-discord says what to do and what to look for |
-| ✅ | R-CH-12 | A failure to deliver on a channel does not end the turn it was reporting | `a delivery that fails does not end the turn it was reporting`, `every delivery failing still leaves the turn finished`, `a record that could not be acted on is written down`, `the loop going away is not a delivery that failed` |
-| ✅ | R-CH-13 | Raw tool arguments and results do not leave the machine unless a rule allows them | `raw tool arguments and results do not leave the machine`, `a field nobody here knows stays here`, `a safe helper name leaves but unrelated tool fields do not`, `a summary too long to show is bounded rather than dropped`, `what a brain wrote into its cache reaches a surface too` |
-| ✅ | R-CH-14 | A conversation's session is found again after the gateway holding it restarted | `a conversations session is found again after a restart`, `reconnecting finds the conversation it already had` |
-| ✅ | R-CH-15 | Work a channel dispatched is findable afterwards by the run it became | `work a channel dispatched is findable by the run it became`, `the run is named from the first mark rather than the last`, `a channel writes nothing of its own`, `where a turn came from is written into its account`, `a turn says which run it became before the brain is started` |
-| ❌ | R-CH-16 | A person can restart the agent answering them, from the channel they are on | src/rundesk/answering.py:166 — proved by hand against a real gateway; a case needs one the machine will bring back; .knowledge/scripts/probe-discord says what to do and what to look for |
-| ✅ | R-CH-17 | What a person attached reaches the agent as a file already on this machine | `a message with nothing but an attachment is still a message`, `a message with neither words nor anything attached is not one`, `something attached that is not on this machine is dropped` |
-| ✅ | R-CH-18 | A readable ordinary local file is sent only when the agent explicitly declares it in an answer; merely reading or editing one never sends it | `an ordinary file anywhere on the computer may be sent in place`, `a file a brain never made is not invented`, `a file that cannot be opened is reported without showing its path`, `an already oversize file is refused before it is hashed`, `a file that grows while read caps work at the limit`, `a symbolic link loop is a refusal instead of an exception`, `an attachment changed after validation is not sent`, `a file replaced by a pipe is refused without blocking`, `attachment verification leaves the channel event loop free`, `discord verification leaves the event loop free` |
-| ✅ | R-CH-19 | A finished thing an agent says mid-turn is shown then on a channel that shows the turn, and its last is the answer (R-CH-6) | `a finished thing said mid turn is shown when the next one arrives`, `only one finished thing said is all answer and no remark`, `a reply written a piece at a time is still held to the end` |
-| ✅ | R-CH-21 | A channel supplies communication-agnostic context naming the surface, conversation, place, and speaker | `a brain is told which surface and conversation it is answering in`, `adapter context uses communication agnostic variables`, `discord maps its places to the shared channel hierarchy`, `public and direct triggers do not require optional display words`, `a surface that names neither is answered exactly as before`, `a surface that names neither says neither`, `a name somebody chose cannot write its own line in the prompt`, `a channel of an unnamed kind says nothing about where it is` |
-| ✅ | R-CH-22 | Owner-written channel instructions are validated when written and append without replacing Rundesk instructions | `what an owner has an agent told is one piece of text`, `a place arrives in pieces as well as in words`, `a piece of a place is a strangers words and is treated as such`, `a channel scopes itself so two surfaces are two channels`, `an owner who wrote nothing anywhere is still told where the agent is`, `a channel that says nothing falls to what the agent says`, `channel and agent instructions both append`, `what is not words at all is refused when it is written`, `a name that cannot be filled in is refused when it is written`, `a brace an owner wrote for its own sake is left alone`, `every bounded instruction layer survives the composed preface`, `only an exact adapter legacy prompt is replaced`, `a third party adapter cannot replace owner instructions`, `legacy owner placeholders remain valid`, `a surface is named rather than located`, `what an agent is told is written and read back`, `writing it again replaces it and empty takes it off`, `a name that cannot be filled in is refused before it is written`, `telling a channel that is not there says so` |
-| ✅ | R-CH-20 | Nothing an agent's surface does for somebody it may not answer is visible or costly | `nothing of this channels is still running afterwards`, `a turn waiting behind another never starts during a shutdown` |
-| ✅ | R-CH-23 | Only a channel's authorized users receive answers to gateway questions | `an authorized gateway query is answered without a brain turn`, `somebody not allowed receives no gateway information` |
-| ✅ | R-CH-24 | A gateway question starts no brain turn | `an authorized gateway query is answered without a brain turn` |
-| ✅ | R-CH-25 | A follow-up arriving while a turn finishes is either accepted as steering or becomes the next turn | `a follow up offered after provider input closed becomes the next turn` |
-| ✅ | R-CH-26 | A single-user channel can change the agent's default provider and start that conversation fresh | `an authorized provider command changes the default and starts fresh`, `a stranger cannot change the provider`, `an unrunnable provider is reported and changes nothing`, `provider change waits for the old turn then starts fresh`, `a shared channels members cannot change agent wide defaults`, `provider and conversation sessions change in one transaction` |
-| ✅ | R-CH-28 | A final channel answer names its resolved provider without exposing the provider's location | `a final answer names the provider that produced it`, `a provider label is readable without exposing or rewriting its location` |
-| ✅ | R-CH-29 | An inbound reply separates its context, identifies the earlier conversation message, and bounds quoted text by REPLY_TEXT_MOST with an explicit truncation marker | `a reply reference crosses the seam with bounded context`, `a reply tells the brain which message the follow up is for`, `an ordinary message has no empty reply context` |
-| ✅ | R-CH-30 | An unresolved reply reference still starts a turn and identifies the unavailable message | `an unresolved reply reference is kept without inventing context`, `an unresolved reply still starts a turn and says what is missing` |
-| ✅ | R-CH-31 | A final answer attaches each existing absolute local file it declares as a Markdown link, image, or local `file:` URL without exposing the machine path | `a linked file is taken and only its label is left`, `an image embed is an attachment without a stray mark`, `a local file URL is decoded into its absolute path`, `a percent encoded plain path is decoded too`, `a rejected local file URL never leaks its destination`, `a preview declared mid turn is held and attached with the final`, `a scheduled reports local link is attached without exposing the path`, `a scheduled artifact refused by the adapter falls back to text`, `ordinary web links are left exactly as written`, `a link inside a fence is an example and never a delivery`, `a link and provider record alias are one attachment`, `no more are carried than one message may hold` |
-| ✅ | R-CH-32 | An agent gaining or losing a skill is told to that agent's owner alone, naming the skill | `a first look says nothing and writes down what is there`, `a skill the agent gained is told to its owner`, `a skill the agent lost is told to its owner`, `several changes at once are one message`, `a change is told once however often it is looked at`, `an agent reached on two surfaces is told on one`, `a change waits for a surface rather than being lost`, `a change a surface refused is told again`, `a change made while the agent was stopped is still told`, `an agent reached on nothing is owed no notice`, `a name that is not an agent is not watched`, `grants that cannot be read are said once`, `a notice for the owner names no conversation`, `a notice for the owner is not written down as the agent speaking`, `a notice is not offered to a channel that is not connected`, `a gateway is told how to ask what its agent may do`, `a gateway of a name that is not an agent is told of no grants` |
-| ✅ | R-CH-33 | A user newly allowed on a channel is privately introduced to the agent once in its own words, and never again while allowed | `the greeting is a turn rundesk asked for in its own conversation`, `the greeting carries the onboarding layer whole`, `what the agent wrote reaches the person it is for`, `somebody this channel does not allow is not greeted`, `a channel that is not connected greets nobody`, `a turn that said nothing is not reported as a greeting`, `a turn that failed is not reported as a greeting`, `an agent that names no brain greets nobody`, `somebody newly allowed is greeted and written down`, `somebody already greeted is not greeted again`, `a channel from before this existed greets nobody`, `only the person newly added is greeted`, `somebody taken off and added again is greeted again`, `an agent reached on two channels greets one person once`, `a greeting waits for a surface rather than being lost`, `a greeting that failed is not written down as delivered`, `a channel that is not up greets nobody`, `a gateway with no channels watches nothing`, `nothing written owes nobody and writes down who is there`, `a channel just added owes everybody it allows`, `somebody no longer allowed is dropped rather than kept`, `somebody forgotten by hand is owed a greeting again`, `forgetting writes no record where there was none`, `a new channel has introduced the agent to nobody`, `somebody taken off is no longer written down as introduced`, `the onboarding layer is filled with the agent it introduces`, `the onboarding layer never displaces rundesks own rules` |
+| ID | Product condition | Acceptance evidence |
+|---|---|---|
+| R-CH-1 | A message from an authorized identity starts or continues work for the agent that owns the channel. | Send an authorized first message and follow-up and inspect the resulting conversation and turns. |
+| R-CH-2 | A configured channel belongs to exactly one agent; its messages, conversations, files, and history are never shared with another agent. | Configure equivalent adapters for two agents and verify isolated records and replies. |
+| R-CH-3 | Each platform conversation keeps its own provider session, and no two conversations answer into one another. | Alternate messages across two conversations and inspect session/resume behavior. |
+| R-CH-4 | A message or gesture from an identity the channel does not authorize is not recorded, answered, reacted to, or sent to a provider. | Exercise unauthorized message and gesture cases and inspect records, adapter output, and turn count. |
+| R-CH-5 | Message text cannot choose a different agent, provider, model, or permission posture by naming one. | Send adversarial message text and inspect the admitted turn. |
+| R-CH-6 | An attended channel may show broad activity and finished mid-turn remarks while work runs; it never exposes partial prose, raw tool arguments, or raw tool results. | Stream representative provider records and inspect every delivery offered to a stand-in channel. |
+| R-CH-7 | Agent prose crosses the channel only as complete units; a part-written response is held until complete. | Exercise fragmented and completed provider text. |
+| R-CH-8 | The final answer is delivered once and in full, split into bounded pieces when needed; an attachment refusal does not silently remove the answer text. | Exercise short, long, empty, split, and partly refused attachment outcomes. |
+| R-CH-9 | A person can stop the active turn in their conversation without stopping another conversation or silently starting queued work behind it. | Run two conversations, stop one, and inspect both outcomes and queues. |
+| R-CH-10 | A person can start their conversation fresh so the next turn does not resume its prior provider session. | Invoke the shared fresh-session control before, during, and after a turn. |
+| R-CH-11 | When a turn ends, its provider process and turn-specific work no longer run; the long-lived channel connection may remain hosted. | Observe child-process and turn-lock state after done, stopped, and failed outcomes. |
+| R-CH-12 | A channel delivery failure is reported without changing what the provider turn actually did; no failed delivery is marked as a successful answer. | Refuse final delivery and inspect the turn record, state mark, person-visible fallback, and logs. |
+| R-CH-13 | Private tool arguments, results, paths, and unknown provider fields remain on the machine unless a separate explicit file-delivery rule permits a file. | Feed sentinel private values through provider records and inspect adapter deliveries. |
+| R-CH-14 | A conversation's provider session can be resumed after its gateway or adapter restarts. | Complete a turn, restart hosting, and continue the same conversation. |
+| R-CH-15 | Channel messages and turns are findable afterwards by conversation, source, and turn without relying on adapter-owned history. | Query the recorded conversation and turn after adapter restart. |
+| R-CH-16 | An authorized person can request a restart from their channel. Rundesk reports the request immediately, stops the gateway gracefully, and lets supervision bring it back without presenting the acknowledgement as the turn's outcome. | Exercise restart while idle and working, with and without supervision, and inspect the interaction reply, gateway lifecycle, and active turn. |
+| R-CH-17 | A message containing only attachments is valid. Accepted inbound files are local, bounded, named safely, and identified to the agent with their absolute local paths. | Exercise file-only, text-plus-file, invalid, partial, oversized, and duplicate-name messages. |
+| R-CH-18 | An outbound local file is considered only when the agent explicitly declares it in the final answer; merely reading, editing, or creating a file never sends it. | Exercise declared and undeclared files, links in code fences, symlinks, changed files, and size/count limits. |
+| R-CH-19 | A completed mid-turn remark may be shown when the next complete unit establishes that it was not the final answer; the final complete unit is the answer. | Exercise one and several complete provider thoughts with and without intervening activity. |
+| R-CH-20 | Nothing a channel does for an unauthorized identity is visible to that identity or billable to the owner. | Inspect platform activity, records, and provider turns after unauthorized input. |
+| R-CH-21 | The agent receives platform-neutral context naming the surface, conversation, place, and speaker when the adapter can supply them. Missing optional display words are omitted rather than invented. | Compare direct, room, thread, named, and unnamed context blocks. |
+| R-CH-23 | Only an authorized identity receives an answer to a shared gateway query. | Exercise every query as authorized and unauthorized identities. |
+| R-CH-24 | A shared gateway query is answered from local state and starts no provider turn. | Compare turn counts before and after `status`, `version`, `agents`, `skills`, and `schedules`. |
+| R-CH-25 | A follow-up racing with turn completion is either accepted as steering or durably becomes the next turn; it is never lost. | Drive both sides of the provider-input-close boundary. |
+| R-CH-26 | A provider change is available only on a single-user channel, changes the agent-wide default atomically, and starts that conversation fresh; a refused change alters nothing. | Exercise accepted, shared-channel, unauthorized, unavailable-provider, and in-flight cases. |
+| R-CH-28 | A final answer names the resolved provider without exposing the adapter's filesystem location. | Run named and path-form providers and inspect the completion metadata. |
+| R-CH-29 | An inbound reply identifies the earlier platform message and includes bounded author/text context when the adapter resolved it. | Exercise resolved replies with long and multiline fields. |
+| R-CH-30 | An unresolved inbound reply still starts the turn and says the earlier message could not be read without inventing its author or text. | Exercise deleted, uncached, and otherwise unavailable reply parents. |
+| R-CH-31 | A final answer may declare up to the supported count and size of existing absolute local files through Markdown links, images, or local file URLs; machine paths are removed from posted text and refusals are visible. | Exercise each declaration form, encoded paths, duplicates, limits, replacement races, and refusal wording. |
+| R-CH-32 | When an agent gains or loses a skill, one private owner notice names the change; a refused notice remains pending rather than being reported as delivered. | Change grants while connected, disconnected, stopped, and on multiple surfaces. |
+| R-CH-34 | An authorized person can request a graceful gateway shutdown from their channel. The response says what was requested without promising that an unsupervised gateway will return. | Exercise shutdown with supervised and unsupervised gateways and inspect the private acknowledgement and final gateway state. |
 
-## Open questions
+## Scope
 
-- Whether a channel may carry a clarifying question before any provider work that raises one exists.
-- Whether showing work as it happens is the same decision on every surface, or each one's to make.
-- Where a channel's token is kept once it has been read, given it may never arrive as an argument.
+**In:** authorization; conversation/session identity; turn activity and final answers; shared
+controls and queries; replies; inbound and outbound attachments; private operational notices.
+
+**Out:** Discord-specific rendering; channel setup and credentials; provider protocol internals;
+cross-surface conversation linking; pricing or spend limits.
+
+## Decisions and open questions
+
+| Item | Status and impact | Decision needed |
+|---|---|---|
+| Activity visibility | The predecessor required an owner-controlled quiet channel, but the current product exposes no channel switch and always offers broad activity to capable surfaces. | Decide whether activity is always on, off by default, or configurable before restoring R-CH-27. |
+| Owner-written channel instructions | Predecessor R-CH-22 required them; the current channel schema and command surface have no reachable setting. | Decide whether this product direction carries forward before adding persisted state. |
+| Newly allowed user introduction | Predecessor R-CH-33 required an agent-authored private greeting; no current behavior was established in this audit. | Decide whether to carry it forward and who receives it before specifying acceptance. |
+| Conversation retention | Current records are durable, but no product retention window is approved. | Decide before any automated conversation or message deletion is introduced. |
+
+## Validation
+
+| Requirement area | Current evidence checked | Result | Last checked |
+|---|---|---|---|
+| Authorization and inbound flow | `src/rundesk/channels/hosting.py`, `src/rundesk/channels/arriving.py`, `tests/test_channels_hosting.py`, `tests/test_channels_arriving.py` | Current mechanics inspected; acceptance not executed in this PRD pass. | 2026-08-08 |
+| Turn presentation and controls | `src/rundesk/providers/answering.py`, `tests/test_providers_answering.py` | Offline suite passed on current Python and macOS Python 3.9; activity-policy decision remains open. | 2026-08-08 |
+| Attachments and replies | `src/rundesk/channels/files.py`, `src/rundesk/channels/delivery.py`, `tests/test_channels_files.py`, `tests/test_channels_delivery.py` | Current mechanics inspected; acceptance not executed in this PRD pass. | 2026-08-08 |
+| Operational notices | `src/rundesk/gateways/host.py`, `tests/test_gateway_host.py` | Skill-change notice mechanics inspected; newly allowed user greeting not established. | 2026-08-08 |

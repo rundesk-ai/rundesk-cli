@@ -1542,10 +1542,10 @@ class WhatAGestureReaches(Hosting):
 
     def test_a_query_is_asked_of_steering_rather_than_of_a_turn(self):
         steering = _SteeringStub()
-        self.gesturing(self.a_gesture(say="query", query=hosting.STATUS, control=None), steering)
+        self.gesturing(self.a_gesture(say="query", query=hosting.AGENTS, control=None), steering)
 
         self.assertTrue(support.waited_until(lambda: steering.asked_with, PATIENCE))
-        self.assertEqual((self.agent, "2207", hosting.STATUS), steering.asked_with[0])
+        self.assertEqual((self.agent, "2207", hosting.AGENTS), steering.asked_with[0])
         self.assertTrue(support.waited_until(lambda: self.answered(), PATIENCE))
 
     def test_changing_the_brain_carries_what_was_typed(self):
@@ -1575,6 +1575,15 @@ class WhatAGestureReaches(Hosting):
 
         self.assertEqual([], steering.controlled_with)
         self.assertEqual([], self.answered(), "a stranger was answered, which says an agent is here")
+
+    def test_a_stranger_cannot_ask_for_the_install_wide_agent_directory(self):
+        steering = _SteeringStub()
+        gesture = self.a_gesture(say="query", query=hosting.AGENTS, control=None, user="9999")
+        self.gesturing(gesture, steering, allowed=("2207",))
+        self.several_passes()
+
+        self.assertEqual([], steering.asked_with)
+        self.assertEqual([], self.answered(), "a stranger learned which agents this install keeps")
 
     def test_steering_that_goes_wrong_still_answers_and_never_ends_the_channel(self):
         # Somebody is waiting on a spinner. A gesture that raised used to leave them there for ever,
