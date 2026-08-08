@@ -10,6 +10,7 @@ Run directly: `python3 tests/test_env.py`
 import base64
 import io
 import os
+import shutil
 import threading
 import unittest
 from unittest import mock
@@ -363,13 +364,14 @@ class WhatACopyCarries(Values):
 
         name = backups.save()
 
-        copied = paths.backups() / name / "secrets"
-        self.assertEqual(secrets.where().read_bytes(), (copied / secrets.KEPT_IN).read_bytes())
-        self.assertEqual(secrets.key_at().read_bytes(), (copied / secrets.KEY_IN).read_bytes())
-        self.assertNotIn(A_TOKEN, (copied / secrets.KEPT_IN).read_text(encoding="utf-8"))
-        self.assertEqual(0o700, os.stat(copied).st_mode & 0o777)
-        self.assertEqual(0o600, os.stat(copied / secrets.KEY_IN).st_mode & 0o777)
-        self.assertEqual(0o600, os.stat(copied / secrets.KEPT_IN).st_mode & 0o777)
+        with backups._opened_copy(paths.backups(), name) as data:
+            copied = data / "secrets"
+            self.assertEqual(secrets.where().read_bytes(), (copied / secrets.KEPT_IN).read_bytes())
+            self.assertEqual(secrets.key_at().read_bytes(), (copied / secrets.KEY_IN).read_bytes())
+            self.assertNotIn(A_TOKEN, (copied / secrets.KEPT_IN).read_text(encoding="utf-8"))
+            self.assertEqual(0o700, os.stat(copied).st_mode & 0o777)
+            self.assertEqual(0o600, os.stat(copied / secrets.KEY_IN).st_mode & 0o777)
+            self.assertEqual(0o600, os.stat(copied / secrets.KEPT_IN).st_mode & 0o777)
 
     def test_a_backup_repairs_loose_secret_store_modes(self):
         paths.data().mkdir(parents=True, exist_ok=True)
@@ -381,10 +383,11 @@ class WhatACopyCarries(Values):
 
         name = backups.save()
 
-        copied = paths.backups() / name / "secrets"
-        self.assertEqual(0o700, os.stat(copied).st_mode & 0o777)
-        self.assertEqual(0o600, os.stat(copied / secrets.KEY_IN).st_mode & 0o777)
-        self.assertEqual(0o600, os.stat(copied / secrets.KEPT_IN).st_mode & 0o777)
+        with backups._opened_copy(paths.backups(), name) as data:
+            copied = data / "secrets"
+            self.assertEqual(0o700, os.stat(copied).st_mode & 0o777)
+            self.assertEqual(0o600, os.stat(copied / secrets.KEY_IN).st_mode & 0o777)
+            self.assertEqual(0o600, os.stat(copied / secrets.KEPT_IN).st_mode & 0o777)
 
     def test_a_restore_puts_the_backed_up_credential_back(self):
         paths.data().mkdir(parents=True, exist_ok=True)
@@ -402,8 +405,10 @@ class WhatACopyCarries(Values):
         paths.data().mkdir(parents=True, exist_ok=True)
         files.write_json(paths.data() / "config.json", {"backup_enabled": True})
         self.given(DISCORD_TOKEN=A_TOKEN)
-        name = backups.save()
-        copied = paths.backups() / name / "secrets"
+        name = "2026-08-04T03-00-00Z"
+        copied_data = paths.backups() / name
+        shutil.copytree(paths.data(), copied_data)
+        copied = copied_data / "secrets"
         os.chmod(copied, 0o755)
         os.chmod(copied / secrets.KEY_IN, 0o644)
         os.chmod(copied / secrets.KEPT_IN, 0o644)

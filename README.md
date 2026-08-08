@@ -46,7 +46,8 @@ DM `ava` tonight. The same agent, context, and workspace are still there tomorro
 - **Improve how it handles your work.** Turn repeated procedures into reusable skills
   and integration CLIs, then grant them to any agent.
 - **Keep it yours.** Rundesk runs locally, needs no hosted Rundesk server, and keeps
-  backups outside the program and data an uninstall can remove.
+  compressed backups outside the program and data an uninstall can remove. Each backup
+  contains sealed credentials and their key, so its storage is credential-bearing.
 
 ## 🚀 Quick start
 
@@ -302,7 +303,9 @@ dotenv option.
 ### Operations and data
 
 - Install, automatic daily updates, version checks, status, and doctor commands
-- Manual and automatic daily backups, restore, and configurable backup location
+- Manual compressed backups, restore, and configurable backup location
+- Existing v0.40 directory backups remain restorable; older `rundesk-data-*.zip` archives use a
+  different format and are refused rather than guessed compatible
 - One set of environment values every program rundesk starts is given, so integration
   commands find their credentials without anything being exported — held here or fetched
   by a command you name, never shown in full, and included in protected backups
