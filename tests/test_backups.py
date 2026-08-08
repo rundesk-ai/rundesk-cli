@@ -349,10 +349,10 @@ class TheArchiveFormat(Copies):
         seen = []
         real_open = os.open
 
-        def watching(path, flags, mode=0o777):
+        def watching(path, flags, mode=0o777, **options):
             if str(path).endswith(".zip.incoming"):
                 seen.append(mode)
-            return real_open(path, flags, mode)
+            return real_open(path, flags, mode, **options)
 
         with mock.patch.object(backups.os, "open", side_effect=watching):
             backups.save(self.data, self.at, A_MOMENT)
