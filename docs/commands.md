@@ -95,7 +95,7 @@ home              /Users/you/.rundesk
 program           /Users/you/.rundesk/app (installed)
 data              /Users/you/.rundesk/data
 backups           /Users/you/.rundesk/backups
-secrets           /Users/you/.rundesk/secrets
+secrets           /Users/you/.rundesk/data/secrets
 projects          /Users/you/.rundesk/projects
 agents            /Users/you/.rundesk/data/agents — 2 agents
 fit to run        yes
@@ -1092,6 +1092,78 @@ The number at the end is a fingerprint of the whole. Every turn records it, so w
 is provable afterwards without a copy of it being kept — and a prompt that changed between releases
 says so rather than leaving somebody to guess.
 
+## permissions
+
+What **macOS** lets rundesk do. Not what a brain's tool permissions allow — every provider adapter
+already runs its CLI with that switched off, and this reports on none of it.
+
+```console
+$ rundesk permissions
+as of 2026-08-08T15:40:55Z, about gateway (/opt/homebrew/…/Python.app/Contents/MacOS/Python)
+
+PROBE                  IS
+control/accessibility  blocked
+control/post-events    blocked
+screen/grant           ready
+files/full-disk        blocked
+shell/admin            not checked
+permissions: 3 still not allowed — rundesk permissions check to prove them again
+```
+
+The bare verb **runs nothing**: it says what the last check found, so *what is still not allowed* can
+be asked without touching the machine. A probe nobody has run says `not checked` rather than
+borrowing a verdict.
+
+**An answer belongs to a process, not to a machine.** macOS makes the nearest application bundle
+responsible for a permission, so anything you start from a terminal inherits what you once granted
+that terminal, while a gateway — a launchd job with no application above it — starts with nothing.
+The two disagree, which is why every answer names the lineage it was proved in:
+
+```console
+$ rundesk permissions lineage
+terminal — com.googlecode.iterm2
+  /Applications/iTerm.app/Contents/MacOS/iTerm2 is responsible for this process
+  below: …/Python ← /bin/zsh ← /Applications/iTerm.app/Contents/MacOS/iTerm2
+```
+
+To ask on a gateway's behalf, ask from inside a turn: `"$RUNDESK_COMMAND" permissions check`.
+
+```console
+$ rundesk permissions check
+these answers are about this gateway (/opt/homebrew/…/Python.app/Contents/MacOS/Python)
+one grant covers every agent on this machine — they are one client, not one each. The client is the
+interpreter at the path above, so a `brew upgrade` of it takes the grants away with no warning and
+this is what finds out
+
+control
+  accessibility  blocked     this process is not trusted for Accessibility …
+                     open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+screen
+  grant    ready       this process itself holds Screen Recording …
+  capture  ready       the screen can be captured — a readable 8x8 image came back
+permissions: 1 of 11 cannot be used by …/Python:
+        open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+```
+
+`check` proves them now and writes down what it found; naming a group (`control`) or one probe
+(`files/full-disk`) proves only that, and leaves every other stored answer at its older timestamp.
+With nothing named it proves everything needed to operate the machine; `--everything` adds the rest.
+It **refuses to run at all** when it cannot work out which lineage it is in — a table of verdicts with
+no process named is a claim about nobody.
+
+Seven verdicts, one per thing there is to do: `ready`, `blocked`, `unasked`, `closed`, `absent`,
+`unrunnable`, `unproven`. The last is the third state and counts as trouble — a check that proved
+nothing has proved nothing. Exit `0` only when everything asked for is `ready`.
+
+**Nothing prompts and nothing is left behind.** Every probe is a preflight or a read; where no
+non-prompting way to ask exists, the probe answers `unproven` rather than guessing. The screenshot is
+eight pixels of one corner and is deleted on every path — and it is not attempted at all without the
+grant, because asking for one without it was measured making macOS *write* the grant.
+
+[`permissions.md`](permissions.md) has the whole of it, and
+[`research/2026-08-08-what-this-mac-lets-a-process-do.md`](research/2026-08-08-what-this-mac-lets-a-process-do.md)
+has the measurements.
+
 ## messages
 
 What an agent has been told, and what it said back.
@@ -1287,6 +1359,10 @@ saved 2026-08-04T03-00-00Z
 The copy is built under a name no finished copy wears and renamed into place only once all of it is
 there, so an interruption leaves litter rather than a copy that is not one.
 
+The copy includes `data/secrets/`: sealed values and the key that opens them. Treat backup storage as
+credential-bearing data. The files remain private, but sealing does not protect a complete copy from
+somebody who can read it.
+
 It then lets go of the oldest past `backup_retention`. **This is the only thing in rundesk that
 removes a copy**, it considers only names that are copies, and a copy it could not remove is said out
 loud — but neither changes the exit code, because the operation asked for was a copy and the copy is
@@ -1348,7 +1424,7 @@ DISCORD_TOKEN:
 DISCORD_TOKEN is set — MTIxxxxxxxxken
 
 $ rundesk env list
-values in /Users/you/.rundesk/secrets
+values in /Users/you/.rundesk/data/secrets
 NAME             VALUE
 DISCORD_TOKEN    MTIxxxxxxxxken
 SLACK_BOT_TOKEN  not set
@@ -1369,8 +1445,8 @@ right thing in a shell. `unset` empties a name and **leaves the name**, so a lis
 integration that was configured here and is now switched off, rather than one that was never set up.
 
 Where these are kept and what protects them is [`layout.md`](layout.md) — the short version is that
-a backup cannot contain one, the files are yours alone, and each value is sealed on disk with a key
-kept beside it.
+the files are yours alone, each value is sealed on disk with a key kept beside it, and a backup
+carries both. Protect backup storage as credential-bearing data.
 
 ## skills
 
@@ -1519,11 +1595,21 @@ rundesk updated to v0.41.0
 ```
 
 Takes no flags. The order is chosen so the failure that cannot damage anything happens first: ask,
-then fetch to a temporary directory, then swap. The swap stages every entry and renames them into
-place, putting back what was there if any part fails — so an interrupted update leaves the install on
-the release it was, never on neither.
+then fetch to a temporary directory, stand down every online gateway, then swap and settle. The swap
+stages every entry and renames them into place, putting back what was there if any part fails — so an
+interrupted update leaves the install on the release it was, never on neither. Gateways that were
+already offline remain offline; every gateway the update stopped is started again.
 
-`data/` is never touched by an update.
+The notified channel receives these maintenance notices around a successful update:
+
+- `🛠️ Installing an update — I'm installing the new rundesk update, be back shortly.`
+- `👋 I'm back — new rundesk update installed, release notes for v0.41.0`, with the release notes
+  linked to that version.
+
+The return notice is written only after the new release settles and is consumed only by a gateway
+running that exact version. An ordinary stop/start keeps the ordinary gateway notices.
+
+The program-tree swap never replaces `data/`; migration steps may deliberately carry its layout.
 
 **Being on the newest release is not the same as being settled on it.** An update interrupted between
 replacing the files and settling — a machine that slept, a terminal that closed — leaves an install
@@ -1562,12 +1648,10 @@ What it takes, one named thing at a time, never a sweep:
 - the PATH link — **only where it points into this install's own `app/`**, so a second install on the
   machine keeps its command
 - `app/`, whole, unless it looks like somebody's checkout
-- `data/`, **only with `--purge`**
-- `secrets/`, **only with `--purge`** — a credential left on a machine rundesk has been removed
-  from is the worst thing here to leave lying about, and an ordinary removal keeps them because
-  they are yours and no backup can bring them back
+- `data/`, **only with `--purge`**, including the live credential store below it
 - `backups/` — **never.** Not "not by default": there is no argument to this command that reaches
-  them, and the code that removes things does not name the directory at all.
+  them. Copies can contain recoverable credentials, so purging the live store is not the same as
+  removing every credential from the machine.
 
 A removal that did not happen is reported as a failure. That is the whole point of the command.
 

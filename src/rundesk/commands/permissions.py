@@ -61,7 +61,7 @@ ABOUT_A_GATEWAY = (
 
 
 def register(sub: argparse._SubParsersAction) -> None:
-    """`rundesk permissions [apps|lineage|check]`, built beside the verb."""
+    """`rundesk permissions [list|lineage|check]`, built beside the verb."""
     kept = sub.add_parser("permissions", help="what this Mac lets rundesk do")
     what = kept.add_subparsers(dest="what")
     what.add_parser("list", help="every probe, what it is for, and what it touches")

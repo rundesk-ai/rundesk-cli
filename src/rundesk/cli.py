@@ -59,6 +59,9 @@ from rundesk.utils.programs import Ran
 #: suite reaches a network by forgetting it.
 Building = Callable[..., Ran]
 
+#: What starts a program while a capability is being proved. See `main`.
+Probing = Callable[..., Ran]
+
 EPILOG = """\
 examples:
   rundesk status                how rundesk is on this machine
@@ -159,7 +162,8 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
          supervising: Optional[job.Supervising] = None,
          refreshing: Optional[Refreshing] = None,
          building: Optional[Building] = None,
-         reaching: Optional[Reaching] = None) -> int:
+         reaching: Optional[Reaching] = None,
+         probing: Optional[Probing] = None) -> int:
     """Parse what was typed and hand it to the one module that answers it.
 
     Bare `rundesk` describes what it can do and exits `0`: somebody who typed the command with no
@@ -180,6 +184,12 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
     stand-in by default, which is the reverse of what it does for the other two, and that reversal
     is deliberate.
 
+    **`probing` is the second with no safety net, and for a sharper reason.** There is no closed
+    port for `osascript` either — and unlike launchd, the real thing can raise a consent dialog on
+    whoever's desktop is in front of the suite, where one wrong click denies a grant permanently.
+    Worse, `screencapture` from an ungranted process was measured making macOS *write* a grant. So
+    `tests/support.py` passes a stand-in by default here too.
+
     **`backups` and `update` are handed a fourth thing, built here out of the third.** A restore
     replaces the file every running gateway's lock stands on, and an update replaces the imported
     program beneath every gateway. Both stand online gateways down and start exactly them again —
@@ -194,7 +204,7 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     try:
         return _the_verb(args, asking, fetching, supervising, refreshing, building, reaching,
-                         parser)
+                         probing, parser)
     except KeyboardInterrupt:
         # **A stop is a normal way for a command to end, and it must read like one.** Every long
         # verb — a turn, a restore, an update — can be Ctrl-C'd or sent a `SIGTERM`, and both
@@ -211,7 +221,7 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
 
 
 def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshing, building,
-              reaching, parser: argparse.ArgumentParser) -> int:
+              reaching, probing, parser: argparse.ArgumentParser) -> int:
     """Which module answers what was typed. One `if` per verb, in the order `rundesk` lists them."""
     if args.command is None:
         parser.print_help()
@@ -237,7 +247,7 @@ def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshin
     if args.command == "turns":
         return cmd_turns(args)
     if args.command == "permissions":
-        return cmd_permissions(args)
+        return cmd_permissions(args, probing)
     if args.command == "providers":
         return cmd_providers(args)
     if args.command == "schedules":

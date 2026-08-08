@@ -12,6 +12,7 @@ anyone learns from it is not to trust the rest.
 | [commands.md](./commands.md) | Every operation the command offers, and what each guarantees |
 | [catalogs.md](./catalogs.md) | Writing a skill, and publishing a catalog of them |
 | [gateways.md](./gateways.md) | What a gateway is, and every state one can get stuck in |
+| [permissions.md](./permissions.md) | What macOS lets rundesk do, and why the answer depends on which process asks |
 | [adapters.md](./adapters.md) | Writing the program behind a channel: the three invocations, and every record |
 | [providers.md](./providers.md) | What a turn is and what is written down about one — and writing the program behind a brain |
 | [schedules.md](./schedules.md) | What a schedule is, and every state one can get stuck in |

@@ -13,6 +13,7 @@ current promises unless a current PRD links to them.
 | [channel-slack.md](./channel-slack.md) | predecessor reference | the previous build's Slack behavior; Slack is outside the current channel increment |
 | [agent-delegation.md](./agent-delegation.md) | predecessor draft | the previous build's delegation design |
 | [agent-role.md](./agent-role.md) | predecessor draft | the previous build's role-worker design |
+| [machine-permissions.md](./machine-permissions.md) | current draft | what macOS lets a rundesk process do, and whose grants an answer is about |
 
 ## Status and evidence
 
