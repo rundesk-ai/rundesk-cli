@@ -259,7 +259,8 @@ class GuidingWorkingDelegation(support.Isolated):
             hosting._collected_what_came_back("ava", directory.where("ava"), reviews)
             self.assertIsNone(kept.one("ava", self.delegation).answered_at)
             release.set()
-            feeder.join(2)
+            feeder.join(5)
+            self.assertFalse(feeder.is_alive(), "the refusing feeder did not release its claim")
         provider_kept.finish_turn("ava", active, provider_kept.STOPPED)
 
         hosting._collected_what_came_back("ava", directory.where("ava"), reviews)
@@ -269,7 +270,7 @@ class GuidingWorkingDelegation(support.Isolated):
             and provider_kept.list_turns("ava")[0]["id"] != active
             and provider_kept.list_turns("ava")[0]["ended_at"]
             and not any(one.name == "review-bob" and one.is_alive()
-                        for one in threading.enumerate()), 15))
+                        for one in threading.enumerate()), 30))
         result = [one for one in arriving.messages("ava", self.parent.conversation)
                   if one["author"] == arriving.BY_RUNDESK]
         self.assertEqual(1, len(result))
