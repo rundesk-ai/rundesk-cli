@@ -248,13 +248,24 @@ FINISHED_HELPER = f"{DID['delegate']} subagent finished"
 #: One mark and one phrasing per word `delegations/hosting.py` defines. A word absent from here
 #: would show as the broad fallback rather than as nothing, and the suite checks this covers
 #: rundesk's list rather than trusting it to.
-HANDED = {"handed": "🤖", "working-still": "⏳", "answered": "✅"}
+HANDED = {"handed": "🤖", "guided": "💬", "working-still": "⏳",
+          "stopping": "🛑", "answered": "✅", "carried-on": "🔁"}
 
-#: The same three, as a person would say them. `handed` reads forwards to the agent taking the work
-#: and the other two read back from the agent that has it, because that is the order the facts
-#: arrive in: first that it went somewhere, then what that somebody is doing.
-HANDED_SAID = {"handed": "handed to", "working-still": "still working",
-               "answered": "answered"}
+#: The same six, as a person would say them: **what goes before the helper's name and what goes
+#: after it.** One shape rather than two, because the name is the one thing every line has and the
+#: words on either side of it are what say which way the news is travelling.
+#:
+#: What this agent did *to* the work puts its words in front — `handed to dev`, `updated dev` — and
+#: what the helper is doing puts them behind — `dev still working`, `dev answered`. That is the
+#: order the facts arrive in: first that the work went somewhere, then what that somebody is doing
+#: with it. `asked dev to stop` is the one that needs both sides, and is why there are two.
+HANDED_SAID = {"handed": ("handed to", ""), "guided": ("updated", ""),
+               "working-still": ("", "still working"), "stopping": ("asked", "to stop"),
+               "answered": ("", "answered"), "carried-on": ("carried on with", "")}
+
+#: The words that carry how long the work has been out. `handed` is not among them because it
+#: carries which ask it is instead — see `delegation_line`, which is where both are put on.
+ELAPSES = ("working-still", "answered")
 
 #: Where what somebody attached is put on its way through: inside `RUNDESK_CHANNEL_HOME`, which is
 #: this channel's own directory and the only place rundesk will take a file from. Each message gets
@@ -537,6 +548,25 @@ def _a_helper(said: Any) -> str:
     return flat(named, A_HELPER_AT_MOST)
 
 
+#: What Discord reads as markup rather than as text. Escaped inside a name before it is emphasised,
+#: because a name is a stranger's text and an unbalanced `*` in one would close the bold early and
+#: leave the rest of the line — including the ask id — in somebody else's formatting.
+#:
+#: **The backslash is first and that is not cosmetic**: escaping it after the others would go back
+#: over the escapes just added and double every one of them.
+MARKUP = "\\*_`~|"
+
+
+def _bold(said: str) -> str:
+    """One name, emphasised. `""` stays `""`, so the line it is joined into drops it rather than
+    arriving with an empty pair of asterisks in the middle."""
+    if not said:
+        return ""
+    for mark in MARKUP:
+        said = said.replace(mark, f"\\{mark}")
+    return f"**{said}**"
+
+
 def activity_line(it: Dict[str, Any]) -> str:
     """One thing the agent did, as one line of small print — **broad, and never its details.**
 
@@ -584,11 +614,23 @@ def delegation_line(it: Dict[str, Any]) -> str:
     who = _a_helper(it.get("who"))
     ask = flat(it.get("ask"), A_HELPER_AT_MOST)
     elapsed = flat(it.get("elapsed"), A_HELPER_AT_MOST)
+    before, after = said
+    # **The name is the one word somebody scans for**, and every line here has one in a different
+    # place — after `handed to`, before `still working`, between `asked` and `to stop`. Bold is what
+    # makes six differently-shaped lines read as one column of *who*, in a register that is otherwise
+    # deliberately quiet. Bolded after flattening, never before: `flat` is what makes this somebody
+    # else's name rather than somebody else's markup.
+    # Empty sides are dropped rather than joined, so one template covers all six words without any
+    # of them arriving with a doubled space or a space before its full stop.
+    line = " ".join(part for part in (mark, before, _bold(who), after) if part)
     # Which ask it is matters once — when it goes — because that is the name somebody types to guide
     # or stop it. After that the room already knows, and repeating it every twenty minutes is noise.
-    if state == "handed":
-        return f"{SUBTEXT}{mark} {said} {who}{' · ' + ask if ask else ''}"
-    return f"{SUBTEXT}{mark} {who} {said}{' · ' + elapsed if elapsed else ''}"
+    # Only the two words about the work itself carry how long it has been out. A steer, a stop and a
+    # carrying-on are news about somebody reaching *into* the work, and "· 41m" beside one reads as
+    # how long the reach took. Rundesk sends none for those; this drops one anyway rather than
+    # rendering it, because what a line means is this file's to keep true.
+    tail = ask if state == "handed" else (elapsed if state in ELAPSES else "")
+    return f"{SUBTEXT}{line}{' · ' + tail if tail else ''}"
 
 
 def grouped(groups: List[Any], lines: List[Any]) -> List[Any]:

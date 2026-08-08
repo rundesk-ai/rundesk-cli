@@ -208,6 +208,33 @@ def stop_asked(agent: str, delegation_id: str, now: Optional[datetime] = None) -
         return bool(moved.rowcount)
 
 
+def guided(agent: str, delegation_id: str, now: Optional[datetime] = None) -> bool:
+    """Move the moment on because words were said into work still going. `False` where there were
+    none to say them into.
+
+    **The words themselves are not here and never will be**, which is why this writes a moment and
+    nothing else: guidance is a `conversation_messages` row in the *answering* agent's store, and
+    that is the membership rule step `0005` was written to. What this records is that the delegation
+    was touched, which is a fact about the delegation rather than about what was said.
+
+    Two things read it, and neither would work without it. The retention window is counted from
+    `latest_at` (R-DEL-21), so before this a delegation somebody steered for an hour aged as though
+    nobody had been near it. And the gateway's sweep says what is happening to work handed out by
+    watching the row move — guidance that moved nothing was guidance no room could be told about.
+
+    `answered_at IS NULL` rather than a read-then-write for the reason `answered` gives: collection
+    settles rows from another process, and a guard that decided before it wrote would stamp a
+    delegation that had been answered in between.
+    """
+    at = config.moment_of(now)
+    with records.writing(directory.records(agent)) as conn:
+        moved = conn.execute(
+            f"UPDATE {TABLE} SET latest_at = ?"
+            " WHERE delegation_id = ? AND answered_at IS NULL",
+            (at, delegation_id))
+        return bool(moved.rowcount)
+
+
 def _read(row: Any) -> Delegation:
     """One row as a `Delegation`, naming every field rather than trusting column order."""
     return Delegation(

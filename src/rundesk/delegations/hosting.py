@@ -62,22 +62,39 @@ COLLECTED_AT_MOST = 4
 WORKING = "working"
 
 #: What a room is told about work this agent handed over, and the whole of that vocabulary
-#: (R-DEL-16). Three words, because there are three things a person waiting actually wants: that it
-#: went, that it is still going, and that it came back.
+#: (R-DEL-16, R-DEL-23). Six words, and they divide into two kinds that the sweep below keeps
+#: apart because a surface has to be told them under different rules.
+#:
+#: **Three are where the work stands** — it went, it is still going, it came back — and each is said
+#: once for as long as it remains true. **Three are something that just happened to it**: somebody
+#: put words into it, somebody asked it to end, somebody carried a finished one on. Those are
+#: moments rather than states, they are said once each time they occur, and the work goes on
+#: standing wherever it stood a moment before.
 #:
 #: **Words and never sentences.** What each one *looks like* is the surface's — see
 #: `channels.hosting.delegating` — so a platform with a quiet register puts them in it and one
 #: without renders them however it can. A sentence composed here would be this product choosing
 #: Discord's small print for every surface that will ever exist.
 #:
-#: There is no fourth for a delegation that failed, and that is deliberate rather than missing. How
+#: There is no word for a delegation that failed, and that is deliberate rather than missing. How
 #: the work *went* is the answer's to say: a turn that failed still answers, with whatever it managed
 #: to say, and that answer arrives in the room a moment later. A mark here saying "failed" would be
 #: this sweep asserting something about words it has never read.
+#:
+#: `STOPPING` is the one word here that says what was *asked for* rather than what became of the
+#: work, and it is named for that: a stop is a request, and what came of it arrives as an answer
+#: like any other.
 HANDED_OVER = "handed"
 STILL_WORKING = "working-still"
 CAME_BACK = "answered"
-SHOWN = (HANDED_OVER, STILL_WORKING, CAME_BACK)
+STANDS = (HANDED_OVER, STILL_WORKING, CAME_BACK)
+
+GUIDED = "guided"
+STOPPING = "stopping"
+CARRIED_ON = "carried-on"
+HAPPENED = (GUIDED, STOPPING, CARRIED_ON)
+
+SHOWN = STANDS + HAPPENED
 
 #: How long work stays out before the room is told it is still out, and how often after that.
 #:
@@ -154,11 +171,19 @@ class Carrying(NamedTuple):
     more, and a line said twice is a far smaller cost than a durable record to keep in step — which
     is the trade the build this replaces made, in those words, and got right.
 
-    `said` maps a delegation's id to the last thing said about it: one of `SHOWN`, or the check-in
-    number for `STILL_WORKING`, so the twentieth minute and the fortieth are different answers.
+    `said` maps a delegation's id to where it last stood: one of `STANDS`, or the check-in number
+    for `STILL_WORKING`, so the twentieth minute and the fortieth are different answers.
+
+    `marked` maps it to the last thing that *happened* to it: one of `HAPPENED`, stamped with the
+    moment it happened at, so a second steer is not the first. **Two dictionaries and not one**,
+    because the two questions are asked of the same delegation on the same beat and one answer
+    cannot hold both: a delegation that stood at `handed`, was steered, and still stands at `handed`
+    would otherwise have "handed" overwritten by "guided" and be announced as newly handed over the
+    moment the steer stopped being the latest news.
     """
 
     said: Dict[str, str]
+    marked: Dict[str, str]
 
 
 def settled(name: str, where) -> Carrying:
@@ -174,8 +199,14 @@ def settled(name: str, where) -> Carrying:
     **Nothing has been said yet, and it starts saying so.** A gateway coming up to find work already
     out tells the room it is still out, on its first pass, rather than staying silent about it for
     ever because a process that is gone had mentioned it once.
+
+    One thing is a little poorer for that and it is worth stating rather than discovering: telling a
+    delegation somebody *carried on* from one somebody *steered* is done by remembering that this
+    process last saw it answered, so a gateway restarted between the answer and the resume says
+    "guided" where it would have said "carried on". One word, once, across a restart — the same
+    trade this whole structure is written to, and cheaper than a durable record to keep in step.
     """
-    return Carrying(said={})
+    return Carrying(said={}, marked={})
 
 
 def looked(name: str, where, carrying: Carrying, answering: Answering) -> Carrying:
@@ -336,38 +367,60 @@ def _collected_what_came_back(name: str, where, answering: Answering) -> None:
 
 
 def _showed_what_is_happening(name: str, carrying: Carrying, answering: Answering) -> None:
-    """Say, where the person asked, that work went out, that it is still out, and that it came back.
+    """Say, where the person asked, what has become of the work this agent handed out and what has
+    just been done to it (R-DEL-16, R-DEL-23).
 
     **Every ask this agent handed over, and never the ones handed to it** (R-DEL-16). The other side
     of a delegation is somebody else's room, and an agent that announced work it was merely *doing*
     would be posting another person's task into its own.
 
     **Driven off the rows and off what this process has already said, on the beat rather than at the
-    moment.** The verb that hands work over runs in a command process with no channel connection and
-    nothing to post through, so the only thing able to say a delegation happened is whatever is
-    already watching — which is this loop. What makes it an event rather than a poll is that the
-    record moved: a state is said once and the same state is never said twice.
+    moment.** The verbs that hand work over, steer it, stop it and carry it on all run in command
+    processes with no channel connection and nothing to post through, so the only thing able to say
+    any of it happened is whatever is already watching — which is this loop. What makes it an event
+    rather than a poll is that the record moved: nothing is said twice for the same movement.
+
+    **At most one line per delegation per beat, and what just happened wins.** A steer that also
+    crossed a twenty-minute boundary is one piece of news and not two, and of the two the steer is
+    the one somebody scrolling has not already been able to work out. The check-in it displaced is
+    recorded as said, so the room hears the next one rather than that one late.
     """
     for one in kept.every(name):
-        said = carrying.said.get(one.delegation_id)
-        state, since = _how_it_stands(one)
-        if state is None or said == state:
+        stood = carrying.said.get(one.delegation_id)
+        marked = carrying.marked.get(one.delegation_id)
+        standing, since = _how_it_stands(one)
+        if standing is None:
             continue
+        happened = _what_just_happened(one, stood)
         # Written before it is sent, and not after. A surface that throws costs one skipped line;
         # written after, a platform that refuses every write makes this say the same thing on every
-        # beat for as long as the work is out.
-        carrying.said[one.delegation_id] = state
-        answering.showed(name, one.parent_conversation, _as_shown(state), one.to_agent,
-                         one.delegation_id, since)
+        # beat for as long as the work is out. **Both are written whichever is spoken**, so the one
+        # that lost this beat is not announced late on the next.
+        carrying.said[one.delegation_id] = standing
+        if happened is not None:
+            carrying.marked[one.delegation_id] = happened
+            if happened != marked:
+                # No elapsed. How long the work has been out is news about the work, and this is
+                # news about somebody reaching into it — a clause saying "· 41m" beside "updated
+                # elena" would read as how long the steering took (R-DEL-23).
+                answering.showed(name, one.parent_conversation, _as_shown(happened), one.to_agent,
+                                 one.delegation_id)
+                continue
+        if standing != stood:
+            answering.showed(name, one.parent_conversation, _as_shown(standing), one.to_agent,
+                             one.delegation_id, since)
     _forgotten(carrying, {one.delegation_id for one in kept.every(name)})
 
 
 def _how_it_stands(one: kept.Delegation) -> Tuple[Optional[str], Optional[int]]:
-    """What should be said about this delegation now, and how long it has been out.
+    """Where this delegation stands now, and how long it has been out.
 
     The state is `HANDED_OVER`, `CAME_BACK`, or a check-in numbered by which twenty minutes it is
     in — so the fortieth minute is a different answer from the twentieth and gets its own line, while
     the nineteen beats inside one window are all the same answer and get none.
+
+    **Counted from when the work was handed over, and steering does not restart it.** A person who
+    has been waiting an hour has been waiting an hour, whatever was said into it meanwhile.
 
     `None` where a moment could not be read. **Unreadable is not "just handed over"**: a row whose
     timestamps do not parse would otherwise announce itself as new on every single beat.
@@ -381,24 +434,62 @@ def _how_it_stands(one: kept.Delegation) -> Tuple[Optional[str], Optional[int]]:
     return (f"{STILL_WORKING}-{checked}" if checked else HANDED_OVER), since
 
 
+def _what_just_happened(one: kept.Delegation, stood: Optional[str]) -> Optional[str]:
+    """The last thing somebody did to this delegation, stamped with when they did it. `None` where
+    nobody has done anything to it since it was handed over.
+
+    **Read off `latest_at`, because that is the one column every one of these verbs moves** — and
+    the reason `asked say` was given `kept.guided` to move it with. A row whose latest moment is
+    still the moment it was created is a row nobody has touched.
+
+    **Which verb moved it is told apart without a column saying so**, and each answer is exact
+    except one:
+
+    - a stop is the only one that also writes its own moment, so `stop_asked_at == latest_at` names
+      it outright — and words said *after* a stop still show, because the stop's moment is then no
+      longer the latest one;
+    - carrying on is the only one that can follow an answer, since `asked say` refuses a delegation
+      that has one and `reopened` requires it. So a row now owing an answer, that this process last
+      saw answered, was carried on;
+    - anything else that moved the moment is somebody putting words into work still going.
+
+    The exception is a gateway that came up between the answer and the resume, which has not seen
+    this delegation answered and calls a resume a steer — see `settled`, where that trade is made.
+
+    **Stamped rather than named**, so two steers are two pieces of news. A word alone would make the
+    second one look like the first still standing, and the room would hear nothing.
+    """
+    if one.answered_at is not None:
+        return None
+    if one.latest_at == one.created_at:
+        return None
+    if one.stop_asked_at == one.latest_at:
+        return f"{STOPPING}@{one.latest_at}"
+    return f"{CARRIED_ON if stood == CAME_BACK else GUIDED}@{one.latest_at}"
+
+
 def _as_shown(state: str) -> str:
     """The word that crosses the seam, out of what this process wrote down for itself.
 
-    A check-in is remembered as `working-still-2` so that the second one is not the first; what a
-    surface is told is `working-still`, because *which* check-in it is is already in the elapsed
-    time beside it and a vocabulary that grew a word an hour would be no vocabulary at all.
+    A check-in is remembered as `working-still-2` so that the second one is not the first; a steer is
+    remembered as `guided@<moment>` so that the second one is not the first. What a surface is told
+    is `working-still` and `guided`, because *which* one it is is already in the elapsed time beside
+    it or in the words that prompted it, and a vocabulary that grew a word an hour — or a word a
+    steer — would be no vocabulary at all.
     """
-    return STILL_WORKING if state.startswith(STILL_WORKING) else state
+    word = state.split("@", 1)[0]
+    return STILL_WORKING if word.startswith(STILL_WORKING) else word
 
 
 def _forgotten(carrying: Carrying, standing: set) -> None:
     """Drop what this process remembers about delegations that are no longer there.
 
-    A gateway runs for weeks and a settled delegation is eventually swept away; without this, `said`
-    is a dictionary that only ever grows, keyed by something that stops existing.
+    A gateway runs for weeks and a settled delegation is eventually swept away; without this, both
+    dictionaries only ever grow, keyed by something that stops existing.
     """
-    for gone in [one for one in carrying.said if one not in standing]:
-        carrying.said.pop(gone, None)
+    for remembered in (carrying.said, carrying.marked):
+        for gone in [one for one in remembered if one not in standing]:
+            remembered.pop(gone, None)
 
 
 def _seconds_since(at: str) -> Optional[int]:

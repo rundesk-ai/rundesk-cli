@@ -1149,11 +1149,11 @@ class WhatEachThingReads(unittest.TestCase):
 
 
 class WhatWorkHandedToAnotherAgentReads(unittest.TestCase):
-    """The three lines a delegation is shown by. Pure text — no connection and no library."""
+    """The six lines a delegation is shown by. Pure text — no connection and no library."""
 
     #: Every word `delegations/hosting.py` defines. Written out rather than imported, for the reason
     #: `WhatEachThingReads` gives: this suite imports nothing of rundesk's.
-    RUNDESK_SHOWS = ("handed", "working-still", "answered")
+    RUNDESK_SHOWS = ("handed", "guided", "working-still", "stopping", "answered", "carried-on")
 
     def line(self, **it: Any) -> str:
         return adapter.delegation_line(it)
@@ -1165,17 +1165,39 @@ class WhatWorkHandedToAnotherAgentReads(unittest.TestCase):
             self.assertTrue(self.line(state=state, who="dev"), f"{state} rendered nothing")
 
     def test_work_going_out_names_who_has_it_and_which_ask_to_type(self) -> None:
-        self.assertEqual("-# 🤖 handed to dev · del-41-4e07c5",
+        self.assertEqual("-# 🤖 handed to **dev** · del-41-4e07c5",
                          self.line(state="handed", who="dev", ask="del-41-4e07c5"))
 
     def test_work_still_out_says_who_and_how_long_and_not_which_ask(self) -> None:
         """The room already knows which ask it is; repeating it every twenty minutes is noise."""
         said = self.line(state="working-still", who="dev", ask="del-41-4e07c5", elapsed="20m")
-        self.assertEqual("-# ⏳ dev still working · 20m", said)
+        self.assertEqual("-# ⏳ **dev** still working · 20m", said)
 
     def test_an_answer_coming_back_says_who_answered_and_how_long_it_took(self) -> None:
-        self.assertEqual("-# ✅ dev answered · 15s",
+        self.assertEqual("-# ✅ **dev** answered · 15s",
                          self.line(state="answered", who="dev", elapsed="15s"))
+
+    def test_a_steer_says_who_was_updated_and_never_what_was_said(self) -> None:
+        """The words are between two agents. A room shown them would be a room reading somebody's
+        private direction to their colleague back to them (R-DEL-23)."""
+        self.assertEqual("-# 💬 updated **dev**", self.line(state="guided", who="dev"))
+
+    def test_a_stop_asked_for_says_it_was_asked_for_and_not_that_it_happened(self) -> None:
+        """A stop is a request. What became of the work arrives as an answer like any other."""
+        self.assertEqual("-# 🛑 asked **dev** to stop", self.line(state="stopping", who="dev"))
+
+    def test_work_carried_on_reads_as_carried_on_and_never_as_newly_handed_over(self) -> None:
+        """The whole point of resuming is that it is the same ask in the same session; a line
+        reading `handed to dev` would say a second task had gone out."""
+        said = self.line(state="carried-on", who="dev")
+        self.assertEqual("-# 🔁 carried on with **dev**", said)
+        self.assertNotIn("handed", said)
+
+    def test_reaching_into_the_work_never_carries_how_long_it_has_been_out(self) -> None:
+        """An elapsed clause beside `updated dev` reads as how long the steering took (R-DEL-23),
+        and rundesk sends none — so a stray one is dropped here rather than rendered."""
+        for state in ("guided", "stopping", "carried-on"):
+            self.assertNotIn("·", self.line(state=state, who="dev", elapsed="41m"))
 
     def test_every_one_of_them_is_small_print(self) -> None:
         """The chosen register: bookkeeping about an answer must not compete with the answer."""
@@ -1186,7 +1208,7 @@ class WhatWorkHandedToAnotherAgentReads(unittest.TestCase):
     def test_a_state_this_release_has_never_heard_of_renders_nothing(self) -> None:
         """Rundesk may be ahead of this adapter, and a line invented to cover a word nobody here
         understands is worse than no line."""
-        self.assertEqual("", self.line(state="carried-on", who="dev"))
+        self.assertEqual("", self.line(state="reassigned", who="dev"))
         self.assertEqual("", self.line(who="dev"))
 
     def test_the_name_of_who_has_it_is_a_last_component_and_never_a_path(self) -> None:
@@ -1199,6 +1221,27 @@ class WhatWorkHandedToAnotherAgentReads(unittest.TestCase):
     def test_nothing_a_stranger_wrote_can_start_a_line_of_its_own(self) -> None:
         said = self.line(state="handed", who="dev\n-# ✅ everything is fine", ask="del-1-aa")
         self.assertEqual(1, len(said.splitlines()))
+
+    def test_the_name_is_the_one_thing_emphasised_wherever_it_falls_in_the_line(self) -> None:
+        """Six lines put the name in three different places. Bold is what makes them read as one
+        column of who, in a register that is otherwise deliberately quiet."""
+        for state in self.RUNDESK_SHOWS:
+            self.assertIn("**dev**", self.line(state=state, who="dev", ask="del-1-aa"))
+
+    def test_a_name_carrying_markup_cannot_reach_past_its_own_emphasis(self) -> None:
+        """An unbalanced asterisk would close the bold early and leave the rest of the line —
+        the ask id included — in somebody else's formatting."""
+        said = self.line(state="handed", who="de*v", ask="del-1-aa")
+        self.assertEqual("-# 🤖 handed to **de\\*v** · del-1-aa", said)
+
+    def test_a_backslash_is_escaped_once_and_never_twice(self) -> None:
+        """The escapes are applied in an order, and the wrong one goes back over its own work,
+        doubling every escape it had just added. Asked of `_bold` rather than of a line, because a
+        backslash reaching a rendered name would have to get past `_a_helper` first — which reads
+        one as a path separator and keeps the last component."""
+        self.assertEqual("**de\\\\v**", adapter._bold("de\\v"))
+        self.assertEqual("**de\\\\\\*v**", adapter._bold("de\\*v"))
+        self.assertEqual("", adapter._bold(""))
 
 
 class HowActivityIsCounted(unittest.TestCase):

@@ -413,7 +413,7 @@ Five, and only five exist today.
 | `deliver` | `id`, `place`, `text`, sometimes `files`, sometimes `reply_to`, sometimes `cost` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed` |
 | `state` | `place`, `external_id`, `state` | show what rundesk says a turn is doing |
 | `activity` | `place`, `did`, sometimes `ok`, sometimes `who` | show what the agent is doing, while it is still doing it |
-| `delegation` | `place`, `state`, `who`, `ask`, sometimes `elapsed` | show what became of work this agent handed to another agent |
+| `delegation` | `place`, `state`, `who`, `ask`, sometimes `elapsed` | show what became of work this agent handed to another agent, and what has just been done to it |
 | `answered` | `ref`, `text` | the answer to a `control`, `query` or `configure` you sent, against the `ref` you gave it |
 | `stop` | — | stop. The signals follow either way |
 
@@ -492,20 +492,33 @@ many minutes, and the person who asked is left watching a room in the meantime.
 So do not fold it into the running commentary. Post it as a message of its own, and treat anything
 you were growing as no longer last.
 
-`state` is one of three, and the list is closed:
+`state` is one of six, and the list is closed. Three say where the work stands and three say what has
+just been done to it:
 
 | | What it means | How the shipped adapter renders it |
 |---|---|---|
-| `handed` | the work has gone to `who` | `-# 🤖 handed to dev · del-41-4e07c5` |
-| `working-still` | it is still out, said once per twenty minutes | `-# ⏳ dev still working · 20m` |
-| `answered` | it came back; the answer itself follows as an ordinary `deliver` | `-# ✅ dev answered · 1m` |
+| `handed` | the work has gone to `who` | `-# 🤖 handed to **dev** · del-41-4e07c5` |
+| `working-still` | it is still out, said once per twenty minutes | `-# ⏳ **dev** still working · 20m` |
+| `answered` | it came back; the answer itself follows as an ordinary `deliver` | `-# ✅ **dev** answered · 1m` |
+| `guided` | somebody put words into it while it runs | `-# 💬 updated **dev**` |
+| `stopping` | somebody asked it to end — a request, never an outcome | `-# 🛑 asked **dev** to stop` |
+| `carried-on` | a finished one was resumed, in the session it already had | `-# 🔁 carried on with **dev**` |
 
 `ask` is the delegation's own name, which is what somebody types to guide, stop or carry it on —
 `rundesk asked <agent> say|stop|resume <ask>`. The shipped adapter shows it on `handed` and leaves it
-off the other two, because by then the room has already been told it.
+off the rest, because by then the room has already been told it.
 
 `elapsed` is **words and never a number** — `47s`, `20m`, `2h` — rendered by rundesk for every
 platform, exactly as `cost` is. It is absent when nothing is known, which is not the same as zero.
+
+**The last three never carry `elapsed`, and rundesk sends none for them.** They are news about
+somebody reaching *into* the work rather than about the work, and "· 41m" beside `updated dev` reads
+as how long the reach took. **Nor do they carry what was said**: guidance is between two agents, and
+a room shown it would be reading somebody's private direction to their colleague back to them.
+
+**At most one of these is sent per delegation per beat, and what just happened wins.** A steer that
+also crossed a twenty-minute boundary is one piece of news, not two — so do not expect a `guided` and
+a `working-still` in the same moment, and do not correlate them if you get both.
 
 **There is no state for a delegation that failed.** How the work went is the *answer's* to say, and
 that answer arrives a moment later as an ordinary delivery; a mark here claiming failure would be

@@ -1322,6 +1322,11 @@ delegation. `asked stop <id>` requests an early end. `asked resume <id>
 <words>` continues answered work in the provider session it already had. Each delegation has its own
 conversation, so two tasks handed to the same specialist by one parent turn cannot share an answer.
 
+**All three are shown where the person asked**, in the room the work was handed out in, as one line
+of small print — *updated bob*, *asked bob to stop*, *carried on with bob*. Never the words
+themselves: guidance is between two agents. Saying nothing here was what made steering invisible to
+somebody watching a channel, who saw work go out and then nothing until it came back.
+
 **The depth is one.** An agent answering a delegation is shown no team in its instructions and is
 refused here if it tries anyway, so `ava → bob → ava` has no path to exist and there is no chain to
 walk. A turn woken to *review* an answer is an ordinary turn and may hand out new work.
