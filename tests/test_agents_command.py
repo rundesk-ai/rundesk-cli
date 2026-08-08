@@ -19,7 +19,7 @@ import unittest
 from unittest import mock
 
 import support
-from rundesk.agents import directory
+from rundesk.agents import directory, records
 from rundesk.channels import hosting
 from rundesk.channels import kept as channels
 from rundesk.core import paths
@@ -53,6 +53,19 @@ class Listing(support.Isolated):
         self.assertIn("PROVIDER", out)
         self.assertIn("cole", out)
         self.assertIn("claude", out)
+
+    def test_it_lists_whether_each_agent_self_improves(self):
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+        self.rundesk("agents", "add", "ada", "--provider", "claude")
+        self.rundesk("agents", "configure", "ada", "--self-improve", "off")
+
+        code, out, err = self.rundesk("agents")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("SELF-IMPROVE", out)
+        rows = {line.split()[0]: line.split()[-1] for line in out.splitlines()
+                if line.startswith(("ada ", "cole "))}
+        self.assertEqual({"ada": "no", "cole": "yes"}, rows)
 
     def test_it_lists_current_skill_names_for_routing(self):
         catalogs.place_bundled()
@@ -127,6 +140,7 @@ class Adding(support.Isolated):
         self.assertIn("claude", out)
         for one in ("home", "logs", "state.db"):
             self.assertIn(one, out, f"the line naming {one} is not there")
+        self.assertIn("plans/, research/, scripts/, retros/", out)
 
     def test_it_is_given_the_skill_it_operates_this_install_with(self):
         # Shipped, undeletable as a catalog, and held by nobody was the state this closes: an agent
@@ -279,6 +293,59 @@ class Configuring(support.Isolated):
         self.assertIn("an agent with nothing behind it cannot answer", err)
         _, out, _ = self.rundesk("agents")
         self.assertIn("claude", out, "the agent was changed by a refusal")
+
+    def test_self_improvement_accepts_every_yes_and_no_spelling(self):
+        for said in ("no", "FALSE", "off", "0"):
+            with self.subTest(said=said):
+                code, out, err = self.rundesk(
+                    "agents", "configure", "cole", "--self-improve", said)
+                self.assertEqual(OK, code, err)
+                self.assertIn("self improvement is now off", out)
+                self.assertEqual(0, records.read(directory.records("cole"))["self_improve"])
+        for said in ("yes", "TRUE", "on", "1"):
+            with self.subTest(said=said):
+                code, out, err = self.rundesk(
+                    "agents", "configure", "cole", "--self-improve", said)
+                self.assertEqual(OK, code, err)
+                self.assertIn("self improvement is now on", out)
+                self.assertEqual(1, records.read(directory.records("cole"))["self_improve"])
+
+    def test_a_value_that_is_not_yes_or_no_is_refused(self):
+        code, out, err = self.rundesk(
+            "agents", "configure", "cole", "--self-improve", "maybe")
+
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("self improvement wants yes or no", err)
+        self.assertIn("nothing was changed", err)
+        self.assertEqual(1, records.read(directory.records("cole"))["self_improve"])
+
+    def test_an_invalid_self_improvement_value_moves_neither_other_field(self):
+        code, _, _ = self.rundesk(
+            "agents", "configure", "cole", "--provider", "openai",
+            "--self-improve", "maybe")
+
+        self.assertEqual(FAILED, code)
+        settled = records.read(directory.records("cole"))
+        self.assertEqual("claude", settled["provider_name"])
+        self.assertEqual(1, settled["self_improve"])
+
+    def test_all_three_settings_move_together(self):
+        code, _, err = self.rundesk(
+            "agents", "configure", "cole", "--provider", "openai",
+            "--describes", "Handles release work.", "--self-improve", "no")
+
+        self.assertEqual(OK, code, err)
+        settled = records.read(directory.records("cole"))
+        self.assertEqual("openai", settled["provider_name"])
+        self.assertEqual("Handles release work.", settled["describes"])
+        self.assertEqual(0, settled["self_improve"])
+
+    def test_help_names_the_agent_setting_and_what_it_accepts(self):
+        code, out, err = self.rundesk("agents", "configure", "--help")
+        self.assertEqual(OK, code, err)
+        self.assertIn("--self-improve", out)
+        self.assertRegex(out, r"yes\s+or no")
 
 
 class Removing(support.Isolated):

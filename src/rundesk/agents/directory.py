@@ -112,6 +112,9 @@ Where **{name}** starts, and what {name} reads.
 **If you are {name}, this directory is yours.** Put what you keep between turns in here; nothing
 rundesk does tidies it, and no other agent has a reason to read it.
 
+Use `plans/`, `research/`, `scripts/`, and `retros/` for durable agent-owned work; the README in
+each explains its boundary. Keep project-owned work in its project and task scratch temporary.
+
 Written once, when this agent was made. Your own notes belong in a file of your own, beside this one.
 """
 

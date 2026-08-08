@@ -112,6 +112,12 @@ def an_update(**update):
                        "params": {"sessionId": "s-1", "update": update}})
 
 
+def an_update_for(session, **update):
+    """One update from a provider-local helper multiplexed onto the parent's stream."""
+    return json.dumps({"jsonrpc": "2.0", "method": "session/update",
+                       "params": {"sessionId": session, "update": update}})
+
+
 class Capabilities(support.Isolated):
     """Asked offline, with no account and no network, and the same answer every time."""
 
@@ -238,6 +244,51 @@ class OneCapturedTurn(support.Isolated):
         kept = at.read_text(encoding="utf-8").splitlines()
         self.assertGreater(len(kept), len(said), "the raw stream held less than the adapter said")
         self.assertTrue(any("turn_completed" in one for one in kept))
+
+
+class ATurnThatUsedAProviderLocalHelper(support.Isolated):
+    """A child session may report on the same stream, but it is not the outward Rundesk turn."""
+
+    def setUp(self):
+        super().setUp()
+        captured = self.home / "a-turn-with-a-provider-local-helper.jsonl"
+        captured.write_text("\n".join(a_conversation(
+            an_update(sessionUpdate="tool_call", toolCallId="parent-spawn",
+                      title="spawn_subagent"),
+            an_update(sessionUpdate="tool_call_update", toolCallId="parent-spawn",
+                      status="completed", rawOutput="child-session"),
+            an_update_for("child-session", sessionUpdate="tool_call",
+                          toolCallId="child-tool", title="web_search"),
+            an_update_for("child-session", sessionUpdate="tool_call_update",
+                          toolCallId="child-tool", status="completed", rawOutput="child result"),
+            an_update_for("child-session", sessionUpdate="agent_message_chunk",
+                          content={"type": "text", "text": "CHILD MUST NOT ESCAPE"}),
+            an_update_for("child-session", sessionUpdate="turn_completed",
+                          stop_reason="end_turn", usage={"inputTokens": 900}),
+            an_update(sessionUpdate="tool_call", toolCallId="parent-wait",
+                      title="get_command_or_subagent_output"),
+            an_update(sessionUpdate="tool_call_update", toolCallId="parent-wait",
+                      status="completed", rawOutput="verified child result"),
+            an_update(sessionUpdate="agent_message_chunk",
+                      content={"type": "text", "text": "PARENT FINAL"}),
+            an_update(sessionUpdate="turn_completed", stop_reason="end_turn",
+                      usage={"inputTokens": 44, "outputTokens": 4}),
+        )) + "\n", encoding="utf-8")
+        self.said, self.got = replayed(self.home, captured=captured)
+
+    def test_only_the_parent_speaks_and_settles_the_rundesk_turn(self):
+        self.assertEqual(["PARENT FINAL"], [one["text"] for one in only(self.said, "text")])
+        self.assertEqual(1, len(only(self.said, "done")))
+        self.assertIs(self.said[-1], only(self.said, "done")[0])
+        self.assertTrue(self.said[-1]["ok"])
+        self.assertEqual("s-1", self.said[-1]["session_id"])
+
+    def test_child_tools_and_usage_do_not_become_the_parents_records(self):
+        tools = only(self.said, "tool")
+        self.assertEqual(["parent-spawn", "parent-wait"], [one["id"] for one in tools])
+        usage = only(self.said, "usage")[0]
+        self.assertEqual(44, usage["input_tokens"])
+        self.assertEqual(4, usage["output_tokens"])
 
 
 class ATurnOnAConversationThatWasCarriedOn(support.Isolated):

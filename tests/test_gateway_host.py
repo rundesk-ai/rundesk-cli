@@ -40,6 +40,7 @@ from rundesk.core import config, paths
 from rundesk.exits import OK
 from rundesk.gateways import host, job, standing
 from rundesk.providers import kept as turns_kept
+from rundesk.providers import protocol
 from rundesk.schedules import firing, kept
 from rundesk.skills import catalogs, grants, library
 from rundesk.utils import logs, programs
@@ -179,6 +180,55 @@ class WithAnAgent(support.Isolated):
     def its_log(self) -> str:
         read = logs.tail(standing.logs_at(self.at), 50)
         return "\n".join(read.lines)
+
+
+class AutomaticUpkeepOnTheGatewayBeat(WithAnAgent):
+    """The real host loop carries a due usage window through settlement exactly once."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        records.stated(directory.records(self.name), {"provider_name": support.A_STAND_IN})
+        conversation = arriving.recorded(
+            self.name, "terminal", self.name, "owner", "start").conversation
+        for offset in range(7):
+            at = datetime.datetime(2026, 7, 1 + offset, 12, tzinfo=datetime.timezone.utc)
+            turn = turns_kept.add_turn(
+                self.name, {"conversation_id": conversation, "provider_name": "standin",
+                            "access_mode": protocol.ACCESS_WORK}, when=at)
+            turns_kept.finish_turn(self.name, turn, turns_kept.DONE, when=at)
+
+    def upkeep_turns(self) -> List[dict]:
+        """Every automatic upkeep turn in this agent's durable records."""
+        try:
+            with records.reading(directory.records(self.name)) as conn:
+                return [dict(one) for one in conn.execute(
+                    "SELECT id, turn_status FROM turns WHERE schedule_name = ? ORDER BY id",
+                    (kept.UPKEEP,)).fetchall()]
+        except records.Unreadable:
+            return []
+
+    def upkeep_outcome(self) -> Optional[str]:
+        """The protected row's settlement, or ``None`` before it exists or settles."""
+        try:
+            with records.reading(directory.records(self.name)) as conn:
+                row = conn.execute(
+                    "SELECT last_outcome FROM schedules WHERE name = ?", (kept.UPKEEP,)).fetchone()
+        except records.Unreadable:
+            return None
+        return str(row["last_outcome"]) if row and row["last_outcome"] else None
+
+    def test_the_first_beat_starts_settles_and_does_not_repeat_one_due_window(self):
+        child = self.a_running_gateway(beat=0.05)
+        self.assertTrue(support.waited_until(
+            lambda: self.upkeep_outcome() == kept.DONE, self.PATIENCE),
+            f"upkeep never settled. Gateway log: {self.its_log()}")
+        self.assertEqual([turns_kept.DONE],
+                         [one["turn_status"] for one in self.upkeep_turns()])
+
+        time.sleep(0.3)
+
+        self.assertEqual(1, len(self.upkeep_turns()), "a later beat repeated the same usage window")
+        self.assertIsNone(child.poll(), "the gateway ended while carrying automatic upkeep")
 
 
 class TheVeryFirstThingItSays(WithAnAgent):
@@ -1344,13 +1394,8 @@ class WhatAScheduledRunSaysOnASurface(TheChannelsItHosts):
 
     def a_stand_in_brain(self) -> str:
         """A real provider adapter on this install, so a scheduled turn genuinely answers."""
-        where = paths.code() / "providers"
-        where.mkdir(parents=True, exist_ok=True)
-        at = where / "standin"
-        at.write_text(Path(support.A_STAND_IN).read_text(encoding="utf-8"), encoding="utf-8")
-        at.chmod(0o755)
-        records.stated(directory.records(self.name), {"provider_name": "standin"})
-        return "standin"
+        records.stated(directory.records(self.name), {"provider_name": support.A_STAND_IN})
+        return support.A_STAND_IN
 
     def what_was_posted(self) -> List[dict]:
         """Every delivery the adapter really took, as objects, oldest first."""

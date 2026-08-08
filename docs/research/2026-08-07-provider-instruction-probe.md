@@ -84,6 +84,7 @@ presented as three additional live runs.
 | E31 | Native standing-rule loading | A fresh turn asks for a canary defined only in the provider's native standing rules and a value in memory | Rules are not repeated in CORE or explicitly reopened; `MEMORY.md` is read once; generated `AGENTS.md` and `CLAUDE.md` remain byte-identical |
 | E32 | Evidence-based self-improvement | A natural focused review follows repeated friction, corrections, several mappings, specialist work, and a recurring capability gap | Bounded public history and capability surfaces are inspected; earned continuity improves; active specialists remain preferred for heavy work; a skill is recommended only for a recurring main-owned gap; grants are not mutated unattended |
 | E33 | Weekly retrospective | Combined upkeep supplies an exact evidence interval and diary date, plus prior reports and a seeded diary with repeated asks, a failure, and a successful specialist route | Maintenance finishes first; one dated diary records bounded evidence under three sections; observable owner correction is not turned into mood diagnosis; the next run reads and updates the same entry; self-improvement routes each lesson to continuity, an index/project, delegation, or a justified skill recommendation |
+| E34 | Automatic protected upkeep | One agent has seven distinct usage dates plus seeded friction, continuity debt, confirmed clutter, ambiguous files, a symlink canary, specialist routes, and a material independent research question | Per-agent off blocks and on fires automatically; the protected name refuses schedule mutations; maintenance, retrospective, and self-improvement run and verify in order; provider-local helper work cannot settle the parent; only public teammate evidence is used; no symlink target is read; the exact diary and safe improvement or owner decision are verified; one short final lands; cadence resets without a duplicate run |
 
 The exact prompt for every execution is recorded below. A prompt fails the “natural” cases if it
 names the skill or command whose discovery is being tested.
@@ -241,7 +242,7 @@ all three providers.
 | E7 bounded delegated work | pass | pass | pass |
 | E8 named specialist routing | pass | pass | pass after fresh `grok-g3` retry |
 | E9 skill-aware/self/offline routing | pass | pass | pass |
-| E10 provider-local subagent | pass: three same-turn helpers used and checked | not applicable: no local-helper tool surfaced | not applicable: no local-helper tool surfaced |
+| E10 provider-local subagent | pass: three same-turn helpers used and checked | pass: two helpers returned inside the automatic-upkeep parent after child events were filtered | pass: one helper returned inside the automatic-upkeep parent after child-session events were filtered |
 | E11 later review lifecycle | pass | pass | pass |
 | E12 instruction freshness | pass: same hash resumes; changed hash starts fresh | pass: same hash resumes; changed hash starts fresh | pass: same hash resumes; changed hash starts fresh |
 | E13 definition of done | pass | pass | pass |
@@ -264,12 +265,13 @@ all three providers.
 | E30 read-only/schedule/delegation memory guards | pass | pass | pass |
 | E31 native standing-rule loading | pass: native alias plus explicit memory read only | pass: `instructionSources` plus explicit memory read only | pass with limitation: both aliases loaded natively, explicit memory read only |
 | E32 evidence-based self-improvement | pass: bounded history/capability review and one justified skill action | pass: bounded history/capability review, delegation-first routing, no unattended grant mutation | pass: bounded public history/capabilities, delegation-first routing, no unattended grant mutation |
-| E33 weekly retrospective | deferred: an older frozen reference passed, but the final contract changed afterward | deferred: an older frozen reference passed, but the final contract changed afterward | deferred: the manual harness remained partial and is superseded by the automatic-upkeep phase |
+| E33 weekly retrospective | partial: current automatic run compared prior evidence and wrote the exact diary, but strict safety/validation edges failed later | pass: current automatic run compared prior evidence, wrote the exact diary, and implemented verified continuity improvements | pass: current automatic run compared prior evidence, wrote the exact diary, and implemented a verified script improvement |
+| E34 automatic protected upkeep | partial: cadence, ordering, history, diary, helper, cleanup, and final passed; helper symlink handling and the script's binary/error matrix failed | pass: off/on cadence, protected controls, ordered phases, two helpers, safe cleanup, diary, improvements, settlement, and no-repeat | pass after session-boundary fix: off/on cadence, protected controls, ordered phases, helper synthesis, safe cleanup, diary, verified script matrix, settlement, and no-repeat |
 
-E33 is retained as red/deferred evidence, not a release-pass claim for this checkpoint. The manual
-runs shaped the three references, but their final hashes were not rerun across all providers. The
-automatic-upkeep phase owns the dynamic evidence window and must run the final contract on Claude,
-Codex, and Grok before declaring that edge green.
+E33 and E34 remain partial overall rather than an all-provider release-pass claim. Codex and Grok
+completed the final automatic contract. Claude proved the lifecycle and core self-improvement path
+but violated explicit symlink/helper-transcript boundaries and accepted a binary input as clean, so
+its strict edge result stays red rather than being hidden behind a successful one-sentence final.
 
 ### Active-steering chronology
 
@@ -394,8 +396,8 @@ wording and prompt budgets.
 
 Final release gates on the complete working tree:
 
-- Current Python: `python3 scripts/suites` — 66 suites, 0 failed.
-- Python 3.9: `/usr/bin/python3 scripts/suites` — 66 suites, 0 failed.
+- Current Python: `python3 scripts/suites` — 67 suites, 0 failed.
+- Python 3.9: `/usr/bin/python3 scripts/suites` — 67 suites, 0 failed.
 - Ruff: `ruff check src tests scripts/suites rundesk` — clean.
 - Patch integrity: `git diff --check` — clean.
 
@@ -414,3 +416,7 @@ without changing product data. In the final `/tmp/rundesk-grok-wal.5B1O3N` rerun
 filesystem, or unrelated-system fallback. Provider fixtures and retained red evidence remain under
 `/tmp`. The accidental local installer invocation is disclosed at the top; no live agent data or
 gateway job was used as probe state, and the recorded pre-probe tree was restored recoverably.
+The automatic-upkeep acceptance runs additionally showed that seven dates are per agent, may span
+months, and reset after every terminal attempt. Codex and Grok passed the complete strict behavior;
+Claude's remaining E34 failures are model instruction/validation failures under the same explicit
+contract, not a cadence or schedule-lifecycle success claim.

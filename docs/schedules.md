@@ -4,6 +4,38 @@ A schedule is work an agent starts because the time came. It belongs to one agen
 agent's own records, and is fired by the gateway hosting that agent — so no other agent can run it,
 report on it or change it, and there is no install-wide table for two gateways to disagree over.
 
+The one policy exception is `weekly-self-improve-upkeep`: Rundesk owns its name and decides when it
+is due from that agent's own usage. It still uses every firing guarantee on this page.
+
+## Protected upkeep follows usage, not elapsed time
+
+Each agent starts with automatic upkeep on. Seven distinct local calendar dates containing terminal
+work for that agent make one run due, however far apart those dates are. Several turns on one date
+count once. Done, failed, and stopped turns count because each is evidence about how the agent was
+used; a working turn does not count until it settles, and the upkeep turn never counts itself.
+
+The first and seventh qualifying dates freeze the evidence interval and diary date in the prompt.
+Any terminal upkeep attempt—done, failed, or stopped—starts a new seven-date cycle so a provider
+failure cannot retry every gateway beat. Turning upkeep off retains accumulated dates; turning it
+back on starts immediately if seven dates are already owed.
+
+The policy is visible through `schedules list` and `schedules show`. `add`, `update`, `run`, and
+`remove` refuse its reserved name. Its only switch is the agent's configuration:
+
+```sh
+rundesk agents configure AGENT --self-improve <true|false>
+```
+
+One compatibility exception prevents the new reservation from trapping old owner work. If an
+owner schedule already used this name before the policy existed, it remains an ordinary schedule
+that can be shown, updated, run, or removed. Rundesk does not adopt or overwrite it, and automatic
+upkeep stays blocked for that agent until the owner schedule is removed.
+
+The gateway supplies the interval and runs verified maintenance, retrospective, and self-improvement
+in order. Detailed evidence remains in the turn; the surfaced final is one short attention-first
+sentence. The protected row is inert to ordinary cron evaluation and exists only to carry the
+frozen prompt, lock, process record, output, and last attempt through this ordinary lifecycle.
+
 [`commands.md`](./commands.md#schedules) is what each verb guarantees and what each refuses. This is
 what a schedule *is*, and what to do when one is not doing what you expected.
 

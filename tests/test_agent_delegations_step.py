@@ -1,4 +1,4 @@
-"""The table an agent keeps about work it handed on, and what an agent is for.
+"""The table an agent keeps about work it handed on, and its added configuration.
 
 Two things this proves that nothing else can. **The constraints are the specification**: what a
 delegation must name, and what it must point at, are the table's rather than Python's, so the cases
@@ -86,6 +86,17 @@ class TheStepItself(OneAgentsDelegations):
                                       self.rows("SELECT agent_name FROM config")])
         self.assertIn("describes", [one[1] for one in self.rows("PRAGMA table_info(config)")])
 
+    def test_an_agent_that_predates_it_gets_self_improvement_on_by_default(self):
+        self.write("ALTER TABLE config DROP COLUMN self_improve")
+        self.write("DELETE FROM migrations WHERE key = ?", THE_STEP)
+
+        self.assertIsNone(migration.carry_one("ava"))
+
+        self.assertEqual(1, self.rows("SELECT self_improve FROM config")[0][0])
+
+    def test_a_fresh_agent_has_self_improvement_on_by_default(self):
+        self.assertEqual(1, self.rows("SELECT self_improve FROM config")[0][0])
+
     def test_running_it_twice_is_the_same_as_running_it_once(self):
         # A step is written to be safe against an agent that does not need it. `ALTER TABLE ADD
         # COLUMN` has no `IF NOT EXISTS`, so a second run that did not ask first would raise.
@@ -111,6 +122,10 @@ class WhatTheConstraintsRefuse(OneAgentsDelegations):
         self._pointing = (conversation, 9999)
         with self.assertRaises(sqlite3.IntegrityError):
             self.a_delegation()
+
+    def test_self_improvement_is_only_on_or_off(self):
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.write("UPDATE config SET self_improve = 2")
 
 
 class WhatTheCascadesTakeWithThem(OneAgentsDelegations):

@@ -69,7 +69,7 @@ to identify the exact target and consequence. Most groups list when called with 
 | [Providers](references/providers.md) | Discover, check, or inspect provider execution |
 | [Skills](references/skills.md) | Catalogs, grants, profiles, values, and skill diagnosis |
 | [Maintenance](references/maintenance.md) | Focused upkeep of this agent's memory, indexes, and home workspace |
-| [Retrospective](references/retrospective.md) | Write the bounded weekly diary from evidence and compare prior improvements |
+| [Retrospective](references/retrospective.md) | Write the bounded usage-cycle diary from evidence and compare prior improvements |
 | [Self-improvement](references/self-improvement.md) | Review proven friction, continuity, capability gaps, skills, and delegation fit |
 | [Configuration](references/configuration.md) | Status, version, install settings, and secret values |
 | [Lifecycle](references/lifecycle.md) | Install, update, uninstall, and purge |

@@ -214,12 +214,14 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "files of uncertain ownership",
                        "## Tidy versus cluttered", "A tidy home", "A cluttered home",
                        "not deletion authority", "working or draft paths",
-                       "commands or deliverable paths", "dates or supersession history",
+                       "commands or deliverable paths", "supersession history",
                        "report formatting",
+                       "Preserve a still-open owner commitment", "canonical `OPEN_ITEMS.md`",
                        "never one home note per project",
                        "Combined upkeep contract", "maintenance runs first",
-                       "Do not open files under `retros/`",
-                       "one complete final report"):
+                       "never open the link or target",
+                       "Preserve and list `retros/`, but do not open its entries",
+                       "short final required by the combined contract"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, maintenance)
 
@@ -232,58 +234,77 @@ class WhatAShippedSkillMayClaim(Bundled):
         self.assertIn("[Self-improvement](references/self-improvement.md)", said)
         self.assertIn("[Retrospective](references/retrospective.md)", said)
         for phrase in ("focused review, not ordinary task overhead",
+                       "Maintenance preservation remains in force",
+                       "never open a symlink or its target",
                        "recent messages and turns", "repeated friction", "owner corrections",
                        "failed or blocked outcomes", "public Rundesk commands",
-                       "previous `agent-upkeep` scheduled runs", "what went well",
+                       "previous `weekly-self-improve-upkeep` scheduled runs", "what went well",
                        "what did not", "already resolved",
                        'messages AGENT --source schedule --limit 10',
-                       "select the `(schedule agent-upkeep)` conversation",
+                       "select the `(schedule weekly-self-improve-upkeep)` conversation",
                        "project-specific evidence in that project's own files",
                        '"$RUNDESK_COMMAND" agents', '"$RUNDESK_COMMAND" gateways',
                        "Compare available and granted skills",
                        "active gateway", "Exclude yourself",
                        "gateway state only to determine delegation availability",
+                       "Never open another agent's home, memory, or records",
                        "Never infer a specialist's focus from its name",
-                       "named specialist", "provider-local helper",
+                       "named specialist", "provider-local research helper",
                        "recurring capability gap", "Skills do not replace delegation",
                        "Before recommending a skill", "why neither route covers",
                        "Non-use alone is not evidence", "Revocation is rare",
                        "Do not change grants", "explicit authority",
-                       "Apply a safe local continuity improvement",
+                       "Apply a safe local improvement",
+                       "post-edit fixture matrix from every documented input type and error branch",
+                       "a skipped input is reported, never called clean",
                        "exact owner decision",
-                       "## Combined upkeep contract", "agent-upkeep",
+                       "## Combined upkeep contract", "weekly-self-improve-upkeep",
                        "maintenance reference first", "retrospective reference second",
                        "self-improvement reference last",
                        "Do not open the next reference until the current phase is verified",
                        "exactly one sentence", "very short and attention-first",
                        "Definition of done for each firing",
                        "full bounded evidence window", "superficial scan",
+                       "error branch, and stated safety limit",
+                       "material independent research question uses a provider-local helper",
                        "every claimed change and preservation",
-                       "Upkeep complete — continuity and workspace tidied; no owner action needed",
-                       "one complete final report"):
+                       "Upkeep completed — no owner action is needed",
+                       "During combined upkeep use the exact short final below"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, improving)
-        self.assertNotIn("schedules add AGENT agent-upkeep", improving)
+        self.assertNotIn("schedules add AGENT weekly-self-improve-upkeep", improving)
         self.assertNotIn("--disabled", improving)
 
     def test_weekly_retrospective_is_bounded_evidence_not_owner_mind_reading(self):
         skill = self.skills / "managing-rundesk"
         retro = " ".join((skill / "references" / "retrospective.md").read_text(
             encoding="utf-8").split())
-        for phrase in ("previous week's entry first", "retros/YYYY-MM-DD.md",
+        for phrase in ("previous entry first", "retros/YYYY-MM-DD.md",
                        "## What went well", "## What did not go well",
                        "## What to improve", "explicit owner correction",
                        "dissatisfaction or distrust", "Never diagnose the owner's mood",
-                       "three evidence-backed bullets per section", "Keep every weekly entry",
+                       "three evidence-backed bullets per section", "Keep every entry",
                        "Never delete an older retrospective merely because of age",
                        "update the same file", "no secrets", "one durable action",
                        "leave it byte-identical",
-                       "Would an active specialist", "Would a provider-local helper",
-                       "available or granted skill",
+                       "Would an existing specialist", "Would a provider-local research helper",
+                       "available, granted, or new skill",
                        "exact evidence interval and diary date supplied by the initiator",
                        "Never calculate or shift that interval yourself"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, retro)
+
+    def test_the_protected_upkeep_policy_is_taught_as_per_agent_configuration(self):
+        skill = self.skills / "managing-rundesk" / "references"
+        schedules = " ".join((skill / "schedules.md").read_text(encoding="utf-8").split())
+        configuration = " ".join(
+            (skill / "configuration.md").read_text(encoding="utf-8").split())
+        for said in (schedules, configuration):
+            with self.subTest(reference=said[:20]):
+                self.assertIn("weekly-self-improve-upkeep", said)
+                self.assertIn("agents configure <agent> --self-improve <true|false>", said)
+        self.assertIn("seven distinct usage dates", schedules)
+        self.assertIn("do not try to add, update, run, disable, or remove it", schedules)
 
     def test_no_shipped_skill_names_a_verb_this_build_does_not_have(self):
         # `AGENTS.md`: a verb rundesk cannot perform is a verb rundesk does not have. A skill is the

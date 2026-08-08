@@ -17,6 +17,7 @@ gets, with no indirection to hold in their head.
 | `AGENTS.md` | `AGENTS.md` | how this agent works |
 | `CLAUDE.md` | `AGENTS.md` | the same bytes, under the name some brains look for first |
 | `MEMORY.md` | `MEMORY.md` | the scaffold it writes what it learns into |
+| `<area>/README.md` | the same path | how to use one durable work area without turning it into clutter |
 
 **`AGENTS.md` and `CLAUDE.md` are one source placed twice, and identical by construction.** Two
 files kept in step by anybody remembering is two files that disagree, and the disagreement is
@@ -52,15 +53,24 @@ from rundesk.core import paths
 #: `skills.catalogs.shipped` is written to, for the same reason it is written there.
 SHIPPED_IN = "templates"
 
-#: What lands in a home, and which shipped page it comes from. **A table rather than a directory
-#: walk**, because the doubling is the decision: `AGENTS.md` is placed twice, and a walk that put
-#: each shipped page down under its own name could not say so without a second copy on disk that
-#: somebody would have to keep identical by hand.
-PAGES: Dict[str, str] = {
+#: The always-read continuity pages, named separately because the command reports them as rules and
+#: memory rather than as workspace organization.
+CONTINUITY: Dict[str, str] = {
     "AGENTS.md": "AGENTS.md",
     "CLAUDE.md": "AGENTS.md",
     "MEMORY.md": "MEMORY.md",
 }
+
+#: Purpose-named places for durable agent-owned work. Their notes are deliberately lazy context:
+#: a brain pays for the guidance only when it enters that area, not on every ordinary turn.
+AREAS = ("plans", "research", "scripts", "retros")
+
+#: What lands in a home, and which shipped page it comes from. **A table rather than a directory
+#: walk**, because the doubling is the decision: `AGENTS.md` is placed twice, and a walk that put
+#: each shipped page down under its own name could not say so without a second copy on disk that
+#: somebody would have to keep identical by hand.
+PAGES: Dict[str, str] = dict(CONTINUITY)
+PAGES.update({f"{area}/README.md": f"{area}/README.md" for area in AREAS})
 
 #: The one thing a page substitutes on the way in. Doubled braces, so it cannot collide with the
 #: single-brace names `providers.instructions` fills — a page is written by hand and a brace in it
@@ -120,7 +130,23 @@ def wanted(home: Path) -> List[str]:
     volume, a checkout not cloned yet. The sweep would then land a regular file on top of it and the
     link would be gone for good, because the replacement is what every later run finds.
     """
-    return [name for name in sorted(PAGES) if not _stands(home / name)]
+    return [name for name in sorted(PAGES)
+            if _safe_parent(home, home / name) and not _stands(home / name)]
+
+
+def _safe_parent(home: Path, page: Path) -> bool:
+    """Whether placing this shipped page stays in the home without following an owner's link.
+
+    The only nested pages are one level down today. Walking the relative parents keeps that
+    guarantee true if another work area is added later: a linked or non-directory parent is an
+    existing answer, never a route through which Rundesk writes somewhere else.
+    """
+    parent = page.parent
+    while parent != home:
+        if parent.is_symlink() or (_stands(parent) and not parent.is_dir()):
+            return False
+        parent = parent.parent
+    return True
 
 
 def _stands(page: Path) -> bool:
@@ -142,8 +168,10 @@ def place(home: Path, agent: str, text: Optional[Dict[str, str]] = None) -> List
     written = []
     for name in sorted(PAGES):
         page = home / name
-        if _stands(page):
+        if not _safe_parent(home, page) or _stands(page):
             continue
+        if page.parent != home:
+            page.parent.mkdir(exist_ok=True)
         _laid_down(page, said[PAGES[name]].replace(AGENT, agent))
         written.append(name)
     return written

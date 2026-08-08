@@ -223,7 +223,7 @@ from rundesk.delegations import hosting as delegations
 from rundesk.exits import OK
 from rundesk.gateways import awake, standing
 from rundesk.providers import answering, kept
-from rundesk.schedules import firing
+from rundesk.schedules import firing, upkeep
 from rundesk.skills import grants
 from rundesk.utils import logs
 
@@ -651,6 +651,8 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
         knew: Optional[Tuple[str, ...]] = None
         while True:
             watching = firing.looked(name, where, watching, telling=notices,
+                                     asking=on_a_schedule)
+            watching = upkeep.looked(name, where, watching, telling=notices,
                                      asking=on_a_schedule)
             channels_up = hosting.looked(name, where, channels_up,
                                          answering=on_a_channel, steering=gestures)

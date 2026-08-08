@@ -1,12 +1,12 @@
-# Weekly agent retrospective
+# Agent usage-cycle retrospective
 
-Read this only during focused weekly upkeep. The diary measures whether this agent is serving its
+Read this only during focused upkeep. The diary measures whether this agent is serving its
 owner better; it is not daily overhead, a transcript, or a judgment of the owner.
 
 ## One bounded entry
 
-1. Read the previous week's entry first when one exists. Then use public Rundesk commands to review
-   the bounded prior week: the earlier `agent-upkeep` final, relevant messages and turns, and
+1. Read the previous entry first when one exists. Then use public Rundesk commands to review the
+   supplied bounded usage cycle: the earlier `weekly-self-improve-upkeep` final, relevant messages and turns, and
    completed or blocked delegations. Do not open records directly.
 2. Identify evidence about the agent's own execution: requests completed well, validation that
    caught defects, useful delegation or skills, repeated owner asks, corrections, missed scope,
@@ -31,17 +31,21 @@ owner better; it is not daily overhead, a transcript, or a judgment of the owner
    ```
 
    A bullet is compact: evidence, effect, lesson. Each improvement names one durable action and how
-   next week's review can tell whether it worked.
+   the next upkeep review can tell whether it worked.
 6. Put the solution in the narrowest durable home. Use `MEMORY.md` for a reusable role, preference,
    process, trap, or gotcha; a maintained client/project index for stable mappings; project files
-   for project truth; a delegation route for specialist work; and a skill recommendation only for
-   a recurring capability the agent must own. Ask: Would an active specialist agent be materially
-   better for this friction? Would a provider-local helper cover same-turn work? Would an available
-   or granted skill improve work this agent still owns? The diary may link to the chosen change but
-   does not duplicate it. Recommend rather than mutate a grant unless the schedule has authority.
-7. Keep every weekly entry as the longitudinal record; keep each entry compact instead of pruning
+   for project truth; a delegation route for specialist work; `scripts/` for small verified
+   cross-project automation; `research/` for reusable sourced investigation; and a skill
+   recommendation only for a recurring capability the agent must own. Ask: Would an existing
+   specialist agent be materially better, or does the recurring boundary justify proposing one?
+   Would a provider-local research helper cover independent same-turn investigation? Would an
+   available, granted, or new skill improve work this agent still owns? Would a compact script,
+   mapping, or index remove repeated tool calls, tokens, latency, or cost? The diary may link to the
+   chosen change but does not duplicate it. Recommend rather than mutate a grant or create a
+   standing agent unless the schedule has authority.
+7. Keep every entry as the longitudinal record; keep each entry compact instead of pruning
    history. Never delete an older retrospective merely because of age. Keep no secrets, raw logs,
    private history, speculative emotion, or unnecessary owner quotes.
 
-The retrospective is an input to the self-improvement pass. A disappointing week does not justify
+The retrospective is an input to the self-improvement pass. A disappointing cycle does not justify
 new standing rules by itself; repeated evidence and a verified remedy do.

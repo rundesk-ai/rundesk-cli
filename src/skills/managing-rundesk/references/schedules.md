@@ -16,6 +16,12 @@ due. The gateway is the clock that fires it.
 
 Prefix every command with `"$RUNDESK_COMMAND"`.
 
+`weekly-self-improve-upkeep` is Rundesk's protected per-agent policy, not an owner cron. It becomes
+due after seven distinct usage dates and is controlled only with `agents configure <agent>
+--self-improve <true|false>`. Inspect it with `schedules list` or `schedules show`; do not try to add,
+update, run, disable, or remove it. A pre-policy owner schedule already using that name stays
+owner-controlled and blocks automatic upkeep until the owner removes it; Rundesk never adopts it.
+
 ## Time and execution rules
 
 - `--when` is five-field cron: `minute hour day month weekday`. `--at` is

@@ -3,8 +3,8 @@
 The release that lets one agent hand a bounded task to another. `0003` reserved the word this needs
 — `conversations.source` already accepts `'agent'` — and said why the vocabulary was written complete
 rather than grown: *"Widening a `CHECK` later means rebuilding the table, and a rebuild here cannot
-follow SQLite's own documented procedure."* So this step adds a table and a column, and rebuilds
-nothing.
+follow SQLite's own documented procedure."* So this step adds a table and two configuration
+columns, and rebuilds nothing.
 
 ## One table, and the test it keeps passing
 
@@ -104,9 +104,18 @@ WHAT_AN_AGENT_IS_FOR = """
 ALTER TABLE config ADD COLUMN describes TEXT;
 """
 
+#: Whether the agent gets Rundesk's automatic self-improvement work. It starts on for a new agent
+#: and for an agent carried into this release: an opt-in default would silently leave the feature
+#: unused by every agent that predates it. Kept as SQLite's integer boolean, with the constraint
+#: watching the database itself refuse a third state rather than relying on every writer to agree.
+SELF_IMPROVEMENT = """
+ALTER TABLE config ADD COLUMN self_improve INTEGER NOT NULL DEFAULT 1
+  CHECK (self_improve IN (0, 1));
+"""
+
 
 def carry(conn: sqlite3.Connection, where: Path) -> None:
-    """Lay down the delegations and, where it is not already there, what an agent is for.
+    """Lay down delegations and this release's agent configuration where each is absent.
 
     `where` is this agent's own directory. This step changes no files in it, and takes it because the
     contract every step is written to is the same one.
@@ -118,6 +127,9 @@ def carry(conn: sqlite3.Connection, where: Path) -> None:
         # Check, then act. `ALTER TABLE ADD COLUMN` has no `IF NOT EXISTS`, and a step has to be safe
         # against an agent that does not need it.
         for statement in statements(WHAT_AN_AGENT_IS_FOR):
+            conn.execute(statement)
+    if "self_improve" not in _columns(conn, "config"):
+        for statement in statements(SELF_IMPROVEMENT):
             conn.execute(statement)
 
 

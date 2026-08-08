@@ -14,6 +14,7 @@ The gateway imports this, not the other way round.
 | `due` | what a schedule says about when it runs, and whether it is due at a given minute |
 | `kept` | the schedules one agent keeps, and the only way in to them |
 | `firing` | turning a schedule that is due into work that has started, and writing down what became of it |
+| `upkeep` | when one agent has accumulated seven distinct usage dates and owes protected upkeep |
 
 **A schedule says when, and it carries what.** `due` never looks at what a schedule names — a
 program today, a provider and a prompt when there is a provider process to run one — so the kind of

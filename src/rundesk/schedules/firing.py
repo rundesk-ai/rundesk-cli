@@ -579,6 +579,31 @@ def looked(agent: str, where: Path, watching: Watching,
     return watching
 
 
+def managed(agent: str, where: Path, watching: Watching, one: due.Schedule,
+            moment: Optional[datetime.datetime] = None,
+            asking: Optional[Starting] = None,
+            telling: Optional[Telling] = None) -> Watching:
+    """Start Rundesk-managed scheduled work through the ordinary firing lifecycle.
+
+    Unlike ``looked``, eligibility was decided by a product policy rather than cron. Everything
+    after that decision must remain identical: the kernel claim, durable claim-before-spawn,
+    child-held descriptor, adoption, reaping, output and notices. Guarded because a managed upkeep
+    failure may not end the gateway hosting the agent's ordinary work.
+    """
+    now = moment if moment is not None else datetime.datetime.now()
+    try:
+        return _fired(agent, where, watching, one, now, AProgram(), asking, telling,
+                      time.monotonic() + ANNOUNCING_AT_MOST)
+    except Exception as why:  # noqa: BLE001 — the gateway must survive any firing failure.
+        return _said_once(where, watching, f"managed:{one.name}",
+                          f"schedule {one.name} could not start: {why}", logs.ERROR)
+
+
+def noted_once(where: Path, watching: Watching, about: str, said: str) -> Watching:
+    """Let another schedule policy report one stable gateway warning without exposing internals."""
+    return _said_once(where, watching, about, said, logs.ERROR)
+
+
 def _fired(agent: str, where: Path, watching: Watching, one: due.Schedule,
            now: datetime.datetime, starting: Starting,
            asking: Optional[Starting], telling: Optional[Telling] = None,

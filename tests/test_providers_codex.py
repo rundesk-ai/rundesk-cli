@@ -391,6 +391,92 @@ class ATurnOnAConversationThatHadAlreadyCost(support.Isolated):
         self.assertEqual("HALTED", self.of_type("text")[-1]["text"])
 
 
+class ATurnThatUsedAProviderLocalHelper(support.Isolated):
+    """A helper is part of the parent's work, never a second outward Rundesk turn.
+
+    This is the shape Codex 0.147.0 emitted during a live upkeep run. The child has its own thread
+    and turn, while its spawn remains an item on the parent's thread. Treating the child's final or
+    completion as the parent's ended the upkeep before the parent wrote its required artifacts.
+    """
+
+    def setUp(self):
+        super().setUp()
+        captured = self.home / "a-turn-with-a-provider-local-helper.jsonl"
+        records = [
+            {"id": 1, "result": {}},
+            {"id": 2, "result": {"thread": {"id": "root-thread"}, "model": "gpt-test"}},
+            {"method": "thread/started", "params": {"thread": {"id": "root-thread"}}},
+            {"id": 3, "result": {}},
+            {"method": "turn/started", "params": {
+                "threadId": "root-thread", "turn": {"id": "root-turn", "status": "inProgress"}}},
+            {"method": "item/completed", "params": {
+                "threadId": "root-thread", "turnId": "root-turn",
+                "item": {"type": "agentMessage", "id": "root-comment", "phase": "commentary",
+                         "text": "parent commentary"}}},
+            {"method": "item/completed", "params": {
+                "threadId": "root-thread", "turnId": "root-turn",
+                "item": {"type": "subAgentActivity", "id": "spawn", "kind": "started",
+                         "agentThreadId": "child-thread"}}},
+            {"method": "turn/started", "params": {
+                "threadId": "child-thread",
+                "turn": {"id": "child-turn", "status": "inProgress"}}},
+            {"method": "item/started", "params": {
+                "threadId": "child-thread", "turnId": "child-turn",
+                "item": {"type": "commandExecution", "id": "child-tool",
+                         "status": "inProgress", "command": "echo child"}}},
+            {"method": "item/completed", "params": {
+                "threadId": "child-thread", "turnId": "child-turn",
+                "item": {"type": "commandExecution", "id": "child-tool",
+                         "status": "completed", "command": "echo child",
+                         "aggregatedOutput": "child output", "exitCode": 0}}},
+            {"method": "thread/tokenUsage/updated", "params": {
+                "threadId": "child-thread", "tokenUsage": {
+                    "total": {"inputTokens": 900, "outputTokens": 90, "cachedInputTokens": 300},
+                    "last": {"inputTokens": 99, "outputTokens": 9, "cachedInputTokens": 33}}}},
+            {"method": "error", "params": {
+                "threadId": "child-thread", "willRetry": False,
+                "error": {"message": "the helper failed but the parent recovered"}}},
+            {"method": "item/completed", "params": {
+                "threadId": "child-thread", "turnId": "child-turn",
+                "item": {"type": "agentMessage", "id": "child-final", "phase": "final_answer",
+                         "text": "CHILD FINAL MUST NOT ESCAPE"}}},
+            {"method": "turn/completed", "params": {
+                "threadId": "child-thread",
+                "turn": {"id": "child-turn", "status": "completed", "error": None}}},
+            {"method": "item/completed", "params": {
+                "threadId": "root-thread", "turnId": "root-turn",
+                "item": {"type": "agentMessage", "id": "root-final", "phase": "final_answer",
+                         "text": "PARENT FINAL"}}},
+            {"method": "thread/tokenUsage/updated", "params": {
+                "threadId": "root-thread", "tokenUsage": {
+                    "total": {"inputTokens": 1000, "outputTokens": 100, "cachedInputTokens": 400},
+                    "last": {"inputTokens": 44, "outputTokens": 4, "cachedInputTokens": 22}}}},
+            {"method": "turn/completed", "params": {
+                "threadId": "root-thread",
+                "turn": {"id": "root-turn", "status": "completed", "error": None}}},
+        ]
+        captured.write_text("".join(json.dumps(one) + "\n" for one in records), encoding="utf-8")
+        self.said, self.got = replayed(self.home, captured=captured)
+
+    def of_type(self, kind):
+        return [one for one in self.said if one.get("type") == kind]
+
+    def test_only_the_parent_speaks_and_settles_the_rundesk_turn(self):
+        self.assertEqual(["parent commentary", "PARENT FINAL"],
+                         [one["text"] for one in self.of_type("text")])
+        self.assertEqual(1, len(self.of_type("done")))
+        self.assertIs(self.said[-1], self.of_type("done")[0])
+        self.assertTrue(self.said[-1]["ok"])
+        self.assertEqual("root-thread", self.said[-1]["session_id"])
+
+    def test_child_tools_failures_and_usage_do_not_become_the_parents_records(self):
+        self.assertEqual([], self.of_type("tool"))
+        self.assertEqual([], self.of_type("result"))
+        self.assertEqual(44, self.of_type("usage")[0]["input_tokens"])
+        self.assertEqual(4, self.of_type("usage")[0]["output_tokens"])
+        self.assertEqual(22, self.of_type("usage")[0]["cache_read_tokens"])
+
+
 class EveryWayTheBrainSaysItFailed(support.Isolated):
     """The closed word for each of the vendor's own, and **never one guessed from the prose**.
 

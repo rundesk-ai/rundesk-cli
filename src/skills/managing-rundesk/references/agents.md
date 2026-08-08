@@ -9,7 +9,7 @@ do not edit its database to change identity or provider.
 |---|---|
 | `agents` or `agents list` | List every agent and recorded provider. |
 | `agents add <agent> --provider <provider> [--describes <text>]` | Create an agent. `--describes` is the one-sentence purpose another agent reads before delegating. |
-| `agents configure <agent> [--provider <provider>] [--describes <text>]` | Change the provider or delegation description. Unnamed fields stay unchanged. |
+| `agents configure <agent> [--provider <provider>] [--describes <text>] [--self-improve <true\|false>]` | Change provider, delegation description, or protected upkeep. Unnamed fields stay unchanged. |
 | `agents remove <agent> [--confirm]` | Preview removal; `--confirm` removes the agent and everything it remembers. |
 
 Prefix every command with `"$RUNDESK_COMMAND"`.

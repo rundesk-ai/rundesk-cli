@@ -29,6 +29,12 @@ identity questions. Do not construct a path from defaults or set `RUNDESK_HOME` 
 Run `configure` first because newer releases may add settings. Invalid multi-setting input changes
 nothing; a successful call changes every requested setting together.
 
+Automatic upkeep is per-agent rather than an install setting. Inspect `agents`, then use
+`agents configure <agent> --self-improve <true|false>`. The protected
+`weekly-self-improve-upkeep` policy cannot be enabled, disabled, run, or removed through `schedules`.
+A pre-policy owner schedule already using that name remains ordinary owner work and blocks the
+automatic policy until the owner removes it; Rundesk never adopts or overwrites it.
+
 The current release stores `update_enabled` and `update_time` but does not itself schedule automatic
 update jobs from them. Use `update` for an update that exists today.
 

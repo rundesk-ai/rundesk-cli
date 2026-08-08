@@ -13,11 +13,12 @@ Run directly: `python3 tests/test_schedules_command.py`
 """
 
 import unittest
+from unittest import mock
 
 import support
 from rundesk.agents import directory, records
 from rundesk.exits import FAILED, OK, USAGE
-from rundesk.schedules import firing, kept
+from rundesk.schedules import firing, kept, upkeep
 
 #: A program that really is on this machine, and one that is not. Located when a schedule is added,
 #: so both spellings have to be real ones.
@@ -56,14 +57,14 @@ class Scheduling(support.Isolated):
 class Listing(Scheduling):
     """`rundesk schedules`, and the same thing narrowed to one agent."""
 
-    def test_an_install_with_nothing_scheduled_says_so_and_says_what_to_type(self):
+    def test_an_agent_with_no_owner_schedule_still_shows_its_managed_upkeep(self):
         # `as_table` prints nothing at all when there are no rows, headings included — so a listing
         # that leant on it would print the directory and stop, and "nothing scheduled" would be
         # something the reader had to infer from silence.
         code, out, _ = self.rundesk("schedules")
         self.assertEqual(OK, code)
-        self.assertIn("nothing is scheduled yet", out)
-        self.assertIn("rundesk schedules add", out)
+        self.assertIn(upkeep.NAME, out)
+        self.assertIn("after 7 more usage dates", out)
 
     def test_where_they_are_kept_is_printed_even_when_there_are_none(self):
         # "nothing scheduled" and "nothing scheduled *here*" are different things to learn, and
@@ -372,6 +373,97 @@ class Showing(Scheduling):
         _code, out, _ = self.rundesk("schedules", "show", self.agent, "nightly")
         self.assertIn("logs", out)
         self.assertIn("nightly.out", out)
+
+
+class ProtectedAutomaticUpkeep(Scheduling):
+    def setUp(self):
+        super().setUp()
+        upkeep.prepared(self.agent, "dynamic upkeep")
+
+    def test_it_is_listed_as_usage_driven_and_shows_how_to_change_it(self):
+        code, out, err = self.rundesk("schedules", "list", self.agent)
+        self.assertEqual(OK, code, err)
+        self.assertIn("weekly-self-improve-upkeep", out)
+        self.assertIn("after 7 usage dates", out)
+        code, shown, err = self.rundesk("schedules", "show", self.agent, "weekly-self-improve-upkeep")
+        self.assertEqual(OK, code, err)
+        self.assertIn("managed", shown)
+        self.assertIn("rundesk agents configure cole --self-improve", shown)
+
+    def test_an_upkeep_in_flight_is_shown_as_running_even_when_turned_off(self):
+        records.stated(directory.records(self.agent), {"self_improve": 0})
+        with mock.patch("rundesk.schedules.upkeep.firing.still_running", return_value=True):
+            code, out, err = self.rundesk("schedules", "list", self.agent)
+            self.assertEqual(OK, code, err)
+            self.assertIn("running", out)
+            self.assertNotIn("  off ", out)
+
+    def test_an_unreadable_policy_state_is_reported_by_listing_instead_of_raising(self):
+        with mock.patch("rundesk.commands.schedules.upkeep.state",
+                        side_effect=records.Unreadable("state became unreadable")):
+            code, out, err = self.rundesk("schedules", "list", self.agent)
+        self.assertEqual(OK, code, err)
+        self.assertIn("cannot be read", out)
+        self.assertIn("state became unreadable", out)
+
+    def test_a_policy_read_race_is_reported_by_every_named_command(self):
+        commands = (
+            ("shown", ("show", self.agent, upkeep.NAME)),
+            ("changed", ("update", self.agent, upkeep.NAME, "--disable")),
+            ("run", ("run", self.agent, upkeep.NAME)),
+            ("removed", ("remove", self.agent, upkeep.NAME)),
+        )
+        for effect, command in commands:
+            with self.subTest(command=command), mock.patch(
+                    "rundesk.commands.schedules.kept.upkeep_is_managed",
+                    side_effect=records.Unreadable("records disappeared during the command")):
+                code, _out, err = self.rundesk("schedules", *command)
+            self.assertEqual(FAILED, code)
+            self.assertIn("records disappeared", err)
+            self.assertIn(f"nothing was {effect}", err)
+
+    def test_add_update_run_and_remove_cannot_override_the_managed_schedule(self):
+        commands = (
+            ("add", self.agent, "weekly-self-improve-upkeep", "--when", "0 9 * * *", "--run", THERE),
+            ("update", self.agent, "weekly-self-improve-upkeep", "--disable"),
+            ("update", self.agent, "weekly-self-improve-upkeep", "--enable"),
+            ("run", self.agent, "weekly-self-improve-upkeep"),
+            ("remove", self.agent, "weekly-self-improve-upkeep"),
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                code, _out, err = self.rundesk("schedules", *command)
+                self.assertEqual(FAILED, code)
+                self.assertIn("managed by Rundesk", err)
+                self.assertIn("agents configure cole --self-improve", err)
+
+    def test_a_pre_feature_owner_schedule_with_the_reserved_name_is_not_trapped(self):
+        with records.writing(directory.records(self.agent)) as conn:
+            conn.execute("DELETE FROM schedules WHERE name = ?", (upkeep.NAME,))
+            conn.execute(
+                "INSERT INTO schedules (name, cron, command, created_at) VALUES (?, ?, ?, ?)",
+                (upkeep.NAME, "0 9 * * *", "/bin/echo old", "2026-08-01T00:00:00Z"))
+
+        code, out, err = self.rundesk("schedules", "list", self.agent)
+        self.assertEqual(OK, code, err)
+        self.assertEqual(1, sum(line.split()[0] == upkeep.NAME
+                                for line in out.splitlines() if line.split()))
+        self.assertNotIn("after 7 usage dates", out)
+        code, out, err = self.rundesk("schedules", "show", self.agent, upkeep.NAME)
+        self.assertEqual(OK, code, err)
+        self.assertIn("owner schedule predates", out)
+
+        code, _out, err = self.rundesk(
+            "schedules", "update", self.agent, upkeep.NAME, "--disable")
+        self.assertEqual(OK, code, err)
+        code, out, err = self.rundesk("schedules", "run", self.agent, upkeep.NAME)
+        self.assertEqual(OK, code, err)
+        self.assertIn("old", out)
+        code, _out, err = self.rundesk("schedules", "remove", self.agent, upkeep.NAME)
+        self.assertEqual(OK, code, err)
+        code, out, err = self.rundesk("schedules", "show", self.agent, upkeep.NAME)
+        self.assertEqual(OK, code, err)
+        self.assertIn("managed", out)
 
 
 class RunningOneByHand(Scheduling):

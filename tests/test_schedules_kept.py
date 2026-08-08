@@ -157,6 +157,40 @@ class WhatTheRecordsRefuse(Keeping):
         with self.assertRaisesRegex(kept.Refused, "is not what a firing comes to"):
             kept.became(self.agent, "nightly", "started")
 
+    def test_the_rundesk_managed_upkeep_name_cannot_be_added_changed_or_removed(self):
+        for action in (
+                lambda: kept.added(self.agent, kept.UPKEEP,
+                                   {"cron": "0 9 * * *", "command": "/bin/echo hi"}),
+                lambda: kept.changed(self.agent, kept.UPKEEP, {"enabled": 0}),
+                lambda: kept.forgotten(self.agent, kept.UPKEEP)):
+            with self.subTest(action=action):
+                with self.assertRaisesRegex(kept.Refused, "managed by Rundesk"):
+                    action()
+
+    def test_rundesk_can_prepare_only_its_own_managed_upkeep_row(self):
+        row = kept.prepared_upkeep(self.agent, "do the exact upkeep")
+        self.assertEqual(kept.UPKEEP, row["name"])
+        self.assertEqual(0, row["enabled"])
+        self.assertEqual(kept.UPKEEP_PROVIDER, row["provider_name"])
+        self.assertEqual("do the exact upkeep", row["prompt"])
+        with self.assertRaisesRegex(kept.Refused, "will not replace"):
+            with records.writing(directory.records(self.agent)) as conn:
+                conn.execute("UPDATE schedules SET provider_name = NULL WHERE name = ?",
+                             (kept.UPKEEP,))
+            kept.prepared_upkeep(self.agent, "replacement")
+
+    def test_an_owner_schedule_from_before_the_reservation_remains_manageable(self):
+        with records.writing(directory.records(self.agent)) as conn:
+            conn.execute(
+                "INSERT INTO schedules (name, cron, command, created_at) VALUES (?, ?, ?, ?)",
+                (kept.UPKEEP, "0 9 * * *", "/bin/echo old", "2026-08-01T00:00:00Z"))
+
+        self.assertFalse(kept.upkeep_is_managed(self.agent))
+        kept.changed(self.agent, kept.UPKEEP, {"enabled": 0})
+        self.assertEqual(0, kept.one(self.agent, kept.UPKEEP)["enabled"])
+        kept.forgotten(self.agent, kept.UPKEEP)
+        self.assertTrue(kept.upkeep_is_managed(self.agent))
+
 
 class ChangingOneInPlace(Keeping):
 

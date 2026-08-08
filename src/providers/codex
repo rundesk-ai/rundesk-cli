@@ -502,6 +502,15 @@ class Turn:
     # ── what the brain says ───────────────────────────────────────────────────────────────────
 
     def a_notification(self, method: str, params: dict) -> None:
+        # Provider-local helpers are separate Codex threads multiplexed onto this same stream.
+        # Their spawn is an item on the parent thread, but their tools, usage, answer, error, and
+        # completion carry the child's `threadId`. None is an outward Rundesk turn: accepting the
+        # child's completion would settle the parent before it had finished its own definition of
+        # done, and accepting its start would redirect later steering at the child. Threadless
+        # account events and older compatible shapes remain readable.
+        belongs_to = params.get("threadId")
+        if belongs_to is not None and self.thread_id is not None and belongs_to != self.thread_id:
+            return
         if method == "thread/started":
             # **Taken from whichever says it first.** The reply to `thread/start` also carries it,
             # and a turn that settled before that reply had been read reported no handle at all —

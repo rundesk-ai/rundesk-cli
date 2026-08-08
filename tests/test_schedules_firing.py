@@ -599,6 +599,30 @@ class AScheduleThatAsksTheAgent(Firing):
         self.assertEqual([("review", "review the queue", self.agent)], runner.asked)
         self.assertEqual(["review"], sorted(after.running))
 
+    def test_rundesk_managed_work_uses_the_same_claim_spawn_and_watch_lifecycle(self):
+        class ATurn:
+            def __init__(self):
+                self.asked = []
+
+            def start(self, one, agent, holding):
+                self.asked.append((one.name, one.prompt, agent))
+                return programs.start(["/bin/echo", "upkeep"],
+                                      log=firing.output_of(agent, one.name),
+                                      holding=(holding,))
+
+        row = kept.prepared_upkeep(self.agent, "perform protected upkeep")
+        one = due.understood(row)._replace(enabled=True)
+        runner = ATurn()
+        at = datetime.datetime(2026, 8, 5, 9, 0)
+
+        after = firing.managed(
+            self.agent, self.where, firing.Watching({}, {}), one, moment=at, asking=runner)
+        self.started.extend(value.pid for value in after.running.values() if value.pid)
+
+        self.assertEqual([(kept.UPKEEP, "perform protected upkeep", self.agent)], runner.asked)
+        self.assertEqual([kept.UPKEEP], sorted(after.running))
+        self.assertEqual(due.as_minute(at), kept.one(self.agent, kept.UPKEEP)["last_fired_for"])
+
     def test_running_one_by_hand_is_refused_in_words_rather_than_by_a_traceback(self):
         self.a_prompt_schedule()
         with self.assertRaises(firing.NoRunner):

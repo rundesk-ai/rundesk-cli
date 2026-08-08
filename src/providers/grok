@@ -673,6 +673,14 @@ class Turn:
         """One notification, as the records rundesk understands — or as nothing at all."""
         if not self.reporting:
             return
+        # Provider-local helpers are separate Grok sessions multiplexed onto the parent's stream.
+        # Their tools, answer, usage, and `turn_completed` belong to the helper. Accepting the last
+        # one settles the outward turn before the parent's wait receives the helper result. Spawn,
+        # progress, and result updates that the parent needs still arrive under the parent session.
+        # Keep an absent id compatible with older shapes rather than making silence out of one.
+        whose = str(params.get("sessionId") or "")
+        if whose and self.session_id and whose != str(self.session_id):
+            return
         update = params.get("update")
         if not isinstance(update, dict):
             return

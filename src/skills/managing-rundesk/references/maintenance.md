@@ -6,16 +6,21 @@ context and removes its own scratch; it does not inventory the whole home.
 ## Focused pass
 
 1. Read `MEMORY.md` and only the home indexes it links. Inventory home loose files and scratch
-   directories without following symlinks. Preserve and list `retros/` if present. Do not open
-   files under `retros/`; the next phase owns that evidence.
+   directories without following symlinks. Reuse the generated `plans/`, `research/`, `scripts/`,
+   and `retros/` areas for durable agent-owned work; keep each README and follow its boundary.
+   For a symlink, inspect only link metadata and its target spelling; never open the link or target.
+   Preserve and list `retros/`, but do not open its entries; the next phase owns that evidence.
 2. Keep compact owner preferences, durable role and responsibilities, reusable cross-project
    process and gotchas, and small active-project pointers: stable location, purpose, role, and
    authoritative overview.
 3. Correct or merge duplicates. Remove a mapping only when it is explicitly marked retired/stale
    or authoritative context confirms that; retain an unavailable active mapping and do not add
    availability status. Remove loops explicitly marked completed/delivered.
-4. Remove commands or deliverable paths, working or draft paths, status, report formatting, dates
-   or supersession history, and task-only methods from personal memory; keep them in the project.
+4. Remove commands or deliverable paths, working or draft paths, changing project status, report
+   formatting, supersession history, and task-only methods from personal memory; keep them in the
+   project. Preserve a still-open owner commitment until it is closed or safely moved; when several
+   active commitments outgrow memory, maintain one canonical `OPEN_ITEMS.md` instead of dropping
+   them merely because they have dates.
    An earned shared index may keep a stable entrypoint that avoids repeated discovery. Use one
    purpose-named index such as `PROJECTS.md`, `CLIENTS.md`, or `OPEN_ITEMS.md` only when several
    entries earn it; never one home note per project or all three as boilerplate.
@@ -23,8 +28,13 @@ context and removes its own scratch; it does not inventory the whole home.
    clutter. Remove an agent-created scratch directory when left empty. Preserve deliverables,
    project or user files, files of uncertain ownership or value, provider-managed directories,
    symlinks, and their targets.
-6. Reread every changed index, verify each removal and retained sentinel, and give one complete
-   final report: what changed, what was preserved, what remains uncertain, and how it was checked.
+   Move an agent-owned durable item into the matching generated area only after proving ownership,
+   purpose, and that no canonical path or link depends on its current location. Do not reorganize
+   uncertain material for appearance.
+6. Reread every changed index and verify each removal and retained sentinel. During combined upkeep,
+   keep that evidence for the later phases and the short final required by the combined contract.
+   When maintenance is the whole task, report what changed, was preserved, remains uncertain, and
+   how it was checked.
 
 Never infer that age, a missing mount, or an unavailable path makes a file or mapping stale. Never
 move project state into home merely to organize it. If safe ownership or obsolescence cannot be
@@ -38,12 +48,14 @@ A tidy home is small, canonical, and useful rather than empty:
 home/
   MEMORY.md                 compact first-read map; links to PROJECTS.md
   PROJECTS.md               one maintained index earned by the agent's role
-  templates/
-    owner-report.md         reusable agent-owned material
+  plans/                    resumable cross-project agent plans
+  research/                 reusable sourced findings
+  scripts/                  verified agent-owned automation
+  retros/                   dated self-improvement history
 ```
 
 Project code, current status, and project decisions remain in each external project. A role that
-does not need `PROJECTS.md` or `templates/` should not create them merely to match the example.
+does not need `PROJECTS.md` should not create it merely to match the example.
 
 A cluttered home has signals worth investigating:
 
@@ -67,6 +79,6 @@ each item, whether it is still needed, and where project state belongs. Preserve
 ## Combined upkeep contract
 
 Use one focused schedule for maintenance, retrospective, and self-improvement rather than competing
-sweeps. Workspace and continuity maintenance runs first; the retrospective records the prior week;
+sweeps. Workspace and continuity maintenance runs first; the retrospective records the supplied usage cycle;
 the evidence review then starts from clean, verified continuity. The strict phase order and finish
 gate are in the [self-improvement reference](self-improvement.md#combined-upkeep-contract).

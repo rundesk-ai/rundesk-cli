@@ -55,7 +55,7 @@ from rundesk.commands import Subcommands, as_written, failed
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.providers import answering, turns
-from rundesk.schedules import due, firing, kept
+from rundesk.schedules import due, firing, kept, upkeep
 from rundesk.utils import locking, programs
 from rundesk.utils.terminal import as_table
 
@@ -213,11 +213,20 @@ def _rows_for(agent: str, showing_who: bool) -> List[Tuple[str, ...]]:
     now = _now()
     try:
         found = kept.all(agent)
+        standing = upkeep.state(agent)
     except TROUBLE as why:
         return [((agent,) if showing_who else ()) + ("?", "?", "?", f"cannot be read — {why}")]
 
+    prefix = (agent,) if showing_who else ()
+    last = "running" if standing["running"] else "never ran"
+    if not standing["running"] and standing["last_outcome"]:
+        last = f"{standing['last_outcome']} {_as_local(standing['last_run_at'])}"
     rows = []
+    if not standing["conflict"]:
+        rows.append((*prefix, upkeep.NAME, "after 7 usage dates", str(standing["next"]), last))
     for row in found:
+        if row.get("name") == upkeep.NAME and row.get("provider_name") == kept.UPKEEP_PROVIDER:
+            continue
         try:
             one = due.understood(row)
             when = one.cron or one.run_at or ""
@@ -252,6 +261,8 @@ def _last(agent: str, row: Dict[str, Any]) -> str:
 
 def _added(args: argparse.Namespace) -> int:
     """Write a new schedule down, or refuse having written nothing."""
+    if args.schedule == upkeep.NAME:
+        return _managed_upkeep(args.agent, "added")
     trouble = _what_it_needs(args, f"rundesk schedules add {args.agent} {args.schedule}")
     if trouble:
         return _failed(trouble, "nothing was added")
@@ -326,6 +337,8 @@ def _changed(args: argparse.Namespace) -> int:
             return _failed(trouble, "nothing was changed")
 
     try:
+        if args.schedule == upkeep.NAME and kept.upkeep_is_managed(args.agent):
+            return _managed_upkeep(args.agent, "changed")
         # Read, changed in a copy and understood before anything is written, so a change that would
         # leave a schedule nobody can act on is refused with the schedule as it was.
         was = kept.one(args.agent, args.schedule)
@@ -344,11 +357,18 @@ def _shown(agent: str, name: str) -> int:
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was shown")
     try:
+        if name == upkeep.NAME and kept.upkeep_is_managed(agent):
+            print(f"schedule {name} for {agent}")
+            return _described_upkeep(agent)
         kept.one(agent, name)
     except TROUBLE as why:
         return _failed(str(why), "nothing was shown")
     print(f"schedule {name} for {agent}")
-    return _described(agent, name)
+    described = _described(agent, name)
+    if described == OK and name == upkeep.NAME:
+        print("        note      this owner schedule predates Rundesk's protected policy; automatic "
+              "upkeep remains blocked until this schedule is removed")
+    return described
 
 
 def _described(agent: str, name: str) -> int:
@@ -377,6 +397,23 @@ def _described(agent: str, name: str) -> int:
     print(f"        last      {_last(agent, row)}")
     print(f"        logs      {directory.logs(agent)}")
     print(f"        output    {firing.output_of(agent, name)}")
+    return OK
+
+
+def _described_upkeep(agent: str) -> int:
+    """The usage-driven policy, without exposing the inert row that carries its firing."""
+    try:
+        standing = upkeep.state(agent)
+    except TROUBLE as why:
+        return _failed(str(why), "nothing was shown")
+    print("        when      after 7 usage dates")
+    print(f"        enabled   {as_written(bool(standing['enabled']))}")
+    print(f"        next      {standing['next']}")
+    print("        managed   Rundesk")
+    print("        change    rundesk agents configure "
+          f"{agent} --self-improve <true|false>")
+    print(f"        logs      {directory.logs(agent)}")
+    print(f"        output    {firing.output_of(agent, upkeep.NAME)}")
     return OK
 
 
@@ -439,6 +476,12 @@ def _ran(agent: str, name: str, waiting: float) -> int:
         return _mistyped(f"{waiting:g} seconds is not long enough for anything to run",
                          "say a number of seconds greater than zero", "nothing was run")
 
+    try:
+        if name == upkeep.NAME and kept.upkeep_is_managed(agent):
+            return _managed_upkeep(agent, "run")
+    except TROUBLE as why:
+        return _failed(str(why), "nothing was run")
+
     if _asks_the_agent(agent, name):
         # **One verb for both kinds.** A schedule starts a program or asks the agent, and a person
         # checking their own work should not have to know which they wrote. The turn is taken here,
@@ -500,6 +543,8 @@ def _forgotten(agent: str, name: str) -> int:
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was removed")
     try:
+        if name == upkeep.NAME and kept.upkeep_is_managed(agent):
+            return _managed_upkeep(agent, "removed")
         kept.forgotten(agent, name)
         # After the row and never before it. The row is what makes the schedule a schedule, so a
         # removal interrupted between the two leaves files with nothing scheduling them — litter —
@@ -514,6 +559,15 @@ def _forgotten(agent: str, name: str) -> int:
     if not gone and firing.still_running(agent, name):
         print(f"        kept   what {name} started is still running, so what it holds was left")
     return OK
+
+
+def _managed_upkeep(agent: str, effect: str) -> int:
+    """Refuse ordinary schedule verbs against the per-agent protected upkeep policy."""
+    return _failed(
+        "weekly-self-improve-upkeep is managed by Rundesk and cannot be changed here",
+        "set this agent's automatic upkeep with:",
+        f"rundesk agents configure {agent} --self-improve <true|false>",
+        f"nothing was {effect}")
 
 
 def _what_it_needs(args: argparse.Namespace, typed: str) -> str:

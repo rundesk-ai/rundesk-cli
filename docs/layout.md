@@ -62,7 +62,7 @@ Agents stand under `data/agents/`, one directory each, named as that agent is:
 ```
 data/agents/<name>/
   state.db          what makes this directory an agent — everything it remembers
-  home/             where the agent starts, and what it puts there. Yours, not rundesk's
+  home/             where the agent starts, with compact rules, memory, and durable work areas
   logs/             what its gateway said: a file per day, and what launchd caught
   schedules/        what each firing holds, wrote, and was: <schedule>.lock, .out and .json
   channels/<kind>/  one adapter's records, logs, staging, and dated inbound files
@@ -85,10 +85,22 @@ agent-created clutter, but an old-looking or unfamiliar
 file is somebody's data, not permission to tidy it away. A purpose-named index such as `PROJECTS.md`
 is ordinary home content: Rundesk does not create, read, or sweep it.
 
-A focused upkeep may keep an agent-owned `retros/YYYY-MM-DD.md` diary. The initiator supplies the
-evidence interval and entry date; a rerun updates that one entry. The bundled maintenance
-reference bounds each entry but keeps the history. Rundesk itself does not create or sweep this
-directory, and an older or unfamiliar file is never treated as disposable.
+Every agent starts with four purpose-named areas and a compact README in each:
+
+```text
+home/
+  plans/       durable resumable plans that do not belong in a project
+  research/    reusable, sourced findings owned by the agent
+  scripts/     tested agent-owned automation for repeated work
+  retros/      dated evidence-based self-improvement entries
+```
+
+The notes are filled in only when absent and never replace an owner-edited answer. The directories
+organize durable work; they are not a reason to move project state home or keep task scratch. A
+focused upkeep may keep `retros/YYYY-MM-DD.md`; the initiator supplies the evidence interval and
+entry date, and a rerun updates that one entry. The bundled maintenance reference bounds each entry
+but keeps the history. Rundesk never sweeps these areas, and an older or unfamiliar file is never
+treated as disposable.
 
 **The names inside are fixed and they are the same for every agent**, which is the whole reason they
 are inside. The build this replaces put them beside the name instead — `<name>.lock`, `<name>.log`,
@@ -107,6 +119,12 @@ gateway each starting a copy. `<schedule>.json` says which minute the firing was
 process id is, written before the spawn so that a gateway killed outright still leaves something
 pointing at the work. `<schedule>.out` is everything that schedule's work has ever written, appended
 across runs and rotated by size.
+
+One protected schedule name, `weekly-self-improve-upkeep`, belongs to Rundesk rather than to an
+owner-authored cron. Its inert database row is created when the first seven-date usage cycle is
+ready and carries the frozen prompt and last attempt. The per-agent `config.self_improve` boolean,
+which defaults on, is the only switch. Distinct terminal-turn dates and the last attempt remain in
+that same agent's `state.db`; no install-wide usage or upkeep state exists.
 
 `channels/<kind>/in/YYYY-MM-DD/<message>/` holds files that arrived through a channel. Rundesk owns
 those copies and sweeps whole days after 60 days. Outgoing files have no directory here: they are

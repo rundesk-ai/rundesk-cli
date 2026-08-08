@@ -8,6 +8,7 @@ about, and it would look exactly like the model having a bad day.
 Run directly: `python3 tests/test_agent_pages.py`
 """
 
+import shutil
 import unittest
 from unittest import mock
 
@@ -69,6 +70,30 @@ class ANewAgent(support.Isolated):
         for name in pages.PAGES:
             with self.subTest(name=name):
                 self.assertTrue((self.home / name).is_file())
+
+    def test_it_starts_with_named_places_for_durable_work(self):
+        self.assertEqual(
+            {"plans", "research", "scripts", "retros"},
+            {one.name for one in self.home.iterdir() if one.is_dir()},
+        )
+        for area in pages.AREAS:
+            with self.subTest(area=area):
+                self.assertTrue((self.home / area / "README.md").is_file())
+
+    def test_each_work_area_explains_use_maintenance_and_safety(self):
+        for area in pages.AREAS:
+            with self.subTest(area=area):
+                note = (self.home / area / "README.md").read_text(encoding="utf-8").lower()
+                self.assertIn(area, note)
+                self.assertIn("keep", note)
+                self.assertTrue(
+                    any(word in note for word in ("remove", "revise", "update", "retire")),
+                    f"{area} does not explain how its contents stay maintained",
+                )
+                self.assertTrue(
+                    any(word in note for word in ("project", "secret", "evidence", "owner")),
+                    f"{area} does not name a safety boundary",
+                )
 
     def test_the_rules_it_got_are_byte_identical_under_both_names(self):
         self.assertEqual((self.home / "AGENTS.md").read_bytes(),
@@ -234,6 +259,31 @@ class WhatIsNeverReplaced(support.Isolated):
         self.assertEqual(["MEMORY.md"], pages.wanted(self.home))
         self.assertEqual(["MEMORY.md"], pages.place(self.home, "ava"))
         self.assertEqual([], pages.wanted(self.home))
+
+    def test_a_missing_work_area_comes_back_without_touching_the_others(self):
+        scripts_note = self.home / "scripts" / "README.md"
+        scripts_note.write_text("keep this exact note", encoding="utf-8")
+        shutil.rmtree(self.home / "plans")
+
+        self.assertEqual(["plans/README.md"], pages.wanted(self.home))
+        self.assertEqual(["plans/README.md"], pages.place(self.home, "ava"))
+        self.assertTrue((self.home / "plans" / "README.md").is_file())
+        self.assertEqual("keep this exact note", scripts_note.read_text(encoding="utf-8"))
+
+    def test_an_area_note_the_owner_changed_is_left_exactly_as_it_is(self):
+        note = self.home / "research" / "README.md"
+        note.write_text("the owner's research rules", encoding="utf-8")
+        self.assertEqual([], pages.place(self.home, "ava"))
+        self.assertEqual("the owner's research rules", note.read_text(encoding="utf-8"))
+
+    def test_a_linked_area_is_never_followed_to_fill_a_note(self):
+        elsewhere = self.home.parent / "somebody-elses-research"
+        elsewhere.mkdir()
+        shutil.rmtree(self.home / "research")
+        (self.home / "research").symlink_to(elsewhere)
+
+        self.assertEqual([], pages.place(self.home, "ava"))
+        self.assertEqual([], list(elsewhere.iterdir()))
 
 
 class TheSweepEveryUpdateRuns(support.Isolated):

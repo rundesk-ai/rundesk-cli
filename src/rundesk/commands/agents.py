@@ -32,11 +32,11 @@ import argparse
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from rundesk.agents import directory, migration, pages, records
 from rundesk.channels import hosting
-from rundesk.commands import Subcommands, failed
+from rundesk.commands import Subcommands, as_written, failed
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job, standing
@@ -57,6 +57,11 @@ NOT_PROVEN = ("the provider is recorded and not proven — check it with: "
 #: about what belongs in it.
 WHAT_IT_IS_FOR = ("what it is for, in one sentence — what another agent reads while deciding "
                   "whether to delegate to it")
+
+#: The same spellings every yes-or-no setting on the install accepts. Kept here because this value
+#: belongs to one agent's SQLite configuration, not to the install-wide JSON configuration.
+YES = ("yes", "true", "on", "1")
+NO = ("no", "false", "off", "0")
 
 #: What a name outside `job.IN_A_LABEL` costs, said where the name is chosen rather than where it is
 #: next needed. `agents` allows any name a directory may have and launchd's labels are narrower, so
@@ -119,6 +124,8 @@ def register(sub: Subcommands) -> None:
     changed.add_argument("--provider", metavar="<provider>", default=None,
                          help="what is behind it; recorded, and not proven")
     changed.add_argument("--describes", metavar="<text>", default=None, help=WHAT_IT_IS_FOR)
+    changed.add_argument("--self-improve", metavar="<true|false>", default=None,
+                         help="whether Rundesk runs automatic self improvement; yes or no")
 
     gone = what.add_parser("remove", help="take an agent away, and everything it remembers")
     gone.add_argument("agent", metavar="<agent>", help="which one, as `rundesk agents` lists it")
@@ -139,7 +146,7 @@ def cmd_agents(args: argparse.Namespace) -> int:
     if what == "add":
         return _made(args.agent, args.provider, args.describes)
     if what == "configure":
-        return _configured(args.agent, args.provider, args.describes)
+        return _configured(args.agent, args.provider, args.describes, args.self_improve)
     if what == "remove":
         return _forgotten(args.agent, args.confirm)
 
@@ -170,8 +177,11 @@ def _listed() -> int:
         print("        no agents yet — add one with: "
               "rundesk agents add <agent> --provider <provider>")
         return OK
-    as_table(("AGENT", "PROVIDER", "SKILLS"),
-             [(name, _provider_of(name), _skills_of(name)) for name in there])
+    rows = []
+    for name in there:
+        provider, self_improve = _configuration_of(name)
+        rows.append((name, provider, _skills_of(name), self_improve))
+    as_table(("AGENT", "PROVIDER", "SKILLS", "SELF-IMPROVE"), rows)
     return OK
 
 
@@ -183,8 +193,8 @@ def _skills_of(name: str) -> str:
         return "? — cannot be read"
 
 
-def _provider_of(name: str) -> str:
-    """What is recorded behind one agent, or why that could not be answered.
+def _configuration_of(name: str) -> Tuple[str, str]:
+    """The two listed settings of one agent, or why they could not be answered.
 
     The two ways it cannot be answered are kept apart, because they are different situations:
     records that have gone away between the listing and the reading, and records that are there and
@@ -192,11 +202,12 @@ def _provider_of(name: str) -> str:
     agent is simply missing, and what they do next is make a new one over it.
     """
     try:
-        return str(records.read(directory.records(name))["provider_name"])
+        settled = records.read(directory.records(name))
+        return str(settled["provider_name"]), as_written(bool(settled["self_improve"]))
     except records.NotThere:
-        return "? — its records are not there"
+        return "? — its records are not there", "?"
     except (directory.Refused, records.Unreadable, OSError, sqlite3.Error, KeyError):
-        return "? — its records cannot be read"
+        return "? — its records cannot be read", "?"
 
 
 def _the_skill_every_agent_holds(agent: str) -> str:
@@ -237,7 +248,8 @@ def _the_pages_it_lives_by(home: Path) -> str:
     """
     missing = pages.wanted(home)
     if not missing:
-        return f"rules     {', '.join(sorted(pages.PAGES))} — how it works, and what it learns"
+        return (f"rules     {', '.join(sorted(pages.CONTINUITY))} — how it works, and what it "
+                "learns")
     return (f"note      it has no {', '.join(missing)} yet — this release shipped none, and "
             "rundesk update gives it them")
 
@@ -269,6 +281,7 @@ def _made(name: str, provider: Optional[str], describes: Optional[str] = None) -
     print(f"        logs      {at / directory.LOGS}")
     print(f"        records   {at / directory.RECORDS}")
     print(f"        {_the_pages_it_lives_by(at / directory.HOME)}")
+    print(f"        workspace {', '.join(f'{area}/' for area in pages.AREAS)} — durable work, organized")
     print(f"        {_the_skill_every_agent_holds(name)}")
     if job.name_trouble(name):
         print(f"        note      {NO_JOB_EVER}")
@@ -276,7 +289,8 @@ def _made(name: str, provider: Optional[str], describes: Optional[str] = None) -
     return OK
 
 
-def _configured(name: str, provider: Optional[str], describes: Optional[str] = None) -> int:
+def _configured(name: str, provider: Optional[str], describes: Optional[str] = None,
+                self_improve: Optional[str] = None) -> int:
     """Change what one agent is configured with, or refuse having changed nothing.
 
     **Naming nothing to change is refused rather than reported as a success.** `configure` makes the
@@ -285,18 +299,19 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
     that never happened. Showing what the agent is configured with instead is a listing wearing the
     name of a change, and `rundesk agents` already answers that question.
 
-    **Either flag, or both, and every named field moves in one write.** Two `stated` calls would be
-    two chances to half-succeed, and an agent left with a new description and its old provider is a
-    state nobody asked for.
+    **Any combination of flags moves in one write.** Two `stated` calls would be two chances to
+    half-succeed, and an agent left with a new description and its old provider is a state nobody
+    asked for.
 
     An empty `--describes` takes the description away rather than storing a blank. That is the one
     way back for somebody who wrote the wrong thing, and it is why `""` and *not given* have to stay
     different answers here — `None` means the flag was absent, and `""` means somebody typed it.
     """
-    if provider is None and describes is None:
+    if provider is None and describes is None and self_improve is None:
         return _failed(f"nothing was named to change about {name}",
                        f"change one with: rundesk agents configure {name} --provider <provider>",
                        f"or: rundesk agents configure {name} --describes <text>",
+                       f"or: rundesk agents configure {name} --self-improve <true|false>",
                        "nothing was changed")
     if provider is not None:
         trouble = _provider_trouble(provider,
@@ -307,18 +322,26 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
         trouble = directory.describes_trouble(describes)
         if trouble:
             return _failed(trouble, "nothing was changed")
+    improving = None
+    if self_improve is not None:
+        improving = _yes_or_no(self_improve)
+        if improving is None:
+            return _failed(f"self improvement wants yes or no, and was given {self_improve!r}",
+                           "nothing was changed")
 
     gone_wrong = directory.not_an_agent(name)
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was changed")
 
-    moving: Dict[str, Optional[str]] = {}
+    moving: Dict[str, Any] = {}
     if provider is not None:
         moving["provider_name"] = provider
     if describes is not None:
         # `None` rather than `""`, so an agent nobody has described and one described as nothing
         # stay the same answer — which is what taking a description away has to mean.
         moving["describes"] = describes.strip() or None
+    if improving is not None:
+        moving["self_improve"] = improving
 
     try:
         records.stated(directory.records(name), moving)
@@ -331,7 +354,19 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
     if describes is not None:
         said = describes.strip()
         print(f"{name}: is for {said}" if said else f"{name}: is described by nothing now")
+    if improving is not None:
+        print(f"{name}: self improvement is now {'on' if improving else 'off'}")
     return OK
+
+
+def _yes_or_no(said: str) -> Optional[int]:
+    """One SQLite boolean from the accepted command spellings, or no answer when invalid."""
+    settled = said.strip().lower()
+    if settled in YES:
+        return 1
+    if settled in NO:
+        return 0
+    return None
 
 
 def _forgotten(name: str, confirming: bool) -> int:

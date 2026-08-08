@@ -9,7 +9,7 @@ rundesk version                           # the version, and whether it is out o
 rundesk configure [--<setting> <value>]   # change what this install is configured with
 rundesk agents                            # the agents this install keeps
 rundesk agents add <agent> --provider <provider> [--describes <text>]        # make one
-rundesk agents configure <agent> [--provider <provider>] [--describes <text>]  # change one
+rundesk agents configure <agent> [--provider <provider>] [--describes <text>] [--self-improve <true|false>]  # change one
 rundesk agents remove <agent> --confirm   # take one away, and everything it remembers
 rundesk gateways                          # every agent, and how its gateway stands
 rundesk gateways start <agent>            # start one, and prove a gateway came up
@@ -172,9 +172,9 @@ nine times in ten.
 ```console
 $ rundesk agents
 agents in /Users/you/.rundesk/data/agents
-AGENT  PROVIDER  SKILLS
-ada    claude    managing-rundesk, researching-topics
-cole   openai    managing-rundesk, reviewing-code
+AGENT  PROVIDER  SKILLS                                  SELF-IMPROVE
+ada    claude    managing-rundesk, researching-topics    yes
+cole   openai    managing-rundesk, reviewing-code        yes
 ```
 
 Skill names are current grants. They are shown so a person or routing agent can tell which standing
@@ -207,6 +207,7 @@ agent cole added
         logs      /Users/you/.rundesk/data/agents/cole/logs
         records   /Users/you/.rundesk/data/agents/cole/state.db
         rules     AGENTS.md, CLAUDE.md, MEMORY.md — how it works, and what it learns
+        workspace plans/, research/, scripts/, retros/ — durable work, organized
         skill     rundesk/managing-rundesk — how it operates this install
         note      the provider is recorded and not proven — check it with: rundesk providers check
 ```
@@ -217,6 +218,11 @@ the name some brains look for first — the same bytes, placed twice. They are t
 owner's to edit from that moment: **an update fills in one that is missing and never replaces one
 that is there**, whatever it has been changed to. A release that shipped none says so on this line
 instead, and the next `rundesk update` gives them.
+
+The home also starts with `plans/`, `research/`, `scripts/`, and `retros/`. Each carries a short
+README describing what belongs there, how to keep it current, and its safety boundary. They hold
+durable agent-owned work without moving project state out of its project or preserving disposable
+task scratch. Updates fill an absent folder note but never replace one already there.
 
 `MEMORY.md` is a compact working index for the next run, not a transcript or project notebook.
 Ordinary work keeps owner preferences, the agent's role and responsibilities, reusable cross-project
@@ -246,7 +252,7 @@ updates one dated diary with what went well, where the agent failed or caused re
 testable improvement. It records observable correction, dissatisfaction, or distrust without
 diagnosing the owner's mood, retains compact older entries as longitudinal evidence, and promotes a
 lesson only to its proper durable home. The final phase starts with that diary and previous
-`agent-upkeep` reports, then reviews a bounded sample of other messages and turns for repeated
+`weekly-self-improve-upkeep` reports, then reviews a bounded sample of other messages and turns for repeated
 friction, corrections,
 missing context, failed outcomes, and ignored capability routes.
 Heavy specialist work stays delegated to a materially better active named agent; a same-turn helper
@@ -276,9 +282,11 @@ listing rather than named blank: a bare name in a list of specialists is an invi
 guessing is what this field exists to prevent. It is capped at one sentence, because every agent's
 description is charged to every other agent's prompt on every turn.
 
-`configure` takes either flag or both, and both move in one write. An empty `--describes` takes the
-description away rather than storing a blank — unset and set-to-empty stay different answers, since
-a listing has to tell an agent nobody has described from one described as nothing.
+`configure` takes any combination of its flags, and every named value moves in one write. An empty
+`--describes` takes the description away rather than storing a blank — unset and set-to-empty stay
+different answers, since a listing has to tell an agent nobody has described from one described as
+nothing. `--self-improve` controls Rundesk's automatic self-improvement work for this agent; it
+starts on, and accepts `yes/no`, `true/false`, `on/off`, and `1/0`.
 
 All of it is built under a staged name and renamed into place once, at the end — so an interruption
 leaves litter rather than a directory wearing an agent's name and not being one.
@@ -637,6 +645,23 @@ the install; with an agent it lists that agent's.
 What a schedule is, and every state one can get stuck in, is [`schedules.md`](schedules.md). This is
 what each verb guarantees and what each refuses.
 
+Every agent also has one protected policy named `weekly-self-improve-upkeep`. It starts on and is
+shown even before it has a stored firing. Seven distinct local calendar dates on which that agent
+finishes work make one upkeep due; several turns on one date count once, and the dates may span
+months. A failed or stopped turn counts as use, the upkeep turn itself does not, and a working turn
+must settle before upkeep starts. After any upkeep attempt, the next seven usage dates begin a new
+cycle.
+
+The agent's gateway runs the policy through the ordinary schedule lock, process, output, settlement,
+and final-report lifecycle. Its hard-coded task supplies the exact evidence interval and diary date,
+then requires verified workspace/continuity maintenance, a retrospective, and evidence-based
+self-improvement in that order. The final is one short attention-first sentence; detailed evidence
+stays in the turn records. Turn it on or off per agent with
+`rundesk agents configure <agent> --self-improve <true|false>`. Ordinary schedule commands cannot
+add, update, run, disable, or remove this protected name; the agent setting is its only control.
+An owner schedule already carrying that name from before the policy remains owner-controlled and
+blocks automatic upkeep until it is removed; Rundesk never adopts or overwrites it.
+
 ```console
 $ rundesk schedules
 schedules in /Users/you/.rundesk/data/agents
@@ -651,6 +676,10 @@ switched off, `expired` for one that can never be due again, and `never` for one
 arrive — `0 0 30 2 *` says the thirtieth of February. `LAST` tells `never ran` from an outcome,
 because an owner seeing only that a schedule is spent cannot tell work that happened from work that
 silently did not, and it says `running` while work is in flight.
+
+The protected upkeep row instead says `after 7 usage dates`; its `NEXT` is `off`, `due`, or the
+number of additional usage dates needed. Disabling it does not erase accumulated usage, so turning
+it back on starts immediately when seven dates are already owed.
 
 **A schedule is stated on this machine's own clock.** `--when` takes the five fields schedules have
 always used and `--at` takes one moment, `YYYY-MM-DDTHH:MM`. Both are kept exactly as typed. A moment

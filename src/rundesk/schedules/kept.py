@@ -69,6 +69,13 @@ OUTCOMES = (DONE, FAILED, STOPPED)
 SETTABLE = ("enabled", "cron", "run_at", "expire_at", "provider_name", "model_name",
             "prompt", "command", "channel", "channel_place_id")
 
+#: Rundesk's per-agent upkeep is represented by a real row so it inherits the schedule lock,
+#: adoption, output and settlement guarantees. It is never a person's cron schedule: the gateway
+#: starts it after seven dates of use and only the agent's `self_improve` setting controls it.
+UPKEEP = "weekly-self-improve-upkeep"
+UPKEEP_PROVIDER = "__rundesk__"
+UPKEEP_AT = "9999-12-31T23:59"
+
 
 class Refused(Exception):
     """Something that may not be done to a schedule, named with why.
@@ -117,6 +124,20 @@ def one(agent: str, name: str) -> Dict[str, Any]:
     return dict(found)
 
 
+def upkeep_is_managed(agent: str) -> bool:
+    """Whether the reserved name is free for Rundesk or already holds an older owner schedule.
+
+    Before this policy existed, every filesystem-safe schedule name was legal. An owner row under
+    the new name remains theirs to inspect, run, change, or remove; silently adopting it would
+    overwrite work, while protecting it would trap work the owner can no longer manage. Absence
+    means Rundesk owns the newly reserved name even before its inert carrier row has been prepared.
+    """
+    with records.reading(directory.records(agent)) as conn:
+        found = conn.execute(
+            "SELECT provider_name FROM schedules WHERE name = ?", (UPKEEP,)).fetchone()
+    return found is None or found["provider_name"] == UPKEEP_PROVIDER
+
+
 def added(agent: str, name: str, values: Dict[str, Any], when: Optional[datetime] = None) -> None:
     """Write down a new schedule. `Refused` when the name is taken or is not a name.
 
@@ -128,6 +149,8 @@ def added(agent: str, name: str, values: Dict[str, Any], when: Optional[datetime
     that is not one of three — is refused by the `CHECK`s rather than re-asked here. What is asked
     here is only what the database cannot see: whether the name can be a file.
     """
+    if name == UPKEEP:
+        raise Refused(_upkeep_is_managed())
     trouble = name_trouble(name)
     if trouble:
         raise Refused(f"{name} cannot be a schedule's name: {trouble}")
@@ -171,6 +194,10 @@ def changed(agent: str, name: str, values: Dict[str, Any]) -> None:
 
     named = sorted(values)
     with records.writing(directory.records(agent)) as conn:
+        found = conn.execute(
+            "SELECT provider_name FROM schedules WHERE name = ?", (name,)).fetchone()
+        if name == UPKEEP and (found is None or found["provider_name"] == UPKEEP_PROVIDER):
+            raise Refused(_upkeep_is_managed())
         _known(conn, agent, named)
         try:
             moved = conn.execute(
@@ -191,9 +218,46 @@ def forgotten(agent: str, name: str) -> None:
     and what a firing wrote is in the agent's log, which this does not touch.
     """
     with records.writing(directory.records(agent)) as conn:
+        found = conn.execute(
+            "SELECT provider_name FROM schedules WHERE name = ?", (name,)).fetchone()
+        if name == UPKEEP and (found is None or found["provider_name"] == UPKEEP_PROVIDER):
+            raise Refused(_upkeep_is_managed())
         gone = conn.execute("DELETE FROM schedules WHERE name = ?", (name,)).rowcount
     if gone == 0:
         raise records.NotThere(f"{agent} has no schedule called {name}")
+
+
+def prepared_upkeep(agent: str, prompt: str, when: Optional[datetime] = None) -> Dict[str, Any]:
+    """Ensure Rundesk's protected upkeep row exists and give its next run the frozen prompt.
+
+    The row is deliberately off and states a far-future moment: ordinary cron evaluation must
+    never start it. `schedules.upkeep` alone decides when seven usage dates have accumulated, then
+    hands this row to the ordinary firing lifecycle. A provider sentinel distinguishes the row
+    from a pre-feature owner schedule that happened to use the newly reserved name; such a row is
+    refused rather than silently adopted or overwritten.
+    """
+    if not prompt.strip():
+        raise Refused("automatic upkeep needs a prompt")
+    with records.writing(directory.records(agent)) as conn:
+        found = conn.execute("SELECT * FROM schedules WHERE name = ?", (UPKEEP,)).fetchone()
+        if found is None:
+            conn.execute(
+                "INSERT INTO schedules "
+                "(name, enabled, run_at, provider_name, prompt, created_at) "
+                "VALUES (?, 0, ?, ?, ?, ?)",
+                (UPKEEP, UPKEEP_AT, UPKEEP_PROVIDER, prompt, _now(when)))
+        elif found["provider_name"] != UPKEEP_PROVIDER:
+            raise Refused(
+                "weekly-self-improve-upkeep is already an owner schedule, so Rundesk will not replace it")
+        else:
+            conn.execute("UPDATE schedules SET prompt = ? WHERE name = ?", (prompt, UPKEEP))
+        return dict(conn.execute("SELECT * FROM schedules WHERE name = ?", (UPKEEP,)).fetchone())
+
+
+def _upkeep_is_managed() -> str:
+    """Why the reserved schedule cannot be changed through the ordinary schedule store."""
+    return ("weekly-self-improve-upkeep is managed by Rundesk; change automatic upkeep with "
+            "rundesk agents configure <agent> --self-improve <true|false>")
 
 
 def claimed(agent: str, name: str, minute: str) -> None:
