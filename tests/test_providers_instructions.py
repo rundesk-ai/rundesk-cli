@@ -376,7 +376,7 @@ class WhatATurnMayDelegateTo(support.Isolated):
     def test_a_delegated_project_task_cannot_pollute_the_agents_own_memory(self):
         text = self.built(instructions.AGENT_TO_AGENT)
         self.assertIn("`MEMORY.md` serves next run", text)
-        self.assertIn("Keep this task out of `MEMORY.md` unless it changes how you work", text)
+        self.assertIn("Keep this task out of `MEMORY.md` unless it changes how you work.", text)
 
     def test_it_prefers_a_materially_better_specialist_without_delegating_simple_work(self):
         text = self.built(instructions.USER_TO_AGENT)
@@ -435,9 +435,14 @@ class OneRuleLivesInOnePlace(support.Isolated):
     def test_both_unattended_blocks_define_the_final_delivery(self):
         for situation in (instructions.SCHEDULE_TO_AGENT, instructions.AGENT_TO_AGENT):
             with self.subTest(situation=situation):
-                self.assertIn("Tool or thinking activity may appear", self.rendered(situation))
                 self.assertIn("sole complete report", self.rendered(situation))
                 self.assertIn("last response alone", self.rendered(situation))
+
+    def test_only_a_schedule_discusses_intermediate_activity(self):
+        self.assertIn("Tool or thinking activity may appear",
+                      self.rendered(instructions.SCHEDULE_TO_AGENT))
+        self.assertNotIn("Tool or thinking activity may appear",
+                         self.rendered(instructions.AGENT_TO_AGENT))
 
     def test_and_a_person_asking_is_told_none_of_it(self):
         """A person is waiting, so none of it is true: they can be asked, and they are reading."""

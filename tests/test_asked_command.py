@@ -94,6 +94,24 @@ class GuidingWorkingDelegation(support.Isolated):
         self.assertEqual(["audit it", "include GUIDANCE=EMBER-284", "now check exports"],
                          [one["body"] for one in arriving.messages("bob", 1)])
 
+    def test_say_moves_the_moment_the_delegation_was_last_touched(self):
+        """R-DEL-23: what makes the steer visible at all. The asking agent's gateway has no way to
+        know words were said into work it handed out — the guidance is a message in *bob's* store —
+        so this row moving is the whole of the signal, and it is what the room's `updated bob` line
+        and the retention window (R-DEL-21) are both read off.
+
+        Handed over a few minutes back because a stored moment is UTC to the second: created and
+        steered inside one second, the row reads as one nobody has been near.
+        """
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute("UPDATE delegations SET created_at = ?, latest_at = ?"
+                         " WHERE delegation_id = ?",
+                         ("2026-08-07T00:05:00Z", "2026-08-07T00:05:00Z", self.delegation))
+        self.assertEqual(OK, self.guide()[0])
+        moved = kept.one("ava", self.delegation)
+        self.assertEqual("2026-08-07T00:05:00Z", moved.created_at)
+        self.assertGreater(moved.latest_at, moved.created_at)
+
     def test_say_refuses_answered_work_and_points_to_resume(self):
         kept.answered("ava", self.delegation)
         code, _out, err = self.guide()

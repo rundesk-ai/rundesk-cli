@@ -24,6 +24,7 @@ hosts `schedules.firing`, at the same three seams and out of the same divided st
 |---|---|
 | `kept` | the channels one agent keeps, and the only way in to them |
 | `adapters` | finding the program behind a channel, and the two questions asked of it |
+| `credentials` | which name a channel's credential stands under, and the value behind it |
 | `arriving` | what came in, written where it can be read again |
 | `files` | what a file may be called, where it lands, and when it is swept |
 | `delivery` | what goes out, split to what the platform will take |

@@ -88,9 +88,8 @@ from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Protocol, Sequence
 
 from rundesk.agents import directory
-from rundesk.channels import adapters, arriving, kept
+from rundesk.channels import adapters, arriving, credentials, kept
 from rundesk.channels import files as naming
-from rundesk.core import secrets
 from rundesk.utils import files, lines, locking, logs, programs
 
 #: What one channel keeps beside itself, inside its own directory.
@@ -1678,8 +1677,13 @@ def _said_on_the_way_out(agent: str, where: Path, kind: str) -> None:
 def _the_environment(agent: str, kind: str, row: Dict[str, Any]) -> Dict[str, str]:
     """What an adapter is started with: who it may answer, its own settings, and its credential.
 
-    The credential is fetched by the name the channel recorded, never re-derived — agent names allow
-    characters an environment variable does not, and sanitising them collides.
+    **The credential arrives under the name the channel recorded, and is kept under the agent's own
+    name and no other** — `channels.credentials` holds both halves of that and is asked the same
+    question by `channels doctor`, so what a diagnosis calls usable is what really starts an adapter.
+    There is no install-wide fallback: an agent whose own name holds nothing is started without a
+    credential and its adapter refuses, which is the honest outcome and never somebody else's bot.
+    The declared name is never re-derived from anything: it is the adapter's own, and a name worked
+    out a second time is a channel that passes `--check` and finds nothing when hosted.
 
     **`RUNDESK_CHANNEL_HOME` is somewhere to put what it fetches**, and it is the directory this
     module already keeps that channel's lock and record in. An adapter holds the credential and so
@@ -1694,10 +1698,7 @@ def _the_environment(agent: str, kind: str, row: Dict[str, Any]) -> Dict[str, st
         "RUNDESK_SETTINGS": str(row.get("settings") or "{}"),
         "RUNDESK_ALLOW": ",".join(kept.who_may_reach(row)),
     }
-    for name in _named_secrets(row):
-        held = secrets.value(name)
-        if held is not None:
-            built[name] = held
+    built.update(credentials.handed(agent, _named_secrets(row)))
     return built
 
 

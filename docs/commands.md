@@ -879,13 +879,13 @@ README's [Setting up a Discord bot](../README.md#setting-up-a-discord-bot) walks
 ```console
 $ rundesk channels add alan discord --allow 341709...
 the discord adapter needs 1 value before alan can use it
-        DISCORD_BOT_TOKEN   the discord adapter reads its credential from this name
+        DISCORD_BOT_TOKEN__ALAN   the discord adapter reads DISCORD_BOT_TOKEN, and this is alan's own
         > 
 alan is connected to discord
         reaches   rundesk#4471, reaching you#0
         allowed   341709...
         told      no
-        needs     DISCORD_BOT_TOKEN (set)
+        needs     DISCORD_BOT_TOKEN__ALAN (set)
         settings  {}
         can       attach=True, edit=full, max_text=2000, react=True, stream=True, thread=True
         adapter   /Users/you/.rundesk/app/src/channels/discord
@@ -934,9 +934,33 @@ unrelated reason. `rundesk env unset <name>` empties it.
 
 **The name a credential is kept under is the adapter's own, and it is recorded rather than worked out
 again.** `channels.hosting` hands the adapter each recorded name back with its value under that same
-name, so the recorded name and the name the adapter reads are one fact. It follows that the name is
-not per-agent: two agents connected to one platform name one credential, the prompt says so when a
-value is already kept under it, and a second bot token needs an adapter that reads a different name.
+name, so the recorded name and the name the adapter reads are one fact.
+
+**Where the value is kept is the agent's own, though.** One bot is one identity: two agents behind
+one Discord token receive the same messages and nobody reading the room can tell which of them
+replied. So what is typed above is kept under `DISCORD_BOT_TOKEN__ALAN` — the same profile naming
+`rundesk skills` uses, on a name `rundesk env set` already accepts — and cole's under
+`DISCORD_BOT_TOKEN__COLE`. Two agents on one platform are two bots without anybody having to arrange
+it.
+
+**One name is read, and a plain `DISCORD_BOT_TOKEN` is not one of them.** There is no fallback. A
+shared name is exactly the shape that lets two agents be one bot by accident, and every way of
+keeping it — read second, read only when nothing scoped exists — is that accident with a longer path
+to it. A channel whose own name holds nothing is `BLOCKED`, said at a terminal, rather than an agent
+quietly signing in as somebody else.
+
+The adapter is handed the value under `DISCORD_BOT_TOKEN`, exactly as it declared it. **`channels
+doctor` resolves it by the same call a gateway does**, so a channel reported `READY` is one whose
+credential a gateway really finds — and a value that is there and cannot be opened is reported as
+that rather than as missing.
+
+**An agent's name is used, or the agent can hold no credential — it is never mangled.** An agent
+already named something a variable can be — letters, digits and underscores, starting with a letter
+— has a name of its own, upper-cased. Any other agent is **refused** a credentialled channel, by
+`add`, before it prompts for anything, and reported `BLOCKED` by `doctor` with no command to type,
+because there is no rename verb and no honest one to suggest. Nothing is folded: `a-b` and `a_b`
+would both become `A_B`, and two agents would quietly share one bot. Such an agent may still have
+any channel whose adapter needs no credential.
 
 `--with '<adapter opts>'` is anything the adapter itself takes, as one quoted string. Rundesk parses
 none of it and has no list of what any platform wants — what comes back in `settings` is the
@@ -948,6 +972,86 @@ them makes the most natural spelling of `--` an `unrecognized arguments` error.
 `--notify` makes this the channel unprompted things go to. At most one channel per agent may be that,
 and where it writes is what the adapter reported rather than something to go and find: a gateway
 coming up is answering nobody and has no conversation to reply into.
+
+#### Moving an existing channel onto the agent's own name
+
+**Do this before you update to v0.41.0.** From that release a plain `DISCORD_BOT_TOKEN` is not read,
+so a channel still relying on one stops working the moment the new gateway starts. Nothing rewrites,
+copies or moves a value on your behalf — copying one token onto several agents would give them all
+one bot, which is the thing this shape exists to prevent, and no program can create a second Discord
+application for you.
+
+The order matters, and it is: stage every scoped key first, prove it on the release you are still
+running, then update, then restart. **Never any of it as an argument** — every value is typed at a
+prompt or piped, so nothing lands in a shell's history.
+
+**1 · While still on v0.40.x, put a key in place for every agent that has a channel.**
+
+```sh
+rundesk channels                             # every agent with a channel, and how each stands
+rundesk env list                             # which names hold something. Hints only, never a value
+
+# In the Discord Developer Portal, per agent: an application, its own Bot, Reset Token,
+# and Message Content Intent switched on.
+
+rundesk env set DISCORD_BOT_TOKEN__ALAN      # prompts without echoing. Or: printf %s "$T" | rundesk env set …
+rundesk env set DISCORD_BOT_TOKEN__COLE
+```
+
+An agent may keep the bot it is already running as: set that agent's scoped name to the token it is
+already using, and it stays the same bot with the same identity in the same servers. Every *other*
+agent needs a new application, because one token cannot be two identities.
+
+**2 · Check the staging with `env check`, which is the only verb that can answer yet.** v0.40.x
+reads the plain name and nothing else, so `channels doctor` and `channels test` cannot tell you
+anything about a scoped key while you are still on it — they would keep reporting `READY` off the
+shared token right up to the update. What they *can* do is name every agent you have to cover:
+
+```sh
+rundesk channels                             # every agent with a channel — one key needed per row
+rundesk env check DISCORD_BOT_TOKEN__ALAN    # exits non-zero until it is staged
+rundesk env check DISCORD_BOT_TOKEN__COLE
+```
+
+A green `env check` for every agent in that listing is the whole of what can be proved before the
+update. It says the key is there and readable; whether the token behind it is the right one is what
+step 4 finds out.
+
+**3 · Update, then restart.**
+
+```sh
+rundesk update
+rundesk gateways restart <agent>             # a running adapter holds the token it started with
+```
+
+`rundesk update` restarts the gateways it stood down, so this is a check rather than a step for
+those; an agent whose gateway you had stopped yourself needs starting.
+
+**4 · Now prove it, on the release that reads the scoped name.**
+
+```sh
+rundesk channels test alan discord           # really connects, as this agent. Writes nothing
+rundesk channels doctor                      # exits non-zero if anything is not ready
+```
+
+Read the `needs` line: it names `DISCORD_BOT_TOKEN__<AGENT>` and says `(set)`. A `BLOCKED` here is an
+agent whose key was missed in step 1, and the summary names the one command that fixes it.
+
+**5 · Then tidy up.** Once `rundesk channels doctor` exits zero and every `needs` line names a
+`__<AGENT>` name, the shared one has no reader left:
+
+```sh
+rundesk env unset DISCORD_BOT_TOKEN
+```
+
+Open the invite for each new application and add that bot where you want it — a second application
+is in no server until somebody puts it there, and the old bot goes on sitting in those servers until
+you remove it.
+
+**If an agent's name cannot carry a credential** — anything but letters, digits and underscores
+starting with a letter — it can hold none, and `doctor` says so with no command to type. Nothing is
+folded, because `a-b` and `a_b` would become one name and two agents would share one bot. The
+answers are an agent whose name can carry one, or a channel whose adapter needs no credential.
 
 ### channels configure
 
@@ -986,14 +1090,16 @@ $ rundesk channels remove alan discord
 remove: this would take alan's discord channel
         take     the connection — alan would no longer be reachable on discord, and 341709... could no longer reach it there
         keep     /Users/you/.rundesk/data/agents/alan/channels/discord — what arrived through it, and what its adapter wrote
-        keep     DISCORD_BOT_TOKEN — rundesk env forgets nothing here
+        keep     DISCORD_BOT_TOKEN__ALAN — rundesk env forgets nothing here
         nothing was removed. To go ahead:
         rundesk channels remove alan discord --confirm
 ```
 
 What arrived through the channel stays, and so does the credential. Both are named in the preview
 rather than left to be discovered: a removal that described more than it would do defeats the point
-of describing it, and one that described less would be worse.
+of describing it, and one that described less would be worse. The credential is named as the name it
+really stands under — `DISCORD_BOT_TOKEN__ALAN` — because that is the name somebody would have to
+type to `rundesk env unset` it afterwards.
 
 ### channels doctor
 
@@ -1005,17 +1111,23 @@ $ rundesk channels doctor
 alan
   discord  READY        rundesk#4471, reaching you#0
 cole
-  discord  BLOCKED      DISCORD_BOT_TOKEN — nothing this install can read is kept under that name
+  discord  BLOCKED      DISCORD_BOT_TOKEN__COLE — nothing this install can read is kept under that name
   quiet    DANGLING     there is no quiet adapter on this install — looked in ...
 channels: 2 of 3 cannot be used:
-        rundesk env set DISCORD_BOT_TOKEN
+        rundesk env set DISCORD_BOT_TOKEN__COLE
         rundesk channels remove cole quiet --confirm
 ```
+
+**The one name a credential stands under is what is said**, and it is the one the summary tells you
+to set. There is no second place to look, so naming a plain `DISCORD_BOT_TOKEN` here would send
+somebody to set a value this release ignores. An agent whose name cannot carry a credential at all is
+`BLOCKED` saying exactly that, and gets **no** command in the summary — there is no rename verb and
+no honest thing to type.
 
 | Verdict | Means |
 |---|---|
 | `READY` | the adapter is there, its credential is set, and it connected just now |
-| `BLOCKED` | a credential this channel names is not set, so there is nothing to connect with |
+| `BLOCKED` | no name this channel's credential could stand under holds anything this install can read — including one that is there and cannot be opened, which is never read past to the shared name |
 | `UNREACHABLE` | everything is in place and `--check` failed now — the platform said why |
 | `DANGLING` | there is no program behind this channel any more |
 | `GIVEN UP` | it checks out from here, and the gateway hosting it has stopped trying to start it |
@@ -1327,6 +1439,18 @@ turn has just ended or cannot be steered, the guidance remains for its next turn
 delegation. `asked stop <id>` requests an early end. `asked resume <id>
 <words>` continues answered work in the provider session it already had. Each delegation has its own
 conversation, so two tasks handed to the same specialist by one parent turn cannot share an answer.
+
+**All three are shown where the person asked**, in the room the work was handed out in, as one line
+of small print — *updated bob*, *asked bob to stop*, *carried on with bob*. Never the words
+themselves: guidance is between two agents. Saying nothing here was what made steering invisible to
+somebody watching a channel, who saw work go out and then nothing until it came back.
+
+**`resume` starts the clock again; `say` and `stop` do not.** How long work has been out is counted
+from the phase it is in, so carrying an hour-old ask on reads as *carried on with bob* and then
+silence until the new work is twenty minutes old, and the answer says how long that new work took
+rather than how old the ask is. The delegation keeps its id, its conversation and its provider
+session throughout — resuming is the same ask continued, which is the whole difference between it
+and handing the task over again.
 
 **The depth is one.** An agent answering a delegation is shown no team in its instructions and is
 refused here if it tries anyway, so `ava → bob → ava` has no path to exist and there is no chain to

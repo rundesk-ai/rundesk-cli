@@ -11,11 +11,12 @@ Run directly: `python3 tests/test_delegations_hosting.py`
 
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 import support
 from rundesk.agents import directory, records
 from rundesk.channels import arriving
-from rundesk.core import paths
+from rundesk.core import config, paths
 from rundesk.delegations import hosting, kept
 from rundesk.providers import answering, instructions, turns
 from rundesk.providers import kept as provider_kept
@@ -343,12 +344,14 @@ class Showing:
         return True
 
 
-class WhatARoomIsToldAboutWorkHandedOver(support.Isolated):
-    """R-DEL-16: handing work over, it still being out, and it coming back, where the person asked.
+class ARoomWatchingWorkHandedOver:
+    """The fixture both halves of what a room is told are proved against: one agent, one real
+    conversation, one real turn, and a seam that records what it was shown.
 
-    **Everything here is about a person watching a room**, which is the half a delegation had none
-    of: the records were right the whole time and somebody staring at their own direct message saw
-    an agent hand work over and then saw nothing ever again.
+    **A mixin and not a case**, because a case that inherited another's fixture would inherit its
+    tests as well and run every one of them a second time under whatever defaults the subclass
+    changed — which is how this was written first, and six inherited cases went red for a reason
+    that had nothing to do with them.
     """
 
     def setUp(self):
@@ -373,12 +376,29 @@ class WhatARoomIsToldAboutWorkHandedOver(support.Isolated):
         kept.made("ava", delegation_id, to_agent, self.conversation, self.turn, now=when)
         return delegation_id
 
+    def moment(self, minutes_ago):
+        return datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+
+    def guided(self, delegation_id="del-7-aabbcc", minutes_ago=0):
+        """Words said into work still going, that many minutes before now."""
+        self.assertTrue(kept.guided("ava", delegation_id, now=self.moment(minutes_ago)))
+        return delegation_id
+
     def swept(self):
         hosting._showed_what_is_happening("ava", self.carrying, self.showing)
         return self.showing.said
 
     def states(self):
         return [one[0] for one in self.showing.said]
+
+
+class WhatARoomIsToldAboutWorkHandedOver(ARoomWatchingWorkHandedOver, support.Isolated):
+    """R-DEL-16: handing work over, it still being out, and it coming back, where the person asked.
+
+    **Everything here is about a person watching a room**, which is the half a delegation had none
+    of: the records were right the whole time and somebody staring at their own direct message saw
+    an agent hand work over and then saw nothing ever again.
+    """
 
     def test_work_that_has_just_gone_out_says_who_has_it_and_which_ask_it_is(self):
         self.handed()
@@ -459,19 +479,393 @@ class WhatARoomIsToldAboutWorkHandedOver(support.Isolated):
         self.assertEqual({}, self.carrying.said)
 
     def test_a_word_this_release_shows_is_one_the_seam_can_carry(self):
-        """The three words are one vocabulary, and a check-in is remembered per window while what
-        crosses is the plain word — the elapsed time beside it is which one it is."""
+        """Six words in one vocabulary, of two kinds. A check-in is remembered per window and a
+        thing that happened is remembered per moment, while what crosses the seam is the plain word
+        — the elapsed time or the words that prompted it are which one it is."""
         self.assertEqual((hosting.HANDED_OVER, hosting.STILL_WORKING, hosting.CAME_BACK),
-                         hosting.SHOWN)
+                         hosting.STANDS)
+        self.assertEqual((hosting.GUIDED, hosting.STOPPING, hosting.CARRIED_ON), hosting.HAPPENED)
+        self.assertEqual(hosting.STANDS + hosting.HAPPENED, hosting.SHOWN)
         self.assertEqual(hosting.STILL_WORKING, hosting._as_shown(f"{hosting.STILL_WORKING}-3"))
         self.assertEqual(hosting.CAME_BACK, hosting._as_shown(hosting.CAME_BACK))
+        self.assertEqual(hosting.GUIDED, hosting._as_shown(f"{hosting.GUIDED}@2026-08-08T10:00:00"))
+        self.assertEqual(hosting.CARRIED_ON,
+                         hosting._as_shown(f"{hosting.CARRIED_ON}@2026-08-08T10:00:00"))
 
     def test_a_moment_nobody_can_read_is_not_work_that_just_went_out(self):
         """Otherwise a row with an unreadable timestamp announces itself on every single beat."""
         self.handed()
         with records.writing(directory.records("ava")) as conn:
-            conn.execute("UPDATE delegations SET created_at = 'not a moment'")
+            # Both, because `working_since` is what the clock is read from now and `created_at` is
+            # what "nobody has touched this" is judged against. A row with one of them unreadable is
+            # a row this has nothing true to say about either.
+            conn.execute("UPDATE delegations SET created_at = 'not a moment',"
+                         " working_since = 'not a moment'")
         self.assertEqual([], self.swept())
+
+
+class WhatARoomIsToldWhenSomebodyReachesIntoTheWork(ARoomWatchingWorkHandedOver, support.Isolated):
+    """R-DEL-23: steering a delegation, stopping one and carrying one on are each shown where the
+    person asked.
+
+    **The half that was missing.** Where the work stands was already told correctly; what somebody
+    *did* to it was told nowhere at all — an owner watching their agent steer a colleague for forty
+    minutes saw one line saying the work had gone out and nothing after it.
+    """
+
+    #: Every moment here is passed in rather than taken, because a stored moment is UTC **to the
+    #: second** and this whole case is about telling one movement of a row from the next. Left to
+    #: the clock, a hand-over and the steer after it land in the same second, the row reads as one
+    #: nobody has touched, and every case below passes or fails on how fast the machine is.
+    def handed(self, delegation_id="del-7-aabbcc", minutes_ago=5, to_agent="dev"):
+        """Handed over a few minutes back by default, so anything done to it comes after it."""
+        return super().handed(delegation_id, minutes_ago, to_agent)
+
+    def aged(self, minutes, delegation_id="del-7-aabbcc"):
+        """Move when this phase of the work began, so a check-in window can be crossed in a test.
+
+        **Both columns, because they answer different questions and a case wants the clock moved.**
+        `working_since` is what a check-in counts from; `created_at` moves with it so a delegation
+        nobody has carried on still reads as one phase, which is what these cases are about.
+        """
+        when = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute("UPDATE delegations SET created_at = ?, working_since = ?"
+                         " WHERE delegation_id = ?",
+                         (when.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                          when.strftime("%Y-%m-%dT%H:%M:%SZ"), delegation_id))
+
+    def test_words_said_into_work_still_going_are_shown_where_the_person_asked(self):
+        self.handed()
+        self.swept()
+        self.showing.said.clear()
+        self.guided()
+        self.assertEqual([(hosting.GUIDED, "dev", "del-7-aabbcc", None)], self.swept())
+
+    def test_a_steer_never_repeats_what_was_said(self):
+        """The words are between two agents, and the seam has nowhere to put them by design —
+        proved here rather than assumed, because a field added later would be added silently."""
+        self.handed()
+        self.guided("del-7-aabbcc")
+        state, who, ask, seconds = self.swept()[-1]
+        self.assertEqual((hosting.GUIDED, "dev", "del-7-aabbcc", None), (state, who, ask, seconds))
+
+    def test_a_steer_carries_no_elapsed_clause(self):
+        """How long the work has been out is news about the work. Beside `updated dev` it reads as
+        how long the steering took."""
+        self.handed(minutes_ago=41)
+        self.guided()
+        self.assertIsNone(self.swept()[-1][3])
+
+    def test_a_second_steer_is_its_own_news_and_not_the_first_still_standing(self):
+        self.handed()
+        self.guided(minutes_ago=2)
+        self.swept()
+        self.showing.said.clear()
+        self.guided()
+        self.swept()
+        self.assertEqual([hosting.GUIDED], self.states())
+
+    def test_a_steer_is_said_once_however_often_the_beat_comes_round(self):
+        self.handed()
+        self.guided()
+        self.swept()
+        self.swept()
+        self.swept()
+        self.assertEqual(1, self.states().count(hosting.GUIDED))
+
+    def test_work_steered_is_never_announced_as_newly_handed_over_afterwards(self):
+        """The trap this structure exists for. Where the work stands and what was just done to it
+        are two different memories; one dictionary would have `handed` overwritten by `guided`, and
+        the beat after the steer would say the work had just gone out — a second time."""
+        self.handed()
+        self.swept()
+        self.guided()
+        self.swept()
+        self.showing.said.clear()
+        self.swept()
+        self.assertEqual([], self.swept())
+
+    def test_a_steer_that_displaced_a_check_in_does_not_make_it_arrive_late(self):
+        """One piece of news per beat, and the steer is the one somebody could not have worked out.
+        The check-in it displaced is counted as said, so the room hears the next one and not that
+        one a beat afterwards."""
+        self.handed(minutes_ago=21)
+        self.guided()
+        self.swept()
+        self.assertEqual([hosting.GUIDED], self.states())
+        self.showing.said.clear()
+        self.assertEqual([], self.swept())
+
+    def test_a_stop_asked_for_is_shown_where_the_person_asked(self):
+        self.handed()
+        self.swept()
+        self.showing.said.clear()
+        kept.stop_asked("ava", "del-7-aabbcc")
+        self.assertEqual([(hosting.STOPPING, "dev", "del-7-aabbcc", None)], self.swept())
+
+    def test_a_stop_nothing_has_honoured_yet_does_not_silence_the_check_ins(self):
+        """A stop is a request. Work that goes on regardless has to go on saying so, or the room's
+        last word on a wedged delegation is that somebody asked it to end."""
+        self.handed(minutes_ago=21)
+        self.swept()
+        kept.stop_asked("ava", "del-7-aabbcc")
+        self.swept()
+        self.showing.said.clear()
+        self.aged(41)
+        self.swept()
+        self.assertEqual([hosting.STILL_WORKING], self.states())
+
+    def test_words_said_after_a_stop_was_asked_for_are_still_shown(self):
+        """The stop is named by its own moment, so it stops being the latest thing that happened
+        the moment somebody says something else."""
+        self.handed()
+        kept.stop_asked("ava", "del-7-aabbcc", now=self.moment(2))
+        self.swept()
+        self.showing.said.clear()
+        self.guided()
+        self.swept()
+        self.assertEqual([hosting.GUIDED], self.states())
+
+    def test_work_carried_on_says_so_rather_than_looking_like_a_new_delegation(self):
+        """The whole difference between resuming and asking again. Before this the sweep read the
+        reopened row off `created_at` alone and announced a second hand-over, or — where the ask was
+        old enough — a check-in counting from a clock that was not measuring the new work."""
+        self.handed()
+        self.swept()
+        kept.answered("ava", "del-7-aabbcc", now=self.moment(3))
+        self.swept()
+        self.showing.said.clear()
+        kept.reopened("ava", "del-7-aabbcc", now=self.moment(1))
+        self.assertEqual([(hosting.CARRIED_ON, "dev", "del-7-aabbcc", None)], self.swept())
+
+    def test_carrying_on_is_told_from_steering_by_the_moment_the_phase_began(self):
+        """A resume is the only verb that moves `working_since`, so the two are told apart off the
+        record — see `_what_just_happened`."""
+        self.handed()
+        self.swept()
+        kept.answered("ava", "del-7-aabbcc", now=self.moment(3))
+        self.swept()
+        kept.reopened("ava", "del-7-aabbcc", now=self.moment(2))
+        self.swept()
+        self.showing.said.clear()
+        self.guided()
+        self.swept()
+        self.assertEqual([hosting.GUIDED], self.states())
+
+    def test_a_gateway_that_never_saw_the_answer_still_calls_a_resume_carrying_on(self):
+        """The trade `settled` used to make and no longer has to. Restarted between the answer and
+        the resume, this process has never seen the delegation answered — and the row says what
+        happened without it, because only a resume moves `working_since`."""
+        self.handed()
+        kept.answered("ava", "del-7-aabbcc", now=self.moment(3))
+        kept.reopened("ava", "del-7-aabbcc", now=self.moment(1))
+
+        self.carrying = hosting.settled("ava", None)     # a gateway with no memory at all
+        self.assertEqual([(hosting.CARRIED_ON, "dev", "del-7-aabbcc", None)], self.swept())
+
+    def test_nothing_is_remembered_about_a_delegation_that_is_no_longer_there(self):
+        """Both dictionaries, not only the one that existed before this."""
+        self.handed()
+        self.guided()
+        self.swept()
+        self.assertIn("del-7-aabbcc", self.carrying.marked)
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute("DELETE FROM delegations")
+        self.swept()
+        self.assertEqual(({}, {}), (self.carrying.said, self.carrying.marked))
+
+
+class WhatARoomIsToldAfterWorkIsCarriedOn(ARoomWatchingWorkHandedOver, support.Isolated):
+    """The clock a resumed phase is measured by.
+
+    **Measured on a real Discord channel, and it is why `working_since` exists.** An hour-old
+    delegation was resumed and the room said *"⏳ forge still working · 1h"* on the very next beat —
+    before the agent had done a second of the new work. Counted from `created_at`, the resumed phase
+    inherited the whole age of the original: the first check-in was overdue the instant it began, so
+    the twenty minutes of silence a person reads as *"nothing to report yet"* never happened, and the
+    answer that followed was reported as having taken an hour when it took minutes.
+
+    Every case here starts from a delegation that is already old, because that is the only shape in
+    which the defect shows.
+    """
+
+    def an_old_delegation_carried_on(self, was_out_for=60, resumed_ago=0):
+        """An hour of work, answered, and then carried on — the exact live shape."""
+        self.handed(minutes_ago=was_out_for)
+        self.swept()
+        kept.answered("ava", "del-7-aabbcc", now=self.moment(was_out_for - 5))
+        self.swept()
+        self.showing.said.clear()
+        kept.reopened("ava", "del-7-aabbcc", now=self.moment(resumed_ago))
+
+    def test_the_resumed_phase_does_not_inherit_the_age_of_the_original(self):
+        # The regression itself. `1h` beside a resume that happened a moment ago is the sentence
+        # somebody read in a real room.
+        self.an_old_delegation_carried_on()
+        self.swept()
+        self.showing.said.clear()
+
+        self.swept()
+        self.assertEqual([], self.swept(), "the resumed phase announced something on its own")
+        standing, since = hosting._how_it_stands(kept.one("ava", "del-7-aabbcc"))
+        self.assertEqual(hosting.HANDED_OVER, standing)
+        self.assertLess(since, 60, f"the resumed phase began {since}s old")
+
+    def test_carrying_on_is_said_once_and_not_again_on_every_beat(self):
+        self.an_old_delegation_carried_on()
+        self.assertEqual([(hosting.CARRIED_ON, "dev", "del-7-aabbcc", None)], self.swept())
+        self.showing.said.clear()
+
+        self.swept()
+        self.swept()
+        self.assertEqual([], self.showing.said)
+
+    def test_no_check_in_lands_before_the_resumed_phase_is_twenty_minutes_old(self):
+        # Nineteen minutes into the new phase, an hour and nineteen into the delegation. Counted
+        # from `created_at` this is the fourth check-in and long overdue; counted from the phase it
+        # is silence, which is what a person watching should see.
+        self.an_old_delegation_carried_on(resumed_ago=19)
+        self.assertEqual([(hosting.CARRIED_ON, "dev", "del-7-aabbcc", None)], self.swept())
+        self.showing.said.clear()
+
+        self.swept()
+        self.assertEqual([], self.showing.said, "a check-in landed inside the first window")
+
+    def test_the_check_in_that_follows_a_resume_is_timed_from_the_resume(self):
+        # **Time is moved rather than the row rewritten.** A fixture that aged the phase by editing
+        # `working_since` would also move the moment the resume happened at, and the sweep would
+        # announce the carry-on a second time — an artefact of the fixture and not of the product.
+        # Moving what `now` means is what really happens between two beats.
+        self.an_old_delegation_carried_on()
+        self.swept()
+        self.showing.said.clear()
+
+        with self.at_minute(19):
+            self.assertEqual([], self.swept(), "a check-in landed before the phase was 20m old")
+        with self.at_minute(21):
+            self.assertEqual([(hosting.STILL_WORKING, "dev", "del-7-aabbcc", 21 * 60)],
+                             self.swept())
+
+    def test_the_answer_to_resumed_work_is_timed_from_the_resume(self):
+        # What the room is told the work took. An hour is the age of the whole delegation and
+        # nobody waited it — the person who asked for more waited four minutes.
+        self.an_old_delegation_carried_on()
+        self.swept()
+        self.showing.said.clear()
+
+        answered = kept.one("ava", "del-7-aabbcc").working_since
+        kept.answered("ava", "del-7-aabbcc",
+                      now=datetime.strptime(answered, "%Y-%m-%dT%H:%M:%SZ").replace(
+                          tzinfo=timezone.utc) + timedelta(minutes=4))
+        self.assertEqual([(hosting.CAME_BACK, "dev", "del-7-aabbcc", 4 * 60)], self.swept())
+
+    def test_steering_and_stopping_the_resumed_work_do_not_restart_its_clock(self):
+        # The other half of the rule, and the one a "fix" would break: only carrying on begins a new
+        # stretch of waiting. Somebody saying a word into running work has not restarted it.
+        # Resumed a minute ago rather than this instant, so the steer that follows lands on a
+        # later recorded moment than the resume did. Two writes inside one second are one moment to
+        # the store, and a case that raced them would be measuring the clock rather than the rule.
+        self.an_old_delegation_carried_on(resumed_ago=1)
+        self.swept()
+        began = kept.one("ava", "del-7-aabbcc").working_since
+
+        self.guided()
+        kept.stop_asked("ava", "del-7-aabbcc")
+
+        after = kept.one("ava", "del-7-aabbcc")
+        self.assertEqual(began, after.working_since,
+                         "a steer or a stop moved the clock the work is measured by")
+        self.assertNotEqual(began, after.latest_at, "neither verb moved the delegation at all")
+        with self.at_minute(21):
+            self.assertEqual((f"{hosting.STILL_WORKING}-1", 21 * 60),
+                             hosting._how_it_stands(kept.one("ava", "del-7-aabbcc")))
+
+    def test_the_delegation_keeps_its_identity_and_its_conversation(self):
+        # Resuming is not asking again: the answering agent picks up the session it already had,
+        # which is only true while the id, the conversation and the parent turn are untouched.
+        self.handed(minutes_ago=60)
+        before = kept.one("ava", "del-7-aabbcc")
+        kept.answered("ava", "del-7-aabbcc", now=self.moment(55))
+        kept.reopened("ava", "del-7-aabbcc", now=self.moment(1))
+        after = kept.one("ava", "del-7-aabbcc")
+
+        self.assertEqual((before.delegation_id, before.parent_conversation, before.parent_turn,
+                          before.created_at),
+                         (after.delegation_id, after.parent_conversation, after.parent_turn,
+                          after.created_at))
+        self.assertNotEqual(before.working_since, after.working_since)
+        self.assertEqual(kept.source_id_for("ava", before.parent_turn, before.delegation_id),
+                         kept.source_id_for("ava", after.parent_turn, after.delegation_id))
+
+    def at_minute(self, minutes, delegation_id="del-7-aabbcc"):
+        """Read the sweep as it would run that many minutes after this phase began.
+
+        **`now` moves and the row does not.** Every moment in the record stays exactly where the
+        product wrote it, so what is being measured is the arithmetic rather than a fixture's idea
+        of it — and nothing here can accidentally restamp the resume and make the sweep re-announce
+        it. Patched on `config`, which is the one place a moment is taken.
+        """
+        began = kept.one("ava", delegation_id).working_since
+        at = (datetime.strptime(began, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+              + timedelta(minutes=minutes))
+        real = config.moment_of
+        return mock.patch.object(
+            config, "moment_of",
+            side_effect=lambda when=None, days_ago=0: (
+                real(at, days_ago) if when is None else real(when, days_ago)))
+
+
+class WhatMovesADelegationsLatestMoment(support.Isolated):
+    """`kept.guided`: the one column every verb that reaches into a delegation moves, and what the
+    sweep and the retention window both read."""
+
+    def setUp(self):
+        super().setUp()
+        paths.agents().mkdir(parents=True, exist_ok=True)
+        directory.made("ava", "a-stand-in")
+        self.conversation = arriving.asked_at_a_terminal("ava", "hand it to dev").conversation
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute(
+                "INSERT INTO turns (conversation_id, provider_name, access_mode, turn_status,"
+                " created_at) VALUES (?, ?, ?, ?, ?)",
+                (self.conversation, "a-stand-in", "work", "done", "2026-08-08T00:00:00Z"))
+            self.turn = conn.execute(
+                "SELECT id FROM turns ORDER BY id DESC LIMIT 1").fetchone()[0]
+        kept.made("ava", "del-7-aabbcc", "dev", self.conversation, self.turn,
+                  now=datetime.now(timezone.utc) - timedelta(hours=2))
+
+    def test_words_said_into_work_move_the_moment_it_was_last_touched(self):
+        """Before this a delegation somebody steered for an hour aged as though nobody had been
+        near it, and the retention window is counted from here (R-DEL-21)."""
+        before = kept.one("ava", "del-7-aabbcc")
+        self.assertEqual(before.created_at, before.latest_at)
+        self.assertTrue(kept.guided("ava", "del-7-aabbcc"))
+        after = kept.one("ava", "del-7-aabbcc")
+        self.assertNotEqual(after.created_at, after.latest_at)
+        self.assertGreater(after.latest_at, after.created_at)
+
+    def test_work_that_has_been_answered_is_not_work_there_was_anything_to_say_into(self):
+        """`False` rather than a stamp, so a row settled by collection between the caller's read and
+        this write is not moved underneath it."""
+        kept.answered("ava", "del-7-aabbcc")
+        settled = kept.one("ava", "del-7-aabbcc")
+        self.assertFalse(kept.guided("ava", "del-7-aabbcc"))
+        self.assertEqual(settled.latest_at, kept.one("ava", "del-7-aabbcc").latest_at)
+
+    def test_nothing_of_what_was_said_is_written_into_the_delegation(self):
+        """The words are a message in the answering agent's store; this row is what is neither a
+        turn nor a message, and the membership rule step 0005 was written to is kept."""
+        kept.guided("ava", "del-7-aabbcc")
+        with records.reading(directory.records("ava")) as conn:
+            row = conn.execute(
+                "SELECT * FROM delegations WHERE delegation_id = 'del-7-aabbcc'").fetchone()
+        # `working_since` is a moment like the three beside it, and is in this list for the same
+        # reason they are: what is being refused here is *words*, not columns.
+        self.assertEqual(
+            {"id", "delegation_id", "to_agent", "parent_conversation", "parent_turn",
+             "answered_at", "stop_asked_at", "created_at", "latest_at", "working_since"},
+            set(row.keys()))
 
 
 if __name__ == "__main__":

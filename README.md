@@ -202,6 +202,14 @@ On success it prints an **invite** URL — the bot is in no server until somebod
 permission opens that URL and adds it. A bot already in a server has to be sent the invite
 again before it may open a thread or attach a file.
 
+**One Discord application per agent.** One bot is one identity: two agents behind one token
+receive the same messages, both may answer, and nobody reading the room can tell which of them
+replied. So each agent gets its own application, its own name and its own avatar — and Rundesk
+keeps each token under that agent's own name (`DISCORD_BOT_TOKEN__AVA`), without anybody having to
+arrange it. **A plain `DISCORD_BOT_TOKEN` is not read**, so there is no shared name for two agents
+to end up sharing. Upgrading an install that has one is a short, ordered procedure:
+[Moving an existing channel onto the agent's own name](docs/commands.md#moving-an-existing-channel-onto-the-agents-own-name).
+
 Finally, start the gateway — `channels add` connects once to prove the channel and does not
 leave anything running:
 

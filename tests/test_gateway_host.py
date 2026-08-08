@@ -36,7 +36,7 @@ from rundesk.agents import directory, records
 from rundesk.channels import arriving, hosting
 from rundesk.channels import files as arrivals
 from rundesk.channels import kept as channels
-from rundesk.core import config, paths
+from rundesk.core import config, paths, secrets
 from rundesk.exits import OK
 from rundesk.gateways import host, job, maintenance, standing
 from rundesk.providers import kept as turns_kept
@@ -128,6 +128,37 @@ for line in sys.stdin:
     if record.get("do") == "deliver":
         print(json.dumps({"say": "failed", "id": record.get("id"),
                           "why": "would not take it: 429 Too Many Requests"}), flush=True)
+"""
+
+
+#: One that will not connect without its credential and never says what it was. `78` is `EX_CONFIG`,
+#: which is what a missing token is — so a gateway that failed to resolve one has an adapter that
+#: dies rather than one that connects anonymously, and the notified channel simply never says
+#: anything. That silence is the assertion, and it costs no value being written anywhere.
+#: A value long enough that `secrets.hinted` would show three characters of each end, so a case
+#: asserting the whole thing appears nowhere is asserting something that could fail.
+A_BOT_TOKEN = "MTIzNDU2Nzg5-coles-own-bot-token"
+
+AN_ADAPTER_THAT_NEEDS_ITS_CREDENTIAL = """#!/usr/bin/env python3
+import json, os, signal, sys
+if "--capabilities" in sys.argv:
+    print(json.dumps({"stream": True, "max_text": 2000})); raise SystemExit(0)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+settings = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
+if not os.environ.get("DISCORD_BOT_TOKEN"):
+    sys.stderr.write("no credential reached this adapter\\n")
+    raise SystemExit(78)
+print(json.dumps({"say": "ready", "as": "a-bot"}), flush=True)
+for line in sys.stdin:
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    if record.get("do") == "stop":
+        break
+    if record.get("do") == "deliver":
+        with open(settings["heard"], "a") as writing:
+            writing.write(record.get("place", "") + " :: " + record.get("text", "") + "\\n")
 """
 
 
@@ -1009,9 +1040,11 @@ class TheChannelsItHosts(WithAnAgent):
         at.chmod(0o755)
         return at
 
-    def a_channel(self, kind: str = "discord", told: bool = True) -> None:
+    def a_channel(self, kind: str = "discord", told: bool = True, needing: Tuple[str, ...] = ()
+                  ) -> None:
         channels.added(self.name, kind, {
             "describes": kind, "allowed": json.dumps(["2207"]),
+            "secret_names": json.dumps(list(needing)),
             "settings": json.dumps({"heard": str(self.heard)})})
         if told:
             channels.telling(self.name, kind, "1180")
@@ -1164,6 +1197,79 @@ class TheChannelsItHosts(WithAnAgent):
             lambda: host.WENT_DOWN in self.was_heard(), self.PATIENCE),
             f"it went down without telling anybody. It heard: {self.was_heard()}")
         self.assertEqual(OK, child.returncode)
+
+    def test_a_credential_of_this_agents_own_survives_a_full_stop_and_start(self):
+        # **The release gate for per-agent credentials, asked of a supervised process.** Everything
+        # about resolution is proved in `tests/test_channels_credentials.py` and
+        # `tests/test_channels_hosting.py`; what only this can prove is that a whole gateway going
+        # away and a whole new one coming up resolves it again — the adapter here exits `EX_CONFIG`
+        # without a token, so a second gateway that failed to resolve one is a notified channel that
+        # never says a word.
+        #
+        # Only the agent's own name is set. The install-wide one holds nothing at all, so nothing
+        # here can pass on the fallback.
+        secrets.stated("DISCORD_BOT_TOKEN__COLE", A_BOT_TOKEN)
+        self.an_adapter(body=AN_ADAPTER_THAT_NEEDS_ITS_CREDENTIAL)
+        self.a_channel(needing=("DISCORD_BOT_TOKEN",))
+
+        first = self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(lambda: host.CAME_UP in self.was_heard(),
+                                             self.PATIENCE),
+                        f"the notified channel never connected. It said: {self.its_log()}")
+
+        os.kill(first.pid, signal.SIGTERM)
+        self.assertTrue(support.waited_until(lambda: first.poll() is not None, self.PATIENCE))
+        self.assertTrue(support.waited_until(
+            lambda: not hosting.still_running(self.name, "discord"), self.PATIENCE),
+            "the adapter outlived the gateway that started it")
+        self.heard.unlink()
+
+        self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(lambda: host.CAME_UP in self.was_heard(),
+                                             self.PATIENCE),
+                        f"the notified channel never reconnected. It said: {self.its_log()}")
+
+    def test_a_gateway_returning_from_an_update_reconnects_on_the_agents_own_credential(self):
+        # **The update handoff carries no credential, and must not need to.** What crosses between
+        # the old gateway and the new one is a small intent file beside the agent; the sealed store
+        # is under `data/`, which an update never touches. So the returning release resolves the
+        # value again from nothing but the store — and the proof is that a channel whose adapter
+        # exits `EX_CONFIG` without a token still reaches the notified place.
+        secrets.stated("DISCORD_BOT_TOKEN__COLE", A_BOT_TOKEN)
+        self.an_adapter(body=AN_ADAPTER_THAT_NEEDS_ITS_CREDENTIAL)
+        self.a_channel(needing=("DISCORD_BOT_TOKEN",))
+        notes = f"https://github.com/rundesk-ai/rundesk-cli/releases/tag/v{__version__}"
+        maintenance.installed(self.at, __version__, notes)
+
+        self.a_running_gateway(beat=self.A_SHORT_BEAT)
+
+        expected = maintenance.INSTALLED.format(version=__version__, notes=notes)
+        self.assertTrue(support.waited_until(lambda: expected in self.was_heard(), self.PATIENCE),
+                        f"the channel never came back after an update. It said: {self.its_log()}")
+        self.assertNotIn(A_BOT_TOKEN, self.was_heard() + self.its_log() + self.what_it_said())
+
+    def test_nothing_a_gateway_writes_anywhere_holds_the_credential_it_resolved(self):
+        # Read out of every place a value could leak from a supervised run: the process output a
+        # supervisor captures, the agent's own day log, the adapter's error file, and what really
+        # went out through the channel.
+        secrets.stated("DISCORD_BOT_TOKEN__COLE", A_BOT_TOKEN)
+        self.an_adapter(body=AN_ADAPTER_THAT_NEEDS_ITS_CREDENTIAL)
+        self.a_channel(needing=("DISCORD_BOT_TOKEN",))
+        self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(lambda: host.CAME_UP in self.was_heard(),
+                                             self.PATIENCE), self.its_log())
+
+        errors = hosting.errors_of(self.name, "discord")
+        written = "".join([
+            self.what_it_said(), self.its_log(), self.was_heard(),
+            errors.read_text(encoding="utf-8", errors="replace") if errors.exists() else "",
+            json.dumps(channels.one(self.name, "discord")),
+        ])
+        self.assertNotIn(A_BOT_TOKEN, written)
+        # And the value is not copied under a second name either — one place keeps it, and
+        # `channels.credentials` resolves rather than duplicates.
+        self.assertEqual(["DISCORD_BOT_TOKEN__COLE"],
+                         [one for one in secrets.names() if one.startswith("DISCORD_BOT_TOKEN")])
 
     def test_a_gateway_stood_down_for_an_update_uses_the_maintenance_notice(self):
         self.an_adapter()

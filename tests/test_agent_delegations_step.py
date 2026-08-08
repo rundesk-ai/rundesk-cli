@@ -56,6 +56,16 @@ class OneAgentsDelegations(support.Isolated):
             turn = conn.execute("SELECT id FROM turns").fetchone()[0]
         return conversation, turn
 
+    def back_to_before(self, step):
+        """Unstamp this step **and every one after it**, the way a real older agent stands.
+
+        Deleting only this step's own row was enough while it was the last one, and stopped being
+        the day a later step landed: the runner refuses to run a step numbered below one an agent
+        has already been carried past, which is the rule that keeps a shipped step from being
+        back-filled. An agent that predates `0005` predates everything after it too.
+        """
+        self.write("DELETE FROM migrations WHERE key >= ?", step)
+
     def a_delegation(self, **moving):
         """Insert one, with every required column filled unless a case replaced it."""
         conversation, turn = getattr(self, "_pointing", (None, None))
@@ -80,7 +90,7 @@ class TheStepItself(OneAgentsDelegations):
         # What an install carrying forward actually does: the column is not there, and the step adds
         # it without touching the rows already in `config`.
         self.write("ALTER TABLE config DROP COLUMN describes")
-        self.write("DELETE FROM migrations WHERE key = ?", THE_STEP)
+        self.back_to_before(THE_STEP)
         self.assertIsNone(migration.carry_one("ava"))
         self.assertEqual([("ava",)], [tuple(one) for one in
                                       self.rows("SELECT agent_name FROM config")])
@@ -88,7 +98,7 @@ class TheStepItself(OneAgentsDelegations):
 
     def test_an_agent_that_predates_it_gets_self_improvement_on_by_default(self):
         self.write("ALTER TABLE config DROP COLUMN self_improve")
-        self.write("DELETE FROM migrations WHERE key = ?", THE_STEP)
+        self.back_to_before(THE_STEP)
 
         self.assertIsNone(migration.carry_one("ava"))
 
@@ -100,9 +110,64 @@ class TheStepItself(OneAgentsDelegations):
     def test_running_it_twice_is_the_same_as_running_it_once(self):
         # A step is written to be safe against an agent that does not need it. `ALTER TABLE ADD
         # COLUMN` has no `IF NOT EXISTS`, so a second run that did not ask first would raise.
-        self.write("DELETE FROM migrations WHERE key = ?", THE_STEP)
+        self.back_to_before(THE_STEP)
         self.assertIsNone(migration.carry_one("ava"))
         self.assertEqual(1, len(self.rows("SELECT 1 FROM migrations WHERE key = ?", THE_STEP)))
+
+
+class ThePhaseAStepLaterAdded(OneAgentsDelegations):
+    """`0006`, which gives a delegation the moment its current phase of work began.
+
+    A step of its own rather than an edit to `0005`, because `0005` shipped in 0.40.0 and its id is
+    how every install on every machine knows it has run. What is checked here is the part an install
+    carrying forward really does: the column is not there, the step adds it, and every row already
+    written gets a phase start rather than a `NULL` for something to subtract from later.
+    """
+
+    THE_PHASE_STEP = "0006_the_phase_the_work_is_in"
+
+    def test_a_made_agent_has_run_it(self):
+        self.assertIn(self.THE_PHASE_STEP,
+                      [one[0] for one in self.rows("SELECT key FROM migrations")])
+
+    def test_an_agent_carried_forward_gains_the_column_and_keeps_its_rows(self):
+        self.a_delegation()
+        self.write("ALTER TABLE delegations DROP COLUMN working_since")
+        self.back_to_before(self.THE_PHASE_STEP)
+
+        self.assertIsNone(migration.carry_one("ava"))
+
+        self.assertIn("working_since",
+                      [one[1] for one in self.rows("PRAGMA table_info(delegations)")])
+        self.assertEqual([("del-1-aaaa",)],
+                         [tuple(one) for one in self.rows("SELECT delegation_id FROM delegations")])
+
+    def test_a_row_that_predates_it_begins_its_phase_when_it_was_made(self):
+        # Backfilling from `created_at` is not a guess: before this release nothing could carry work
+        # on and have a clock notice, so every existing row is in its first phase by construction.
+        self.a_delegation(created_at="2026-08-01T09:00:00Z", latest_at="2026-08-01T11:00:00Z")
+        self.write("ALTER TABLE delegations DROP COLUMN working_since")
+        self.back_to_before(self.THE_PHASE_STEP)
+
+        self.assertIsNone(migration.carry_one("ava"))
+
+        self.assertEqual([("2026-08-01T09:00:00Z",)],
+                         [tuple(one) for one in
+                          self.rows("SELECT working_since FROM delegations")])
+
+    def test_running_it_twice_is_the_same_as_running_it_once(self):
+        # `ALTER TABLE ADD COLUMN` has no `IF NOT EXISTS`, so a second run that did not ask first
+        # would raise — and a step is written to be safe against an agent that does not need it.
+        self.a_delegation(created_at="2026-08-01T09:00:00Z")
+        self.write("UPDATE delegations SET working_since = '2026-08-05T09:00:00Z'")
+        self.back_to_before(self.THE_PHASE_STEP)
+
+        self.assertIsNone(migration.carry_one("ava"))
+
+        self.assertEqual([("2026-08-05T09:00:00Z",)],
+                         [tuple(one) for one in
+                          self.rows("SELECT working_since FROM delegations")],
+                         "a second run overwrote a phase start that was already there")
 
 
 class WhatTheConstraintsRefuse(OneAgentsDelegations):

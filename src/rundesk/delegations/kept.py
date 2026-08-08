@@ -97,6 +97,14 @@ class Delegation(NamedTuple):
     stop_asked_at: Optional[str]
     created_at: str
     latest_at: str
+    #: When the phase of work this delegation is **currently** in began: the moment it was handed
+    #: over, or the moment it was last carried on. Step `0006` says at length why this is a column
+    #: rather than arithmetic; the short version is that `latest_at` moves for a steer and
+    #: `answered_at` is cleared by the resume, so neither can answer it.
+    #:
+    #: Never `None` to a reader — `_read` falls back to `created_at` for a row an older release
+    #: wrote, which by construction is a row still in its first phase.
+    working_since: str
 
 
 def made(agent: str, delegation_id: str, to_agent: str, parent_conversation: int,
@@ -115,9 +123,9 @@ def made(agent: str, delegation_id: str, to_agent: str, parent_conversation: int
         try:
             conn.execute(
                 f"INSERT INTO {TABLE} (delegation_id, to_agent,"
-                " parent_conversation, parent_turn, created_at, latest_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (delegation_id, to_agent, parent_conversation, parent_turn, at, at))
+                " parent_conversation, parent_turn, created_at, latest_at, working_since)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (delegation_id, to_agent, parent_conversation, parent_turn, at, at, at))
         except sqlite3.IntegrityError as why:
             raise Refused(f"{delegation_id} could not be written down: {why}") from why
 
@@ -183,13 +191,26 @@ def reopened(agent: str, delegation_id: str, now: Optional[datetime] = None) -> 
 
     Clearing `answered_at` is what puts it back in front of the answering gateway: that column is
     the only thing marking it done, so taking it away is the same thing as never having been.
+
+    **`working_since` moves, and this is the only verb that moves it.** Carrying on is new work, and
+    a resumed phase that inherited the original moment was reported to the room as an hour old
+    before the agent had done a second of it — the first check-in overdue the instant it began, and
+    the answer that followed described as having taken the whole of both phases. `guided` and
+    `stop_asked` deliberately leave it alone: somebody saying a word into work that is running has
+    not restarted that work.
+
+    **The identity and the session are untouched**, which is the whole difference between resuming
+    and handing the task over again: same `delegation_id`, same `parent_conversation`, same
+    `parent_turn`, so `source_id_for` builds the same conversation key and the answering agent picks
+    up the provider session it already had.
     """
     at = config.moment_of(now)
     with records.writing(directory.records(agent)) as conn:
         moved = conn.execute(
-            f"UPDATE {TABLE} SET answered_at = NULL, stop_asked_at = NULL, latest_at = ?"
+            f"UPDATE {TABLE} SET answered_at = NULL, stop_asked_at = NULL, latest_at = ?,"
+            " working_since = ?"
             " WHERE delegation_id = ? AND answered_at IS NOT NULL",
-            (at, delegation_id))
+            (at, at, delegation_id))
         return bool(moved.rowcount)
 
 
@@ -208,6 +229,33 @@ def stop_asked(agent: str, delegation_id: str, now: Optional[datetime] = None) -
         return bool(moved.rowcount)
 
 
+def guided(agent: str, delegation_id: str, now: Optional[datetime] = None) -> bool:
+    """Move the moment on because words were said into work still going. `False` where there were
+    none to say them into.
+
+    **The words themselves are not here and never will be**, which is why this writes a moment and
+    nothing else: guidance is a `conversation_messages` row in the *answering* agent's store, and
+    that is the membership rule step `0005` was written to. What this records is that the delegation
+    was touched, which is a fact about the delegation rather than about what was said.
+
+    Two things read it, and neither would work without it. The retention window is counted from
+    `latest_at` (R-DEL-21), so before this a delegation somebody steered for an hour aged as though
+    nobody had been near it. And the gateway's sweep says what is happening to work handed out by
+    watching the row move — guidance that moved nothing was guidance no room could be told about.
+
+    `answered_at IS NULL` rather than a read-then-write for the reason `answered` gives: collection
+    settles rows from another process, and a guard that decided before it wrote would stamp a
+    delegation that had been answered in between.
+    """
+    at = config.moment_of(now)
+    with records.writing(directory.records(agent)) as conn:
+        moved = conn.execute(
+            f"UPDATE {TABLE} SET latest_at = ?"
+            " WHERE delegation_id = ? AND answered_at IS NULL",
+            (at, delegation_id))
+        return bool(moved.rowcount)
+
+
 def _read(row: Any) -> Delegation:
     """One row as a `Delegation`, naming every field rather than trusting column order."""
     return Delegation(
@@ -215,7 +263,11 @@ def _read(row: Any) -> Delegation:
         parent_conversation=int(row["parent_conversation"]),
         parent_turn=int(row["parent_turn"]),
         answered_at=row["answered_at"], stop_asked_at=row["stop_asked_at"],
-        created_at=str(row["created_at"]), latest_at=str(row["latest_at"]))
+        created_at=str(row["created_at"]), latest_at=str(row["latest_at"]),
+        # A row written before `0006`, or by a release that predates it, has never been carried on
+        # — so its only phase began when it was made. Falling back here as well as backfilling in
+        # the step means a reader is never handed `None` to reason about.
+        working_since=str(row["working_since"] or row["created_at"]))
 
 
 def _asked(conn: sqlite3.Connection, agent: str, sql: str,

@@ -31,8 +31,10 @@ set covering every value the skill declares, and this module reasons about it as
 
 **Profiles are found, not declared.** The set of them is the suffixes standing on the names a skill
 declares, so adding a fourth site needs no edit to the skill, to its catalog, or to any configuration
-— and `core.secrets` is not modified by any of this, because a profile is a naming convention on
-names `rundesk env set` already accepts.
+— and nothing about how a value is *kept* changes, because a profile is a naming convention on names
+`rundesk env set` already accepts. The separator itself lives in `core.secrets` beside the rule for
+what a name may be, because `channels.credentials` spells the same convention for an agent's own bot
+and the two layers may not import each other.
 
 **A named profile never falls back to a plain value, and that is the safety property this module
 exists to hold.** Falling back is how `JIRA_BASE_URL__ACME` comes to be paired with the default
@@ -69,10 +71,10 @@ from rundesk.utils import files
 #: none — a skill that only tells an agent how to do something needs nothing from anybody.
 WANTS = "rundesk.json"
 
-#: What separates a name from the profile it belongs to. Two underscores rather than one, because a
-#: single one is ordinary inside a name and `JIRA_API_TOKEN` would then appear to be `JIRA_API` in a
-#: profile called `TOKEN`.
-BETWEEN = "__"
+#: What separates a name from the profile it belongs to. Named here as well because this module's
+#: own surface is written in terms of it — `name_trouble` refuses a declared name containing it —
+#: and taken from `core.secrets` rather than spelled again, so the one convention has one spelling.
+BETWEEN = secrets.PROFILED_BY
 
 #: What a profile may be called: the same alphabet the rest of a name uses, since the two are joined
 #: into one environment variable and `secrets` refuses anything else.
@@ -211,7 +213,7 @@ def as_named(profile: str) -> str:
 
 def named(env: str, profile: str) -> str:
     """The environment variable holding `env` for `profile`. The plain name for the default."""
-    return f"{env}{BETWEEN}{as_named(profile)}" if profile else env
+    return secrets.profiled(env, as_named(profile) if profile else "")
 
 
 def profiles(needs: List[Need], at: Optional[Path] = None) -> List[str]:
