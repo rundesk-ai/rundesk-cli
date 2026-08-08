@@ -86,6 +86,20 @@ VERSION_WITHIN = 10.0
 #: policies disagreeing. This covers only the handshake, where a hang has no records to explain it.
 HANDSHAKE_WITHIN = 120.0
 
+#: How long to wait for `thread/resume` before answering in a **new** thread instead.
+#:
+#: **Far shorter than the handshake, because giving up on this one costs almost nothing.** Failing
+#: to resume is not failing to answer: what the exchange actually is lives in rundesk's records and
+#: is sent as the prompt, so the handle is a cache the brain keeps rather than the conversation
+#: itself. Waiting two minutes for it and then ending the turn is the worst of both.
+#:
+#: The number this replaces was `HANDSHAKE_WITHIN`, and the failure was measured: a session whose
+#: history had a two-and-a-half megabyte image in it stopped resuming, and every turn in that
+#: conversation then failed after two minutes of silence, for ever — while the same agent answered
+#: normally anywhere else. Nothing said what had happened, and the sentence a person got told them
+#: to try again, which was the one thing that could never work.
+RESUMING_WITHIN = 20.0
+
 #: How much of one line is read at once. Not a limit on what the server may say — only on what is
 #: held while it is being read, which is what makes the bound true rather than aspirational.
 A_LINE_AT_MOST = 1024 * 1024
@@ -444,8 +458,7 @@ class Turn:
             return self.could_not_start("codex app-server did not answer initialize", got)
         self.send("initialized", wants_reply=False)
 
-        asked = self.opening_the_thread()
-        got = self.waited_for(asked, HANDSHAKE_WITHIN)
+        got = self.opening_the_thread()
         if got is None or "error" in got:
             return self.could_not_start("codex would not open a conversation", got)
         self.read_the_thread(got["result"])
@@ -467,25 +480,57 @@ class Turn:
         # adapter that did its job; a stream this side could not go on reading is not.
         return 1 if self.could_not_go_on else 0
 
-    def opening_the_thread(self) -> int:
-        """`thread/resume` when rundesk gave a handle, and `thread/start` when it did not.
+    def opening_the_thread(self):
+        """A thread to answer in: the one rundesk named, or a fresh one when that cannot be had.
+
+        **A session that will not resume is not a conversation that is over**, and treating it as
+        one is how an agent comes to be permanently unreachable in the place somebody actually
+        talks to it. What the exchange *is* lives in rundesk's own records and is sent as the
+        prompt; the handle is only what saves the brain being told it again. So losing one costs
+        continuity for a turn, and it may not cost the answer.
+
+        Measured, and this is the failure it exists to make unreachable: a session with a
+        two-and-a-half megabyte image in its history stopped resuming, and every turn in that
+        conversation failed after two minutes of silence — for ever, while the same agent went on
+        answering in every other place. Rundesk records the thread this ends up in, so the next turn
+        resumes the new one and the whole thing is over in a line of log nobody has to read.
 
         **The preface goes on the start and never on the resume**, which is the third measured fact
         in the module docstring: a resume takes the argument and ignores it, so sending one would
-        read as working while changing nothing.
+        read as working while changing nothing. It is therefore sent on the way *back* here too —
+        a fresh thread reached this way is a fresh thread in every respect.
         """
+        resume = os.environ.get("RUNDESK_RESUME")
+        if resume:
+            got = self.waited_for(
+                self.send("thread/resume", dict(self.opening(), threadId=resume)), RESUMING_WITHIN)
+            if got is not None and "error" not in got:
+                return got
+            # Said to the log and never to the person: what they asked for is about to be answered,
+            # and *this conversation lost its continuity* is an operator's fact, not theirs. A late
+            # reply to the request above is left where it lands — `waited_for` reads by request id,
+            # so it can never be mistaken for the answer to the one below.
+            went_wrong(
+                f"could not resume thread {resume}"
+                f"{'' if got is None else ': ' + str((got.get('error') or {}).get('message'))}"
+                f" — answering in a new one, so this turn does not carry what came before")
+        return self.waited_for(self.send("thread/start", self.starting()), HANDSHAKE_WITHIN)
+
+    def opening(self) -> dict:
+        """What every way of opening a thread states, whichever way this is opening one."""
         common = {"cwd": self.where, "sandbox": SANDBOX, "approvalPolicy": "never"}
         model = os.environ.get("RUNDESK_MODEL")
         if model:
             common["model"] = model
-        resume = os.environ.get("RUNDESK_RESUME")
-        if resume:
-            return self.send("thread/resume", dict(common, threadId=resume))
-        common["threadSource"] = CLIENT
+        return common
+
+    def starting(self) -> dict:
+        """What only a *new* thread states — see `opening_the_thread` on why a resume takes none."""
+        common = dict(self.opening(), threadSource=CLIENT)
         preface = os.environ.get("RUNDESK_PREFACE", "").strip()
         if preface:
             common["developerInstructions"] = preface
-        return self.send("thread/start", common)
+        return common
 
     def read_the_thread(self, result: dict) -> None:
         """The handle to carry this conversation on with, and the model that will actually answer."""

@@ -320,6 +320,104 @@ for line in sys.stdin:
         self.assertEqual([], self.sent("skills/extraRoots/set"))
 
 
+class WhenASessionWillNotResume(support.Isolated):
+    """A handle that has gone bad is a turn that answers anyway, in a thread of its own.
+
+    **Measured on a live install.** A conversation whose codex session had a two-and-a-half megabyte
+    image in its history stopped resuming; every turn in it then failed after two minutes of silence
+    — for ever, while the same agent answered normally everywhere else — and the sentence the owner
+    was given told them to try again, which was the one thing that could never work.
+
+    A session is a cache. What the exchange *is* lives in rundesk's records and is sent as the
+    prompt, so losing the handle costs continuity for one turn and may not cost the answer.
+    """
+
+    A_BRAIN_THAT_WILL_NOT_RESUME = '''#!/usr/bin/env python3
+import json, os, sys
+if "--capabilities" in sys.argv[1:]:
+    print('{"tools": true}'); raise SystemExit(0)
+for line in sys.stdin:
+    with open(os.environ["HEARD"], "a") as writing:
+        writing.write(line)
+    try:
+        said = json.loads(line)
+    except ValueError:
+        continue
+    if said.get("method") == "initialize":
+        print(json.dumps({"id": said["id"], "result": {}}), flush=True)
+    elif said.get("method") == "thread/resume":
+        print(json.dumps({"id": said["id"],
+                          "error": {"code": -32000, "message": "rollout is unreadable"}}),
+              flush=True)
+    elif said.get("method") == "thread/start":
+        print(json.dumps({"id": said["id"], "result": {"thread": {"id": "t-fresh"},
+                                                       "model": "m-1"}}), flush=True)
+    elif said.get("method") == "turn/start":
+        print(json.dumps({"id": said["id"], "result": {}}), flush=True)
+        print(json.dumps({"method": "turn/completed",
+                          "params": {"threadId": "t-fresh",
+                                     "turn": {"id": "u-1", "status": "completed"}}}), flush=True)
+'''
+
+    def ran(self, **also):
+        where = self.home / "cwd"
+        where.mkdir(parents=True, exist_ok=True)
+        instead = self.home / "bin"
+        instead.mkdir(parents=True, exist_ok=True)
+        heard = self.home / "heard.jsonl"
+        (instead / "codex").write_text(self.A_BRAIN_THAT_WILL_NOT_RESUME, encoding="utf-8")
+        (instead / "codex").chmod(0o755)
+        heard.write_text("", encoding="utf-8")
+        told = {"PATH": f"{instead}:/usr/bin:/bin", "HEARD": str(heard),
+                "RUNDESK_CWD": str(where), "RUNDESK_ACCESS_MODE": "work",
+                "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1", "RUNDESK_RESUME": "t-gone"}
+        told.update(also)
+        got = subprocess.run(
+            [str(ADAPTER)], input=json.dumps({"type": "say", "text": "hello"}) + "\n",
+            capture_output=True, text=True, timeout=PATIENCE, env=told, check=False)
+        self.spoken = [json.loads(one) for one in heard.read_text().splitlines() if one.strip()]
+        self.records = [json.loads(one) for one in got.stdout.splitlines() if one.strip()]
+        self.said = got.stderr
+        return got
+
+    def sent(self, method):
+        return [one for one in self.spoken if one.get("method") == method]
+
+    def test_a_refused_resume_opens_a_new_thread_instead_of_ending_the_turn(self):
+        self.ran()
+        self.assertEqual("t-gone", self.sent("thread/resume")[0]["params"]["threadId"])
+        self.assertEqual(1, len(self.sent("thread/start")),
+                         "a session that would not resume ended the turn instead of starting one")
+
+    def test_the_turn_still_answers(self):
+        self.ran()
+        ended = [one for one in self.records if one.get("type") == "done"]
+        self.assertEqual(1, len(ended), f"the turn never ended cleanly: {self.records}")
+        self.assertTrue(ended[0].get("ok"),
+                        f"a recoverable resume failure was reported as a failed turn: {ended[0]}")
+
+    def test_rundesk_is_told_the_thread_it_actually_ended_up_in(self):
+        # Or the next turn resumes the bad handle again, and the conversation is dead after all.
+        self.ran()
+        ended = next(one for one in self.records if one.get("type") == "done")
+        self.assertEqual("t-fresh", ended.get("session_id"))
+
+    def test_a_fresh_thread_reached_this_way_is_fresh_in_every_respect(self):
+        # The preface is bound at `thread/start` and ignored by a resume, so a fallback that left
+        # it off would answer in a thread that had never been told how to behave.
+        self.ran(RUNDESK_PREFACE="stand up straight")
+        params = self.sent("thread/start")[0]["params"]
+        self.assertEqual("stand up straight", params["developerInstructions"])
+        self.assertEqual("rundesk", params["threadSource"])
+
+    def test_the_lost_continuity_is_said_to_the_log_and_never_to_the_person(self):
+        self.ran()
+        self.assertIn("could not resume", self.said)
+        spoken = " ".join(json.dumps(one) for one in self.records)
+        self.assertNotIn("could not resume", spoken,
+                         "an operator's fact was put in front of whoever asked the question")
+
+
 class WhenItCannotRunAtAll(support.Isolated):
 
     def test_a_brain_that_is_not_on_the_machine_is_said_as_a_done_and_never_as_silence(self):
