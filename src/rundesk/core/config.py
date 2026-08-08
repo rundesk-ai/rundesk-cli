@@ -58,10 +58,25 @@ INITIAL = {
     # here. Written only by the two paths that really place a program, never by a run of `update`
     # that found nothing newer: otherwise the answer drifts to "just now" every time anybody checks.
     "last_updated_at": None,
+
+    # What `rundesk permissions check` last found, so that "what is still not allowed" can be asked
+    # without running anything. **A report of what was true when it was last asked, and never a
+    # cache anything decides on** — TCC state is the machine's, and the owner ticks a box or a
+    # `brew upgrade` moves the interpreter with nothing telling rundesk. So `check` always re-proves
+    # and nothing reads this to decide whether it may act.
+    #
+    # It carries the lineage it was proved in, because that is what makes an answer mean anything:
+    # the same probe run from a terminal and from a gateway gives opposite results, so a result
+    # without the process it was about is a claim about nobody.
+    #
+    # Install-wide rather than per-agent, and that is measured rather than convenient: every gateway
+    # on a machine is one TCC client, so there is exactly one answer and a per-agent copy would
+    # invent several.
+    "permissions": None,
 }
 
 #: The values nobody states, so `fill_in` can leave the owner's alone and still manage these.
-MANAGED = ("migration", "command_link", "last_updated_at")
+MANAGED = ("migration", "command_link", "last_updated_at", "permissions")
 
 #: What each stated value has to look like, in the words somebody would use to correct it.
 WANTED = {

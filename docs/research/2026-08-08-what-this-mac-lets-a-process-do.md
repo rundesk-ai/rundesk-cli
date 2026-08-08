@@ -143,10 +143,65 @@ agent to learn its own gateway's grants.
 
 ---
 
-## 3. Screen capture — `screencapture` does not use the caller's grant at all
+## 3. Screen capture — running it **creates** the grant, which is why both earlier answers were wrong
 
-This section was written twice. **The first answer was wrong and the record of why is the useful
-part**, because the wrong answer is the one everybody arrives at.
+This section was written three times, and the two wrong versions are kept because each is a reading
+somebody will arrive at again. **The finding that settles it is that the probe was not passive:
+asking macOS for a screenshot from a process with no Screen Recording grant made macOS write one.**
+
+The evidence is a timestamp. Before any of this, the system TCC database held no row for the
+Homebrew interpreter. Afterwards:
+
+```
+kTCCServiceScreenCapture|/opt/homebrew/Cellar/python@3.14/3.14.6/…/bin/python3.14|1|2|1786202353
+                                                                        client_type↑  ↑auth_value=allowed
+1786202353 = 2026-08-08 11:19:13 — during this session, and the only TCC change on the machine in two hours
+```
+
+So the three runs were not three measurements of one state. They were **one measurement, one state
+change caused by it, and two measurements of the new state.**
+
+| Run | Preflight | `screencapture` said | What was really true |
+|---|---|---|---|
+| first, under launchd | `False` | `exit 1`, *could not create image from rect*, **no file** | **the denied behaviour** |
+| — | — | — | 11:19:13 — macOS writes an *allowed* grant for the interpreter |
+| second, under launchd | (not asked) | `exit 0`, valid 8×8 and full-screen PNGs | granted by then |
+| third, under launchd | (not asked) | menu bar byte-identical to the terminal's | granted by then |
+
+### What each wrong version claimed, and why it looked right
+
+**Version one: the silent-success trap.** Read the differing byte counts between a granted and an
+"ungranted" full-screen capture as wallpaper-versus-content. They were the desktop clock changing
+between runs, and by then both runs were granted anyway.
+
+**Version two: `screencapture` is Apple-signed and bypasses the caller's grant.** Read the
+byte-identical menu-bar captures as proof that an ungranted process sees the real screen. The
+captures were identical because **both processes were granted** — the second one by the first.
+
+The mechanism is real for other tools and the reasoning was sound; the premise was false.
+
+### What is actually true, as far as this went
+
+- **A denied capture fails outright**: `exit 1`, `could not create image from rect`, no file. The
+  exit code does track the grant on 26.5.1, and neither earlier version believed that.
+- **`CGPreflightScreenCaptureAccess` agreed at every point**, before and after. It is the reliable
+  reading and it is non-prompting.
+- **Asking for a capture without the grant changes the machine.** Whether macOS prompted and
+  something accepted, or whether it added an allowed row on first use, was not established — but the
+  row is `auth_value=2` and nobody deliberately granted it.
+
+### ⇒ The probe may not shell out before asking
+
+This is the design consequence and it is not a small one. **A probe that grants the permission it was
+asked to report on is worse than useless**: it answers `ready` about a machine it has just changed,
+and it alters the owner's privacy settings without being asked. `capabilities.proving._a_capture`
+therefore reads the preflight **first** and runs nothing at all when the answer is no.
+
+It also generalises past this one probe: *prove it by doing it* is right only where doing it is
+inert, and **whether a probe is inert is a claim that has to be checked rather than assumed.** Every
+other probe here is a preflight or a read for that reason.
+
+### The rest of §3, kept because it was measured either way
 
 ### The reading that looked right, and was not
 
@@ -202,10 +257,11 @@ An agent asked for a screenshot will shell out, so the first is what usually dec
 do the job. The second still matters and is not redundant: a library-based capture, continuous
 recording, and anything running where `screencapture` is unavailable all need the real grant.
 
-**⇒ These are two probes, not one, and reporting either alone is a wrong answer to somebody.** A
-check that reported only the preflight would tell an owner their agent cannot take a screenshot when
-it demonstrably can; a check that reported only the shell-out would claim a grant the process does
-not hold.
+**⇒ They stay two probes, for a different reason than version two gave.** `screen/grant` reads the
+preflight and is the authority. `screen/capture` proves the pipeline end to end — that a real image
+comes back and decodes at the size asked for — which a boolean cannot, since a granted machine with
+a broken capture path would still preflight `True`. But it runs **only after** the grant is
+confirmed, because of what the attempt does otherwise.
 
 ### Window titles are not withheld either
 
@@ -220,31 +276,29 @@ On earlier macOS versions the window *name* was withheld from a process without 
 which made the window list a cheap discriminator. **It is not one on 26.5.1** — the titles come back
 either way. Recorded because it is the obvious next thing to try and it does not work.
 
-### It can also fail for reasons that are not permission
+### The failure that was read as a sleeping display
 
-**Measured, once, and worth more than the times it worked.** An earlier launchd run of the identical
-command:
+`exit 1` / *could not create image from rect* / no file was first written up here as a transient — a
+display that had gone to sleep — because it happened once and the next run worked. **It was the
+denied answer**, and the next run worked because the grant had appeared in between. A single
+observation explained by the most convenient hypothesis available is how both wrong versions of this
+section were written.
 
-```
-  exit=1 stderr='could not create image from rect'   NO FILE
-```
+The `UNPROVEN` third state stays in the design, because a capture genuinely can fail for reasons that
+are not permission and a two-branch classifier would have to call such a case allowed or denied. But
+it is now **reasoned rather than measured**, and this page should stop claiming otherwise.
 
-Same machine, same lineage, same grant state, minutes apart — the display had gone to sleep. That is
-neither allowed nor denied, and a classifier with two branches would have to call it one of them.
-**This is the `UNPROVEN` third state, measured rather than assumed.**
+### The failure that was read as a sleeping display
 
-### It can also fail for reasons that are not permission
+`exit 1` / *could not create image from rect* / no file was first written up here as a transient — a
+display that had gone to sleep — because it happened once and the next run worked. **It was the
+denied answer**, and the next run worked because the grant had appeared in between. A single
+observation explained by the most convenient hypothesis available is how both wrong versions of this
+section were written.
 
-**Measured, once, and worth more than the times it worked.** An earlier launchd run of the identical
-command:
-
-```
-  exit=1 stderr='could not create image from rect'   NO FILE
-```
-
-Same machine, same lineage, same grant state, minutes apart — the display had gone to sleep. That is
-neither allowed nor denied, and a classifier with two branches would have to call it one of them.
-**This is the `UNPROVEN` third state, measured rather than assumed.**
+The `UNPROVEN` third state stays in the design, because a capture genuinely can fail for reasons that
+are not permission and a two-branch classifier would have to call such a case allowed or denied. But
+it is now **reasoned rather than measured**, and this page should stop claiming otherwise.
 
 ---
 
@@ -408,18 +462,12 @@ Ordered by how much each would change the design.
 
 - **Lineage is part of every answer, not a heading.** §2 is the measured failure that makes this
   structural: same probe, same machine, opposite answers.
-- **Screen is two probes** (§3): `screen/capture` runs `screencapture`, decodes the result and checks
-  the dimensions — proving what an agent shelling out actually gets; `screen/grant` reads
-  `CGPreflightScreenCaptureAccess` — proving whether this process could capture in-process. They
-  disagree on an ungranted machine and **both answers are true**, so both are reported and each says
-  what it covers. Neither is derived from the exit code, and both need a third state for the
-  display-asleep case.
-- **Prove capability by doing it, not only by asking about the grant.** The whole of §3 is one
-  instance of a general rule this research earned: a preflight answers *may I*, and running the thing
-  answers *did it work*. Where they can be checked separately and can disagree, check both. The
-  screenshot probe therefore captures a real image, decodes it, and verifies its dimensions rather
-  than trusting a boolean — and a window capture by id proves it can target a window and not just
-  the desktop.
+- **Screen is two probes, and the order between them is load-bearing** (§3): `screen/grant` reads
+  `CGPreflightScreenCaptureAccess` and is the authority; `screen/capture` then proves the pipeline
+  end to end, and **runs nothing when the grant is absent**, because the attempt writes the grant.
+- **Prove it by doing it — only where doing it is inert, and check that it is.** The rule survives
+  §3; what §3 added is the qualifier. A probe's side effects are a claim like any other, and this one
+  was assumed rather than checked for three rewrites of the same section.
 - **`control` is four probes with four fixes** (§6).
 - **`apps` is one probe per target, targets discovered from the machine** (§7).
 - **`files` classifies on errno**: `EPERM` is TCC, `EACCES` is the filesystem (§4).

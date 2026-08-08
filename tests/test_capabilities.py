@@ -157,17 +157,28 @@ class SeeingTheScreen(Probing):
                            AMachine({"screencapture": ran(0)}, {"screencapture": a_png()}))
         self.assertEqual(proving.READY, found.verdict)
 
-    def test_the_capture_and_the_grant_are_two_probes_that_may_disagree(self) -> None:
-        """Measured: screencapture is Apple-signed with its own identity and works either way.
+    def test_an_ungranted_capture_is_never_attempted(self) -> None:
+        """**The probe may not grant the permission it was asked to report on.**
 
-        Reporting only the grant tells an owner their agent cannot take a screenshot when it
-        demonstrably can. Reporting only the capture claims a grant this process does not hold.
+        Measured, and it is why this function asks before it acts: running `screencapture` from a
+        process with no Screen Recording grant made macOS *write an allowed grant* into the system
+        TCC database. A probe that does that answers `ready` about a machine it has just changed,
+        and alters the owner's privacy settings without being asked.
+
+        So the assertion that matters is not the verdict — it is that **nothing was run.**
         """
-        machine = AMachine({"screencapture": ran(0),
-                            "CGPreflightScreenCaptureAccess": ran(0, "no")},
-                           {"screencapture": a_png()})
+        machine = AMachine({"CGPreflightScreenCaptureAccess": ran(0, "no")})
+        found = self.prove("screen/capture", machine)
+        self.assertEqual(proving.BLOCKED, found.verdict)
+        self.assertNotIn("screencapture", " ".join(machine.words()),
+                         "the capture was attempted without the grant, which writes the grant")
+
+    def test_a_granted_capture_is_attempted(self) -> None:
+        """The other half: where the grant is held, the pipeline is proved end to end."""
+        machine = AMachine({"CGPreflightScreenCaptureAccess": ran(0, "yes"),
+                            "screencapture": ran(0)}, {"screencapture": a_png()})
         self.assertEqual(proving.READY, self.prove("screen/capture", machine).verdict)
-        self.assertEqual(proving.BLOCKED, self.prove("screen/grant", machine).verdict)
+        self.assertIn("screencapture", " ".join(machine.words()))
 
     def test_a_capture_that_would_not_run_is_unproven_and_not_blocked(self) -> None:
         """Measured: a sleeping display answers exactly here, and it is not a refusal."""

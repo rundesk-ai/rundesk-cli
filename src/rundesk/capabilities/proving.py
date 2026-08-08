@@ -288,13 +288,29 @@ def _a_reading(what: Callable[[], Path], source: str, blocked: str, fix: str, mi
 
 
 def _a_capture(probe: Probe, whose: lineage.Lineage, into: Path, running: Running):
-    """Settle by taking a real picture and looking at it — not by asking whether it is allowed.
+    """Settle by taking a real picture and looking at it — **but only where that changes nothing.**
 
     Eight pixels of the top-left corner, so this reads nothing of what is on the owner's screen, and
     the file is removed whatever happens. What proves it is that the bytes decode as a PNG of the
     size that was asked for: a capture that exited zero and wrote something unreadable has not
     proved a machine can be seen.
+
+    **The preflight is asked first, and a `no` stops this before it runs anything.** That is not an
+    optimisation, it is the whole reason this function is shaped the way it is. Running
+    `screencapture` from a process that holds no Screen Recording grant was measured **causing macOS
+    to write one** — a real, allowed row appeared in the system TCC database at the moment an
+    ungranted launchd job first tried it. A probe that grants the permission it was asked to report
+    on is worse than useless: it answers `ready` about a machine it just changed, and it changes the
+    owner's privacy settings without being asked. So where the grant is absent this reports that and
+    stops, and the honest answer to *can it capture* is the one `screen/grant` already gave.
     """
+    allowed = running([sys.executable, "-c", A_PREFLIGHT, CORE_GRAPHICS,
+                       "CGPreflightScreenCaptureAccess"], A_PREFLIGHT_WITHIN)
+    if allowed.trouble is None and allowed.out.strip() == "no":
+        return (BLOCKED,
+                "not attempted — this process does not hold Screen Recording, and trying anyway "
+                "makes macOS write the grant rather than report on it", SCREEN_RECORDING)
+
     shot = into / "capture.png"
     ran = running(["/usr/sbin/screencapture", "-x", "-t", "png", "-R", "0,0,8,8", str(shot)],
                   A_CAPTURE_WITHIN)
@@ -456,8 +472,10 @@ def _screen() -> List[Probe]:
     return [
         Probe("screen", "capture",
               "a screenshot can actually be taken and read back",
-              "captures the top-left eight pixels to a temporary file and deletes it. Nothing of "
-              "what is on the screen is kept, printed, or looked at.",
+              "asks first whether the grant is held, and only then captures the top-left eight "
+              "pixels to a temporary file and deletes it. Nothing of what is on the screen is "
+              "kept, printed or looked at, and where the grant is absent nothing is run at all — "
+              "trying makes macOS write the grant instead of reporting on it.",
               True, _a_capture),
         Probe("screen", "grant",
               "this process itself holds Screen Recording, for capture that cannot shell out",

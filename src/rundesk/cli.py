@@ -35,6 +35,8 @@ from rundesk.commands.gateways import register as register_gateways
 from rundesk.commands.install import cmd_install
 from rundesk.commands.messages import cmd_messages
 from rundesk.commands.messages import register as register_messages
+from rundesk.commands.permissions import cmd_permissions
+from rundesk.commands.permissions import register as register_permissions
 from rundesk.commands.providers import cmd_providers
 from rundesk.commands.providers import register as register_providers
 from rundesk.commands.schedules import cmd_schedules
@@ -77,6 +79,8 @@ examples:
   rundesk env list              the values rundesk hands to what it talks to
   rundesk skills                the skills this install has, and who holds which
   rundesk skills doctor         what an agent cannot use, and exactly why
+  rundesk permissions           what this Mac lets rundesk do, as last checked
+  rundesk permissions check     prove it now, and say what is still not allowed
   rundesk version               what version this is, and whether it is out of date
   rundesk update                move to the newest published release
   rundesk uninstall --confirm   remove rundesk, keeping what it kept for you
@@ -111,6 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_asked(sub)
     register_messages(sub)
     register_providers(sub)
+    register_permissions(sub)
     register_turns(sub)
     register_schedules(sub)
     register_channels(sub)
@@ -175,9 +180,10 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
     stand-in by default, which is the reverse of what it does for the other two, and that reversal
     is deliberate.
 
-    **`backups` is handed a fourth thing, built here out of the third.** A restore replaces the file
-    every running gateway's lock stands on, so it stands those gateways down and starts exactly them
-    again — and what it stands them down *with* is `commands.gateways.Cycled`, which is the same
+    **`backups` and `update` are handed a fourth thing, built here out of the third.** A restore
+    replaces the file every running gateway's lock stands on, and an update replaces the imported
+    program beneath every gateway. Both stand online gateways down and start exactly them again —
+    and what they stand them down *with* is `commands.gateways.Cycled`, which is the same
     `stop` and `start` a person types. Built here rather than defaulted in that command's signature,
     for every reason `Cycled` gives for having no default of its own: it is built out of
     `supervising`, so a suite that replaced the supervisor has replaced this too, without knowing it
@@ -230,6 +236,8 @@ def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshin
         return cmd_messages(args)
     if args.command == "turns":
         return cmd_turns(args)
+    if args.command == "permissions":
+        return cmd_permissions(args)
     if args.command == "providers":
         return cmd_providers(args)
     if args.command == "schedules":
@@ -243,7 +251,7 @@ def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshin
     if args.command == "install":
         return cmd_install(args, refreshing, building)
     if args.command == "update":
-        return cmd_update(args, asking, fetching, refreshing, building)
+        return cmd_update(args, asking, fetching, refreshing, building, _gateways(supervising))
     if args.command == "uninstall":
         return cmd_uninstall(args, supervising)
 
