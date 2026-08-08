@@ -212,6 +212,22 @@ class WhatAShippedSkillMayClaim(Bundled):
                 self.assertIn(preview, skills)
                 self.assertIn(f"{preview} --confirm", skills)
 
+    def test_managing_rundesk_routes_desk_cli_catalog_and_binary_separately(self):
+        skills = (self.skills / "managing-rundesk" / "references" / "skills.md").read_text(
+            encoding="utf-8")
+        repository = "https://github.com/rundesk-ai/desk-cli"
+        preview = f'"$RUNDESK_COMMAND" skills install {repository}'
+        address = "desk-cli/managing-your-desk"
+
+        self.assertIn(preview, skills)
+        self.assertIn(f"{preview} --confirm", skills)
+        self.assertIn(f'"$RUNDESK_COMMAND" skills grant <agent> {address}', skills)
+        self.assertIn(f'"$RUNDESK_COMMAND" skills profiles {address}', skills)
+        self.assertIn(
+            f'"$RUNDESK_COMMAND" skills configure {address} --profile <name>', skills)
+        self.assertIn('"$RUNDESK_COMMAND" skills doctor <agent>', skills)
+        self.assertIn("does not install the `desk` binary", skills)
+
     def test_focused_maintenance_is_detailed_only_in_its_reference(self):
         skill = self.skills / "managing-rundesk"
         said = (skill / library.DECLARED).read_text(encoding="utf-8")

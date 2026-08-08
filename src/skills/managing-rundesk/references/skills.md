@@ -34,16 +34,37 @@ Check `skills catalogs` first. If the requested capability is absent, preview th
   `https://github.com/rundesk-ai/rundesk-skills-apple`
 - Guarded service integrations:
   `https://github.com/rundesk-ai/rundesk-skills-integrations`
+- Rundesk tasks, inbox, mentions, projects, pages, and assets through the `desk` API client:
+  `https://github.com/rundesk-ai/desk-cli`
 
 ```sh
 "$RUNDESK_COMMAND" skills install https://github.com/rundesk-ai/rundesk-skills-apple
 "$RUNDESK_COMMAND" skills install https://github.com/rundesk-ai/rundesk-skills-apple --confirm
 "$RUNDESK_COMMAND" skills install https://github.com/rundesk-ai/rundesk-skills-integrations
 "$RUNDESK_COMMAND" skills install https://github.com/rundesk-ai/rundesk-skills-integrations --confirm
+"$RUNDESK_COMMAND" skills install https://github.com/rundesk-ai/desk-cli
+"$RUNDESK_COMMAND" skills install https://github.com/rundesk-ai/desk-cli --confirm
 ```
 
 Treat the unconfirmed preview as authoritative for the catalog's current skills. Add `--confirm`
 only after its source, name, and skills match the request.
+
+The `desk-cli` catalog installs the agent instructions; it does not install the `desk` binary.
+Follow that repository's README to install or update the executable separately, and verify
+`desk --version` before granting its skill:
+
+```sh
+"$RUNDESK_COMMAND" skills grant <agent> desk-cli/managing-your-desk
+"$RUNDESK_COMMAND" skills profiles desk-cli/managing-your-desk
+"$RUNDESK_COMMAND" skills configure desk-cli/managing-your-desk --profile <name>
+"$RUNDESK_COMMAND" skills doctor <agent>
+```
+
+Configure one complete named profile for each API identity the agent may use. A desk-bound profile
+manages that desk's inbox and mentions; an owner profile acts for the user across explicitly targeted
+desks, tasks, weeks, projects, pages, and assets, but has no desk-only mentions access. Prefer a
+profile matching the agent's desk. Give an owner profile only when the agent is meant to act for the
+owner, and remember that every agent holding the skill can reach every profile configured for it.
 
 ## Safe workflow
 
