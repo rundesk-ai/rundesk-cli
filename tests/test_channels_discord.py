@@ -1532,6 +1532,43 @@ class HowTheCommentaryGrows(Records):
         self.assertEqual("-# 💻 ran command **(x10)**", place.sent[0]["content"])
         self.assertEqual([], place.posted[0].edits, "a single burst should need no edit at all")
 
+    def test_a_line_still_waiting_when_the_turn_ends_is_never_posted_under_the_answer(self) -> None:
+        # **Seen on a real bot**: a `thinking` message standing *below* the answer, describing work
+        # that had finished before it. A line queued in the last moment of a turn waits out
+        # `GROW_SECONDS`; the answer goes out inside that window and buries the commentary; and the
+        # flush then has nowhere to grow, so it starts a fresh message under what somebody is
+        # already reading. A turn that has ended has nothing more to say about itself.
+        async def exchange(reaching: Any) -> None:
+            await self.doing(reaching, "500", {"did": "run"})
+            await reaching._deliver({"do": "deliver", "id": "1", "place": "500", "text": "answer"})
+            reaching._doing({"place": "500", "did": "read"})     # queued, not yet written
+            await reaching._state({"place": "500", "state": "done", "external_id": "8841"})
+            held = reaching.growing[500]
+            self.assertEqual([], held.pending,
+                             "a line about a finished turn was still waiting to be posted")
+            await reaching._flush(500, held)
+
+        self.during(exchange)
+        place = self.client.places[500]
+        posted = [one["content"] for one in place.sent]
+        self.assertEqual(2, len(posted),
+                         f"something was posted under the answer: {posted}")
+        self.assertEqual("answer", posted[-1], "the answer is no longer the last thing said")
+
+    def test_a_turn_still_running_goes_on_growing_its_commentary(self) -> None:
+        # The other half, and the one that must not be broken to fix the above: a remark posted
+        # mid-turn buries the commentary and what follows still gets written — in a message of its
+        # own, because the remark is standing under the old one.
+        async def exchange(reaching: Any) -> None:
+            await self.doing(reaching, "500", {"did": "run"})
+            await reaching._deliver({"do": "deliver", "id": "1", "place": "500", "text": "a remark"})
+            await self.doing(reaching, "500", {"did": "read"})
+
+        self.during(exchange)
+        posted = [one["content"] for one in self.client.places[500].sent]
+        self.assertEqual(3, len(posted), f"the turn stopped saying what it was doing: {posted}")
+        self.assertIn("read file", posted[-1])
+
     def test_something_posted_under_it_starts_a_fresh_commentary(self) -> None:
         # A message something has been posted under is one the reader has already scrolled past,
         # and editing it changes history rather than showing progress.

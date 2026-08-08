@@ -320,6 +320,80 @@ for line in sys.stdin:
         self.assertEqual([], self.sent("skills/extraRoots/set"))
 
 
+class WhenTheBrainMakesAnImage(support.Isolated):
+    """Generating an image is `make`, and it stopped being anything at all.
+
+    **A capability that had worked, reported to nobody.** It used to arrive as a `fileChange` whose
+    changes were all `add`, so it showed as *made something* like everything else the agent creates.
+    The brain grew a tool of its own for it, that item kind was not among the ones read, and the line
+    silently stopped appearing — with nothing anywhere to say it had gone.
+
+    The item below is the shape a real codex sent on 2026-08-08, taken off a live install: the
+    `started` arrives and carries no path, and the completion that would carry one never came.
+    """
+
+    A_BRAIN_THAT_DRAWS = '''#!/usr/bin/env python3
+import json, os, sys
+if "--capabilities" in sys.argv[1:]:
+    print('{"tools": true}'); raise SystemExit(0)
+ITEM = {"type": "imageGeneration", "id": "exec-317912a2", "status": "in_progress",
+        "revisedPrompt": None, "result": "", "transparentBackground": None}
+for line in sys.stdin:
+    try:
+        said = json.loads(line)
+    except ValueError:
+        continue
+    if said.get("method") == "initialize":
+        print(json.dumps({"id": said["id"], "result": {}}), flush=True)
+    elif said.get("method") == "thread/start":
+        print(json.dumps({"id": said["id"], "result": {"thread": {"id": "t-1"}}}), flush=True)
+    elif said.get("method") == "turn/start":
+        print(json.dumps({"id": said["id"], "result": {}}), flush=True)
+        print(json.dumps({"method": "item/started", "params": {"item": ITEM}}), flush=True)
+        print(json.dumps({"method": "item/completed", "params": {"item": dict(
+            ITEM, status="completed", savedPath="/tmp/generated/cat.png")}}), flush=True)
+        print(json.dumps({"method": "turn/completed",
+                          "params": {"threadId": "t-1",
+                                     "turn": {"id": "u-1", "status": "completed"}}}), flush=True)
+'''
+
+    def ran(self):
+        where = self.home / "cwd"
+        where.mkdir(parents=True, exist_ok=True)
+        instead = self.home / "bin"
+        instead.mkdir(parents=True, exist_ok=True)
+        (instead / "codex").write_text(self.A_BRAIN_THAT_DRAWS, encoding="utf-8")
+        (instead / "codex").chmod(0o755)
+        got = subprocess.run(
+            [str(ADAPTER)], input=json.dumps({"type": "say", "text": "draw a cat"}) + "\n",
+            capture_output=True, text=True, timeout=PATIENCE, check=False,
+            env={"PATH": f"{instead}:/usr/bin:/bin", "RUNDESK_CWD": str(where),
+                 "RUNDESK_ACCESS_MODE": "work", "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1"})
+        return [json.loads(one) for one in got.stdout.splitlines() if one.strip()]
+
+    def test_making_an_image_is_reported_as_making_something(self):
+        tools = [one for one in self.ran() if one.get("type") == "tool"]
+        self.assertEqual(1, len(tools), "the brain drew an image and said nothing about it")
+        self.assertEqual("make", tools[0]["did"])
+
+    def test_it_is_named_by_what_it_is_and_never_by_the_prompt_behind_it(self):
+        # The brain writes itself a revised prompt hundreds of characters long. A line somebody
+        # reads is not where that belongs.
+        tools = [one for one in self.ran() if one.get("type") == "tool"]
+        self.assertEqual("an image", tools[0]["name"])
+
+    def test_where_it_was_written_is_carried_and_never_the_image_itself(self):
+        # The record holds the image as base64 — two and a half megabytes of it, measured. What is
+        # worth carrying is the path, which is also the only thing an answer could link.
+        results = [one for one in self.ran() if one.get("type") == "result"]
+        self.assertEqual("/tmp/generated/cat.png", results[0].get("summary"))
+
+    def test_a_turn_that_only_drew_still_ends_cleanly(self):
+        ended = [one for one in self.ran() if one.get("type") == "done"]
+        self.assertEqual(1, len(ended))
+        self.assertTrue(ended[0]["ok"])
+
+
 class WhenASessionWillNotResume(support.Isolated):
     """A handle that has gone bad is a turn that answers anyway, in a thread of its own.
 

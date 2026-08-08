@@ -959,6 +959,23 @@ class Growing:
             self.pacing.cancel()
             self.pacing = None
 
+    def over(self) -> None:
+        """The turn this was describing has ended, so nothing more will be written about it.
+
+        **Only where this has already been buried**, which at the end of a turn means the answer is
+        standing under it. `buried` deliberately keeps what is waiting — mid-turn that is right, a
+        remark goes out and the commentary carries on below it — but at the end there is nothing
+        more to carry on to, and writing then starts a *new* message underneath the answer saying
+        `thinking`. That is the recorded failure: a line describing work that finished before the
+        answer somebody is already reading, posted after it.
+
+        Where the commentary is still the last thing there is a message above to edit and nothing
+        is out of place, so the ordinary flush is left alone to finish it.
+        """
+        if self.posted is None:
+            self.let_go()
+            self.pending = []
+
 
 class Reaching:
     """The connection, held open for as long as this program runs, and what it is holding.
@@ -1537,6 +1554,7 @@ class Reaching:
             return
         if state != "seen":
             self._typing_stops(place)
+            self._commentary_is_over(place)
         mark = MARKS.get(state)
         if mark and named is not None:
             await self._mark(place, named, mark)
@@ -1816,6 +1834,17 @@ class Reaching:
             held.posted = None             # start a fresh one rather than keep failing on this
             return
         held.shown = saying
+
+    def _commentary_is_over(self, place: int) -> None:
+        """The turn in this place has ended, so nothing more is written about it. See `Growing.over`.
+
+        Said by every state that ends a turn rather than by the delivery, because a turn ends
+        whether or not it had anything to say: one that was stopped, or that failed before it
+        answered, must not leave a line waiting to be posted under whatever went out instead.
+        """
+        held = self.growing.get(place)
+        if held is not None:
+            held.over()
 
     def _no_longer_last(self, place: int) -> None:
         """Something visible was said in this place, so the commentary stops growing.

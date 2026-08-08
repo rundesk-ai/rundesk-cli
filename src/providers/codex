@@ -660,7 +660,7 @@ class Turn:
                 if str(thought).strip():
                     say({"type": "think", "text": str(thought), "whole": True})
         elif kind in ("commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall",
-                      "webSearch"):
+                      "webSearch", "imageGeneration"):
             self.a_tool(kind, item, started)
 
     def a_tool(self, kind: str, item: dict, started: bool) -> None:
@@ -718,6 +718,14 @@ class Turn:
                 ", ".join(Path(str(one.get("path") or "")).name for one in changes) or "files")
         if kind == "webSearch":
             return "search", one_line(str(item.get("query") or "the web"))
+        if kind == "imageGeneration":
+            # **`make`, and it is the same word this already gave the same act.** Generating an
+            # image used to arrive as a `fileChange` whose changes were all `add`, so it showed as
+            # *made something* like anything else the agent creates. The brain grew a tool of its
+            # own for it, that item kind was not in the list above, and the line silently stopped
+            # appearing — a capability that had worked, reported to nobody, with nothing to say it
+            # had gone. The word is unchanged because the act is.
+            return "make", "an image"
         return "run", one_line(f"{item.get('server') or item.get('namespace') or ''}"
                                f"{'/' if item.get('server') else ''}{item.get('tool') or 'a tool'}")
 
@@ -739,6 +747,17 @@ class Turn:
         return "edit"
 
     def what_it_reported(self, kind: str, item: dict) -> str:
+        if kind == "imageGeneration":
+            # **Where it was written, and never what was written.** The brain keeps the image itself
+            # in this record as base64 — two and a half megabytes of it, measured — and a summary is
+            # one line somebody reads. The path is what is worth carrying, and it is what an answer
+            # would have to link for the file to be attached at all.
+            #
+            # Read on both spellings because neither has been seen here: the app-server sent this
+            # item only as `started`, and the completion that would carry a path never arrived. The
+            # path is real — it stands in the brain's own session file as `saved_path` — so this is
+            # ready for the day it crosses the seam, and says nothing until it does.
+            return one_line(str(item.get("savedPath") or item.get("saved_path") or ""))
         if kind == "commandExecution":
             code = item.get("exitCode")
             out = one_line(str(item.get("aggregatedOutput") or ""))
