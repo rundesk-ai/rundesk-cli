@@ -1034,10 +1034,14 @@ class TheChannelsItHosts(WithAnAgent):
         # Silence goes on reading as landed: an adapter is free to acknowledge nothing at all, and
         # this one does exactly that. Treating *nothing said* as a refusal would report a failure
         # for every whole adapter that simply does not answer.
+        #
+        # A short ceiling on purpose. This one is waiting for something that never arrives, so the
+        # whole of it is spent — and every second of it is a second the rest of this file's
+        # `waited_until` ceilings are competing with on a loaded runner.
         watching = self.a_hosted_channel()
         self.assertEqual(host.TOLD,
                          host._told(self.name, self.where_it_logs(), watching, host.WENT_DOWN,
-                                    landed_within=3.0))
+                                    landed_within=0.5))
 
     def test_a_refused_notice_is_said_once_and_not_twice(self):
         # A caller that hands a list in is going to say what it makes of the refusal — the scheduled
@@ -1055,7 +1059,7 @@ class TheChannelsItHosts(WithAnAgent):
         # Asked of this sentence and not of the reason, which `hosting._refused` already writes for
         # every refusal either way — an assertion on "429" alone would stay green with the whole of
         # this branch deleted.
-        host._told(self.name, self.where_it_logs(), watching, host.WENT_DOWN, landed_within=3.0)
+        host._told(self.name, self.where_it_logs(), watching, host.WENT_DOWN, landed_within=2.0)
         self.assertIn(f"the notice for {self.name} was refused", self.its_log(),
                       "a refusal nobody asked for reached nobody at all")
 
