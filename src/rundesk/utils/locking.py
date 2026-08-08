@@ -108,8 +108,8 @@ def is_held(at: Path) -> Optional[bool]:
 
 @contextlib.contextmanager
 def only_one(at: Path, guarding: Optional[str] = None,
-             waiting: Optional[float] = None) -> Iterator[None]:
-    """Hold an exclusive lock on the file `at` for the length of the block.
+             waiting: Optional[float] = None) -> Iterator[bool]:
+    """Hold an exclusive lock on `at`, yielding whether another process made this caller wait.
 
     `guarding` is what the lock is protecting, in the words of whoever took it, so the message when
     it cannot be had names the thing a person cares about rather than a dotfile they have never
@@ -128,7 +128,7 @@ def only_one(at: Path, guarding: Optional[str] = None,
     if _HELD.get(key):
         _HELD[key] += 1
         try:
-            yield
+            yield False
         finally:
             _HELD[key] -= 1
         return
@@ -136,27 +136,29 @@ def only_one(at: Path, guarding: Optional[str] = None,
     at.parent.mkdir(parents=True, exist_ok=True)
     holding = os.open(at, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        _taken(holding, guarding or str(at), waiting)
+        waited = _taken(holding, guarding or str(at), waiting)
         _HELD[key] = 1
         try:
-            yield
+            yield waited
         finally:
             _HELD.pop(key, None)
     finally:
         os.close(holding)
 
 
-def _taken(holding: int, guarding: str, waiting: Optional[float]) -> None:
-    """Take the lock, looking again until the ceiling. `Stuck` when it never came free."""
+def _taken(holding: int, guarding: str, waiting: Optional[float]) -> bool:
+    """Take the lock, returning whether it was busy first. `Stuck` when it never came free."""
     patience = WAITING_SECONDS if waiting is None else waiting
     ceiling = time.monotonic() + patience
+    waited = False
     while True:
         try:
             fcntl.flock(holding, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return
+            return waited
         except OSError as why:
             if not busy(why):
                 raise
+            waited = True
             if time.monotonic() >= ceiling:
                 # It says what was waited for and how long, and does not claim to know why.
                 # Asserting that something has gone wrong would be a confident wrong answer when

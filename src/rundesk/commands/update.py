@@ -10,10 +10,12 @@ The order is chosen so that the failure which cannot damage anything happens fir
    being settled on it, and an update interrupted between the two would otherwise never finish.
 3. Fetch the archive and check it is a rundesk tree, in a temporary directory. Nothing installed has
    been touched yet, so everything up to here is free to fail.
-4. Replace `app/`, staged and renamed, putting back what was there if any part fails.
-5. **Hand off to the release that just landed** to settle the install.
+4. Stand down every online gateway, after all fetch/archive failures are behind us.
+5. Replace `app/`, staged and renamed, putting back what was there if any part fails.
+6. **Hand off to the release that just landed** to settle the install, then restart exactly those
+   gateways with a one-shot notice proving which version came back.
 
-## Why step five is a handoff and not two more lines here
+## Why settling is a handoff and not two more lines here
 
 Once the files are replaced, this process is still running **the old release** — its modules were
 imported before the swap and they do not change underneath it. So the code sitting in memory to fill
@@ -28,6 +30,7 @@ rather than an operation anybody performs, and the command surface stays exactly
 """
 
 import argparse
+import contextlib
 import shutil
 import sys
 import tarfile
@@ -44,10 +47,10 @@ from rundesk.commands import failed, skills, the_reason
 from rundesk.commands.gateways import Cycled
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
-from rundesk.gateways import job, standing
+from rundesk.gateways import job, maintenance, standing
 from rundesk.lifecycle import backups, home, migration, packages, release, tree
 from rundesk.skills.catalogs import Fetching as Refreshing
-from rundesk.utils import archives, programs
+from rundesk.utils import archives, locking, programs
 
 #: How a release archive is brought down: given where it is and where to put it, it puts it there.
 #: The second of the two things in this product that leave the machine, and like the first it is a
@@ -65,10 +68,10 @@ class Gateways(Protocol):
     """Standing one agent's gateway down, and starting it again. One name in, `""` when it was done.
 
     **A gateway holding an agent's records open while that agent is carried is the `database is
-    locked` failure**, and it is not a rare one: a gateway is meant to run for days, and a step that
-    changes a table needs the write lock the gateway's own reader is contending for. So a carry
-    stands the running gateways down first and starts again **exactly** the ones that were up — see
-    `carried_every_agent`, which records which those were before it touches anything.
+    locked` failure**, and a gateway left alive across a program swap keeps running the old imported
+    release indefinitely. A new release therefore stands every online gateway down; an up-to-date
+    settle still cycles only agents with migration work. Both start again **exactly** the gateways
+    they stood down.
 
     **What answers this is `commands.gateways.Cycled`**, which is the two verbs a person types —
     `rundesk gateways stop` and `rundesk gateways start` — as something another command can be
@@ -99,12 +102,13 @@ class Gateways(Protocol):
 def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = None,
                fetching: Optional[Fetching] = None,
                refreshing: Optional[Refreshing] = None,
-               building: Optional[Callable[..., programs.Ran]] = None) -> int:
+               building: Optional[Callable[..., programs.Ran]] = None,
+               gateways: Optional[Gateways] = None) -> int:
     """Move to the newest published release, or say it is already up to date.
 
-    Takes no flags. `asking` looks up what is published, `fetching` downloads it and `refreshing`
-    brings down a catalog of skills; all three are resolved here rather than bound in the signature,
-    so the whole command is driven with no network anywhere near it.
+    Takes no flags. `asking` looks up what is published, `fetching` downloads it, `refreshing`
+    brings down a catalog of skills, and `gateways` cycles live agents; all are resolved here rather
+    than bound in the signature, so the whole command is driven with no network or launchd nearby.
 
     **The skill catalogs are checked on every run of this, including one that found nothing newer.**
     That is what makes them current daily rather than only when rundesk itself moves: a catalog is
@@ -136,7 +140,10 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
         # added before a release that ships a migration step therefore stayed unsettled, and its
         # gateway refused to host it with a sentence nobody was going to read. `paths.code` answers
         # for both arrangements, so there is nothing left for this guard to protect against.
-        gone_wrong = settled_by_the_new_release(paths.code())
+        try:
+            gone_wrong = settled_by_the_new_release(paths.code())
+        except paths.Refused as why:
+            gone_wrong = str(why)
         if gone_wrong:
             return _failed(f"this install is on {__version__} and is not settled — {gone_wrong}")
         _catalogs_checked(refreshing)
@@ -148,6 +155,14 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
         return _failed(str(why))
 
     holding = tempfile.mkdtemp(prefix="rundesk-update-")
+    were_up: List[str] = []
+    update_failure = ""
+    installed = False
+    settled = False
+    handed_to_the_tree = False
+    normalized = published.lstrip("v")
+    notes = release.release_url(normalized) or ""
+    restart_trouble = ""
     try:
         try:
             landed = _brought_down(published, Path(holding), fetching)
@@ -156,48 +171,179 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
 
         print(f"        installing {published}")
         try:
-            tree.place(landed, root)
-        except tree.HalfReplaced as why:
-            return _failed(str(why))
-        except (tree.Refused, OSError) as why:
-            return _failed(f"{why} — this install is unchanged")
+            # A host takes this same barrier before claiming an agent. One that wins first is
+            # visible to the preflight; one that arrives later cannot import-and-run across the
+            # swap, and refreshes its interpreter after the barrier opens.
+            with locking.only_one(
+                    paths.gateway_transition_lock(root), "gateways during this update",
+                    locking.WHILE_A_DIRECTORY_MOVES):
+                cycled = _the_gateways(gateways)
+                gone_wrong, were_up = _gateways_stood_down_for_update(
+                    root, normalized, cycled, _out_loud)
+                if gone_wrong:
+                    return _failed(gone_wrong)
+
+                # From here on whichever coherent tree remains must restart the gateways. Set
+                # before the call: an interrupt can land after `place` returns and before the
+                # next Python assignment, when the files are already the new release.
+                handed_to_the_tree = True
+                try:
+                    tree.place(landed, root)
+                    installed = True
+                except tree.HalfReplaced as why:
+                    update_failure = str(why)
+                except (tree.Refused, OSError) as why:
+                    update_failure = f"{why} — this install is unchanged"
+
+                if installed:
+                    # Built from the tree that just landed, not the imported old release.
+                    could_not = packages.built(paths.app(), building)
+                    if could_not:
+                        print(f"        packages   {could_not}", file=sys.stderr)
+                        print("        channels cannot be started until this works", file=sys.stderr)
+
+                    gone_wrong = settled_by_the_new_release(paths.code())
+                    if gone_wrong:
+                        update_failure = f"{published} is installed and was not settled — {gone_wrong}"
+                    else:
+                        settled = True
+                        try:
+                            config.moved(data=paths.data())
+                        except (config.Unreadable, config.Refused, config.Stuck) as why:
+                            print(f"update: {published} is installed and when it arrived was not "
+                                  f"recorded — {why}", file=sys.stderr)
+        except locking.Stuck as why:
+            return _failed(f"the gateways could not be held offline — {why}")
     finally:
         shutil.rmtree(holding, ignore_errors=True)
+        if were_up:
+            if handed_to_the_tree:
+                try:
+                    installed_code = paths.code()
+                except paths.Refused as why:
+                    restart_trouble = f"the release on disk could not be loaded to restart gateways: {why}"
+                else:
+                    restart_trouble = restarted_by_the_new_release(
+                        installed_code, were_up, normalized, notes, settled)
+            else:
+                restart_trouble = _said(_gateways_started_after_update(
+                    were_up, cycled, normalized, notes, False, _out_loud))
 
-    # **Built from the tree that just landed, not the one that was here.** A release brings its own
-    # `requirements.txt`, and an environment left by the previous one holds that one's packages —
-    # so what is installed would stop being what any release asked for. Reported and never fatal:
-    # rundesk runs on the standard library, so a machine that could not fetch has a working install
-    # and no channels, which is true and is not a broken update.
-    could_not = packages.built(paths.app(), building)
-    if could_not:
-        print(f"        packages   {could_not}", file=sys.stderr)
-        print("        channels cannot be started until this works", file=sys.stderr)
-
-    gone_wrong = settled_by_the_new_release(paths.code())
-    if gone_wrong:
-        # The files landed and the settling did not. Said plainly rather than rolled back: the new
-        # release is on disk, and what needs deciding is the data, which is untouched and still there.
-        print(f"update: {published} is installed and was not settled — {gone_wrong}",
-              file=sys.stderr)
-        print("        running it again will carry on from where this stopped", file=sys.stderr)
+    if update_failure:
+        if installed:
+            print(f"update: {update_failure}", file=sys.stderr)
+            print("        running it again will carry on from where this stopped", file=sys.stderr)
+        else:
+            _failed(update_failure)
+        if restart_trouble:
+            print(f"        {restart_trouble}", file=sys.stderr)
         return FAILED
+    if restart_trouble:
+        return _failed(restart_trouble)
 
-    # Recorded here, and only here, because this is the path where a version really arrived. The
-    # settling above runs on every update including one that found nothing newer, so stamping in
-    # there would move the answer forward every time anybody merely checked.
-    try:
-        config.moved(data=paths.data())
-    except (config.Unreadable, config.Refused, config.Stuck) as why:
-        print(f"update: {published} is installed and when it arrived was not recorded — {why}",
-              file=sys.stderr)
-
-    where = release.release_url(published.lstrip("v"))
     print(f"rundesk updated to {published}")
-    if where:
-        print(f"        what changed: {where}")
+    if notes:
+        print(f"        what changed: {notes}")
     _catalogs_checked(refreshing)
     return OK
+
+
+def _gateways_stood_down_for_update(root: Path, version: str, gateways: Gateways,
+                                      said: Callable[[str], None]) -> Tuple[str, List[str]]:
+    """Preflight and stop every online gateway before replacing the program tree."""
+    try:
+        names = directory.known()
+    except OSError as why:
+        return f"the gateways could not be listed before the update: {why}", []
+
+    online: List[str] = []
+    for name in names:
+        how = standing.standing(directory.where(name))
+        if how.how == standing.CANNOT_TELL:
+            return (f"nobody can tell whether the gateway for {name} is running — {how.why}; "
+                    "the update was not installed"), []
+        if how.how == standing.ONLINE:
+            online.append(name)
+
+    # Prove every live gateway can be restored before stopping the first. A foreground gateway with
+    # a name launchd cannot carry is supported, but only the terminal that owns it can start it; an
+    # unattended update therefore refuses while it is running instead of taking it away for good.
+    for name in online:
+        try:
+            job.job(name, directory.where(name), root)
+        except (directory.Refused, job.Refused, paths.Refused) as why:
+            return (f"the gateway for {name} is running but cannot be restarted after the update "
+                    f"({why}) — stop it in its terminal, then update", [])
+    were_up: List[str] = []
+    try:
+        for name in online:
+            at = directory.where(name)
+            # Recorded before the marker too: an interrupt may land after its atomic rename and
+            # before the next Python assignment, and recovery must consume that stale farewell.
+            were_up.append(name)
+            try:
+                maintenance.installing(at, version)
+            except (OSError, ValueError) as why:
+                trouble = f"the update notice for {name} could not be prepared ({why})"
+            else:
+                try:
+                    trouble = gateways.down(name)
+                finally:
+                    maintenance.clear(at)
+            if trouble:
+                restarted = _gateways_started_after_update(
+                    were_up, gateways, version, "", False, said)
+                also = f"; {_said(restarted)}" if restarted else ""
+                return f"the gateway for {name} would not stand down ({trouble}){also}", []
+            said(f"stood the gateway for {name} down for the update")
+    except BaseException:
+        # A second best-effort pass is intentional if recovery itself was interrupted. Starting an
+        # already-started job is idempotent; leaving a candidate offline is not.
+        _gateways_restarted_best_effort(were_up, gateways)
+        raise
+    return "", were_up
+
+
+def _gateways_started_after_update(were_up: List[str], gateways: Gateways, version: str,
+                                    notes: str, announce_installed: bool,
+                                    said: Callable[[str], None]) -> Dict[str, str]:
+    """Start exactly the gateways stopped for this update, with a proven success notice or none."""
+    gone_wrong: Dict[str, str] = {}
+    for index, name in enumerate(were_up):
+        at = directory.where(name)
+        try:
+            if announce_installed:
+                try:
+                    maintenance.installed(at, version, notes)
+                except (OSError, ValueError) as why:
+                    gone_wrong[name] = (
+                        f"the installed-update notice for {name} could not be prepared ({why})")
+            else:
+                maintenance.clear(at)
+
+            trouble = gateways.up(name)
+            if trouble:
+                maintenance.clear(at)
+                why = f"the gateway for {name} could not be started after the update ({trouble})"
+                gone_wrong[name] = (
+                    f"{gone_wrong[name]} — and {why}" if name in gone_wrong else why)
+                continue
+            said(f"started the gateway for {name} again")
+        except BaseException:
+            # The current call may have completed before interruption. Retry it and every untouched
+            # candidate; both job placement and marker clearing are safe to repeat.
+            _gateways_restarted_best_effort(were_up[index:], gateways)
+            raise
+    return gone_wrong
+
+
+def _gateways_restarted_best_effort(names: List[str], gateways: Gateways) -> None:
+    """Try every emergency restart even when marker cleanup or another restart fails."""
+    for name in names:
+        with contextlib.suppress(BaseException):
+            maintenance.clear(directory.where(name))
+        with contextlib.suppress(BaseException):
+            gateways.up(name)
 
 
 def _catalogs_checked(refreshing: Optional[Refreshing]) -> None:
@@ -480,6 +626,16 @@ _SETTLE = (
     "raise SystemExit(settle())"
 )
 
+#: The companion handoff after the update barrier opens. Restarting here — in the release that now
+#: stands on disk — keeps old imported job/shim/layout logic from recreating a superseded job.
+_RESTART_AFTER_UPDATE = (
+    "import sys;"
+    "sys.path.insert(0, sys.argv[1]);"
+    "from rundesk.commands.update import restart_after_update;"
+    "raise SystemExit(restart_after_update(sys.argv[2],sys.argv[3],"
+    "sys.argv[4]=='installed',sys.argv[5:]))"
+)
+
 
 def settled_by_the_new_release(code: Path) -> str:
     """Run the release now in `app/` to settle the install. `""` when it worked.
@@ -507,6 +663,37 @@ def settled_by_the_new_release(code: Path) -> str:
         return f"the installed release {ended.trouble}"
     if ended.code != 0:
         return the_reason(ended.err) or f"it ended {ended.code}"
+    return ""
+
+
+def restart_after_update(version: str, notes: str, announce_installed: bool,
+                         names: List[str], gateways: Optional[Gateways] = None) -> int:
+    """Restart update-stopped gateways using the release now imported in this process.
+
+    A stable internal handoff, not a command surface. `gateways` exists only for direct tests; the
+    update subprocess resolves the new release's own supervisor and job implementation here.
+    """
+    gone_wrong = _gateways_started_after_update(
+        names, _the_gateways(gateways), version, notes, announce_installed, _out_loud)
+    if gone_wrong:
+        print(_said(gone_wrong), file=sys.stderr)
+        return FAILED
+    return OK
+
+
+def restarted_by_the_new_release(code: Path, names: List[str], version: str, notes: str,
+                                 announce_installed: bool) -> str:
+    """Ask the release on disk to restart `names`. `""` only when every one came back."""
+    phase = "installed" if announce_installed else "ordinary"
+    ended = programs.run(
+        [sys.executable, "-c", _RESTART_AFTER_UPDATE, str(code), version, notes, phase, *names],
+        SETTLE_SECONDS + len(names) * job.KICK_SECONDS)
+    if ended.out:
+        sys.stdout.write(ended.out)
+    if ended.trouble:
+        return f"the installed release {ended.trouble} while restarting gateways"
+    if ended.code != 0:
+        return the_reason(ended.err) or f"the installed release ended {ended.code} restarting gateways"
     return ""
 
 

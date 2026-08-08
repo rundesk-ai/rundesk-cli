@@ -200,9 +200,9 @@ class HowItIsKeptOnDisk(Values):
         self.given(DISCORD_TOKEN=A_TOKEN)
         self.assertEqual(0o600, os.stat(secrets.key_at()).st_mode & 0o777)
 
-    def test_the_key_is_kept_where_a_copy_cannot_reach_it(self):
+    def test_the_key_is_kept_where_a_copy_can_reach_it(self):
         self.given(DISCORD_TOKEN=A_TOKEN)
-        self.assertNotIn(paths.data(), secrets.key_at().parents)
+        self.assertIn(paths.data(), secrets.key_at().parents)
 
     def test_a_value_written_by_a_shape_this_release_does_not_know_is_refused(self):
         files.write_json(secrets.where(), {"A_KEY": "v9:not:this:release"}, private=True)
@@ -247,10 +247,10 @@ class WhereTheBytesMayLand(Values):
     """A symlink decides where bytes go, and here that defeats the placement outright."""
 
     def test_the_key_is_not_written_through_a_link(self):
-        # A dangling `key` pointing into `data/` sends the one thing that opens every sealed value
-        # into the directory a backup copies — so an ordinary unattended copy carries it away.
+        # A dangling `key` can send the one thing that opens every sealed value somewhere Rundesk
+        # neither owns nor protects. Placement inside data does not make following a link safe.
         paths.secrets().mkdir(parents=True, exist_ok=True)
-        aimed = paths.data() / "cache" / "somewhere-a-copy-reaches"
+        aimed = self.home / "outside" / "somewhere-rundesk-does-not-own"
         aimed.parent.mkdir(parents=True, exist_ok=True)
         secrets.key_at().symlink_to(aimed)
 
@@ -263,6 +263,7 @@ class WhereTheBytesMayLand(Values):
     def test_the_directory_is_not_written_through_a_link(self):
         elsewhere = self.home / "elsewhere"
         elsewhere.mkdir()
+        paths.secrets().parent.mkdir(parents=True, exist_ok=True)
         paths.secrets().symlink_to(elsewhere)
         with self.assertRaises(secrets.Refused):
             secrets.stated("DISCORD_TOKEN", A_TOKEN)
@@ -305,6 +306,11 @@ class WhenTwoAreKeepingAValueAtOnce(Values):
             secrets.stated("DISCORD_TOKEN", A_TOKEN)
         self.assertIn("not a key this release can use", str(refused.exception))
 
+    def test_the_store_uses_the_install_lock_while_nested_under_data(self):
+        self.given(DISCORD_TOKEN=A_TOKEN)
+        self.assertTrue(paths.lock().is_file())
+        self.assertFalse((paths.data() / ".rundesk.lock").exists())
+
 
 class WhoCanReadIt(Values):
     """The permissions, and the fact that they are repaired rather than merely set once."""
@@ -343,40 +349,83 @@ class WhoCanReadIt(Values):
         self.assertIn(0o600, seen, "the staging file was not opened privately")
 
 
-class WhatACopyCannotContain(Values):
-    """The whole security of where these are kept: a backup is a copy of `data/` and nothing else."""
+class WhatACopyCarries(Values):
+    """Secrets are owner data, so a backup and restore carry the sealed store and its key."""
 
-    def test_a_credential_is_not_below_the_data_directory(self):
+    def test_a_credential_is_below_the_data_directory(self):
         self.given(DISCORD_TOKEN=A_TOKEN)
-        self.assertNotIn(paths.data(), secrets.where().parents)
+        self.assertIn(paths.data(), secrets.where().parents)
 
-    def test_a_backup_is_structurally_incapable_of_holding_one(self):
-        # Not "careful not to" — there is no code path from a copy to here, so there is none to
-        # get wrong. This is the reason the directory is where it is.
+    def test_a_backup_contains_the_sealed_store_and_the_key(self):
         paths.data().mkdir(parents=True, exist_ok=True)
         files.write_json(paths.data() / "config.json", {"backup_enabled": True})
         self.given(DISCORD_TOKEN=A_TOKEN)
 
         name = backups.save()
 
-        landed = [one for one in (paths.backups() / name).rglob("*") if one.is_file()]
-        self.assertTrue(landed, "the copy is empty, so this proves nothing")
-        for one in landed:
-            with self.subTest(file=one.name):
-                self.assertNotIn(A_TOKEN, one.read_text(errors="replace"))
+        copied = paths.backups() / name / "secrets"
+        self.assertEqual(secrets.where().read_bytes(), (copied / secrets.KEPT_IN).read_bytes())
+        self.assertEqual(secrets.key_at().read_bytes(), (copied / secrets.KEY_IN).read_bytes())
+        self.assertNotIn(A_TOKEN, (copied / secrets.KEPT_IN).read_text(encoding="utf-8"))
+        self.assertEqual(0o700, os.stat(copied).st_mode & 0o777)
+        self.assertEqual(0o600, os.stat(copied / secrets.KEY_IN).st_mode & 0o777)
+        self.assertEqual(0o600, os.stat(copied / secrets.KEPT_IN).st_mode & 0o777)
 
-    def test_a_restore_does_not_put_a_credential_back(self):
-        # The other half of the same decision, and the right way round: a value somebody typed once
-        # is not state a copy should be able to reinstate.
+    def test_a_backup_repairs_loose_secret_store_modes(self):
         paths.data().mkdir(parents=True, exist_ok=True)
         files.write_json(paths.data() / "config.json", {"backup_enabled": True})
-        name = backups.save()
         self.given(DISCORD_TOKEN=A_TOKEN)
+        os.chmod(paths.secrets(), 0o755)
+        os.chmod(secrets.key_at(), 0o644)
+        os.chmod(secrets.where(), 0o644)
+
+        name = backups.save()
+
+        copied = paths.backups() / name / "secrets"
+        self.assertEqual(0o700, os.stat(copied).st_mode & 0o777)
+        self.assertEqual(0o600, os.stat(copied / secrets.KEY_IN).st_mode & 0o777)
+        self.assertEqual(0o600, os.stat(copied / secrets.KEPT_IN).st_mode & 0o777)
+
+    def test_a_restore_puts_the_backed_up_credential_back(self):
+        paths.data().mkdir(parents=True, exist_ok=True)
+        files.write_json(paths.data() / "config.json", {"backup_enabled": True})
+        self.given(DISCORD_TOKEN=A_TOKEN)
+        name = backups.save()
+        secrets.stated("DISCORD_TOKEN", "a-newer-secret-value")
 
         backups.restore(name)
 
         self.assertEqual(A_TOKEN, secrets.value("DISCORD_TOKEN"),
-                         "a restore reached into the secrets")
+                         "the backed-up credential was not restored")
+
+    def test_a_restore_repairs_loose_modes_in_the_copy(self):
+        paths.data().mkdir(parents=True, exist_ok=True)
+        files.write_json(paths.data() / "config.json", {"backup_enabled": True})
+        self.given(DISCORD_TOKEN=A_TOKEN)
+        name = backups.save()
+        copied = paths.backups() / name / "secrets"
+        os.chmod(copied, 0o755)
+        os.chmod(copied / secrets.KEY_IN, 0o644)
+        os.chmod(copied / secrets.KEPT_IN, 0o644)
+
+        backups.restore(name)
+
+        self.assertEqual(0o700, os.stat(paths.secrets()).st_mode & 0o777)
+        self.assertEqual(0o600, os.stat(secrets.key_at()).st_mode & 0o777)
+        self.assertEqual(0o600, os.stat(secrets.where()).st_mode & 0o777)
+
+    def test_a_link_cannot_make_a_finished_copy_contain_an_external_store(self):
+        paths.data().mkdir(parents=True, exist_ok=True)
+        files.write_json(paths.data() / "config.json", {"backup_enabled": True})
+        elsewhere = self.home / "elsewhere"
+        elsewhere.mkdir()
+        paths.secrets().symlink_to(elsewhere)
+
+        with self.assertRaises(backups.Refused) as refused:
+            backups.save()
+
+        self.assertIn("link", str(refused.exception))
+        self.assertEqual([], backups.kept())
 
 
 class WhenRundeskIsRemoved(Values):
@@ -390,13 +439,13 @@ class WhenRundeskIsRemoved(Values):
         self.given(DISCORD_TOKEN=A_TOKEN)
 
     def test_an_ordinary_removal_keeps_them(self):
-        # They are the owner's. Taking a token away because somebody uninstalled a program is not
-        # what they asked for, and it is not recoverable from a backup either — see the placement.
+        # They are owner data. Taking a token away because somebody uninstalled a program is not
+        # what they asked for, and the data directory is kept as one unit.
         code, out, _ = self.rundesk("uninstall", "--confirm")
         self.assertEqual(OK, code)
         self.assertTrue(paths.secrets().is_dir())
         self.assertEqual(A_TOKEN, secrets.value("DISCORD_TOKEN"))
-        self.assertIn(str(paths.secrets()), out)
+        self.assertIn(str(paths.data()), out)
 
     def test_a_purge_takes_them(self):
         # A purge takes what the owner accumulated, and a credential left lying on a machine
@@ -404,7 +453,7 @@ class WhenRundeskIsRemoved(Values):
         code, out, _ = self.rundesk("uninstall", "--confirm", "--purge")
         self.assertEqual(OK, code)
         self.assertFalse(paths.secrets().exists())
-        self.assertIn(str(paths.secrets()), out)
+        self.assertIn(str(paths.data()), out)
 
     def test_a_purge_takes_the_key_with_them(self):
         # A key left behind is not harmless: it is half of what somebody needs if they also have
@@ -415,9 +464,10 @@ class WhenRundeskIsRemoved(Values):
     def test_what_it_would_do_matches_what_it_does(self):
         # The dry run is the only thing somebody reads before agreeing to it.
         _, _, would = self.rundesk("uninstall", "--purge")
-        self.assertIn(str(paths.secrets()), would)
+        self.assertIn(str(paths.data()), would)
         self.assertIn("take", would)
         _, _, would_keep = self.rundesk("uninstall")
+        self.assertIn(str(paths.data()), would_keep)
         self.assertIn("keep", would_keep)
 
     def test_no_removal_ever_prints_a_value(self):

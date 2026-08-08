@@ -62,6 +62,9 @@ GATEWAY_LOCK = "gateway.lock"
 #: What the running gateway wrote down about itself. Inside the agent's directory, never beside it.
 GATEWAY_RECORD = "gateway.json"
 
+#: A transient one-shot update handoff. Backups omit it so restoring owner data cannot replay one.
+UPDATE_INTENT = "gateway-update.json"
+
 #: What a firing leaves beside itself: the lock the running one holds, what started it, and what it
 #: wrote. Inside the agent's directory, never beside it — the same rule as `gateway.lock`, and for
 #: the same reason: `<schedule>.lock` inside `foo/` and inside `foo.log/` are two different files,

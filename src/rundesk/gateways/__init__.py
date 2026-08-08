@@ -13,6 +13,7 @@ guests is a host nobody can say anything true about.
 | `awake` | holding and proving the macOS idle-system-sleep assertion for exactly one live gateway |
 | `standing` | whether a gateway is online, offline, or something nobody can tell — and, when it never came up, where the only account of that is |
 | `job` | handing one gateway to the machine's supervisor, and the four ways of asking whether it is really there |
+| `maintenance` | one-shot update notices handed from the old gateway process to the new one |
 | `host` | the gateway process itself: what it refuses to run for, and the one exit code launchd reads |
 
 **`host` may not import `job`, and that is a rule rather than an accident.** A process never talks

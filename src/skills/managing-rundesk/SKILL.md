@@ -48,8 +48,8 @@ to identify the exact target and consequence. Most groups list when called with 
   or forced gateway shutdown. Name the exact target.
 - Run a guarded command without `--confirm` first when it offers a preview. Add `--confirm` only
   after the preview matches the request.
-- Save a backup before an approved destructive change. A backup excludes credentials, so it cannot
-  recover a lost secret.
+- Save a backup before an approved destructive change. A backup contains the sealed credential store
+  and its key, so protect its location as credential-bearing data.
 - Never ask for a credential in chat or pass one as an argument. Tell the owner to run
   `"$RUNDESK_COMMAND" env set <NAME>` in their own terminal.
 - Prefer diagnosis before restart: inspect status, listings, logs, and the relevant `doctor` or

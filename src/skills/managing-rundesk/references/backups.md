@@ -1,7 +1,8 @@
 # Backups
 
-Backups copy the install's durable `data`. They do not include credentials, program releases, or the
-backup directory itself.
+Backups copy the install's durable `data`, including the sealed credential store and its key. They do
+not include program releases or the backup directory itself. Treat every copy as credential-bearing
+data: sealing does not protect a complete store from somebody who has its key beside it.
 
 ## Commands
 
@@ -33,7 +34,6 @@ replaced, but that does not make an accidental restore harmless.
   verify the reported location before relying on it.
 - `configure --backup-enabled` controls the safety copy made before an update carries outstanding
   install migrations. `--backup-retention` controls how many copies a manual save keeps.
-- Credentials live separately and are never restored. Diagnose missing values with `env` and
-  `skills doctor`; have the owner type replacements at their terminal.
-- Backups are never removed by uninstall, including purge. Keep an external copy when machine loss
-  is part of the threat model.
+- Backups restore the credential state they contain.
+- Backups are never removed by uninstall, including purge. Protect external copies and their media;
+  purging the live install does not erase recoverable credentials in backups.

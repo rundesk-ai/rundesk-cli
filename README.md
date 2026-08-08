@@ -292,7 +292,7 @@ First-party optional integrations use the same contract:
 - [Apple skills](https://github.com/rundesk-ai/rundesk-skills-apple) — Calendar, Contacts,
   Mail, and Messages on macOS.
 - [Integration skills](https://github.com/rundesk-ai/rundesk-skills-integrations) —
-  Cloudflare, Confluence, Coolify, Jira, and Sentry.
+  Cloudflare, Confluence, Coolify, Discord, Jira, Monarch Money, Sentry, and Stripe.
 
 Each command is packaged inside its skill. Service integrations use the system Python standard
 library; Apple integrations use macOS system frameworks and tools. Neither catalog installs
@@ -305,7 +305,7 @@ dotenv option.
 - Manual and automatic daily backups, restore, and configurable backup location
 - One set of environment values every program rundesk starts is given, so integration
   commands find their credentials without anything being exported — held here or fetched
-  by a command you name, never shown in full, and kept where no backup can carry them
+  by a command you name, never shown in full, and included in protected backups
 - Program files under `~/.rundesk/app`; agent data and configuration under
   `~/.rundesk/data`
 - Agent removal that preserves its home unless purge is explicitly requested

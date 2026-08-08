@@ -16,7 +16,8 @@ So it names what it takes, one thing at a time, and never globs:
 - `data/`, **only when `--purge` asks for it** — that is what the owner accumulated
 - `backups/`, **never**. Not "not by default": there is no argument to this command that reaches
   them. A copy is worth nothing if the thing that takes the product away takes the copies too, and
-  the way to guarantee that is for this file never to name the directory at all.
+  the way to guarantee that is for this file never to remove the directory. Copies now include
+  credentials, so purging the live store does not remove every recoverable credential.
 - `$RUNDESK_HOME` itself, only once nothing is left in it — so a purge tidies up and a plain removal
   leaves the root standing over the data it kept.
 
@@ -123,17 +124,6 @@ def cmd_uninstall(args: argparse.Namespace,
             taken.append(str(paths.data()))
         else:
             kept.append(str(paths.data()))
-
-    if paths.secrets().exists():
-        if args.purge:
-            # A purge takes what the owner accumulated, and a credential left behind on a machine
-            # rundesk has been removed from is the worst thing here to leave lying about.
-            gone_wrong = _purge(paths.secrets())
-            if gone_wrong:
-                return _failed(gone_wrong)
-            taken.append(str(paths.secrets()))
-        else:
-            kept.append(f"{paths.secrets()} (the values you placed)")
 
     if paths.backups().exists():
         kept.append(f"{paths.backups()} (copies always survive removal)")
@@ -321,9 +311,6 @@ def _needs_confirming(root: Path, purging: bool) -> int:
               "included", file=sys.stderr)
     else:
         print(f"        keep   {paths.data()}", file=sys.stderr)
-    if paths.secrets().exists():
-        print(f"        {'take  ' if purging else 'keep  '} {paths.secrets()} — the values you placed",
-              file=sys.stderr)
     print(f"        keep   {paths.backups()}", file=sys.stderr)
     print("        nothing was removed. To go ahead:", file=sys.stderr)
     print(f"        rundesk uninstall --confirm{' --purge' if purging else ''}", file=sys.stderr)
@@ -352,10 +339,11 @@ def _let_go_of_the_lock() -> None:
     no reason to have heard of it — but removed all the same, because a root left standing over one
     dotfile is a removal that visibly did not finish.
     """
-    try:
-        paths.lock().unlink()
-    except OSError:
-        pass
+    for one in (paths.lock(), paths.gateway_transition_lock()):
+        try:
+            one.unlink()
+        except OSError:
+            pass
 
 
 def _tidy(root: Path) -> None:

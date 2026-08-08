@@ -38,12 +38,12 @@ from rundesk.channels import files as arrivals
 from rundesk.channels import kept as channels
 from rundesk.core import config, paths
 from rundesk.exits import OK
-from rundesk.gateways import host, job, standing
+from rundesk.gateways import host, job, maintenance, standing
 from rundesk.providers import kept as turns_kept
 from rundesk.providers import protocol
 from rundesk.schedules import firing, kept
 from rundesk.skills import catalogs, grants, library
-from rundesk.utils import logs, programs
+from rundesk.utils import locking, logs, programs
 
 #: How a gateway is started here: the same handoff the job's shim performs, so what these cases run
 #: is what launchd runs. Deliberately not `cli.main` — there is no verb for this, and inventing one
@@ -55,9 +55,9 @@ from rundesk.utils import logs, programs
 #: suite a minute of sleeping; the constant is read on every pass, so lowering it changes when the
 #: loop comes round and nothing else. Every case that is not about the loop leaves it alone.
 A_GATEWAY = """
-import contextlib, sys
+import contextlib, os, sys
 sys.path.insert(0, {src!r})
-from rundesk.gateways import awake, standing
+from rundesk.gateways import awake, maintenance, standing
 standing.BEAT_SECONDS = {beat!r}
 from rundesk.gateways.host import run
 
@@ -71,6 +71,12 @@ def no_machine_assertion():
 
 
 awake.while_running = no_machine_assertion
+if os.environ.get("RUNDESK_TEST_REENTER"):
+    def fresh(_name):
+        from pathlib import Path
+        Path(os.environ["RUNDESK_TEST_REENTER_PROOF"]).write_text("fresh")
+        os.execv(sys.executable, [sys.executable, "-c", os.environ["RUNDESK_TEST_GATEWAY_BODY"]])
+    maintenance.fresh = fresh
 raise SystemExit(run({name!r}))
 """
 
@@ -148,7 +154,7 @@ class WithAnAgent(support.Isolated):
                 child.wait(timeout=self.PATIENCE)
 
     def hosting(self, name: Optional[str] = None, out: Optional[Path] = None,
-                beat: float = standing.BEAT_SECONDS) -> subprocess.Popen:
+                beat: float = standing.BEAT_SECONDS, refreshing: bool = False) -> subprocess.Popen:
         """Start a real gateway process, with its output captured the way launchd captures it.
 
         **The file is opened here and inherited there**, `O_APPEND`, which is the whole of how a
@@ -158,11 +164,16 @@ class WithAnAgent(support.Isolated):
         """
         where = out or self.said
         body = A_GATEWAY.format(src=str(support.CHECKOUT / "src"), name=name or self.name, beat=beat)
+        environment = os.environ.copy()
+        if refreshing:
+            environment["RUNDESK_TEST_REENTER"] = "1"
+            environment["RUNDESK_TEST_REENTER_PROOF"] = str(self.home / "reentered")
+            environment["RUNDESK_TEST_GATEWAY_BODY"] = body
         with open(where, "ab") as writing:
             child = subprocess.Popen(
                 [sys.executable, "-c", body],
                 stdin=subprocess.DEVNULL, stdout=writing, stderr=subprocess.STDOUT,
-                start_new_session=True)
+                start_new_session=True, env=environment)
         self.started.append(child)
         return child
 
@@ -274,6 +285,24 @@ class TheVeryFirstThingItSays(WithAnAgent):
     def test_a_gateway_that_comes_up_says_it_too(self):
         self.a_running_gateway()
         self.assertIn(f"pid {self.started[0].pid}", self.what_it_said().splitlines()[0])
+
+
+class StartingWhileAnUpdateOwnsTheInstall(WithAnAgent):
+    """The cross-process barrier: no old imported gateway may claim during an update."""
+
+    def test_it_waits_then_refreshes_before_claiming_the_agent(self):
+        with locking.only_one(paths.gateway_transition_lock(), "the test update"):
+            child = self.hosting(refreshing=True)
+            self.assertTrue(support.waited_until(
+                lambda: "this process is pid" in self.what_it_said(), 2.0), self.what_it_said())
+            time.sleep(0.1)
+            self.assertIsNone(self.holder(), "the gateway claimed its agent inside the update")
+            self.assertIsNone(child.poll(), "the blocked gateway exited instead of waiting")
+
+        self.assertTrue(support.waited_until(
+            lambda: (self.home / "reentered").is_file(), self.PATIENCE), self.what_it_said())
+        self.assertTrue(support.waited_until(
+            lambda: self.holder() == child.pid, self.PATIENCE), self.what_it_said())
 
 
 class WhatItRefusesToRunFor(WithAnAgent):
@@ -1090,6 +1119,20 @@ class TheChannelsItHosts(WithAnAgent):
         self.assertNotIn(__version__, self.was_heard())
         self.assertNotIn(str(self.name) + " on", self.was_heard())
 
+    def test_a_gateway_returning_from_an_update_names_and_links_the_installed_release(self):
+        self.an_adapter()
+        self.a_channel()
+        notes = f"https://github.com/rundesk-ai/rundesk-cli/releases/tag/v{__version__}"
+        maintenance.installed(self.at, __version__, notes)
+
+        self.a_running_gateway(beat=self.A_SHORT_BEAT)
+
+        expected = maintenance.INSTALLED.format(version=__version__, notes=notes)
+        self.assertTrue(support.waited_until(lambda: expected in self.was_heard(), self.PATIENCE),
+                        f"nobody was told. It said: {self.its_log()}")
+        self.assertNotIn(host.CAME_UP, self.was_heard())
+        self.assertFalse((self.at / maintenance.MARKER).exists())
+
     def test_an_agent_that_tells_nobody_anything_is_a_gateway_that_says_nothing(self):
         # `delivery.notice` answers `None`, which is an ordinary answer rather than a failure: an
         # agent with no notified channel is one somebody configured to be quiet.
@@ -1121,6 +1164,23 @@ class TheChannelsItHosts(WithAnAgent):
             lambda: host.WENT_DOWN in self.was_heard(), self.PATIENCE),
             f"it went down without telling anybody. It heard: {self.was_heard()}")
         self.assertEqual(OK, child.returncode)
+
+    def test_a_gateway_stood_down_for_an_update_uses_the_maintenance_notice(self):
+        self.an_adapter()
+        self.a_channel()
+        child = self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(lambda: host.CAME_UP in self.was_heard(),
+                                             self.PATIENCE), self.its_log())
+        maintenance.installing(self.at, "0.37.0")
+
+        os.kill(child.pid, signal.SIGTERM)
+        self.assertTrue(support.waited_until(lambda: child.poll() is not None, self.PATIENCE))
+
+        self.assertTrue(support.waited_until(
+            lambda: maintenance.INSTALLING in self.was_heard(), self.PATIENCE),
+            f"it went down without the update notice. It heard: {self.was_heard()}")
+        self.assertNotIn(host.WENT_DOWN, self.was_heard())
+        self.assertFalse((self.at / maintenance.MARKER).exists())
 
     def test_a_schedule_that_failed_is_told_and_one_that_worked_is_not(self):
         # **The restraint is the guarantee.** A notice for every successful nightly job is how

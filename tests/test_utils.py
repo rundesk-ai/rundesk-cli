@@ -440,9 +440,16 @@ class TakingTurns(support.Isolated):
 
     def test_a_lock_that_comes_free_is_simply_taken(self):
         holding = self.held_by_something_else()
-        fcntl.flock(holding, fcntl.LOCK_UN)
-        with locking.only_one(self.at):
-            pass
+        released = threading.Thread(target=lambda: (time.sleep(0.03),
+                                                     fcntl.flock(holding, fcntl.LOCK_UN)))
+        released.start()
+        with locking.only_one(self.at, waiting=1) as waited:
+            self.assertTrue(waited)
+        released.join(1)
+
+    def test_an_immediate_lock_says_it_did_not_wait(self):
+        with locking.only_one(self.at) as waited:
+            self.assertFalse(waited)
 
     def test_a_non_creating_probe_distinguishes_missing_free_and_held(self):
         self.assertFalse(locking.is_held(self.at))

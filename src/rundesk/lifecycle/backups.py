@@ -92,13 +92,14 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, ContextManager, List, NamedTuple, Optional
 
 from rundesk.agents import directory, records
 from rundesk.agents import migration as agent_migration
-from rundesk.core import config, paths
+from rundesk.core import config, paths, secrets
 from rundesk.lifecycle import migration
 from rundesk.utils import files, locking
 
@@ -289,10 +290,12 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
         files.discard(pending)
         try:
             shutil.copytree(from_where, pending, symlinks=True)
+            _without_update_intents(pending)
             # **Before the rename, so a copy is never named like one until every database in it is
             # a snapshot.** After it, the window between a copy appearing under its own name and
             # its records being made consistent is a window a restore can happen in.
             _snapshotted(from_where, pending, said)
+            _private_secrets(pending / "secrets")
             os.rename(pending, at / name)
         except BaseException:
             # `BaseException`: a Ctrl-C, or a closed terminal turned into one, is not an
@@ -318,6 +321,14 @@ def _snapshotted(from_where: Path, pending: Path, said: Callable[[str], None]) -
     for copied in sorted(pending.rglob(directory.RECORDS)):
         if copied.is_file() and not copied.is_symlink():
             _a_snapshot(from_where / copied.relative_to(pending), copied, said)
+
+
+def _without_update_intents(pending: Path) -> None:
+    """Omit transient process handoffs from the agent directories in a staged copy."""
+    for copied in sorted(pending.rglob(directory.RECORDS)):
+        transient = copied.parent / directory.UPDATE_INTENT
+        if transient.exists() or transient.is_symlink():
+            files.remove_one(transient)
 
 
 def _a_snapshot(live: Path, copied: Path, said: Callable[[str], None]) -> None:
@@ -454,7 +465,13 @@ def restorable(at: Path, name: str) -> bool:
     ask before it lets somebody believe they are covered.
     """
     where = at / name
-    return where.is_dir() and _has_the_mark(where)
+    if not where.is_dir() or not _has_the_mark(where):
+        return False
+    try:
+        _valid_secrets(where / "secrets")
+    except (Refused, OSError):
+        return False
+    return True
 
 
 def restore(name: str, data: Optional[Path] = None, backups: Optional[Path] = None,
@@ -687,6 +704,7 @@ def _a_copy(at: Path, name: str) -> Path:
         raise Refused(
             f"{name} has no readable {THE_MARK}, so it is not a copy of an install's data — "
             "putting it back would leave rundesk unable to tell how far it has been carried")
+    _valid_secrets(where / "secrets")
     return where
 
 
@@ -718,6 +736,7 @@ def _swap(a_copy: Path, into: Path) -> None:
 
     try:
         shutil.copytree(a_copy, pending, symlinks=True)
+        _private_secrets(pending / "secrets")
     except BaseException:
         files.discard(pending)
         raise
@@ -740,6 +759,70 @@ def _swap(a_copy: Path, into: Path) -> None:
             _put_back(aside, into)
         raise
     files.discard(aside)
+
+
+def _private_secrets(at: Path) -> None:
+    """Validate and tighten a copied secrets store when one is present.
+
+    A backup contains the key beside the sealed values, so links are not an owner convenience here:
+    they can make a copy claim credentials it does not contain or point a restore outside its staged
+    tree. Every check happens before a staged copy receives its finished name or replaces `data/`.
+    """
+    _valid_secrets(at)
+    if not at.exists() and not at.is_symlink():
+        return
+    at.chmod(secrets.ONLY_MINE)
+    for name in (secrets.KEY_IN, secrets.KEPT_IN):
+        one = at / name
+        if one.exists():
+            one.chmod(files.ONLY_MINE)
+
+
+def _valid_secrets(at: Path) -> None:
+    """Refuse a copied secrets store whose shape could escape or cannot be restored.
+
+    Non-mutating so retention can ask whether a copy is genuinely restorable without changing the
+    owner's backup. Permission tightening belongs only to a fresh staged save or restore.
+    """
+    if not at.exists() and not at.is_symlink():
+        return
+    if at.is_symlink():
+        raise Refused(f"{at} is a link, and a secrets store may not be copied through one")
+    try:
+        mode = at.lstat().st_mode
+    except OSError as why:
+        raise Refused(f"{at} cannot be inspected: {why}") from why
+    if not stat.S_ISDIR(mode):
+        raise Refused(f"{at} is not a directory")
+
+    for entry in at.iterdir():
+        if entry.is_symlink():
+            raise Refused(f"{entry} is a link, and a secrets store may not contain one")
+        try:
+            entry_mode = entry.lstat().st_mode
+        except OSError as why:
+            raise Refused(f"{entry} cannot be inspected: {why}") from why
+        if not stat.S_ISREG(entry_mode):
+            raise Refused(f"{entry} is not a regular file")
+
+    values = at / secrets.KEPT_IN
+    key = at / secrets.KEY_IN
+    if key.exists() and len(key.read_bytes()) < 32:
+        raise Refused(f"{key} is not a key this release can use")
+    if not values.exists():
+        return
+
+    how, sealed = files.read_json(values)
+    if how != files.READ or not isinstance(sealed, dict):
+        raise Refused(f"{values} is not a readable store of sealed values")
+    if any(value is not None for value in sealed.values()) and not key.exists():
+        raise Refused(f"{values} holds sealed values without {key}, so they cannot be restored")
+    for name, held in secrets.kept(at).items():
+        trouble = secrets.name_trouble(name)
+        if trouble:
+            raise Refused(f"{values} contains {trouble}")
+        if held.trouble:
+            raise Refused(f"{values} contains {name}, which {held.trouble}")
 
 
 def _put_back(aside: Path, into: Path) -> None:

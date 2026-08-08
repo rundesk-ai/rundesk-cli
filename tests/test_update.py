@@ -13,6 +13,7 @@ one layer further down, and still leaves nothing able to reach the network.
 Run directly: `python3 tests/test_update.py`
 """
 
+import argparse
 import contextlib
 import io
 import os
@@ -32,7 +33,7 @@ from rundesk.agents import migration as agent_migration
 from rundesk.commands import update as the_update
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
-from rundesk.gateways import standing
+from rundesk.gateways import maintenance, standing
 from rundesk.lifecycle import backups, migration, release, tree
 from rundesk.skills import grants, library
 
@@ -590,9 +591,10 @@ class AFakeGateway:
     and a case about one that will not start again are the same object with a different argument.
     """
 
-    def __init__(self, refusing_down=(), refusing_up=()):
+    def __init__(self, refusing_down=(), refusing_up=(), events=None):
         self.went_down: List[str] = []
         self.came_up: List[str] = []
+        self.events = events if events is not None else []
         self._refusing_down = set(refusing_down)
         self._refusing_up = set(refusing_up)
 
@@ -600,13 +602,210 @@ class AFakeGateway:
         if name in self._refusing_down:
             return "it would not stop"
         self.went_down.append(name)
+        self.events.append(f"down:{name}")
         return ""
 
     def up(self, name: str) -> str:
         if name in self._refusing_up:
             return "it would not start"
         self.came_up.append(name)
+        self.events.append(f"up:{name}")
         return ""
+
+
+class EveryGatewayDuringAReleaseUpdate(Updating):
+    """An actual release swap cycles all online gateways, even with no migration waiting."""
+
+    def an_agent(self, name: str) -> Path:
+        return directory.made(name, "anthropic")
+
+    def directly(self, gateways, published="v99.0.0", archive=None, restarting=None):
+        out, err = io.StringIO(), io.StringIO()
+        if restarting is None:
+            def restarting(_code, names, version, notes, announce):
+                code = the_update.restart_after_update(
+                    version, notes, announce, names, gateways=gateways)
+                return "the new release could not restart every gateway" if code else ""
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with mock.patch.object(the_update, "restarted_by_the_new_release",
+                                   side_effect=restarting):
+                code = the_update.cmd_update(
+                    argparse.Namespace(), asking=lambda: (published, None),
+                    fetching=self.fetching(archive) if archive is not None else None,
+                    gateways=gateways)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_every_online_gateway_is_down_across_swap_and_settle_then_started(self):
+        self.an_agent("alpha")
+        self.an_agent("beta")
+        events: List[str] = []
+        gateways = AFakeGateway(events=events)
+        really_place = tree.place
+
+        def placed(*args, **kwargs):
+            events.append("place")
+            return really_place(*args, **kwargs)
+
+        def settled(_code):
+            events.append("settle")
+            return ""
+
+        with standing.holding(directory.where("alpha")):
+            with mock.patch.object(tree, "place", side_effect=placed), \
+                    mock.patch.object(the_update, "settled_by_the_new_release", side_effect=settled):
+                code, _, err = self.directly(gateways, archive=self.an_archive())
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual(["down:alpha", "place", "settle", "up:alpha"], events)
+        self.assertEqual([], gateways.went_down[1:], "an offline gateway was cycled")
+        expected = maintenance.INSTALLED.format(
+            version="99.0.0", notes=release.release_url("99.0.0"))
+        self.assertEqual(expected, maintenance.starting(directory.where("alpha"), "99.0.0"))
+
+    def test_a_fetch_failure_and_an_up_to_date_check_cycle_nothing(self):
+        self.an_agent("alpha")
+        gateways = AFakeGateway()
+
+        with standing.holding(directory.where("alpha")):
+            code, _, _ = self.directly(gateways, published=f"v{__version__}")
+        self.assertEqual(OK, code)
+        self.assertEqual([], gateways.went_down)
+
+        def refused(_url, _into):
+            raise OSError("offline")
+
+        with standing.holding(directory.where("alpha")):
+            with mock.patch.object(self, "fetching", return_value=refused):
+                code, _, _ = self.directly(gateways, archive=self.an_archive())
+        self.assertEqual(FAILED, code)
+        self.assertEqual([], gateways.went_down)
+
+    def test_a_gateway_that_will_not_stop_prevents_the_swap(self):
+        self.an_agent("alpha")
+        gateways = AFakeGateway(refusing_down=("alpha",))
+
+        with standing.holding(directory.where("alpha")):
+            code, _, err = self.directly(gateways, archive=self.an_archive())
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("would not stand down", err)
+        self.assertEqual("before", (paths.app() / "README.md").read_text())
+        self.assertFalse((directory.where("alpha") / maintenance.MARKER).exists())
+
+    def test_a_foreground_gateway_that_launchd_cannot_restore_prevents_the_swap(self):
+        self.an_agent("my agent")
+        gateways = AFakeGateway()
+
+        with standing.holding(directory.where("my agent")):
+            code, _, err = self.directly(gateways, archive=self.an_archive())
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("cannot be restarted", err)
+        self.assertEqual([], gateways.went_down)
+        self.assertEqual("before", (paths.app() / "README.md").read_text())
+
+    def test_an_interrupt_during_the_second_stop_recovers_every_candidate(self):
+        self.an_agent("alpha")
+        self.an_agent("beta")
+        gateways = AFakeGateway()
+        really_down = gateways.down
+
+        def interrupted(name):
+            if name == "beta":
+                raise KeyboardInterrupt
+            return really_down(name)
+
+        gateways.down = interrupted
+        with standing.holding(directory.where("alpha")):
+            with standing.holding(directory.where("beta")):
+                with self.assertRaises(KeyboardInterrupt):
+                    self.directly(gateways, archive=self.an_archive())
+
+        self.assertCountEqual(["alpha", "beta"], gateways.came_up)
+        self.assertEqual("before", (paths.app() / "README.md").read_text())
+        for name in ("alpha", "beta"):
+            self.assertFalse((directory.where(name) / maintenance.MARKER).exists())
+
+    def test_an_interrupt_during_restart_retries_that_gateway_and_every_remaining_one(self):
+        for name in ("alpha", "beta", "gamma"):
+            self.an_agent(name)
+        gateways = AFakeGateway()
+        interrupted = False
+
+        def up(name):
+            nonlocal interrupted
+            if name == "beta" and not interrupted:
+                interrupted = True
+                raise KeyboardInterrupt
+            trouble = AFakeGateway.up(gateways, name)
+            maintenance.starting(directory.where(name), "0.37.0")
+            return trouble
+
+        gateways.up = up
+        with self.assertRaises(KeyboardInterrupt):
+            the_update.restart_after_update(
+                "0.37.0", "https://example.test/v0.37.0", True,
+                ["alpha", "beta", "gamma"], gateways=gateways)
+
+        self.assertEqual(["alpha", "beta", "gamma"], gateways.came_up)
+        for name in ("alpha", "beta", "gamma"):
+            self.assertFalse((directory.where(name) / maintenance.MARKER).exists())
+
+    def test_a_settle_failure_restarts_without_claiming_the_update_was_installed(self):
+        self.an_agent("alpha")
+        gateways = AFakeGateway()
+
+        with standing.holding(directory.where("alpha")):
+            with mock.patch.object(the_update, "settled_by_the_new_release",
+                                   return_value="migration failed"):
+                code, _, err = self.directly(gateways, archive=self.an_archive())
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("was not settled", err)
+        self.assertEqual(["alpha"], gateways.came_up)
+        self.assertFalse((directory.where("alpha") / maintenance.MARKER).exists())
+
+    def test_a_restart_failure_is_nonzero_and_cannot_replay_a_success_notice(self):
+        self.an_agent("alpha")
+        gateways = AFakeGateway(refusing_up=("alpha",))
+
+        with standing.holding(directory.where("alpha")):
+            with mock.patch.object(the_update, "settled_by_the_new_release", return_value=""):
+                code, _, err = self.directly(gateways, archive=self.an_archive())
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("could not be started", err)
+        self.assertFalse((directory.where("alpha") / maintenance.MARKER).exists())
+
+
+class RestartingThroughTheInstalledRelease(support.Isolated):
+    """The old updater names the work; the code now on disk is what performs it."""
+
+    def test_the_restart_handoff_imports_the_release_it_is_given(self):
+        code = self.home / "new-release"
+        commands = code / "rundesk" / "commands"
+        commands.mkdir(parents=True)
+        (code / "rundesk" / "__init__.py").write_text("", encoding="utf-8")
+        (commands / "__init__.py").write_text("", encoding="utf-8")
+        proof = self.home / "restarted-by.txt"
+        os.environ["RUNDESK_RESTART_PROOF"] = str(proof)
+        self.addCleanup(os.environ.pop, "RUNDESK_RESTART_PROOF", None)
+        (commands / "update.py").write_text(
+            "import os\n"
+            "from pathlib import Path\n"
+            "def restart_after_update(version, notes, announce, names):\n"
+            "    Path(os.environ['RUNDESK_RESTART_PROOF']).write_text(\n"
+            "        '|'.join([version, notes, str(announce), *names]))\n"
+            "    return 0\n",
+            encoding="utf-8")
+
+        trouble = the_update.restarted_by_the_new_release(
+            code, ["alpha", "beta"], "0.37.0", "https://example.test/v0.37.0", True)
+
+        self.assertEqual("", trouble)
+        self.assertEqual(
+            "0.37.0|https://example.test/v0.37.0|True|alpha|beta",
+            proof.read_text(encoding="utf-8"))
 
 
 class TheGatewaySeam(support.Isolated):

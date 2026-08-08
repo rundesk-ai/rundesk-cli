@@ -30,7 +30,7 @@ from rundesk.agents import migration as agent_migration
 from rundesk.commands import backups as command
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
-from rundesk.gateways import standing
+from rundesk.gateways import maintenance, standing
 from rundesk.lifecycle import backups
 from rundesk.utils import files
 
@@ -248,6 +248,15 @@ class MakingOne(Copies):
         name = backups.save(self.data, self.at, A_MOMENT)
         self.assertTrue((self.at / name / "config.json").is_file())
 
+    def test_a_copy_omits_the_transient_gateway_update_notice(self):
+        agent = directory.made("cole", "anthropic")
+        maintenance.installed(agent, "0.37.0", "https://example.test/v0.37.0")
+
+        name = backups.save(self.data, self.at, A_MOMENT)
+
+        self.assertTrue((agent / maintenance.MARKER).is_file(), "the live intent was changed")
+        self.assertFalse((self.at / name / "agents" / "cole" / maintenance.MARKER).exists())
+
     def test_it_makes_the_directory_when_there_is_not_one_yet(self):
         shutil.rmtree(self.at)
         backups.save(self.data, self.at, A_MOMENT)
@@ -337,6 +346,20 @@ class LettingGoOfOldOnes(Copies):
         self.assertTrue((self.at / "2020-01-01T00-00-00Z").is_dir(),
                         "the only restorable copy was let go of")
 
+    def test_a_copy_with_linked_secrets_never_evicts_one_that_can_be_put_back(self):
+        self.given_copy("2020-01-01T00-00-00Z")
+        broken = self.at / "2026-08-04T00-00-00Z"
+        self.given_copy(broken.name)
+        elsewhere = self.home / "outside-secrets"
+        elsewhere.mkdir()
+        (broken / "secrets").symlink_to(elsewhere)
+
+        self.assertFalse(backups.restorable(self.at, broken.name))
+        backups.prune(1, self.at)
+
+        self.assertTrue((self.at / "2020-01-01T00-00-00Z").is_dir(),
+                        "invalid secrets evicted the only restorable copy")
+
     def test_it_leaves_a_copy_it_cannot_read_alone_rather_than_sweeping_it(self):
         # Still the owner's, and rundesk cannot say what is in it. Quietly deleting a directory
         # because a file inside it would not parse is not this command's decision to make.
@@ -399,6 +422,18 @@ class WhetherSomethingIsACopy(Copies):
         with self.assertRaises(backups.Refused):
             backups._a_copy(self.at, ITS_NAME)
 
+    def test_a_copy_with_a_link_inside_its_secrets_is_not_restorable(self):
+        self.given_copy(ITS_NAME)
+        store = self.at / ITS_NAME / "secrets"
+        store.mkdir()
+        outside = self.home / "outside-key"
+        outside.write_bytes(b"not part of the copy")
+        (store / "key").symlink_to(outside)
+
+        with self.assertRaises(backups.Refused) as refused:
+            backups._a_copy(self.at, ITS_NAME)
+        self.assertIn("link", str(refused.exception))
+
     def test_a_real_copy_is_handed_back(self):
         self.given_copies(ITS_NAME)
         self.assertEqual(self.at / ITS_NAME, backups._a_copy(self.at, ITS_NAME))
@@ -449,6 +484,19 @@ class PuttingOneBack(Copies):
             backups.restore("last-tuesday", self.data, self.at, A_MOMENT, self.steps)
         self.assertEqual("untouched", (self.data / "marker.txt").read_text())
         self.assertEqual([], backups.kept(self.at))
+
+    def test_invalid_secrets_are_refused_before_a_safety_copy_or_live_change(self):
+        self.given_copy(ITS_NAME)
+        outside = self.home / "outside-secrets"
+        outside.mkdir()
+        (self.at / ITS_NAME / "secrets").symlink_to(outside)
+        self.given_data("untouched")
+
+        with self.assertRaises(backups.Refused):
+            backups.restore(ITS_NAME, self.data, self.at, A_MOMENT, self.steps)
+
+        self.assertEqual("untouched", (self.data / "marker.txt").read_text())
+        self.assertEqual([ITS_NAME], backups.kept(self.at), "restore took a safety copy first")
 
     def test_it_carries_what_comes_back_onto_this_release(self):
         # Data copied three releases ago has never been carried forward. Putting the files back is

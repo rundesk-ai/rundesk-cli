@@ -146,16 +146,15 @@ def backups() -> Path:
 def secrets() -> Path:
     """Where values only this machine's owner may read are kept.
 
-    **Deliberately not below `data/`, and that is the whole of its security.** A copy is a copy of
-    `data/` and nothing else, so an install's backups are *structurally incapable* of holding a
-    credential rather than careful not to — there is no code path to get one wrong, because there
-    is no code that reaches here from there. The build this replaces made the same choice and said
-    so in the same words.
+    Below `data/` because credentials are owner state and a copy must be able to restore a working
+    install. The key sits beside the sealed values, so a copy contains usable credentials and has to
+    be protected like any other credential store; sealing prevents accidental plain-text exposure,
+    not access by somebody who has the whole copy.
 
-    It follows that a credential is **not** carried by a restore either. That is the right way
-    round: a value somebody typed once is not state a copy should be able to put back.
+    **Derived, and there is no second variable that reaches it.** Moving one piece of an install by
+    changing an unrelated environment variable is the defect this rewrite exists to remove.
     """
-    return home() / "secrets"
+    return data() / "secrets"
 
 
 def projects() -> Path:
@@ -183,6 +182,17 @@ def lock(root: Optional[Path] = None) -> Path:
     configure writes into it — and a lock per directory is a lock that lets exactly those through.
     """
     return (root or home()) / ".rundesk.lock"
+
+
+def gateway_transition_lock(root: Optional[Path] = None) -> Path:
+    """The install-wide barrier between a gateway starting and an update replacing its release.
+
+    Separate from :func:`lock` because the update must hand settling to a child process, and that
+    child legitimately takes the install lock while the parent still has every gateway offline.
+    A second lock for this one boundary lets data work proceed in the child while no gateway can
+    claim an agent against the old or half-settled release.
+    """
+    return (root or home()) / ".rundesk-gateways.lock"
 
 
 def program() -> Path:

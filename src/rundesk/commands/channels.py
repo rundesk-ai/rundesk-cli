@@ -745,8 +745,8 @@ def _removed(agent: str, kind: str, confirm: bool) -> int:
 
     **`--confirm` is required here and is not on `configure`**, and the line between them is the one
     `skills` draws: would somebody want to read this before it happened. Setting up a channel is a
-    credential, an allow list and a round trip to a platform, and none of that comes back from a
-    backup of `data/` — the credential is deliberately kept outside it.
+    credential, an allow list and a round trip to a platform. A backup can restore those pieces, but
+    taking the live channel away is still a user-visible destructive change worth confirming.
     """
     gone_wrong = directory.not_an_agent(agent)
     if gone_wrong:

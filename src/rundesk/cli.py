@@ -261,7 +261,7 @@ def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshin
     if args.command == "install":
         return cmd_install(args, refreshing, building)
     if args.command == "update":
-        return cmd_update(args, asking, fetching, refreshing, building)
+        return cmd_update(args, asking, fetching, refreshing, building, _gateways(supervising))
     if args.command == "uninstall":
         return cmd_uninstall(args, supervising)
 

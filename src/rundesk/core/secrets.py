@@ -5,9 +5,10 @@ starts can find it, with nobody having exported anything in a shell that a gatew
 
 Four rules, and each of them closes a way a credential gets away from you:
 
-**They are kept outside `data/`.** `paths.secrets()` explains it: a copy is a copy of `data/`, so
-this install's backups cannot contain a credential *structurally*, not by being careful. Nothing
-here has to remember to exclude anything, because nothing over there reaches here.
+**They are owner data, and copies carry them.** `paths.secrets()` places the store below `data/` so
+a backup can restore a working install. The key and sealed values travel together, which means a
+copy contains usable credentials and must be protected accordingly. Sealing is protection against
+accidental plain-text exposure, not against somebody who can read the whole copy.
 
 **Only the owner can read the file, from the moment it exists.** Written through `files`' private
 mode, which opens the staging file at `0600` before a byte goes in — writing it at the umask and
@@ -31,9 +32,9 @@ with nobody typing anything, so there is nowhere else it could live. Someone wit
 account, or root, can open these values. Say that plainly rather than let the word "encrypted" do
 work it has not earned.
 
-What it does buy, precisely: a value never sits in plain text on a disk, in a stray copy of a
-directory, in a screenshot, or in whatever a filesystem hands back after the file is deleted. The
-file permissions and the placement outside `data/` are still what stops another *user*.
+What it does buy, precisely: a value never sits in plain text on a disk, in a screenshot, or in
+whatever a filesystem hands back after the file is deleted. The file and directory permissions are
+what stop another *user* on the machine; a backup needs protection of its own.
 
 The construction, so it can be checked rather than trusted:
 
@@ -248,7 +249,7 @@ def _key(at: Optional[Path] = None) -> bytes:
     # the other value can never be opened again. Nothing else about this feature is unrecoverable.
     made.parent.mkdir(parents=True, exist_ok=True)
     made.parent.chmod(ONLY_MINE)
-    with locking.only_one(paths.lock(made.parent.parent), "this install",
+    with locking.only_one(_install_lock(at), "this install",
                           locking.WHILE_A_DIRECTORY_MOVES):
         there = _read_key(made)
         if there:
@@ -347,9 +348,8 @@ def _not_through_a_link(one: Path, called: str) -> None:
     """Refuse to write through a symlink, whatever it points at.
 
     **A link decides where the bytes land, and here that defeats the placement outright.** A
-    dangling `key` pointing into `data/` sends the master key — the one thing that opens every
-    sealed value — into the directory a backup copies, so an ordinary unattended copy carries it
-    off the machine. `open` with `O_CREAT` follows a symlink and creates at the target, and
+    dangling `key` can send the master key — the one thing that opens every sealed value — outside
+    the install's owned tree. `open` with `O_CREAT` follows a symlink and creates at the target, and
     `mkdir(exist_ok=True)` and `chmod` both follow one too, so nothing here notices on its own.
 
     Refused rather than resolved: a link where rundesk expects a directory of its own is not a
@@ -365,13 +365,18 @@ def _b64(raw: bytes) -> str:
     return base64.b64encode(raw).decode("ascii")
 
 
+def _install_lock(at: Optional[Path]) -> Path:
+    """The lock for this store: the ambient install, or the root above an explicit store."""
+    return paths.lock(at.parent) if at is not None else paths.lock()
+
+
 def _written(values: Dict[str, Optional[str]], at: Optional[Path]) -> None:
     """Change what is kept, under the install's lock, privately, repairing the modes as it goes."""
     directory = at or paths.secrets()
     _not_through_a_link(directory, "the directory the values are kept in")
     directory.mkdir(parents=True, exist_ok=True)
     directory.chmod(ONLY_MINE)
-    with locking.only_one(paths.lock(directory.parent), "this install",
+    with locking.only_one(_install_lock(at), "this install",
                           locking.WHILE_A_DIRECTORY_MOVES):
         with files.changing_json(where(at), empty={}, private=True) as held:
             settled = dict(held[0]) if isinstance(held[0], dict) else {}

@@ -467,7 +467,7 @@ class TakingAChannelAway(Channels):
         self.assertIn("no longer connected to chat", out)
         self.assertEqual([], kept.all("alan"))
         self.assertTrue(secrets.placed("A_TOKEN"),
-                        "a removal took a credential no backup can put back")
+                        "removing one channel took the shared credential with it")
 
     def test_removing_one_that_is_not_there_is_a_failure(self):
         code, _out, err = self.rundesk("channels", "remove", "alan", "slack", "--confirm")

@@ -30,8 +30,10 @@ class OneRootDecidesEverything(support.Isolated):
     def test_the_places_are_the_ones_the_owner_drew(self):
         self.assertEqual(self.home / "app", paths.app())
         self.assertEqual(self.home / "data", paths.data())
+        self.assertEqual(self.home / "data" / "secrets", paths.secrets())
         self.assertEqual(self.home / "backups", paths.backups())
         self.assertEqual(self.home / "projects", paths.projects())
+        self.assertEqual(self.home / ".rundesk-gateways.lock", paths.gateway_transition_lock())
 
     def test_the_agents_stand_below_the_data_and_move_with_the_root(self):
         # Below `data/` and not below the root directly, because an agent's records are something

@@ -221,11 +221,11 @@ from rundesk.channels import files as arrivals
 from rundesk.core import config, paths
 from rundesk.delegations import hosting as delegations
 from rundesk.exits import OK
-from rundesk.gateways import awake, standing
+from rundesk.gateways import awake, maintenance, standing
 from rundesk.providers import answering, kept
 from rundesk.schedules import firing, upkeep
 from rundesk.skills import grants
-from rundesk.utils import logs
+from rundesk.utils import locking, logs
 
 #: What the very first line looks like. Deliberately not through `utils.logs`: this is written to
 #: whatever the supervisor captured, before anything has been read or resolved, and the whole value
@@ -378,72 +378,64 @@ def run(name: str) -> int:
     """
     _said_first(name)
 
-    at, refusal = _may_not_run(name)
-    if _kept_the_captures(at):
-        _said_first(name)
-
-    if refusal is None:
-        held = contextlib.ExitStack()
-        try:
-            # Before the name is claimed, because the claim is what every command reads as LIVE.
-            # Acquiring this second would leave a real window where a start reports success before
-            # macOS has promised to stay awake — exactly the false success this project refuses.
-            sleep_prevented = held.enter_context(awake.while_running())
-        except awake.TryAgain:
-            # A login burst can exhaust a process or file ceiling for a moment. Exit non-zero so
-            # launchd retries under its throttle; calling that a permanent refusal would leave this
-            # gateway down after the pressure has passed, with no process left to try again.
-            with contextlib.suppress(BaseException):
-                held.close()
-            raise
-        except awake.NotPreventingSleep as why:
-            refusal = f"{name} could not keep this Mac awake while its gateway runs: {why}"
-        except BaseException:                          # An unexpected failure is a fault, not
-            # evidence of a permanent machine condition. Let launchd try a fresh process instead of
-            # teaching it to leave this gateway down for ever.
-            with contextlib.suppress(BaseException):
-                held.close()
-            raise
-        else:
-            try:
-                # The claim, and nothing else, is inside this guard: a name that could not be taken
-                # is a refusal and exits 0, while anything that fails once this gateway is *working*
-                # is a crash and must exit non-zero so that launchd brings it back.
-                held.enter_context(standing.holding(at))
-            except standing.Taken:
-                # Guarded like the branch below it, and for the same reason. `_who_has_it` reads the
-                # record to name the pid, and it is safe today only because a *different* module is
-                # careful — `standing` catches every `OSError` it can produce. Nothing here
-                # guarantees that, and the asymmetry with its neighbour was an oversight rather
-                # than a decision: a refusal that raises while working out how to word itself still
-                # exits non-zero.
+    at = None
+    refusal = None
+    held = contextlib.ExitStack()
+    claimed = False
+    try:
+        # The barrier precedes both release/data checks and every resource this process would carry
+        # across an `exec`. A waiter refreshes immediately; checking migrations first could turn a
+        # temporary mid-update state into a permanent exit-zero refusal.
+        with locking.only_one(
+                paths.gateway_transition_lock(), "gateway starts during an update",
+                locking.WHILE_A_DIRECTORY_MOVES) as waited:
+            if waited:
+                maintenance.fresh(name)
+            at, refusal = _may_not_run(name)
+            if _kept_the_captures(at):
+                _said_first(name)
+            if refusal is None:
+                # Before the name is claimed, because the claim is what every command reads as LIVE.
+                sleep_prevented = held.enter_context(awake.while_running())
                 try:
-                    refusal = _who_has_it(at, name)
-                except BaseException:                  # noqa: BLE001 — same reason as below
-                    refusal = f"{name} is already being run by another gateway"
-            except BaseException as why:               # noqa: BLE001 — see the module docstring:
-                # this is still the refusal phase, and the one thing it may never do is end in a
-                # non-zero exit, which would turn a permanent condition into an endless restart.
-                refusal = f"{name} could not claim its own name: {why}"
-            else:
-                asked_for: List[str] = []
-                with held:
-                    code = _serving(name, at, held, asked_for, sleep_prevented)
-                # **Outside the stack, and that is the whole of why it is here rather than inside
-                # it.** A restart replaces this program with a fresh copy of itself, and everything
-                # this gateway was holding has to be let go of first: every child stopped, every
-                # adapter closed, the sleep assertion released, and the claim on the agent's own
-                # name dropped — because the copy is going to take those claims again and cannot
-                # while this one still has them.
-                if asked_for and asked_for[0] == hosting.RESTART:
-                    _again(name, standing.logs_at(at))
-                return code
-
-        # A refusal after the assertion was entered — another gateway already holds the name, or
-        # the claim itself failed — must release the assertion before it reports that nothing is
-        # running. Cleanup may never turn that refusal into launchd's non-zero "bring me back".
+                    held.enter_context(standing.holding(at))
+                except standing.Taken:
+                    try:
+                        refusal = _who_has_it(at, name)
+                    except BaseException:                  # noqa: BLE001 — refusal must exit zero
+                        refusal = f"{name} is already being run by another gateway"
+                except BaseException as why:               # noqa: BLE001 — still refusal phase
+                    refusal = f"{name} could not claim its own name: {why}"
+                else:
+                    claimed = True
+    except awake.TryAgain:
+        # A login burst can exhaust a process or file ceiling for a moment. Exit non-zero so
+        # launchd retries under its throttle; calling that a permanent refusal would leave this
+        # gateway down after the pressure has passed, with no process left to try again.
         with contextlib.suppress(BaseException):
             held.close()
+        raise
+    except awake.NotPreventingSleep as why:
+        refusal = f"{name} could not keep this Mac awake while its gateway runs: {why}"
+    except BaseException:                          # An unexpected failure is a fault, not
+        # evidence of a permanent machine condition. Let launchd try a fresh process instead of
+        # teaching it to leave this gateway down for ever.
+        with contextlib.suppress(BaseException):
+            held.close()
+        raise
+    if claimed:
+        asked_for: List[str] = []
+        with held:
+            code = _serving(name, at, held, asked_for, sleep_prevented)
+        if asked_for and asked_for[0] == hosting.RESTART:
+            _again(name, standing.logs_at(at))
+        return code
+
+    # A refusal after the assertion was entered — another gateway already holds the name, or
+    # the claim itself failed — must release the assertion before it reports that nothing is
+    # running. Cleanup may never turn that refusal into launchd's non-zero "bring me back".
+    with contextlib.suppress(BaseException):
+        held.close()
 
     _refused(at, name, refusal)
     return OK
@@ -677,7 +669,7 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
                 # Every beat until it is, so an adapter that takes a while is waited for and one
                 # that never connects simply never says this.
                 said_up = True
-                notices.say(CAME_UP)
+                notices.say(maintenance.starting(at, __version__) or CAME_UP)
             time.sleep(standing.BEAT_SECONDS)
             # A helper that vanished leaves a live-looking gateway without the guarantee it came
             # up under. Treat that as a crash launchd can clear, never as a warning beside a process
@@ -717,7 +709,8 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
         # real Discord bot: the owner was told the gateway came up and never that it went away, with
         # nothing in any log to say so. Bounded, and out of a budget that has room for it: this is
         # one round trip against the `STOPPING_WITHIN` seconds the stop below is allowed.
-        _told(name, where, channels_up, WENT_DOWN, landed_within=GOODBYE_WITHIN)
+        _told(name, where, channels_up, maintenance.stopping(at) or WENT_DOWN,
+              landed_within=GOODBYE_WITHIN)
         # **A restart leaves by exiting, and that is not this process talking to its supervisor.**
         # It cannot place, boot out or kick its own job — that would put the decision to keep a
         # gateway running inside the thing being kept running — but ending is not asking anybody for
@@ -1127,6 +1120,10 @@ def _again(name: str, where: Path) -> None:
     if argv and Path(argv[0]).is_file():
         with contextlib.suppress(Exception):
             os.execv(argv[0], argv)
+    # A gateway refreshed after waiting behind an update starts through Python's `-c`, whose argv
+    # has no executable file to repeat. It can still become the current installed release directly.
+    with contextlib.suppress(Exception):
+        maintenance.fresh(name)
     # Started some way this cannot repeat — `python -c`, a zipapp, an argv nobody set. Said rather
     # than guessed at, because a command invented here would start *a* gateway and possibly not this
     # one, against a different root.

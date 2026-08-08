@@ -55,8 +55,8 @@ base = os.environ[env_name("JIRA_BASE_URL")]
 token = os.environ[env_name("JIRA_API_TOKEN")]
 ```
 
-Never write a value into the agent's files or logs. The agent's data is backed up; secrets are kept
-outside it so backups cannot contain them.
+Never write a value into the agent's files or logs. Rundesk keeps values in its private credential
+store; backups carry the sealed store and its key, so their location must be protected.
 
 For multiple accounts, list the complete profiles and ask which one to use when the request does not
 decide:

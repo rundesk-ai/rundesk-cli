@@ -30,7 +30,8 @@ Everything rundesk keeps for this install: agents, their homes and histories, lo
 `config.json`, which holds the install-wide settings.
 
 **This directory is yours and rundesk protects it.** An update never touches it, and an uninstall
-keeps it unless it is explicitly asked to purge. Copies of it go to `../backups/`.
+keeps it unless it is explicitly asked to purge. Copies of it go to `../backups/`, including the
+sealed credential store and the key that opens it.
 """
 
 BACKUPS_NOTE = """# backups/
@@ -40,6 +41,9 @@ Copies of `../data/` — everything rundesk keeps for you.
 **Nothing rundesk does removes a copy from here**, including an uninstall asked to purge the data.
 That is the point of the directory: a copy is worth nothing if the thing that takes the product away
 takes the copies with it.
+
+Copies contain usable credentials when `../data/secrets/` exists. Protect this directory and any
+disk it is moved to as credential-bearing data.
 
 This directory may be moved elsewhere and linked back to from here, so copies can live on another
 disk.

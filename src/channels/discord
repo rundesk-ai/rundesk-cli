@@ -486,7 +486,7 @@ def the_token() -> str:
     """The bot token, from the one variable that carries it, or `""`.
 
     One place and no fallback file. What rundesk keeps is the *name*; the value lives in its sealed
-    store outside `data/`; and both `--check` and `serve` are handed it under this name — so a
+    store below `data/`; and both `--check` and `serve` are handed it under this name — so a
     second place to look would be a second thing that can silently be the wrong one.
     """
     return (os.environ.get(TOKEN_FROM) or "").strip()

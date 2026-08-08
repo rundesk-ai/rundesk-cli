@@ -1,7 +1,7 @@
 # Configuration and values
 
 Rundesk derives every location from `RUNDESK_HOME`. Install settings live in `data/config.json`;
-credential values live separately and are masked in every command output.
+credential values live in `data/secrets/` and are masked in every command output.
 
 ## Inspect the install
 
@@ -51,5 +51,6 @@ Never request, print, echo, or paste a credential into chat or an argument. Give
 set` command to type locally. A changed value is available to newly started processes and the next
 agent turn; it cannot alter the environment of the current process.
 
-Backups exclude values. When a restore, machine move, or integration failure leaves a value absent,
-use `env check`, `channels doctor`, or `skills doctor` to name what the owner must set.
+Backups carry the sealed values and their key, so protect them as credential-bearing data. When an
+integration failure leaves a value absent, use `env check`, `channels doctor`, or `skills doctor` to
+name what the owner must set.

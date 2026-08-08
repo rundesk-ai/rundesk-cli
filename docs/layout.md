@@ -8,11 +8,12 @@ is a function of it:
 ```
 $RUNDESK_HOME/
   app/            the program itself
-  data/           everything you accumulate — agents, logs, skills, catalogs, configuration
+  data/           everything you accumulate — agents, logs, skills, configuration, secrets
+    secrets/      sealed values and the key that opens them
   backups/        copies of data/
   projects/       the shared directory work is checked out into
-  secrets/        the values you place for what rundesk talks to
   .rundesk.lock   held while one command at a time changes this install
+  .rundesk-gateways.lock  held while an update and gateway starts take turns
 ```
 
 | Below the root | What may reach it |
@@ -21,8 +22,8 @@ $RUNDESK_HOME/
 | `data/` | never touched by an update; kept by an uninstall unless a purge asks for it |
 | `backups/` | survives removal, including a purge; may be a link to another disk |
 | `projects/` | yours, never rundesk's to tidy |
-| `secrets/` | **never copied by a backup**; taken only by a purge |
 | `.rundesk.lock` | rundesk's own; taken away by an uninstall |
+| `.rundesk-gateways.lock` | rundesk's transient gateway/update barrier; taken away by an uninstall |
 
 `.rundesk.lock` is the file one command at a time holds while it changes the install. It stands
 beside the directories rather than inside `data/` on purpose: the operations it makes safe *move
@@ -31,9 +32,15 @@ holding different copies of. That is not hypothetical — a `configure` landing 
 restore had renamed `data/` aside recreated the directory, reported success, and had its change
 deleted by the restore's own rollback.
 
-One lock for the whole install rather than one per directory, because the races worth stopping are
+One data lock for the whole install rather than one per directory, because the races worth stopping are
 between *different* commands touching different things, and a lock per directory lets exactly those
 through.
+
+`.rundesk-gateways.lock` answers a different process-lifecycle boundary. An update holds it from
+gateway preflight through the new release settling; a gateway takes it before claiming an agent. A
+gateway that had to wait refreshes its interpreter first, because the modules it imported may have
+been replaced while it waited. It cannot reuse `.rundesk.lock`: the updater's child legitimately
+takes that data lock while settling, and a parent holding it across the handoff would deadlock.
 
 **Nothing sweeps it, and a stale file is not a held lock.** The lock is the `flock`, not the file:
 the kernel drops it when the process ends, however it ended — cleanly, on a crash, on `SIGKILL`, on
@@ -68,6 +75,7 @@ data/agents/<name>/
   channels/<kind>/  one adapter's records, logs, staging, and dated inbound files
   gateway.lock      held by the one gateway running this agent, for as long as it runs
   gateway.json      what that gateway wrote down about itself
+  gateway-update.json  transient one-shot update notice, omitted from backups and consumed on use
   rundesk-gateway-<name>   the program launchd starts, written when the job is placed
 ```
 
@@ -277,20 +285,15 @@ And when that disk is not plugged in, it says so rather than reading as an insta
 backups  /Users/you/.rundesk/backups → /Volumes/Big/rundesk-backups — that directory is not there
 ```
 
-## Why the values you place are not below `data/`
+## Why the values you place are below `data/`
 
-`rundesk env set` keeps a token where a backup cannot reach it, and that is the whole of its
-placement: **a copy is a copy of `data/` and nothing else**, so this install's backups are
-structurally incapable of holding a credential rather than careful not to. There is no code path
-from a copy to `secrets/`, so there is none to get wrong.
-
-It follows that a restore does not put a credential back either, which is the right way round: a
-value somebody typed once is not state a copy should be able to reinstate.
+`rundesk env set` keeps a token in `data/secrets/` because credentials are owner state and a backup
+must be able to restore a working install. Backups carry the store and restore the credential state
+they contain.
 
 The directory is `0700` and every file in it `0600`, repaired on each write, and neither the
-directory nor the key may be reached through a symlink — a link decides where bytes land, and a
-dangling `key` aimed into `data/` would put the one thing that opens every value into the directory
-a backup copies.
+directory nor the key may be reached through a symlink — a link decides where bytes land, and can
+send the one thing that opens every value outside the tree rundesk owns.
 
 Each value is sealed with a key kept beside it, so nothing is readable text on the disk. Each is
 also signed **over its name as well as its bytes**, so a value that was tampered with *or moved to
@@ -299,9 +302,9 @@ edit the file swap two sealed values between names, with no key at all, and a pr
 its Discord token would be handed the Slack one and send it to Slack.
 
 **The key sits beside the values because a gateway has to start at boot with nobody typing**, which
-is the honest limit of the whole thing: this stops a credential being readable text on a disk, in a
-stray copy, or in whatever a filesystem hands back after a delete. It does not stop somebody with
-the owner's account, or root.
+is the honest limit of the whole thing: this stops a credential being readable text on a disk or in
+whatever a filesystem hands back after a delete. It does not stop somebody with the owner's account,
+root, or a complete backup. Protect and encrypt backup media accordingly.
 
 ## What a copy does not carry
 

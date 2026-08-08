@@ -10,7 +10,7 @@ machine-level operations; preserve owner data and report every refusal.
 | `install [--source <dir>] [--bin-dir <dir>]` | Install from a program tree and place the command link in the chosen PATH directory. Defaults use the running source and installer-selected bin directory. |
 | `update` | Check the published release and move to it, or prove this install is already settled. |
 | `uninstall [--confirm]` | Preview removal; `--confirm` removes program, job definitions, and command link while retaining owner data, backups, and credentials. |
-| `uninstall --purge [--confirm]` | Also remove owner data and credentials. Backups are never removed. |
+| `uninstall --purge [--confirm]` | Also remove owner data and the live credential store. Backups, which may contain credentials, are never removed. |
 
 Prefix every command with `"$RUNDESK_COMMAND"` for an existing install. An update may restart the
 gateway hosting the current agent; Rundesk queues that restart until the active turn finishes and
@@ -28,8 +28,9 @@ then brings the gateway back online.
 ## Update
 
 1. Run `status`, `version`, and `backups save`.
-2. Run `update`. It cycles only gateways whose agents need migration, records which were running,
-   and starts exactly those again even when carrying an agent fails. Do not stop them preemptively.
+2. Run `update`. For a new release, it cycles every online gateway around the program swap and
+   settling, then starts exactly those again. Do not stop them preemptively. An up-to-date settle
+   cycles only gateways whose agents still need migration.
 3. Preserve all three release answers: moved, already current, or unable to determine the published
    version. Unknown is not up to date. `version` may report UNKNOWN and exit `0` because it answered;
    `update` exits nonzero when it cannot determine what to install.
@@ -43,5 +44,5 @@ then brings the gateway back online.
 3. Add `--confirm` only after the owner approves the named root and retained/removed categories.
 4. Report what was removed and what remains, especially the backup location.
 
-Uninstall stops placed jobs before removing the program. `--purge` is irreversible from the local
-install data; recovery requires an existing backup and separately restored credentials.
+Uninstall stops placed jobs before removing the program. `--purge` is irreversible from the live
+install data, but backups survive and can contain recoverable credentials.

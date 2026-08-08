@@ -161,8 +161,8 @@ class ANewAgent(support.Isolated):
 
     def test_finish_is_short_and_readable_on_a_phone_or_discord(self):
         rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").lower().split())
-        for phrase in ("summary first", "concise on phones/discord", "short bullets",
-                       "no markdown tables", "purpose/proof"):
+        for phrase in ("direct, concrete summary", "in your words", "phone/discord concise",
+                       "bullets/no tables", "needed purpose/proof"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, rules)
 

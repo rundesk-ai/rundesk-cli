@@ -1598,7 +1598,10 @@ Takes no flags. The order is chosen so the failure that cannot damage anything h
 then fetch to a temporary directory, stand down every online gateway, then swap and settle. The swap
 stages every entry and renames them into place, putting back what was there if any part fails — so an
 interrupted update leaves the install on the release it was, never on neither. Gateways that were
-already offline remain offline; every gateway the update stopped is started again.
+already offline remain offline; every gateway the update stopped is started again by the release
+that landed, never by the updater's cached old job logic. A foreground gateway whose name launchd
+cannot supervise must be stopped in its terminal first, because an unattended update cannot restore
+it and will not take it offline permanently.
 
 The notified channel receives these maintenance notices around a successful update:
 
