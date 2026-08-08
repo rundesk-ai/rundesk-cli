@@ -270,7 +270,7 @@ nothing translates between them.
 
 | Kind | What it is |
 |---|---|
-| `text` | what the agent said. `whole: true` means *this is finished*, which is what lets a surface show it while the turn runs; absent means a fragment, and fragments are only shown at the end |
+| `text` | what the agent said. `whole: true` means *this is finished*, which is what lets a surface show it while the turn runs; absent means a fragment, and fragments are only shown at the end. `final: true` means *this is the answer* — see below |
 | `think` | the same, for reasoning. One record per finished thought, never one per fragment |
 | `tool` | a tool starting. `id` is yours and pairs it with its result; `name` is for a person to read; `did` is one of ten words below |
 | `result` | what that tool came to |
@@ -281,6 +281,18 @@ nothing translates between them.
 
 `context_tokens` is a **level, not a quantity**: how big the conversation is now. It goes *down* when
 one is compacted, so rundesk takes the last and never the sum.
+
+#### Which `text` was the answer
+
+**`final: true` says *this one is the reply*, and it is worth setting.** A turn nobody watched — a
+schedule, a delegation — is read back afterwards as a single report, so rundesk has to decide which
+of several finished thoughts was the answer. Told, it takes the one you marked. Not told, it falls
+back to the last thought after the last tool, which is a guess: a brain that says something after
+its last tool call and then adds a short aside publishes the aside. Measured on a steered turn, an
+adapter that marks nothing reported *"Running `sleep 45` and waiting for it to finish.\n\nomega"*
+where one that marks the answer reported *"omega"*.
+
+Set it on the reply and nowhere else. Absent is a working note; more than one means the last wins.
 
 #### What a tool did
 
@@ -328,6 +340,15 @@ either way.
 
 `failure_message` is the prose a person reads. Say the actionable thing in it.
 
+**Only on a `done` that says `ok: false`.** You are the one thing that knows whether your turn
+worked, so a reason for failing beside your own `ok: true` is a contradiction rather than extra
+detail — and read as a failure it would invert the answer. If your brain reports something it then
+recovers from, keep it while the turn runs and leave it off the ending. Rundesk drops such a word
+rather than acting on it and names the adapter in the agent's log, because it is the adapter's to
+fix; it does not turn a turn the brain said worked into a failed one. Measured on a shipped adapter
+before this was closed: an owner was told `FAILED — it did not answer` on the line directly above
+the answer it had given, and the ledger agreed.
+
 ### The environment
 
 Built from nothing rather than inherited, so nothing of the gateway's own leaks into a brain. **What
@@ -348,6 +369,11 @@ is left out is unset, never empty** — `${RUNDESK_MODEL:-default}` is written e
 | `RUNDESK_RESUME` | the handle this conversation got to last time, or unset for a new one |
 | `RUNDESK_SETTINGS` | whatever the owner set, as one JSON object, sorted |
 | `RUNDESK_PREFACE` | what rundesk wants said before the brain reads a word of the task |
+| `RUNDESK_DELEGATION` | which delegation this turn is answering, or **unset** when it is answering nobody. Set only on a turn another agent asked for, and *present* is the whole signal: a `rundesk ask` run from inside one reads it and refuses, which is what makes depth one enforceable |
+
+**A name on this table is one an owner's own value may never take**, including on a turn where
+rundesk leaves it unset — deciding to say nothing is still rundesk deciding. Being unset therefore
+means rundesk had nothing to say, never that the name is free.
 
 The standing rules are not repeated in `RUNDESK_PREFACE`. A new agent receives byte-identical
 `AGENTS.md` and `CLAUDE.md` regular files from one source; Claude loads the latter and Codex loads the
