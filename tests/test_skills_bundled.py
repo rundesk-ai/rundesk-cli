@@ -227,6 +227,12 @@ class WhatAShippedSkillMayClaim(Bundled):
             f'"$RUNDESK_COMMAND" skills configure {address} --profile <name>', skills)
         self.assertIn('"$RUNDESK_COMMAND" skills doctor <agent>', skills)
         self.assertIn("does not install the `desk` binary", skills)
+        contract_text = " ".join(skills.split())
+        for contract in ("desk-bound identity", "desk user-mentions", "API-token actor",
+                         "Owner and Admin", "Member is limited to its assigned visible desk",
+                         "deskless Member retains human mentions"):
+            with self.subTest(contract=contract):
+                self.assertIn(contract, contract_text)
 
     def test_focused_maintenance_is_detailed_only_in_its_reference(self):
         skill = self.skills / "managing-rundesk"

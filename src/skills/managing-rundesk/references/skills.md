@@ -60,11 +60,14 @@ Follow that repository's README to install or update the executable separately, 
 "$RUNDESK_COMMAND" skills doctor <agent>
 ```
 
-Configure one complete named profile for each API identity the agent may use. A desk-bound profile
-manages that desk's inbox and mentions; an owner profile acts for the user across explicitly targeted
-desks, tasks, weeks, projects, pages, and assets, but has no desk-only mentions access. Prefer a
-profile matching the agent's desk. Give an owner profile only when the agent is meant to act for the
-owner, and remember that every agent holding the skill can reach every profile configured for it.
+Configure one complete named profile for each API identity the agent may use. A desk-bound identity
+uses `desk inbox` and `desk mentions` for exactly its desk. A non-desk identity acts as the signed-in
+human and uses `desk user-mentions` for that human inbox; those are separate from mentions addressed
+to the API-token actor. Check `desk account --json` rather than inferring authority from a profile
+name: Owner and Admin may target and manage desks, while a Member is limited to its assigned visible
+desk; a deskless Member retains human mentions but has no task or project desk scope. Prefer the
+least-privileged identity that can do the requested work, and remember that every agent holding the
+skill can reach every profile configured for it.
 
 ## Safe workflow
 
