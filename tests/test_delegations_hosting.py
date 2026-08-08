@@ -653,16 +653,15 @@ class WhatARoomIsToldWhenSomebodyReachesIntoTheWork(ARoomWatchingWorkHandedOver,
         self.swept()
         self.assertEqual([hosting.GUIDED], self.states())
 
-    def test_a_gateway_that_never_saw_the_answer_still_calls_a_resume_carrying_on(self):
-        """The trade `settled` used to make and no longer has to. Restarted between the answer and
-        the resume, this process has never seen the delegation answered — and the row says what
-        happened without it, because only a resume moves `working_since`."""
+    def test_a_gateway_restart_treats_retained_delegations_as_its_baseline(self):
+        """Restarting is not a new delegation event. A gateway must describe only changes that
+        happen after it starts, rather than replaying every retained answer or resume as fresh."""
         self.handed()
         kept.answered("ava", "del-7-aabbcc", now=self.moment(3))
         kept.reopened("ava", "del-7-aabbcc", now=self.moment(1))
 
         self.carrying = hosting.settled("ava", None)     # a gateway with no memory at all
-        self.assertEqual([(hosting.CARRIED_ON, "dev", "del-7-aabbcc", None)], self.swept())
+        self.assertEqual([], self.swept())
 
     def test_nothing_is_remembered_about_a_delegation_that_is_no_longer_there(self):
         """Both dictionaries, not only the one that existed before this."""

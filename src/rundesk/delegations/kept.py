@@ -147,6 +147,15 @@ def every(agent: str) -> List[Delegation]:
     return [_read(row) for row in rows]
 
 
+def from_turn(agent: str, parent_turn: int) -> List[Delegation]:
+    """Every delegation created by one parent turn, including already returned work."""
+    with records.reading(directory.records(agent)) as conn:
+        rows = _asked(conn, agent,
+                      f"SELECT * FROM {TABLE} WHERE parent_turn = ? ORDER BY id",
+                      (parent_turn,)).fetchall()
+    return [_read(row) for row in rows]
+
+
 def outstanding(agent: str, to_agent: Optional[str] = None) -> List[Delegation]:
     """What has not been answered yet — everything, or only what was handed to one agent.
 

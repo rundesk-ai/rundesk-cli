@@ -182,10 +182,11 @@ the work starts, so they outlive the process that announced.
 ## What is not built
 
 A schedule asks the agent with `--ask` or starts a program with `--run`, and exactly one of the two —
-the records hold that as a `CHECK` and the command says it in words. An agent-asking schedule gets
-**its own conversation**, keyed by the schedule's name, so a run at three in the morning never lands
-in the exchange somebody types into: in the build this replaces it resumed the owner's own session
-and left its prompt and its answer in the middle of it.
+the records hold that as a `CHECK` and the command says it in words. Every invocation of an
+agent-asking schedule gets **a fresh conversation and provider session**, so tonight cannot inherit
+last night's context and a run at three in the morning never lands in the exchange somebody types
+into. It may delegate to a named agent; that result returns to the same invocation session for review,
+and the reviewed final report goes to the agent's notified channel.
 
 `rundesk schedules run` takes either kind by hand, and neither uses up the minute it next falls due —
 testing a schedule must not be how you stop it happening.

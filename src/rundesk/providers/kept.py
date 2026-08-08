@@ -175,6 +175,16 @@ def list_turns(agent: str, most: int = FOUND_AT_MOST,
         return [dict(row) for row in got.fetchall()]
 
 
+def schedule_turn_after(agent: str, schedule: str, after: str) -> Optional[Dict[str, Any]]:
+    """The first turn one schedule invocation admitted at or after `after`."""
+    with records.reading(directory.records(agent)) as conn:
+        got = _rows(
+            conn, agent,
+            f"SELECT * FROM {TURNS} WHERE schedule_name = ? AND created_at >= ?"
+            " ORDER BY id LIMIT 1", (schedule, after)).fetchone()
+    return dict(got) if got is not None else None
+
+
 def list_unfinished_turns(agent: str) -> List[Dict[str, Any]]:
     """Every turn nothing has settled, oldest first.
 

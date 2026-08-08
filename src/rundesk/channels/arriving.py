@@ -21,6 +21,7 @@ a thing an agent could later be asked to read.
 May depend on `agents`, `core` and `utils`.
 """
 
+import secrets
 import sqlite3
 from datetime import datetime
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
@@ -69,6 +70,17 @@ class Landed(NamedTuple):
     conversation: int
     message: int
     fresh: bool
+
+
+class Pending(NamedTuple):
+    """One channel message recorded durably before any turn admitted it."""
+
+    channel: str
+    place: str
+    author_id: str
+    body: str
+    external_id: Optional[str]
+    landed: Landed
 
 
 def recorded(agent: str, channel: str, place: str, author_id: str, body: str,
@@ -122,18 +134,21 @@ def asked_at_a_terminal(agent: str, body: str, when: Optional[datetime] = None) 
 
 
 def recorded_for_a_schedule(agent: str, schedule: str, body: str,
-                            when: Optional[datetime] = None) -> Landed:
-    """Write down what a schedule asked, in that schedule's own conversation.
+                            when: Optional[datetime] = None,
+                            invocation: Optional[str] = None) -> Landed:
+    """Write down what one schedule invocation asked, in a fresh conversation.
 
-    **One conversation per schedule, and never the one a person types into.** In the build this
-    replaces a scheduled turn resumed the owner's own session and left its prompt and its answer in
-    the middle of it — so a run at three in the morning appeared as though somebody had asked.
+    **One conversation per invocation, and never the one a person types into.** The schedule name
+    remains the prefix so a later delegated result can recover which unattended situation it is
+    resuming, while the random suffix prevents tonight from inheriting last night's provider
+    session.
 
     Written as `rundesk` rather than as a person, because nobody asked: the clock did.
     """
     now = _now(when)
+    source_id = f"{schedule}/{invocation or secrets.token_hex(16)}"
     with records.writing(directory.records(agent)) as conn:
-        conversation = _conversation(conn, agent, FROM_SCHEDULE, schedule, None, now)
+        conversation = _conversation(conn, agent, FROM_SCHEDULE, source_id, None, now)
         message, fresh = _message(conn, agent, conversation, BY_RUNDESK, FROM_SCHEDULE,
                                   _bounded(body), None, now)
     return Landed(conversation, message, fresh)
@@ -230,6 +245,22 @@ def said_by_agent(agent: str, source: str, place: str, body: str, turn: Optional
     return Landed(conversation, message, fresh)
 
 
+def said_by_agent_into(agent: str, conversation: int, body: str,
+                       turn: Optional[int] = None, external_id: Optional[str] = None,
+                       when: Optional[datetime] = None) -> Landed:
+    """Write the agent's answer into the exact conversation its admitted turn belongs to."""
+    now = _now(when)
+    with records.writing(directory.records(agent)) as conn:
+        message, fresh = _message(conn, agent, conversation, BY_AGENT, agent,
+                                  _bounded(body), external_id, now, turn=turn)
+    return Landed(conversation, message, fresh)
+
+
+def schedule_name(source_id: str) -> str:
+    """The schedule prefix in an invocation source id, including legacy unsuffixed ids."""
+    return source_id.rsplit("/", 1)[0] if "/" in source_id else source_id
+
+
 def where_it_stands(agent: str, conversation: int) -> Optional[Tuple[str, str]]:
     """The `source` and `source_id` this conversation was made under, or `None` if there is no such
     conversation.
@@ -316,6 +347,40 @@ def pending_from(agent: str, conversation: int, author_id: str,
     return [(int(one["id"]), str(one["body"] or "")) for one in found]
 
 
+def pending_on_channels(agent: str, most: int,
+                        channels: Optional[Tuple[str, ...]] = None,
+                        after: int = 0) -> List[Pending]:
+    """Unclaimed user messages from channel conversations, oldest first and bounded.
+
+    This is the restart boundary: a gateway may end after recording a platform message but before
+    its answering thread acquires the provider claim. A fresh adapter will not necessarily receive
+    that platform event again, so the durable row is what must wake the replacement gateway.
+    """
+    if channels is not None and not channels:
+        return []
+    channel_clause = ""
+    parameters: Tuple[Any, ...] = (FROM_CHANNEL, BY_USER, after)
+    if channels is not None:
+        channel_clause = " AND c.channel IN (" + ",".join("?" for _one in channels) + ")"
+        parameters += tuple(channels)
+    parameters += (most,)
+    with records.reading(directory.records(agent)) as conn:
+        found = _rows(
+            conn, agent,
+            "SELECT m.id, m.conversation_id, m.author_id, m.body, m.external_id,"
+            " c.channel, c.source_id FROM conversation_messages AS m"
+            " JOIN conversations AS c ON c.id = m.conversation_id"
+            " WHERE c.source = ? AND m.author = ? AND m.turn_id IS NULL"
+            " AND m.external_id IS NOT NULL AND m.id > ?"
+            + channel_clause +
+            " ORDER BY m.id LIMIT ?", parameters).fetchall()
+    return [Pending(
+        channel=str(one["channel"] or ""), place=str(one["source_id"]),
+        author_id=str(one["author_id"]), body=str(one["body"] or ""),
+        external_id=(str(one["external_id"]) if one["external_id"] is not None else None),
+        landed=Landed(int(one["conversation_id"]), int(one["id"]), True)) for one in found]
+
+
 def turn_for_message(agent: str, conversation: int, message: int) -> Optional[int]:
     """The turn that admitted one exact message, or `None` while it remains pending."""
     with records.reading(directory.records(agent)) as conn:
@@ -387,15 +452,9 @@ def last_answer(agent: str, source: str, place: str, after: str = "") -> str:
     written into the same conversation as `rundesk`, and a report that posted that back would be
     quoting the question as though it were the answer.
 
-    **`after` is what makes this *this run's* answer, and leaving it out is a real defect rather than
-    a loose end.** Every firing of one schedule shares a single conversation — it is keyed by the
-    schedule's name and nothing else — and a turn writes a message only when it actually produced
-    words. So a schedule that answered on Monday and failed on Tuesday without saying anything has,
-    on Tuesday, exactly one agent message in its conversation: Monday's. Read without a bound, that
-    is posted under Tuesday's notice as though it were Tuesday's report, and the failure is never
-    mentioned at all — an answer nobody earned, reported as fact, which is the failure this product
-    is built around refusing. Bounded by the moment the firing began, only what was said after the
-    run started can be the run's.
+    **`after` is what makes this *this run's* answer.** It protects legacy shared schedule
+    conversations and any caller looking across several runs from attributing yesterday's answer to
+    today's failed run.
 
     A moment in `core.config.MOMENT`, which is what these records keep and why a plain string
     comparison is the whole of the test. `""` means unbounded and is for a caller that genuinely
@@ -416,6 +475,31 @@ def last_answer(agent: str, source: str, place: str, after: str = "") -> str:
                       " ORDER BY m.id DESC LIMIT 1",
                       values).fetchone()
     return str(found[0]) if found is not None else ""
+
+
+def last_schedule_answer(agent: str, schedule: str, after: str = "") -> str:
+    """The last answer from this schedule's turns, across invocation conversations."""
+    since = " AND m.created_at >= ?" if after else ""
+    values = (schedule, BY_AGENT) + ((after,) if after else ())
+    with records.reading(directory.records(agent)) as conn:
+        found = _rows(
+            conn, agent,
+            "SELECT m.body FROM conversation_messages m"
+            " JOIN turns t ON t.id = m.turn_id"
+            " WHERE t.schedule_name = ? AND m.author = ?"
+            f"{since} ORDER BY m.id DESC LIMIT 1", values).fetchone()
+    return str(found[0]) if found is not None else ""
+
+
+def delegation_result_reached_turn(agent: str, turn: int) -> bool:
+    """Whether a returned delegation was admitted into this still-running parent turn."""
+    with records.reading(directory.records(agent)) as conn:
+        found = _rows(
+            conn, agent,
+            "SELECT 1 FROM conversation_messages"
+            " WHERE turn_id = ? AND external_id LIKE 'delegation-result:%' LIMIT 1",
+            (turn,)).fetchone()
+    return found is not None
 
 
 def standing_in(agent: str, place: str) -> Optional[int]:

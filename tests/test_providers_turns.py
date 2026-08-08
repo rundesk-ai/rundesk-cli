@@ -206,7 +206,6 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
 
     def test_team_state_is_not_read_when_a_named_handoff_cannot_be_used(self):
         requests = [
-            self.asking(situation=instructions.SCHEDULE_TO_AGENT),
             self.asking(situation=instructions.AGENT_TO_AGENT, caller_agent="bob"),
             self.asking(access_mode=protocol.ACCESS_READ),
         ]
@@ -219,6 +218,17 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
                 said = json.loads(record["event_data"])
                 self.assertNotIn("agents", [one["name"] for one in said["layers"]])
                 self.assertEqual("", said["team"])
+
+    def test_a_scheduled_work_turn_records_the_team_it_was_shown(self):
+        listed = "- **bob** — verifies releases · skills: reviewing-code"
+        with mock.patch.object(turns.team, "for_agent", return_value=listed) as looked:
+            got = self.run_turn(self.asking(situation=instructions.SCHEDULE_TO_AGENT,
+                                            schedule_name="nightly"))
+        looked.assert_called_once_with("ava")
+        record = kept.list_turn_records("ava", got.turn)[0]
+        said = json.loads(record["event_data"])
+        self.assertIn("agents", [one["name"] for one in said["layers"]])
+        self.assertEqual(listed, said["team"])
 
     def test_a_person_facing_work_turn_records_the_team_it_was_shown(self):
         listed = "- **bob** — verifies releases · skills: reviewing-code"
@@ -767,6 +777,83 @@ class ATurnIsAlwaysSettled(WithAnAgent):
         self.assertEqual(kept.list_unfinished_turns("ava"), [],
                          "a turn was left recorded as still working with nothing doing it")
         self.assertEqual(kept.list_turns("ava")[0]["turn_status"], kept.STOPPED)
+
+    def test_a_gateway_settles_an_abandoned_working_row_once_its_claim_is_free(self):
+        conversation = self.asking().conversation
+        turn = kept.add_turn(self.agent, {
+            "conversation_id": conversation, "schedule_id": None, "schedule_name": None,
+            "provider_name": support.A_STAND_IN, "model_name": None, "access_mode": "work",
+            "provider_capabilities": "{}", "session_resumed": 0,
+            "instructions_sha256": None, "instructions_bytes": None})
+
+        self.assertEqual(1, turns.settle_abandoned(self.agent))
+        self.assertEqual(kept.STOPPED, kept.get_turn(self.agent, turn)["turn_status"])
+
+    def test_a_gateway_never_settles_a_working_row_while_its_kernel_claim_is_held(self):
+        conversation = self.asking().conversation
+        turn = kept.add_turn(self.agent, {
+            "conversation_id": conversation, "schedule_id": None, "schedule_name": None,
+            "provider_name": support.A_STAND_IN, "model_name": None, "access_mode": "work",
+            "provider_capabilities": "{}", "session_resumed": 0,
+            "instructions_sha256": None, "instructions_bytes": None})
+
+        with turns.claiming(self.agent, conversation):
+            self.assertEqual(0, turns.settle_abandoned(self.agent))
+        self.assertEqual(kept.WORKING, kept.get_turn(self.agent, turn)["turn_status"])
+
+    def test_gateway_shutdown_stops_and_waits_for_the_turns_this_process_owns(self):
+        entered = threading.Event()
+
+        def running():
+            with turns._stoppable(self.agent, 1) as ours:
+                entered.set()
+                self.assertTrue(support.waited_until(lambda: ours.asked, PATIENCE))
+
+        thread = threading.Thread(target=running)
+        thread.start()
+        self.assertTrue(entered.wait(PATIENCE))
+        turns.stopping(self.agent, PATIENCE)
+        thread.join(PATIENCE)
+        self.assertFalse(thread.is_alive())
+
+    def test_new_cannot_land_between_the_forget_check_and_session_save(self):
+        request = self.asking()
+        turn = kept.add_turn(self.agent, {
+            "conversation_id": request.conversation, "schedule_id": None,
+            "schedule_name": None, "provider_name": support.A_STAND_IN,
+            "model_name": None, "access_mode": "work", "provider_capabilities": "{}",
+            "session_resumed": 0, "instructions_sha256": None,
+            "instructions_bytes": None})
+        entered_save = threading.Event()
+        release_save = threading.Event()
+        real_save = kept.save_session
+
+        def paused_save(*args):
+            entered_save.set()
+            self.assertTrue(release_save.wait(PATIENCE))
+            real_save(*args)
+
+        stream = mock.Mock(stop_reason="", stop_code=None)
+        stream.outcome.return_value = mock.Mock(code=0)
+        with turns._stoppable(self.agent, request.conversation) as ours, \
+                mock.patch.object(kept, "save_session", side_effect=paused_save):
+            settling = threading.Thread(target=lambda: turns._became(
+                request, turn,
+                [{"type": "done", "ok": True, "session_id": "late-session"}],
+                stream, {"resume": True}, support.A_STAND_IN, 0, 0, ours=ours))
+            settling.start()
+            self.assertTrue(entered_save.wait(PATIENCE))
+            forgetting = threading.Thread(target=lambda: turns.forget_when_done(
+                self.agent, request.conversation))
+            forgetting.start()
+            release_save.set()
+            settling.join(PATIENCE)
+            forgetting.join(PATIENCE)
+
+        self.assertFalse(settling.is_alive())
+        self.assertFalse(forgetting.is_alive())
+        self.assertIsNone(kept.get_session(
+            self.agent, request.conversation, support.A_STAND_IN))
 
 
 if __name__ == "__main__":

@@ -83,6 +83,25 @@ def cmd_uninstall(args: argparse.Namespace,
     if not args.confirm:
         return _needs_confirming(root, args.purge)
 
+    try:
+        with automatic_updates.updates_stopped():
+            result = _confirmed_uninstall(
+                args, supervising, root, app, automatic, locally_absent)
+            if result == OK:
+                # These names go only after every destructive step. A caller reaching a newly
+                # created lock sees an already-uninstalled app; an updater that began before this
+                # transaction is refused by its generation check when the held claim is released.
+                _let_go_of_the_lock()
+                _tidy(root)
+    except automatic_updates.CouldNotStop as why:
+        return _failed(f"the queued update worker or an update could not be stopped — {why}")
+    return result
+
+
+def _confirmed_uninstall(args: argparse.Namespace, supervising: Optional[job.Supervising],
+                         root: Path, app: Path, automatic: automatic_updates.Coordinator,
+                         locally_absent: bool) -> int:
+    """Perform the confirmed removal while queued and running updates are excluded."""
     taken, kept = [], []
 
     automatic_standing = automatic_updates.standing(supervising)
@@ -95,7 +114,6 @@ def cmd_uninstall(args: argparse.Namespace,
                        f"{automatic_wrong}")
     if automatic_standing.how != job.NOT_PLACED:
         taken.append(f"{automatic.label} — the automatic update job")
-
     # **First, and before `app/` is touched.** A job left behind points at a shim that hands off to
     # a release that is no longer on the disk, and launchd starts it at every login for ever —
     # failing, being throttled, and saying so only in the unified log. Nothing else here can be
@@ -144,9 +162,6 @@ def cmd_uninstall(args: argparse.Namespace,
         kept.append(f"{paths.backups()} (copies always survive removal)")
     if paths.projects().exists():
         kept.append(str(paths.projects()))
-
-    _let_go_of_the_lock()
-    _tidy(root)
 
     print("rundesk removed")
     for one in taken:
@@ -357,7 +372,8 @@ def _let_go_of_the_lock() -> None:
     dotfile is a removal that visibly did not finish.
     """
     for one in (paths.lock(), paths.gateway_transition_lock(), paths.update_lock(),
-                paths.work_admission_lock()):
+                paths.work_admission_lock(),
+                automatic_updates.queue_lock_at(automatic_updates.coordinator())):
         try:
             one.unlink()
         except OSError:

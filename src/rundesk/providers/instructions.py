@@ -255,14 +255,13 @@ def build(*, situation: str = USER_TO_AGENT, variables: Optional[Mapping[str, ob
     anywhere outside this module. Omitted, it is a person asking — which is the safe default for
     the same reason it always was, and is now the signature rather than a fallback in a lookup.
 
-    `team` is who this turn may hand work to, and it is composed **only for a person-facing turn**.
-    The runtime also withholds it in read mode. Schedules cannot review a later async result, and a
-    turn already answering a delegation is depth one; both are shown nobody rather than given an
-    unusable capability.
+    `team` is who this turn may hand work to, and it is composed for person-facing and scheduled
+    work. The runtime withholds it in read mode, and a turn already answering a delegation remains
+    depth one.
     """
     said = [("core", _filled(CORE, variables)),
             ("situation", _filled(situation or USER_TO_AGENT, variables))]
-    if team.strip() and situation == USER_TO_AGENT:
+    if team.strip() and situation in (USER_TO_AGENT, SCHEDULE_TO_AGENT):
         # Fill the trusted template first. Descriptions are owner data, not instruction templates;
         # a `{provider_name}` in one must remain those literal characters.
         said.append(("agents", _filled(AGENTS_LIST, variables).replace("{team}", team)))

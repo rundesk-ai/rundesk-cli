@@ -38,7 +38,7 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Protocol, Tuple
+from typing import Callable, Dict, List, NamedTuple, Optional, Protocol, Tuple
 
 from rundesk import __version__
 from rundesk.agents import directory, pages, records
@@ -62,6 +62,13 @@ FETCH_SECONDS = 60
 #: How long the newly installed release is given to settle the install. Generous: a migration step
 #: may legitimately move a lot of files.
 SETTLE_SECONDS = 300
+
+
+class Attempt(NamedTuple):
+    """The command result and whether work made this a durable queue request."""
+
+    code: int
+    queued: bool
 
 
 class Gateways(Protocol):
@@ -115,11 +122,40 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
     somebody else's repository and it changes on its own schedule. It happens last, it cannot change
     this command's exit code, and `commands.skills.refreshed` says why.
     """
+    return attempt_update(
+        _args, asking=asking, fetching=fetching, refreshing=refreshing,
+        building=building, gateways=gateways).code
+
+
+def attempt_update(_args: argparse.Namespace, asking: Optional[release.Asking] = None,
+                   fetching: Optional[Fetching] = None,
+                   refreshing: Optional[Refreshing] = None,
+                   building: Optional[Callable[..., programs.Ran]] = None,
+                   gateways: Optional[Gateways] = None) -> Attempt:
+    """Run or durably queue one update, preserving that distinction for coordinators."""
+    installed_before_waiting = paths.app().is_dir()
     try:
         with locking.only_one(paths.update_lock(), guarding="updating this install"):
-            return _cmd_update(_args, asking, fetching, refreshing, building, gateways)
+            if installed_before_waiting and not paths.app().is_dir():
+                return Attempt(_failed(
+                    "this install was removed while the update waited; run install to place it "
+                    "again"), False)
+            # No update may take a gateway away from admitted work. The same admission barrier the
+            # automatic coordinator uses closes the last-message race: once quiet is observed, no
+            # new provider turn can begin until the whole gateway cycle has finished.
+            with locking.only_one(paths.work_admission_lock(),
+                                   guarding="starting this update safely"):
+                from rundesk.commands import automatic_updates
+                busy = automatic_updates._busy_reason()
+                if busy:
+                    said = automatic_updates.queued(busy)
+                    print(said, file=sys.stderr if said.startswith("the update could not") else sys.stdout)
+                    failed_to_queue = said.startswith("the update could not")
+                    return Attempt(FAILED if failed_to_queue else OK, not failed_to_queue)
+                return Attempt(
+                    _cmd_update(_args, asking, fetching, refreshing, building, gateways), False)
     except locking.Stuck as why:
-        return _failed(str(why))
+        return Attempt(_failed(str(why)), False)
 
 
 def _cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = None,
