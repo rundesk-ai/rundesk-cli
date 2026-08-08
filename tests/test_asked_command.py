@@ -3,6 +3,7 @@
 Run directly: `python3 tests/test_asked_command.py`
 """
 
+import os
 import threading
 import time
 import unittest
@@ -11,11 +12,22 @@ from unittest import mock
 import support
 from rundesk.agents import directory, records
 from rundesk.channels import arriving
+from rundesk.channels import hosting as channels_hosting
 from rundesk.commands import asked
-from rundesk.delegations import hosting, kept
+from rundesk.delegations import admitting, hosting, kept
 from rundesk.exits import FAILED, OK
 from rundesk.providers import answering, turns
 from rundesk.providers import kept as provider_kept
+
+
+def _reaching_no_channel() -> channels_hosting.Watching:
+    """A gateway watching nothing, for a tenant whose conversations stand on no platform.
+
+    Every conversation here is a delegation or a terminal one, so nothing is ever sent through this
+    — but it is handed in rather than left out, because a tenant with nowhere to send an answer is
+    the defect these cases exist alongside, not a shape a case should be able to construct.
+    """
+    return channels_hosting.Watching({}, {}, {})
 
 
 class GuidingWorkingDelegation(support.Isolated):
@@ -50,6 +62,37 @@ class GuidingWorkingDelegation(support.Isolated):
         said = arriving.messages("bob", 1)
         self.assertEqual(["audit it", "include GUIDANCE=EMBER-284"],
                          [one["body"] for one in said])
+
+    def test_an_agents_own_turn_guides_and_carries_on_without_naming_itself(self):
+        """**The verbs an agent actually reaches for, asked the way an agent asks them.**
+
+        Every other case here passes `--agent`, which is the shape a person at a terminal uses — so
+        all of them would pass with the environment ignored, and an agent following the instruction
+        layer's own words would be told there is no turn here. Which agent it is comes from
+        `RUNDESK_AGENT`, exactly as `ask` reads it, and an agent naming an agent is refused by not
+        being possible: there is nothing on this parser to name somebody else with.
+        """
+        with mock.patch.dict(os.environ, {admitting.AGENT: "ava",
+                                          admitting.RUN: str(self.turn)}):
+            code, out, err = self.rundesk(
+                "asked", "say", self.delegation, "include GUIDANCE=EMBER-284")
+            self.assertEqual(OK, code, err)
+            self.assertIn("include GUIDANCE=EMBER-284",
+                          [one["body"] for one in arriving.messages("bob", 1)])
+
+            kept.answered("ava", self.delegation)
+            code, out, err = self.rundesk(
+                "asked", "resume", self.delegation, "now check exports")
+            self.assertEqual(OK, code, err)
+            self.assertIn("carried on", out)
+
+        # Carried on in the session it already had, and owed again — which is what puts it back in
+        # front of the answering gateway rather than starting a second task that repeats the first.
+        self.assertIsNone(kept.one("ava", self.delegation).answered_at)
+        self.assertEqual([self.landed.conversation],
+                         [one["id"] for one in arriving.conversations("bob")])
+        self.assertEqual(["audit it", "include GUIDANCE=EMBER-284", "now check exports"],
+                         [one["body"] for one in arriving.messages("bob", 1)])
 
     def test_say_refuses_answered_work_and_points_to_resume(self):
         kept.answered("ava", self.delegation)
@@ -158,7 +201,7 @@ class GuidingWorkingDelegation(support.Isolated):
         arriving.handled_by_turn("bob", self.landed.conversation, (self.landed.message,), turn)
         arriving.said_by_agent("bob", kept.FROM_AGENT, kept.source_id_for("ava", self.turn),
                                "finished report", turn=turn)
-        reviews = answering.OnADelegation(directory.logs("ava"))
+        reviews = answering.OnADelegation(directory.logs("ava"), _reaching_no_channel)
 
         with turns.claiming("ava", self.parent.conversation):
             hosting._collected_what_came_back("ava", directory.where("ava"), reviews)
@@ -193,7 +236,7 @@ class GuidingWorkingDelegation(support.Isolated):
             arriving.said_by_agent(
                 "bob", kept.FROM_AGENT, kept.source_id_for("ava", self.turn), body, turn=turn)
 
-        reviews = answering.OnADelegation(directory.logs("ava"))
+        reviews = answering.OnADelegation(directory.logs("ava"), _reaching_no_channel)
         answered(self.landed.message, "first result")
         hosting._collected_what_came_back("ava", directory.where("ava"), reviews)
         self.assertTrue(support.waited_until(
@@ -249,7 +292,7 @@ class GuidingWorkingDelegation(support.Isolated):
 
         feeder = turns._speaking(
             "ava", active, SlowRefusal(), words.each(), reachable=words)
-        reviews = answering.OnADelegation(directory.logs("ava"))
+        reviews = answering.OnADelegation(directory.logs("ava"), _reaching_no_channel)
         with turns.claiming("ava", self.parent.conversation), \
                 turns._reachable("ava", self.parent.conversation, words):
             began = time.monotonic()

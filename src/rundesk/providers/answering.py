@@ -149,12 +149,16 @@ class Refused(Exception):
 THE_RUNNER = ("providers", "run")
 
 
-class OnAChannel:
-    """Answers a message that arrived on a channel, on a thread of its own.
+class IntoAChannel:
+    """Getting an agent's words onto the platform its conversation stands on.
 
-    Handed to `hosting.looked`. Holds nothing but what it needs to find the gateway's own log and to
-    reach the adapter again with the answer — the turn itself keeps no state here, because a turn
-    that outlived the object that started it would be a turn nobody could settle.
+    **One door out, and two tenants leave through it.** A message a person sent and an answer another
+    agent handed back are different work, and what happens once a turn has settled is the same work
+    exactly: cut the reply to what the platform takes, attach whatever the brain made, put the cost on
+    it, and hand it to the adapter. Written twice, it was written once — and the half that was never
+    written is why a delegated answer reached a person's records and never their room.
+
+    Holds nothing but what it needs to find the gateway's own log and to reach the adapter again.
     """
 
     def __init__(self, where: Path, hosted: Callable[[], hosting.Watching]):
@@ -172,18 +176,6 @@ class OnAChannel:
         """What the gateway is watching **now** — asked again every time, never held."""
         return self._hosted()
 
-    def busy(self, agent: str, conversation: int) -> bool:
-        """Whether a turn is already running in this conversation. **Asked of the kernel.**
-
-        `hosting` publishes this question and cannot answer it — what a turn is lives here. It is
-        asked before a message is marked, so that somebody typing again while their agent works is
-        not given a mark for a turn that will never begin.
-
-        `turns.busy` probes with a *shared* lock rather than an exclusive one, so two of these asked
-        at the same moment do not each read the other as a running turn.
-        """
-        return turns.busy(agent, conversation)
-
     def remark(self, agent: str, kind: str, place: str, said: str) -> None:
         """One finished thing the agent said mid-turn, posted on its own (R-CH-19).
 
@@ -200,87 +192,6 @@ class OnAChannel:
             pieces = delivery.split(said, at_most=self._at_most(agent, kind))
             if pieces:
                 hosting.told(agent, self._where, self._hosted(), kind, place, pieces)
-
-    def answer(self, agent: str, kind: str, place: str, who: str, body: str,
-               external_id: Optional[str], landed: arriving.Landed) -> None:
-        """Start a turn for this message and **return at once**. Never raises.
-
-        A thread rather than the caller's, for the reason `hosting.Answering` gives. Daemon, because
-        a gateway going down must not be held open by a turn — what settles that turn is the same
-        thing that settles one killed outright, and it is the lock rather than this thread.
-        """
-        answering = threading.Thread(
-            target=self._answered, name=f"answer-{kind}-{place}",
-            args=(agent, kind, place, body, external_id, landed), daemon=True)
-        answering.start()
-
-    def _answered(self, agent: str, kind: str, place: str, body: str,
-                  external_id: Optional[str], landed: arriving.Landed) -> None:
-        """One turn for one message. **Never raises** — this is a thread, and nobody is above it.
-
-        **`external_id` is carried the whole way down** — it is the platform's own name for the
-        message somebody sent, and two separate things need it. The answer quotes it, so a reply
-        reads as an answer rather than as a remark (R-DIS-28); and the mark that says how the turn
-        ended goes on *that* message rather than nowhere (R-DIS-7). Both were built and neither
-        fired, because this thread was started without it and every layer below defaulted it away.
-        """
-        try:
-            for again in range(TRIES):
-                try:
-                    self._marked(agent, kind, place, WORKING)
-                    watching = _Streaming(self, agent, kind, place)
-                    got = turns.run(turns.Request(
-                        agent=agent, prompt=body, conversation=landed.conversation,
-                        situation=instructions.USER_TO_AGENT,
-                        source=arriving.FROM_CHANNEL, place=place,
-                        inbound_messages=(landed.message,)), watching=watching.heard,
-                        # The final attempt waits on the kernel's conversation claim. This thread
-                        # owns the durable channel message, and without a later gateway sweep it is
-                        # the one place that can guarantee an external active turn is followed by
-                        # exactly one fallback turn rather than an orphaned pending row.
-                        waiting=again + 1 == TRIES)
-                    refused = self._delivered(agent, kind, place, got, external_id,
-                                              watching.said_already, watching.linked)
-                    # **One producer of the mark, and this is still it.** Turning the adapter's
-                    # acknowledgement into a mark of its own was removed once and must stay removed
-                    # — two producers raced and the mark a person saw was whichever record arrived
-                    # last. What changed is that the outcome now includes whether the answer reached
-                    # anybody, which is a fact about this turn and not a second opinion about it.
-                    became = AS_A_STATE.get(got.turn_status, FAILED)
-                    if refused:
-                        _note(self._where, f"channel {kind}: the answer to {place} was not "
-                                           f"delivered — {refused}", logs.ERROR)
-                        became = FAILED
-                    self._marked(agent, kind, place, became, external_id)
-                    return
-                except turns.Busy:
-                    admission = turns.Admission()
-                    if turns.also_say(
-                            agent, landed.conversation, body, (landed.message,), admission):
-                        if admission.wait() is not True:
-                            continue
-                        # The agent is working and its brain reads while it works, so this reached
-                        # the turn already going rather than waiting behind it. What it says next
-                        # answers both, which is what somebody adding to their own question means.
-                        _note(self._where, f"channel {kind}: {place} is being answered, so this "
-                                           "was said into the turn already running")
-                        return
-                    # **Nobody took it, and that is not the same as nothing to do.** Either this
-                    # brain reads nothing after its prompt, or the turn settled in the moment
-                    # between the claim being refused and the word being offered. Both leave the
-                    # message unanswered and this thread holding it, so it is asked again — the
-                    # turn that was in the way is over or is ending, and the claim is about to be
-                    # free. Bounded, because a conversation somebody is typing into steadily must
-                    # not keep one thread here for ever.
-                    if again + 1 < TRIES:
-                        time.sleep(BEFORE_ASKING_AGAIN)
-            _note(self._where, f"channel {kind}: {place} stayed busy, so this was recorded and "
-                               "not answered", logs.ERROR)
-            self._marked(agent, kind, place, FAILED, external_id)
-        except Exception as why:                       # noqa: BLE001 — see the docstring
-            _note(self._where, f"channel {kind}: answering {place} went wrong ({why})", logs.ERROR)
-            with contextlib.suppress(Exception):
-                self._marked(agent, kind, place, FAILED, external_id)
 
     def _delivered(self, agent: str, kind: str, place: str, got: turns.Outcome,
                    external_id: Optional[str] = None, said_already: bool = False,
@@ -406,6 +317,108 @@ class OnAChannel:
                 return at_most
         return delivery.WHEN_UNSAID
 
+
+class OnAChannel(IntoAChannel):
+    """Answers a message that arrived on a channel, on a thread of its own.
+
+    Handed to `hosting.looked`. Holds nothing but what it needs to find the gateway's own log and to
+    reach the adapter again with the answer — the turn itself keeps no state here, because a turn
+    that outlived the object that started it would be a turn nobody could settle.
+    """
+
+    def busy(self, agent: str, conversation: int) -> bool:
+        """Whether a turn is already running in this conversation. **Asked of the kernel.**
+
+        `hosting` publishes this question and cannot answer it — what a turn is lives here. It is
+        asked before a message is marked, so that somebody typing again while their agent works is
+        not given a mark for a turn that will never begin.
+
+        `turns.busy` probes with a *shared* lock rather than an exclusive one, so two of these asked
+        at the same moment do not each read the other as a running turn.
+        """
+        return turns.busy(agent, conversation)
+
+    def answer(self, agent: str, kind: str, place: str, who: str, body: str,
+               external_id: Optional[str], landed: arriving.Landed) -> None:
+        """Start a turn for this message and **return at once**. Never raises.
+
+        A thread rather than the caller's, for the reason `hosting.Answering` gives. Daemon, because
+        a gateway going down must not be held open by a turn — what settles that turn is the same
+        thing that settles one killed outright, and it is the lock rather than this thread.
+        """
+        answering = threading.Thread(
+            target=self._answered, name=f"answer-{kind}-{place}",
+            args=(agent, kind, place, body, external_id, landed), daemon=True)
+        answering.start()
+
+    def _answered(self, agent: str, kind: str, place: str, body: str,
+                  external_id: Optional[str], landed: arriving.Landed) -> None:
+        """One turn for one message. **Never raises** — this is a thread, and nobody is above it.
+
+        **`external_id` is carried the whole way down** — it is the platform's own name for the
+        message somebody sent, and two separate things need it. The answer quotes it, so a reply
+        reads as an answer rather than as a remark (R-DIS-28); and the mark that says how the turn
+        ended goes on *that* message rather than nowhere (R-DIS-7). Both were built and neither
+        fired, because this thread was started without it and every layer below defaulted it away.
+        """
+        try:
+            for again in range(TRIES):
+                try:
+                    self._marked(agent, kind, place, WORKING)
+                    watching = _Streaming(self, agent, kind, place)
+                    got = turns.run(turns.Request(
+                        agent=agent, prompt=body, conversation=landed.conversation,
+                        situation=instructions.USER_TO_AGENT,
+                        source=arriving.FROM_CHANNEL, place=place,
+                        inbound_messages=(landed.message,)), watching=watching.heard,
+                        # The final attempt waits on the kernel's conversation claim. This thread
+                        # owns the durable channel message, and without a later gateway sweep it is
+                        # the one place that can guarantee an external active turn is followed by
+                        # exactly one fallback turn rather than an orphaned pending row.
+                        waiting=again + 1 == TRIES)
+                    refused = self._delivered(agent, kind, place, got, external_id,
+                                              watching.said_already, watching.linked)
+                    # **One producer of the mark, and this is still it.** Turning the adapter's
+                    # acknowledgement into a mark of its own was removed once and must stay removed
+                    # — two producers raced and the mark a person saw was whichever record arrived
+                    # last. What changed is that the outcome now includes whether the answer reached
+                    # anybody, which is a fact about this turn and not a second opinion about it.
+                    became = AS_A_STATE.get(got.turn_status, FAILED)
+                    if refused:
+                        _note(self._where, f"channel {kind}: the answer to {place} was not "
+                                           f"delivered — {refused}", logs.ERROR)
+                        became = FAILED
+                    self._marked(agent, kind, place, became, external_id)
+                    return
+                except turns.Busy:
+                    admission = turns.Admission()
+                    if turns.also_say(
+                            agent, landed.conversation, body, (landed.message,), admission):
+                        if admission.wait() is not True:
+                            continue
+                        # The agent is working and its brain reads while it works, so this reached
+                        # the turn already going rather than waiting behind it. What it says next
+                        # answers both, which is what somebody adding to their own question means.
+                        _note(self._where, f"channel {kind}: {place} is being answered, so this "
+                                           "was said into the turn already running")
+                        return
+                    # **Nobody took it, and that is not the same as nothing to do.** Either this
+                    # brain reads nothing after its prompt, or the turn settled in the moment
+                    # between the claim being refused and the word being offered. Both leave the
+                    # message unanswered and this thread holding it, so it is asked again — the
+                    # turn that was in the way is over or is ending, and the claim is about to be
+                    # free. Bounded, because a conversation somebody is typing into steadily must
+                    # not keep one thread here for ever.
+                    if again + 1 < TRIES:
+                        time.sleep(BEFORE_ASKING_AGAIN)
+            _note(self._where, f"channel {kind}: {place} stayed busy, so this was recorded and "
+                               "not answered", logs.ERROR)
+            self._marked(agent, kind, place, FAILED, external_id)
+        except Exception as why:                       # noqa: BLE001 — see the docstring
+            _note(self._where, f"channel {kind}: answering {place} went wrong ({why})", logs.ERROR)
+            with contextlib.suppress(Exception):
+                self._marked(agent, kind, place, FAILED, external_id)
+
     def _marked(self, agent: str, kind: str, place: str, state: str,
                 external_id: Optional[str] = None) -> None:
         """Say what the turn is doing, in the words the channel layer renders. Never raises.
@@ -446,7 +459,7 @@ class _Streaming:
     remark and once as the answer.
     """
 
-    def __init__(self, on: "OnAChannel", agent: str, kind: str, place: str) -> None:
+    def __init__(self, on: "IntoAChannel", agent: str, kind: str, place: str) -> None:
         self._on = on
         self._agent = agent
         self._kind = kind
@@ -780,7 +793,7 @@ def _delegated_prompt(agent: str, conversation: int, delegator: str) -> Tuple[st
     return turns.delegated_prompt(agent, conversation, delegator)
 
 
-class OnADelegation:
+class OnADelegation(IntoAChannel):
     """Runs the two turns a delegation needs. Handed to `delegations.hosting.looked`.
 
     **Both directions end in the same three-way answer**, and it is not written here: a turn starts
@@ -791,10 +804,23 @@ class OnADelegation:
 
     A thread per turn, daemon, for the reason `OnAChannel.answer` gives: a gateway going down must
     not be held open by one, and what settles a turn is its lock rather than the thread watching it.
-    """
 
-    def __init__(self, where: Path):
-        self._where = where
+    ## Why this reaches a channel at all
+
+    **A turn that answered somebody has to answer them where they are standing.** Waking the agent
+    was only ever half of it: the review turn ran, said what it thought of the answer, and wrote that
+    into the agent's own records — and there it stopped, because the one thing in this build that
+    ever posted to an adapter was the tenant answering a *channel* message. So a person watched their
+    agent hand work over, watched nothing come back, and was right. The words existed; the room they
+    were owed to was never told.
+
+    It is `IntoAChannel` that both tenants get that from, rather than a second copy of the same
+    cutting, attaching and costing — see its docstring. What decides whether anything is sent is the
+    conversation, never a flag: one standing on a platform is answered out loud, and one standing on
+    nothing is not. **That is also what keeps an answering agent's own room silent** (R-DEL-16) — a
+    delegation conversation arrived on no channel, so there is nobody to tell and nothing here has to
+    know it is the far side of somebody else's ask.
+    """
 
     def answer_this(self, agent: str, conversation: int, delegation_id: str,
                     delegator: str) -> None:
@@ -828,6 +854,28 @@ class OnADelegation:
                          args=(agent, conversation, said, from_agent, landed, admitted),
                          daemon=True).start()
         return admitted.wait(REVIEW_ADMITTED_WITHIN) is True
+
+    def showed(self, agent: str, conversation: int, state: str, to_agent: str,
+               delegation_id: str, seconds: Optional[int] = None) -> bool:
+        """Say one of `delegations.hosting.SHOWN` where the work was asked for. **Never raises.**
+
+        **The room, found from the conversation** — the same question `_take` asks before it answers
+        out loud, and the same answer: a conversation standing on no platform has nobody to tell, so
+        this is `False` and nothing else happens. That is what keeps an agent's own room quiet about
+        work another agent handed *to* it.
+        """
+        kind = arriving.on_which_channel(agent, conversation)
+        stands = arriving.where_it_stands(agent, conversation)
+        if not kind or stands is None:
+            return False
+        # Rendered here, where `channels.delivery` is reachable and `delegations` is not — the same
+        # words the cost line uses for the same quantity, so one turn's `47s elapsed` and one
+        # delegation's `47s` are the same measure said the same way.
+        elapsed = delivery.duration(seconds) if seconds is not None else ""
+        with contextlib.suppress(Exception):
+            return hosting.delegating(agent, self._where, self._hosted(), kind, stands[1],
+                                      state, to_agent, delegation_id, elapsed)
+        return False
 
     def _answered(self, agent: str, conversation: int, delegation_id: str,
                   delegator: str) -> None:
@@ -864,6 +912,10 @@ class OnADelegation:
         The same three answers `OnAChannel._answered` gives a person's message, and deliberately the
         same: an agent busy on a channel when an answer comes back should read it now rather than
         after whatever it is doing, which is the whole of what steering is for.
+
+        **Only the turn this starts sends anything.** A word said into a turn already running is
+        answered by *that* turn, which posts its own final answer with this read into it — so a
+        delivery here as well would post the same exchange twice.
         """
         # **Where this conversation actually stands, asked rather than assumed.** `turns` writes the
         # answer back through `said_by_agent`, which finds the conversation from `(source, place)` —
@@ -875,21 +927,30 @@ class OnADelegation:
                 admitted.refused()
             return False
         source, place = stands
+        # The adapter that speaks to wherever this conversation stands, or `None` where it stands on
+        # no platform — a delegation being answered, a schedule, a terminal. Read once here rather
+        # than inside the retry, because it cannot change between attempts.
+        kind = (arriving.on_which_channel(agent, conversation)
+                if source == arriving.FROM_CHANNEL else None)
         try:
             for again in range(TRIES):
                 try:
-                    turns.run(turns.Request(
+                    watching = (_Streaming(self, agent, kind, place) if kind else None)
+                    got = turns.run(turns.Request(
                         agent=agent, prompt=body, conversation=conversation,
                         situation=situation,
                         source=source, place=place, answering=answering,
                         caller_agent=caller_agent, inbound_messages=message_ids),
+                        watching=watching.heard if watching else None,
                         admitted=admitted.accepted if admitted is not None else None)
+                    if kind and watching:
+                        self._out_loud(agent, kind, place, got, watching, about)
                     return True
                 except turns.Busy:
-                    delivery = turns.Admission()
+                    said_into = turns.Admission()
                     if turns.also_say(
-                            agent, conversation, body, message_ids, delivery):
-                        if delivery.wait() is not True:
+                            agent, conversation, body, message_ids, said_into):
+                        if said_into.wait() is not True:
                             continue
                         if admitted is not None:
                             admitted.accepted()
@@ -907,6 +968,27 @@ class OnADelegation:
             if admitted is not None:
                 admitted.refused()
             return False
+
+    def _out_loud(self, agent: str, kind: str, place: str, got: turns.Outcome,
+                  watching: "_Streaming", about: str) -> None:
+        """Send what the turn settled with to the room it was asked in. **Never raises.**
+
+        Guarded rather than left to the caller's `except`: a platform that would not take the answer
+        must not read as the turn having gone wrong, because it did not — the words are in the
+        agent's records either way, and what failed is one delivery.
+
+        No mark goes with it. The four marks belong to *a message somebody sent*, and nobody sent
+        this one: it is the agent picking its own conversation back up, so there is nothing on the
+        platform for a reaction to land on.
+        """
+        try:
+            refused = self._delivered(agent, kind, place, got, None,
+                                      watching.said_already, tuple(watching.linked))
+        except Exception as why:  # noqa: BLE001 — a thread, and nobody is above it
+            _note(self._where, f"{about} could not be sent to {kind} ({why})", logs.ERROR)
+            return
+        if refused:
+            _note(self._where, f"channel {kind}: {about} was not delivered — {refused}", logs.ERROR)
 
 
 class OnASchedule:

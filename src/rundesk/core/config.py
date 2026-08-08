@@ -146,6 +146,24 @@ def moment_of(when: Optional[datetime] = None, days_ago: int = 0) -> str:
     return at.strftime(MOMENT)
 
 
+def read_moment(said: str) -> Optional[datetime]:
+    """One stored moment read back, or `None` where that is not what it is.
+
+    The other half of `moment_of`, here for the reason that one is here: the format is named once,
+    and something that wrote through this and read through its own `strptime` would be two things
+    that can come to disagree about what a stored moment looks like.
+
+    **`None` rather than an exception**, because every caller so far is a sweep asking how long ago
+    something was, on a row it does not own and cannot repair. A moment nobody can read is not a
+    moment of zero seconds ago, and it is not a reason to stop the pass either — so it is answered
+    as the third thing it actually is, and the caller decides.
+    """
+    try:
+        return datetime.strptime(str(said), MOMENT).replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
 def moved(when: Optional[datetime] = None, data: Optional[Path] = None) -> str:
     """Record that a version has just arrived on this install. Returns the moment recorded.
 

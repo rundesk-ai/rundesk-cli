@@ -683,6 +683,47 @@ def doing(agent: str, where: Path, watching: Watching, kind: str, place: str,
     return False
 
 
+def delegating(agent: str, where: Path, watching: Watching, kind: str, place: str,
+               state: str, to_agent: str, delegation_id: str,
+               elapsed: str = "") -> bool:
+    """What is happening to work this agent handed to another one (R-DEL-16).
+
+    **Its own record rather than an `activity` line**, because the two are different news and the
+    difference shows the moment a surface renders them. An activity line is one thing a *brain*
+    reached for, disposable, folded into a running count and edited away — and work handed to a
+    colleague outlives the turn that handed it over, so a person scrolling back has to still find it
+    where it happened. It also carries what no activity line has anywhere to put: how long the work
+    has been out.
+
+    **The words are `delegations`', the marks are the adapter's.** Four fields cross and no more —
+    the closed state, who has it, which ask, and how long — and what a person is *shown* is the
+    surface's, exactly as it is for a turn's four marks and for the cost line. A sentence composed
+    here with an emoji in it would be this product deciding what Discord's small print looks like,
+    for every surface that will ever exist.
+
+    **`elapsed` arrives as words and not as a number**, for the reason the cost line does: how long
+    something took is rendered once, by `delivery.duration`, for every platform. Sent as seconds it
+    would be arithmetic each adapter did again, and two adapters would have two ideas of what twenty
+    minutes looks like.
+
+    **Never raises, and `False` is an ordinary answer.** A room nobody is hosting is a room that
+    hears nothing, and a delegation must not be held up by a chat platform any more than a turn is.
+    """
+    one = watching.running.get(kind)
+    if one is None:
+        return False
+    said = {"do": "delegation", "place": place, "state": state,
+            "who": to_agent, "ask": delegation_id}
+    # **Left out rather than sent empty.** Nothing known and no time at all are different facts, and
+    # a surface handed `""` has to decide what that meant; handed nothing, there is nothing to say.
+    if elapsed:
+        said["elapsed"] = elapsed
+    with contextlib.suppress(Exception):
+        _said_to(where, one, said)
+        return True
+    return False
+
+
 def connected(watching: Watching, kind: str) -> bool:
     """Whether this adapter has said it reached its platform. **Started is not connected.**
 

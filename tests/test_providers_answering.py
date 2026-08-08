@@ -38,6 +38,7 @@ from rundesk.channels import arriving, delivery, hosting
 from rundesk.channels import hosting as answering_hosting
 from rundesk.channels import kept as channels_kept
 from rundesk.core import paths
+from rundesk.delegations import hosting as delegations
 from rundesk.providers import answering, kept, turns
 from rundesk.schedules import kept as schedules_kept
 from rundesk.utils import programs
@@ -123,6 +124,10 @@ class Answering(support.Isolated):
         self.adapters = paths.code() / "channels"
         self.adapters.mkdir(parents=True, exist_ok=True)
         self.told = self.home / "told.txt"
+        #: What the gateway is watching, for a tenant that has to reach an adapter. A case that never
+        #: hosts anything keeps this empty one, which sends nothing — rather than `None`, which is
+        #: how a tenant comes to have no way out and no way to say so.
+        self.hosted = hosting.Watching({}, {}, {})
         self.watching = []
         self.pids = []
         # Read after the root is set and before the case can start anything, so what is running now
@@ -191,8 +196,17 @@ class Answering(support.Isolated):
         answers = answering.OnAChannel(self.where, lambda: watching)
         hosting.looked(self.agent, self.where, watching, answering=answers)
         self.watching.append(watching)
+        self.hosted = watching
         self.pids.extend(one.pid for one in watching.running.values() if one.pid)
         return watching
+
+    def a_delegation_tenant(self):
+        """What runs a delegation's turns, reaching whatever this case is hosting **now**.
+
+        Asked each time rather than bound, exactly as the gateway hands it: a case that starts
+        hosting after building one of these still has its answers reach the adapter.
+        """
+        return answering.OnADelegation(self.where, lambda: self.hosted)
 
     def what_it_was_told(self):
         """Every record rundesk wrote to the adapter, as objects, oldest first."""
@@ -224,6 +238,10 @@ class Answering(support.Isolated):
 
     def delivered(self):
         return [one.get("text") for one in self.what_it_was_told() if one.get("do") == "deliver"]
+
+    def delegating(self):
+        """Everything the surface was told about work this agent handed to another one."""
+        return [one for one in self.what_it_was_told() if one.get("do") == "delegation"]
 
     def activity(self):
         """Every broad line the surface was shown while the turn was still running."""
@@ -935,6 +953,111 @@ class WhatAgentsSays(support.Isolated):
         ran.assert_not_called()
 
 
+class AnAnswerHandedBackReachesThePersonWhoAsked(Answering):
+    """What another agent sent back, all the way out to the room the work was asked for in.
+
+    **This is the half that was missing, and everything either side of it worked.** An agent handed
+    work over, the answering agent answered, collection woke the delegator, and its review turn ran
+    and said what it made of the answer — into its own records, and nowhere else. A person watching
+    the direct message they had asked in saw their agent hand the work over and then saw nothing at
+    all, for ever, which reads exactly like a delegation that never came back.
+
+    So these cases go the whole way: a real adapter, a real turn, and the assertion is what came out
+    of the adapter's pipe rather than what is in the database.
+    """
+
+    def a_conversation_on_the_channel(self):
+        """A channel with one exchange already in it, and the conversation that exchange stands in.
+
+        Started the way a real one is — a message arriving and being answered — because what is
+        under test is a *later* turn on a conversation a person is already reading.
+        """
+        self.a_channel(saying=self.a_message_arrived())
+        watching = self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: self.delivered()))
+        conversation = arriving.standing_in(self.agent, "1180")
+        self.assertIsNotNone(conversation)
+        return watching, conversation
+
+    def test_the_review_turn_answers_in_the_room_the_work_was_asked_for_in(self):
+        """The whole defect, in one assertion: the words reached the platform, not only the records."""
+        _watching, conversation = self.a_conversation_on_the_channel()
+        already = len(self.delivered())
+        self.a_delegation_tenant().review_this(
+            self.agent, conversation, "im online", "dev", "del-41-4e07c5", "7")
+        self.waited_for_a_turn(which=2)
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) > already),
+                        "the review turn said nothing where the person was waiting")
+
+    def test_the_answer_it_reviewed_is_what_it_was_answering(self):
+        """The review turn is asked about *that* answer, so what comes back is about it."""
+        _watching, conversation = self.a_conversation_on_the_channel()
+        self.a_delegation_tenant().review_this(
+            self.agent, conversation, "im online", "dev", "del-41-4e07c5", "7")
+        self.waited_for_a_turn(which=2)
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) > 1))
+        self.assertIn("im online", " ".join(self.delivered()))
+
+    def test_the_agent_answering_somebody_elses_ask_says_nothing_in_its_own_room(self):
+        """R-DEL-16, and it falls out of the conversation rather than out of a rule.
+
+        A delegation stands on no platform, so there is nobody for the answering side to tell —
+        which is what must stay true now that this tenant can reach an adapter at all.
+        """
+        self.a_conversation_on_the_channel()
+        already = len(self.delivered())
+        landed = arriving.recorded_for_a_delegation(
+            self.agent, "ava", 3, "say im online", delegation_id="del-3-abcdef")
+        self.a_delegation_tenant().answer_this(
+            self.agent, landed.conversation, "del-3-abcdef", "ava")
+        self.waited_for_a_turn(which=2)
+        self.assertEqual(already, len(self.delivered()),
+                         "the answering agent's own room was told about somebody else's work")
+
+
+class WhatARoomIsToldWhileWorkIsOut(Answering):
+    """The notices, the whole way out: the tenant's word, through the seam, onto a real adapter.
+
+    `test_delegations_hosting` proves *when* each is said and `test_channels_discord` proves what
+    each looks like. What neither can prove on its own is that the two ends meet — which is the same
+    thing that was wrong about the answer itself, and the reason this file exists.
+    """
+
+    def test_what_happens_to_handed_over_work_reaches_the_adapter(self):
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        conversation = arriving.standing_in(self.agent, "1180")
+
+        self.assertTrue(self.a_delegation_tenant().showed(
+            self.agent, conversation, delegations.HANDED_OVER, "dev", "del-41-4e07c5", 0))
+        self.assertTrue(self.waited_until(lambda: self.delegating()),
+                        "nothing about the delegation reached the channel")
+        said = self.delegating()[0]
+        self.assertEqual((delegations.HANDED_OVER, "dev", "del-41-4e07c5", "1180"),
+                         (said["state"], said["who"], said["ask"], said["place"]))
+
+    def test_how_long_it_has_been_out_crosses_as_words_rather_than_as_a_number(self):
+        """The same rendering the cost line uses, so one measure is said one way everywhere."""
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        conversation = arriving.standing_in(self.agent, "1180")
+
+        self.a_delegation_tenant().showed(
+            self.agent, conversation, delegations.STILL_WORKING, "dev", "del-41-4e07c5", 20 * 60)
+        self.assertTrue(self.waited_until(lambda: self.delegating()))
+        self.assertEqual("20m", self.delegating()[0]["elapsed"])
+
+    def test_a_conversation_standing_on_no_platform_is_told_nothing(self):
+        """R-DEL-16 again, at the other end: the agent answering somebody else's ask has no room."""
+        landed = arriving.recorded_for_a_delegation(
+            self.agent, "ava", 3, "say im online", delegation_id="del-3-abcdef")
+        self.assertFalse(self.a_delegation_tenant().showed(
+            self.agent, landed.conversation, delegations.CAME_BACK, "ava", "del-3-abcdef", 5))
+
+
 class AScheduleThatAsksTheAgent(Answering):
 
     def a_schedule(self, name="nightly", prompt="what happened overnight?", **also):
@@ -1002,7 +1125,7 @@ class ADelegatedResultReachesItsParent(Answering):
         conversation = arriving.standing_in(self.agent, "1180")
         self.assertIsNotNone(conversation)
 
-        answering.OnADelegation(self.where).review_this(
+        self.a_delegation_tenant().review_this(
             self.agent, conversation, marker, "bob")
 
         turn = self.waited_for_a_turn()
@@ -1024,7 +1147,10 @@ class ADelegatedResultReachesItsParent(Answering):
         fallback = turns.Outcome(turn=29, turn_status=kept.DONE, reply="reviewed")
         attempts = 0
 
-        def run(_request, admitted=None):
+        # `watching` is named here because `turns.run` names it, and a double narrower than the real
+        # thing refuses a caller the real thing would have taken — which reads as the product having
+        # failed. It did: this case went red on a `TypeError` no product code could produce.
+        def run(_request, watching=None, admitted=None):
             nonlocal attempts
             attempts += 1
             if attempts == 1:
@@ -1039,7 +1165,7 @@ class ADelegatedResultReachesItsParent(Answering):
 
         with mock.patch.object(turns, "run", side_effect=run) as ran, \
                 mock.patch.object(turns, "also_say", side_effect=refused):
-            admitted = answering.OnADelegation(self.where).review_this(
+            admitted = self.a_delegation_tenant().review_this(
                 self.agent, parent.conversation, result, "bob", "del-1-aabbcc")
 
         self.assertTrue(admitted)
@@ -1058,7 +1184,7 @@ class ADelegatedResultReachesItsParent(Answering):
         self.assertTrue(original.worked)
         self.assertFalse(turns.busy(self.agent, first.conversation))
 
-        answering.OnADelegation(self.where).review_this(
+        self.a_delegation_tenant().review_this(
             self.agent, first.conversation, marker, "bob")
 
         turn = self.waited_for_a_turn(which=2)

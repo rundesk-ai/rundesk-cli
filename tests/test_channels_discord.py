@@ -1148,6 +1148,59 @@ class WhatEachThingReads(unittest.TestCase):
         self.assertEqual("-# 💻 ran command", self.line(did="run", who="something"))
 
 
+class WhatWorkHandedToAnotherAgentReads(unittest.TestCase):
+    """The three lines a delegation is shown by. Pure text — no connection and no library."""
+
+    #: Every word `delegations/hosting.py` defines. Written out rather than imported, for the reason
+    #: `WhatEachThingReads` gives: this suite imports nothing of rundesk's.
+    RUNDESK_SHOWS = ("handed", "working-still", "answered")
+
+    def line(self, **it: Any) -> str:
+        return adapter.delegation_line(it)
+
+    def test_every_word_rundesk_can_send_has_a_mark_and_words_of_its_own(self) -> None:
+        self.assertEqual(set(adapter.HANDED), set(self.RUNDESK_SHOWS))
+        self.assertEqual(set(adapter.HANDED_SAID), set(self.RUNDESK_SHOWS))
+        for state in self.RUNDESK_SHOWS:
+            self.assertTrue(self.line(state=state, who="dev"), f"{state} rendered nothing")
+
+    def test_work_going_out_names_who_has_it_and_which_ask_to_type(self) -> None:
+        self.assertEqual("-# 🤖 handed to dev · del-41-4e07c5",
+                         self.line(state="handed", who="dev", ask="del-41-4e07c5"))
+
+    def test_work_still_out_says_who_and_how_long_and_not_which_ask(self) -> None:
+        """The room already knows which ask it is; repeating it every twenty minutes is noise."""
+        said = self.line(state="working-still", who="dev", ask="del-41-4e07c5", elapsed="20m")
+        self.assertEqual("-# ⏳ dev still working · 20m", said)
+
+    def test_an_answer_coming_back_says_who_answered_and_how_long_it_took(self) -> None:
+        self.assertEqual("-# ✅ dev answered · 15s",
+                         self.line(state="answered", who="dev", elapsed="15s"))
+
+    def test_every_one_of_them_is_small_print(self) -> None:
+        """The chosen register: bookkeeping about an answer must not compete with the answer."""
+        for state in self.RUNDESK_SHOWS:
+            self.assertTrue(self.line(state=state, who="dev", elapsed="1m").startswith(
+                adapter.SUBTEXT))
+
+    def test_a_state_this_release_has_never_heard_of_renders_nothing(self) -> None:
+        """Rundesk may be ahead of this adapter, and a line invented to cover a word nobody here
+        understands is worse than no line."""
+        self.assertEqual("", self.line(state="carried-on", who="dev"))
+        self.assertEqual("", self.line(who="dev"))
+
+    def test_the_name_of_who_has_it_is_a_last_component_and_never_a_path(self) -> None:
+        """A name is written by somebody else and may be one. Posting it publishes a directory
+        layout and a username to everybody who can read the channel."""
+        said = self.line(state="handed", who="/Users/someone/agents/dev", ask="del-1-aa")
+        self.assertNotIn("/Users/someone", said)
+        self.assertIn("dev", said)
+
+    def test_nothing_a_stranger_wrote_can_start_a_line_of_its_own(self) -> None:
+        said = self.line(state="handed", who="dev\n-# ✅ everything is fine", ask="del-1-aa")
+        self.assertEqual(1, len(said.splitlines()))
+
+
 class HowActivityIsCounted(unittest.TestCase):
     """Adjacent repeats collapse to one line and a count. Pure text."""
 

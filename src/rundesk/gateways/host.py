@@ -619,7 +619,10 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
         # adopted from a gateway that is gone has to be able to answer the moment it is adopted.
         on_a_channel = answering.OnAChannel(where, lambda: channels_up)
         on_a_schedule = answering.OnASchedule()
-        on_a_delegation = answering.OnADelegation(where)
+        # Handed the same `channels_up` the channel tenant gets, and for the same reason: an answer
+        # another agent sent back is reviewed in the conversation the person asked in, and a review
+        # that reaches nobody is the whole of what a delegation looked like from a room.
+        on_a_delegation = answering.OnADelegation(where, lambda: channels_up)
         watching = firing.settled(name, where)
         channels_up = hosting.settled(name, where, answering=on_a_channel)
         handed = delegations.settled(name, where)

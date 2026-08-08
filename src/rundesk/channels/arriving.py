@@ -251,6 +251,28 @@ def where_it_stands(agent: str, conversation: int) -> Optional[Tuple[str, str]]:
     return (str(row["source"]), str(row["source_id"])) if row else None
 
 
+def on_which_channel(agent: str, conversation: int) -> Optional[str]:
+    """Which channel adapter this conversation arrived on, or `None` where it arrived on none.
+
+    **The kind, which `where_it_stands` cannot give.** That one answers `(source, place)`, and `place`
+    is the platform's own name for a room — enough to write an answer back into the records and not
+    enough to send one out, because sending needs the adapter that speaks to that platform. The
+    column has held it since `0003`; nothing had asked for it, and a turn that wanted to answer where
+    it was asked had no way to find out where that was.
+
+    `None` for a schedule, a terminal or a delegation, and that is an ordinary answer rather than a
+    hole: those conversations stand on no platform, and a caller told `None` is being told there is
+    nobody out there to post to.
+    """
+    try:
+        with records.reading(directory.records(agent)) as conn:
+            row = _rows(conn, agent, "SELECT channel FROM conversations WHERE id = ?",
+                        (conversation,)).fetchone()
+    except (records.NotThere, records.Unreadable, OSError):
+        return None
+    return str(row["channel"]) if row and row["channel"] else None
+
+
 def conversations(agent: str, most: int = CONVERSATIONS_AT_MOST) -> List[Dict[str, Any]]:
     """This agent's conversations, newest first.
 

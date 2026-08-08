@@ -22,7 +22,17 @@ rewrite: a gateway hosts a list.
 notices work addressed to it and answers as itself; a delegation to an agent nothing is running would
 wait for ever, so `rundesk ask` refuses it at the point of asking rather than letting the work sit.
 The same loop collects the answers to what *this* agent handed out, and puts each in front of it —
-into the turn already running if there is one, and by starting a turn if there is not.
+into the turn already running if there is one, and by starting a turn if there is not. **The turn it
+starts answers where the person asked**, out loud, on the channel the conversation stands on: waking
+the agent is only half of it, and a review that reached its own records and no room at all is what a
+delegation looked like from a direct message for as long as that half was missing.
+
+**And it says so while the work is out.** In the room the work was asked for in — never the notified
+channel and never the answering agent's own room — one line of small print when the work goes, one
+every twenty minutes for as long as it is still out, and one when it comes back saying who answered
+and how long it took. That is the gateway's to say rather than `rundesk ask`'s: the command runs in a
+process with no channel connection and nothing to post through, so the only thing able to report a
+delegation is whatever is already watching, which is this loop.
 
 Underneath both is the part that had to be right before either could be trusted: a gateway starts,
 holds its agent's name, says every fifteen seconds that it is still working, stops when it is asked

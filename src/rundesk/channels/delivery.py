@@ -133,7 +133,7 @@ def stats(provider: str = "", input_tokens: Optional[int] = None,
                    ("cached", cached_tokens)))
     parts.extend(f"{_amount(one)} {what}" for what, one in slots if isinstance(one, int))
     if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool):
-        parts.append(f"{_duration(elapsed)} elapsed")
+        parts.append(f"{duration(elapsed)} elapsed")
     return " · ".join(parts)
 
 
@@ -158,8 +158,14 @@ def _amount(tokens: int) -> str:
     return f"{tokens / 1000000:.1f}M".replace(".0M", "M")
 
 
-def _duration(seconds: float) -> str:
-    """How long a turn took, compact enough to sit in a line of small print beside four counts."""
+def duration(seconds: float) -> str:
+    """How long something took, compact enough to sit in a line of small print beside four counts.
+
+    **Rendered here for every platform, like the cost line it sits in** — an adapter is handed the
+    words and chooses the register, never the arithmetic. It was private while the cost line was its
+    only reader; a delegation saying how long work has been out is the second, and two adapters each
+    writing their own would be two products' idea of what twenty minutes looks like.
+    """
     whole = max(0, int(seconds))
     if whole < 60:
         return f"{whole}s"

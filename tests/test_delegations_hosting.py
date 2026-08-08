@@ -10,6 +10,7 @@ Run directly: `python3 tests/test_delegations_hosting.py`
 """
 
 import unittest
+from datetime import datetime, timedelta, timezone
 
 import support
 from rundesk.agents import directory, records
@@ -319,6 +320,158 @@ class TwoDelegationsFromOneTurn(support.Isolated):
         self.assertEqual(
             "exports need a fix",
             hosting._what_they_answered("bob", "ava", 12, self.second_id))
+
+
+class Showing:
+    """A room that writes down what it was told, standing in for a channel that is not here.
+
+    The sweep under test may not reach `channels` at all — what a room *is* belongs a layer away —
+    so this is the published shape filled in, which is exactly what the gateway hands it.
+    """
+
+    def __init__(self):
+        self.said = []
+
+    def answer_this(self, *args, **more):
+        raise AssertionError("this case is about what is shown, not about starting turns")
+
+    def review_this(self, *args, **more):
+        raise AssertionError("this case is about what is shown, not about delivering answers")
+
+    def showed(self, agent, conversation, state, to_agent, delegation_id, seconds=None):
+        self.said.append((state, to_agent, delegation_id, seconds))
+        return True
+
+
+class WhatARoomIsToldAboutWorkHandedOver(support.Isolated):
+    """R-DEL-16: handing work over, it still being out, and it coming back, where the person asked.
+
+    **Everything here is about a person watching a room**, which is the half a delegation had none
+    of: the records were right the whole time and somebody staring at their own direct message saw
+    an agent hand work over and then saw nothing ever again.
+    """
+
+    def setUp(self):
+        super().setUp()
+        paths.agents().mkdir(parents=True, exist_ok=True)
+        directory.made("ava", "a-stand-in")
+        self.showing = Showing()
+        self.carrying = hosting.settled("ava", directory.logs("ava"))
+        # A real conversation and a real turn, because the row points at both and SQLite means it.
+        self.conversation = arriving.asked_at_a_terminal("ava", "hand it to dev").conversation
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute(
+                "INSERT INTO turns (conversation_id, provider_name, access_mode, turn_status,"
+                " created_at) VALUES (?, ?, ?, ?, ?)",
+                (self.conversation, "a-stand-in", "work", "done", "2026-08-08T00:00:00Z"))
+            self.turn = conn.execute(
+                "SELECT id FROM turns ORDER BY id DESC LIMIT 1").fetchone()[0]
+
+    def handed(self, delegation_id="del-7-aabbcc", minutes_ago=0, to_agent="dev"):
+        """One delegation this agent made, handed over that many minutes before now."""
+        when = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+        kept.made("ava", delegation_id, to_agent, self.conversation, self.turn, now=when)
+        return delegation_id
+
+    def swept(self):
+        hosting._showed_what_is_happening("ava", self.carrying, self.showing)
+        return self.showing.said
+
+    def states(self):
+        return [one[0] for one in self.showing.said]
+
+    def test_work_that_has_just_gone_out_says_who_has_it_and_which_ask_it_is(self):
+        self.handed()
+        self.assertEqual([(hosting.HANDED_OVER, "dev", "del-7-aabbcc", 0)], self.swept())
+
+    def test_it_is_said_once_however_often_the_beat_comes_round(self):
+        """The beat is fifteen seconds. Anything said per pass would be said four times a minute."""
+        self.handed()
+        self.swept()
+        self.swept()
+        self.swept()
+        self.assertEqual([hosting.HANDED_OVER], self.states())
+
+    def test_work_still_out_after_the_window_says_so_and_says_how_long(self):
+        self.handed(minutes_ago=21)
+        state, who, _ask, seconds = self.swept()[0]
+        self.assertEqual((hosting.STILL_WORKING, "dev"), (state, who))
+        self.assertGreaterEqual(seconds, hosting.STILL_WORKING_EVERY)
+
+    def test_work_that_finishes_inside_the_window_never_says_it_is_still_working(self):
+        """A ninety-second delegation says it went and says it came back, and nothing between."""
+        self.handed(minutes_ago=1)
+        self.swept()
+        kept.answered("ava", "del-7-aabbcc")
+        self.swept()
+        self.assertEqual([hosting.HANDED_OVER, hosting.CAME_BACK], self.states())
+
+    def test_each_window_is_its_own_check_in_rather_than_one_for_ever(self):
+        """Twenty minutes and forty minutes are different news, and the second must not be eaten by
+        the first having already been said."""
+        self.handed(minutes_ago=21)
+        self.swept()
+        self.carrying.said.clear()
+        self.handed(delegation_id="del-8-bbccdd", minutes_ago=41)
+        said = [one for one in self.swept() if one[2] == "del-8-bbccdd"]
+        self.assertEqual(hosting.STILL_WORKING, said[0][0])
+        self.assertGreaterEqual(said[0][3], 2 * hosting.STILL_WORKING_EVERY)
+
+    def test_an_answer_that_came_back_says_so_and_how_long_it_took(self):
+        self.handed(minutes_ago=5)
+        self.swept()
+        kept.answered("ava", "del-7-aabbcc")
+        state, who, _ask, seconds = self.swept()[-1]
+        self.assertEqual((hosting.CAME_BACK, "dev"), (state, who))
+        self.assertGreaterEqual(seconds, 5 * 60)
+
+    def test_an_answer_already_reported_is_never_reported_again(self):
+        self.handed()
+        kept.answered("ava", "del-7-aabbcc")
+        self.swept()
+        self.swept()
+        self.assertEqual([hosting.CAME_BACK], self.states())
+
+    def test_work_another_agent_handed_to_this_one_is_never_shown_here(self):
+        """The other side of a delegation is somebody else's room. An agent that announced work it
+        was merely doing would be posting another person's task into its own."""
+        directory.made("bob", "a-stand-in")
+        conversation = arriving.recorded_for_a_delegation(
+            "bob", "ava", 9, "audit it", delegation_id="del-9-eeffaa").conversation
+        with records.writing(directory.records("bob")) as conn:
+            conn.execute(
+                "INSERT INTO turns (conversation_id, provider_name, access_mode, turn_status,"
+                " created_at) VALUES (?, ?, ?, ?, ?)",
+                (conversation, "a-stand-in", "work", "done", "2026-08-08T00:00:00Z"))
+            turn = conn.execute("SELECT id FROM turns ORDER BY id DESC LIMIT 1").fetchone()[0]
+        kept.made("bob", "del-9-eeffaa", "ava", conversation, turn)
+        self.assertEqual([], self.swept())
+
+    def test_what_it_remembers_is_dropped_when_the_delegation_is(self):
+        """A gateway runs for weeks; without this, `said` only ever grows and is keyed by something
+        that stops existing."""
+        self.handed()
+        self.swept()
+        self.assertIn("del-7-aabbcc", self.carrying.said)
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute("DELETE FROM delegations")
+        self.swept()
+        self.assertEqual({}, self.carrying.said)
+
+    def test_a_word_this_release_shows_is_one_the_seam_can_carry(self):
+        """The three words are one vocabulary, and a check-in is remembered per window while what
+        crosses is the plain word — the elapsed time beside it is which one it is."""
+        self.assertEqual((hosting.HANDED_OVER, hosting.STILL_WORKING, hosting.CAME_BACK),
+                         hosting.SHOWN)
+        self.assertEqual(hosting.STILL_WORKING, hosting._as_shown(f"{hosting.STILL_WORKING}-3"))
+        self.assertEqual(hosting.CAME_BACK, hosting._as_shown(hosting.CAME_BACK))
+
+    def test_a_moment_nobody_can_read_is_not_work_that_just_went_out(self):
+        """Otherwise a row with an unreadable timestamp announces itself on every single beat."""
+        self.handed()
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute("UPDATE delegations SET created_at = 'not a moment'")
+        self.assertEqual([], self.swept())
 
 
 if __name__ == "__main__":

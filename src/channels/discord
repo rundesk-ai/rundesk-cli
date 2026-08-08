@@ -240,6 +240,22 @@ FAILED = {"read": "file read failed", "search": "search failed", "run": "command
 DELEGATED = f"{DID['delegate']} {SHOWN['delegate']}"
 FINISHED_HELPER = f"{DID['delegate']} subagent finished"
 
+#: How work handed to **another rundesk agent** looks — a different thing from the two lines above,
+#: which are a brain reaching for its own vendor's subagent tool. That one begins and ends inside a
+#: turn; this one outlives the turn that handed it over, so it is written as its own message rather
+#: than folded into the running commentary and edited away.
+#:
+#: One mark and one phrasing per word `delegations/hosting.py` defines. A word absent from here
+#: would show as the broad fallback rather than as nothing, and the suite checks this covers
+#: rundesk's list rather than trusting it to.
+HANDED = {"handed": "🤖", "working-still": "⏳", "answered": "✅"}
+
+#: The same three, as a person would say them. `handed` reads forwards to the agent taking the work
+#: and the other two read back from the agent that has it, because that is the order the facts
+#: arrive in: first that it went somewhere, then what that somebody is doing.
+HANDED_SAID = {"handed": "handed to", "working-still": "still working",
+               "answered": "answered"}
+
 #: Where what somebody attached is put on its way through: inside `RUNDESK_CHANNEL_HOME`, which is
 #: this channel's own directory and the only place rundesk will take a file from. Each message gets
 #: its own, and the files in it are named by their position rather than by anything the platform
@@ -544,6 +560,35 @@ def activity_line(it: Dict[str, Any]) -> str:
         heading = FINISHED_HELPER if ok is True else DELEGATED
         return f"{SUBTEXT}{heading}{': ' + who if who else ''}"
     return f"{SUBTEXT}{DID.get(did, UNKNOWN)} {SHOWN.get(did, 'thinking')}"
+
+
+def delegation_line(it: Dict[str, Any]) -> str:
+    """Work handed to another agent, as one line of small print. `""` for a word this cannot show.
+
+    **The quiet register, deliberately.** A person asked their agent a question; another agent
+    having the work is bookkeeping about that answer and not the answer, so it reads as small print
+    beside the exchange rather than as a message competing with it.
+
+    **Who has it is a name from somewhere else and is treated as one.** `_a_helper` takes the last
+    component and flattens it, for the reason it does everywhere else: a name may be a path, and a
+    newline in one is somebody ending our line and beginning their own.
+
+    `""` for a state this adapter has never heard of, which is the same answer `activity_line` gives
+    and for the same reason — rundesk may be ahead of this file, and a line invented to cover a word
+    nobody here understands is worse than no line.
+    """
+    state = str(it.get("state") or "")
+    mark, said = HANDED.get(state), HANDED_SAID.get(state)
+    if not mark or not said:
+        return ""
+    who = _a_helper(it.get("who"))
+    ask = flat(it.get("ask"), A_HELPER_AT_MOST)
+    elapsed = flat(it.get("elapsed"), A_HELPER_AT_MOST)
+    # Which ask it is matters once — when it goes — because that is the name somebody types to guide
+    # or stop it. After that the room already knows, and repeating it every twenty minutes is noise.
+    if state == "handed":
+        return f"{SUBTEXT}{mark} {said} {who}{' · ' + ask if ask else ''}"
+    return f"{SUBTEXT}{mark} {who} {said}{' · ' + elapsed if elapsed else ''}"
 
 
 def grouped(groups: List[Any], lines: List[Any]) -> List[Any]:
@@ -1447,6 +1492,8 @@ class Reaching:
             await self._state(it)
         elif doing == "activity":
             self._doing(it)
+        elif doing == "delegation":
+            await self._delegating(it)
         elif doing == "answered":
             await self._answered(it)
         elif doing == "stop":
@@ -1869,6 +1916,37 @@ class Reaching:
             held.posted = None             # start a fresh one rather than keep failing on this
             return
         held.shown = saying
+
+    async def _delegating(self, it: Dict[str, Any]) -> None:
+        """Say that work went to another agent, that it is still out, or that it came back.
+
+        **Its own message, and never the growing commentary.** The commentary is what one turn is
+        doing and is edited in place until that turn ends; work handed to a colleague outlives the
+        turn that handed it over, and folded in there it would be rewritten away under somebody who
+        had scrolled past. So this posts, and tells the commentary it is no longer last.
+
+        **Written where its conversation stands, and nothing is quoted.** These are not answers, and
+        a room where every line quotes the same question is unreadable — the same rule the running
+        commentary is posted under.
+        """
+        try:
+            place = an_id(it.get("place"), "channel id")
+        except Refused as why:
+            noted(str(why))
+            return
+        line = delegation_line(it)
+        if not line or self.client is None:
+            return
+        try:
+            sent = await self.client.get_partial_messageable(place).send(content=line)
+        except Exception as why:           # noqa: BLE001 — a platform boundary
+            self._final(why)
+            noted(f"could not say what a delegation is doing in {place}: "
+                  f"{type(why).__name__}: {why}")
+            return
+        self.handled[str(sent.id)] = Handled(place=place, ours=True)
+        self._make_room()
+        self._no_longer_last(place)
 
     def _commentary_is_over(self, place: int) -> None:
         """The turn in this place has ended, so nothing more is written about it. See `Growing.over`.

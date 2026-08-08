@@ -39,10 +39,10 @@ May depend on `agents`, `core` and `utils`.
 import json
 import sqlite3
 from pathlib import Path
-from typing import Callable, List, NamedTuple, Optional, Tuple
+from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
 
 from rundesk.agents import directory, records
-from rundesk.core import paths
+from rundesk.core import config, paths
 from rundesk.delegations import kept
 from rundesk.utils import locking, logs
 
@@ -60,6 +60,33 @@ COLLECTED_AT_MOST = 4
 #: because this package may not reach `providers` — and asserted against it by the suite, so the two
 #: cannot drift into meaning different things.
 WORKING = "working"
+
+#: What a room is told about work this agent handed over, and the whole of that vocabulary
+#: (R-DEL-16). Three words, because there are three things a person waiting actually wants: that it
+#: went, that it is still going, and that it came back.
+#:
+#: **Words and never sentences.** What each one *looks like* is the surface's — see
+#: `channels.hosting.delegating` — so a platform with a quiet register puts them in it and one
+#: without renders them however it can. A sentence composed here would be this product choosing
+#: Discord's small print for every surface that will ever exist.
+#:
+#: There is no fourth for a delegation that failed, and that is deliberate rather than missing. How
+#: the work *went* is the answer's to say: a turn that failed still answers, with whatever it managed
+#: to say, and that answer arrives in the room a moment later. A mark here saying "failed" would be
+#: this sweep asserting something about words it has never read.
+HANDED_OVER = "handed"
+STILL_WORKING = "working-still"
+CAME_BACK = "answered"
+SHOWN = (HANDED_OVER, STILL_WORKING, CAME_BACK)
+
+#: How long work stays out before the room is told it is still out, and how often after that.
+#:
+#: **Counted from when the work was handed over, not from the last thing said**, so the number a
+#: person reads is how long they have been waiting rather than how long since a notice. Twenty
+#: minutes: long enough that ordinary work finishes without ever posting one — a delegation that
+#: takes ninety seconds says only that it went and that it came back — and short enough that
+#: something wedged for an hour says so three times rather than never.
+STILL_WORKING_EVERY = 20 * 60
 
 
 class CollectedAnswer(str):
@@ -94,22 +121,44 @@ class Answering:
         """Durably offer an answer for review; `True` only once a turn has admitted it."""
         raise NotImplementedError
 
+    def showed(self, agent: str, conversation: int, state: str, to_agent: str,
+               delegation_id: str, seconds: Optional[int] = None) -> bool:
+        """Show one of `SHOWN` in the room this conversation stands in. `False` where there is none.
+
+        Handed in rather than reached for, like everything else here: what a room *is* belongs to
+        `channels`, which this package may not import, and the layer that may reach both is the
+        gateway. `False` for a conversation standing on no platform — a schedule, a terminal, another
+        agent's ask — which is an ordinary answer and not a failure.
+        """
+        raise NotImplementedError
+
 
 class Carrying(NamedTuple):
-    """What this tenant carries between passes, which is **nothing**.
+    """What this tenant carries between passes: **what it has already said out loud, and nothing
+    else.**
 
-    It held two lists of delegation ids this process had already acted on, and that was a bug rather
-    than an optimisation: a delegation carried on with more work is the same delegation, so an id
-    remembered as *started* was one this gateway would never start again. Resuming wrote the message,
-    cleared the answer, and nothing ever picked it up.
+    It once held two lists of delegation ids this process had already *acted on*, and that was a bug
+    rather than an optimisation: a delegation carried on with more work is the same delegation, so an
+    id remembered as *started* was one this gateway would never start again. Resuming wrote the
+    message, cleared the answer, and nothing ever picked it up. Both of those questions are
+    answerable from what is already written down — see `_is_waiting_on_us` and `kept.outstanding` —
+    so neither is here.
 
-    Both questions are answerable from what is already written down — see `_is_waiting_on_us` and
-    `kept.outstanding` — so there is no state to keep in step, and a gateway that restarts mid-flight
-    reaches the same answer as one that did not.
+    **What is here is a different kind of thing, and the difference is what makes it safe.** Nothing
+    is decided from `said`: every delegation is answered, collected and settled exactly as it would
+    be if this were empty. It only stops a room being told the same thing twice a beat. So the worst
+    a stale or lost entry can do is one repeated line, where a stale entry in the old lists was work
+    nobody would ever pick up again.
 
-    Kept as a type so the three seams have the shape the other two tenants have, and so the day this
-    needs to carry something there is somewhere for it to go.
+    That is also why it is not written to disk. A gateway that restarts says "handed to dev" once
+    more, and a line said twice is a far smaller cost than a durable record to keep in step — which
+    is the trade the build this replaces made, in those words, and got right.
+
+    `said` maps a delegation's id to the last thing said about it: one of `SHOWN`, or the check-in
+    number for `STILL_WORKING`, so the twentieth minute and the fortieth are different answers.
     """
+
+    said: Dict[str, str]
 
 
 def settled(name: str, where) -> Carrying:
@@ -121,16 +170,25 @@ def settled(name: str, where) -> Carrying:
 
     The seam exists anyway, and is called anyway, because the shape is the other two tenants' and a
     third that quietly had two of the three would be one somebody has to remember is different.
+
+    **Nothing has been said yet, and it starts saying so.** A gateway coming up to find work already
+    out tells the room it is still out, on its first pass, rather than staying silent about it for
+    ever because a process that is gone had mentioned it once.
     """
-    return Carrying()
+    return Carrying(said={})
 
 
 def looked(name: str, where, carrying: Carrying, answering: Answering) -> Carrying:
-    """One pass: answer what was handed to this agent, then collect what it handed out.
+    """One pass: answer what was handed to this agent, collect what it handed out, then say so.
 
     **Answering first.** A gateway that collected first would spend its pass delivering answers
     while work addressed to it sat untouched, and the agent waiting on that work is another agent
     whose own turn is already over.
+
+    **Showing last, and that ordering is the whole of why a delegation reads correctly.** Collection
+    is what settles a row, so a pass that showed first would say *still working* about work that this
+    same pass is about to mark answered — and the room would read a check-in below the answer it was
+    checking in on.
 
     Never raises. A pass that threw would take the gateway's loop with it, and every other thing a
     gateway does — its heartbeat, its channels, its schedules — is more important than one
@@ -140,6 +198,8 @@ def looked(name: str, where, carrying: Carrying, answering: Answering) -> Carryi
                       lambda: _answered_what_was_handed_here(name, where, answering))
     _whatever_happens(where, "collecting what came back",
                       lambda: _collected_what_came_back(name, where, answering))
+    _whatever_happens(where, "showing what became of what was handed out",
+                      lambda: _showed_what_is_happening(name, carrying, answering))
     return carrying
 
 
@@ -273,6 +333,90 @@ def _collected_what_came_back(name: str, where, answering: Answering) -> None:
                 continue
             if not kept.answered(name, current.delegation_id):
                 continue
+
+
+def _showed_what_is_happening(name: str, carrying: Carrying, answering: Answering) -> None:
+    """Say, where the person asked, that work went out, that it is still out, and that it came back.
+
+    **Every ask this agent handed over, and never the ones handed to it** (R-DEL-16). The other side
+    of a delegation is somebody else's room, and an agent that announced work it was merely *doing*
+    would be posting another person's task into its own.
+
+    **Driven off the rows and off what this process has already said, on the beat rather than at the
+    moment.** The verb that hands work over runs in a command process with no channel connection and
+    nothing to post through, so the only thing able to say a delegation happened is whatever is
+    already watching — which is this loop. What makes it an event rather than a poll is that the
+    record moved: a state is said once and the same state is never said twice.
+    """
+    for one in kept.every(name):
+        said = carrying.said.get(one.delegation_id)
+        state, since = _how_it_stands(one)
+        if state is None or said == state:
+            continue
+        # Written before it is sent, and not after. A surface that throws costs one skipped line;
+        # written after, a platform that refuses every write makes this say the same thing on every
+        # beat for as long as the work is out.
+        carrying.said[one.delegation_id] = state
+        answering.showed(name, one.parent_conversation, _as_shown(state), one.to_agent,
+                         one.delegation_id, since)
+    _forgotten(carrying, {one.delegation_id for one in kept.every(name)})
+
+
+def _how_it_stands(one: kept.Delegation) -> Tuple[Optional[str], Optional[int]]:
+    """What should be said about this delegation now, and how long it has been out.
+
+    The state is `HANDED_OVER`, `CAME_BACK`, or a check-in numbered by which twenty minutes it is
+    in — so the fortieth minute is a different answer from the twentieth and gets its own line, while
+    the nineteen beats inside one window are all the same answer and get none.
+
+    `None` where a moment could not be read. **Unreadable is not "just handed over"**: a row whose
+    timestamps do not parse would otherwise announce itself as new on every single beat.
+    """
+    since = _seconds_since(one.created_at)
+    if one.answered_at is not None:
+        return CAME_BACK, _seconds_between(one.created_at, one.answered_at)
+    if since is None:
+        return None, None
+    checked = int(since // STILL_WORKING_EVERY)
+    return (f"{STILL_WORKING}-{checked}" if checked else HANDED_OVER), since
+
+
+def _as_shown(state: str) -> str:
+    """The word that crosses the seam, out of what this process wrote down for itself.
+
+    A check-in is remembered as `working-still-2` so that the second one is not the first; what a
+    surface is told is `working-still`, because *which* check-in it is is already in the elapsed
+    time beside it and a vocabulary that grew a word an hour would be no vocabulary at all.
+    """
+    return STILL_WORKING if state.startswith(STILL_WORKING) else state
+
+
+def _forgotten(carrying: Carrying, standing: set) -> None:
+    """Drop what this process remembers about delegations that are no longer there.
+
+    A gateway runs for weeks and a settled delegation is eventually swept away; without this, `said`
+    is a dictionary that only ever grows, keyed by something that stops existing.
+    """
+    for gone in [one for one in carrying.said if one not in standing]:
+        carrying.said.pop(gone, None)
+
+
+def _seconds_since(at: str) -> Optional[int]:
+    """How long ago that moment was, or `None` if it cannot be read as one."""
+    return _seconds_between(at, config.moment_of())
+
+
+def _seconds_between(this: str, that: str) -> Optional[int]:
+    """Whole seconds from one stored moment to another, or `None` if either cannot be read.
+
+    **Never negative.** A clock that went backwards between two writes — an install that changed
+    time zone, an NTP correction — would otherwise put "· -3s" in front of somebody, which reads as
+    a defect in the product rather than in the machine's clock.
+    """
+    first, second = config.read_moment(this), config.read_moment(that)
+    if first is None or second is None:
+        return None
+    return max(0, int((second - first).total_seconds()))
 
 
 def _addressed_to(name: str, where) -> List[Tuple[str, kept.Delegation]]:

@@ -401,6 +401,9 @@ Five, and only five exist today.
             "sha256": "b1f3…"}]}
 {"do": "state", "place": "1180", "external_id": "8841", "state": "seen"}
 {"do": "activity", "place": "1180", "did": "run"}
+{"do": "delegation", "place": "1180", "state": "handed", "who": "dev", "ask": "del-41-4e07c5"}
+{"do": "delegation", "place": "1180", "state": "answered", "who": "dev", "ask": "del-41-4e07c5",
+ "elapsed": "1m"}
 {"do": "answered", "ref": "c-91f2", "text": "3 schedules, next at 09:00"}
 {"do": "stop"}
 ```
@@ -410,6 +413,7 @@ Five, and only five exist today.
 | `deliver` | `id`, `place`, `text`, sometimes `files`, sometimes `reply_to`, sometimes `cost` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed` |
 | `state` | `place`, `external_id`, `state` | show what rundesk says a turn is doing |
 | `activity` | `place`, `did`, sometimes `ok`, sometimes `who` | show what the agent is doing, while it is still doing it |
+| `delegation` | `place`, `state`, `who`, `ask`, sometimes `elapsed` | show what became of work this agent handed to another agent |
 | `answered` | `ref`, `text` | the answer to a `control`, `query` or `configure` you sent, against the `ref` you gave it |
 | `stop` | — | stop. The signals follow either way |
 
@@ -476,6 +480,39 @@ none of it shows none of it. Correctness never depends on any of this.
 
 **Anything you do not recognise: say so as a `note` and read on.** One record you could do nothing
 with is not a channel going away.
+
+#### Work handed to another agent — `delegation`
+
+**A different thing from an `activity` line naming `delegate`, and the difference decides how it is
+rendered.** That one is a brain reaching for its own vendor's subagent tool: it begins and ends
+inside one turn, and it is disposable. This one is one rundesk agent handing a bounded task to
+another rundesk agent on the same install — it **outlives the turn that handed it over**, often by
+many minutes, and the person who asked is left watching a room in the meantime.
+
+So do not fold it into the running commentary. Post it as a message of its own, and treat anything
+you were growing as no longer last.
+
+`state` is one of three, and the list is closed:
+
+| | What it means | How the shipped adapter renders it |
+|---|---|---|
+| `handed` | the work has gone to `who` | `-# 🤖 handed to dev · del-41-4e07c5` |
+| `working-still` | it is still out, said once per twenty minutes | `-# ⏳ dev still working · 20m` |
+| `answered` | it came back; the answer itself follows as an ordinary `deliver` | `-# ✅ dev answered · 1m` |
+
+`ask` is the delegation's own name, which is what somebody types to guide, stop or carry it on —
+`rundesk asked <agent> say|stop|resume <ask>`. The shipped adapter shows it on `handed` and leaves it
+off the other two, because by then the room has already been told it.
+
+`elapsed` is **words and never a number** — `47s`, `20m`, `2h` — rendered by rundesk for every
+platform, exactly as `cost` is. It is absent when nothing is known, which is not the same as zero.
+
+**There is no state for a delegation that failed.** How the work went is the *answer's* to say, and
+that answer arrives a moment later as an ordinary delivery; a mark here claiming failure would be
+rundesk asserting something about words it has never read.
+
+**A state you do not recognise: render nothing for it and read on.** Rundesk may be ahead of your
+adapter, and a line invented to cover a word you do not understand is worse than no line.
 
 #### The turn states
 
