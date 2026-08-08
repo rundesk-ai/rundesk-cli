@@ -49,6 +49,13 @@ MAY_IMPORT = {
     # been handed over is a different question from what runs it**, so the store and the guards are
     # answerable by a case with no brain and no subprocess anywhere near them.
     "delegations": ("agents", "core", "utils"),
+    # `capabilities` is the one package below `commands` that may **not** reach `agents`, and the
+    # restriction is the mechanical statement of what it is for: *a grant belongs to a machine, not
+    # to an install's agents.* Two gateway shims differing only in the agent they name were measured
+    # to be one TCC client, so a module that had to be told which agent was asking would be
+    # answering a question nobody can ask. Which agent a process was started for is passed in by
+    # `commands`, which may reach both.
+    "capabilities": ("core", "utils"),
     # `channels` reaches `agents` for the same reason and keeps the same distance from `gateways`:
     # what a channel *is* — a row in one agent's records, a directory in that agent's own tree — is
     # a different question from what hosts one, and the module that answered both could not be
@@ -308,8 +315,8 @@ class TheTreePointsOneWay(support.Isolated):
         # `utils` was checked and `core` was not, so `core`'s table went on listing a module that
         # had moved a whole layer down and nothing said a word. A table a reader trusts is a table
         # worth checking — all of them, not the one that happened to get a test first.
-        for package in ("agents", "channels", "core", "gateways", "lifecycle", "providers",
-                        "schedules", "skills", "utils"):
+        for package in ("agents", "capabilities", "channels", "core", "gateways", "lifecycle",
+                        "providers", "schedules", "skills", "utils"):
             table = (WHERE / package / "__init__.py").read_text(encoding="utf-8")
             # A trailing slash names a directory rather than a module — `steps/` is
             # documented deliberately and has no `.py` of its own to match.
