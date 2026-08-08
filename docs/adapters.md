@@ -250,18 +250,21 @@ One JSON object per line, both ways. Nothing is nested inside anything and nothi
 
 ### What an adapter says — `say:`
 
-Five are recognised. **Anything else is ignored in silence**, which is deliberate: rundesk may be
+Eight are recognised. **Anything else is ignored in silence**, which is deliberate: rundesk may be
 behind an adapter, and a record it does not know is not a channel that has gone wrong.
 
 ```json
 {"say": "ready", "as": "rundesk#4471"}
 {"say": "gone", "why": "the socket closed"}
 {"say": "note", "level": "warning", "text": "could not bring in report.csv: HTTPException: 403"}
-{"say": "failed", "id": "1754431200.123456-0", "why": "Discord would not take it: Forbidden"}
-{"say": "delivered", "id": "1754431200.123456-0", "external_id": "9002", "place": "1180"}
+{"say": "failed", "id": "1754431200.123456-0-7", "why": "Discord would not take it: Forbidden"}
+{"say": "delivered", "id": "1754431200.123456-0-7", "external_id": "9002"}
 {"say": "arrived", "conversation": "1180", "user": "2207", "text": "what changed today?",
  "external_id": "8841",
  "attachments": [{"name": "report.csv", "at": "/…/channels/discord/fetched/8841/0", "bytes": 8}]}
+{"say": "control", "conversation": "1180", "user": "2207", "control": "stop", "ref": "i-9911"}
+{"say": "query", "conversation": "1180", "user": "2207", "query": "status", "ref": "i-9912"}
+{"say": "configure", "conversation": "1180", "user": "2207", "provider": "codex", "ref": "i-9913"}
 ```
 
 | | Required | Optional | What rundesk does with it |
@@ -269,9 +272,12 @@ behind an adapter, and a record it does not know is not a channel that has gone 
 | `ready` | — | `as` | one `INFO` line in the agent's log: *connected as …* |
 | `gone` | — | `why` | one `WARNING` line. `no reason given` when `why` is absent |
 | `note` | `text` | `level` | one line at that level. `level` is `DEBUG`, `INFO`, `WARNING` or `ERROR`, case-insensitive; anything else becomes `INFO` |
-| `failed` | `why` | `id` | one `WARNING` line: *could not deliver — …*. `id` releases what rundesk was holding for that delivery |
-| `delivered` | `id` | `external_id`, `place` | one line saying the answer reached the platform, naming the message it answered, and **`external_id` is kept** — see below. **Never a mark** |
+| `failed` | `why` | `id` | one `WARNING` line: *could not deliver — …*. `id` releases what rundesk was holding for that delivery, and the reason is kept against it for whoever settles the turn behind it |
+| `delivered` | `id` | `external_id` | one line saying the answer reached the platform, naming the message it answered, and **`external_id` is kept** — see below. **Never a mark** |
 | `arrived` | `conversation`, `user`, and `text` **or** `attachments` | `external_id` | the message, if that user may be answered |
+| `control` | `control`, `user` | `conversation`, `ref` | one gesture, if that user may be answered and the word is one rundesk knows — see [gestures](#gestures) |
+| `query` | `query`, `user` | `conversation`, `ref` | one question, answered out of what this install already knows |
+| `configure` | `provider`, `user` | `conversation`, `ref` | the agent's default brain is changed |
 
 **Say `ready` when you have the connection and `gone` when you lose it**, once per change and not
 once per reconnection attempt behind it — that is how somebody tells a quiet agent from a deaf one.
@@ -387,9 +393,9 @@ are still not asked for; nothing reads a member list or a presence.
 Five, and only five exist today.
 
 ```json
-{"do": "deliver", "id": "1754431200.123456-0", "place": "1180", "text": "Three files changed…",
+{"do": "deliver", "id": "1754431200.123456-0-7", "place": "1180", "text": "Three files changed…",
  "reply_to": "8841", "cost": "codex · 2.2k input · 481 output · 78k cached · 1m elapsed"}
-{"do": "deliver", "id": "1754431200.123456-2", "place": "1180", "text": "here it is",
+{"do": "deliver", "id": "1754431200.123456-2-9", "place": "1180", "text": "here it is",
  "files": [{"name": "chart.png", "at": "/…/agents/alan/home/chart.png", "bytes": 9,
             "sha256": "b1f3…"}]}
 {"do": "state", "place": "1180", "external_id": "8841", "state": "seen"}
@@ -589,7 +595,7 @@ Rundesk's, unless the last column says otherwise.
 | stopping one adapter, mid-life | 5 s | the loop is held for the whole of it and the beat is fifteen seconds — and it is enough for a `SIGTERM` to be answered before the `SIGKILL` behind it |
 | `stderr.log` | 256 KiB, 3 kept | moved aside when the adapter is started. A channel that reconnects noisily for a week must not fill a disk, and the beginning of the trouble is the part worth keeping |
 | an adapter's last words copied into the agent's log | 20 lines, 500 chars each | the whole of it stays in the file; a megabyte of traceback would roll the rest of the day off the end of what somebody came to read |
-| a display name carried into a prompt | 80 chars, one line | *the adapter's.* A display name is somewhere somebody can write something shaped like an instruction, and a newline is how they would end our sentence and start their own |
+| a display name carried into a prompt | 80 chars, one line | **both sides', and neither is a copy of the other.** Narrow it so what you send is what you meant; rundesk narrows it again because a bound that lives only on the far side of a seam is one a third-party adapter can be wrong about. A display name is somewhere somebody can write something shaped like an instruction, and a newline is how they would end our sentence and start their own |
 | what one message may bring in | 10 files, 32 MiB each | *the adapter's*, and not a second copy of rundesk's — it exists so the adapter does not spend a platform's bandwidth on files that will be refused a moment later |
 
 ## The smallest adapter that is not a lie
@@ -675,7 +681,9 @@ checking the text you are handed, because that check is what catches the day the
 the message it answered. It does **not** turn into a `done` — it did once, and that was wrong, because
 a turn that failed still delivers a sentence saying so and the acknowledgement cannot tell the two
 apart. What a turn came to is decided by the turn. The `id` on a `failed` is read the same way;
-`retry_after` with it is not.
+`retry_after` with it is not — and on the shipped Discord adapter it is not even reachable, because
+`discord.py` raises the one exception carrying it only when a ceiling rundesk does not set is
+configured. Send it if your platform gives you one; nothing acts on it yet.
 
 **`external_id` on a `delivered` is worth passing, and this is the only moment rundesk can learn
 it.** It is what the *platform* called the message you just posted, and rundesk keeps it against its
@@ -696,7 +704,36 @@ somebody will arrive from that page looking for it.
 which was wrong, and wrong in the way that matters most, because somebody writing a third-party
 adapter against it could not implement a slash command at all. The shipped Discord adapter sends all
 three and the gateway answers them; the answer comes back as `{"do": "answered", "ref": …, "text":
-…}`, which is the fifth `do:` record.
+…}`, which is the fifth `do:` record. They are in the `say:` table above, where they belong — the
+correction was made in this paragraph first and the table went on saying *five* for a while longer,
+so the page contradicted itself two hundred lines apart about the very thing it was correcting.
+
+<a id="gestures"></a>
+### Gestures — the words rundesk knows
+
+**Closed sets, and that is the whole of their value.** A gesture whose name is whatever the caller
+typed is a command runner with a chat window in front of it, and a word absent from these is a word
+the gateway does nothing about, however a platform spells it. Send the wire word, not the label you
+show a person.
+
+| | Words |
+|---|---|
+| `control` | `stop`, `forget`, `restart`, `shutdown` |
+| `query` | `status`, `version`, `skills`, `schedules` |
+| `configure` | takes `provider` — a value, not a word from a set |
+
+`forget` is the wire word and *new* is what a person is usually offered: the gesture starts the next
+message fresh, and *forget* says what happens to the session while *new* says what they get.
+
+**Answer with `ref` or not at all.** Put your platform's own id for the waiting interaction on the
+gesture, and rundesk hands it back on `{"do": "answered", "ref": …}`. Without one there is nothing to
+complete, and somebody watches a spinner until their platform gives up. A gesture is answered out of
+what this install already knows and **never by starting a turn**, so the answer comes back in
+milliseconds; a control that really does take time says so through the turn's own outcome instead.
+
+**A stranger's gesture is dropped in silence**, exactly as a stranger's message is. Narrowing it on
+your side first is worth doing so nobody is shown a spinner for an answer that will never come — but
+that is to avoid visible work, and it is never the decision.
 
 **Nothing downloads on rundesk's side.** The adapter holds the credential and rundesk does not; the
 adapter fetches, and rundesk decides where it lands. The previous build's page has that the other way

@@ -17,13 +17,19 @@ carried, and where that is so the docstring that replaces one says which and why
 
 ## What that cost, measured
 
+**These numbers were counted once, when these pages were moved here, and have not been counted
+again.** Several channel requirements have been met since — inbound replies, attachments in and out,
+who-and-where reaching the brain — and the build now cites requirement ids in its own docstrings,
+so the last row in particular is out of date. Read the table as the measurement that prompted this
+directory rather than as this build's current standing; re-count before quoting it.
+
 | | |
 |---|---|
 | Requirement rows across the four channel pages | **140** |
 | Met by this build at the time they were found | **34** |
 | Met, excluding Slack — a platform this build does not have | **34 of 95** |
 | Times the previous build cited a requirement id in its own source | **1,109** |
-| Times this build had cited one | **0** |
+| Times this build had cited one **at that moment** | **0** |
 
 The one that made it concrete: `R-DIS-1` — *named in a room, the turn happens in a thread* — was
 dropped, and then a docstring was written explaining why not doing it was the right design. Nobody

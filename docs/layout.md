@@ -131,6 +131,14 @@ those copies and sweeps whole days after 60 days. Outgoing files have no directo
 sent in place from the explicit local path in an answer and remain owned by the project, tool, or
 person that created them.
 
+Beside that stand four things belonging to whichever gateway is hosting the channel, none of which
+is configuration and none of which a person edits: `lock`, the claim an adapter holds for as long as
+it lives; `record.json`, which process it is; `stderr.log`, what it wrote that was not a record; and
+`will-not-start.json`, written when an adapter has exited `78` to say that this gateway has stopped
+trying to start it. The last is what `channels show` and `channels doctor` read to tell a channel
+that was given up on from one whose gateway is simply not running, and it is removed the moment
+something starts that channel again.
+
 It is one of the two directories a migration does not copy aside and put back, along with `logs/`:
 both grow without bound, and putting a lock file back underneath a child that is still running would
 be putting back a claim that has moved on.

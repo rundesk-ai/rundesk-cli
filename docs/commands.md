@@ -1,7 +1,8 @@
 # The command surface
 
-Thirteen operations, and every one of them works. There is no "coming soon" list: a verb rundesk
-cannot perform is a verb rundesk does not have.
+Eighteen commands, and every one of them works. There is no "coming soon" list: a verb rundesk
+cannot perform is a verb rundesk does not have. `rundesk --help` is the count that cannot go stale;
+this one is checked against it.
 
 ```sh
 rundesk status                            # the version, where the install is, and every configured value
@@ -856,6 +857,16 @@ because a state nothing here can resolve is a state to report and not to be sile
 
 `--allow` is required, is repeatable, and takes the id that platform knows somebody by.
 
+**What the platform wants first.** Rundesk holds no list of what any platform needs, so what a
+channel asks for comes from its adapter and is named on the refusal. For the shipped Discord adapter
+that is three things, all of them from Discord rather than from here: a **bot token** (Developer
+Portal → your application → Bot → Reset Token), the **Message Content Intent** switched on for that
+bot (same page, under Privileged Gateway Intents — without it Discord blanks every message in a room
+and in a thread unless it names the bot, and the gateway is closed with `4014` rather than
+connecting), and your **numeric user id** for `--allow` (Discord → Settings → Advanced → Developer
+Mode, then right-click your profile → Copy User ID; a username is not an id and can be changed). The
+README's [Setting up a Discord bot](../README.md#setting-up-a-discord-bot) walks it through.
+
 ```console
 $ rundesk channels add alan discord --allow 341709...
 the discord adapter needs 1 value before alan can use it
@@ -874,6 +885,16 @@ alan is connected to discord
         invite    https://discord.com/oauth2/authorize?client_id=...
         the bot is not in any server until somebody with permission adds it there
 ```
+
+**`add` connects once and leaves nothing running**, which is what `standing not connected` on the
+last line means — so the next thing to type is `rundesk gateways start <agent>`. The **invite** is
+printed here and kept nowhere: `channels show` cannot reproduce it, so it is worth saving. A bot
+already in a server has to be sent it again before it may open a thread or attach a file.
+
+**A `FAILED` here does not always mean nothing was written.** `--notify` is marked inside the same
+lock and after the row, and it has its own guard: where the channel was added and only the marking
+failed, the failure says so and names `rundesk channels configure <agent> <adapter> --notify` rather
+than sending somebody to add a channel that is already standing.
 
 **An empty allow list authorises nobody, never everybody**, so leaving `--allow` off is refused —
 by the verb rather than by argparse, in a sentence ending with the whole command to type. An agent
@@ -964,10 +985,10 @@ alan
   discord  READY        rundesk#4471, reaching you#0
 cole
   discord  BLOCKED      DISCORD_BOT_TOKEN — nothing this install can read is kept under that name
-  slack    DANGLING     there is no slack adapter on this install — looked in ...
+  quiet    DANGLING     there is no quiet adapter on this install — looked in ...
 channels: 2 of 3 cannot be used:
         rundesk env set DISCORD_BOT_TOKEN
-        rundesk channels remove cole slack --confirm
+        rundesk channels remove cole quiet --confirm
 ```
 
 | Verdict | Means |
@@ -976,6 +997,18 @@ channels: 2 of 3 cannot be used:
 | `BLOCKED` | a credential this channel names is not set, so there is nothing to connect with |
 | `UNREACHABLE` | everything is in place and `--check` failed now — the platform said why |
 | `DANGLING` | there is no program behind this channel any more |
+| `GIVEN UP` | it checks out from here, and the gateway hosting it has stopped trying to start it |
+
+An agent whose channels cannot be read at all is a fifth outcome and is not a verdict: it is reported
+under that agent's own name — *`<agent>`'s channels cannot be read — …* — and counted in the same
+denominator, because an agent whose records will not open is not an agent with no channels.
+
+**`GIVEN UP` is the one verdict that does not come from the adapter.** This verb asks in a process of
+its own, so a failure that shows itself only once an adapter is really serving — a close code the
+platform will answer with for ever — leaves every question here answered correctly. When an adapter
+exits `78` its gateway stops starting it for the rest of that gateway's life, and until this verdict
+existed the channel was reported `READY` while nothing had hosted it for hours. `rundesk gateways
+restart <agent>` is the whole of the fix, and it is what the summary tells you to type.
 
 **It really connects**, and that is what `UNREACHABLE` costs. A credential that is set and no longer
 accepted is the failure this exists to find, and nothing on this machine can tell that from a working
@@ -1060,8 +1093,8 @@ exactly that.
 $ rundesk messages ava --search invoice
 2 ava said or was told holding 'invoice'
 WHEN                  WHO   WHERE            IN  SAID
-2026-08-06T13:11:29Z  user  slack D072X      2   [invoice] again, different room
-2026-08-06T13:11:29Z  user  discord dm-4471  1   the [invoice] bug is in the parser
+2026-08-06T13:11:29Z  user  discord 9930-ops  2   [invoice] again, different room
+2026-08-06T13:11:29Z  user  discord dm-4471   1   the [invoice] bug is in the parser
 ```
 
 One bounded line each, because every line the agent reads costs tokens and a listing that answered
@@ -1562,7 +1595,7 @@ nothing to change — exits `0` for whatever it found, because the question was 
 that question was answered. `rundesk gateways` finding every gateway on the machine down is a
 listing that worked. What a bad state costs is the word `running`, not the exit code.
 
-Three commands are written to have their code read by a script, and they are the ones to build on:
+Five commands are written to have their code read by a script, and they are the ones to build on:
 
 - **`rundesk env check <key>`** exits non-zero when a value is not set, so
   `rundesk env check DISCORD_TOKEN && …` does the right thing in a shell.
@@ -1572,6 +1605,10 @@ Three commands are written to have their code read by a script, and they are the
 - **`rundesk gateways start <agent>`** exits `0` only once a gateway has been shown to be holding
   the name. A job the supervisor accepted is not a gateway that started, and the exit code here
   means the second thing.
+- **`rundesk channels doctor [<agent>]`** and **`rundesk skills doctor [<agent>]`** exit non-zero
+  when anything is wrong, and `0` when there is nothing to check at all — an install with no channels
+  is not an install with a broken one. The findings go to stdout so a script can read them and the
+  summary to stderr so it can ignore them.
 
 Where a refusal is a `2` rather than a `1`, it is because nobody said what to do. **`rundesk
 gateways stop` with neither a name nor `--all` is a `2`** — the gateway is not one that would not

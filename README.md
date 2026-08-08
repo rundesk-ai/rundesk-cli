@@ -27,9 +27,9 @@ Rundesk gives that agent a name, a home, memory, and a way to keep working. Reac
 same agent from Discord, your terminal, or a schedule.
 
 ```sh
-rundesk add ava --provider codex
-rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
-rundesk start ava
+rundesk agents add ava --provider codex
+rundesk channels add ava discord --allow <your-discord-user-id>
+rundesk gateways start ava
 ```
 
 DM `ava` tonight. The same agent, context, and workspace are still there tomorrow.
@@ -40,8 +40,9 @@ DM `ava` tonight. The same agent, context, and workspace are still there tomorro
   to open a dedicated thread, or continue from the terminal.
 - **Keep it available.** macOS `launchd` owns one gateway per agent and brings it back
   after a crash, reboot, or update.
-- **Let it work while you are away.** Run recurring or one-time work and deliver the
-  result to a channel: `rundesk schedules ava add daily --when "0 4 * * *" --ask "review today's changes" --to discord-dms`
+- **Let it work while you are away.** Run recurring or one-time work, and the result goes
+  to the channel the agent is told things through:
+  `rundesk schedules add ava daily --when "0 4 * * *" --ask "review today's changes"`
 - **Improve how it handles your work.** Turn repeated procedures into reusable skills
   and integration CLIs, then grant them to any agent.
 - **Keep it yours.** Rundesk runs locally, needs no hosted Rundesk server, and keeps
@@ -61,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install
 Create an agent:
 
 ```sh
-rundesk add ava --provider codex
+rundesk agents add ava --provider codex
 ```
 
 Ask it to work:
@@ -73,23 +74,23 @@ rundesk ask ava "summarize what changed in this repository today"
 Keep it available:
 
 ```sh
-rundesk start ava
+rundesk gateways start ava
 ```
 
 The next terminal `ask` resumes the same conversation. To reach the agent away from
-your terminal, **set up the Discord bot** (guide returns with the channel).
+your terminal, see **[Setting up a Discord bot](#setting-up-a-discord-bot)** below.
 
 ## 🧠 Provider adapters
 
-Rundesk ships four provider adapters. They use the provider CLI and login already on
-your machine; Rundesk does not copy provider credentials.
+Rundesk ships three provider adapters. They use the provider CLI and login already on
+your machine; Rundesk does not copy provider credentials. `rundesk providers` lists what
+this install can actually run.
 
 | Provider CLI | `--provider` | Differentiator |
 |---|---|---|
 | [OpenAI Codex CLI](https://learn.chatgpt.com/docs/codex/cli) | `codex` | Live steering |
 | [Anthropic Claude Code](https://code.claude.com/docs/en/overview) | `claude` | — |
 | [xAI Grok CLI](https://docs.x.ai/build/cli/headless-scripting) | `grok` | — |
-| [Google Antigravity CLI](https://antigravity.google/docs/cli/install) | `antigravity` | — |
 
 Every shipped adapter supports continuing conversations, model selection, tool activity,
 and per-turn usage.
@@ -97,27 +98,25 @@ and per-turn usage.
 Choose a provider while creating an agent:
 
 ```sh
-rundesk add claude-agent --provider claude
-rundesk add grok-agent --provider grok
-rundesk add antigravity-agent --provider antigravity
+rundesk agents add claude-agent --provider claude
+rundesk agents add grok-agent --provider grok
 ```
 
 Change an existing agent's default without replacing its identity, home, memory,
 conversations, channels, schedules, or history:
 
 ```sh
-rundesk configure ava --provider claude
+rundesk agents configure ava --provider claude
 ```
 
 Rundesk checks the new adapter before changing the default. A turn already underway
 finishes with the provider it started with; subsequent turns use the new default.
 
-Change only the model, provider settings, or standing instructions:
+A model or a posture is chosen per turn rather than stored on the agent:
 
 ```sh
-rundesk configure ava --model opus
-rundesk configure ava --set effort=high
-rundesk configure ava --instructions "Keep answers concise."
+rundesk ask ava --model opus "review this"
+rundesk ask ava --read-only "what changed today?"
 ```
 
 On a single-user Discord channel, `/provider <provider>` changes the same agent-wide
@@ -126,7 +125,7 @@ default. Shared channels cannot change that default.
 ### Custom providers are first-class
 
 ```sh
-rundesk add ava --provider /opt/my-provider --model fast-1 --set effort=high
+rundesk agents add ava --provider /opt/my-provider
 ```
 
 A provider adapter is an executable that exchanges newline-delimited JSON records with
@@ -140,62 +139,63 @@ lifecycle as shipped adapters.
 
 ### Discord
 
-Discord and Slack are the shipped channel adapters. Neither is special: each is a program
-Rundesk runs, written against the same published contract.
+Discord is the shipped channel adapter. It is not special: it is a program Rundesk runs,
+written against the [published contract](docs/adapters.md), and `rundesk channels doctor`
+says what any channel cannot do and exactly why.
 
-```sh
-rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
-```
-
-The command asks for the bot token without echoing it, proves the connection before
-saving anything, and creates separate `discord-dms` and `discord-rooms` channels by
-default.
+**A channel is a connection, not a place.** One `discord` channel per agent carries private
+messages and every room the bot was invited to, so there is nothing to point it at and
+nothing to name. One list of ids says who may reach the agent, and it says so wherever they
+say it.
 
 On Discord, Rundesk supports:
 
 - private direct messages and public server channels;
 - a dedicated thread when the agent is mentioned in a public channel;
 - continuing inside that thread without mentioning the agent again;
-- explicit per-channel user allowlists;
-- typing, state reactions, and optional live activity;
-- long answers, generated files, and inbound attachments; and
-- stopping or forgetting a conversation from chat.
+- an explicit allowlist of ids, which nobody outside is ever answered or told about;
+- typing, state reactions, and live activity that batches a burst of tools into one edit;
+- long answers split to Discord's limit, generated files, and inbound attachments; and
+- `/stop`, `/new`, `/restart`, `/shutdown`, `/status`, `/version`, `/skills`, `/schedules`
+  and `/provider` from chat.
 
-Keep public-room behavior separate from private conversations:
+#### Setting up a Discord bot
+
+You need three things from Discord before `channels add` can succeed. Rundesk refuses,
+without writing anything down, until it has connected — so getting one wrong costs a
+retry rather than a broken agent at three in the morning.
+
+1. **A bot token.** In the [Developer Portal](https://discord.com/developers/applications),
+   create an application, open **Bot**, and **Reset Token**. Copy it.
+2. **The Message Content Intent.** On that same **Bot** page, under **Privileged Gateway
+   Intents**, switch on **Message Content Intent**. Without it Discord blanks every message
+   in a room and in a thread unless it names the bot, so no thread could be opened and
+   nothing said in one could be read. Rundesk refuses while it is off, and a gateway would
+   be closed with `4014` rather than connecting.
+3. **Your own numeric user id.** In Discord, **Settings → Advanced → Developer Mode** on,
+   then right-click your profile and **Copy User ID**. This is a number, never a username —
+   a username can be changed and an id cannot.
+
+Then:
 
 ```sh
-rundesk channels ava instructions discord-rooms \
-  "You are {agent} in {where.channel}. Others can read this, so keep it concise."
+rundesk channels add ava discord --allow <your-discord-user-id>
 ```
 
-→ **Setting up the Discord bot** — the guide returns with the channel
+It asks for the token without echoing it, connects, and only then writes the channel down.
+On success it prints an **invite** URL — the bot is in no server until somebody with
+permission opens that URL and adds it. A bot already in a server has to be sent the invite
+again before it may open a thread or attach a file.
 
-### Slack
+Finally, start the gateway — `channels add` connects once to prove the channel and does not
+leave anything running:
 
 ```sh
-rundesk channels ava add slack --kind slack --allow <your-slack-member-id>
+rundesk gateways start ava
 ```
 
-Socket Mode, so there is no public URL and no inbound port. The command signs in with both
-credentials Slack requires, asks Slack which channels the bot is actually in, and creates
-separate `slack-dms` and `slack-rooms` channels by default.
-
-On Slack, Rundesk supports:
-
-- private direct messages and the channels the bot has been invited to;
-- a thread under the message that named the agent in a channel;
-- continuing inside that thread without mentioning the agent again;
-- explicit per-channel user allowlists;
-- state reactions and optional live activity;
-- long answers, generated files, and inbound attachments;
-- ordinary Markdown rendered in Slack's own dialect; and
-- stopping, forgetting or restarting from one slash command.
-
-Slack has no typing indicator a bot may raise without forcing a thread-only conversation UI
-on every exchange, so the eyes reaction and the running commentary are what say a turn is
-alive. Everything else is what Discord does.
-
-→ **Setting up the Slack bot** — the guide returns with the channel
+Then say hello to the bot in a DM. If nothing answers, `rundesk channels doctor` and
+`rundesk gateways logs ava` are the two things to read.
 
 ### Custom channels are first-class
 
@@ -343,14 +343,17 @@ others from being checked or rolling back an otherwise healthy CLI update.
 ## 📖 Documentation
 
 - **[Commands](docs/commands.md)** — every operation, what it guarantees, and what each exit code means
+- **[Channel adapters](docs/adapters.md)** — writing the program behind a channel: the three invocations, and every record
+- **[Provider adapters](docs/providers.md)** — what a turn is, and writing the program behind a brain
+- **[Gateways](docs/gateways.md)** and **[Schedules](docs/schedules.md)** — what each is, and every state one can get stuck in
 - **[Where an install keeps things](docs/layout.md)** — one root, and everything derived from it
 - **[Working on a checkout](docs/development.md)** — running and testing without installing
 
-> **This branch is a rebuild in progress.** The command's own lifecycle — install, status, version,
-> configure, update, uninstall — is rebuilt and covered by tests. Agents, gateways, channels,
-> schedules and skills are being brought back one part at a time, and the sections describing them
-> above document the published release rather than what is in this tree. `rundesk --help` is always
-> the truth about what this copy can do.
+> **This branch is a rebuild in progress**, and `rundesk --help` is always the truth about what this
+> copy can do. The sections above are kept to what ships: a verb Rundesk cannot perform is a verb
+> Rundesk does not have, so there is no "coming soon" list here and nothing above describes a
+> release other than this one. Where a feature exists in the published build and not in this tree,
+> it is absent from this page rather than described.
 
 ## 🤝 Contributing
 

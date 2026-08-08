@@ -96,8 +96,10 @@ discord = None
 MAX_TEXT = 2000
 
 #: What this can do, asked with no network and no account, and the same answer every time. Read when
-#: a channel is added and written into its record, so that a surface which *cannot* edit a message
-#: is told apart from one that can and did not.
+#: a channel is added and **printed rather than kept** — there is no column in the `channels` table
+#: holding it, so nothing later reads a key from here. Declared honestly anyway: the answer is what
+#: tells a surface that *cannot* edit a message from one that can and did not, and the day rundesk
+#: keeps it is the day an adapter that lied about itself starts being believed.
 #:
 #: `thread` says this opens one when it is named in a room, and that the exchange then goes on
 #: inside it as an ordinary conversation, reached and identified by that thread's own id. **Rundesk

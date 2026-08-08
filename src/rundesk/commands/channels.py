@@ -440,8 +440,14 @@ def _added(args: argparse.Namespace, reaching: Optional[Reaching]) -> int:
     try:
         adapters.where(args.adapter)
         # Asked before anything connects and with no credential anywhere near it, so that a fidelity
-        # difference is a fact rather than a guess. What it says is written into the record, which is
-        # how a surface that *cannot* edit a message is told apart from one that can and did not.
+        # difference is a fact rather than a guess.
+        #
+        # **Printed here and kept nowhere**, and this said otherwise for a while — it claimed the
+        # answer was written into the record, which is a mechanism that does not exist: `values`
+        # below has no such key, the `channels` table has no column, and `kept.SETTABLE` names none.
+        # The one capability anything reads is `max_text`, and it is read out of `settings`, where a
+        # `--check` may put it. `docs/adapters.md` says so under *what is not built yet*; a docstring
+        # asserting the opposite is worse than the gap, because nobody re-checks it.
         able = adapters.capabilities(args.adapter, reaching)
     except TROUBLE as why:
         return _failed(str(why), "nothing was added")

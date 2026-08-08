@@ -5,7 +5,20 @@ defects found while checking them. Companion to [`REVIEW.md`](REVIEW.md), which 
 
 Paths are repo-relative. `src_old/` is the gitignored copy of the previous build.
 
-**No code has been written.** This is the plan; nothing in it has been started.
+**Most of this has since shipped.** This said *"no code has been written"* long after that stopped
+being true, which makes a plan read as untouched when what is left is only its tail. Phases 1–5
+landed in `a266b0a` (*a reply carries its context, a file goes both ways, and a refusal is not a ✅*);
+the defects found in a later audit landed in the four commits after it.
+
+**What is left is Phase 6, and not all of it:** long `/skills` and `/schedules` answers are still cut
+rather than split (1.3); there are no per-person notices and no greeting for a newly allowed user
+(6.1); rooms cannot be addressed by name (6.3); slash commands are synced globally, so a fresh bot
+waits up to an hour for them (6.5); `retry_after` is emitted and read by nothing — and, on the
+shipped adapter, is not even reachable (6.6); there is no `/agents` or `/help` (6.7);
+`--capabilities` is still asked for and thrown away (6.8); and `allowed_mentions` is unset (6.9).
+
+Read the item statuses below as *what was true when this was written*, and this header as what is
+true now.
 
 Scope was set by the owner: **fix inbound replies, make files attach in and out, and confirm nothing
 critical is missing or broken in Discord.** Turning activity commentary off is **explicitly out of
