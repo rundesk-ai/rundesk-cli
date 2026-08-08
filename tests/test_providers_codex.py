@@ -498,11 +498,22 @@ for line in sys.stdin:
         self.assertNotIn("codex-file-citation", text)
         self.assertIn("test.pdf", text)
 
-    def test_a_file_it_only_read_is_not_a_deliverable(self):
+    def test_the_purpose_it_states_is_not_read(self):
+        # The brain's own instructions reserve `output` for something it made and `source` for a
+        # question it answered — and it cited a PDF it had just written as `source`. The field
+        # describes the turn rather than the file, and reading it lost the file.
         at = self.a_pdf()
-        cited = f'I looked at :codex-file-citation{{path="{at}" purpose="context"}}'
-        said = self.ran(cited)
-        self.assertEqual([], [one for one in said if one.get("type") == "file"])
+        for purpose in ("output", "source"):
+            with self.subTest(purpose=purpose):
+                said = self.ran(f'Here it is: :codex-file-citation{{path="{at}" '
+                                f'purpose="{purpose}"}}')
+                self.assertEqual([str(at)],
+                                 [one["at"] for one in said if one.get("type") == "file"])
+
+    def test_a_citation_stating_no_purpose_at_all_is_still_a_file(self):
+        at = self.a_pdf()
+        said = self.ran(f'Here it is: :codex-file-citation{{path="{at}"}}')
+        self.assertEqual([str(at)], [one["at"] for one in said if one.get("type") == "file"])
 
     def test_a_path_that_is_not_there_loses_neither_the_words_nor_lies_about_a_file(self):
         said = self.ran(f"Done: {self.SAID % '/nowhere/at/all/test.pdf'}")

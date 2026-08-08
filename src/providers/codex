@@ -131,14 +131,17 @@ SANDBOX_POLICY = {"type": "dangerFullAccess"}
 #: and says which of four things it recognised; anything else is a command that ran.
 DID_FOR_COMMAND = {"read": "read", "listFiles": "list", "search": "search", "unknown": "run"}
 
-#: How this brain names a file inside its own prose, and the two things worth reading out of one.
+#: How this brain names a file inside its own prose, and the one thing worth reading out of one.
 #: **Its own spelling and nobody else's** — rundesk asks for a markdown link and this writes
-#: `:codex-file-citation{path="…" purpose="output"}` instead, so an answer arrived with the markup
-#: verbatim in it and the file it named attached to nothing. `purpose` is what tells a deliverable
-#: from something the brain merely read; see `anything_it_cited`. The two fields are matched in
-#: either order, because a brand's own syntax is not a promise about field order.
-A_CITATION = re.compile(r':codex-file-citation\{(?=[^}]*path="(?P<at>[^"]*)")'
-                        r'(?=[^}]*purpose="(?P<purpose>[^"]*)")[^}]*\}')
+#: `:codex-file-citation{path="…"}` instead, so an answer arrived with the markup verbatim in front
+#: of a person and the file it named attached to nothing.
+#:
+#: **The path is the whole of it and `purpose` is not read.** The brain's own instructions say to
+#: use `source` for a question it answered and `output` for something it created — and it cited one
+#: PDF it had just made as `source`, so the field says what the *turn* was rather than what the file
+#: is. Reading it lost the file. A citation stands inline in a final answer, which is the brain
+#: presenting something to whoever asked; that is the intent, and the path is where it lives.
+A_CITATION = re.compile(r':codex-file-citation\{[^}]*?path="(?P<at>[^"]*)"[^}]*\}')
 
 #: Which of the closed words each of the brain's own error names means. **Nothing is inferred from
 #: the prose beside it** — a word guessed from a message is a word that is wrong on the first vendor
@@ -850,11 +853,13 @@ class Turn:
         a person was shown a line of markup, and the file it named was never attached, because
         nothing downstream reads a syntax only this brain speaks.
 
-        **`purpose="output"` is the whole of the test.** That is the brain saying *this is the thing
-        that was asked for*, which is exactly the question `file` records answer; a citation with
-        any other purpose is it pointing at something it read or changed, and those are not
-        deliverables. Anything it names that is not there is left alone as text, because a path that
-        does not resolve is not a file and saying otherwise would attach nothing and lose the words.
+        **Every citation counts and `purpose` is not read.** The brain's own instructions reserve
+        `output` for something it created and `source` for a question it answered — and it cited a
+        PDF it had just written as `source`, so that field describes the turn rather than the file.
+        A citation is inline in a final answer, which is the brain handing something to whoever
+        asked; the intent is the citation itself. Anything it names that is not there is left as
+        text, because a path that does not resolve is not a file and saying otherwise would attach
+        nothing and lose the words.
 
         Kept here and nowhere else: this is one vendor's spelling, and the seam above must not learn
         it.
@@ -864,7 +869,7 @@ class Turn:
 
         def instead(found) -> str:
             at = found.group("at")
-            if found.group("purpose") != "output" or not os.path.isabs(at):
+            if not os.path.isabs(at):
                 return found.group(0)
             if not os.path.isfile(at):
                 return os.path.basename(at)

@@ -396,6 +396,31 @@ def last_answer(agent: str, source: str, place: str, after: str = "") -> str:
     return str(found[0]) if found is not None else ""
 
 
+def last_from_a_person(agent: str, place: str) -> Optional[str]:
+    """The platform's own id for the last thing a **person** said in one place, or `None`.
+
+    **What an answer anchors to, so that it reads as an answer.** Quoting somebody's own message is
+    what makes a platform mark a reply for them — on Discord a reply draws attention for the author
+    of the message it quotes, and nobody else — so a report anchored to something rundesk itself
+    posted is a report the person it is for has nothing to distinguish. Anchored here instead, a
+    scheduled run reads exactly as a reply in a private conversation does, by the same mechanism.
+
+    `None` where nobody has spoken here, or where the platform names no messages. Both mean *there
+    is nothing of theirs to quote*, and the caller falls back to what it had.
+
+    A read that never writes, like `standing_in` and for the same reason.
+    """
+    conversation = standing_in(agent, place)
+    if conversation is None:
+        return None
+    with records.reading(directory.records(agent)) as conn:
+        row = conn.execute(
+            "SELECT external_id FROM conversation_messages WHERE conversation_id = ? AND author = ?"
+            " AND external_id IS NOT NULL ORDER BY id DESC LIMIT 1",
+            (conversation, BY_USER)).fetchone()
+    return str(row["external_id"]) if row and row["external_id"] else None
+
+
 def standing_in(agent: str, place: str) -> Optional[int]:
     """The conversation a place already has, or `None` where nothing has been said in it yet.
 

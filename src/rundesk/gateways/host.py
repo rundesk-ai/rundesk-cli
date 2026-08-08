@@ -868,7 +868,17 @@ class _Notices:
         _told(self.name, self.where, self.hosted(), saying)
 
     def announced(self, saying: str, within: float) -> Optional[str]:
-        """Say that a run has begun, and hand back what the platform called that message.
+        """Say that a run has begun, and hand back **what its report should quote**.
+
+        **The person's own last message where there is one, and this notice otherwise.** Quoting
+        somebody's message is what makes a platform mark a reply *for them* — a reply draws
+        attention for the author of what it quotes and for nobody else — so a report anchored to
+        rundesk's own notice reaches the person it is for with nothing to tell it from the
+        bookkeeping around it. Anchored to theirs, a scheduled run reads exactly as an answer in a
+        private conversation does, by the same mechanism and with nothing added to the words.
+
+        The notice is still posted either way: it is what says a run has begun, and a long one is
+        worth saying. What changes is only which message the report hangs under.
 
         `None` where nothing was said or nothing can be quoted — no notified channel, no adapter up,
         or a platform whose adapter passes no ids. Every one of those means the report will stand on
@@ -878,8 +888,10 @@ class _Notices:
             going = delivery.notice(self.name, saying)
             if going is None:
                 return None
-            return hosting.announced(self.name, self.where, self.hosted(), going.kind, going.place,
-                                     going.pieces, within)
+            posted = hosting.announced(self.name, self.where, self.hosted(), going.kind,
+                                       going.place, going.pieces, within)
+            theirs = arriving.last_from_a_person(self.name, going.place)
+            return theirs or posted
         except Exception:                          # noqa: BLE001 — see `_told`
             return None
 
