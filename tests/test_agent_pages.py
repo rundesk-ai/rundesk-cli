@@ -92,6 +92,7 @@ class ANewAgent(support.Isolated):
         self.assertIn("continue independent useful work", rules)
         self.assertIn("result reaches this turn", rules)
         self.assertIn("wakes a review turn", rules)
+        self.assertIn("request's done criteria pass", rules)
 
     def test_the_rules_do_not_claim_the_two_rule_files_synchronize_after_placement(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
@@ -102,10 +103,82 @@ class ANewAgent(support.Isolated):
         rules = (self.home / "AGENTS.md").read_bytes()
         self.assertLessEqual(len(rules), 4500)
 
+    def test_the_complete_standing_context_has_a_budget(self):
+        total = sum(len((self.home / name).read_bytes()) for name in ("AGENTS.md", "MEMORY.md"))
+        self.assertLessEqual(total, 4800)
+
     def test_the_rules_defer_question_policy_to_the_turn_situation(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
         self.assertNotIn("Ask about goals", rules)
         self.assertIn("situation rules", rules)
+
+    def test_start_still_orients_routes_skills_context_and_existing_work(self):
+        rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").split())
+        for phrase in ("## Start", "requested outcome, limits, and proof of completion",
+                       "Review the available skills", "description covers the work",
+                       "Search recorded messages", "context you do not have",
+                       "Inspect existing files, commands, and tools",
+                       "Do setup silently unless it blocks you"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, rules)
+
+    def test_finish_does_not_leave_a_task_process_behind(self):
+        rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("temporary process", rules)
+
+    def test_finish_validates_after_the_last_change_and_keeps_active_handoffs_pending(self):
+        rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").split())
+        for phrase in ("After final changes and cleanup", "validate each deliverable yourself",
+                       "named delegated work is still active", "task is explicitly pending",
+                       "Never call pending work complete"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, rules)
+
+    def test_native_rules_do_not_tell_the_brain_to_open_themselves_again(self):
+        rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertNotIn("Read this", rules)
+        self.assertIn("Read `MEMORY.md` before your first reply", rules)
+
+    def test_memory_keeps_a_project_index_without_becoming_a_project_log(self):
+        rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").split())
+        for phrase in ("durable context useful next run", "active-project pointers",
+                       "owner preferences", "role and responsibilities", "cross-project process",
+                       "name, stable location, purpose, role, authoritative overview",
+                       "Project commands, deliverable paths, status, decisions, conventions",
+                       "task methods/checks/done criteria",
+                       "working paths, report formats, dates, and supersession/retirement history",
+                       "stay in the project or a shared index",
+                       "one shared purpose-named index", "never one note per project",
+                       "Keep only current facts", "never narrate or date a correction",
+                       "Merge, do not append", "superseded fact or closed loop",
+                       "If nothing durable changed, do not edit"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, rules)
+
+    def test_ordinary_work_pays_only_for_current_task_hygiene(self):
+        rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").split())
+        for phrase in ("## Workspace", "canonical files", "project state in its project",
+                       "disposable work temporary",
+                       "Delete each task-created temporary file and directory before ending, wherever it is",
+                       "Preserve deliverables", "pre-existing or uncertain files",
+                       "files of uncertain ownership/value",
+                       "Do not inspect unrelated home files or inventory, reorganize, or prune home unless maintenance is the task"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, rules)
+        self.assertNotIn("Inspect home loose files and scratch contents", rules)
+
+    def test_the_memory_scaffold_is_a_small_adaptable_index_not_a_log(self):
+        raw = (self.home / "MEMORY.md").read_text(encoding="utf-8")
+        memory = " ".join(raw.split())
+        for heading in ("## Owner", "## Role and responsibilities", "## Response preferences",
+                        "## Cross-project process and gotchas", "## Active project pointers",
+                        "## Open loops"):
+            with self.subTest(heading=heading):
+                self.assertIn(heading, memory)
+        self.assertIn("canonical purpose-named home indexes", memory)
+        self.assertIn("read and prune when relevant", memory)
+        self.assertIn("Adapt headings to your role", memory)
+        self.assertLessEqual(len(raw.encode("utf-8")), 400)
 
     def test_nothing_is_left_staged_beside_them(self):
         """Each is written aside and renamed, because a brain may be reading the directory while an

@@ -59,6 +59,11 @@ descriptor is passed to the adapter's child process, so the claim is held for ex
 adapter tree lives — through a `SIGKILL`, through a gateway that died without unwinding. There is no
 pid written down anywhere, because a written-down pid gets reused and a reused pid gets signalled.
 
+For that same lifetime, Rundesk holds one ordinary read connection to the agent records. It does not
+read or change a row for the provider; it keeps SQLite's WAL sidecars present so a sandboxed provider
+tool can invoke the documented `messages` command without needing permission to create those sibling
+files itself. The connection closes on every settlement path.
+
 ### The five callers, and why they are not one
 
 | Caller | Runs the turn | Can steer | Conversation |
@@ -129,7 +134,7 @@ per fragment is a history nobody can read back and a search that matches half a 
 
 ```
 data/agents/alan/
-  home/                        every turn stands here — the brain finds AGENTS.md by being in it
+  home/                        every turn stands here — the brain natively loads its standing rules
   state.db                     turns, turn_records, provider_sessions, messages, the search index
   providers/<provider>/        the adapter's own; rundesk never writes here
   conversations/<id>/
@@ -337,12 +342,19 @@ is left out is unset, never empty** — `${RUNDESK_MODEL:-default}` is written e
 | `RUNDESK_HOME` | which install this turn belongs to. Every `rundesk` command the agent runs reads it |
 | `RUNDESK_COMMAND` | the whole path to *this* install's `rundesk`. What works when `PATH` does not |
 | `RUNDESK_SKILLS` | where this agent's skills stand. Presenting them is yours |
-| `RUNDESK_CONTINUITY` | `AGENTS.md=rules,MEMORY.md=memory,SOUL.md=identity` — which files the agent lives by, and what changing one is called |
+| `RUNDESK_CONTINUITY` | `AGENTS.md=rules,MEMORY.md=memory` — which files the agent lives by, and what changing one is called |
 | `RUNDESK_RAW` | somewhere to append everything the brain said, verbatim. Offered, never required |
 | `RUNDESK_MODEL` | a model name your brain understands, or unset |
 | `RUNDESK_RESUME` | the handle this conversation got to last time, or unset for a new one |
 | `RUNDESK_SETTINGS` | whatever the owner set, as one JSON object, sorted |
 | `RUNDESK_PREFACE` | what rundesk wants said before the brain reads a word of the task |
+
+The standing rules are not repeated in `RUNDESK_PREFACE`. A new agent receives byte-identical
+`AGENTS.md` and `CLAUDE.md` regular files from one source; Claude loads the latter and Codex loads the
+former. Grok 0.2.118 loads both top-level aliases even when its Claude compatibility scanners are
+disabled; it exposes no supported selective switch. The regular copies stay because each provider
+must work from the same home without a provider-specific rewrite. `MEMORY.md` is not provider-native,
+so the preface still tells every brain to read it.
 
 **`RUNDESK_PREFACE` is appended to your brain's instructions and never mapped onto the flag that
 replaces its system prompt.** Measured on one brain, the replacing flag takes about 6,100 tokens of

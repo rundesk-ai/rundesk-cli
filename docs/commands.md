@@ -218,6 +218,44 @@ owner's to edit from that moment: **an update fills in one that is missing and n
 that is there**, whatever it has been changed to. A release that shipped none says so on this line
 instead, and the next `rundesk update` gives them.
 
+`MEMORY.md` is a compact working index for the next run, not a transcript or project notebook.
+Ordinary work keeps owner preferences, the agent's role and responsibilities, reusable cross-project
+process and gotchas, and a small active-project pointer: name, stable location, purpose, role, and
+authoritative overview. Commands, deliverable paths, changing state, task methods, dates, and change
+history stay with the project or an earned shared index. Memory keeps the current fact instead of a
+dated correction story; a turn that learned nothing durable leaves it alone. Ordinary work removes
+only temporary files and directories that turn created; it does not inventory the home.
+
+When useful durable context would make `MEMORY.md` dense, the agent may link from it to a canonical,
+purpose-named index in its home. `PROJECTS.md`, `CLIENTS.md`, and `OPEN_ITEMS.md` are examples, not
+files every agent should create. An index earns its file only when the role has enough reusable
+detail; it may include a stable entrypoint when that prevents repeated discovery. The agent reads it
+when relevant and applies the same correction, compaction, and stale-entry removal rules. The link
+keeps `MEMORY.md` as the small first-read map and prevents detached notes the next session would
+never discover.
+
+Periodic compaction and workspace upkeep are a focused Rundesk-management task, not daily prompt
+weight. The bundled `managing-rundesk` skill has conservative maintenance, retrospective, and
+self-improvement references for one focused upkeep pass. Maintenance runs first,
+preserving unavailable active mappings, uncertain files, deliverables, provider-managed content,
+symlinks, and project/user files; only confirmed stale continuity and agent-created obsolete clutter
+are removed.
+
+The retrospective phase reads the previous weekly entry, reviews bounded public evidence, and
+updates one dated diary with what went well, where the agent failed or caused repeated asks, and one
+testable improvement. It records observable correction, dissatisfaction, or distrust without
+diagnosing the owner's mood, retains compact older entries as longitudinal evidence, and promotes a
+lesson only to its proper durable home. The final phase starts with that diary and previous
+`agent-upkeep` reports, then reviews a bounded sample of other messages and turns for repeated
+friction, corrections,
+missing context, failed outcomes, and ignored capability routes.
+Heavy specialist work stays delegated to a materially better active named agent; a same-turn helper
+is next when no standing specialist fits; a skill is recommended only for a recurring capability
+this agent must own and neither route covers. The pass compares available and granted skills, never
+revokes from non-use alone, and changes no grants or standing rules without explicit authority. Its
+scheduled response is deliberately short and attention-first: owner actions only, or one line saying
+upkeep completed and no action is needed.
+
 **Every agent is given `rundesk/managing-rundesk`**, which is how it operates the install running
 it — where things are, what its own gateway is doing, which values are set. It is a floor of the
 product rather than a choice: `rundesk skills revoke` will not take it away, and `rundesk update`

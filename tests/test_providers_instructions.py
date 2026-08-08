@@ -10,7 +10,7 @@ Run directly: `python3 tests/test_providers_instructions.py`
 import unittest
 
 import support
-from rundesk.providers import instructions
+from rundesk.providers import instructions, team
 
 #: Everything a layer may read, filled in, so a case can tell "not supplied" from "not used".
 EVERYTHING = {
@@ -36,10 +36,6 @@ EVERY_SITUATION = (instructions.USER_TO_AGENT, instructions.SCHEDULE_TO_AGENT,
 #: `SOUL.md` and `voice` are here for a different reason: no release places a `SOUL.md`, so naming
 #: one would point every brain at a file that is not there.
 NEVER_IN_THE_CORE = ("channel", "schedule", "SOUL.md", "voice", "attachment")
-
-#: The files the core tells an agent to read. Named here as well as in `agents.pages` because this
-#: suite may not import that layer's package to ask — `test_layers.py` is what compares the two.
-THE_FILES_IT_LIVES_BY = ("AGENTS.md", "MEMORY.md")
 
 
 class TheCore(support.Isolated):
@@ -67,13 +63,14 @@ class TheCore(support.Isolated):
         self.assertIn("ava", built)
         self.assertIn("/agents/ava/home", built)
 
-    def test_it_names_the_files_the_agent_lives_by(self):
-        """Left to be discovered, a brain that reads its bootstrap page late has no rules at all —
-        and reports nothing wrong, which is what makes it worth naming in the layer nothing skips."""
+    def test_it_relies_on_native_standing_rules_and_names_only_continuity_to_open(self):
+        """Each provider loads its standing rule filename before the prompt. Telling Claude to
+        open `AGENTS.md` after it already loaded the identical `CLAUDE.md` copy spends context and
+        tool work twice; `MEMORY.md` is not native and must still be named."""
         text = instructions.CORE
-        for name in THE_FILES_IT_LIVES_BY:
-            with self.subTest(name=name):
-                self.assertIn(name, text)
+        self.assertIn("Rules are loaded", text)
+        self.assertIn("read `MEMORY.md`", text)
+        self.assertNotIn("AGENTS.md", text)
 
     def test_it_says_how_to_reach_the_rundesk_running_this_turn(self):
         """The bare word is what fails on a brain that rebuilds its shell's PATH, so the whole path
@@ -91,14 +88,27 @@ class TheCore(support.Isolated):
     def test_it_says_what_a_turn_may_never_do(self):
         text = instructions.CORE.lower()
         for said in ("never invent", "never write a secret", "never dress a failure",
-                     "never open its databases or lock files directly"):
+                     "never open its records or locks"):
             with self.subTest(said=said):
                 self.assertIn(said, text)
 
     def test_it_defines_done_as_verified_against_every_requested_item(self):
         text = instructions.CORE
-        self.assertIn("Before ending, check every requested item", text)
+        self.assertIn("After final work, check every requested item", text)
         self.assertIn("Unverified is not done", text)
+
+    def test_memory_and_applicable_skills_are_read_before_work_or_reply(self):
+        self.assertIn("Before work or reply, read `MEMORY.md` and each available skill",
+                      instructions.CORE)
+
+    def test_it_gives_existing_agent_pages_a_compact_continuity_floor(self):
+        text = instructions.CORE
+        for phrase in ("holds continuity", "index external projects", "changing details",
+                       "disposable work", "serves next run", "role/process",
+                       "project locations", "not project commands/status",
+                       "otherwise leave it alone"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
 
     def test_it_makes_the_requested_access_mode_an_operating_rule(self):
         for mode in ("read", "work"):
@@ -106,8 +116,8 @@ class TheCore(support.Isolated):
                 built = instructions.build(variables={**EVERYTHING, "access_mode": mode}).text
                 self.assertIn(f"This turn is {mode}", built)
         read = instructions.build(variables={**EVERYTHING, "access_mode": "read"}).text
-        self.assertIn("do not edit, change external state", read)
-        self.assertIn("or create a named-agent handoff", read)
+        self.assertIn("never write, even to test access", read)
+        self.assertIn("no external change or named-agent handoff", read)
         self.assertIn("not a sandbox", read)
 
     def test_every_situation_knows_how_to_recover_missing_context(self):
@@ -117,7 +127,9 @@ class TheCore(support.Isolated):
                     situation=situation,
                     variables={**EVERYTHING, "caller_agent": "bob"}).text
                 self.assertIn('"$RUNDESK_COMMAND" messages ava --search', built)
-                self.assertIn("another audience's history as private", built.lower())
+                self.assertIn("other audiences are private", built.lower())
+                self.assertIn("report context unavailable", built.lower())
+                self.assertIn("never search rundesk files or another system", built.lower())
 
     def test_it_identifies_the_current_audience_for_safe_history_recovery(self):
         built = instructions.build(variables=EVERYTHING).text
@@ -361,6 +373,11 @@ class WhatATurnMayDelegateTo(support.Isolated):
         self.assertIn("instead of doing all sequentially", text)
         self.assertIn("verify the results", text)
 
+    def test_a_delegated_project_task_cannot_pollute_the_agents_own_memory(self):
+        text = self.built(instructions.AGENT_TO_AGENT)
+        self.assertIn("`MEMORY.md` serves next run", text)
+        self.assertIn("Keep this task out of `MEMORY.md` unless it changes how you work", text)
+
     def test_it_prefers_a_materially_better_specialist_without_delegating_simple_work(self):
         text = self.built(instructions.USER_TO_AGENT)
         self.assertIn("materially better equipped", text)
@@ -461,7 +478,7 @@ class PromptBudget(support.Isolated):
                 self.assertLessEqual(len(text.encode("utf-8")), ceiling)
 
     def test_a_maximum_dynamic_team_keeps_the_complete_prompt_bounded(self):
-        built = instructions.build(variables=EVERYTHING, team="x" * 5850)
+        built = instructions.build(variables=EVERYTHING, team="x" * team.TEAM_BYTES_AT_MOST)
         self.assertLessEqual(built.total_bytes, 9200)
 
 

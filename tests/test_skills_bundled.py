@@ -200,7 +200,90 @@ class WhatAShippedSkillMayClaim(Bundled):
 
     def test_managing_rundesk_forbids_raw_database_and_lock_access(self):
         said = (self.skills / "managing-rundesk" / library.DECLARED).read_text(encoding="utf-8")
-        self.assertIn("Never open or edit rundesk databases or lock files directly", said)
+        self.assertIn("Never open or edit Rundesk databases, conversation records, or lock files directly", said)
+
+    def test_focused_maintenance_is_detailed_only_in_its_reference(self):
+        skill = self.skills / "managing-rundesk"
+        said = (skill / library.DECLARED).read_text(encoding="utf-8")
+        maintenance = " ".join((skill / "references" / "maintenance.md").read_text(
+            encoding="utf-8").split())
+        self.assertIn("focused maintenance of this agent's continuity and home", said)
+        self.assertIn("[Maintenance](references/maintenance.md)", said)
+        for phrase in ("retain an unavailable active mapping",
+                       "durable role and responsibilities", "confirmed agent-created",
+                       "files of uncertain ownership",
+                       "## Tidy versus cluttered", "A tidy home", "A cluttered home",
+                       "not deletion authority", "working or draft paths",
+                       "commands or deliverable paths", "dates or supersession history",
+                       "report formatting",
+                       "never one home note per project",
+                       "Combined upkeep contract", "maintenance runs first",
+                       "Do not open files under `retros/`",
+                       "one complete final report"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, maintenance)
+
+    def test_self_improvement_is_evidence_based_and_detailed_only_in_its_reference(self):
+        skill = self.skills / "managing-rundesk"
+        said = (skill / library.DECLARED).read_text(encoding="utf-8")
+        improving = " ".join((skill / "references" / "self-improvement.md").read_text(
+            encoding="utf-8").split())
+        self.assertIn("evidence-based self-improvement", said)
+        self.assertIn("[Self-improvement](references/self-improvement.md)", said)
+        self.assertIn("[Retrospective](references/retrospective.md)", said)
+        for phrase in ("focused review, not ordinary task overhead",
+                       "recent messages and turns", "repeated friction", "owner corrections",
+                       "failed or blocked outcomes", "public Rundesk commands",
+                       "previous `agent-upkeep` scheduled runs", "what went well",
+                       "what did not", "already resolved",
+                       'messages AGENT --source schedule --limit 10',
+                       "select the `(schedule agent-upkeep)` conversation",
+                       "project-specific evidence in that project's own files",
+                       '"$RUNDESK_COMMAND" agents', '"$RUNDESK_COMMAND" gateways',
+                       "Compare available and granted skills",
+                       "active gateway", "Exclude yourself",
+                       "gateway state only to determine delegation availability",
+                       "Never infer a specialist's focus from its name",
+                       "named specialist", "provider-local helper",
+                       "recurring capability gap", "Skills do not replace delegation",
+                       "Before recommending a skill", "why neither route covers",
+                       "Non-use alone is not evidence", "Revocation is rare",
+                       "Do not change grants", "explicit authority",
+                       "Apply a safe local continuity improvement",
+                       "exact owner decision",
+                       "## Combined upkeep contract", "agent-upkeep",
+                       "maintenance reference first", "retrospective reference second",
+                       "self-improvement reference last",
+                       "Do not open the next reference until the current phase is verified",
+                       "exactly one sentence", "very short and attention-first",
+                       "Definition of done for each firing",
+                       "full bounded evidence window", "superficial scan",
+                       "every claimed change and preservation",
+                       "Upkeep complete — continuity and workspace tidied; no owner action needed",
+                       "one complete final report"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, improving)
+        self.assertNotIn("schedules add AGENT agent-upkeep", improving)
+        self.assertNotIn("--disabled", improving)
+
+    def test_weekly_retrospective_is_bounded_evidence_not_owner_mind_reading(self):
+        skill = self.skills / "managing-rundesk"
+        retro = " ".join((skill / "references" / "retrospective.md").read_text(
+            encoding="utf-8").split())
+        for phrase in ("previous week's entry first", "retros/YYYY-MM-DD.md",
+                       "## What went well", "## What did not go well",
+                       "## What to improve", "explicit owner correction",
+                       "dissatisfaction or distrust", "Never diagnose the owner's mood",
+                       "three evidence-backed bullets per section", "Keep every weekly entry",
+                       "Never delete an older retrospective merely because of age",
+                       "update the same file", "no secrets", "one durable action",
+                       "leave it byte-identical",
+                       "Would an active specialist", "Would a provider-local helper",
+                       "available or granted skill",
+                       "exact evidence interval and diary date supplied by the initiator",
+                       "Never calculate or shift that interval yourself"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, retro)
 
     def test_no_shipped_skill_names_a_verb_this_build_does_not_have(self):
         # `AGENTS.md`: a verb rundesk cannot perform is a verb rundesk does not have. A skill is the

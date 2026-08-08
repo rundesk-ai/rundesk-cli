@@ -77,6 +77,19 @@ hand. So a stray directory is not listed as an agent and cannot be operated on a
 interrupted `agents add` leaves litter rather than something wearing an agent's name and not being
 one.
 
+**Rundesk never sweeps an agent's `home/`.** The agent keeps compact cross-run continuity in
+`MEMORY.md`, including small pointers to active external projects; changing project detail stays in
+its project or an earned shared index. Ordinary work removes only temporary files and directories it
+created. A focused maintenance task may compact linked indexes and remove confirmed obsolete
+agent-created clutter, but an old-looking or unfamiliar
+file is somebody's data, not permission to tidy it away. A purpose-named index such as `PROJECTS.md`
+is ordinary home content: Rundesk does not create, read, or sweep it.
+
+A focused upkeep may keep an agent-owned `retros/YYYY-MM-DD.md` diary. The initiator supplies the
+evidence interval and entry date; a rerun updates that one entry. The bundled maintenance
+reference bounds each entry but keeps the history. Rundesk itself does not create or sweep this
+directory, and an older or unfamiliar file is never treated as disposable.
+
 **The names inside are fixed and they are the same for every agent**, which is the whole reason they
 are inside. The build this replaces put them beside the name instead — `<name>.lock`, `<name>.log`,
 `<name>.json`, all flat in one directory — so an agent called `foo.log` and an agent called `foo`
@@ -119,6 +132,9 @@ data/skills/
     app/                    the catalog's own tree, verbatim
       manifest.json         what makes the directory a catalog
       skills/managing-rundesk/SKILL.md
+      skills/managing-rundesk/references/maintenance.md
+      skills/managing-rundesk/references/retrospective.md
+      skills/managing-rundesk/references/self-improvement.md
   rundesk-skills/           fetched from GitHub — the general catalog rundesk depends on
   local/                    yours. Never fetched, never removed by rundesk
     manifest.json

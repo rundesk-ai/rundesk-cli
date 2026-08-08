@@ -8,6 +8,7 @@ shape a turn has to survive.
 Run directly: `python3 tests/test_providers_turns.py`
 """
 
+import contextlib
 import json
 import threading
 import time
@@ -152,6 +153,38 @@ class ATurnThatAnswers(WithAnAgent):
             raise RuntimeError("this watcher is broken")
 
         self.assertEqual(self.run_turn(watching=refuses).turn_status, kept.DONE)
+
+    def test_agent_records_stay_reachable_while_the_provider_process_runs(self):
+        """A provider tool may invoke `rundesk messages` during its turn.
+
+        SQLite WAL readers need the shared-memory sidecar. Some provider sandboxes may read the
+        agent directory but not create that sibling, so the gateway keeps one read connection open
+        while the provider runs rather than leaving the documented history command unusable.
+        """
+        opened = 0
+        reading = turns.records.reading
+        talking = turns.adapters.talking_to
+
+        @contextlib.contextmanager
+        def tracked(at):
+            nonlocal opened
+            with reading(at) as conn:
+                opened += 1
+                try:
+                    yield conn
+                finally:
+                    opened -= 1
+
+        def while_reachable(*args, **kwargs):
+            self.assertGreater(opened, 0, "provider started without reachable WAL sidecars")
+            return talking(*args, **kwargs)
+
+        with mock.patch.object(turns.records, "reading", tracked), \
+                mock.patch.object(turns.adapters, "talking_to", side_effect=while_reachable):
+            got = self.run_turn()
+
+        self.assertEqual(kept.DONE, got.turn_status)
+        self.assertEqual(0, opened)
 
 
 class WhatWasSentIsProvableAfterwards(WithAnAgent):

@@ -1,6 +1,6 @@
 ---
 name: managing-rundesk
-description: Use this skill when the user asks to inspect, configure, operate, troubleshoot, or recover the Rundesk install that owns this agent, including its agents, gateways, agent-to-agent delegation, conversations, channels, schedules, providers, skills, backups, lifecycle, or credentials. It supplies the verified commands and safety rules needed to establish state, make requested changes, and report only proven outcomes. Do not use it for work inside an agent's project unless Rundesk controls the behavior.
+description: Use this skill when the user asks to inspect, configure, operate, troubleshoot, or recover the Rundesk install that owns this agent, including its agents, gateways, delegation, conversations, channels, schedules, providers, skills, backups, lifecycle, credentials, focused maintenance of this agent's continuity and home, or evidence-based self-improvement. It supplies verified commands and safety rules. Do not use it for ordinary project or workspace work.
 ---
 
 # Manage Rundesk
@@ -40,8 +40,8 @@ to identify the exact target and consequence. Most groups list when called with 
 
 ## Safety boundaries
 
-- Never open or edit rundesk databases or lock files directly. If the command fails, diagnose with
-  its documented read-only surfaces or report the failure; do not bypass it with SQLite or file tools.
+- Never open or edit Rundesk databases, conversation records, or lock files directly. If a command
+  fails, use documented read-only surfaces or report it; do not bypass the command with file tools.
 - Never stop your own gateway. Restarting it is allowed: Rundesk queues the restart until the active
   turn finishes, then brings the gateway back online.
 - Require an explicit request for agent removal, schedule removal, backup restore, uninstall, purge,
@@ -68,6 +68,9 @@ to identify the exact target and consequence. Most groups list when called with 
 | [Channels](references/channels.md) | Connect adapters, access lists, notifications, and diagnosis |
 | [Providers](references/providers.md) | Discover, check, or inspect provider execution |
 | [Skills](references/skills.md) | Catalogs, grants, profiles, values, and skill diagnosis |
+| [Maintenance](references/maintenance.md) | Focused upkeep of this agent's memory, indexes, and home workspace |
+| [Retrospective](references/retrospective.md) | Write the bounded weekly diary from evidence and compare prior improvements |
+| [Self-improvement](references/self-improvement.md) | Review proven friction, continuity, capability gaps, skills, and delegation fit |
 | [Configuration](references/configuration.md) | Status, version, install settings, and secret values |
 | [Lifecycle](references/lifecycle.md) | Install, update, uninstall, and purge |
 

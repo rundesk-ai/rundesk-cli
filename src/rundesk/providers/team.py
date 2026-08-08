@@ -13,7 +13,7 @@ from rundesk.utils import locking
 
 SKILLS_AT_MOST = 8
 TEAMMATES_AT_MOST = 12
-TEAM_BYTES_AT_MOST = 5850
+TEAM_BYTES_AT_MOST = 5720
 
 
 def for_agent(name: str) -> str:

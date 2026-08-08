@@ -633,10 +633,16 @@ def _held(request: Request, held: int, watching, saying,
             caller_agent=(request.caller_agent
                           if request.situation == instructions.AGENT_TO_AGENT else None))
                      if can["steer"] and saying is None else None)
-        with _reachable(agent, request.conversation, reachable):
-            said, stream = _the_brain(request, provider_name, told, turn, held, can, watching,
-                                      saying if saying is not None else
-                                      (reachable.each() if reachable else None), reachable, ours)
+        # A provider may invoke `rundesk messages` to recover context during this turn. SQLite's
+        # WAL reader needs the shared-memory sibling; some provider sandboxes may read the agent
+        # directory but not create that file. Holding one gateway reader keeps the sidecars alive
+        # for the documented child command, and the context managers close both on every path.
+        with records.reading(directory.records(agent)):
+            with _reachable(agent, request.conversation, reachable):
+                said, stream = _the_brain(
+                    request, provider_name, told, turn, held, can, watching,
+                    saying if saying is not None else (reachable.each() if reachable else None),
+                    reachable, ours)
         settling.update(_became(request, turn, said, stream, can, provider_name,
                                 began_at, _how_big(raw), time.monotonic() - began))
     return settling.outcome

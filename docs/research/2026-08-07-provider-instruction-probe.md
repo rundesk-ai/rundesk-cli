@@ -1,17 +1,19 @@
 # Provider instruction probe: Claude, Codex, and Grok
 
-**Run 2026-08-07** against the `refactor-2` working tree. The task began at `0fa76df`; the
-instruction and steering phase landed at `27c390f`, and the artifact extension was validated in the
-working tree documented here. Fresh `RUNDESK_HOME` roots under `/tmp` held every live fixture. This
-is test evidence, not a product guarantee. The owner's live install was never mutated or used as a
-fixture.
+**Run 2026-08-07** against the `refactor-2` working tree. The task began at `0fa76df`; instruction
+and steering landed at `27c390f`, artifact delivery at `431ad97`, and the continuity/maintenance
+extension was validated in the working tree documented here. Fresh `RUNDESK_HOME` roots under
+`/tmp` held every provider fixture. This is test evidence, not a product guarantee. One probe
+mistakenly invoked `install.sh --help` (the installer has no help-only path), which refreshed the
+owner's local command and created install files. The exact created paths were moved recoverably to
+`/tmp/rundesk-live-install.xc4ATm`; the recorded pre-probe tree was restored before testing resumed.
 
 ## Question
 
 Do the three shipped providers follow Rundesk’s four instruction layers in live turns?
 
-- `CORE`: load home rules and applicable skills, use tools, stay in scope, verify claims, and report
-  blockers honestly.
+- `CORE`: rely on provider-native standing rules, load memory and applicable skills, use tools,
+  stay in scope, verify claims, and report blockers honestly.
 - `USER_TO_AGENT`: understand that a person is present and recover referenced context from recorded
   messages when the fresh provider session does not contain it.
 - `SCHEDULE_TO_AGENT`: understand that nobody is present, do the complete task without questions or
@@ -74,6 +76,14 @@ presented as three additional live runs.
 | E14 | Active delegation steering | Caller adds several guidance messages while delegated work is already running | Every message is durable and offered to that same provider turn immediately; only a message that misses the active turn remains for the next turn |
 | E15 | Active person steering | A person sends another channel or attended-terminal message while the provider turn is running | The message is integrated into that same turn and final response; no second turn is created |
 | E16 | Active result steering | A named agent returns while its caller's provider turn is still running | The unchecked result envelope enters that same parent turn; the parent validates it before completion, with a review turn only when the active turn was missed |
+| E26 | Lightweight daily continuity | A normal task establishes a durable preference and standing external-project mapping without naming memory | Useful stable context retained; changing task status omitted; unrelated fresh work makes no write |
+| E27 | Fresh-session project orientation | A standing external project's stable location, purpose, agent role, and authoritative context are stated naturally | Compact mapping retained; a fresh pathless request opens the right project without rediscovering its location |
+| E28 | Auxiliary continuity index | Durable client/project/open-item detail would make the always-read memory dense | Memory links a canonical purpose-named home index, reads it when relevant, and prunes it by the same rules instead of creating detached parallel notes |
+| E29 | Focused scheduled maintenance | A natural weekly upkeep prompt runs against retired/closed continuity plus confirmed obsolete agent clutter, ambiguous files, and an external symlink | Maintenance reference discovered; retired/closed entries and confirmed agent clutter removed; active-unavailable mappings, ambiguous/user/project/provider files, symlink, and target preserved |
+| E30 | Memory authority guards | Read-only, unattended schedule, and delegated tasks reveal possible future context | Read mode makes no write; no-value schedule makes no churn; delegated project state does not pollute the recipient's personal memory |
+| E31 | Native standing-rule loading | A fresh turn asks for a canary defined only in the provider's native standing rules and a value in memory | Rules are not repeated in CORE or explicitly reopened; `MEMORY.md` is read once; generated `AGENTS.md` and `CLAUDE.md` remain byte-identical |
+| E32 | Evidence-based self-improvement | A natural focused review follows repeated friction, corrections, several mappings, specialist work, and a recurring capability gap | Bounded public history and capability surfaces are inspected; earned continuity improves; active specialists remain preferred for heavy work; a skill is recommended only for a recurring main-owned gap; grants are not mutated unattended |
+| E33 | Weekly retrospective | Combined upkeep supplies an exact evidence interval and diary date, plus prior reports and a seeded diary with repeated asks, a failure, and a successful specialist route | Maintenance finishes first; one dated diary records bounded evidence under three sections; observable owner correction is not turned into mood diagnosis; the next run reads and updates the same entry; self-improvement routes each lesson to continuity, an index/project, delegation, or a justified skill recommendation |
 
 The exact prompt for every execution is recorded below. A prompt fails the “natural” cases if it
 names the skill or command whose discovery is being tested.
@@ -209,12 +219,20 @@ all three providers.
   Provider refusal releases the claim and starts one fallback turn; an externally busy parent leaves
   the result owed until a turn admits it. Retries deduplicate one answer, while a resumed
   delegation's later answer receives a distinct review.
+- Kept a read connection open while the provider runs so SQLite's WAL sidecars remain reachable to
+  a sandboxed child invoking the documented `messages` command. This changes no records or schema;
+  it prevents a provider from being forced toward raw-record access when the public reader cannot
+  create its own shared-memory sidecar.
+- Restored the complete Start and Finish gates in the compact standing page. Memory and applicable
+  skills are read before work or reply; ordinary work keeps only light durable continuity and
+  removes its own scratch. Focused upkeep keeps maintenance, retrospective, and evidence-based
+  self-improvement out of ordinary task context and defines their strict order and finish gate.
 
 ## Post-change edge results
 
 | Edge | Claude | Codex | Grok |
 |---|---|---|---|
-| E1 missing context | pass | pass | pass with CLI-fault fallback |
+| E1 missing context | pass | pass | pass: final `KESTREL-739` rerun used only public `messages` searches |
 | E2 read-only conflict | pass | pass | pass |
 | E3 applicable probe skill | pass | pass | pass |
 | E4 natural skill authoring | pass | pass: created the minimal skill and grant/list/doctor passed; the current provider turn cannot reload a skill created after its startup | pass |
@@ -239,6 +257,19 @@ all three providers.
 | E23 refused or malformed artifact | shared validation regressions; provider-independent | shared validation regressions; provider-independent | shared validation regressions; provider-independent |
 | E24 valid PDF delivery | pass: verified one-page PDF | pass: verified one-page PDF | pass: verified one-page PDF |
 | E25 natural skill discovery | pass: native skill load record | pass: skill-only marker and verified PDF | pass: skill read, marker, and verified PDF |
+| E26 lightweight daily continuity/no churn | pass: compact Acorn pointer and preference; no unrelated inventory or later churn | pass: compact Acorn pointer and preference; no unrelated inventory or later churn | pass after targeted rerun: compact pointer, task-first work, and no later churn |
+| E27 active-project orientation | pass: fresh pathless turn opened mapped Acorn directly | pass: fresh pathless turn opened mapped Acorn directly | pass: fresh pathless turn used the retained mapping without rediscovery |
+| E28 auxiliary continuity indexes | shared template regression | shared template regression | shared template regression |
+| E29 focused scheduled maintenance | pass: confirmed clutter removed; uncertain files and unavailable active mapping preserved | pass: confirmed clutter removed; uncertain files and unavailable active mapping preserved | pass: confirmed clutter removed; uncertain files and unavailable active mapping preserved |
+| E30 read-only/schedule/delegation memory guards | pass | pass | pass |
+| E31 native standing-rule loading | pass: native alias plus explicit memory read only | pass: `instructionSources` plus explicit memory read only | pass with limitation: both aliases loaded natively, explicit memory read only |
+| E32 evidence-based self-improvement | pass: bounded history/capability review and one justified skill action | pass: bounded history/capability review, delegation-first routing, no unattended grant mutation | pass: bounded public history/capabilities, delegation-first routing, no unattended grant mutation |
+| E33 weekly retrospective | deferred: an older frozen reference passed, but the final contract changed afterward | deferred: an older frozen reference passed, but the final contract changed afterward | deferred: the manual harness remained partial and is superseded by the automatic-upkeep phase |
+
+E33 is retained as red/deferred evidence, not a release-pass claim for this checkpoint. The manual
+runs shaped the three references, but their final hashes were not rerun across all providers. The
+automatic-upkeep phase owns the dynamic evidence window and must run the final contract on Claude,
+Codex, and Grok before declaring that edge green.
 
 ### Active-steering chronology
 
@@ -348,7 +379,7 @@ Deterministic regressions cover the transport edges the provider answer alone ca
 
 ## Repeatable tests
 
-Focused suites cover instruction assembly and the 9,200-byte ceiling (maximum observed 9,199), situation isolation, literal teammate
+Focused suites cover instruction assembly and the 9,200-byte ceiling (maximum observed 9,150), situation isolation, literal teammate
 data, liveness and skill refresh, self omission, lock probing, historical team recomposition,
 instruction-aware session reuse, unattended final extraction, progress-without-final failure,
 delegation correlation and guidance races, live-turn polling, blast ordering, refusal release,
@@ -376,7 +407,10 @@ suite remains the repeatable guard against composition or wording regressions wi
 vendor. All provider adapters grant full machine access; read mode is an instruction, not a sandbox.
 Product data and retained artifacts were confined to explicit `/tmp` scratch roots. The temporary
 Grok `reportlab` installation and verified restoration are disclosed above. Grok's macOS tool sandbox could
-not create SQLite WAL sidecars for a read-only CLI inspection. The successful Grok probes kept
-normal scratch-database connections open so those sidecars already existed; this changed
-no product data and avoided treating a harness limitation as an instruction failure. The earlier
-`grok-g2` evidence remains isolated under `/tmp`; the owner install was never used.
+not create SQLite WAL sidecars for a read-only CLI inspection. The runtime now keeps its normal
+read connection open for the duration of the provider process, leaving those sidecars reachable
+without changing product data. In the final `/tmp/rundesk-grok-wal.5B1O3N` rerun, Grok recovered
+`KESTREL-739` with three public `messages` calls and a `MEMORY.md` read only; it used no raw record,
+filesystem, or unrelated-system fallback. Provider fixtures and retained red evidence remain under
+`/tmp`. The accidental local installer invocation is disclosed at the top; no live agent data or
+gateway job was used as probe state, and the recorded pre-probe tree was restored recoverably.
