@@ -147,6 +147,7 @@ DID_FOR = {
     "search_replace": "edit",
     "write": "make",
     "create_file": "make",
+    "image_gen": "make",
 }
 
 #: What this brain says when the home it was handed has no login in it.
@@ -769,6 +770,37 @@ class Turn:
             self.a_tool(update)
         say({"type": "result", "id": which, "ok": update.get("status") == "completed",
              "summary": one_line(what_it_reported(update))})
+        self.anything_it_made(update)
+
+    def anything_it_made(self, update: dict) -> None:
+        """A file this brain made *for the person who asked*, said as a `file` record.
+
+        **The one tool where a path is the deliverable rather than a file that was touched.** Every
+        other tool here reports `locations` — what it read, what it edited — and none of those is
+        something to send anybody: that is why no adapter reports files in general, and the answer's
+        own links are what say *send this*. Generating an image is the exception and it is not a
+        close call. The tool makes exactly one file, it exists only because somebody asked for it,
+        and it is written somewhere nobody would ever look — under the brain's own session
+        directory, with the agent's home URL-encoded into a path element.
+
+        Measured on a live install: without this the image was made, saved, and never mentioned, and
+        a person who asked for a picture was handed a sentence saying they had been given one.
+        `locations` is empty on that same update, so this reads the brain's own output where the
+        path really is.
+        """
+        made = update.get("rawOutput")
+        if not isinstance(made, dict) or made.get("type") != "ImageGen":
+            return
+        at = str(made.get("path") or "")
+        # Absolute or nothing: `protocol.file_records` refuses a relative one downstream, and a
+        # record rundesk will drop is worth not making.
+        if not at or not os.path.isabs(at):
+            return
+        record = {"type": "file", "at": at}
+        name = str(made.get("filename") or "")
+        if name:
+            record["name"] = name
+        say(record)
 
     def that_is_the_turn(self, ended: dict) -> None:
         """The turn ended. Say what it cost, then say what became of it, then stop reading.

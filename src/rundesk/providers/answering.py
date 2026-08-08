@@ -318,12 +318,15 @@ class OnAChannel:
         excused = got.worked or got.turn_status == kept.STOPPED
         said = whole.strip() or ("" if excused else self._instead(got))
         # **A brain says *send this* by linking it, because that is the one place the intent exists**
-        # (R-CH-31). No shipped adapter emits a `file` record and each explains why: a stream says
-        # which files were *touched* and never which one was made for the person who asked. So the
-        # links come out of the answer, the paths go through the same approval as anything else, and
-        # what is left in the words is the label alone — never the owner's own directory, posted into
-        # a room. Both sources are merged before approval, so an adapter that one day does report one
-        # needs nothing changed here.
+        # (R-CH-31), because a stream says which files were *touched* and never which one was made
+        # for the person who asked. So the links come out of the answer, the paths go through the
+        # same approval as anything else, and what is left in the words is the label alone — never
+        # the owner's own directory, posted into a room.
+        #
+        # **One tool is the exception, and an adapter that can see it now reports one**: generating
+        # an image makes exactly one file, it exists only because somebody asked for it, and it
+        # lands under the brain's own session directory where nobody would look for it. Both sources
+        # are merged before approval, which is why nothing here had to change to accept it.
         prepared = delivery.prepared(
             said, [*linked_earlier, *(str(one.get("at")) for one in got.files
                                       if one.get("at"))])

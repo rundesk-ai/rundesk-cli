@@ -29,6 +29,12 @@ ADAPTER = support.CHECKOUT / "src" / "providers" / "grok"
 CAPTURED = support.CHECKOUT / "tests" / "samples" / "grok-acp-0.2.118.jsonl"
 A_BRAIN = support.CHECKOUT / "tests" / "samples" / "an-acp-brain"
 
+#: The same turn with one image made in it, off a live run on 2026-08-08 and scrubbed. **The path
+#: keeps its shape exactly**, URL-encoded element and all: the brain writes into its own session
+#: directory, and nothing about where it lands is anything a person would guess or a rundesk would
+#: choose. Kept because this is the one tool whose output *is* the thing somebody asked for.
+MADE_AN_IMAGE = support.CHECKOUT / "tests" / "samples" / "grok-acp-0.2.118-image.jsonl"
+
 #: A second turn, on a conversation that had already cost 12,472 tokens when it began. **The first
 #: capture cannot prove what a resumed turn does** — carrying a conversation on replays every update
 #: the previous turn made, including its reply and the line that ended it, and a fixture that never
@@ -534,6 +540,44 @@ for line in sys.stdin:
     def test_an_agent_granted_none_has_no_vendor_directory_to_explain(self):
         self.spoke(RUNDESK_SKILLS=str(self.home / "nothing-here"))
         self.assertFalse((self.home / "cwd" / ".grok").exists())
+
+
+class ATurnThatMadeAnImage(support.Isolated):
+    """The one tool whose output *is* what somebody asked for, and it was reaching nobody.
+
+    **Measured on a live install**: the brain generated an image, saved it, said *here you go* — and
+    nothing was attached, because nothing had told rundesk a file existed. Every other tool here
+    reports `locations`, which says what was read or edited and is never something to send; that is
+    why no adapter reports files in general. This one is not a close call, and on the very update
+    that carries the path its own `locations` is empty.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.said, self.got = replayed(self.home, prompt="draw me a cat", captured=MADE_AN_IMAGE)
+
+    def of_type(self, kind):
+        return [one for one in self.said if one.get("type") == kind]
+
+    def test_the_image_it_made_is_reported_as_a_file(self):
+        made = self.of_type("file")
+        self.assertEqual(1, len(made), f"the image reached nobody: {self.said}")
+        self.assertTrue(made[0]["at"].endswith("/images/1.jpg"))
+
+    def test_the_path_is_absolute_because_anything_else_is_dropped_downstream(self):
+        self.assertTrue(self.of_type("file")[0]["at"].startswith("/"))
+
+    def test_it_is_named_so_a_person_sees_a_filename_and_never_a_path(self):
+        self.assertEqual("1.jpg", self.of_type("file")[0]["name"])
+
+    def test_making_an_image_is_reported_as_making_something(self):
+        drew = [one for one in self.of_type("tool") if one.get("did") == "make"]
+        self.assertEqual(1, len(drew), f"no tool said it made anything: {self.of_type('tool')}")
+
+    def test_a_tool_that_only_read_something_still_reports_no_file(self):
+        # The guard that keeps this from becoming "send everything the brain touched": the same turn
+        # reads two files, and neither is a deliverable.
+        self.assertEqual(1, len(self.of_type("file")))
 
 
 class WhenItCannotRunAtAll(support.Isolated):

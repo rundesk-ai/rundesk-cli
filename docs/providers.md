@@ -276,7 +276,7 @@ nothing translates between them.
 | `result` | what that tool came to |
 | `usage` | what the turn cost. **Only what you actually measured** — a brain that cannot tell fresh tokens from cached ones leaves the cached field out, because summing that into zero says it read nothing from the cache |
 | `limit` | account state. **News about the account, never about the work**: a turn carrying one may have succeeded |
-| `file` | something the brain *made*, for a person. Not every file it touched — this is what gets attached to a message on a channel |
+| `file` | something the brain *made*, for a person. Not every file it touched — this is what gets attached to a message on a channel. `at` must be absolute or it is dropped; `name` is what a person sees instead of the path. The shipped `grok` adapter reports one for a generated image and for nothing else, which is the test to apply: the tool made exactly one file, it exists only because somebody asked, and nobody would find it on their own. Anything a brain merely read or edited is not this — the agent linking a path in its answer is how everything else gets attached |
 | `done` | the turn ended. **Exactly one, and always one** |
 
 `context_tokens` is a **level, not a quantity**: how big the conversation is now. It goes *down* when
