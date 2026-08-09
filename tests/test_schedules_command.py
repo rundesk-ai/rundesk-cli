@@ -304,6 +304,39 @@ class Updating(Scheduling):
         self.assertIn("is not a program on this machine", err)
         self.assertEqual(f"{THERE} hello", self.row()["command"])
 
+    def test_what_an_asking_schedule_asks_can_be_changed_without_losing_its_history(self):
+        code, _out, err = self.rundesk(
+            "schedules", "add", self.agent, "client-update",
+            "--when", "0 9 * * 1-5", "--ask", "Post the client update.")
+        self.assertEqual(OK, code, err)
+        kept.claimed(self.agent, "client-update", "2026-08-05 09:00")
+        kept.became(self.agent, "client-update", kept.DONE)
+
+        code, out, err = self.rundesk(
+            "schedules", "update", self.agent, "client-update",
+            "--ask", "Post the measured client update.")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("Post the measured client update.", out)
+        row = self.row("client-update")
+        self.assertEqual("Post the measured client update.", row["prompt"])
+        self.assertIsNone(row["command"])
+        self.assertEqual("0 9 * * 1-5", row["cron"])
+        self.assertEqual("2026-08-05 09:00", row["last_fired_for"])
+        self.assertEqual(kept.DONE, row["last_outcome"])
+
+    def test_changing_a_schedule_to_run_and_ask_at_once_is_refused(self):
+        self.given()
+        before = self.row()
+
+        code, _out, err = self.rundesk(
+            "schedules", "update", self.agent, "nightly",
+            "--run", THERE, "--ask", "Do the work.")
+
+        self.assertEqual(USAGE, code)
+        self.assertIn("starts a program or asks the agent, never both", err)
+        self.assertEqual(dict(before), dict(self.row()))
+
     def test_a_change_keeps_every_record_of_what_the_schedule_has_already_done(self):
         self.given()
         kept.claimed(self.agent, "nightly", "2026-08-05 02:00")
