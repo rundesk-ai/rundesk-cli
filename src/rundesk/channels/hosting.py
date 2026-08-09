@@ -607,7 +607,7 @@ def _answered_pending(agent: str, watching: Watching, answering: Answering) -> N
     """Recover messages whose original gateway ended before a turn could claim them."""
     connected = tuple(kind for kind, running in watching.running.items()
                       if running.connected is not None and running.connected.is_set())
-    after, started = 0, 0
+    after, started, conversations_started = 0, 0, set()
     while started < PENDING_STARTED_AT_MOST:
         pending_page = arriving.pending_on_channels(
             agent, 32, channels=connected, after=after)
@@ -615,11 +615,18 @@ def _answered_pending(agent: str, watching: Watching, answering: Answering) -> N
             return
         for pending in pending_page:
             after = pending.landed.message
+            if pending.landed.conversation in conversations_started:
+                # `answer` starts a thread and returns before that thread can acquire the kernel
+                # claim. Asking `busy` again in this same sweep has a race in which several old
+                # messages from one conversation each start a competing turn. One successful start
+                # is this pass's answer; its remaining tail waits for the turn or the next sweep.
+                continue
             if answering.busy(agent, pending.landed.conversation):
                 continue
             if answering.answer(
                     agent, pending.channel, pending.place, pending.author_id, pending.body,
                     pending.external_id, pending.landed):
+                conversations_started.add(pending.landed.conversation)
                 started += 1
                 if started >= PENDING_STARTED_AT_MOST:
                     return

@@ -58,6 +58,17 @@ BODY_AT_MOST = 64 * 1024
 #: because a channel makes a conversation per room and per person for as long as the agent lives.
 CONVERSATIONS_AT_MOST = 200
 
+#: A pending message belongs only to the unresolved tail of its conversation. Once a later message
+#: has been admitted, the exchange has moved past every older unclaimed row: replaying one after a
+#: restart starts work the person has already continued beyond, and can answer an already-answered
+#: retry a second time. Derived from the existing exact turn boundary rather than wall-clock age, so
+#: a genuinely stranded latest message remains recoverable however long a gateway was unavailable.
+NO_LATER_ADMITTED = (
+    " AND NOT EXISTS (SELECT 1 FROM conversation_messages AS later"
+    " WHERE later.conversation_id = m.conversation_id AND later.id > m.id"
+    " AND later.turn_id IS NOT NULL)"
+)
+
 
 class Landed(NamedTuple):
     """What became of one arriving message.
@@ -355,6 +366,10 @@ def pending_on_channels(agent: str, most: int,
     This is the restart boundary: a gateway may end after recording a platform message but before
     its answering thread acquires the provider claim. A fresh adapter will not necessarily receive
     that platform event again, so the durable row is what must wake the replacement gateway.
+
+    Only the unresolved tail of a conversation may wake it. A later admitted message proves the
+    exchange progressed after an older row failed admission; replaying that row after an unrelated
+    restart is stale work, even when its platform id still makes the transport idempotent.
     """
     if channels is not None and not channels:
         return []
@@ -372,6 +387,7 @@ def pending_on_channels(agent: str, most: int,
             " JOIN conversations AS c ON c.id = m.conversation_id"
             " WHERE c.source = ? AND m.author = ? AND m.turn_id IS NULL"
             " AND m.external_id IS NOT NULL AND m.id > ?"
+            + NO_LATER_ADMITTED
             + channel_clause +
             " ORDER BY m.id LIMIT ?", parameters).fetchall()
     return [Pending(
