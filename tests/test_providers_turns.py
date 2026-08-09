@@ -759,6 +759,22 @@ class WhenADiagnosticRowCannotBeKept(WithAnAgent):
 
 
 class ATurnIsAlwaysSettled(WithAnAgent):
+    def test_a_follow_up_waits_for_our_starting_turn_to_publish_its_steer_queue(self):
+        offered = []
+        with turns._stoppable(self.agent, 1) as ours:
+            offering = threading.Thread(
+                target=lambda: offered.append(turns.also_say(self.agent, 1, "more context")))
+            offering.start()
+            self.assertTrue(support.waited_until(offering.is_alive, PATIENCE))
+            words = turns.Words(self.agent, 1, 29)
+            ours.can_reach(words)
+            offering.join(PATIENCE)
+
+        self.assertFalse(offering.is_alive())
+        self.assertEqual([True], offered)
+        self.assertEqual("more context", next(words.each()).text)
+        words.close()
+
     def test_nothing_is_left_recorded_as_still_working(self):
         self.run_turn()
         self.assertEqual(kept.list_unfinished_turns("ava"), [])

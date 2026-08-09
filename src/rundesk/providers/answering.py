@@ -194,7 +194,7 @@ class IntoAChannel:
                 hosting.told(agent, self._where, self._hosted(), kind, place, pieces)
 
     def _delivered(self, agent: str, kind: str, place: str, got: turns.Outcome,
-                   external_id: Optional[str] = None, said_already: bool = False,
+                   external_id: Optional[str] = None,
                    linked_earlier: Tuple[str, ...] = ()) -> str:
         """The answer, cut to what this platform takes, with whatever the brain made beside it.
 
@@ -215,14 +215,13 @@ class IntoAChannel:
         for from the running commentary around it — and it is what a platform draws its own emphasis
         from, rather than anything this builds.
 
-        **A turn somebody watched answers with its last thought, and one nobody watched with all of
-        them** (R-CH-19). `protocol.last_thought` exists for exactly this and says so: a surface that
-        was shown each finished remark as it landed has already had everything before the last one,
-        so sending the whole reply posts every remark a second time — measured, and it read as the
-        agent repeating itself. A turn with no remarks behind it is unchanged, because the reply and
-        the last thought are the same thing when there was only ever one.
+        **A channel turn answers with one final thought** (R-CH-19). Earlier working remarks were
+        already shown as they landed. An explicit final produced before later guidance is a
+        candidate that the later final supersedes, not another completed answer to post.
         """
-        whole = got.last_thought if said_already and got.last_thought.strip() else got.reply
+        # A channel turn has one final answer. Earlier completed thoughts were either already shown
+        # as commentary or superseded by a later explicit final after steering.
+        whole = got.last_thought if got.last_thought.strip() else got.reply
         # **A turn somebody stopped is never apologised for.** The sentence for a turn that produced
         # nothing exists because silence leaves a person unable to tell a broken agent from a slow
         # one — and somebody who has just pressed `/stop` knows exactly which this is. Told "I could
@@ -401,8 +400,8 @@ class OnAChannel(IntoAChannel):
                         # the one place that can guarantee an external active turn is followed by
                         # exactly one fallback turn rather than an orphaned pending row.
                         waiting=again + 1 == TRIES)
-                    refused = self._delivered(agent, kind, place, got, external_id,
-                                              watching.said_already, watching.linked)
+                    refused = self._delivered(
+                        agent, kind, place, got, external_id, tuple(watching.linked))
                     # **One producer of the mark, and this is still it.** Turning the adapter's
                     # acknowledgement into a mark of its own was removed once and must stay removed
                     # — two producers raced and the mark a person saw was whichever record arrived
@@ -484,7 +483,8 @@ class _Streaming:
     has each posted the moment the **next** one arrives — which is what makes the last one the
     answer, and is only knowable once there is a next (R-CH-19). So a brain that never says `whole`
     produces exactly one message for the turn, and a chatty one produces a running transcript, from
-    this same code.
+    this same code. An explicit `final` is held as an answer candidate and never posted as working
+    commentary; later steering may supersede it with another explicit final.
 
     The held remark is deliberately never flushed here at the end. `_delivered` sends the reply the
     turn settled with, and that reply already contains it — flushing would post it twice, once as a
@@ -501,14 +501,10 @@ class _Streaming:
         #: nothing removes an entry whose result never arrives.
         self._tools: Dict[str, Dict[str, str]] = {}
         #: The last finished thing the brain said, held until the next one proves it was not the end.
-        self._said: Optional[str] = None
+        self._said: Optional[Tuple[str, bool]] = None
         #: Local files explicitly declared in remarks already shown. They are held for the final
         #: delivery: a path must never leak mid-turn, and an attachment belongs with the answer.
         self.linked: List[str] = []
-        #: Whether any remark was actually posted. **Read by `_delivered` to decide what the answer
-        #: is**: a surface already shown everything before the last thought must be sent only that,
-        #: or every remark arrives a second time inside the answer.
-        self.said_already = False
 
     def heard(self, record: Dict[str, Any]) -> None:
         """One record from the brain. **Never raises** — a watcher is nobody's reason to fail."""
@@ -570,10 +566,13 @@ class _Streaming:
 
     def _remarked(self, record: Dict[str, Any]) -> None:
         """A finished thing the brain said. Posts the **previous** one, and holds this."""
-        said, self._said = self._said, str(record.get("text") or "")
-        if said and said.strip():
-            self.said_already = True
-            shown, linked = delivery.declared_in(said)
+        previous = self._said
+        self._said = (str(record.get("text") or ""), record.get("final") is True)
+        # An explicit final is a candidate answer, never working commentary. If steering makes the
+        # provider produce another final, the old one is superseded rather than posted as a second
+        # apparent answer.
+        if previous and not previous[1] and previous[0].strip():
+            shown, linked = delivery.declared_in(previous[0])
             self.linked.extend(linked)
             self._on.remark(self._agent, self._kind, self._place, shown)
 
@@ -1067,8 +1066,8 @@ class OnADelegation(IntoAChannel):
         platform for a reaction to land on.
         """
         try:
-            refused = self._delivered(agent, kind, place, got, None,
-                                      watching.said_already, tuple(watching.linked))
+            refused = self._delivered(
+                agent, kind, place, got, None, tuple(watching.linked))
         except Exception as why:  # noqa: BLE001 — a thread, and nobody is above it
             _note(self._where, f"{about} could not be sent to {kind} ({why})", logs.ERROR)
             return

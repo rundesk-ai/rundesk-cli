@@ -401,8 +401,10 @@ class WhatARoomIsToldAboutWorkHandedOver(ARoomWatchingWorkHandedOver, support.Is
     """
 
     def test_work_that_has_just_gone_out_says_who_has_it_and_which_ask_it_is(self):
-        self.handed()
-        self.assertEqual([(hosting.HANDED_OVER, "dev", "del-7-aabbcc", 0)], self.swept())
+        at = config.moment_of()
+        with mock.patch.object(config, "moment_of", return_value=at):
+            self.handed()
+            self.assertEqual([(hosting.HANDED_OVER, "dev", "del-7-aabbcc", 0)], self.swept())
 
     def test_it_is_said_once_however_often_the_beat_comes_round(self):
         """The beat is fifteen seconds. Anything said per pass would be said four times a minute."""
