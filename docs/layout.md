@@ -294,6 +294,10 @@ reads, `backups/` is still `$RUNDESK_HOME/backups`, and nothing anywhere gained 
 look — the filesystem holds the indirection rather than the configuration. Redirect the root and
 everything still moves with it.
 
+Install and update settlement never follows that link merely to refresh Rundesk's explanatory
+`README.md`. The external directory belongs to the backup store, may be unavailable to a background
+launchd process, and is entered only by a backup operation that actually needs the copies.
+
 `rundesk status` shows both, because they are two different questions:
 
 ```
