@@ -331,7 +331,10 @@ def _changed(args: argparse.Namespace) -> int:
     gone_wrong = directory.not_an_agent(args.agent)
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was changed")
-    if "command" in values:
+    # A prompt change clears the command column too, but that does not make it a program change.
+    # Validate only a program the owner actually named with --run; otherwise --ask is refused as
+    # though its missing program were an error.
+    if args.program is not None:
         trouble = firing_trouble(args.program)
         if trouble:
             return _failed(trouble, "nothing was changed")
