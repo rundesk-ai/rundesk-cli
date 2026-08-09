@@ -90,7 +90,7 @@ Answers *how rundesk is*. Takes no flags.
 ```console
 $ rundesk status
 WHAT              IS
-version           0.42.2
+version           0.42.3
 home              /Users/you/.rundesk
 program           /Users/you/.rundesk/app (installed)
 data              /Users/you/.rundesk/data
@@ -131,8 +131,8 @@ running.
 
 ```console
 $ rundesk version
-rundesk 0.42.2
-        0.42.2: UP TO DATE
+rundesk 0.42.3
+        0.42.3: UP TO DATE
 ```
 
 **Being unable to ask is never reported as being up to date.** If GitHub cannot be reached the line
@@ -587,9 +587,9 @@ perfectly ordinary day log and a traceback in a file the day log knows nothing a
 $ rundesk gateways logs cole -n 5
 logs for cole in /Users/you/.rundesk/data/agents/cole/logs
         what cole's own gateway wrote, in /Users/you/.rundesk/data/agents/cole/logs:
-[2026-08-05 08:26:43-04:00] INFO:    gateway up for cole on 0.42.2 as pid 95177
+[2026-08-05 08:26:43-04:00] INFO:    gateway up for cole on 0.42.3 as pid 95177
 [2026-08-05 08:26:45-04:00] INFO:    gateway stopping for cole: asked to stop with signal 15
-[2026-08-05 08:28:40-04:00] INFO:    gateway up for cole on 0.42.2 as pid 96111
+[2026-08-05 08:28:40-04:00] INFO:    gateway up for cole on 0.42.3 as pid 96111
 [2026-08-05 08:28:42-04:00] WARNING: gateway did not start: a gateway is already running for cole as pid 96111 — one agent has one gateway, and this one is standing down
         the supervisor caught nothing in gateway.out or gateway.err — everything above is the gateway's own log
 ```
@@ -629,7 +629,7 @@ holding:
 
 ```console
 $ rundesk gateways run cole
-[2026-08-05 08:28:42-04:00] gateway cole: this process is pid 96134, running 0.42.2
+[2026-08-05 08:28:42-04:00] gateway cole: this process is pid 96134, running 0.42.3
 gateway: NOT RUNNING — a gateway is already running for cole as pid 96111 — one agent has one gateway, and this one is standing down
 ```
 
