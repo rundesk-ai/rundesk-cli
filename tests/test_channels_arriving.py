@@ -15,6 +15,7 @@ import support
 from rundesk.agents import directory, records
 from rundesk.channels import arriving
 from rundesk.core import config
+from rundesk.providers import kept as turns_kept
 
 
 class Arriving(support.Isolated):
@@ -84,6 +85,17 @@ class AMessageLandsOnce(Arriving):
 
 class MessagesAReplacementGatewayCanRecover(Arriving):
 
+    def admitted(self, landed):
+        turn = turns_kept.add_turn(self.agent, {
+            "conversation_id": landed.conversation,
+            "provider_name": "stand-in",
+            "access_mode": "work",
+        })
+        arriving.handled_by_turn(
+            self.agent, landed.conversation, (landed.message,), turn)
+        turns_kept.finish_turn(self.agent, turn, turns_kept.DONE)
+        return turn
+
     def test_an_unclaimed_platform_message_is_returned_with_everything_needed_to_answer(self):
         landed = self.arrived("please continue", external_id="8841")
 
@@ -97,6 +109,29 @@ class MessagesAReplacementGatewayCanRecover(Arriving):
         self.arrived("old message without an id")
 
         self.assertEqual([], arriving.pending_on_channels(self.agent, 4))
+
+    def test_an_older_unclaimed_message_is_not_replayed_after_the_conversation_moved_on(self):
+        self.arrived("why no eyes?", external_id="8841")
+        later = self.arrived("please update", external_id="8842")
+        self.admitted(later)
+
+        self.assertEqual([], arriving.pending_on_channels(self.agent, 4))
+
+    def test_an_answered_retry_supersedes_the_original_duplicate(self):
+        self.arrived("are you organized?", external_id="8841")
+        retry = self.arrived("are you organized?", external_id="8842")
+        self.admitted(retry)
+
+        self.assertEqual([], arriving.pending_on_channels(self.agent, 4))
+
+    def test_the_unclaimed_tail_after_the_last_admitted_turn_is_still_recoverable(self):
+        answered = self.arrived("first question", external_id="8841")
+        self.admitted(answered)
+        latest = self.arrived("please continue", external_id="8842")
+
+        self.assertEqual([
+            arriving.Pending("discord", "1180", "2207", "please continue", "8842", latest)
+        ], arriving.pending_on_channels(self.agent, 4))
 
 
 class WhatIsWrittenDown(Arriving):

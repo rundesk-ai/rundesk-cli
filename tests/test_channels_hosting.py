@@ -477,6 +477,32 @@ class RecoveringARecordedMessage(Hosting):
 
         self.assertEqual([], answering.answered)
 
+    def test_one_sweep_starts_only_one_recovery_turn_in_one_conversation(self):
+        arriving.recorded(
+            self.agent, "discord", "1180", "2207", "first", "8841")
+        arriving.recorded(
+            self.agent, "discord", "1180", "2207", "second", "8842")
+        answering = _AnsweringStub()
+
+        hosting._answered_pending(
+            self.agent, hosting.Watching({"discord": _Connected()}, {}, {}), answering)
+
+        self.assertEqual([("1180", "first", "8841")], answering.answered)
+
+    def test_one_sweep_still_recovers_independent_conversations(self):
+        arriving.recorded(
+            self.agent, "discord", "1180", "2207", "first", "8841")
+        arriving.recorded(
+            self.agent, "discord", "1190", "2207", "second", "8842")
+        answering = _AnsweringStub()
+
+        hosting._answered_pending(
+            self.agent, hosting.Watching({"discord": _Connected()}, {}, {}), answering)
+
+        self.assertEqual([
+            ("1180", "first", "8841"), ("1190", "second", "8842")
+        ], answering.answered)
+
     def test_old_rows_on_a_disconnected_channel_do_not_starve_a_connected_one(self):
         for nth in range(6):
             arriving.recorded(

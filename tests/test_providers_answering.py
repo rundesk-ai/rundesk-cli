@@ -128,6 +128,7 @@ class Answering(support.Isolated):
         #: hosts anything keeps this empty one, which sends nothing — rather than `None`, which is
         #: how a tenant comes to have no way out and no way to say so.
         self.hosted = hosting.Watching({}, {}, {})
+        self.answers = None
         self.watching = []
         self.pids = []
         # Read after the root is set and before the case can start anything, so what is running now
@@ -194,11 +195,17 @@ class Answering(support.Isolated):
         """One pass of the gateway's loop, with the real thing that answers handed in."""
         watching = hosting.Watching({}, {}, {})
         answers = answering.OnAChannel(self.where, lambda: watching)
+        self.answers = answers
         hosting.looked(self.agent, self.where, watching, answering=answers)
         self.watching.append(watching)
         self.hosted = watching
         self.pids.extend(one.pid for one in watching.running.values() if one.pid)
         return watching
+
+    def looked_again(self):
+        hosting.looked(
+            self.agent, self.where, self.hosted, answering=self.answers)
+        return self.hosted
 
     def a_delegation_tenant(self):
         """What runs a delegation's turns, reaching whatever this case is hosting **now**.
@@ -255,6 +262,51 @@ class Answering(support.Isolated):
 
 
 class AMessageOnAChannelIsAnswered(Answering):
+
+    def test_a_replacement_gateway_does_not_run_hours_old_superseded_work(self):
+        arriving.recorded(
+            self.agent, "discord", "1180", "2207", "why no eyes?", "8841")
+        later = arriving.recorded(
+            self.agent, "discord", "1180", "2207", "please update", "8842")
+        turn = kept.add_turn(self.agent, {
+            "conversation_id": later.conversation,
+            "provider_name": support.A_STAND_IN,
+            "access_mode": "work",
+        })
+        arriving.handled_by_turn(
+            self.agent, later.conversation, (later.message,), turn)
+        kept.finish_turn(self.agent, turn, kept.DONE)
+        self.a_channel()
+        self.hosting_now()
+        self.assertTrue(self.waited_until(
+            lambda: hosting.connected(self.hosted, "discord")))
+
+        self.looked_again()
+
+        self.assertFalse(self.waited_until(
+            lambda: len(kept.list_turns(self.agent)) > 1, NOT_GOING_TO_HAPPEN),
+            "the old message started a turn after the replacement gateway connected")
+        self.assertEqual(1, len(kept.list_turns(self.agent)))
+        self.assertEqual([], self.what_it_was_told(),
+                         "the old message changed state after the replacement gateway connected")
+
+    def test_a_replacement_gateway_recovers_a_genuinely_stranded_latest_message_once(self):
+        arriving.recorded(
+            self.agent, "discord", "1180", "2207", "please continue", "8841")
+        self.a_channel()
+        self.hosting_now()
+        self.assertTrue(self.waited_until(
+            lambda: hosting.connected(self.hosted, "discord")))
+
+        self.looked_again()
+        self.waited_for_a_turn()
+        self.looked_again()
+        self.assertTrue(self.waited_until(lambda: answering.DONE in self.marks()))
+
+        self.assertEqual(1, len(kept.list_turns(self.agent)))
+        settled = [one for one in self.what_it_was_told()
+                   if one.get("do") == "state" and one.get("state") == answering.DONE]
+        self.assertEqual("8841", settled[0].get("external_id"))
 
     def test_new_does_not_call_an_inherited_or_orphaned_lock_a_running_turn(self):
         landed = arriving.recorded(self.agent, "discord", "1180", "2207", "hello", "8841")
