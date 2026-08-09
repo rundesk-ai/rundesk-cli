@@ -456,6 +456,11 @@ class Ours:
         self.stream: Optional["streaming.Stream"] = None
         self.asked = False
         self.ended = threading.Event()
+        # A channel can observe the kernel claim before provider setup has decided whether this
+        # turn accepts live guidance. Publish that decision explicitly so a follow-up does not race
+        # the short gap and incorrectly start a fallback turn.
+        self.reachability_known = threading.Event()
+        self.reachable: Optional["Words"] = None
         self.forget_session = False
 
     def ends(self) -> None:
@@ -471,6 +476,11 @@ class Ours:
         if self.asked:
             with contextlib.suppress(Exception):
                 stream.stop()
+
+    def can_reach(self, words: Optional["Words"]) -> None:
+        """Publish the turn's live-guidance queue, including the deliberate absence of one."""
+        self.reachable = words
+        self.reachability_known.set()
 
 
 _running: Dict[tuple, Ours] = {}
@@ -512,6 +522,7 @@ def _stoppable(agent: str, conversation: int) -> Iterator[Ours]:
     try:
         yield ours
     finally:
+        ours.reachability_known.set()
         with _running_lock:
             if _running.get((agent, conversation)) is ours:
                 del _running[(agent, conversation)]
@@ -572,8 +583,17 @@ def also_say(agent: str, conversation: int, word: str,
     it is still yours** — and a caller that treated any of them as delivery would drop a message
     somebody sent.
     """
-    with _speaking_to_lock:
-        speaking = _speaking_to.get((agent, conversation))
+    # The process owns its turn from claim onward, while `_reachable` is necessarily published
+    # only after provider capabilities and instructions are resolved. Wait for that decision when
+    # it is ours; otherwise a follow-up arriving in this window is falsely treated as unsteerable.
+    with _running_lock:
+        ours = _running.get((agent, conversation))
+    if ours is not None:
+        ours.reachability_known.wait()
+        speaking = ours.reachable
+    else:
+        with _speaking_to_lock:
+            speaking = _speaking_to.get((agent, conversation))
     return bool(speaking and speaking.say(word, messages, admission))
 
 
@@ -705,6 +725,8 @@ def _held(request: Request, held: int, watching, saying,
             caller_agent=(request.caller_agent
                           if request.situation == instructions.AGENT_TO_AGENT else None))
                      if can["steer"] and saying is None else None)
+        if ours is not None:
+            ours.can_reach(reachable)
         # A provider may invoke `rundesk messages` to recover context during this turn. SQLite's
         # WAL reader needs the shared-memory sibling; some provider sandboxes may read the agent
         # directory but not create that file. Holding one gateway reader keeps the sidecars alive
@@ -906,9 +928,10 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
             elapsed: Optional[float] = None, ours: Optional[Ours] = None) -> Dict[str, Any]:
     """What this turn came to, and everything the records keep about it."""
     agent = request.agent
-    # A person-facing turn is a conversation and keeps everything the brain said. An unattended
+    # An attended outcome keeps everything the brain said for its live caller. An unattended
     # schedule or delegation has one report: activity may exist in its stream, but only the last
-    # complete response is what its owner or calling agent receives.
+    # complete response is what its owner or calling agent receives. Channel history keeps ordinary
+    # remarks below while removing only explicit finals that later guidance superseded.
     unattended = request.situation in (instructions.SCHEDULE_TO_AGENT,
                                        instructions.AGENT_TO_AGENT)
     closing = protocol.last_thought(said)
@@ -918,8 +941,18 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
     gone = stream.outcome()
     used = protocol.usage_of(said)
 
-    if reply.strip():
-        arriving.said_by_agent_into(agent, request.conversation, reply, turn=turn)
+    # An explicit final produced before later guidance is superseded, not a second answer. Preserve
+    # every ordinary remark in channel history and remove only earlier explicit finals; narrowing
+    # all channel history to the closing thought would silently discard useful working context.
+    remembered = reply
+    explicit = [one for one in said
+                if one.get("type") == "text" and one.get("final") is True]
+    if request.source == arriving.FROM_CHANNEL and len(explicit) > 1:
+        last_final = explicit[-1]
+        remembered = protocol.reply(
+            one for one in said if one.get("final") is not True or one is last_final)
+    if remembered.strip():
+        arriving.said_by_agent_into(agent, request.conversation, remembered, turn=turn)
     handle = protocol.resume_handle(said)
     if handle and can["resume"]:
         if ours is None:

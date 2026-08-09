@@ -929,6 +929,36 @@ class TwoTurnsInOneConversation(Answering):
             one for one in arriving.messages(self.agent, conversation)
             if one["id"] == follow_up.message)["turn_id"])
 
+    def test_a_final_superseded_by_mid_turn_guidance_is_not_delivered_or_remembered(self):
+        """A provider may finish an answer just before guidance lands, then continue the same turn.
+        The earlier final is superseded; presenting both looks like two completed agent turns."""
+        marker = "LATEST-FINAL-719"
+        self.a_stand_in_told(
+            self.agent, steer=True, finish_after_steers=1, mark_final=True,
+            remarks=["ordinary working context"])
+        self.a_channel(saying=self.a_message_arrived(text="the first"))
+        watching = self.hosting_now()
+        self.assertTrue(self.waited_until(self.a_turn_is_running),
+                        "no turn ever started to steer")
+        conversation = arriving.standing_in(self.agent, "1180")
+        follow_up = arriving.recorded(
+            self.agent, "discord", "1180", "2207", marker, external_id="8842")
+
+        answering.OnAChannel(self.where, lambda: watching).answer(
+            self.agent, "discord", "1180", "2207", marker, "8842", follow_up)
+
+        turn = self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: marker in "\n".join(self.delivered())))
+        delivered = "\n".join(self.delivered())
+        self.assertIn(marker, delivered)
+        self.assertNotIn("You asked: the first", delivered)
+        remembered = [one["body"] for one in arriving.messages(self.agent, conversation)
+                      if one["author"] == arriving.BY_AGENT and one["turn_id"] == turn["id"]]
+        self.assertEqual(1, len(remembered))
+        self.assertIn(marker, remembered[0])
+        self.assertIn("ordinary working context", remembered[0])
+        self.assertNotIn("You asked: the first", remembered[0])
+
     def test_a_queued_follow_up_the_provider_refuses_receives_one_fallback_turn(self):
         landed = arriving.recorded(self.agent, "discord", "1180", "2207", "follow up")
         answers = answering.OnAChannel(self.where, lambda: hosting.Watching({}, {}, {}))

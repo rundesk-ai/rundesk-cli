@@ -107,7 +107,8 @@ def main():
         if how.get("also_did"):
             say(type="tool", id=f"r{nth}", name="Bash", did=how["also_did"])
     if not how.get("omit_final_response"):
-        say(type="text", text="You asked: " + asked.strip(), whole=True)
+        say(type="text", text="You asked: " + asked.strip(), whole=True,
+            final=bool(how.get("mark_final")))
 
     if capabilities(how)["steer"]:
         # Anything said after the prompt reaches a running turn, and is answered as it arrives.
@@ -117,7 +118,8 @@ def main():
             if not line.strip():
                 continue
             word = json.loads(line)
-            say(type="text", text="heard " + (word.get("text") or "").strip(), whole=True)
+            say(type="text", text="heard " + (word.get("text") or "").strip(), whole=True,
+                final=bool(how.get("mark_final")))
             heard += 1
             if finish_after and heard >= finish_after:
                 break

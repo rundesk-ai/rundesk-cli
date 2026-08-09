@@ -865,11 +865,30 @@ class WhatItGoesOnDoingForMonths(WithAnAgent):
         # `_refused` has the same rule for the same reason: a directory invented by whatever is
         # complaining that it is missing is one that then looks half-made to everything else.
         child = self.a_running_gateway(beat=self.QUICKLY)
+        first = json.loads((self.at / standing.RECORD).read_text(encoding="utf-8"))["since_boot"]
+
+        def a_later_beat_landed() -> bool:
+            try:
+                now = json.loads(
+                    (self.at / standing.RECORD).read_text(encoding="utf-8"))["since_boot"]
+                return float(now) > float(first)
+            except (OSError, KeyError, TypeError, ValueError):
+                return False
+
+        # Holding the gateway lock proves the process was admitted, not that startup settlement
+        # has finished. Taking the records away during that settlement tests a startup crash rather
+        # than this case's long-running loop. A later beat can land only after settlement and one
+        # whole pass through that loop.
+        self.assertTrue(support.waited_until(a_later_beat_landed, self.PATIENCE),
+                        f"the gateway never finished starting. It said: {self.what_it_said()}")
         self.taken_away(self.at)
 
         self.several_more_beats()
 
-        self.assertIsNone(child.poll(), "it ended when its agent went away, which exits non-zero")
+        self.assertIsNone(
+            child.poll(),
+            "it ended when its agent went away, which exits non-zero. Captured output:\n"
+            + self.what_it_said())
         self.assertFalse(self.at.exists(), "it made its agent's directory again to complain into")
 
 
