@@ -57,7 +57,7 @@ already installed and signed in**
 Install Rundesk:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh | bash
+curl -fsSL https://get.rundesk.ai/rundesk | bash
 ```
 
 Create an agent:
