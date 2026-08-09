@@ -1,5 +1,5 @@
 name: Feature
-description: Propose a capability that must be built into Rundesk itself.
+description: Propose a clearly scoped capability for Rundesk itself.
 title: "<area>: "
 type: Feature
 body:
@@ -10,22 +10,22 @@ body:
   - type: textarea
     id: need
     attributes:
-      label: Need
-      description: Who needs what, and what is impossible or costly today?
+      label: Problem or opportunity
+      description: Describe the affected audience, current limitation or opportunity, and why it matters.
     validations:
       required: true
   - type: textarea
     id: evidence
     attributes:
-      label: Evidence
-      description: Give a concrete example, request, measurement, or current limitation.
+      label: Context and evidence
+      description: Provide concrete examples, observations, or measurements that establish the problem or opportunity.
     validations:
       required: true
   - type: textarea
     id: scope
     attributes:
-      label: Scope
-      description: Define the bounded capability or outcome Rundesk must provide.
+      label: Desired outcome and scope
+      description: Define the bounded capability and user-visible outcome Rundesk should provide.
     validations:
       required: true
   - type: textarea
@@ -46,8 +46,8 @@ body:
   - type: textarea
     id: approach
     attributes:
-      label: Possible approach
-      description: Optional implementation ideas; the issue must remain valid if the design changes.
+      label: Implementation considerations
+      description: Optional constraints, compatibility concerns, or possible approaches; the request must remain valid if the design changes.
     validations:
       required: false
   - type: input
