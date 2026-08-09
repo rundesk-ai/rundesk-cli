@@ -270,7 +270,10 @@ def document(one: Coordinator, update_time: str) -> Dict[str, object]:
             paths.HOME_IS: str(one.root),
             AUTOMATIC: "1",
             "HOME": str(Path.home()),
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
+            # A persisted job definition cannot depend on which shell happened to reconcile or
+            # inspect it. The updater uses absolute program paths; the system path is enough for
+            # commands it deliberately starts and contains no transient development directories.
+            "PATH": os.pathsep.join(job.LAUNCHD_PATH),
             "LANG": job.LANG,
         },
     }
