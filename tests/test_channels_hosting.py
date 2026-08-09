@@ -1449,9 +1449,10 @@ class WhenOneIsKilledOutright(Hosting):
         self.assertTrue(support.waited_until(
             lambda: not hosting.still_running(self.agent, "discord"), PATIENCE),
             "the claim outlived the child tree that was holding it")
-        self.looked_again(watching)
-        self.assertNotIn("discord", watching.running,
-                         "the loop went on hosting an adapter that no longer exists")
+        self.assertTrue(support.waited_until(
+            lambda: "discord" not in self.looked_again(watching).running, PATIENCE),
+            f"the loop went on hosting an adapter that no longer exists. It said: "
+            f"{self.said_in_the_log()}")
         self.assertFalse(hosting.record_of(self.agent, "discord").exists(),
                          "the record of an adapter that is gone was left for the next gateway")
         self.assertIn("channel discord: the adapter stopped", self.said_in_the_log())
