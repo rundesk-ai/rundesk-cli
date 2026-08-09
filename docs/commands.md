@@ -1769,6 +1769,10 @@ The return notice is written only after the new release settles and is consumed 
 running that exact version. An ordinary stop/start keeps the ordinary gateway notices.
 
 The program-tree swap never replaces `data/`; migration steps may deliberately carry its layout.
+When migration work is waiting and `backup_enabled` is on, settlement first makes and verifies the
+safety copy described under `backups save`. If that copy cannot be made, migration does not begin
+and the update fails with the reason; turning backups on therefore guarantees a rollback boundary
+rather than merely requesting one.
 
 **Being on the newest release is not the same as being settled on it.** An update interrupted between
 replacing the files and settling — a machine that slept, a terminal that closed — leaves an install
@@ -1784,6 +1788,8 @@ schedule claims. Active work, or activity that cannot be inspected safely, produ
 local day, unless a durable manual request is already waiting, in which case the coordinator also
 acts as its recovery path. Repeated launchd starts on the same day are logged and skipped. Failures
 remain non-zero and recover through the same rerunnable settlement path as a manual update.
+The job carries a fixed minimal system `PATH`, so reconciliation and status do not change according
+to the shell or development environment that happened to invoke them.
 
 ## uninstall
 

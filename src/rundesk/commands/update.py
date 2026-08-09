@@ -71,6 +71,10 @@ class Attempt(NamedTuple):
     queued: bool
 
 
+class CouldNotKeep(Exception):
+    """The configured pre-migration rollback copy could not be made."""
+
+
 class Gateways(Protocol):
     """Standing one agent's gateway down, and starting it again. One name in, `""` when it was done.
 
@@ -478,7 +482,7 @@ def settle(gateways: Optional[Gateways] = None) -> int:
         scheduled = automatic_updates.reconcile()
         if scheduled.how == job.CANNOT_TELL:
             return _failed(f"automatic update scheduling could not be reconciled — {scheduled.why}")
-    except (config.Unreadable, config.Stuck, migration.Broken, OSError) as why:
+    except (CouldNotKeep, config.Unreadable, config.Stuck, migration.Broken, OSError) as why:
         # Every write below `settle` goes through the configuration, including the stamp each
         # migration step lands with, so all of these are caught in one place rather than at each
         # of the calls that can give them.
@@ -651,20 +655,19 @@ def _kept_before_carrying() -> str:
     has been a setting that governed nothing until now, and an owner who turned it off should not
     be surprised by one appearing.
 
-    A copy that could not be made is not a reason to refuse to carry — it is said, and the carrying
-    goes ahead, because an install left un-migrated is its own kind of broken.
+    When copies are enabled, failing to make this one stops before carrying. Otherwise
+    backup-enabled would claim a rollback boundary the update did not actually have.
     """
     data = paths.data()
-    try:
-        settled = config.read(data)
-        if not migration.outstanding(settled.get("migration")):
-            return ""
-        if not settled.get("backup_enabled"):
-            return ""
-        name = backups.save(data)
-    except (config.Unreadable, migration.Broken, backups.Refused, OSError) as why:
-        _out_loud(f"no copy was taken before carrying: {why}")
+    settled = config.read(data)
+    if not migration.outstanding(settled.get("migration")):
         return ""
+    if not settled.get("backup_enabled"):
+        return ""
+    try:
+        name = backups.save(data)
+    except (backups.Refused, OSError) as why:
+        raise CouldNotKeep(f"no copy was taken before carrying: {why}") from why
     _out_loud(f"kept {name} — the data as it was before carrying")
     return f" — {paths.data()} as it was before this is the copy {name}"
 

@@ -2,6 +2,7 @@
 
 import datetime
 import json
+import os
 import plistlib
 import sys
 import threading
@@ -52,6 +53,20 @@ class AutomaticUpdates(Isolated):
         self.assertNotIn("KeepAlive", document)
         self.assertEqual(document["EnvironmentVariables"][paths.HOME_IS], str(self.home))
         self.assertNotIn("SECRET", repr(document))
+
+    def test_job_definition_does_not_depend_on_the_callers_path(self) -> None:
+        supervisor = ASupervisor()
+        with mock.patch.dict(os.environ, {"PATH": "/tmp/first"}):
+            automatic_updates.reconcile(supervisor, self.into)
+        supervisor.answers["print"] = ran(0)
+        with mock.patch.dict(os.environ, {"PATH": "/tmp/second"}):
+            answer = automatic_updates.status(supervisor, self.into)
+
+        one = automatic_updates.coordinator(into=self.into)
+        placed = plistlib.loads(automatic_updates.plist_of(one).read_bytes())
+        self.assertEqual("scheduled daily at 03:00 local time", answer)
+        self.assertEqual(":".join(job.LAUNCHD_PATH),
+                         placed["EnvironmentVariables"]["PATH"])
 
     def test_enabled_job_is_placed_once_and_files_are_private(self) -> None:
         supervisor = ASupervisor()

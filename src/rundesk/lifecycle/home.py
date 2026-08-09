@@ -143,6 +143,13 @@ def prepare(root: Optional[Path] = None,
     said = saying or (lambda _line: None)
     touched = []
     for name, where in sorted(directories(root).items(), key=lambda entry: entry[1].parts):
+        # A supported backup location is a link to storage Rundesk does not own. Settlement must
+        # not follow it merely to refresh an explanatory note: background launchd jobs may have
+        # less access than an interactive owner, and an unavailable external disk must not stop an
+        # otherwise complete update. Backup commands still follow this link when their work
+        # actually requires the copies.
+        if name == "backups" and where.is_symlink():
+            continue
         if not where.is_dir():
             where.mkdir(parents=True, exist_ok=True)
             said(f"made {where}")

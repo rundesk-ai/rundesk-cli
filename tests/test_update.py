@@ -350,24 +350,25 @@ class AnUpdateThatDoesNotLand(Updating):
         self.update(archive=self.an_archive())
         self.assertEqual([], backups.kept(paths.backups()))
 
-    def test_a_copy_that_could_not_be_taken_does_not_stop_the_carrying(self):
-        # An install left un-migrated is its own kind of broken, so this is said and carried on.
-        #
-        # Driven against the helper rather than through `update`: an install settles in an
-        # interpreter of its own by design, so a replacement made in *this* one would never reach
-        # it — the first version of this case passed for that reason rather than for a good one.
+    def test_a_copy_that_could_not_be_taken_stops_before_carrying(self):
+        # A configured safety copy is the rollback boundary. A failed copy therefore stops before
+        # migration rather than reporting protection the update did not actually have.
         from rundesk.commands import update as the_update
         config.stated("backup_enabled", True, paths.data())
         steps = self.home / "steps"
         steps.mkdir(parents=True, exist_ok=True)
         (steps / "0001_first.py").write_text(A_STEP)
+        carrying = mock.Mock()
 
-        with mock.patch.object(migration, "STEPS", steps):
-            with mock.patch.object(the_update.backups, "save",
-                                   side_effect=OSError("the disk filled")):
-                said = the_update._kept_before_carrying()
+        with mock.patch.object(migration, "STEPS", steps), \
+                mock.patch.object(the_update.backups, "save",
+                                  side_effect=OSError("the disk filled")), \
+                mock.patch.object(migration, "carry", carrying):
+            result = the_update.settle(gateways=mock.Mock())
 
-        self.assertEqual("", said, "a copy that could not be taken must not stop the carrying")
+        self.assertEqual(FAILED, result)
+        carrying.assert_not_called()
+        self.assertFalse((paths.data() / "carried").exists())
 
     def test_the_copy_is_named_when_a_step_does_not_finish(self):
         config.stated("backup_enabled", True, paths.data())

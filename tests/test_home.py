@@ -118,6 +118,17 @@ class TheNoteInEachDirectory(support.Isolated):
         home.prepare()
         self.assertIn("Written by rundesk", note.read_text())
 
+    def test_an_external_backups_directory_is_never_read_or_rewritten(self):
+        external = self.home / "external-copies"
+        external.mkdir()
+        marker = external / "README.md"
+        marker.write_text("the backup store owner's note")
+        paths.backups().symlink_to(external, target_is_directory=True)
+
+        home.prepare()
+
+        self.assertEqual("the backup store owner's note", marker.read_text())
+
 
 class WhatAnInstallLaysDown(support.Isolated):
     """Through the real command, so the notes are proved to reach a machine."""
