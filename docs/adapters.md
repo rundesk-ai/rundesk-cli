@@ -800,13 +800,15 @@ not only the agent whose Discord connection received the gesture. Each agent is 
 bullet lines:
 
 ```markdown
-- **ava** — coordinates release work
+- **ava** (codex) — coordinates release work
   - Skills: managing-rundesk, writing-plans
 ```
 
 Agent names and each agent's skill names are sorted case-insensitively, with deterministic ordering
-when case alone is not enough. A missing or empty description is `no description`; one that cannot
-be read is `description cannot be read`. No granted skills is `none`; grants that cannot be read is
+when case alone is not enough. A provider path is reduced to its final component so the machine's
+layout is not disclosed; a missing provider is `provider unknown`, and an unreadable one is
+`provider cannot be read`. A missing or empty description is `no description`; one that cannot be
+read is `description cannot be read`. No granted skills is `none`; grants that cannot be read is
 `cannot be read`. The zero-agent answer is exactly `No agents.` None of these states starts a
 provider turn, and an unreadable field never makes its agent disappear.
 
