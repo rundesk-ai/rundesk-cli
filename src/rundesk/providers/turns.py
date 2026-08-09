@@ -930,8 +930,8 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
     agent = request.agent
     # An attended outcome keeps everything the brain said for its live caller. An unattended
     # schedule or delegation has one report: activity may exist in its stream, but only the last
-    # complete response is what its owner or calling agent receives. Channel history is narrowed to
-    # that closing report below because its earlier remarks were already delivered live.
+    # complete response is what its owner or calling agent receives. Channel history keeps ordinary
+    # remarks below while removing only explicit finals that later guidance superseded.
     unattended = request.situation in (instructions.SCHEDULE_TO_AGENT,
                                        instructions.AGENT_TO_AGENT)
     closing = protocol.last_thought(said)
@@ -941,10 +941,16 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
     gone = stream.outcome()
     used = protocol.usage_of(said)
 
-    # A watched channel already received completed working remarks as they happened. Its durable
-    # agent message is the one final report, not every superseded response the provider produced
-    # before later steering arrived.
-    remembered = closing if request.source == arriving.FROM_CHANNEL and closing.strip() else reply
+    # An explicit final produced before later guidance is superseded, not a second answer. Preserve
+    # every ordinary remark in channel history and remove only earlier explicit finals; narrowing
+    # all channel history to the closing thought would silently discard useful working context.
+    remembered = reply
+    explicit = [one for one in said
+                if one.get("type") == "text" and one.get("final") is True]
+    if request.source == arriving.FROM_CHANNEL and len(explicit) > 1:
+        last_final = explicit[-1]
+        remembered = protocol.reply(
+            one for one in said if one.get("final") is not True or one is last_final)
     if remembered.strip():
         arriving.said_by_agent_into(agent, request.conversation, remembered, turn=turn)
     handle = protocol.resume_handle(said)

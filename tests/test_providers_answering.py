@@ -934,7 +934,8 @@ class TwoTurnsInOneConversation(Answering):
         The earlier final is superseded; presenting both looks like two completed agent turns."""
         marker = "LATEST-FINAL-719"
         self.a_stand_in_told(
-            self.agent, steer=True, finish_after_steers=1, mark_final=True)
+            self.agent, steer=True, finish_after_steers=1, mark_final=True,
+            remarks=["ordinary working context"])
         self.a_channel(saying=self.a_message_arrived(text="the first"))
         watching = self.hosting_now()
         self.assertTrue(self.waited_until(self.a_turn_is_running),
@@ -955,6 +956,7 @@ class TwoTurnsInOneConversation(Answering):
                       if one["author"] == arriving.BY_AGENT and one["turn_id"] == turn["id"]]
         self.assertEqual(1, len(remembered))
         self.assertIn(marker, remembered[0])
+        self.assertIn("ordinary working context", remembered[0])
         self.assertNotIn("You asked: the first", remembered[0])
 
     def test_a_queued_follow_up_the_provider_refuses_receives_one_fallback_turn(self):

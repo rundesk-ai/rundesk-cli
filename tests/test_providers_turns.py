@@ -762,13 +762,23 @@ class ATurnIsAlwaysSettled(WithAnAgent):
     def test_a_follow_up_waits_for_our_starting_turn_to_publish_its_steer_queue(self):
         offered = []
         with turns._stoppable(self.agent, 1) as ours:
-            offering = threading.Thread(
-                target=lambda: offered.append(turns.also_say(self.agent, 1, "more context")))
-            offering.start()
-            self.assertTrue(support.waited_until(offering.is_alive, PATIENCE))
-            words = turns.Words(self.agent, 1, 29)
-            ours.can_reach(words)
-            offering.join(PATIENCE)
+            entered_wait = threading.Event()
+            real_wait = ours.reachability_known.wait
+
+            def waiting(*args, **kwargs):
+                entered_wait.set()
+                return real_wait(*args, **kwargs)
+
+            with mock.patch.object(ours.reachability_known, "wait", side_effect=waiting):
+                offering = threading.Thread(
+                    target=lambda: offered.append(
+                        turns.also_say(self.agent, 1, "more context")))
+                offering.start()
+                self.assertTrue(entered_wait.wait(PATIENCE),
+                                "the follow-up never waited for the reachability decision")
+                words = turns.Words(self.agent, 1, 29)
+                ours.can_reach(words)
+                offering.join(PATIENCE)
 
         self.assertFalse(offering.is_alive())
         self.assertEqual([True], offered)
