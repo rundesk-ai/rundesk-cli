@@ -1008,6 +1008,33 @@ class TwoTurnsInOneConversation(Answering):
 class WhatAgentsSays(support.Isolated):
     """The install-wide agent directory rendered for the shared `/agents` query."""
 
+    def test_it_names_each_agents_provider_without_exposing_a_provider_path(self):
+        directory.made("winston", support.A_STAND_IN, describes="Coordinates releases.")
+        with mock.patch.object(answering, "_granted_skills", return_value=[]):
+            said = answering._what_agents_are()
+
+        self.assertEqual(
+            "- **winston** (a-stand-in) — Coordinates releases.\n  - Skills: none",
+            said,
+        )
+        self.assertNotIn(str(support.CHECKOUT), said)
+
+    def test_provider_text_cannot_reshape_the_listing_and_an_empty_one_is_named(self):
+        directory.made("ada", "co*dex\nextra")
+        directory.made("cole", support.A_STAND_IN)
+        records.stated(directory.records("cole"), {"provider_name": ""})
+
+        with mock.patch.object(answering, "_granted_skills", return_value=[]):
+            said = answering._what_agents_are()
+
+        self.assertEqual(
+            "- **ada** (co\\*dex extra) — no description\n"
+            "  - Skills: none\n"
+            "- **cole** (provider unknown) — no description\n"
+            "  - Skills: none",
+            said,
+        )
+
     def test_it_lists_every_agent_in_case_insensitive_order_with_descriptions_and_skills(self):
         directory.made("Zulu", support.A_STAND_IN)
         directory.made("beta", support.A_STAND_IN, describes="Plans difficult work.")
@@ -1020,9 +1047,9 @@ class WhatAgentsSays(support.Isolated):
             said = answering._what_agents_are()
 
         self.assertEqual(
-            "- **beta** — Plans difficult work.\n"
+            "- **beta** (a-stand-in) — Plans difficult work.\n"
             "  - Skills: beta-skill, Zulu-skill\n"
-            "- **Zulu** — no description\n"
+            "- **Zulu** (a-stand-in) — no description\n"
             "  - Skills: none",
             said,
         )
@@ -1048,9 +1075,9 @@ class WhatAgentsSays(support.Isolated):
             said = answering._what_agents_are()
 
         self.assertEqual(
-            "- **ada** — Coordinates releases.\n"
+            "- **ada** (a-stand-in) — Coordinates releases.\n"
             "  - Skills: cannot be read\n"
-            "- **cole** — description cannot be read\n"
+            "- **cole** (provider cannot be read) — description cannot be read\n"
             "  - Skills: reviewing-code",
             said,
         )
@@ -1062,7 +1089,8 @@ class WhatAgentsSays(support.Isolated):
         directory.made("ada", support.A_STAND_IN, describes="First line\nSecond line.")
         with mock.patch.object(answering, "_granted_skills", return_value=[]):
             said = answering._what_agents_are()
-        self.assertEqual("- **ada** — First line Second line.\n  - Skills: none", said)
+        self.assertEqual(
+            "- **ada** (a-stand-in) — First line Second line.\n  - Skills: none", said)
 
     def test_markdown_in_dynamic_fields_cannot_break_the_two_bullet_lines(self):
         directory.made("a*da", support.A_STAND_IN, describes="Uses _care_.")
@@ -1070,7 +1098,7 @@ class WhatAgentsSays(support.Isolated):
                                return_value=["plan*work", "code`review"]):
             said = answering._what_agents_are()
         self.assertEqual(
-            "- **a\\*da** — Uses \\_care\\_.\n"
+            "- **a\\*da** (a-stand-in) — Uses \\_care\\_.\n"
             "  - Skills: code\\`review, plan\\*work",
             said,
         )
@@ -1085,7 +1113,7 @@ class WhatAgentsSays(support.Isolated):
         directory.made("ada", support.A_STAND_IN, describes="Coordinates releases.")
         answering.grants.where("ada").write_text("not a grants directory", encoding="utf-8")
         self.assertEqual(
-            "- **ada** — Coordinates releases.\n  - Skills: cannot be read",
+            "- **ada** (a-stand-in) — Coordinates releases.\n  - Skills: cannot be read",
             answering._what_agents_are(),
         )
 
