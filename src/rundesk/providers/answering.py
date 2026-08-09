@@ -776,8 +776,11 @@ def _what_agents_are() -> str:
     for agent in agents:
         try:
             row = records.read(directory.records(agent))
+            provider = _markdown_text(_named(str(row.get("provider_name") or ""))) \
+                or "provider unknown"
             description = _markdown_text(row.get("describes")) or "no description"
         except Exception:                              # noqa: BLE001 — one damaged agent stays listed
+            provider = "provider cannot be read"
             description = "description cannot be read"
         try:
             skills = sorted(_granted_skills(agent),
@@ -785,7 +788,7 @@ def _what_agents_are() -> str:
             holding = ", ".join(_markdown_text(one) for one in skills) or "none"
         except Exception:                              # noqa: BLE001 — independent inspection field
             holding = "cannot be read"
-        said.extend((f"- **{_markdown_text(agent)}** — {description}",
+        said.extend((f"- **{_markdown_text(agent)}** ({provider}) — {description}",
                      f"  - Skills: {holding}"))
     return "\n".join(said)
 
