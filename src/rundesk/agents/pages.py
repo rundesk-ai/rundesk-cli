@@ -8,18 +8,18 @@ one.
 
 ## What is placed, and under what name
 
-**A template is named for the file it becomes.** `src/templates/AGENTS.md` is what an agent's
-`AGENTS.md` is copied from, so somebody reading that directory is reading exactly what a new agent
-gets, with no indirection to hold in their head.
+**Rules are named by operating role.** `src/templates/domain/AGENTS.md` and
+`src/templates/specialist/AGENTS.md` are the two canonical rule sources. The selected one becomes
+both native rule filenames; shared memory and work-area pages remain role-independent.
 
 | In the home | Copied from | Is |
 |---|---|---|
-| `AGENTS.md` | `AGENTS.md` | how this agent works |
-| `CLAUDE.md` | `AGENTS.md` | the same bytes, under the name some brains look for first |
+| `AGENTS.md` | `<role>/AGENTS.md` | how this agent works |
+| `CLAUDE.md` | `<role>/AGENTS.md` | the same bytes, under the name some brains look for first |
 | `MEMORY.md` | `MEMORY.md` | the scaffold it writes what it learns into |
 | `<area>/README.md` | the same path | how to use one durable work area without turning it into clutter |
 
-**`AGENTS.md` and `CLAUDE.md` are one source placed twice, and identical by construction.** Two
+**For one role, `AGENTS.md` and `CLAUDE.md` are one source placed twice, identical by construction.** Two
 files kept in step by anybody remembering is two files that disagree, and the disagreement is
 invisible: each brain reads only the one it looks for, so the two would drift into two different
 agents wearing one name. `tests/test_agent_pages.py` compares the bytes rather than trusting this
@@ -53,11 +53,16 @@ from rundesk.core import paths
 #: `skills.catalogs.shipped` is written to, for the same reason it is written there.
 SHIPPED_IN = "templates"
 
+#: The two supported operating roles. Kept here with the templates they select so creation cannot
+#: accept a role that page placement does not understand.
+ROLES = ("domain", "specialist")
+DEFAULT_ROLE = "domain"
+
 #: The always-read continuity pages, named separately because the command reports them as rules and
-#: memory rather than as workspace organization.
+#: memory rather than as workspace organization. Rules are selected by role; memory is shared.
 CONTINUITY: Dict[str, str] = {
-    "AGENTS.md": "AGENTS.md",
-    "CLAUDE.md": "AGENTS.md",
+    "AGENTS.md": "{role}/AGENTS.md",
+    "CLAUDE.md": "{role}/AGENTS.md",
     "MEMORY.md": "MEMORY.md",
 }
 
@@ -94,7 +99,15 @@ def shipped() -> Path:
 
 def sources() -> List[str]:
     """Every shipped file a page is copied from, named once however many pages use it."""
-    return sorted(set(PAGES.values()))
+    return sorted({source.format(role=role) if "{role}" in source else source
+                   for source in PAGES.values() for role in ROLES})
+
+
+def source_for(name: str, role: str = DEFAULT_ROLE) -> str:
+    """The shipped source for one home page under one exact operating role."""
+    if role not in ROLES:
+        raise ValueError(f"role must be one of {', '.join(ROLES)}, and was {role!r}")
+    return PAGES[name].format(role=role)
 
 
 def read_shipped() -> Dict[str, str]:
@@ -154,7 +167,8 @@ def _stands(page: Path) -> bool:
     return page.exists() or page.is_symlink()
 
 
-def place(home: Path, agent: str, text: Optional[Dict[str, str]] = None) -> List[str]:
+def place(home: Path, agent: str, text: Optional[Dict[str, str]] = None,
+          role: str = DEFAULT_ROLE) -> List[str]:
     """Put every page this home is missing into it. Hands back what was written, in order.
 
     **Fills an absence and never replaces an answer** — see the module docstring. A page already
@@ -164,6 +178,8 @@ def place(home: Path, agent: str, text: Optional[Dict[str, str]] = None) -> List
     release's own files are read once rather than once per agent. Resolved in the body when it is
     not — never in the signature, where it would be bound at import and unreachable by a test.
     """
+    if role not in ROLES:
+        raise ValueError(f"role must be one of {', '.join(ROLES)}, and was {role!r}")
     said = read_shipped() if text is None else text
     written = []
     for name in sorted(PAGES):
@@ -172,7 +188,8 @@ def place(home: Path, agent: str, text: Optional[Dict[str, str]] = None) -> List
             continue
         if page.parent != home:
             page.parent.mkdir(exist_ok=True)
-        _laid_down(page, said[PAGES[name]].replace(AGENT, agent))
+        source = source_for(name, role)
+        _laid_down(page, said[source].replace(AGENT, agent))
         written.append(name)
     return written
 
@@ -197,7 +214,7 @@ def _laid_down(page: Path, text: str) -> None:
         raise
 
 
-def everybody_has_theirs(names, home_of, saying=None) -> List[Tuple[str, str]]:
+def everybody_has_theirs(names, home_of, saying=None, role_of=None) -> List[Tuple[str, str]]:
     """Give every agent the pages it is missing. Hands back what could not be done, per agent.
 
     **Never raises for one agent's sake.** This runs inside `update`'s settle, where the install has
@@ -220,7 +237,8 @@ def everybody_has_theirs(names, home_of, saying=None) -> List[Tuple[str, str]]:
     left = []
     for name in names:
         try:
-            written = place(home_of(name), name, text)
+            role = role_of(name) if role_of is not None else DEFAULT_ROLE
+            written = place(home_of(name), name, text, role)
         except OSError as why:
             left.append((name, str(why)))
             told(f"{name} is missing pages that could not be written ({why})")

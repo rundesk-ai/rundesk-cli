@@ -202,14 +202,18 @@ whose records are there and cannot be read is listed with a provider nobody can 
 than left out: leaving it out would say the agent is gone, and what somebody does next is make a new
 one over what survived.
 
+Listings are split into `Domain agents` and `Specialist agents`; each section preserves name order.
+Domain is the compatible default for existing and newly created agents.
+
 ### agents add
 
 Makes an agent: its records, `home/`, `logs/`, and the files it lives by. `--provider` is required.
 
 ```console
-$ rundesk agents add cole --provider claude
+$ rundesk agents add cole --provider claude --role domain
 agent cole added
         provider  claude
+        role      domain
         home      /Users/you/.rundesk/data/agents/cole/home
         logs      /Users/you/.rundesk/data/agents/cole/logs
         records   /Users/you/.rundesk/data/agents/cole/state.db
@@ -218,6 +222,13 @@ agent cole added
         skill     rundesk/managing-rundesk — how it operates this install
         note      the provider is recorded and not proven — check it with: rundesk providers check
 ```
+
+`--role` accepts exactly `domain` or `specialist` and defaults to `domain`. A domain agent owns an
+ongoing operational area and its Desk queue when it holds `managing-your-desk`; its rules prioritize
+standing specialists for bounded work in their focus or skill scope. A specialist accepts one
+bounded assignment from its delegator and has no persistent Desk queue, Rundesk-operations workflow,
+or standing named-agent delegation policy. Role is independent of provider, skills, delegation
+scope, and whether a Desk exists.
 
 **Every agent is given the files it lives by**, in its own `home/`: `AGENTS.md` is how it works and
 `MEMORY.md` is what it has learned that is still true, and `CLAUDE.md` is the first of those under
@@ -292,7 +303,10 @@ listing rather than named blank: a bare name in a list of specialists is an invi
 guessing is what this field exists to prevent. It is capped at one sentence, because every agent's
 description is charged to every other agent's prompt on every turn.
 
-`configure` takes any combination of its flags, and every named value moves in one write. An empty
+`configure` takes any combination of its flags, and every named value moves in one write. `--role
+<domain|specialist>` changes the recorded role and grouping only. It never rewrites `AGENTS.md` or
+`CLAUDE.md`, because those may contain owner customizations; applying a different template requires
+an explicit, separately reviewed edit to both files. An empty
 `--describes` takes the description away rather than storing a blank — unset and set-to-empty stay
 different answers, since a listing has to tell an agent nobody has described from one described as
 nothing. `--self-improve` controls Rundesk's automatic self-improvement work for this agent; it

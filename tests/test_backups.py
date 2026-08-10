@@ -1000,6 +1000,11 @@ class WithRealAgents(Copies):
         # The real first step, because it is what makes a directory an agent at all. A stand-in for
         # it would be a second description of an agent's records.
         shutil.copy2(agent_migration.STEPS / "0001_the_records_an_agent_keeps.py", self.agent_steps)
+        # New-agent creation writes its explicit operating role after migration. Keep this
+        # deliberately small migration fixture representative of that current required schema
+        # without importing all unrelated historical steps into backup tests.
+        shutil.copy2(agent_migration.STEPS / "0009_every_agent_has_an_operating_role.py",
+                     self.agent_steps / "0002_every_agent_has_an_operating_role.py")
         stepping = mock.patch.object(agent_migration, "STEPS", self.agent_steps)
         stepping.start()
         self.addCleanup(stepping.stop)
@@ -1011,7 +1016,7 @@ class WithRealAgents(Copies):
 
     def a_step_waiting(self, body: str = "") -> None:
         """One step more than every agent made so far has run."""
-        (self.agent_steps / "0002_x.py").write_text(body or AN_AGENT_STEP, encoding="utf-8")
+        (self.agent_steps / "0003_x.py").write_text(body or AN_AGENT_STEP, encoding="utf-8")
 
     def records_in(self, copied: Path, agent: str = "cole") -> Path:
         return copied / "agents" / agent / directory.RECORDS
@@ -1173,7 +1178,7 @@ class AnAgentInsideACopy(WithRealAgents):
         done = backups.restore(name, self.data, self.at, None, self.steps, self.said.append)
 
         self.assertIsNone(done.settled)
-        self.assertIn("0002_x", agent_migration.recorded(directory.records("cole")))
+        self.assertIn("0003_x", agent_migration.recorded(directory.records("cole")))
         self.assertTrue((directory.where("cole") / "carried").exists(),
                         "the step the restored agent never ran was never run")
 
@@ -1182,7 +1187,7 @@ class AnAgentInsideACopy(WithRealAgents):
         name = backups.save(self.data, self.at, A_MOMENT)
         self.a_step_waiting()
         backups.restore(name, self.data, self.at, None, self.steps, self.said.append)
-        self.assertTrue(any("carrying cole to 0002_x" in one for one in self.said), self.said)
+        self.assertTrue(any("carrying cole to 0003_x" in one for one in self.said), self.said)
 
     def test_a_restored_agent_that_could_not_be_carried_is_not_reported_as_restored(self):
         # `settled` being a reason rather than `None` is the case that matters: the data really is
@@ -1226,7 +1231,7 @@ class AnAgentInsideACopy(WithRealAgents):
                                self.said.append)
 
         self.assertIsNone(done.settled)
-        self.assertNotIn("0002_x", agent_migration.recorded(directory.records("cole")))
+        self.assertNotIn("0003_x", agent_migration.recorded(directory.records("cole")))
         self.assertTrue(any("were not carried" in one for one in self.said), self.said)
 
     def test_the_command_says_which_records_went_into_the_copy_as_they_stood(self):

@@ -113,7 +113,15 @@ narrow a team that already delegates. Removing an agent prunes its name from eve
 before removal, so recreating that name does not inherit prior allowlist authority; `NULL` remains
 unrestricted and inbound delegation remains unchanged.
 
-**Rundesk never sweeps an agent's `home/`.** The agent keeps compact cross-run continuity in
+The same row keeps an explicit operating `role`: `domain` or `specialist`. Existing agents migrate
+to `domain`, which is also creation's default. Role describes the agent's work lifecycle only; it
+does not grant skills, change provider or delegation scope, create a Desk, or confer authority.
+Rundesk uses it to group team listings and choose the initial standing-rule template.
+
+**Rundesk never sweeps an agent's `home/`.** New domain and specialist agents start from separate
+canonical rule templates, with identical bytes in `AGENTS.md` and `CLAUDE.md`. After creation those
+files belong to the agent and owner: changing `role` does not rewrite either one. The agent keeps
+compact cross-run continuity in
 `MEMORY.md`, including small pointers to active external projects; changing project detail stays in
 its project or an earned shared index. Ordinary work removes only temporary files and directories it
 created. A focused maintenance task may compact linked indexes and remove confirmed obsolete

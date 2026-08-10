@@ -314,7 +314,9 @@ class MakingAnAgent(Agents):
         steps = self.home / "steps"
         steps.mkdir(parents=True, exist_ok=True)
         shutil.copy2(migration.STEPS / "0001_the_records_an_agent_keeps.py", steps)
-        (steps / "0002_seen.py").write_text(A_STEP_THAT_SAYS_WHERE_IT_IS, encoding="utf-8")
+        shutil.copy2(migration.STEPS / "0009_every_agent_has_an_operating_role.py",
+                     steps / "0002_every_agent_has_an_operating_role.py")
+        (steps / "0003_seen.py").write_text(A_STEP_THAT_SAYS_WHERE_IT_IS, encoding="utf-8")
         with mock.patch.object(migration, "STEPS", steps):
             directory.made("nina", "openai")
         said = (self.agents / "seen").read_text(encoding="utf-8")

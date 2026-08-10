@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 import support
-from rundesk.agents import directory, pages
+from rundesk.agents import directory, pages, records
 from rundesk.core import paths
 
 
@@ -42,9 +42,12 @@ class WhatIsShipped(support.Isolated):
 
     def test_every_page_comes_from_a_file_that_is_really_there(self):
         said = pages.read_shipped()
-        for name, source in pages.PAGES.items():
-            with self.subTest(name=name):
-                self.assertTrue(said[source].strip(), f"{source} is empty, and {name} comes from it")
+        for name in pages.PAGES:
+            for role in pages.ROLES:
+                source = pages.source_for(name, role)
+                with self.subTest(name=name, role=role):
+                    self.assertTrue(
+                        said[source].strip(), f"{source} is empty, and {name} comes from it")
 
     def test_the_rules_are_one_file_placed_twice(self):
         """Two files kept in step by anybody remembering is two files that disagree, and each brain
@@ -104,6 +107,24 @@ class ANewAgent(support.Isolated):
     def test_the_rules_it_got_are_byte_identical_under_both_names(self):
         self.assertEqual((self.home / "AGENTS.md").read_bytes(),
                          (self.home / "CLAUDE.md").read_bytes())
+
+    def test_domain_is_the_default_role_and_uses_the_domain_rules(self):
+        self.assertEqual("domain", records.read(directory.records("ava"))["role"])
+        self.assertEqual(
+            (pages.shipped() / "domain" / "AGENTS.md").read_bytes(),
+            (self.home / "AGENTS.md").read_bytes())
+
+    def test_a_specialist_gets_the_specialist_rules_identically_under_both_names(self):
+        directory.made("forge", "a-stand-in", role="specialist")
+        specialist = directory.home("forge")
+        self.assertEqual("specialist", records.read(directory.records("forge"))["role"])
+        self.assertEqual((specialist / "AGENTS.md").read_bytes(),
+                         (specialist / "CLAUDE.md").read_bytes())
+        rules = (specialist / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("one bounded delegated assignment", rules)
+        for absent in ("operational queue", "managing-rundesk", "named Rundesk agent"):
+            with self.subTest(absent=absent):
+                self.assertNotIn(absent, rules)
 
     def test_the_pages_say_what_they_are(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")

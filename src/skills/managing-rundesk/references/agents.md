@@ -7,12 +7,26 @@ do not edit its database to change identity or provider.
 
 | Command | Control |
 |---|---|
-| `agents` or `agents list` | List every agent, recorded provider, and outbound delegation scope. |
-| `agents add <agent> --provider <provider> [--describes <text>]` | Create an agent. `--describes` is the one-sentence purpose another agent reads before delegating. |
-| `agents configure <agent> [--provider <provider>] [--describes <text>] [--self-improve <true\|false>] [--delegate-to <agent> ... \| --delegate-to-any \| --delegate-to-none]` | Change provider, delegation description, protected upkeep, or outbound delegation scope. Unnamed fields stay unchanged. |
+| `agents` or `agents list` | List domain agents and specialists separately, with provider and outbound delegation scope. |
+| `agents add <agent> --provider <provider> [--role <domain\|specialist>] [--describes <text>]` | Create an agent. Role defaults to domain; `--describes` is the one-sentence purpose another agent reads before delegating. |
+| `agents configure <agent> [--provider <provider>] [--role <domain\|specialist>] [--describes <text>] [--self-improve <true\|false>] [--delegate-to <agent> ... \| --delegate-to-any \| --delegate-to-none]` | Change recorded settings. Unnamed fields stay unchanged, and role changes never rewrite rules. |
 | `agents remove <agent> [--confirm]` | Preview removal; `--confirm` removes the agent and everything it remembers. |
 
 Prefix every command with `"$RUNDESK_COMMAND"`.
+
+## Choose the operating role
+
+Use `domain` for an agent that owns ongoing work, a project/client area, and its persistent Desk
+queue when it holds `managing-your-desk`. Use `specialist` for an agent that accepts one bounded
+assignment from its delegator. Domain is the default for creation and migration.
+
+Role is independent of provider, skills, outbound delegation scope, and whether a Desk exists. A
+specialist may be inbound-only, but the role itself does not set that scope. Creation writes the
+selected canonical template to both `AGENTS.md` and `CLAUDE.md` with identical bytes. Configuring a
+different role changes only the record and team grouping; it deliberately preserves both rule files.
+If the owner explicitly asks to apply another template later, inspect both files for customization,
+prepare the replacement visibly, and make the two resulting files byte-identical. Never infer
+permission to replace rules from a role change alone.
 
 ## Write the delegation description
 
@@ -48,7 +62,8 @@ unrestricted. Do not edit `state.db`; verify `DELEGATES TO` with `agents` after 
 ## Safe operating flow
 
 1. Run `providers` and `providers check <provider>`. Recording a provider does not prove it can run.
-2. Add the agent with a name that can also be a launchd label: letters, digits, `.`, `-`, or `_`.
+2. Choose `domain` or `specialist`, then add the agent with a name that can also be a launchd label:
+   letters, digits, `.`, `-`, or `_`.
 3. Run `agents` to verify the recorded result, then `gateways start <agent>` to prove it starts.
 4. Edit the agent's `AGENTS.md` and `MEMORY.md` when changing how it works or what it knows; those
    files are its identity, not columns in `state.db`.

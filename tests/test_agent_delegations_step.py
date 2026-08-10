@@ -253,6 +253,41 @@ class TheStoppedOutcome(OneAgentsDelegations):
                              "SELECT stopped_at FROM delegations")])
 
 
+class EveryAgentHasAnOperatingRole(OneAgentsDelegations):
+    """`0009` makes the lifecycle distinction explicit without changing older agents' behavior."""
+
+    THE_ROLE_STEP = "0009_every_agent_has_an_operating_role"
+
+    def test_a_made_agent_has_run_it_and_defaults_to_domain(self):
+        self.assertIn(self.THE_ROLE_STEP,
+                      [one[0] for one in self.rows("SELECT key FROM migrations")])
+        self.assertEqual([("domain",)],
+                         [tuple(one) for one in self.rows("SELECT role FROM config")])
+
+    def test_an_agent_carried_forward_becomes_domain(self):
+        self.write("ALTER TABLE config DROP COLUMN role")
+        self.back_to_before(self.THE_ROLE_STEP)
+
+        self.assertIsNone(migration.carry_one("ava"))
+
+        self.assertEqual([("domain",)],
+                         [tuple(one) for one in self.rows("SELECT role FROM config")])
+
+    def test_only_the_two_public_roles_can_be_stored(self):
+        self.write("UPDATE config SET role = 'specialist'")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.write("UPDATE config SET role = 'owner'")
+
+    def test_running_it_twice_keeps_an_explicit_specialist(self):
+        self.write("UPDATE config SET role = 'specialist'")
+        self.back_to_before(self.THE_ROLE_STEP)
+
+        self.assertIsNone(migration.carry_one("ava"))
+
+        self.assertEqual([("specialist",)],
+                         [tuple(one) for one in self.rows("SELECT role FROM config")])
+
+
 class WhatTheConstraintsRefuse(OneAgentsDelegations):
     """Every rule the table holds, watched refusing something."""
 
