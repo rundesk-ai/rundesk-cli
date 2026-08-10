@@ -113,6 +113,11 @@ or eligible-team snapshot starts a fresh provider session and discards the stale
 required for brains that bind instructions when the session is created and silently ignore a
 replacement on resume.
 
+The eligible-team snapshot is grouped under `Domain agents` and `Specialist agents`. Each entry
+still carries only current purpose and skill names. The split lets the standing instructions prefer
+a matching specialist for bounded work while routing domain owners by project or client focus; the
+recorded role does not alter scope, availability, skills, or provider selection.
+
 **`conversation_messages`** — what was said, kept for ever, with a full-text index over it.
 
 #### One source of truth per fact

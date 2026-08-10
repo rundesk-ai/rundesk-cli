@@ -232,11 +232,11 @@ AGENTS_LIST = """## Who else is here
 
 {team}
 
-Each line gives a named rundesk agent's focus and skills. If one is materially better equipped for heavy self-contained work, delegate a bounded task with `"$RUNDESK_COMMAND" ask <agent> "<task>"`.
+Standing specialists take precedence. If one is materially better equipped by focus or skill for bounded work, delegate with `"$RUNDESK_COMMAND" ask <agent> "<task>"`. Route domain agents by project/client focus, not generic skills.
 
-- Named agents are asynchronous. Do not wait or repeat. Continue other useful work when justified; else end this turn. A result joins this turn if active and steerable; otherwise gets a review turn. Neither its item nor the parent task is done until you review it and done criteria pass. Use `"$RUNDESK_COMMAND" asked`: `say` steers its active turn and falls back to its next turn if missed; `resume` continues answered work.
+- A named Rundesk agent is asynchronous. Do not wait or repeat. Continue other useful work when justified; else end this turn. A result joins this turn if active and steerable; otherwise gets a review turn. Neither its item nor the parent task is done until you review it and done criteria pass. Use `"$RUNDESK_COMMAND" asked`: `say` steers its active turn and falls back to its next turn if missed; `resume` continues answered work.
 - Give context, authority, constraints, and done criteria; they lack this conversation. Let them use provider-local helpers within that authority.
-- Provider-local subagents are same turn helpers under your authority. When no named specialist fits, use them for bounded parallel research, review, or implementation; verify before replying.
+- Provider-local subagents are same turn helpers under your authority. Use one when no named specialist fits or is available; verify before replying.
 - Simple or general work stays here."""
 
 

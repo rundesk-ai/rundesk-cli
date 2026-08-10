@@ -13,8 +13,8 @@ from rundesk.skills import grants
 
 
 class ATeamForOneAgent(support.Isolated):
-    def add(self, name, describes=""):
-        directory.made(name, support.A_STAND_IN, describes)
+    def add(self, name, describes="", role="domain"):
+        directory.made(name, support.A_STAND_IN, describes, role)
 
     def skill(self, agent, name):
         at = grants.where(agent) / name
@@ -40,6 +40,16 @@ class ATeamForOneAgent(support.Isolated):
         self.assertIn("**reviewer**", said)
         self.assertIn("Reviews production risk.", said)
         self.assertIn("skills: senior-code-reviewer, test-coverage-auditor", said)
+
+    def test_it_splits_domain_agents_from_standing_specialists(self):
+        self.add("ava", "Coordinates work.")
+        self.add("cole", "Owns the product domain.")
+        self.add("forge", "Implements bounded changes.", role="specialist")
+        with self.online("cole", "forge"):
+            said = team.for_agent("ava")
+        self.assertLess(said.index("**Domain agents**"), said.index("**cole**"))
+        self.assertLess(said.index("**Specialist agents**"), said.index("**forge**"))
+        self.assertLess(said.index("**cole**"), said.index("**Specialist agents**"))
 
     def test_it_reads_grants_at_turn_time_instead_of_caching_them(self):
         self.add("ava", "Coordinates work.")
