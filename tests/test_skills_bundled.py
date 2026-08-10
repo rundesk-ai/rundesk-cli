@@ -338,6 +338,18 @@ class WhatAShippedSkillMayClaim(Bundled):
         self.assertIn("seven distinct usage dates", schedules)
         self.assertIn("do not try to add, update, run, disable, or remove it", schedules)
 
+    def test_schedules_are_taught_as_bounded_proactive_verification(self):
+        skill = self.skills / "managing-rundesk"
+        main = " ".join((skill / "SKILL.md").read_text(encoding="utf-8").split())
+        schedules = " ".join(
+            (skill / "references" / "schedules.md").read_text(encoding="utf-8").split())
+        self.assertIn("proactive verification check-ins", main)
+        for phrase in ("outcome can only be confirmed later", "one `--at` check",
+                       "name what to inspect", "perform the check",
+                       "within the original authority", "notified channel"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, schedules)
+
     def test_no_shipped_skill_names_a_verb_this_build_does_not_have(self):
         # `AGENTS.md`: a verb rundesk cannot perform is a verb rundesk does not have. A skill is the
         # one place that can be broken with nothing going red — it is read by an agent, on every
