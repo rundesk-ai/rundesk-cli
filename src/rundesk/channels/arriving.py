@@ -409,6 +409,51 @@ def turn_for_message(agent: str, conversation: int, message: int) -> Optional[in
     return int(found["turn_id"]) if found["turn_id"] is not None else None
 
 
+def delegation_brief(agent: str, delegator: str, parent_turn: int,
+                     delegation_id: str) -> str:
+    """The first task message for one delegation, or ``""`` when it cannot be found.
+
+    The query surface uses only a bounded identity made from this body. Keeping the read here means
+    the conversation store still owns how modern and pre-boundary delegation keys are reconciled;
+    a gateway does not gain a second spelling of that durable identity.
+    """
+    modern = f"{delegator}/{parent_turn}/{delegation_id}"
+    legacy = f"{delegator}/{parent_turn}"
+    with records.reading(directory.records(agent)) as conn:
+        found = _rows(
+            conn, agent,
+            "SELECT m.body FROM conversation_messages AS m"
+            " JOIN conversations AS c ON c.id = m.conversation_id"
+            " WHERE c.source = ? AND c.source_id IN (?, ?) AND m.author = ?"
+            " AND m.author_id = ?"
+            " ORDER BY CASE c.source_id WHEN ? THEN 0 ELSE 1 END, m.id LIMIT 1",
+            (FROM_AGENT, modern, legacy, BY_AGENT, delegator, modern),
+        ).fetchone()
+    return str(found["body"] or "") if found is not None else ""
+
+
+def delegation_review_turn(agent: str, conversation: int,
+                           delegation_id: str) -> Optional[int]:
+    """The turn handling this delegation's latest returned result, or ``None`` while unclaimed.
+
+    Result bodies are deliberately not selected. A state query needs only the durable association,
+    and selecting less makes exposing a specialist's full result through this seam impossible by
+    accident.
+    """
+    prefix = f"delegation-result:{delegation_id}:"
+    with records.reading(directory.records(agent)) as conn:
+        found = _rows(
+            conn, agent,
+            "SELECT turn_id FROM conversation_messages"
+            " WHERE conversation_id = ? AND external_id IS NOT NULL"
+            " AND substr(external_id, 1, length(?)) = ? ORDER BY id DESC LIMIT 1",
+            (conversation, prefix, prefix),
+        ).fetchone()
+    if found is None or found["turn_id"] is None:
+        return None
+    return int(found["turn_id"])
+
+
 def handled_by_turn(agent: str, conversation: int, messages: tuple, turn: int) -> None:
     """Associate pending inbound `messages` with the turn that received them.
 

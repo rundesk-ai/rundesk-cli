@@ -175,6 +175,22 @@ def list_turns(agent: str, most: int = FOUND_AT_MOST,
         return [dict(row) for row in got.fetchall()]
 
 
+def turns_in_conversation(agent: str, conversation: int) -> List[Dict[str, Any]]:
+    """Every turn in one conversation, oldest first.
+
+    The ordinary listing stays bounded and newest first. A session-lineage query needs the other
+    shape: a durable delegation may have originated before the listing bound, and a later fresh
+    turn is the evidence that its delivery session was replaced.
+    """
+    with records.reading(directory.records(agent)) as conn:
+        got = _rows(
+            conn, agent,
+            f"SELECT * FROM {TURNS} WHERE conversation_id = ? ORDER BY id",
+            (conversation,),
+        )
+        return [dict(row) for row in got.fetchall()]
+
+
 def schedule_turn_after(agent: str, schedule: str, after: str) -> Optional[Dict[str, Any]]:
     """The first turn one schedule invocation admitted at or after `after`."""
     with records.reading(directory.records(agent)) as conn:

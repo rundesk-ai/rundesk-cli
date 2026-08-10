@@ -3,7 +3,7 @@ id: CH
 name: A channel conversation and the work that arrives on it
 status: draft
 owner: Rundesk product owner
-last_updated: 2026-08-08
+last_updated: 2026-08-10
 ---
 
 # Shared channel messaging product contract
@@ -62,7 +62,7 @@ without deciding turn state or exposing private tool details.
 | R-CH-20 | Nothing a channel does for an unauthorized identity is visible to that identity or billable to the owner. | Inspect platform activity, records, and provider turns after unauthorized input. |
 | R-CH-21 | The agent receives platform-neutral context naming the surface, conversation, place, and speaker when the adapter can supply them. Missing optional display words are omitted rather than invented. | Compare direct, room, thread, named, and unnamed context blocks. |
 | R-CH-23 | Only an authorized identity receives an answer to a shared gateway query. | Exercise every query as authorized and unauthorized identities. |
-| R-CH-24 | A shared gateway query is answered from local state and starts no provider turn. | Compare turn counts before and after `status`, `version`, `agents`, `skills`, and `schedules`. |
+| R-CH-24 | A shared gateway query is answered from local state and starts no provider turn. | Compare turn counts before and after `status`, `version`, `agents`, `skills`, `schedules`, and `delegations`. |
 | R-CH-25 | A follow-up racing with turn completion is either accepted as steering or durably becomes the next turn; it is never lost. | Drive both sides of the provider-input-close boundary. |
 | R-CH-26 | A provider change is available only on a single-user channel, changes the agent-wide default atomically, and starts that conversation fresh; a refused change alters nothing. | Exercise accepted, shared-channel, unauthorized, unavailable-provider, and in-flight cases. |
 | R-CH-28 | A final answer names the resolved provider without exposing the adapter's filesystem location. | Run named and path-form providers and inspect the completion metadata. |
@@ -72,6 +72,7 @@ without deciding turn state or exposing private tool details.
 | R-CH-32 | When an agent gains or loses a skill, one private owner notice names the change; a refused notice remains pending rather than being reported as delivered. | Change grants while connected, disconnected, stopped, and on multiple surfaces. |
 | R-CH-33 | A replacement gateway recovers only the unresolved tail of a channel conversation, exactly once and at most one turn per conversation per sweep; older unclaimed messages cannot replay after later work was admitted. | Reproduce a stranded latest message, a later answered retry, later unrelated admitted work, concurrent pending messages in one conversation, and independent conversations. |
 | R-CH-34 | An authorized person can request a graceful gateway shutdown from their channel. The response says what was requested without promising that an unsupervised gateway will return. | Exercise shutdown with supervised and unsupervised gateways and inspect the private acknowledgement and final gateway state. |
+| R-CH-35 | The shared delegation query resolves the current platform place to one durable conversation after authorization, joins current named-agent work with only the provider-local lifecycle visible in the current provider session, labels session replacement and delivery routing, and excludes unrelated or stale completed work without mutating state. | Query authorized and unauthorized identities across two conversations before/after session reset and review; inspect turn/delegation counts, privacy sentinels, item identity/state/routing/timing, and partial-visibility wording. |
 
 ## Scope
 

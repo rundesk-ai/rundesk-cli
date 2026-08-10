@@ -1122,8 +1122,22 @@ class WhatAgentsSays(support.Isolated):
         gestures = answering.Gestures(self.home, lambda: hosting.Watching({}, {}, {}),
                                       lambda word: None, lambda agent: "online")
         with mock.patch.object(answering.turns, "run") as ran:
-            said = gestures.asked("ada", "2207", hosting.AGENTS)
+            said = gestures.asked("ada", "discord", "1180", "2207", hosting.AGENTS)
         self.assertIn("**ada**", said)
+        ran.assert_not_called()
+
+    def test_delegations_use_the_shared_read_only_query_without_starting_a_turn(self):
+        directory.made("ada", support.A_STAND_IN)
+        queried = []
+        gestures = answering.Gestures(
+            self.home, lambda: hosting.Watching({}, {}, {}), lambda word: None,
+            lambda agent: "online",
+            delegations=lambda agent, kind, place: queried.append((agent, kind, place)) or "work")
+        with mock.patch.object(answering.turns, "run") as ran:
+            said = gestures.asked(
+                "ada", "discord", "thread-1180", "2207", hosting.DELEGATIONS)
+        self.assertEqual("work", said)
+        self.assertEqual([("ada", "discord", "thread-1180")], queried)
         ran.assert_not_called()
 
 

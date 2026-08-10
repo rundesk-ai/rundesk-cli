@@ -3,7 +3,7 @@ id: DIS
 name: Discord as an agent is reached on it
 status: draft
 owner: Rundesk product owner
-last_updated: 2026-08-08
+last_updated: 2026-08-10
 ---
 
 # Discord channel adapter product contract
@@ -50,7 +50,7 @@ uploads.
 | R-DIS-7 | A terminal turn is marked with one ending reaction for done, stopped, or failed. | Exercise each ending and inspect the final reaction. |
 | R-DIS-8 | A turn carries one state reaction at a time: the ending reaction is placed before the seen reaction is removed, and a failed replacement leaves the existing reaction rather than erasing state. | Exercise successful and refused reaction replacement and inspect event order. |
 | R-DIS-9 | A failed turn is distinguishable from a stopped turn, and its person-visible result does not expose private tool details. | Exercise provider, tool, and delivery failures plus an explicit stop. |
-| R-DIS-10 | Discord offers `/stop`, `/new`, `/restart`, and `/shutdown` as described controls and `/status`, `/version`, `/agents`, `/skills`, `/schedules`, and `/provider` as described queries/configuration. | Inspect registered commands and exercise each as an authorized user. |
+| R-DIS-10 | Discord offers `/stop`, `/new`, `/restart`, and `/shutdown` as described controls and `/status`, `/version`, `/agents`, `/skills`, `/schedules`, `/delegations`, and `/provider` as described queries/configuration. | Inspect registered commands and exercise each as an authorized user. |
 | R-DIS-11 | A slash command is acknowledged within Discord's interaction window and its final result is private to the invoking user. Results beyond one Discord message continue losslessly across ordered ephemeral followups; if Discord refuses a continuation, a private incomplete-response warning and an adapter log prevent the partial result from looking complete. | Exercise every command on real Discord under ordinary and delayed gateway handling, including complete and refused multi-message results; reconstruct complete results and inspect the warning and log for a refusal. |
 | R-DIS-12 | A control that changes a running turn is reflected by that turn's own state and outcome, not invented by the slash-command acknowledgement. | Stop, restart, and shut down active and idle cases. |
 | R-DIS-13 | Text longer than one Discord message is split without loss at safe boundaries; only the first answer piece carries reply/recipient emphasis, and declared files accompany the last piece. | Compare reconstructed short, multiline, and no-break long answers with the original. |
@@ -61,7 +61,7 @@ uploads.
 | R-DIS-19 | Each accepted local file explicitly declared by the agent is uploaded with the final answer; a verification or Discord refusal is visible and never leaks the machine path. | Upload representative text/image files and exercise changed, missing, oversized, and permission-refused files. |
 | R-DIS-20 | Discord renders broad activity compactly while work runs, collapses adjacent repeats, and never shows raw arguments, results, or provider tool names. | Run representative read/search/run/edit/make/delegate activity and inspect posts/edits. |
 | R-DIS-21 | The agent is told whether the Discord message came from a direct message, room, or thread, with available server/room/thread and speaker display names in shared platform-neutral context. | Compare prompt context for each Discord place shape and missing display metadata. |
-| R-DIS-22 | Discord exposes the shared authorized queries as private slash commands and correlates each private answer with the interaction that requested it. | Exercise status, version, agents, skills, and schedules concurrently from authorized and unauthorized users. |
+| R-DIS-22 | Discord exposes the shared authorized queries as private slash commands and correlates each private answer with the interaction that requested it. | Exercise status, version, agents, skills, schedules, and delegations concurrently from authorized and unauthorized users. |
 | R-DIS-23 | A Discord interaction is handled only by the configured agent channel whose connection received it. | Configure two agents and ensure one interaction produces one correctly routed answer. |
 | R-DIS-24 | Completion metadata shows compact elapsed time measured from turn admission until the answer is ready. | Exercise second-, minute-, and hour-length examples plus repeated admission records. |
 | R-DIS-25 | `/provider` is available only when the channel has one authorized user; accepted and refused changes are private and start the conversation fresh only on success. | Exercise single-user, multi-user, unauthorized, unavailable-provider, and in-flight cases. |
@@ -82,11 +82,12 @@ uploads.
 | R-DIS-40 | A completed answer names its recipient only in a place holding more than that one person; a direct message adds no redundant mention. | Compare direct, room, thread, and scheduled answers. |
 | R-DIS-41 | When a completed answer names its recipient, the mention stands beneath the completion metadata rather than before it. | Inspect short and split answers in a multi-person place. |
 | R-DIS-42 | `/agents` privately lists every known agent in deterministic, case-insensitive agent order. Each agent is exactly `- **name** (provider) — description` followed by `  - Skills: ...`, with skills in deterministic, case-insensitive order. Provider paths expose only their final component; missing providers say `provider unknown`; unreadable providers say `provider cannot be read`. Missing or empty descriptions say `no description`; unreadable descriptions say `description cannot be read`; no grants says `none`; unreadable grants says `cannot be read`. Zero agents says exactly `No agents.` The query starts no provider turn. | Exercise zero agents, described and undescribed agents, bare/path/missing/unreadable providers, no/one/many grants, unreadable records and grants, case-varied ordering, long output, and concurrent requests; verify exact privacy-safe Markdown, lossless ordered ephemeral followups, and no provider turn. |
+| R-DIS-43 | `/delegations` privately shows each relevant named-agent and observable provider-local item once for the invoking DM, room, or thread. Named-agent work distinguishes active, stopping, returned-awaiting-review, and reviewed; preserves reset/replacement routing; excludes unrelated and stale work; and exposes no full prompt, result, hidden reasoning, credential, provider tool name, path, or opaque session handle. Provider-local visibility is explicitly partial. | Exercise authorized and unauthorized DM/room/thread queries, active/stopping/returned/reviewed and stale records, a reset origin routed into the current turn, provider-local start/result records, long concurrent responses, sentinels, and unchanged turn/delegation state. |
 
 ## Scope
 
 **In:** Discord setup and connection; direct/server/thread triggering; state, activity, answer, reply,
-file, presence, notice, and slash-command rendering; the new `/agents` command.
+file, presence, notice, and slash-command rendering; private `/agents` and `/delegations` queries.
 
 **Out:** Slack; Discord administration beyond the bot's required permissions; automatic thread
 archival; provider behavior; a general web console; public command responses.
@@ -111,3 +112,4 @@ archival; provider behavior; a general web console; public command responses.
 | Shared delivery and turn composition | `src/rundesk/channels/hosting.py`, `src/rundesk/providers/answering.py`, `tests/test_channels_hosting.py`, `tests/test_providers_answering.py` | Offline suites passed on current Python and macOS Python 3.9. | 2026-08-08 |
 | Gateway and scheduled notices | `src/rundesk/gateways/host.py`, `tests/test_gateway_host.py` | Current mechanics inspected; R-DIS-30 is implemented in this branch, correcting the stale predecessor note. | 2026-08-08 |
 | `/agents` | R-DIS-42; focused Discord, hosting, and provider-answering scenarios plus the full 67-suite runs on current Python and macOS Python 3.9. | Offline acceptance passed for exact nested bullets, escaping/flattening, empty and unreadable states, ordering, authorization, no provider turn, lossless pagination, and visible continuation refusal. Real-Discord presentation remains unvalidated. | 2026-08-08 |
+| `/delegations` | R-DIS-43; focused Discord registration/correlation, shared authorization/query seam, and gateway cross-store read-model scenarios. | Offline acceptance covers conversation scoping, replacement delivery labels, lifecycle states, stale-history exclusion, provider-local partial visibility, privacy sentinels, empty state, no provider wake, and no mutation. Real-Discord presentation remains unvalidated. | 2026-08-10 |

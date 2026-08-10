@@ -222,7 +222,7 @@ from rundesk.core import config, paths
 from rundesk.delegations import hosting as delegations
 from rundesk.delegations import kept as delegations_kept
 from rundesk.exits import OK
-from rundesk.gateways import awake, maintenance, standing
+from rundesk.gateways import awake, delegation_query, maintenance, standing
 from rundesk.providers import answering, kept, turns
 from rundesk.schedules import firing, upkeep
 from rundesk.skills import grants
@@ -647,7 +647,8 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
         # the loop reads on its next pass, which is where every other way of stopping already is.
         gestures = answering.Gestures(where, lambda: channels_up,
                                       lambda word: _asked_from_a_channel(asked_for, word),
-                                      lambda agent: _how_it_stands(agent, up_at))
+                                      lambda agent: _how_it_stands(agent, up_at),
+                                      delegations=delegation_query.summary)
         # All three start as "nothing has happened yet", and the first sweep is the loop's first pass
         # rather than a call of its own before it. One call site: a sweep done on the way up as well
         # as in the loop is one that goes on looking right with the loop's half deleted, and the

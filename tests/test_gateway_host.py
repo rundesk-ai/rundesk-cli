@@ -39,12 +39,147 @@ from rundesk.channels import kept as channels
 from rundesk.core import config, paths, secrets
 from rundesk.delegations import kept as delegations_kept
 from rundesk.exits import OK
-from rundesk.gateways import host, job, maintenance, standing
+from rundesk.gateways import delegation_query, host, job, maintenance, standing
 from rundesk.providers import kept as turns_kept
 from rundesk.providers import protocol
 from rundesk.schedules import firing, kept
 from rundesk.skills import catalogs, grants, library
 from rundesk.utils import locking, logs, programs
+
+
+class AConversationScopedDelegationQuery(support.Isolated):
+    """The cross-store read model behind a private channel query."""
+
+    def setUp(self):
+        super().setUp()
+        directory.made("ava", support.A_STAND_IN)
+        directory.made("bob", support.A_STAND_IN)
+        self.parent = arriving.recorded(
+            "ava", "discord", "1180", "2207", "coordinate the release", external_id="m-1",
+            when=datetime.datetime(2026, 8, 10, 12, 0, tzinfo=datetime.timezone.utc))
+        self.turn = self.a_turn(
+            "ava", self.parent.conversation, "done", "2026-08-10T12:00:01Z")
+
+    @staticmethod
+    def a_turn(agent, conversation, state, created, resumed=0, ended=None):
+        turn = turns_kept.add_turn(agent, {
+            "conversation_id": conversation, "provider_name": support.A_STAND_IN,
+            "access_mode": "work", "session_resumed": resumed,
+        }, when=datetime.datetime.fromisoformat(created.replace("Z", "+00:00")))
+        if state != "working":
+            turns_kept.finish_turn(
+                agent, turn, state, when=datetime.datetime.fromisoformat(
+                    (ended or created).replace("Z", "+00:00")))
+        return turn
+
+    def handed_over(self, delegation_id="del-1-aabbcc", task=None, conversation=None,
+                    turn=None, target="bob"):
+        parent_conversation = conversation or self.parent.conversation
+        parent_turn = turn or self.turn
+        task = task or "Audit the exporter\nPRIVATE PROMPT BODY MUST NOT APPEAR"
+        arriving.recorded_for_a_delegation(
+            target, "ava", parent_turn, task, delegation_id=delegation_id,
+            when=datetime.datetime(2026, 8, 10, 12, 0, 2, tzinfo=datetime.timezone.utc))
+        delegations_kept.made(
+            "ava", delegation_id, target, parent_conversation, parent_turn,
+            now=datetime.datetime(2026, 8, 10, 12, 0, 2, tzinfo=datetime.timezone.utc))
+        return delegation_id
+
+    def summary(self):
+        return delegation_query.summary(
+            "ava", "discord", "1180",
+            now=datetime.datetime(2026, 8, 10, 12, 5, tzinfo=datetime.timezone.utc))
+
+    def test_active_named_work_survives_a_replaced_origin_session_and_is_scoped_once(self):
+        wanted = self.handed_over()
+        other = arriving.recorded(
+            "ava", "discord", "9900", "2207", "unrelated", external_id="m-2")
+        other_turn = self.a_turn("ava", other.conversation, "done", "2026-08-10T12:01:00Z")
+        self.handed_over("del-other-ffffff", "Unrelated private task", other.conversation,
+                         other_turn)
+        current = self.a_turn(
+            "ava", self.parent.conversation, "working", "2026-08-10T12:02:00Z")
+
+        before = (delegations_kept.one("ava", wanted),
+                  tuple(turns_kept.turns_in_conversation("ava", self.parent.conversation)))
+        with mock.patch.object(records, "writing", side_effect=AssertionError("query wrote state")):
+            said = self.summary()
+
+        self.assertEqual(1, said.count(wanted))
+        self.assertIn("named-agent", said)
+        self.assertIn("target: bob", said)
+        self.assertIn("task: Audit the exporter", said)
+        self.assertIn("state: active", said)
+        self.assertIn(f"origin: conversation {self.parent.conversation}, turn {self.turn}", said)
+        self.assertIn(f"delivery: discord:1180, turn {current}", said)
+        self.assertIn("session reset/replaced", said)
+        self.assertIn("4m elapsed", said)
+        self.assertNotIn("PRIVATE PROMPT BODY", said)
+        self.assertNotIn("del-other-ffffff", said)
+        self.assertNotIn("Unrelated private task", said)
+        self.assertEqual(before, (delegations_kept.one("ava", wanted),
+                                  tuple(turns_kept.turns_in_conversation(
+                                      "ava", self.parent.conversation))))
+
+    def test_returned_work_is_awaiting_review_then_reviewed_and_later_becomes_stale(self):
+        wanted = self.handed_over()
+        result = arriving.said_by_rundesk_into(
+            "ava", self.parent.conversation, "FULL RESULT MUST NOT APPEAR",
+            external_id=f"delegation-result:{wanted}:answer-9",
+            when=datetime.datetime(2026, 8, 10, 12, 3, tzinfo=datetime.timezone.utc))
+        review = self.a_turn(
+            "ava", self.parent.conversation, "working", "2026-08-10T12:03:01Z")
+        arriving.handled_by_turn("ava", self.parent.conversation, (result.message,), review)
+        delegations_kept.answered(
+            "ava", wanted, now=datetime.datetime(2026, 8, 10, 12, 3, tzinfo=datetime.timezone.utc))
+
+        self.assertIn("state: returned — awaiting review", self.summary())
+        self.assertNotIn("FULL RESULT", self.summary())
+
+        turns_kept.finish_turn(
+            "ava", review, turns_kept.DONE,
+            when=datetime.datetime(2026, 8, 10, 12, 4, tzinfo=datetime.timezone.utc))
+        self.assertIn("state: reviewed", self.summary())
+
+        self.a_turn("ava", self.parent.conversation, "done", "2026-08-10T12:04:30Z")
+        self.assertNotIn(wanted, self.summary())
+
+    def test_stopping_and_provider_local_work_are_distinct_without_claiming_full_visibility(self):
+        wanted = self.handed_over()
+        delegations_kept.stop_asked(
+            "ava", wanted, now=datetime.datetime(2026, 8, 10, 12, 1, tzinfo=datetime.timezone.utc))
+        current = self.a_turn(
+            "ava", self.parent.conversation, "working", "2026-08-10T12:02:00Z")
+        turns_kept.add_turn_record(
+            "ava", current, "tool",
+            {"type": "tool", "id": "provider-internal-id", "did": "delegate",
+             "name": "INTERNAL TOOL NAME", "who": "/secret/provider/helper/path"},
+            when=datetime.datetime(2026, 8, 10, 12, 2, 5, tzinfo=datetime.timezone.utc))
+
+        said = self.summary()
+
+        self.assertIn("state: stopping", said)
+        self.assertIn("provider-local", said)
+        self.assertIn("state: active", said)
+        self.assertIn("visibility is partial", said)
+        self.assertNotIn("provider-internal-id", said)
+        self.assertNotIn("INTERNAL TOOL NAME", said)
+        self.assertNotIn("/secret/", said)
+
+        turns_kept.add_turn_record(
+            "ava", current, "result", {"type": "result", "id": "provider-internal-id",
+                                        "ok": True},
+            when=datetime.datetime(2026, 8, 10, 12, 3, tzinfo=datetime.timezone.utc))
+        returned = self.summary()
+        self.assertEqual(1, returned.count(f"local-{current}-"))
+        self.assertIn("state: returned", returned)
+
+    def test_empty_state_is_plain_and_a_missing_conversation_is_not_created(self):
+        before = arriving.conversations("ava")
+        said = delegation_query.summary("ava", "discord", "new-place")
+        self.assertEqual("No relevant delegations are active or recorded here.", said)
+        self.assertEqual(before, arriving.conversations("ava"))
+
 
 #: How a gateway is started here: the same handoff the job's shim performs, so what these cases run
 #: is what launchd runs. Deliberately not `cli.main` — there is no verb for this, and inventing one
