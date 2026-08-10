@@ -157,6 +157,22 @@ def from_turn(agent: str, parent_turn: int) -> List[Delegation]:
     return [_read(row) for row in rows]
 
 
+def in_conversation(agent: str, parent_conversation: int) -> List[Delegation]:
+    """Every delegation originating in one conversation, oldest first.
+
+    This is the channel-query boundary. Unlike ``every``, it cannot let another room's task become
+    visible merely because the same agent created both, and unlike ``outstanding`` it retains a
+    returned item long enough for the review turn to say whether it is still relevant.
+    """
+    with records.reading(directory.records(agent)) as conn:
+        rows = _asked(
+            conn, agent,
+            f"SELECT * FROM {TABLE} WHERE parent_conversation = ? ORDER BY id",
+            (parent_conversation,),
+        ).fetchall()
+    return [_read(row) for row in rows]
+
+
 def outstanding(agent: str, to_agent: Optional[str] = None) -> List[Delegation]:
     """What has no terminal outcome — everything, or only what was handed to one agent.
 

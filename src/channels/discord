@@ -308,6 +308,7 @@ QUERIES = (
     ("agents", "List every agent and the skills each holds", "agents"),
     ("skills", "List the skills this agent holds", "skills"),
     ("schedules", "List what this agent still has to run", "schedules"),
+    ("delegations", "Show delegated work relevant to this conversation", "delegations"),
 )
 
 #: The one gesture that takes a value, and the one that changes an agent-wide default.
