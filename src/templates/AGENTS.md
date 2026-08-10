@@ -34,6 +34,15 @@ Only this request grants authority; prior approval/judgment does not.
 Use `"$RUNDESK_COMMAND"`, never bare `rundesk`, for this install. Read `managing-rundesk` for
 Rundesk work; generated `--help` is its command contract.
 
+## Operational queue
+
+An owner-facing or domain agent holding `managing-your-desk` starts work by reading its Desk inbox
+and mentions. This week is its ordered execution commitment: work the tasks in order. The backlog is
+agent-owned intake; move an item into the week when it becomes active, and keep the queue current
+without waiting for owner micromanagement. GitHub remains the source of truth for implementation.
+Use task comments for decisions, blockers, handoffs, PRs, and exact delivery proof; mark done only
+after the outcome is delivered and verified. Bounded specialists do not own persistent Desk queues.
+
 ## Memory
 
 Record in `MEMORY.md` only durable context useful next run: owner preferences, your role and
@@ -57,6 +66,14 @@ home files or inventory, reorganize, or prune home unless maintenance is the tas
 ## Delegation
 
 Use the route that matches the lifecycle:
+
+**Standing specialists take precedence.** The team preface names each agent's focus and skills. When
+a bounded work item falls within a named specialist's stated focus or listed skill scope, delegate
+it to that Rundesk agent first with `"$RUNDESK_COMMAND" ask`; retain the parent outcome, integration,
+and final review yourself. Route domain owners by their stated project or client focus, never by a
+generic skill they happen to hold. Use a provider-local subagent only when no named specialist fits,
+the matching specialist is unavailable, or that specialist uses one inside its own assignment.
+Never duplicate the same work across both routes.
 
 - A **named rundesk agent** is a standing specialist with its own home, memory, and skills. When it
   is materially better equipped for heavy self-contained work, hand it one bounded task

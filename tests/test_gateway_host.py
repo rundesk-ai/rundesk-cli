@@ -132,6 +132,26 @@ for line in sys.stdin:
 """
 
 
+AN_ADAPTER_THAT_RECORDS_DELEGATIONS = """#!/usr/bin/env python3
+import json, os, signal, sys
+if "--capabilities" in sys.argv:
+    print(json.dumps({"stream": True, "max_text": 2000})); raise SystemExit(0)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+settings = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
+print(json.dumps({"say": "ready", "as": "a-bot"}), flush=True)
+for line in sys.stdin:
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    if record.get("do") == "stop":
+        break
+    if record.get("do") == "delegation":
+        with open(settings["heard"], "a") as writing:
+            writing.write(json.dumps(record) + "\\n")
+"""
+
+
 #: One that will not connect without its credential and never says what it was. `78` is `EX_CONFIG`,
 #: which is what a missing token is — so a gateway that failed to resolve one has an adapter that
 #: dies rather than one that connects anonymously, and the notified channel simply never says
@@ -1619,6 +1639,62 @@ class TheProcessNeverTalksToItsSupervisor(unittest.TestCase):
     def test_it_never_reaches_for_launchctl_either(self):
         said = (support.CHECKOUT / "src" / "rundesk" / "gateways" / "host.py").read_text()
         self.assertNotIn("launchctl", said)
+
+
+class AStoppedDelegationAcrossGatewayPasses(TheChannelsItHosts):
+    """The target settles the stop; the delegator emits it without waking a review turn."""
+
+    def test_requested_stop_is_durably_stopped_and_never_answered_or_reviewed(self):
+        target = "trace"
+        directory.made(target, support.A_STAND_IN)
+        parent = arriving.recorded(
+            self.name, "discord", "1180", "2207", "delegate the audit", "message-1")
+        parent_turn = turns_kept.add_turn(self.name, {
+            "conversation_id": parent.conversation,
+            "provider_name": support.A_STAND_IN,
+            "access_mode": protocol.ACCESS_WORK,
+        })
+        turns_kept.finish_turn(self.name, parent_turn, turns_kept.DONE)
+        delegation_id = "del-1-stopme"
+        arriving.recorded_for_a_delegation(
+            target, self.name, parent_turn, "audit it", delegation_id=delegation_id)
+        delegations_kept.made(
+            self.name, delegation_id, target, parent.conversation, parent_turn)
+        self.assertTrue(delegations_kept.stop_asked(self.name, delegation_id))
+
+        self.an_adapter(body=AN_ADAPTER_THAT_RECORDS_DELEGATIONS)
+        self.a_channel()
+        self.a_running_gateway(beat=0.05)
+        self.assertTrue(support.waited_until(
+            lambda: "channel discord: connected" in self.its_log(), self.PATIENCE),
+            f"the delegator's channel never connected. It said: {self.its_log()}")
+        turns_before = len(turns_kept.list_turns(self.name))
+
+        self.hosting(name=target, out=self.home / "trace-gateway.out", beat=0.05)
+        self.assertTrue(support.waited_until(
+            lambda: bool(turns_kept.list_turns(target))
+            and turns_kept.list_turns(target)[0]["turn_status"] == turns_kept.STOPPED,
+            self.PATIENCE), "the target gateway never settled the requested stop")
+
+        self.assertTrue(support.waited_until(
+            lambda: delegations_kept.one(self.name, delegation_id).stopped_at is not None,
+            self.PATIENCE), "the delegator gateway never persisted the stopped outcome")
+        self.assertTrue(support.waited_until(
+            lambda: '"state": "stopped"' in self.was_heard(), self.PATIENCE),
+            f"the delegator gateway never emitted stopped. It heard: {self.was_heard()}. "
+            f"It said: {self.its_log()}")
+
+        one = delegations_kept.one(self.name, delegation_id)
+        self.assertIsNotNone(one.stopped_at)
+        self.assertIsNone(one.answered_at)
+        self.assertNotIn('"state": "answered"', self.was_heard())
+        self.assertEqual(turns_before, len(turns_kept.list_turns(self.name)),
+                         "settling a stop woke a review turn")
+
+        code, out, err = self.rundesk("asked", "--agent", self.name)
+        self.assertEqual(OK, code, err)
+        self.assertIn("stopped", out)
+        self.assertNotIn("answered", out)
 
 
 #: One that answers a delivery the way a real platform's adapter does — with what the platform then

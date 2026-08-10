@@ -7,9 +7,9 @@ do not edit its database to change identity or provider.
 
 | Command | Control |
 |---|---|
-| `agents` or `agents list` | List every agent and recorded provider. |
+| `agents` or `agents list` | List every agent, recorded provider, and outbound delegation scope. |
 | `agents add <agent> --provider <provider> [--describes <text>]` | Create an agent. `--describes` is the one-sentence purpose another agent reads before delegating. |
-| `agents configure <agent> [--provider <provider>] [--describes <text>] [--self-improve <true\|false>]` | Change provider, delegation description, or protected upkeep. Unnamed fields stay unchanged. |
+| `agents configure <agent> [--provider <provider>] [--describes <text>] [--self-improve <true\|false>] [--delegate-to <agent> ... \| --delegate-to-any \| --delegate-to-none]` | Change provider, delegation description, protected upkeep, or outbound delegation scope. Unnamed fields stay unchanged. |
 | `agents remove <agent> [--confirm]` | Preview removal; `--confirm` removes the agent and everything it remembers. |
 
 Prefix every command with `"$RUNDESK_COMMAND"`.
@@ -26,6 +26,24 @@ the description. Put changing task state in the task's own tracker and let `agen
 and grants. Update the description when durable responsibility changes; remove it only when the
 agent should no longer appear to other agents as a delegation route. Verify the stored sentence with
 `agents` after every change.
+
+## Scope outbound delegation
+
+Delegation is unrestricted by default. Use repeated `--delegate-to <agent>` options to replace that
+default with an exact allowlist, `--delegate-to-none` to make an agent inbound-only, and
+`--delegate-to-any` to restore the default. The modes are mutually exclusive:
+
+```sh
+"$RUNDESK_COMMAND" agents configure cole --delegate-to forge --delegate-to trace
+"$RUNDESK_COMMAND" agents configure forge --delegate-to-none
+"$RUNDESK_COMMAND" agents configure cole --delegate-to-any
+```
+
+This setting controls only where the configured agent may delegate. An inbound-only specialist can
+still receive work. When its outbound scope is empty, Rundesk removes the entire named-agent team
+and delegation instruction block from its turns. Removing a target also removes its name from every
+explicit allowlist, so recreating the name does not restore old authority; unrestricted scopes stay
+unrestricted. Do not edit `state.db`; verify `DELEGATES TO` with `agents` after every change.
 
 ## Safe operating flow
 

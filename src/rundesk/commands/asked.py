@@ -14,7 +14,8 @@ would be an agent that could type somebody else's.
 
 ## Three verbs, because there are three things to mean
 
-`say` puts words into work that is still going. `stop` ends it. `resume` carries a finished one on.
+`say` puts words into work that is still going. `stop` ends it. `resume` carries answered work on;
+stopped work stays closed.
 A single verb guessing from the state would say something into work in flight when the agent meant
 to start it again, and spend a brain's time doing it — so each refuses in the other's case and names
 the one that was wanted.
@@ -126,6 +127,7 @@ def _shown(agent: str, delegation_id: str) -> int:
               ["asked at", one.created_at],
               ["last change", one.latest_at],
               ["answered at", one.answered_at or "not yet"],
+              ["stopped at", one.stopped_at or "not stopped"],
               ["stop asked at", one.stop_asked_at or "nobody has"]])
     print(f"        what was said:  rundesk messages {one.to_agent} --source agent")
     return OK
@@ -145,10 +147,11 @@ def _said_into(agent: str, delegation_id: str, words: str) -> int:
     # message behind a row the gateway has already settled.
     with locking.only_one(paths.lock(), f"guidance for {delegation_id}"):
         one = delegations.one(agent, delegation_id)
-        if one.answered_at:
+        if one.answered_at or one.stopped_at:
             return _failed(
-                f"{delegation_id} is already answered, so there is no work to say this into",
-                f"carry it on instead with: rundesk asked resume {delegation_id} \"<what more>\"")
+                f"{delegation_id} is already {_how(one)}, so there is no work to say this into",
+                *([f"carry it on instead with: rundesk asked resume {delegation_id} \"<what more>\""]
+                  if one.answered_at else []))
         arriving.recorded_for_a_delegation(
             one.to_agent, agent, one.parent_turn, words, delegation_id=delegation_id,
             legacy_fallback=True)
@@ -174,13 +177,14 @@ def _stopped(agent: str, delegation_id: str) -> int:
     if not delegations.stop_asked(agent, delegation_id):
         return _failed(
             f"{delegation_id} is already over, so there was nothing to stop"
-            if one.answered_at else f"a stop has already been asked for on {delegation_id}")
+            if one.answered_at or one.stopped_at
+            else f"a stop has already been asked for on {delegation_id}")
     print(f"a stop was asked for on {delegation_id}")
     return OK
 
 
 def _carried_on(agent: str, delegation_id: str, words: str) -> int:
-    """Carry a finished delegation on, with more to do.
+    """Carry an answered delegation on, with more to do.
 
     **The same conversation, so the same provider session.** The answering agent picks up where it
     left off rather than being handed a second task that repeats the first — which is the whole
@@ -189,6 +193,9 @@ def _carried_on(agent: str, delegation_id: str, words: str) -> int:
     one = delegations.one(agent, delegation_id)
     if not words.strip():
         return _failed("carrying one on needs something more to do")
+    if one.stopped_at:
+        return _failed(f"{delegation_id} was stopped and cannot be carried on",
+                       "hand over a new delegation if more work is wanted")
     if not one.answered_at:
         return _failed(f"{delegation_id} is still being answered, so there is nothing to carry on",
                        f"say something into it instead with: "
@@ -213,6 +220,8 @@ def _how(one: delegations.Delegation) -> str:
     finish, `stopping` is a request nothing has acted on yet, and `answered` is this agent's to
     review or carry on.
     """
+    if one.stopped_at:
+        return "stopped"
     if one.answered_at:
         return "answered"
     return "stopping" if one.stop_asked_at else "working"

@@ -21,15 +21,16 @@ import argparse
 import sys
 from typing import Any, Dict, Iterator, Optional
 
-from rundesk.agents import directory, records
+from rundesk.agents import delegating, directory, records
 from rundesk.channels import arriving
 from rundesk.commands import Subcommands, failed
+from rundesk.core import paths
 from rundesk.delegations import admitting
 from rundesk.delegations import kept as delegations
 from rundesk.exits import OK
 from rundesk.gateways import standing
 from rundesk.providers import instructions, kept, protocol, turns
-from rundesk.utils import terminal
+from rundesk.utils import locking, terminal
 
 #: What a tool that did something is shown as. Its own name is the *brain's* word for it, and putting
 #: that in front of somebody means putting one vendor's vocabulary in front of a person who has never
@@ -125,26 +126,32 @@ def _handed_over(asking: admitting.Asking, to_agent: str, task: str) -> int:
     the conversation to exist before it will start anything. A delegation nobody can see, resolve or
     stop, under a command that said it had failed.
     """
-    # Collapsed here, where all three of `standing`'s answers are visible. Only a gateway that is
-    # definitely down refuses; one nobody can ask about is admitted.
-    how = standing.standing(directory.where(to_agent)).how
-    trouble = admitting.refusal(asking, to_agent, task,
-                                nothing_would_answer=how == standing.OFFLINE)
-    if trouble:
-        return _failed(trouble)
-
-    delegation_id = admitting.a_name(asking.run or 0)
     try:
-        # Where the answer goes: the conversation the *delegating turn* is in, read off the turn
-        # rather than guessed at. An agent delegating from a channel is answering somebody there,
-        # and a review that arrived in its terminal conversation instead would reach nobody.
-        was = kept.get_turn(asking.agent or "", asking.run or 0)
-        arriving.recorded_for_a_delegation(
-            to_agent, asking.agent or "", asking.run or 0, task,
-            delegation_id=delegation_id)
-        admitting.admitted(asking, delegation_id, to_agent, int(was["conversation_id"]))
+        with locking.only_one(paths.lock(), "this install"):
+            target_trouble = directory.not_an_agent(to_agent)
+            if target_trouble:
+                return _failed(target_trouble, "nothing was handed over")
+            scope = delegating.scope_of(asking.agent or "")
+            # Collapsed here, where all three of `standing`'s answers are visible. Only a gateway
+            # that is definitely down refuses; one nobody can ask about is admitted.
+            how = standing.standing(directory.where(to_agent)).how
+            trouble = admitting.refusal(
+                asking, to_agent, task, nothing_would_answer=how == standing.OFFLINE,
+                outside_scope=not delegating.allows(scope, to_agent))
+            if trouble:
+                return _failed(trouble)
+
+            delegation_id = admitting.a_name(asking.run or 0)
+            # Where the answer goes: the conversation the *delegating turn* is in, read off the
+            # turn rather than guessed at. The policy read and both admission writes stay inside
+            # this lock so no completed scope revocation can be followed by stale authority.
+            was = kept.get_turn(asking.agent or "", asking.run or 0)
+            arriving.recorded_for_a_delegation(
+                to_agent, asking.agent or "", asking.run or 0, task,
+                delegation_id=delegation_id)
+            admitting.admitted(asking, delegation_id, to_agent, int(was["conversation_id"]))
     except (admitting.Refused, delegations.Refused, directory.Refused, kept.Refused,
-            records.NotThere, records.Unreadable, OSError) as why:
+            records.NotThere, records.Unreadable, locking.Stuck, OSError) as why:
         return _failed(str(why), "nothing was handed over")
 
     print(f"handed to {to_agent}  ·  {delegation_id}")

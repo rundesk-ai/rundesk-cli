@@ -1,11 +1,12 @@
 """The compact, skill-aware, online teammate listing injected into eligible turns."""
 
 import contextlib
+import json
 import unittest
 from unittest import mock
 
 import support
-from rundesk.agents import directory
+from rundesk.agents import directory, records
 from rundesk.gateways import standing
 from rundesk.providers import team
 from rundesk.skills import grants
@@ -58,6 +59,34 @@ class ATeamForOneAgent(support.Isolated):
         self.add("ava", "Coordinates work.")
         self.add("researcher", "Does focused research.")
         self.assertEqual("", team.for_agent("ava"))
+
+    def test_a_scoped_agent_is_shown_only_the_teammates_it_may_delegate_to(self):
+        self.add("ava", "Coordinates work.")
+        self.add("forge", "Implements bounded changes.")
+        self.add("trace", "Investigates bounded failures.")
+        records.stated(directory.records("ava"), {"delegates_to": json.dumps(["trace"])})
+
+        with self.online("forge", "trace"):
+            said = team.for_agent("ava")
+
+        self.assertIn("**trace**", said)
+        self.assertNotIn("**forge**", said)
+
+    def test_an_explicit_empty_scope_produces_no_delegation_instructions(self):
+        self.add("ava", "Coordinates work.")
+        self.add("forge", "Implements bounded changes.")
+        records.stated(directory.records("ava"), {"delegates_to": "[]"})
+
+        with self.online("forge"):
+            self.assertEqual("", team.for_agent("ava"))
+
+    def test_an_inbound_only_specialist_remains_a_target_for_another_agent(self):
+        self.add("ava", "Coordinates work.")
+        self.add("forge", "Implements bounded changes.")
+        records.stated(directory.records("forge"), {"delegates_to": "[]"})
+
+        with self.online("forge"):
+            self.assertIn("**forge**", team.for_agent("ava"))
 
     def test_it_does_not_list_an_agent_whose_liveness_cannot_be_verified(self):
         self.add("ava", "Coordinates work.")

@@ -132,6 +132,18 @@ class GuidingWorkingDelegation(support.Isolated):
             ["audit it", "check exports too"],
             [one["body"] for one in arriving.messages("bob", self.landed.conversation)])
 
+    def test_stopped_work_cannot_be_resumed(self):
+        kept.stopped("ava", self.delegation)
+
+        code, _out, err = self.rundesk(
+            "asked", "--agent", "ava", "resume", self.delegation, "check exports too")
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("was stopped and cannot be carried on", err)
+        self.assertIsNotNone(kept.one("ava", self.delegation).stopped_at)
+        self.assertEqual(["audit it"], [
+            one["body"] for one in arriving.messages("bob", self.landed.conversation)])
+
     def test_say_reaches_active_polling_on_the_modern_delegation_conversation(self):
         modern = arriving.recorded_for_a_delegation(
             "bob", "ava", self.turn, "modern audit", delegation_id=self.delegation)
@@ -239,6 +251,40 @@ class GuidingWorkingDelegation(support.Isolated):
                   if one["author"] == arriving.BY_RUNDESK]
         self.assertEqual(1, len(result))
         self.assertIsNotNone(result[0]["turn_id"])
+
+    def test_a_requested_stop_settles_without_a_review_or_response_turn(self):
+        with records.writing(directory.records("bob")) as conn:
+            conn.execute(
+                "INSERT INTO turns (conversation_id, provider_name, access_mode, turn_status,"
+                " created_at) VALUES (?, ?, ?, ?, ?)",
+                (self.landed.conversation, support.A_STAND_IN, "work", hosting.STOPPED,
+                 "2026-08-10T00:00:01Z"))
+            target_turn = conn.execute(
+                "SELECT id FROM turns ORDER BY id DESC LIMIT 1").fetchone()[0]
+        arriving.handled_by_turn(
+            "bob", self.landed.conversation, (self.landed.message,), target_turn)
+        kept.stop_asked("ava", self.delegation)
+
+        class NoReview(hosting.Answering):
+            def review_this(inner, *args, **kwargs):
+                raise AssertionError(f"a stopped delegation was reviewed: {args} {kwargs}")
+
+        before = len(provider_kept.list_turns("ava"))
+        hosting._collected_what_came_back(
+            "ava", directory.where("ava"), NoReview())
+
+        settled = kept.one("ava", self.delegation)
+        self.assertIsNone(settled.answered_at)
+        self.assertIsNotNone(settled.stopped_at)
+        self.assertEqual(before, len(provider_kept.list_turns("ava")))
+        self.assertFalse(any(
+            one["author"] == arriving.BY_RUNDESK
+            for one in arriving.messages("ava", self.parent.conversation)))
+
+        code, out, err = self.rundesk("asked", "--agent", "ava")
+        self.assertEqual(OK, code, err)
+        self.assertIn("stopped", out)
+        self.assertNotIn("answered", out)
 
     def test_a_resumed_delegation_delivers_its_second_result_once(self):
         def answered(message, body):

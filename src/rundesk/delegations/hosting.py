@@ -60,6 +60,7 @@ COLLECTED_AT_MOST = 4
 #: because this package may not reach `providers` — and asserted against it by the suite, so the two
 #: cannot drift into meaning different things.
 WORKING = "working"
+STOPPED = "stopped"
 
 #: What a room is told about work this agent handed over, and the whole of that vocabulary
 #: (R-DEL-16, R-DEL-23). Six words, and they divide into two kinds that the sweep below keeps
@@ -81,13 +82,12 @@ WORKING = "working"
 #: to say, and that answer arrives in the room a moment later. A mark here saying "failed" would be
 #: this sweep asserting something about words it has never read.
 #:
-#: `STOPPING` is the one word here that says what was *asked for* rather than what became of the
-#: work, and it is named for that: a stop is a request, and what came of it arrives as an answer
-#: like any other.
+#: `STOPPING` says what was *asked for*; `STOPPED` says the request reached its durable terminal
+#: outcome. It is deliberately not an answer because it owes no review turn.
 HANDED_OVER = "handed"
 STILL_WORKING = "working-still"
 CAME_BACK = "answered"
-STANDS = (HANDED_OVER, STILL_WORKING, CAME_BACK)
+STANDS = (HANDED_OVER, STILL_WORKING, CAME_BACK, STOPPED)
 
 GUIDED = "guided"
 STOPPING = "stopping"
@@ -109,9 +109,10 @@ STILL_WORKING_EVERY = 20 * 60
 class CollectedAnswer(str):
     """Answer text carrying the terminal turn that makes one delivery cycle distinct."""
 
-    def __new__(cls, text: str, turn: int) -> "CollectedAnswer":
+    def __new__(cls, text: str, turn: int, status: str) -> "CollectedAnswer":
         answer = str.__new__(cls, text)
         answer.answer_id = str(turn)
+        answer.turn_status = status
         return answer
 
 
@@ -131,6 +132,11 @@ class Answering:
         names them is four sentences about who asked and where the answer goes — a turn that got
         this wrong would tell a brain `{caller_agent}` five times over.
         """
+        raise NotImplementedError
+
+    def stop_this(self, agent: str, conversation: int, delegation_id: str,
+                  delegator: str) -> bool:
+        """Stop this delegation's live turn, or settle its pending brief without starting one."""
         raise NotImplementedError
 
     def review_this(self, agent: str, conversation: int, answer: str, from_agent: str,
@@ -294,6 +300,18 @@ def _answered_what_was_handed_here(name: str, where, answering: Answering) -> No
             # The row is there and the brief is not, which is the window between the two writes
             # `commands.ask` makes. It lands on the next pass.
             continue
+        if one.stop_asked_at is not None:
+            # The row belongs to the delegator and is read-only here. Its durable stop request is
+            # acted on by the gateway that owns the provider process: a running turn is signalled,
+            # and a brief that has not begun is settled stopped without launching a brain. A race
+            # that owns the conversation but has not published its stream returns False and stays
+            # here for the next beat; it must never fall through and start another turn.
+            try:
+                answering.stop_this(name, conversation, one.delegation_id, delegator)
+            except Exception as why:  # noqa: BLE001 — see `looked`
+                logs.note(where, f"delegation {one.delegation_id} could not be stopped ({why})",
+                          logs.ERROR)
+            continue
         if not _is_waiting_on_us(name, conversation, delegator):
             continue
         try:
@@ -351,11 +369,20 @@ def _collected_what_came_back(name: str, where, answering: Answering) -> None:
         # candidate by the time the lock is ours.
         with locking.only_one(paths.lock(), f"collection of {one.delegation_id}"):
             current = kept.one(name, one.delegation_id)
-            if current.answered_at:
+            if current.answered_at or current.stopped_at:
                 continue
             said = _what_they_answered(
                 current.to_agent, name, current.parent_turn, current.delegation_id)
             if said is None:
+                continue
+            # **A requested stop is terminal, not another answer to review.** Before this branch a
+            # stopped turn was converted into "finished without saying anything (stopped)" and
+            # offered to `review_this`, which woke the delegating agent for one more provider turn.
+            # That made a person who had explicitly ended work watch the agents answer anyway. A
+            # stop that lost the race with a normally completed turn still delivers that real
+            # answer; only the requested STOPPED outcome settles silently.
+            if current.stop_asked_at is not None and said.turn_status == STOPPED:
+                kept.stopped(name, current.delegation_id)
                 continue
             try:
                 admitted = answering.review_this(
@@ -445,6 +472,8 @@ def _how_it_stands(one: kept.Delegation) -> Tuple[Optional[str], Optional[int]]:
     timestamps do not parse would otherwise announce itself as new on every single beat.
     """
     since = _seconds_since(one.working_since)
+    if one.stopped_at is not None:
+        return STOPPED, _seconds_between(one.working_since, one.stopped_at)
     if one.answered_at is not None:
         return CAME_BACK, _seconds_between(one.working_since, one.answered_at)
     if since is None:
@@ -480,7 +509,7 @@ def _what_just_happened(one: kept.Delegation) -> Optional[str]:
     follows carries that moment's stamp either way, so the room hears one line about one moment
     rather than two.
     """
-    if one.answered_at is not None:
+    if one.answered_at is not None or one.stopped_at is not None:
         return None
     if one.latest_at == one.created_at:
         return None
@@ -582,9 +611,9 @@ def _what_they_answered(to_agent: str, delegator: str, parent_turn: int,
     **Only the last message, and only once its turn is terminal** (R-DEL-10). Everything said on the
     way is working narration, and handing that back would bury the report inside it.
 
-    A turn that failed or was stopped still answers: what it managed to say is what the delegator
-    reviews, and an empty one becomes a sentence saying so, because silence delivered as an answer
-    reads as an answer.
+    A failed turn still answers: what it managed to say is what the delegator reviews, and an empty
+    one becomes a sentence saying so, because silence delivered as an answer reads as an answer.
+    A stopped turn is returned with its status so collection can settle a requested stop silently.
     """
     try:
         with records.reading(directory.records(to_agent)) as conn:
@@ -606,7 +635,8 @@ def _what_they_answered(to_agent: str, delegator: str, parent_turn: int,
                     return None
                 turn, status, body = previous
                 return CollectedAnswer(
-                    body or f"{to_agent} finished without saying anything ({status})", turn)
+                    body or f"{to_agent} finished without saying anything ({status})", turn,
+                    status)
             asked = conn.execute(
                 "SELECT turn_id FROM conversation_messages"
                 " WHERE conversation_id = ? AND author_id = ? AND turn_id IS NOT NULL"
@@ -627,7 +657,7 @@ def _what_they_answered(to_agent: str, delegator: str, parent_turn: int,
     body = (said["body"] or "").strip()
     return CollectedAnswer(
         body or f"{to_agent} finished without saying anything ({said['turn_status']})",
-        int(asked["turn_id"]))
+        int(asked["turn_id"]), str(said["turn_status"]))
 
 
 def _preferred_conversation(conn: sqlite3.Connection, delegator: str, parent_turn: int,

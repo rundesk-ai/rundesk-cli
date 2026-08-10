@@ -22,9 +22,9 @@ is no care to be taken and no reviewer who has to notice.
 
 **Every column is a thing that is neither a turn nor a message**, and that is the membership rule
 step `0005` was written to. The brief, the answer and every steer are `conversation_messages`; the
-work is `turns`; its outcome is `turn_status`. There is no `state` column, because what state a
-delegation is in is read off the work it delegated: no terminal turn yet means it is still being
-answered, and `turn_status` says how it went.
+work is `turns`; its provider outcome is `turn_status`. There is no broad `state` column. The two
+terminal delegation outcomes are explicit timestamps: `answered_at` means a result is owed for
+review, while `stopped_at` means an owner-requested stop completed and no review is owed.
 
 There is no attempt counter either, and that is worth saying because its absence looks like an
 oversight. `providers.turns` writes the turn row before the work starts and settles it in a `finally`
@@ -94,6 +94,7 @@ class Delegation(NamedTuple):
     parent_conversation: int
     parent_turn: int
     answered_at: Optional[str]
+    stopped_at: Optional[str]
     stop_asked_at: Optional[str]
     created_at: str
     latest_at: str
@@ -157,14 +158,14 @@ def from_turn(agent: str, parent_turn: int) -> List[Delegation]:
 
 
 def outstanding(agent: str, to_agent: Optional[str] = None) -> List[Delegation]:
-    """What has not been answered yet — everything, or only what was handed to one agent.
+    """What has no terminal outcome — everything, or only what was handed to one agent.
 
     **Read out of somebody else's store as readily as out of one's own**, which is the whole of how
     an answering gateway finds work: it asks each agent on the install what it has outstanding for
     *it*, over a read-only connection. Oldest first, so nothing waits behind work that arrived
     later.
     """
-    sql = f"SELECT * FROM {TABLE} WHERE answered_at IS NULL"
+    sql = f"SELECT * FROM {TABLE} WHERE answered_at IS NULL AND stopped_at IS NULL"
     values: tuple = ()
     if to_agent is not None:
         sql += " AND to_agent = ?"
@@ -186,20 +187,31 @@ def answered(agent: str, delegation_id: str, now: Optional[datetime] = None) -> 
     with records.writing(directory.records(agent)) as conn:
         moved = conn.execute(
             f"UPDATE {TABLE} SET answered_at = ?, latest_at = ?"
-            " WHERE delegation_id = ? AND answered_at IS NULL",
+            " WHERE delegation_id = ? AND answered_at IS NULL AND stopped_at IS NULL",
+            (at, at, delegation_id))
+        return bool(moved.rowcount)
+
+
+def stopped(agent: str, delegation_id: str, now: Optional[datetime] = None) -> bool:
+    """Settle a requested stop once, without recording that an answer was returned for review."""
+    at = config.moment_of(now)
+    with records.writing(directory.records(agent)) as conn:
+        moved = conn.execute(
+            f"UPDATE {TABLE} SET stopped_at = ?, latest_at = ?"
+            " WHERE delegation_id = ? AND answered_at IS NULL AND stopped_at IS NULL",
             (at, at, delegation_id))
         return bool(moved.rowcount)
 
 
 def reopened(agent: str, delegation_id: str, now: Optional[datetime] = None) -> bool:
-    """Owe an answer again, so work already settled can be carried on. `False` if it was not settled.
+    """Owe an answer again for answered work. `False` for working or stopped work.
 
     **Carrying on is not asking again.** The conversation is the same one, so the answering agent
     picks up the provider session it already had rather than starting over — which is the whole
     point of resuming rather than handing over a second task that repeats the first.
 
-    Clearing `answered_at` is what puts it back in front of the answering gateway: that column is
-    the only thing marking it done, so taking it away is the same thing as never having been.
+    Clearing `answered_at` is what puts it back in front of the answering gateway. `stopped_at` is
+    never cleared: an owner-requested stop closes the ask rather than pausing it.
 
     **`working_since` moves, and this is the only verb that moves it.** Carrying on is new work, and
     a resumed phase that inherited the original moment was reported to the room as an hour old
@@ -218,7 +230,7 @@ def reopened(agent: str, delegation_id: str, now: Optional[datetime] = None) -> 
         moved = conn.execute(
             f"UPDATE {TABLE} SET answered_at = NULL, stop_asked_at = NULL, latest_at = ?,"
             " working_since = ?"
-            " WHERE delegation_id = ? AND answered_at IS NOT NULL",
+            " WHERE delegation_id = ? AND answered_at IS NOT NULL AND stopped_at IS NULL",
             (at, at, delegation_id))
         return bool(moved.rowcount)
 
@@ -233,7 +245,8 @@ def stop_asked(agent: str, delegation_id: str, now: Optional[datetime] = None) -
     with records.writing(directory.records(agent)) as conn:
         moved = conn.execute(
             f"UPDATE {TABLE} SET stop_asked_at = ?, latest_at = ?"
-            " WHERE delegation_id = ? AND answered_at IS NULL AND stop_asked_at IS NULL",
+            " WHERE delegation_id = ? AND answered_at IS NULL AND stopped_at IS NULL"
+            " AND stop_asked_at IS NULL",
             (at, at, delegation_id))
         return bool(moved.rowcount)
 
@@ -260,7 +273,7 @@ def guided(agent: str, delegation_id: str, now: Optional[datetime] = None) -> bo
     with records.writing(directory.records(agent)) as conn:
         moved = conn.execute(
             f"UPDATE {TABLE} SET latest_at = ?"
-            " WHERE delegation_id = ? AND answered_at IS NULL",
+            " WHERE delegation_id = ? AND answered_at IS NULL AND stopped_at IS NULL",
             (at, delegation_id))
         return bool(moved.rowcount)
 
@@ -271,7 +284,8 @@ def _read(row: Any) -> Delegation:
         delegation_id=str(row["delegation_id"]), to_agent=str(row["to_agent"]),
         parent_conversation=int(row["parent_conversation"]),
         parent_turn=int(row["parent_turn"]),
-        answered_at=row["answered_at"], stop_asked_at=row["stop_asked_at"],
+        answered_at=row["answered_at"], stopped_at=row["stopped_at"],
+        stop_asked_at=row["stop_asked_at"],
         created_at=str(row["created_at"]), latest_at=str(row["latest_at"]),
         # A row written before `0006`, or by a release that predates it, has never been carried on
         # — so its only phase began when it was made. Falling back here as well as backfilling in

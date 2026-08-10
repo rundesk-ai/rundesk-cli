@@ -104,6 +104,15 @@ hand. So a stray directory is not listed as an agent and cannot be operated on a
 interrupted `agents add` leaves litter rather than something wearing an agent's name and not being
 one.
 
+The configuration row in `state.db` also keeps this agent's outbound delegation scope as a nullable
+JSON array. `NULL` means the default, any other available agent; `[]` means none, making this agent
+inbound-only for named-agent work; and a non-empty array is the exact allowlist. The setting changes
+only where this agent may delegate. It never prevents another agent from delegating work here.
+Existing agents carried into the release receive `NULL`, so adding the setting does not silently
+narrow a team that already delegates. Removing an agent prunes its name from every explicit array
+before removal, so recreating that name does not inherit prior allowlist authority; `NULL` remains
+unrestricted and inbound delegation remains unchanged.
+
 **Rundesk never sweeps an agent's `home/`.** The agent keeps compact cross-run continuity in
 `MEMORY.md`, including small pointers to active external projects; changing project detail stays in
 its project or an earned shared index. Ordinary work removes only temporary files and directories it
@@ -174,7 +183,8 @@ be putting back a claim that has moved on.
 
 An agent's directory is only ever removed by `rundesk agents remove`, one named thing at a time, and
 the directory itself goes only if it is then empty — anything you put in there is kept, along with
-the directory holding it.
+the directory holding it. Scope configuration, explicit-scope pruning during removal, and direct
+delegation admission are serialized by the install state-change lock.
 
 ## Every skill is in a catalog, and a catalog is a directory
 

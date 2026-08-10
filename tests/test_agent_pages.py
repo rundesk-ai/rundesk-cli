@@ -132,11 +132,11 @@ class ANewAgent(support.Isolated):
 
     def test_the_standing_rules_have_a_context_budget(self):
         rules = (self.home / "AGENTS.md").read_bytes()
-        self.assertLessEqual(len(rules), 4500)
+        self.assertLessEqual(len(rules), 6000)
 
     def test_the_complete_standing_context_has_a_budget(self):
         total = sum(len((self.home / name).read_bytes()) for name in ("AGENTS.md", "MEMORY.md"))
-        self.assertLessEqual(total, 4800)
+        self.assertLessEqual(total, 6300)
 
     def test_the_rules_defer_question_policy_to_the_turn_situation(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")

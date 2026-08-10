@@ -29,12 +29,13 @@ connected to a platform as an agent that is gone.
 """
 
 import argparse
+import contextlib
 import sqlite3
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from rundesk.agents import directory, migration, pages, records
+from rundesk.agents import delegating, directory, migration, pages, records
 from rundesk.channels import hosting
 from rundesk.commands import Subcommands, as_written, failed
 from rundesk.core import paths
@@ -81,7 +82,8 @@ NO_JOB_EVER = ("this name cannot be a launchd label, so no job can ever be place
 #: as the rest — `records` turns a file that is not a database into `Unreadable` at open time, but a
 #: writer that waits out its whole busy timeout against a gateway still surfaces SQLite's own error,
 #: and a traceback is not an answer somebody can act on.
-TROUBLE = (directory.Refused, records.NotThere, records.Unreadable, records.Refused,
+TROUBLE = (delegating.Refused, directory.Refused, records.NotThere, records.Unreadable,
+           records.Refused,
            migration.Ahead, migration.Broken, locking.Stuck, OSError, sqlite3.Error)
 
 #: Everything giving a new agent the skill it operates this install with can be stopped by.
@@ -126,6 +128,13 @@ def register(sub: Subcommands) -> None:
     changed.add_argument("--describes", metavar="<text>", default=None, help=WHAT_IT_IS_FOR)
     changed.add_argument("--self-improve", metavar="<true|false>", default=None,
                          help="whether Rundesk runs automatic self improvement; yes or no")
+    delegation = changed.add_mutually_exclusive_group()
+    delegation.add_argument("--delegate-to", metavar="<agent>", action="append", default=None,
+                            help="replace its delegation scope; repeat for each allowed agent")
+    delegation.add_argument("--delegate-to-any", action="store_true",
+                            help="let it delegate to any other agent (the default)")
+    delegation.add_argument("--delegate-to-none", action="store_true",
+                            help="make it inbound-only; it may receive but not delegate work")
 
     gone = what.add_parser("remove", help="take an agent away, and everything it remembers")
     gone.add_argument("agent", metavar="<agent>", help="which one, as `rundesk agents` lists it")
@@ -146,7 +155,8 @@ def cmd_agents(args: argparse.Namespace) -> int:
     if what == "add":
         return _made(args.agent, args.provider, args.describes)
     if what == "configure":
-        return _configured(args.agent, args.provider, args.describes, args.self_improve)
+        return _configured(args.agent, args.provider, args.describes, args.self_improve,
+                           args.delegate_to, args.delegate_to_any, args.delegate_to_none)
     if what == "remove":
         return _forgotten(args.agent, args.confirm)
 
@@ -179,9 +189,9 @@ def _listed() -> int:
         return OK
     rows = []
     for name in there:
-        provider, self_improve = _configuration_of(name)
-        rows.append((name, provider, _skills_of(name), self_improve))
-    as_table(("AGENT", "PROVIDER", "SKILLS", "SELF-IMPROVE"), rows)
+        provider, self_improve, delegates_to = _configuration_of(name)
+        rows.append((name, provider, _skills_of(name), delegates_to, self_improve))
+    as_table(("AGENT", "PROVIDER", "SKILLS", "DELEGATES TO", "SELF-IMPROVE"), rows)
     return OK
 
 
@@ -193,8 +203,8 @@ def _skills_of(name: str) -> str:
         return "? — cannot be read"
 
 
-def _configuration_of(name: str) -> Tuple[str, str]:
-    """The two listed settings of one agent, or why they could not be answered.
+def _configuration_of(name: str) -> Tuple[str, str, str]:
+    """The three listed settings of one agent, or why they could not be answered.
 
     The two ways it cannot be answered are kept apart, because they are different situations:
     records that have gone away between the listing and the reading, and records that are there and
@@ -203,11 +213,13 @@ def _configuration_of(name: str) -> Tuple[str, str]:
     """
     try:
         settled = records.read(directory.records(name))
-        return str(settled["provider_name"]), as_written(bool(settled["self_improve"]))
+        return (str(settled["provider_name"]), as_written(bool(settled["self_improve"])),
+                delegating.shown(delegating.decoded(settled.get("delegates_to"))))
     except records.NotThere:
-        return "? — its records are not there", "?"
-    except (directory.Refused, records.Unreadable, OSError, sqlite3.Error, KeyError):
-        return "? — its records cannot be read", "?"
+        return "? — its records are not there", "?", "?"
+    except (delegating.Refused, directory.Refused, records.Unreadable, OSError, sqlite3.Error,
+            KeyError):
+        return "? — its records cannot be read", "?", "?"
 
 
 def _the_skill_every_agent_holds(agent: str) -> str:
@@ -290,7 +302,9 @@ def _made(name: str, provider: Optional[str], describes: Optional[str] = None) -
 
 
 def _configured(name: str, provider: Optional[str], describes: Optional[str] = None,
-                self_improve: Optional[str] = None) -> int:
+                self_improve: Optional[str] = None,
+                delegate_to: Optional[List[str]] = None,
+                delegate_to_any: bool = False, delegate_to_none: bool = False) -> int:
     """Change what one agent is configured with, or refuse having changed nothing.
 
     **Naming nothing to change is refused rather than reported as a success.** `configure` makes the
@@ -307,11 +321,13 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
     way back for somebody who wrote the wrong thing, and it is why `""` and *not given* have to stay
     different answers here — `None` means the flag was absent, and `""` means somebody typed it.
     """
-    if provider is None and describes is None and self_improve is None:
+    changing_delegation = delegate_to is not None or delegate_to_any or delegate_to_none
+    if provider is None and describes is None and self_improve is None and not changing_delegation:
         return _failed(f"nothing was named to change about {name}",
                        f"change one with: rundesk agents configure {name} --provider <provider>",
                        f"or: rundesk agents configure {name} --describes <text>",
                        f"or: rundesk agents configure {name} --self-improve <true|false>",
+                       f"or: rundesk agents configure {name} --delegate-to <agent>",
                        "nothing was changed")
     if provider is not None:
         trouble = _provider_trouble(provider,
@@ -329,22 +345,39 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
             return _failed(f"self improvement wants yes or no, and was given {self_improve!r}",
                            "nothing was changed")
 
-    gone_wrong = directory.not_an_agent(name)
-    if gone_wrong:
-        return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was changed")
-
-    moving: Dict[str, Any] = {}
-    if provider is not None:
-        moving["provider_name"] = provider
-    if describes is not None:
-        # `None` rather than `""`, so an agent nobody has described and one described as nothing
-        # stay the same answer — which is what taking a description away has to mean.
-        moving["describes"] = describes.strip() or None
-    if improving is not None:
-        moving["self_improve"] = improving
-
     try:
-        records.stated(directory.records(name), moving)
+        guarded = (locking.only_one(paths.lock(), "this install") if changing_delegation
+                   else contextlib.nullcontext())
+        with guarded:
+            # Scope validation and its write are one install-state decision. Agent removal and
+            # direct handoff admission use this same lock, so a target cannot disappear after it
+            # was validated and a completed revocation cannot be followed by a stale read.
+            gone_wrong = directory.not_an_agent(name)
+            if gone_wrong:
+                return _failed(gone_wrong, "see what there is with: rundesk agents",
+                               "nothing was changed")
+
+            scope = None
+            if delegate_to is not None:
+                scope = delegating.configured(name, delegate_to)
+            elif delegate_to_none:
+                scope = ()
+
+            moving: Dict[str, Any] = {}
+            if provider is not None:
+                moving["provider_name"] = provider
+            if describes is not None:
+                # `None` rather than `""`, so an agent nobody has described and one described as
+                # nothing stay the same answer — which is what taking a description away means.
+                moving["describes"] = describes.strip() or None
+            if improving is not None:
+                moving["self_improve"] = improving
+            if changing_delegation:
+                moving["delegates_to"] = delegating.encoded(
+                    None if delegate_to_any else scope)
+            records.stated(directory.records(name), moving)
+    except delegating.Refused as why:
+        return _failed(str(why), "nothing was changed")
     except TROUBLE as why:
         return _failed(str(why), "nothing was changed")
 
@@ -356,6 +389,13 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
         print(f"{name}: is for {said}" if said else f"{name}: is described by nothing now")
     if improving is not None:
         print(f"{name}: self improvement is now {'on' if improving else 'off'}")
+    if changing_delegation:
+        if delegate_to_any:
+            print(f"{name}: may now delegate to any available agent")
+        elif scope:
+            print(f"{name}: may now delegate to {delegating.shown(scope)}")
+        else:
+            print(f"{name}: may not delegate to another named agent now")
     return OK
 
 
@@ -410,7 +450,15 @@ def _forgotten(name: str, confirming: bool) -> int:
 
     at = paths.agents() / name
     try:
-        gone = directory.forgotten(name)
+        with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+            # A configure or handoff may have waited behind the running-work checks above. Recheck
+            # existence under the state lock, then narrow every explicit allowlist before the name
+            # can be recreated. `NULL` remains unrestricted by definition.
+            gone_wrong = directory.not_an_agent(name)
+            if gone_wrong:
+                return _failed(gone_wrong, "nothing was removed")
+            _revoked_from_explicit_scopes(name)
+            gone = directory.forgotten(name)
     except TROUBLE as why:
         return _failed(str(why), f"{at} is not fully taken away")
 
@@ -423,6 +471,23 @@ def _forgotten(name: str, confirming: bool) -> int:
         # removal is still a removal, because everything that made this an agent is gone.
         print(f"        kept   {at} — something you put in there is still there")
     return OK
+
+
+def _revoked_from_explicit_scopes(target: str) -> None:
+    """Remove ``target`` from every exact allowlist while the install state lock is held.
+
+    Narrow first, remove second. If a later filesystem operation fails, the safe residue is less
+    authority rather than a deleted name whose future occupant inherits an old grant.
+    """
+    for agent in directory.known():
+        if agent == target:
+            continue
+        scope = delegating.scope_of(agent)
+        if scope is None or target not in scope:
+            continue
+        records.stated(
+            directory.records(agent),
+            {"delegates_to": delegating.encoded(one for one in scope if one != target)})
 
 
 def _skills_it_holds(name: str) -> List[str]:

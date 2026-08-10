@@ -13,13 +13,22 @@ the same exchange on rather than starting a new one.
 Run directly: `python3 tests/test_ask_command.py`
 """
 
+import json
+import os
+import threading
 import unittest
+from contextlib import contextmanager
+from unittest import mock
 
 import support
-from rundesk.agents import directory, records
+from rundesk.agents import delegating, directory, records
 from rundesk.channels import arriving
+from rundesk.delegations import admitting
+from rundesk.delegations import kept as delegations
 from rundesk.exits import FAILED, OK, USAGE
+from rundesk.gateways import standing
 from rundesk.providers import kept
+from rundesk.utils import locking
 
 
 class Asking(support.Isolated):
@@ -178,6 +187,115 @@ class WhenTheCommandLineIsWrong(Asking):
         code, _out, err = self.rundesk("ask", self.agent, "   ")
         self.assertEqual(FAILED, code)
         self.assertIn("nothing to ask", err)
+
+
+class WhenOneAgentAsksAnother(support.Isolated):
+    """The configured scope is enforced at admission, not merely hidden from the prompt."""
+
+    def setUp(self):
+        super().setUp()
+        for agent in ("ava", "forge", "trace"):
+            directory.made(agent, support.A_STAND_IN)
+        parent = arriving.asked_at_a_terminal("ava", "delegate the bounded work")
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute(
+                "INSERT INTO turns (conversation_id, provider_name, access_mode, turn_status,"
+                " created_at) VALUES (?, ?, ?, ?, ?)",
+                (parent.conversation, support.A_STAND_IN, "work", "working",
+                 "2026-08-10T00:00:00Z"))
+            self.turn = int(conn.execute("SELECT id FROM turns").fetchone()[0])
+
+    def ask_from_ava(self, target):
+        with mock.patch.dict(os.environ, {admitting.AGENT: "ava",
+                                          admitting.RUN: str(self.turn)}), \
+                standing.holding(directory.where(target)):
+            return self.rundesk("ask", target, "audit the exporter")
+
+    def test_an_allowed_target_is_admitted(self):
+        records.stated(directory.records("ava"),
+                       {"delegates_to": json.dumps(["forge"])})
+
+        code, out, err = self.ask_from_ava("forge")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("handed to forge", out)
+        self.assertEqual(["forge"], [one.to_agent for one in delegations.every("ava")])
+
+    def test_an_unlisted_target_is_refused_before_either_delegation_write(self):
+        records.stated(directory.records("ava"),
+                       {"delegates_to": json.dumps(["forge"])})
+        with mock.patch("rundesk.commands.ask.arriving.recorded_for_a_delegation") as recorded:
+            code, out, err = self.ask_from_ava("trace")
+
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("trace", err)
+        self.assertIn("not configured to delegate to trace", err)
+        recorded.assert_not_called()
+        self.assertEqual([], delegations.every("ava"))
+
+    def test_an_empty_scope_refuses_every_target_before_writing(self):
+        records.stated(directory.records("ava"), {"delegates_to": "[]"})
+        with mock.patch("rundesk.commands.ask.arriving.recorded_for_a_delegation") as recorded:
+            code, _out, err = self.ask_from_ava("forge")
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("not configured to delegate to forge", err)
+        recorded.assert_not_called()
+        self.assertEqual([], delegations.every("ava"))
+
+    def test_a_completed_revocation_cannot_be_followed_by_stale_authority_admission(self):
+        records.stated(directory.records("ava"),
+                       {"delegates_to": json.dumps(["forge"])})
+        scope_read = threading.Event()
+        release_admission = threading.Event()
+        revocation_waiting = threading.Event()
+        order = []
+        results = {}
+        original_scope = delegating.scope_of
+        original_lock = locking.only_one
+
+        def paused_scope(agent):
+            scope = original_scope(agent)
+            scope_read.set()
+            self.assertTrue(release_admission.wait(2))
+            return scope
+
+        @contextmanager
+        def observed_lock(*args, **kwargs):
+            if threading.current_thread().name == "revocation":
+                revocation_waiting.set()
+            with original_lock(*args, **kwargs) as waited:
+                yield waited
+
+        def admit():
+            results["admit"] = self.ask_from_ava("forge")
+            order.append("admitted")
+
+        def revoke():
+            results["revoke"] = self.rundesk(
+                "agents", "configure", "ava", "--delegate-to-none")
+            order.append("revoked")
+
+        with mock.patch("rundesk.commands.ask.delegating.scope_of", side_effect=paused_scope), \
+                mock.patch.object(locking, "only_one", side_effect=observed_lock):
+            admission = threading.Thread(target=admit, name="admission")
+            revocation = threading.Thread(target=revoke, name="revocation")
+            admission.start()
+            self.assertTrue(scope_read.wait(2))
+            revocation.start()
+            self.assertTrue(revocation_waiting.wait(2))
+            release_admission.set()
+            admission.join(2)
+            revocation.join(2)
+
+        self.assertFalse(admission.is_alive())
+        self.assertFalse(revocation.is_alive())
+        self.assertEqual(["admitted", "revoked"], order)
+        self.assertEqual(OK, results["admit"][0], results["admit"][2])
+        self.assertEqual(OK, results["revoke"][0], results["revoke"][2])
+        self.assertEqual([], json.loads(
+            records.read(directory.records("ava"))["delegates_to"]))
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ rundesk version                           # the version, and whether it is out o
 rundesk configure [--<setting> <value>]   # change what this install is configured with
 rundesk agents                            # the agents this install keeps
 rundesk agents add <agent> --provider <provider> [--describes <text>]        # make one
-rundesk agents configure <agent> [--provider <provider>] [--describes <text>] [--self-improve <true|false>]  # change one
+rundesk agents configure <agent> [--provider <provider>] [--describes <text>] [--self-improve <true|false>] [--delegate-to <agent> ... | --delegate-to-any | --delegate-to-none]  # change one
 rundesk agents remove <agent> --confirm   # take one away, and everything it remembers
 rundesk gateways                          # every agent, and how its gateway stands
 rundesk gateways start <agent>            # start one, and prove a gateway came up
@@ -298,6 +298,34 @@ different answers, since a listing has to tell an agent nobody has described fro
 nothing. `--self-improve` controls Rundesk's automatic self-improvement work for this agent; it
 starts on, and accepts `yes/no`, `true/false`, `on/off`, and `1/0`.
 
+Delegation scope controls where this agent may hand work, not who may hand work to it. It starts
+unrestricted for new agents and agents carried forward from an earlier release. Configure exactly
+one of these modes:
+
+```console
+$ rundesk agents configure ava --delegate-to forge --delegate-to trace
+ava: may now delegate to forge, trace
+
+$ rundesk agents configure forge --delegate-to-none
+forge: may not delegate to another named agent now
+
+$ rundesk agents configure ava --delegate-to-any
+ava: may now delegate to any available agent
+```
+
+`--delegate-to <agent>` is repeatable and replaces the whole scoped list; it does not append to an
+older one. `--delegate-to-none` makes the agent inbound-only for named-agent work: other agents may
+still delegate to it, but it is shown no named agents and no named-agent delegation instructions.
+`--delegate-to-any` restores the default. The three modes are mutually exclusive, and an invalid
+target changes none of the other settings named in the same command.
+
+The `DELEGATES TO` column in `rundesk agents` says `any`, `none`, or the configured agent names.
+That is policy, not availability: an allowed target still needs a description and a running gateway
+before it is offered in a turn. A direct `rundesk ask` from inside a turn is checked against the
+same policy before any delegation is written. Scope changes, scope revocation during removal, and
+direct handoff admission share the install state-change lock: whichever completes first determines
+the policy the next operation sees.
+
 All of it is built under a staged name and renamed into place once, at the end — so an interruption
 leaves litter rather than a directory wearing an agent's name and not being one.
 
@@ -400,6 +428,11 @@ answerable when an agent's database cannot be read — which is one of the state
 agent in. A claim nobody can *ask* about is refused in the same breath as one that is held, for the
 reason the gateway's own third answer is: reporting an agent nobody can ask about as free is how a
 live program comes to be orphaned by a removal.
+
+Before the target is taken away, its name is removed from every other agent's explicit delegation
+allowlist under the same install state-change lock. Recreating an agent with that name therefore
+does not restore old allowlist authority. An unrestricted (`any`) scope remains unrestricted, as
+does inbound delegation; those are policies rather than references to the removed agent.
 
 It is checked below the confirmation rather than above it, which looks like the wrong way round and
 is not. A description of a removal describes what would be taken; this decides whether it may happen
@@ -1421,13 +1454,14 @@ wakes a review turn. What ava gets is bob's last complete message, verbatim and 
 summarises nothing and asserts nothing about it — and nothing bob wrote reaches any person until ava
 has reviewed it.
 
-**Four things are refused**, each with what to type instead:
+**Five things are refused**, each with what to type instead:
 
 | | |
 |---|---|
 | a person typing it | not a delegation — it is an ordinary turn on that agent |
 | an agent naming itself | that is a turn, not a delegation |
 | a turn already answering a delegation | work handed over cannot be handed on again |
+| a target outside the asking agent's delegation scope | change that agent's scope, or keep the work here |
 | an agent whose gateway is not running | nothing would ever answer it, so it says how to start one |
 
 The last is the one worth knowing about operationally: **an agent you intend to delegate to needs a
@@ -1439,8 +1473,12 @@ over, which is a success nothing earned.
 `rundesk asked --agent ava` lists ava's work. `asked say <id> <words>` durably adds guidance to
 working work. The recipient's gateway offers it to the active provider turn immediately; if that
 turn has just ended or cannot be steered, the guidance remains for its next turn on the same
-delegation. `asked stop <id>` requests an early end. `asked resume <id>
-<words>` continues answered work in the provider session it already had. Each delegation has its own
+delegation. `asked stop <id>` records an early end request; the recipient's next gateway beat stops
+the live provider process group, or settles an unstarted brief as stopped without launching it. The
+listing says `stopping` until that terminal outcome comes back, then settles it without waking the
+asking agent for another review response and lists it as `stopped`, never `answered`. Stopped work
+cannot be resumed. `asked resume <id> <words>` continues answered work in the provider session it
+already had. Each delegation has its own
 conversation, so two tasks handed to the same specialist by one parent turn cannot share an answer.
 
 **All three are shown where the person asked**, in the room the work was handed out in, as one line
@@ -1457,7 +1495,8 @@ and handing the task over again.
 
 **The depth is one.** An agent answering a delegation is shown no team in its instructions and is
 refused here if it tries anyway, so `ava → bob → ava` has no path to exist and there is no chain to
-walk. A turn woken to *review* an answer is an ordinary turn and may hand out new work.
+walk. A turn woken to *review* an answer is an ordinary turn and may hand out new work, subject to
+the reviewing agent's current delegation scope.
 
 ## backups
 
