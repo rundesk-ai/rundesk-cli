@@ -140,7 +140,14 @@ class ExactlyOneSituation(support.Isolated):
     def test_a_person_asking_gets_the_person_layer(self):
         built = instructions.build(situation=instructions.USER_TO_AGENT, variables=EVERYTHING)
         self.assertIn("A person asked you", built.text)
-        self.assertNotIn("came due", built.text)
+
+    def test_a_person_facing_turn_must_arrange_the_next_trigger_for_ongoing_work(self):
+        built = instructions.build(situation=instructions.USER_TO_AGENT, variables=EVERYTHING).text
+        for phrase in ("Ending this turn stops work", "future trigger",
+                       "schedule or named handoff", "exact local time", "do not wake you"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, built)
+        self.assertNotIn("came due", built)
 
     def test_a_schedule_gets_the_schedule_layer(self):
         built = instructions.build(situation=instructions.SCHEDULE_TO_AGENT, variables=EVERYTHING)

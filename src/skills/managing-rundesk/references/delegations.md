@@ -7,8 +7,12 @@ an ordinary attended turn; it is not a delegation.
 
 ## Delegate well
 
-Before delegating, confirm the target agent appears in the team available to this turn and that its
-gateway is running. Brief it with:
+Choose the target from its description in the team available to this turn: that sentence is the
+agent's durable routing scope. Do not infer ownership from its name, provider, skill list, or gateway
+state; gateway state says only whether the chosen route is currently available. If no description
+matches the work, do not delegate on a guess.
+
+Before delegating, confirm the chosen agent's gateway is running. Brief it with:
 
 - the exact task and why it matters;
 - the files, system, or question in scope;

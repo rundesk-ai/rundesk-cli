@@ -105,6 +105,29 @@ class Listing(Scheduling):
         _code, out, _ = self.rundesk("schedules", "list", self.agent)
         self.assertIn("off", out)
 
+    def test_expired_schedules_are_hidden_by_default_and_available_as_their_own_filter(self):
+        self.given("current")
+        code, _out, err = self.rundesk("schedules", "add", self.agent, "old-once",
+                                      "--at", "2000-01-01T09:00", "--run", THERE)
+        self.assertEqual(OK, code, err)
+
+        code, current, err = self.rundesk("schedules", "list", self.agent)
+        self.assertEqual(OK, code, err)
+        self.assertIn("current", current)
+        self.assertNotIn("old-once", current)
+
+        code, expired, err = self.rundesk("schedules", "list", self.agent, "--expired")
+        self.assertEqual(OK, code, err)
+        self.assertIn("old-once", expired)
+        self.assertIn("expired", expired)
+        self.assertNotIn("current", expired)
+        self.assertNotIn(upkeep.NAME, expired)
+
+    def test_an_expired_filter_with_no_matches_says_so(self):
+        code, out, err = self.rundesk("schedules", "list", self.agent, "--expired")
+        self.assertEqual(OK, code, err)
+        self.assertIn("no schedules are expired", out)
+
     def test_a_schedule_nobody_can_understand_is_still_listed_and_says_why(self):
         # It is on the disk and it is something to be done about. A listing that left it out would
         # say it is not there, which is a different and worse thing to be told.

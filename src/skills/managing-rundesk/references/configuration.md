@@ -37,11 +37,11 @@ automatic policy until the owner removes it; Rundesk never adopts or overwrites 
 
 `update_enabled` and `update_time` control a root-specific launchd job immediately. It makes one
 local-time attempt per day, outside every gateway process tree. An active provider turn or schedule,
-or activity Rundesk cannot inspect safely, defers without fetching, stopping gateways, or forcing
-work down. A manual update requested during active work is queued durably and performed by a
-detached install-level worker once the install is quiet; it is never attached to an agent turn or
-delegation. `status` reports configured intent and measured supervisor placement; a reconciliation
-failure is non-zero and is repaired idempotently by repeating the same `configure` command.
+or activity Rundesk cannot inspect safely, creates a durable request without fetching, stopping
+gateways, or forcing work down. One detached install-level worker waits until the install is quiet,
+then performs the automatic or manual request; it is never attached to an agent turn or delegation.
+`status` reports configured intent and measured supervisor placement; a reconciliation failure is
+non-zero and is repaired idempotently by repeating the same `configure` command.
 
 ## Credential values
 

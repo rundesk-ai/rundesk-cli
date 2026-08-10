@@ -7,7 +7,8 @@ due. The gateway is the clock that fires it.
 
 | Command | Control |
 |---|---|
-| `schedules` or `schedules list [<agent>]` | List every schedule or one agent's. |
+| `schedules` or `schedules list [<agent>]` | List schedules that can still run, for every agent or one. |
+| `schedules list [<agent>] --expired` | List only schedules that can never run again. |
 | `schedules add <agent> <schedule> (--when <cron> | --at <moment>) (--run <program> | --ask <prompt>) [--until <moment>] [--disabled]` | Create repeating or one-time work. |
 | `schedules update <agent> <schedule> [--when <cron> | --at <moment>] [--run <program> | --ask <prompt>] [--until <moment>] [--enable | --disable]` | Change stated fields and keep execution history. |
 | `schedules show <agent> <schedule>` | Show the complete definition and state. |
@@ -44,6 +45,20 @@ be running, and configure a notified channel when the result must reach the owne
 - `--run` takes one quoted string, splits it into program arguments, and never invokes a shell. It
   does not expand variables, globs, pipes, redirects, `&&`, or `;`. Name an executable program.
 - `--ask` uses a schedule-specific conversation, separate from the conversation used by `ask`.
+
+## Arrange the next trigger
+
+Ending a turn ends the work; a task brief or memory preserves context but does not wake the agent.
+When an owner authorizes an ongoing outcome, or the agent commits to finish something later today or
+on a future day, arrange the next trigger before the turn ends. Use `--at` for one promised time
+block and `--when` for a genuinely recurring responsibility. The scheduled prompt must carry the
+original authority, exact next action, limits, and proof. State the exact local start or delivery
+time to the owner; do not substitute an open-ended window such as “later” or “today.” The owner
+should not have to return merely to restart work already promised.
+
+Do not create a schedule for an aspiration, an unapproved state change, or work with a missing
+decision. A schedule preserves timing, not authority. Verify the saved definition and that the
+agent's gateway is running; without both, no future work is arranged.
 
 ## Operate and recover
 
