@@ -64,7 +64,7 @@ to identify the exact target and consequence. Most groups list when called with 
 | [Delegations](references/delegations.md) | Hand work to another agent; inspect, guide, stop, resume, or review it |
 | [Conversations](references/conversations.md) | Ask agents; inspect messages, turns, usage, and failures |
 | [Backups](references/backups.md) | Save, locate, move, or restore copies |
-| [Schedules](references/schedules.md) | Create and control timed programs or agent prompts |
+| [Schedules](references/schedules.md) | Create timed work and proactive verification check-ins |
 | [Channels](references/channels.md) | Connect adapters, access lists, notifications, and diagnosis |
 | [Providers](references/providers.md) | Discover, check, or inspect provider execution |
 | [Skills](references/skills.md) | Catalogs, grants, profiles, values, and skill diagnosis |

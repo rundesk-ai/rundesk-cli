@@ -22,6 +22,19 @@ due after seven distinct usage dates and is controlled only with `agents configu
 update, run, disable, or remove it. A pre-policy owner schedule already using that name stays
 owner-controlled and blocks automatic upkeep until the owner removes it; Rundesk never adopts it.
 
+## Use schedules to close future verification loops
+
+Use a schedule proactively when an outcome can only be confirmed later: check that a release stayed
+healthy, a gateway came back after an update, an external job finished, or a temporary fix still
+works. Prefer one `--at` check for one open loop; use repeating `--when` only for an ongoing need.
+Verify an outcome now when it is already observable instead of scheduling avoidable delay.
+
+Make an `--ask` prompt executable on fresh context: name what to inspect, the expected result, the
+evidence to use, and who should hear about success or failure. Ask the agent to perform the check,
+not merely remind the owner that a check was planned. Keep the check within the original authority;
+a schedule changes when work runs, not what changes it is allowed to make. Confirm the gateway will
+be running, and configure a notified channel when the result must reach the owner proactively.
+
 ## Time and execution rules
 
 - `--when` is five-field cron: `minute hour day month weekday`. `--at` is
