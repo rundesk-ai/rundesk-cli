@@ -249,9 +249,9 @@ FINISHED_HELPER = f"{DID['delegate']} subagent finished"
 #: would show as the broad fallback rather than as nothing, and the suite checks this covers
 #: rundesk's list rather than trusting it to.
 HANDED = {"handed": "🤖", "guided": "💬", "working-still": "⏳",
-          "stopping": "🛑", "answered": "✅", "carried-on": "🔁"}
+          "stopping": "🛑", "stopped": "✋", "answered": "✅", "carried-on": "🔁"}
 
-#: The same six, as a person would say them: **what goes before the helper's name and what goes
+#: The same seven, as a person would say them: **what goes before the helper's name and what goes
 #: after it.** One shape rather than two, because the name is the one thing every line has and the
 #: words on either side of it are what say which way the news is travelling.
 #:
@@ -261,11 +261,12 @@ HANDED = {"handed": "🤖", "guided": "💬", "working-still": "⏳",
 #: with it. `asked dev to stop` is the one that needs both sides, and is why there are two.
 HANDED_SAID = {"handed": ("handed to", ""), "guided": ("updated", ""),
                "working-still": ("", "still working"), "stopping": ("asked", "to stop"),
-               "answered": ("", "answered"), "carried-on": ("carried on with", "")}
+               "stopped": ("", "stopped"), "answered": ("", "answered"),
+               "carried-on": ("carried on with", "")}
 
 #: The words that carry how long the work has been out. `handed` is not among them because it
 #: carries which ask it is instead — see `delegation_line`, which is where both are put on.
-ELAPSES = ("working-still", "answered")
+ELAPSES = ("working-still", "stopped", "answered")
 
 #: Where what somebody attached is put on its way through: inside `RUNDESK_CHANNEL_HOME`, which is
 #: this channel's own directory and the only place rundesk will take a file from. Each message gets
@@ -617,10 +618,10 @@ def delegation_line(it: Dict[str, Any]) -> str:
     before, after = said
     # **The name is the one word somebody scans for**, and every line here has one in a different
     # place — after `handed to`, before `still working`, between `asked` and `to stop`. Bold is what
-    # makes six differently-shaped lines read as one column of *who*, in a register that is otherwise
+    # makes seven differently-shaped lines read as one column of *who*, in a register that is otherwise
     # deliberately quiet. Bolded after flattening, never before: `flat` is what makes this somebody
     # else's name rather than somebody else's markup.
-    # Empty sides are dropped rather than joined, so one template covers all six words without any
+    # Empty sides are dropped rather than joined, so one template covers all seven words without any
     # of them arriving with a doubled space or a space before its full stop.
     line = " ".join(part for part in (mark, before, _bold(who), after) if part)
     # Which ask it is matters once — when it goes — because that is the name somebody types to guide
@@ -1629,7 +1630,7 @@ class Reaching:
         **A private conversation is quoted too, and this is the correction** (R-DIS-28). It was
         dropped here on the reasoning that two people are already alone and a quote buys no
         attention — which reads well and is wrong about what the quote is *for*. The tint is not
-        attention, it is the difference between the answer and the six lines of commentary above it,
+        attention, it is the difference between the answer and the lines of commentary above it,
         and in a one-to-one conversation the reply ping is the only thing that draws it at all. An
         answer that arrives after minutes of working, untinted, under its own running commentary,
         is the failure this exists to prevent — and it is worst in a DM, where there is nothing else

@@ -113,7 +113,7 @@ def a_name(parent_turn: int, marking: Optional[Callable[[], str]] = None) -> str
 
 
 def refusal(asking: Asking, to_agent: str, task: str,
-            nothing_would_answer: bool = False) -> str:
+            nothing_would_answer: bool = False, outside_scope: bool = False) -> str:
     """Why this delegation may not be admitted, or `""` when it may.
 
     A sentence rather than an exception, because the caller is a command whose job is to tell
@@ -139,6 +139,8 @@ def refusal(asking: Asking, to_agent: str, task: str,
         return "there was nothing to hand over"
     if len(task) > A_TASK_AT_MOST:
         return (f"a task goes in at most {A_TASK_AT_MOST} characters, and this is {len(task)}")
+    if outside_scope:
+        return f"{asking.agent} is not configured to delegate to {to_agent}"
     if nothing_would_answer:
         return (f"{to_agent} has no gateway running, so nothing would ever answer this — "
                 f"start it with: rundesk gateways start {to_agent}")

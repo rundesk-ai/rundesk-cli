@@ -1149,11 +1149,12 @@ class WhatEachThingReads(unittest.TestCase):
 
 
 class WhatWorkHandedToAnotherAgentReads(unittest.TestCase):
-    """The six lines a delegation is shown by. Pure text — no connection and no library."""
+    """The seven lines a delegation is shown by. Pure text — no connection and no library."""
 
     #: Every word `delegations/hosting.py` defines. Written out rather than imported, for the reason
     #: `WhatEachThingReads` gives: this suite imports nothing of rundesk's.
-    RUNDESK_SHOWS = ("handed", "guided", "working-still", "stopping", "answered", "carried-on")
+    RUNDESK_SHOWS = ("handed", "guided", "working-still", "stopping", "stopped", "answered",
+                     "carried-on")
 
     def line(self, **it: Any) -> str:
         return adapter.delegation_line(it)
@@ -1183,8 +1184,12 @@ class WhatWorkHandedToAnotherAgentReads(unittest.TestCase):
         self.assertEqual("-# 💬 updated **dev**", self.line(state="guided", who="dev"))
 
     def test_a_stop_asked_for_says_it_was_asked_for_and_not_that_it_happened(self) -> None:
-        """A stop is a request. What became of the work arrives as an answer like any other."""
+        """A stop request and its eventual terminal outcome are two different facts."""
         self.assertEqual("-# 🛑 asked **dev** to stop", self.line(state="stopping", who="dev"))
+
+    def test_stopped_work_is_not_rendered_as_an_answer(self) -> None:
+        self.assertEqual("-# ✋ **dev** stopped · 15s",
+                         self.line(state="stopped", who="dev", elapsed="15s"))
 
     def test_work_carried_on_reads_as_carried_on_and_never_as_newly_handed_over(self) -> None:
         """The whole point of resuming is that it is the same ask in the same session; a line

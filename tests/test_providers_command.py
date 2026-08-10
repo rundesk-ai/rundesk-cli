@@ -148,17 +148,35 @@ class Instructions(Providers):
         self.assertIn("Reviews production risk.", out)
         self.assertIn("skills: senior-code-reviewer", out)
 
-    def test_schedule_and_delegation_previews_do_not_scan_or_show_the_team(self):
+    def test_a_schedule_preview_includes_the_same_current_team_as_a_scheduled_turn(self):
         agent = self.an_agent("ava")
-        for situation in ("schedule", "agent"):
-            with self.subTest(situation=situation):
-                with mock.patch("rundesk.commands.providers.team.for_agent",
-                                side_effect=AssertionError("team was inspected")):
-                    code, out, err = self.rundesk(
-                        "providers", "instructions", agent, "--situation", situation)
-                self.assertEqual(OK, code, err)
-                self.assertNotIn("Who else is here", out)
-                self.assertNotIn("\nagents", out)
+        directory.made("reviewer", support.A_STAND_IN, "Reviews production risk.")
+        with standing.holding(directory.where("reviewer")):
+            code, out, err = self.rundesk(
+                "providers", "instructions", agent, "--situation", "schedule")
+        self.assertEqual(OK, code, err)
+        self.assertIn("Reviews production risk.", out)
+        self.assertIn("Who else is here", out)
+
+    def test_an_inbound_only_preview_omits_the_complete_named_agent_layer(self):
+        agent = self.an_agent("ava")
+        directory.made("reviewer", support.A_STAND_IN, "Reviews production risk.")
+        records.stated(directory.records(agent), {"delegates_to": "[]"})
+        with standing.holding(directory.where("reviewer")):
+            code, out, err = self.rundesk("providers", "instructions", agent)
+        self.assertEqual(OK, code, err)
+        self.assertNotIn("Who else is here", out)
+        self.assertNotIn('"$RUNDESK_COMMAND" ask <agent>', out)
+
+    def test_a_delegation_preview_does_not_scan_or_show_the_team(self):
+        agent = self.an_agent("ava")
+        with mock.patch("rundesk.commands.providers.team.for_agent",
+                        side_effect=AssertionError("team was inspected")):
+            code, out, err = self.rundesk(
+                "providers", "instructions", agent, "--situation", "agent")
+        self.assertEqual(OK, code, err)
+        self.assertNotIn("Who else is here", out)
+        self.assertNotIn("\nagents", out)
 
     def test_a_past_turn_is_recomposed_and_compared_rather_than_read_back(self):
         """The fingerprint is re-derived, so changed composition is never shown as historical."""

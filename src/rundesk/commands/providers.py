@@ -162,7 +162,7 @@ def _instructions(agent: str, situation: str, only_layers: bool,
             return _failed("a turn belongs to an agent, so say which one",
                            "rundesk providers instructions <agent> --turn <turn>")
         return _what_a_turn_was_sent(agent, turn, only_layers)
-    may_hand_off = bool(agent and situation == BY_A_PERSON)
+    may_hand_off = bool(agent and situation in (BY_A_PERSON, "schedule"))
     return _shown(instructions.build(
         situation=SITUATIONS[situation], variables=_about(agent),
         team=team.for_agent(agent) if may_hand_off else ""), only_layers)

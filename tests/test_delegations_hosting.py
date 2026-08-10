@@ -165,6 +165,66 @@ class WhetherWorkIsWaitingOnUs(support.Isolated):
         self.assertFalse(hosting._is_waiting_on_us("bob", 999, "ava"))
 
 
+class StoppingWorkHandedHere(support.Isolated):
+    """A durable stop reaches the gateway that owns the delegated provider turn."""
+
+    def setUp(self):
+        super().setUp()
+        directory.made("ava", "a-stand-in")
+        directory.made("bob", "a-stand-in")
+        parent = arriving.asked_at_a_terminal("ava", "delegate the audit")
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute(
+                "INSERT INTO turns (conversation_id, provider_name, access_mode, turn_status,"
+                " created_at) VALUES (?, ?, ?, ?, ?)",
+                (parent.conversation, "a-stand-in", "work", "done",
+                 "2026-08-10T00:00:00Z"))
+            parent_turn = int(conn.execute("SELECT id FROM turns").fetchone()[0])
+        self.delegation = "del-1-aabbcc"
+        self.landed = arriving.recorded_for_a_delegation(
+            "bob", "ava", parent_turn, "audit it", delegation_id=self.delegation)
+        kept.made("ava", self.delegation, "bob", parent.conversation, parent_turn)
+        kept.stop_asked("ava", self.delegation)
+
+    def test_a_stop_is_routed_to_the_target_turn_and_never_starts_another(self):
+        calls = []
+
+        class Target:
+            def stop_this(inner, *args):
+                calls.append(("stop", args))
+                return True
+
+            def answer_this(inner, *args):
+                calls.append(("answer", args))
+
+        hosting._answered_what_was_handed_here("bob", directory.where("bob"), Target())
+
+        self.assertEqual([("stop", ("bob", self.landed.conversation,
+                                     self.delegation, "ava"))], calls)
+
+    def test_one_stop_failure_does_not_prevent_the_next_stop(self):
+        second = "del-1-ddeeff"
+        arriving.recorded_for_a_delegation(
+            "bob", "ava", 1, "audit exports", delegation_id=second)
+        kept.made("ava", second, "bob", 1, 1)
+        kept.stop_asked("ava", second)
+        calls = []
+
+        class Target:
+            def stop_this(inner, _agent, _conversation, delegation_id, _delegator):
+                calls.append(delegation_id)
+                if delegation_id == self.delegation:
+                    raise RuntimeError("provider is leaving")
+                return True
+
+            def answer_this(inner, *args):
+                raise AssertionError(f"stopped work was started: {args}")
+
+        hosting._answered_what_was_handed_here("bob", directory.where("bob"), Target())
+
+        self.assertEqual([self.delegation, second], calls)
+
+
 class WhatCountsAsTheAnswer(support.Isolated):
     """Only a reply newer than the ask. Without that clause a carried-on delegation is answered
     instantly with the reply to the previous task — measured, and it left the further work
@@ -199,6 +259,10 @@ class WhatCountsAsTheAnswer(support.Isolated):
     def test_the_reply_once_the_turn_is_terminal(self):
         self.answered_with("here is what I found")
         self.assertEqual("here is what I found", self.what())
+
+    def test_a_collected_answer_carries_its_terminal_status(self):
+        self.answered_with("here is what I found", status=hosting.STOPPED)
+        self.assertEqual(hosting.STOPPED, self.what().turn_status)
 
     def test_nothing_while_the_turn_is_still_going(self):
         self.answered_with("half a thought", status=hosting.WORKING)
@@ -484,7 +548,8 @@ class WhatARoomIsToldAboutWorkHandedOver(ARoomWatchingWorkHandedOver, support.Is
         """Six words in one vocabulary, of two kinds. A check-in is remembered per window and a
         thing that happened is remembered per moment, while what crosses the seam is the plain word
         — the elapsed time or the words that prompted it are which one it is."""
-        self.assertEqual((hosting.HANDED_OVER, hosting.STILL_WORKING, hosting.CAME_BACK),
+        self.assertEqual((hosting.HANDED_OVER, hosting.STILL_WORKING, hosting.CAME_BACK,
+                          hosting.STOPPED),
                          hosting.STANDS)
         self.assertEqual((hosting.GUIDED, hosting.STOPPING, hosting.CARRIED_ON), hosting.HAPPENED)
         self.assertEqual(hosting.STANDS + hosting.HAPPENED, hosting.SHOWN)
@@ -605,6 +670,18 @@ class WhatARoomIsToldWhenSomebodyReachesIntoTheWork(ARoomWatchingWorkHandedOver,
         self.showing.said.clear()
         kept.stop_asked("ava", "del-7-aabbcc")
         self.assertEqual([(hosting.STOPPING, "dev", "del-7-aabbcc", None)], self.swept())
+
+    def test_a_completed_requested_stop_is_shown_as_stopped_and_never_as_answered(self):
+        now = datetime.now(timezone.utc)
+        kept.made("ava", "del-7-aabbcc", "dev", self.conversation, self.turn,
+                  now=now - timedelta(minutes=5))
+        self.swept()
+        self.showing.said.clear()
+        kept.stop_asked("ava", "del-7-aabbcc", now=now)
+        kept.stopped("ava", "del-7-aabbcc", now=now)
+
+        self.assertEqual([(hosting.STOPPED, "dev", "del-7-aabbcc", 5 * 60)], self.swept())
+        self.assertNotIn(hosting.CAME_BACK, self.states())
 
     def test_a_stop_nothing_has_honoured_yet_does_not_silence_the_check_ins(self):
         """A stop is a request. Work that goes on regardless has to go on saying so, or the room's
@@ -865,7 +942,8 @@ class WhatMovesADelegationsLatestMoment(support.Isolated):
         # reason they are: what is being refused here is *words*, not columns.
         self.assertEqual(
             {"id", "delegation_id", "to_agent", "parent_conversation", "parent_turn",
-             "answered_at", "stop_asked_at", "created_at", "latest_at", "working_since"},
+             "answered_at", "stopped_at", "stop_asked_at", "created_at", "latest_at",
+             "working_since"},
             set(row.keys()))
 
 

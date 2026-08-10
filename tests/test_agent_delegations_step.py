@@ -170,6 +170,89 @@ class ThePhaseAStepLaterAdded(OneAgentsDelegations):
                          "a second run overwrote a phase start that was already there")
 
 
+class TheAgentsOneMayDelegateTo(OneAgentsDelegations):
+    """`0007`, which distinguishes the default open team from a deliberately empty one."""
+
+    THE_SCOPE_STEP = "0007_the_agents_one_may_delegate_to"
+
+    def test_a_made_agent_has_run_it_and_may_delegate_to_any_agent_by_default(self):
+        self.assertIn(self.THE_SCOPE_STEP,
+                      [one[0] for one in self.rows("SELECT key FROM migrations")])
+        self.assertEqual([(None,)],
+                         [tuple(one) for one in self.rows("SELECT delegates_to FROM config")])
+
+    def test_an_agent_carried_forward_gains_the_unrestricted_default(self):
+        self.write("ALTER TABLE config DROP COLUMN delegates_to")
+        self.back_to_before(self.THE_SCOPE_STEP)
+
+        self.assertIsNone(migration.carry_one("ava"))
+
+        self.assertIn("delegates_to",
+                      [one[1] for one in self.rows("PRAGMA table_info(config)")])
+        self.assertEqual([(None,)],
+                         [tuple(one) for one in self.rows("SELECT delegates_to FROM config")])
+
+    def test_an_explicit_empty_scope_round_trips_apart_from_the_default(self):
+        self.write("UPDATE config SET delegates_to = '[]'")
+        self.assertEqual([("[]",)],
+                         [tuple(one) for one in self.rows("SELECT delegates_to FROM config")])
+
+    def test_the_scope_is_either_null_or_a_json_array(self):
+        for invalid in ('not json', '"forge"', '{"agent":"forge"}'):
+            with self.subTest(invalid=invalid), self.assertRaises(sqlite3.IntegrityError):
+                self.write("UPDATE config SET delegates_to = ?", invalid)
+
+    def test_running_it_twice_is_the_same_as_running_it_once(self):
+        self.write("UPDATE config SET delegates_to = '[\"forge\"]'")
+        self.back_to_before(self.THE_SCOPE_STEP)
+
+        self.assertIsNone(migration.carry_one("ava"))
+
+        self.assertEqual([('["forge"]',)],
+                         [tuple(one) for one in self.rows("SELECT delegates_to FROM config")],
+                         "a second run reset the scope an owner had already configured")
+
+
+class TheStoppedOutcome(OneAgentsDelegations):
+    """`0008` gives an owner-requested end its own durable terminal outcome."""
+
+    THE_STOPPED_STEP = "0008_a_stopped_delegation_is_not_an_answer"
+
+    def test_a_made_agent_has_run_it(self):
+        self.assertIn(self.THE_STOPPED_STEP,
+                      [one[0] for one in self.rows("SELECT key FROM migrations")])
+
+    def test_an_agent_carried_forward_gains_the_column_and_keeps_its_rows(self):
+        self.a_delegation()
+        self.write("DROP INDEX idx_delegations_waiting")
+        self.write("ALTER TABLE delegations DROP COLUMN stopped_at")
+        self.write("CREATE INDEX idx_delegations_waiting ON delegations(to_agent) "
+                   "WHERE answered_at IS NULL")
+        self.back_to_before(self.THE_STOPPED_STEP)
+
+        self.assertIsNone(migration.carry_one("ava"))
+
+        self.assertIn("stopped_at",
+                      [one[1] for one in self.rows("PRAGMA table_info(delegations)")])
+        self.assertEqual([("del-1-aaaa",)],
+                         [tuple(one) for one in self.rows(
+                             "SELECT delegation_id FROM delegations")])
+        self.assertIn("stopped_at IS NULL",
+                      self.rows("SELECT sql FROM sqlite_master "
+                                "WHERE name = 'idx_delegations_waiting'")[0][0])
+
+    def test_running_it_twice_keeps_an_existing_stopped_outcome(self):
+        self.a_delegation()
+        self.write("UPDATE delegations SET stopped_at = '2026-08-10T12:00:00Z'")
+        self.back_to_before(self.THE_STOPPED_STEP)
+
+        self.assertIsNone(migration.carry_one("ava"))
+
+        self.assertEqual([("2026-08-10T12:00:00Z",)],
+                         [tuple(one) for one in self.rows(
+                             "SELECT stopped_at FROM delegations")])
+
+
 class WhatTheConstraintsRefuse(OneAgentsDelegations):
     """Every rule the table holds, watched refusing something."""
 

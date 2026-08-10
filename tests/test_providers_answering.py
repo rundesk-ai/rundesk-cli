@@ -1189,6 +1189,18 @@ class AnAnswerHandedBackReachesThePersonWhoAsked(Answering):
         self.assertEqual(already, len(self.delivered()),
                          "the answering agent's own room was told about somebody else's work")
 
+    def test_a_delegation_stop_routes_its_pending_brief_to_the_turn_boundary(self):
+        landed = arriving.recorded_for_a_delegation(
+            self.agent, "ava", 3, "audit it", delegation_id="del-3-abcdef")
+        with mock.patch.object(answering.turns, "stop_or_settle_pending",
+                               return_value=True) as stopped:
+            result = self.a_delegation_tenant().stop_this(
+                self.agent, landed.conversation, "del-3-abcdef", "ava")
+
+        self.assertTrue(result)
+        stopped.assert_called_once_with(
+            self.agent, landed.conversation, (landed.message,))
+
 
 class WhatARoomIsToldWhileWorkIsOut(Answering):
     """The notices, the whole way out: the tenant's word, through the seam, onto a real adapter.

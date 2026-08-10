@@ -240,6 +240,26 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
         self.assertIn("agents", [one["name"] for one in said["layers"]])
         self.assertEqual(listed, said["team"])
 
+    def test_a_delegation_stopped_before_start_is_settled_without_launching_a_provider(self):
+        landed = arriving.recorded_for_a_delegation(
+            self.agent, "bob", 12, "audit it", delegation_id="del-12-aabbcc")
+        with mock.patch.object(turns.adapters, "talking_to",
+                               side_effect=AssertionError("a provider was launched")):
+            stopped = turns.stop_or_settle_pending(
+                self.agent, landed.conversation, (landed.message,))
+
+        self.assertTrue(stopped)
+        recorded = kept.list_turns(self.agent)[0]
+        self.assertEqual(kept.STOPPED, recorded["turn_status"])
+        self.assertEqual(protocol.CANCELLED, recorded["failure_code"])
+        self.assertEqual(recorded["id"], arriving.turn_for_message(
+            self.agent, landed.conversation, landed.message))
+
+    def test_a_delegation_stop_reaches_a_live_turn(self):
+        with turns._stoppable(self.agent, 71) as active:
+            self.assertTrue(turns.stop_or_settle_pending(self.agent, 71, ()))
+            self.assertTrue(active.asked)
+
     def test_what_was_asked_is_written_before_the_brain_is_started(self):
         got = self.run_turn()
         sent = [one for one in kept.list_turn_records("ava", got.turn)

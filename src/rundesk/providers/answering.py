@@ -865,6 +865,12 @@ class OnADelegation(IntoAChannel):
                          args=(agent, conversation, delegation_id, delegator),
                          daemon=True).start()
 
+    def stop_this(self, agent: str, conversation: int, delegation_id: str,
+                  delegator: str) -> bool:
+        """End delegated work, including a brief stopped before its provider began."""
+        _body, messages = _delegated_prompt(agent, conversation, delegator)
+        return turns.stop_or_settle_pending(agent, conversation, messages)
+
     def review_this(self, agent: str, conversation: int, answer: str, from_agent: str,
                     delegation_id: str = "", answer_id: str = "") -> bool:
         """Put an answer in front of the agent that asked for it.

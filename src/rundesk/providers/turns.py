@@ -508,6 +508,42 @@ def stop(agent: str, conversation: int) -> bool:
     return True
 
 
+def stop_or_settle_pending(agent: str, conversation: int,
+                           inbound_messages: Tuple[int, ...]) -> bool:
+    """Stop a live turn, or make an unstarted inbound delegation terminal without a provider.
+
+    The conversation claim closes the race with the worker thread a previous gateway beat may have
+    spawned. If that worker owns the claim but has not published itself in `_running` yet, `Busy`
+    leaves the durable stop request for the next beat instead of inventing a second turn.
+    """
+    if stop(agent, conversation):
+        return True
+    if not inbound_messages:
+        return False
+    try:
+        with claiming(agent, conversation):
+            settled = records.read(directory.records(agent))
+            turn = kept.add_turn(agent, {
+                "conversation_id": conversation,
+                "provider_name": str(settled.get("provider_name") or ""),
+                "access_mode": protocol.ACCESS_WORK,
+            })
+            try:
+                arriving.handled_by_turn(agent, conversation, inbound_messages, turn)
+                kept.add_turn_record(
+                    agent, turn, ADMITTED, {"messages": list(inbound_messages)})
+            finally:
+                kept.finish_turn(
+                    agent, turn, kept.STOPPED,
+                    {"failure_code": protocol.CANCELLED,
+                     "failure_message": "this delegated work was stopped before it began"})
+            return True
+    except Busy:
+        # `claiming` precedes `_stoppable` by only the publication window. Reach once more now; if
+        # it is still between those two points, the durable row makes the next beat retry.
+        return stop(agent, conversation)
+
+
 @contextlib.contextmanager
 def _stoppable(agent: str, conversation: int) -> Iterator[Ours]:
     """Publish this turn as one this process can end, for exactly as long as that is true.

@@ -117,6 +117,25 @@ class DeliveringExactlyOnce(TwoAgents):
         self.assertFalse(kept.answered("ava", "del-9-zzzz"))
 
 
+class StoppingExactlyOnce(TwoAgents):
+    """A requested stop is terminal without pretending an answer came back."""
+
+    def test_stopped_work_is_terminal_and_distinct_from_answered_work(self):
+        self.ava_delegates()
+
+        self.assertTrue(kept.stopped("ava", "del-1-aaaa"))
+        one = kept.one("ava", "del-1-aaaa")
+
+        self.assertIsNotNone(one.stopped_at)
+        self.assertIsNone(one.answered_at)
+        self.assertEqual([], kept.outstanding("ava", to_agent="bob"))
+
+    def test_only_the_first_gateway_pass_can_settle_the_stop(self):
+        self.ava_delegates()
+        self.assertTrue(kept.stopped("ava", "del-1-aaaa"))
+        self.assertFalse(kept.stopped("ava", "del-1-aaaa"))
+
+
 class WhenThePhaseOfWorkBegan(TwoAgents):
     """`working_since`, and the one verb that is allowed to move it.
 

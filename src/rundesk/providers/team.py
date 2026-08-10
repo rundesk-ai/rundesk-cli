@@ -7,7 +7,7 @@ and `skills`; neither lower layer has to know the other exists.
 
 import sqlite3
 
-from rundesk.agents import directory, records
+from rundesk.agents import delegating, directory, records
 from rundesk.skills import grants
 from rundesk.utils import locking
 
@@ -17,11 +17,17 @@ TEAM_BYTES_AT_MOST = 5720
 
 
 def for_agent(name: str) -> str:
-    """Every described agent except `name`, with a bounded list of current skill names."""
+    """Every permitted, described agent except `name`, with bounded current skill names."""
     lines = []
     unavailable = 0
+    try:
+        scope = delegating.scope_of(name)
+    except (delegating.Refused, directory.Refused, records.NotThere, records.Unreadable,
+            sqlite3.DatabaseError, OSError):
+        # An unreadable authority is never widened to the historical unrestricted default.
+        return ""
     for other in directory.known():
-        if other == name:
+        if other == name or not delegating.allows(scope, other):
             continue
         held = locking.is_held(directory.where(other) / directory.GATEWAY_LOCK)
         if held is None:

@@ -67,6 +67,24 @@ class Listing(support.Isolated):
                 if line.startswith(("ada ", "cole "))}
         self.assertEqual({"ada": "no", "cole": "yes"}, rows)
 
+    def test_it_lists_each_agents_outbound_delegation_scope(self):
+        for name in ("cole", "forge", "trace"):
+            self.rundesk("agents", "add", name, "--provider", "claude")
+        self.assertEqual(OK, self.rundesk(
+            "agents", "configure", "cole", "--delegate-to", "forge")[0])
+        self.assertEqual(OK, self.rundesk(
+            "agents", "configure", "trace", "--delegate-to-none")[0])
+
+        code, out, err = self.rundesk("agents")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("DELEGATES TO", out)
+        rows = {line.split()[0]: line for line in out.splitlines()
+                if line.startswith(("cole ", "forge ", "trace "))}
+        self.assertIn("forge", rows["cole"])
+        self.assertIn("any", rows["forge"])
+        self.assertIn("none", rows["trace"])
+
     def test_it_lists_current_skill_names_for_routing(self):
         catalogs.place_bundled()
         self.rundesk("agents", "add", "cole", "--provider", "claude")
@@ -347,6 +365,71 @@ class Configuring(support.Isolated):
         self.assertIn("--self-improve", out)
         self.assertRegex(out, r"yes\s+or no")
 
+    def test_repeated_delegate_targets_replace_the_scope_as_one_setting(self):
+        for name in ("forge", "trace"):
+            self.rundesk("agents", "add", name, "--provider", "claude")
+
+        code, out, err = self.rundesk(
+            "agents", "configure", "cole",
+            "--delegate-to", "forge", "--delegate-to", "trace")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("forge", out)
+        self.assertIn("trace", out)
+        settled = json.loads(records.read(directory.records("cole"))["delegates_to"])
+        self.assertEqual({"forge", "trace"}, set(settled))
+
+    def test_delegate_to_none_makes_an_agent_inbound_only(self):
+        code, out, err = self.rundesk(
+            "agents", "configure", "cole", "--delegate-to-none")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("may not delegate to another named agent now", out)
+        self.assertEqual([], json.loads(
+            records.read(directory.records("cole"))["delegates_to"]))
+
+    def test_delegate_to_any_restores_the_compatible_default(self):
+        self.assertEqual(OK, self.rundesk(
+            "agents", "configure", "cole", "--delegate-to-none")[0])
+
+        code, out, err = self.rundesk(
+            "agents", "configure", "cole", "--delegate-to-any")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("any", out)
+        self.assertIsNone(records.read(directory.records("cole"))["delegates_to"])
+
+    def test_an_unknown_delegate_target_refuses_every_named_change(self):
+        code, out, err = self.rundesk(
+            "agents", "configure", "cole", "--provider", "openai",
+            "--delegate-to", "not-an-agent")
+
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("not-an-agent is not an agent", err)
+        settled = records.read(directory.records("cole"))
+        self.assertEqual("claude", settled["provider_name"])
+        self.assertIsNone(settled["delegates_to"])
+
+    def test_an_agent_cannot_put_itself_in_its_delegate_scope(self):
+        code, out, err = self.rundesk(
+            "agents", "configure", "cole", "--delegate-to", "cole")
+
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("cannot be configured to delegate to itself", err)
+        self.assertIsNone(records.read(directory.records("cole"))["delegates_to"])
+
+    def test_scope_modes_are_mutually_exclusive(self):
+        self.rundesk("agents", "add", "forge", "--provider", "claude")
+
+        code, _out, _err = self.rundesk(
+            "agents", "configure", "cole", "--delegate-to", "forge",
+            "--delegate-to-none")
+
+        self.assertEqual(USAGE, code)
+        self.assertIsNone(records.read(directory.records("cole"))["delegates_to"])
+
 
 class Removing(support.Isolated):
     """`rundesk agents remove <agent> --confirm`."""
@@ -367,6 +450,30 @@ class Removing(support.Isolated):
         self.rundesk("agents", "remove", "cole", "--confirm")
         self.assertFalse((paths.agents() / "cole").exists())
         self.assertEqual([], directory.known())
+
+    def test_removing_a_target_revokes_it_from_explicit_allowlists_before_recreation(self):
+        self.rundesk("agents", "add", "ava", "--provider", "claude")
+        self.assertEqual(OK, self.rundesk(
+            "agents", "configure", "ava", "--delegate-to", "cole")[0])
+
+        self.assertEqual(OK, self.rundesk(
+            "agents", "remove", "cole", "--confirm")[0])
+        self.assertEqual([], json.loads(
+            records.read(directory.records("ava"))["delegates_to"]))
+
+        self.assertEqual(OK, self.rundesk(
+            "agents", "add", "cole", "--provider", "claude")[0])
+        self.assertEqual([], json.loads(
+            records.read(directory.records("ava"))["delegates_to"]))
+
+    def test_removing_a_target_does_not_narrow_an_unrestricted_agent(self):
+        self.rundesk("agents", "add", "ava", "--provider", "claude")
+        self.assertIsNone(records.read(directory.records("ava"))["delegates_to"])
+
+        self.assertEqual(OK, self.rundesk(
+            "agents", "remove", "cole", "--confirm")[0])
+
+        self.assertIsNone(records.read(directory.records("ava"))["delegates_to"])
 
     def test_without_confirming_it_says_what_it_would_take_and_takes_none_of_it(self):
         code, out, err = self.rundesk("agents", "remove", "cole")
