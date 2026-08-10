@@ -51,6 +51,14 @@ class Reconciled(NamedTuple):
     why: str = ""
 
 
+class Daily(NamedTuple):
+    """One daily attempt, including work that must be queued after its claim is released."""
+
+    code: int
+    queue_reason: str = ""
+    request_waiting: bool = False
+
+
 class CouldNotStop(Exception):
     """An uninstall could not exclude every queued or running update."""
 
@@ -182,11 +190,16 @@ def queued(reason: str, starting=None, environ: Optional[Dict[str, str]] = None)
         with locking.only_one(paths.update_lock(), guarding="queueing this update"):
             _written_privately(
                 request_at(one), (json.dumps(request, sort_keys=True) + "\n").encode(), 0o600)
-            if locking.is_held(queue_lock_at(one)) is not True:
-                (starting or _start_queued_runner)(one)
+            _ensure_queued_runner(one, starting)
     except (locking.Stuck, OSError, ValueError, programs.CouldNotStart) as why:
         return f"the update could not be queued ({why})"
     return f"update queued until current work finishes — {reason}"
+
+
+def _ensure_queued_runner(one: Coordinator, starting=None) -> None:
+    """Start one waiter when none owns the queue claim; an existing waiter is enough."""
+    if locking.is_held(queue_lock_at(one)) is not True:
+        (starting or _start_queued_runner)(one)
 
 
 def _start_queued_runner(one: Coordinator) -> int:
@@ -393,7 +406,7 @@ def standing(supervising: Optional[job.Supervising] = None,
 
 
 def run(now: Optional[datetime.datetime] = None, **updating: object) -> int:
-    """Run today's automatic attempt, deferring safely while install work is active."""
+    """Run today's automatic attempt, queueing safely while install work is active."""
     one = coordinator()
     moment = (now or datetime.datetime.now()).astimezone()
     today = moment.date().isoformat()
@@ -401,7 +414,24 @@ def run(now: Optional[datetime.datetime] = None, **updating: object) -> int:
         logs.rotated(capture, CAPTURE_BYTES, CAPTURES_KEPT)
     try:
         with locking.only_one(queue_lock_at(one), guarding="running the daily update", waiting=0):
-            return _run(one, today, **updating)
+            attempt = _run(one, today, **updating)
+        if not attempt.queue_reason:
+            return attempt.code
+        try:
+            if attempt.request_waiting:
+                _ensure_queued_runner(one)
+                said = f"update already queued until current work finishes — {attempt.queue_reason}"
+            else:
+                said = queued(attempt.queue_reason)
+        except (OSError, ValueError, programs.CouldNotStart) as why:
+            said = f"the update could not be queued ({why})"
+        if said.startswith("the update could not"):
+            _complete(one, today, "FAILED")
+            _note(one, f"FAILED — {said}", logs.ERROR)
+            return FAILED
+        _complete(one, today, "DEFERRED")
+        _note(one, f"DEFERRED — {said}", logs.WARNING)
+        return OK
     except locking.Stuck:
         _note(one, "SKIPPED — another queued or daily update worker is active")
         return OK
@@ -410,31 +440,27 @@ def run(now: Optional[datetime.datetime] = None, **updating: object) -> int:
         return FAILED
 
 
-def _run(one: Coordinator, today: str, **updating: object) -> int:
+def _run(one: Coordinator, today: str, **updating: object) -> Daily:
     """One serialised daily/queue-recovery attempt."""
     try:
         if _completed(one) == today and not request_at(one).is_file():
             _note(one, "SKIPPED — today's automatic update already completed")
-            return OK
+            return Daily(OK)
         configured = config.read(paths.data())
         if not configured["update_enabled"] and not request_at(one).is_file():
             _complete(one, today, "DISABLED")
             _note(one, "DISABLED — automatic updates are not enabled")
-            return OK
+            return Daily(OK)
         busy = _busy_reason()
         if busy:
-            _complete(one, today, "DEFERRED")
-            _note(one, f"DEFERRED — {busy}", logs.WARNING)
-            return OK
+            return Daily(OK, busy, request_at(one).is_file())
         _note(one, "STARTED")
         from rundesk.commands import update
         claimed = _claim_request(one)
         try:
             attempt = update.attempt_update(argparse.Namespace(), **updating)
             if attempt.queued:
-                _complete(one, today, "DEFERRED")
-                _note(one, "DEFERRED — work began before update admission closed", logs.WARNING)
-                return OK
+                return Daily(OK, "work began before update admission closed", True)
             if attempt.code == OK:
                 _remove_claimed_request(one, claimed)
         finally:
@@ -443,10 +469,10 @@ def _run(one: Coordinator, today: str, **updating: object) -> int:
         outcome = "SUCCEEDED" if attempt.code == OK else "FAILED"
         _complete(one, today, outcome)
         _note(one, outcome, logs.INFO if attempt.code == OK else logs.ERROR)
-        return attempt.code
+        return Daily(attempt.code)
     except (config.Unreadable, OSError) as why:
         _note(one, f"FAILED — {why}", logs.ERROR)
-        return FAILED
+        return Daily(FAILED)
 
 
 def status(supervising: Optional[job.Supervising] = None,

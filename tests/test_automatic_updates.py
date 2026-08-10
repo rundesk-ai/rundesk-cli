@@ -129,17 +129,57 @@ class AutomaticUpdates(Isolated):
         called.assert_called_once()
         self.assertEqual(automatic_updates._completed(automatic_updates.coordinator()), "2026-11-01")
 
-    def test_busy_install_defers_without_invoking_the_updater(self) -> None:
+    def test_busy_install_queues_after_releasing_the_daily_claim(self) -> None:
         called = mock.Mock(return_value=update.Attempt(OK, False))
+        started = []
+
+        def start(one):
+            started.append((automatic_updates.request_at(one).is_file(),
+                            locking.is_held(automatic_updates.queue_lock_at(one))))
+            return 41
+
         with mock.patch("rundesk.commands.update.attempt_update", called), \
                 mock.patch.object(automatic_updates, "_busy_reason",
-                                  return_value="piper has an active provider turn"):
+                                  return_value="piper has an active provider turn"), \
+                mock.patch.object(automatic_updates, "_start_queued_runner", side_effect=start):
             result = automatic_updates.run(datetime.datetime(2026, 8, 8, 3, 0).astimezone())
 
         self.assertEqual(result, OK)
         called.assert_not_called()
+        self.assertEqual([(True, False)], started,
+                         "the worker started before the daily coordinator released its claim")
+        request = json.loads(automatic_updates.request_at(
+            automatic_updates.coordinator()).read_text())
+        self.assertEqual("piper has an active provider turn", request["reason"])
         state = automatic_updates.state_at(automatic_updates.coordinator()).read_text()
         self.assertIn('"outcome": "DEFERRED"', state)
+
+    def test_a_busy_daily_attempt_does_not_replace_an_existing_manual_request(self) -> None:
+        automatic_updates.queued("manual request", starting=lambda _one: 41, environ={})
+        one = automatic_updates.coordinator()
+        before = automatic_updates.request_at(one).stat()
+        with mock.patch.object(automatic_updates, "_busy_reason", return_value="busy"), \
+                mock.patch.object(automatic_updates, "_start_queued_runner", return_value=42):
+            result = automatic_updates.run(
+                datetime.datetime(2026, 8, 8, 3, 0).astimezone())
+
+        after = automatic_updates.request_at(one).stat()
+        request = json.loads(automatic_updates.request_at(one).read_text())
+        self.assertEqual(OK, result)
+        self.assertEqual((before.st_dev, before.st_ino), (after.st_dev, after.st_ino))
+        self.assertEqual("manual request", request["reason"])
+
+    def test_a_daily_queue_start_failure_keeps_the_request_and_reports_failure(self) -> None:
+        with mock.patch.object(automatic_updates, "_busy_reason", return_value="busy"), \
+                mock.patch.object(automatic_updates, "_start_queued_runner",
+                                  side_effect=OSError("could not spawn")):
+            result = automatic_updates.run(
+                datetime.datetime(2026, 8, 8, 3, 0).astimezone())
+
+        one = automatic_updates.coordinator()
+        self.assertEqual(FAILED, result)
+        self.assertTrue(automatic_updates.request_at(one).is_file())
+        self.assertIn('"outcome": "FAILED"', automatic_updates.state_at(one).read_text())
 
     def test_failed_update_is_not_reported_as_success(self) -> None:
         with mock.patch("rundesk.commands.update.attempt_update",
@@ -278,13 +318,21 @@ class AutomaticUpdates(Isolated):
 
     def test_a_turn_winning_the_final_race_keeps_the_request_deferred(self) -> None:
         automatic_updates.queued("earlier work", starting=lambda _one: 41, environ={})
+        started = []
+
+        def start(one):
+            started.append(locking.is_held(automatic_updates.queue_lock_at(one)))
+            return 42
+
         with mock.patch.object(automatic_updates, "_busy_reason", return_value=""), \
                 mock.patch("rundesk.commands.update.attempt_update",
-                           return_value=update.Attempt(OK, True)):
+                           return_value=update.Attempt(OK, True)), \
+                mock.patch.object(automatic_updates, "_start_queued_runner", side_effect=start):
             result = automatic_updates.run(
                 datetime.datetime(2026, 8, 8, 3, 0).astimezone())
 
         self.assertEqual(OK, result)
+        self.assertEqual([False], started)
         self.assertTrue(automatic_updates.request_at(automatic_updates.coordinator()).is_file())
         self.assertIn('"outcome": "DEFERRED"',
                       automatic_updates.state_at(automatic_updates.coordinator()).read_text())

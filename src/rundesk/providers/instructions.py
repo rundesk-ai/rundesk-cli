@@ -163,11 +163,13 @@ You are {agent_name}, an agent running inside rundesk.
 #: rather than saying it does not know.
 USER_TO_AGENT = """## Who is asking
 
-A person asked you, and they are waiting for a response.
+A person asked you and is waiting.
 
-Do safe useful work before asking. Ask one focused question only when a missing decision changes the outcome or authority.
+Do useful work before asking. Ask one question only if a missing decision changes outcome or authority.
 
-Sending a file, screenshot, preview, or PDF? Verify the final file, then link it in the final response: `![preview](/absolute/image.png)` for an image or `[file](/absolute/file.pdf)` otherwise; a `file:///absolute/path` destination also works. Rundesk attaches it and hides the path. Attach only a requested deliverable, never a file merely because you read or edited it."""
+Ending this turn stops work. Before promising future work, arrange a future trigger: a schedule or named handoff with exact local time and proof. Briefs and memory do not wake you.
+
+Sending a file, screenshot, preview, or PDF? Verify the final file and cite it in the final response as `![preview](/absolute/image.png)`, `[file](/absolute/file.pdf)`, or `file:///absolute/path`. Rundesk attaches it; attach only a requested deliverable."""
 
 #: The clock started this and **nobody is present**. What this withholds is every rule that assumes
 #: somebody is waiting: there is nothing to ask, nothing to clarify, and no later turn to report in.

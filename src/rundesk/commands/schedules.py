@@ -92,6 +92,8 @@ def register(sub: Subcommands) -> None:
     every = what.add_parser("list", help="what one agent has scheduled, or every agent's")
     every.add_argument("agent", metavar="<agent>", nargs="?", default=None,
                        help="which agent — with none, every agent on this install")
+    every.add_argument("--expired", action="store_true",
+                       help="list only schedules that can never run again")
 
     new = what.add_parser("add", help="schedule something")
     _named(new)
@@ -156,7 +158,7 @@ def cmd_schedules(args: argparse.Namespace) -> int:
 
     what = getattr(args, "what", None)
     if what in (None, "list"):
-        return _listed(getattr(args, "agent", None))
+        return _listed(getattr(args, "agent", None), bool(getattr(args, "expired", False)))
     if what == "add":
         return _added(args)
     if what == "update":
@@ -173,8 +175,8 @@ def cmd_schedules(args: argparse.Namespace) -> int:
     raise AssertionError(f"schedules {what} is registered on the parser and answered by nothing")
 
 
-def _listed(agent: Optional[str]) -> int:
-    """Every schedule there is, or one agent's, with when each next runs and what it last did.
+def _listed(agent: Optional[str], expired_only: bool = False) -> int:
+    """Current schedules, or expired schedules when asked, with next and last outcomes.
 
     Where they are kept is printed even when there are none, for the reason `agents` prints it: "no
     schedules" and "no schedules *for this agent*" are different things to learn, and somebody
@@ -198,17 +200,21 @@ def _listed(agent: Optional[str]) -> int:
     print(where)
     rows: List[Tuple[str, ...]] = []
     for name in names:
-        rows.extend(_rows_for(name, showing_who=agent is None))
+        rows.extend(_rows_for(name, showing_who=agent is None, expired_only=expired_only))
     if not rows:
-        print("        nothing is scheduled yet — add one with: rundesk schedules add "
-              "<agent> <schedule> --when '<cron>' --run '<program>'")
+        if expired_only:
+            print("        no schedules are expired")
+        else:
+            print("        nothing is scheduled yet — add one with: rundesk schedules add "
+                  "<agent> <schedule> --when '<cron>' --run '<program>'")
         return OK
     head = ("SCHEDULE", "WHEN", "NEXT", "LAST")
     as_table(("AGENT", *head) if agent is None else head, rows)
     return OK
 
 
-def _rows_for(agent: str, showing_who: bool) -> List[Tuple[str, ...]]:
+def _rows_for(agent: str, showing_who: bool,
+              expired_only: bool = False) -> List[Tuple[str, ...]]:
     """One agent's schedules as lines of a table, or one line saying why they could not be read."""
     now = _now()
     try:
@@ -222,13 +228,15 @@ def _rows_for(agent: str, showing_who: bool) -> List[Tuple[str, ...]]:
     if not standing["running"] and standing["last_outcome"]:
         last = f"{standing['last_outcome']} {_as_local(standing['last_run_at'])}"
     rows = []
-    if not standing["conflict"]:
+    if not expired_only and not standing["conflict"]:
         rows.append((*prefix, upkeep.NAME, "after 7 usage dates", str(standing["next"]), last))
     for row in found:
         if row.get("name") == upkeep.NAME and row.get("provider_name") == kept.UPKEEP_PROVIDER:
             continue
         try:
             one = due.understood(row)
+            if due.expired(one, now) != expired_only:
+                continue
             when = one.cron or one.run_at or ""
             following = due.describe(one, now)
         except due.NotASchedule as why:

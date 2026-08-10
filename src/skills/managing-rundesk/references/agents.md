@@ -14,6 +14,19 @@ do not edit its database to change identity or provider.
 
 Prefix every command with `"$RUNDESK_COMMAND"`.
 
+## Write the delegation description
+
+Treat `--describes` as a routing contract, not a biography. In one sentence, name the durable
+responsibility it owns and the domain, project, client, or operating boundary that lets another
+agent decide whether to delegate there. Describe ownership, not merely abilities: a specialist may
+have many skills without owning every task those skills could perform.
+
+Do not use transient assignments, current status, provider or model names, or a skill inventory as
+the description. Put changing task state in the task's own tracker and let `agents` report provider
+and grants. Update the description when durable responsibility changes; remove it only when the
+agent should no longer appear to other agents as a delegation route. Verify the stored sentence with
+`agents` after every change.
+
 ## Safe operating flow
 
 1. Run `providers` and `providers check <provider>`. Recording a provider does not prove it can run.

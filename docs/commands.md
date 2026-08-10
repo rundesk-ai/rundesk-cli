@@ -649,8 +649,9 @@ hand, and the display remains free to sleep.
 
 Work an agent starts because the time came, rather than because somebody asked. A schedule belongs to
 one agent and lives in that agent's own records, so no other agent can run it, report on it or change
-it — and the gateway hosting that agent is what fires it. With no sub-verb it lists every schedule on
-the install; with an agent it lists that agent's.
+it — and the gateway hosting that agent is what fires it. With no sub-verb it lists every schedule
+that can still run on the install; with an agent it lists that agent's. Expired schedules stay out of
+the ordinary operational view; `rundesk schedules list [<agent>] --expired` lists only those.
 
 What a schedule is, and every state one can get stuck in, is [`schedules.md`](schedules.md). This is
 what each verb guarantees and what each refuses.
@@ -682,10 +683,10 @@ cole   once      2026-09-01T06:00  2026-09-01 06:00  never ran
 ```
 
 `NEXT` is a local minute, or one of three words that are not times: `off` for a schedule somebody
-switched off, `expired` for one that can never be due again, and `never` for one whose date does not
-arrive — `0 0 30 2 *` says the thirtieth of February. `LAST` tells `never ran` from an outcome,
-because an owner seeing only that a schedule is spent cannot tell work that happened from work that
-silently did not, and it says `running` while work is in flight.
+switched off, `expired` in an `--expired` listing for one that can never be due again, and `never`
+for one whose date does not arrive — `0 0 30 2 *` says the thirtieth of February. `LAST` tells
+`never ran` from an outcome, because an owner seeing only that a schedule is spent cannot tell work
+that happened from work that silently did not, and it says `running` while work is in flight.
 
 The protected upkeep row instead says `after 7 usage dates`; its `NEXT` is `off`, `due`, or the
 number of additional usage dates needed. Disabling it does not erase accumulated usage, so turning
@@ -1784,10 +1785,11 @@ When `update_enabled` is on, launchd makes one attempt per local calendar day at
 The coordinator is outside every gateway process tree and uses the same update transaction as this
 command. Before asking for a release it closes work admission and inspects kernel-held provider and
 schedule claims. Active work, or activity that cannot be inspected safely, produces a logged
-`DEFERRED` outcome and no fetch, gateway stop, or forced termination; the next attempt is the next
-local day, unless a durable manual request is already waiting, in which case the coordinator also
-acts as its recovery path. Repeated launchd starts on the same day are logged and skipped. Failures
-remain non-zero and recover through the same rerunnable settlement path as a manual update.
+`DEFERRED` outcome and a private durable request; one detached install-level worker waits until all
+turns and schedules finish, then uses the same update transaction without forcing work down. A
+request already waiting is preserved and given a worker rather than replaced. Repeated launchd
+starts while that worker owns the queue claim are logged and skipped. Failures remain non-zero and
+the durable worker retries through the same rerunnable settlement path as a manual update.
 The job carries a fixed minimal system `PATH`, so reconciliation and status do not change according
 to the shell or development environment that happened to invoke them.
 

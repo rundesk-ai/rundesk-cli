@@ -212,6 +212,19 @@ class WhatAShippedSkillMayClaim(Bundled):
                 self.assertIn(preview, skills)
                 self.assertIn(f"{preview} --confirm", skills)
 
+    def test_agent_descriptions_are_taught_as_delegation_routing_contracts(self):
+        skill = self.skills / "managing-rundesk" / "references"
+        agents = " ".join((skill / "agents.md").read_text(encoding="utf-8").split())
+        delegations = " ".join(
+            (skill / "delegations.md").read_text(encoding="utf-8").split())
+        for phrase in ("routing contract, not a biography", "durable responsibility it owns",
+                       "Do not use transient assignments", "Update the description when"):
+            with self.subTest(reference="agents", phrase=phrase):
+                self.assertIn(phrase, agents)
+        for phrase in ("Choose the target from its description", "Do not infer ownership"):
+            with self.subTest(reference="delegations", phrase=phrase):
+                self.assertIn(phrase, delegations)
+
     def test_managing_rundesk_routes_desk_cli_catalog_and_binary_separately(self):
         skills = (self.skills / "managing-rundesk" / "references" / "skills.md").read_text(
             encoding="utf-8")
