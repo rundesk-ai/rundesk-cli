@@ -209,7 +209,8 @@ VERSION = "version"
 AGENTS = "agents"
 SKILLS = "skills"
 SCHEDULES = "schedules"
-QUERIES = (STATUS, VERSION, AGENTS, SKILLS, SCHEDULES)
+DELEGATIONS = "delegations"
+QUERIES = (STATUS, VERSION, AGENTS, SKILLS, SCHEDULES, DELEGATIONS)
 
 #: How many gestures waiting on an answer are held. A person cannot type faster than a handful, and
 #: an adapter that asked and went away would otherwise leave one behind for every question.
@@ -314,7 +315,7 @@ class Steering(Protocol):
     def controlled(self, agent: str, kind: str, place: str, who: str, control: str) -> str:
         ...
 
-    def asked(self, agent: str, who: str, query: str) -> str:
+    def asked(self, agent: str, kind: str, place: str, who: str, query: str) -> str:
         ...
 
     def configured(self, agent: str, kind: str, place: str, who: str, provider: str) -> str:
@@ -1209,7 +1210,7 @@ def _gestured(agent: str, where: Path, one: Running, record: Dict[str, Any],
             query = str(record.get("query") or "")
             if query not in QUERIES:
                 return
-            said = one.steering.asked(agent, who, query)
+            said = one.steering.asked(agent, kind, place, who, query)
         else:
             provider = str(record.get("provider") or "")
             said = one.steering.configured(agent, kind, place, who, provider)

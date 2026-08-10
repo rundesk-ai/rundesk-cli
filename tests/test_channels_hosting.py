@@ -339,8 +339,8 @@ class _SteeringStub:
         self.controlled_with.append((agent, kind, place, who, control))
         return self._answer(f"{self._answering}: {control}")
 
-    def asked(self, agent, who, query):
-        self.asked_with.append((agent, who, query))
+    def asked(self, agent, kind, place, who, query):
+        self.asked_with.append((agent, kind, place, who, query))
         return self._answer(f"{self._answering}: {query}")
 
     def configured(self, agent, kind, place, who, provider):
@@ -1747,7 +1747,8 @@ class WhatAGestureReaches(Hosting):
         self.gesturing(self.a_gesture(say="query", query=hosting.AGENTS, control=None), steering)
 
         self.assertTrue(support.waited_until(lambda: steering.asked_with, PATIENCE))
-        self.assertEqual((self.agent, "2207", hosting.AGENTS), steering.asked_with[0])
+        self.assertEqual((self.agent, "discord", "1180", "2207", hosting.AGENTS),
+                         steering.asked_with[0])
         self.assertTrue(support.waited_until(lambda: self.answered(), PATIENCE))
 
     def test_changing_the_brain_carries_what_was_typed(self):
@@ -1786,6 +1787,18 @@ class WhatAGestureReaches(Hosting):
 
         self.assertEqual([], steering.asked_with)
         self.assertEqual([], self.answered(), "a stranger learned which agents this install keeps")
+
+    def test_a_stranger_cannot_ask_for_conversation_delegations(self):
+        """Authorization is decided before the read seam receives the conversation identifier."""
+        steering = _SteeringStub()
+        gesture = self.a_gesture(
+            say="query", query=hosting.DELEGATIONS, control=None, user="9999")
+        self.gesturing(gesture, steering, allowed=("2207",))
+        self.several_passes()
+
+        self.assertEqual([], steering.asked_with)
+        self.assertEqual([], self.answered(),
+                         "a stranger learned which delegations this conversation holds")
 
     def test_steering_that_goes_wrong_still_answers_and_never_ends_the_channel(self):
         # Somebody is waiting on a spinner. A gesture that raised used to leave them there for ever,

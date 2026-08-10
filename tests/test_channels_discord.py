@@ -1426,7 +1426,7 @@ class WhatItOffers(unittest.TestCase):
     #: Rundesk's own closed vocabularies, written out rather than imported: this suite imports
     #: nothing of rundesk's, because the adapter is a program on the far side of a pipe.
     RUNDESK_CONTROLS = ("stop", "forget", "restart", "shutdown")
-    RUNDESK_QUERIES = ("status", "version", "agents", "skills", "schedules")
+    RUNDESK_QUERIES = ("status", "version", "agents", "skills", "schedules", "delegations")
 
     def test_every_gesture_speaks_a_word_rundesk_knows(self) -> None:
         # A name here that rundesk does not know is a command that appears on the menu, is pressed,
@@ -1434,12 +1434,12 @@ class WhatItOffers(unittest.TestCase):
         self.assertEqual(set(self.RUNDESK_CONTROLS), {one[2] for one in adapter.CONTROLS})
         self.assertEqual(set(self.RUNDESK_QUERIES), {one[2] for one in adapter.QUERIES})
 
-    def test_the_ten_a_person_is_offered(self) -> None:
+    def test_the_eleven_a_person_is_offered(self) -> None:
         offered = [one[0] for one in adapter.CONTROLS] + [one[0] for one in adapter.QUERIES]
         offered.append(adapter.CONFIGURE[0])
         self.assertEqual(
             {"stop", "new", "restart", "shutdown", "status", "version", "agents", "skills",
-             "schedules", "provider"}, set(offered))
+             "schedules", "delegations", "provider"}, set(offered))
 
     def test_new_is_what_a_person_sees_and_forget_is_what_rundesk_hears(self) -> None:
         # *New* says what they get; *forget* says what happens to the session. Two words for one
@@ -1624,11 +1624,11 @@ class HowAGestureIsAnswered(Records):
         self.assertEqual("codex", said["provider"])
         self.assertEqual(str(self.interaction.id), said["ref"])
 
-    def test_all_ten_are_registered(self) -> None:
+    def test_all_eleven_are_registered(self) -> None:
         async def exchange(reaching: Any) -> None:
             reaching.tree = adapter.discord.app_commands.CommandTree(self.client)
             reaching._offers()
-            self.assertEqual(10, len(reaching.tree.commands))
+            self.assertEqual(11, len(reaching.tree.commands))
 
         self.during(exchange)
 

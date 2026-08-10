@@ -783,7 +783,7 @@ show a person.
 | | Words |
 |---|---|
 | `control` | `stop`, `forget`, `restart`, `shutdown` |
-| `query` | `status`, `version`, `agents`, `skills`, `schedules` |
+| `query` | `status`, `version`, `agents`, `skills`, `schedules`, `delegations` |
 | `configure` | takes `provider` — a value, not a word from a set |
 
 `forget` is the wire word and *new* is what a person is usually offered: the gesture starts the next
@@ -812,10 +812,20 @@ read is `description cannot be read`. No granted skills is `none`; grants that c
 `cannot be read`. The zero-agent answer is exactly `No agents.` None of these states starts a
 provider turn, and an unreadable field never makes its agent disappear.
 
+**`delegations` is private and conversation-scoped.** The adapter supplies the current platform
+conversation as `conversation`; Rundesk resolves that to its durable conversation only after the
+configured identity has been authorized. Named-agent work is shown once with its stable id, safe
+one-line task identity, lifecycle state, originating turn/session, current delivery target, and
+timing. A later fresh turn labels the original session as reset/replaced. Returned work stays
+visible through review; reviewed work falls out after a later turn makes it stale. Provider-local
+helpers are separate and limited to lifecycle events reported by the current provider session, so
+the response explicitly calls that visibility partial. No prompt, result, provider tool name, or
+session handle is returned, and the query never starts a provider turn or changes delegation state.
+
 **The shipped Discord adapter never cuts a private slash answer at its message limit.** It sends the
 first piece and every continuation as ordered ephemeral followups to the interaction that supplied
-`ref`, preserving every character in order. This applies to `agents`, `skills`, `schedules`, and any
-other gesture answer long enough to need more than one Discord message. If Discord refuses a
+`ref`, preserving every character in order. This applies to `agents`, `skills`, `schedules`,
+`delegations`, and any other gesture answer long enough to need more than one Discord message. If Discord refuses a
 continuation, the adapter logs the refusal and attempts a private incomplete-response warning so the
 delivered prefix cannot be mistaken for the whole answer.
 

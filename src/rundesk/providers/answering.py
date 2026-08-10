@@ -602,7 +602,8 @@ class Gestures:
     """
 
     def __init__(self, where: Path, hosted: Callable[[], hosting.Watching],
-                 wanted: Callable[[str], None], standing: Callable[[str], str]) -> None:
+                 wanted: Callable[[str], None], standing: Callable[[str], str],
+                 delegations: Optional[Callable[[str, str, str], str]] = None) -> None:
         self._where = where
         self._hosted = hosted
         #: How a gateway is asked to end. It cannot be ended from here: this runs on the thread
@@ -611,6 +612,9 @@ class Gestures:
         self._wanted = wanted
         #: What `/status` says. The gateway's own, because only it knows what it is.
         self._standing = standing
+        #: The cross-store read belongs to the gateway layer. Passed in so providers need not reach
+        #: up to it and a gesture remains drivable with no gateway or durable delegation fixture.
+        self._delegations = delegations
 
     def controlled(self, agent: str, kind: str, place: str, who: str, control: str) -> str:
         if control == hosting.FORGET:
@@ -623,7 +627,7 @@ class Gestures:
         return ("♻️ Restarting — I'll be back in a moment." if control == hosting.RESTART
                 else "🛑 Shutting down. Nothing here can start me again.")
 
-    def asked(self, agent: str, who: str, query: str) -> str:
+    def asked(self, agent: str, kind: str, place: str, who: str, query: str) -> str:
         if query == hosting.STATUS:
             return self._standing(agent)
         if query == hosting.VERSION:
@@ -634,6 +638,8 @@ class Gestures:
             return _what_it_holds(agent)
         if query == hosting.SCHEDULES:
             return _what_is_coming(agent)
+        if query == hosting.DELEGATIONS and self._delegations is not None:
+            return self._delegations(agent, kind, place)
         return ""
 
     def configured(self, agent: str, kind: str, place: str, who: str, provider: str) -> str:

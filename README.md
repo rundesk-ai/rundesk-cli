@@ -158,12 +158,17 @@ On Discord, Rundesk supports:
 - typing, state reactions, and live activity that batches a burst of tools into one edit;
 - long answers split to Discord's limit, generated files, and inbound attachments; and
 - `/stop`, `/new`, `/restart`, `/shutdown`, `/status`, `/version`, `/agents`, `/skills`,
-  `/schedules` and `/provider` from chat.
+  `/schedules`, `/delegations` and `/provider` from chat.
 
 Every slash-command answer is private to the authorized person who asked. `/agents` is the
 install-wide directory: it lists every known agent with its description and granted skills without
 starting a provider turn. Long private answers continue across ordered ephemeral followups rather
 than being cut at Discord's message limit.
+
+`/delegations` is the conversation-scoped work view. It shows current named-agent work—including
+work whose originating provider session was reset while its result stayed routed to this
+conversation—and the provider-local helper lifecycle the current session reported. It never shows
+full briefs or results, and says when provider-local visibility is only partial.
 
 #### Setting up a Discord bot
 
