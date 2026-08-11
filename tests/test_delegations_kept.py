@@ -77,24 +77,19 @@ class WritingOneDown(TwoAgents):
         with self.assertRaises(records.NotThere):
             kept.one("ava", "del-9-zzzz")
 
-    def test_requested_and_effective_provider_model_round_trip(self):
+    def test_the_canonical_provider_and_explicit_model_round_trip(self):
         kept.made(
             "ava", "del-1-aaaa", "bob", self.conversation, self.turn,
-            requested_provider_name="codex", requested_model_name="asked-model",
-            provider_name="codex", model_name="effective-model")
+            provider_name="codex", model_name="asked-model")
 
         one = kept.one("ava", "del-1-aaaa")
 
-        self.assertEqual(("codex", "asked-model", "codex", "effective-model"),
-                         (one.requested_provider_name, one.requested_model_name,
-                          one.provider_name, one.model_name))
+        self.assertEqual(("codex", "asked-model"), (one.provider_name, one.model_name))
 
     def test_no_override_keeps_the_compatible_absent_provenance(self):
         self.ava_delegates()
         one = kept.one("ava", "del-1-aaaa")
-        self.assertEqual((None, None, None, None),
-                         (one.requested_provider_name, one.requested_model_name,
-                          one.provider_name, one.model_name))
+        self.assertEqual((None, None), (one.provider_name, one.model_name))
 
 
 class FindingWorkToDo(TwoAgents):
@@ -190,15 +185,12 @@ class WhenThePhaseOfWorkBegan(TwoAgents):
     def test_carrying_work_on_keeps_its_scoped_provider_and_model(self):
         kept.made(
             "ava", "del-1-aaaa", "bob", self.conversation, self.turn,
-            requested_provider_name="codex", requested_model_name="asked-model",
-            provider_name="codex", model_name="effective-model")
+            provider_name="codex", model_name="asked-model")
         kept.answered("ava", "del-1-aaaa")
         self.assertTrue(kept.reopened("ava", "del-1-aaaa"))
 
         one = kept.one("ava", "del-1-aaaa")
-        self.assertEqual(("codex", "asked-model", "codex", "effective-model"),
-                         (one.requested_provider_name, one.requested_model_name,
-                          one.provider_name, one.model_name))
+        self.assertEqual(("codex", "asked-model"), (one.provider_name, one.model_name))
 
     def test_words_said_into_running_work_leave_the_phase_where_it_is(self):
         self.ava_delegates(now=self.moment(60))

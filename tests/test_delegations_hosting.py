@@ -229,8 +229,7 @@ class StoppingWorkHandedHere(support.Isolated):
         with records.writing(directory.records("ava")) as conn:
             conn.execute(
                 "UPDATE delegations SET stop_asked_at = NULL,"
-                " requested_provider_name = 'codex', requested_model_name = 'asked-model',"
-                " provider_name = 'codex', model_name = 'effective-model'"
+                " provider_name = 'codex', model_name = 'asked-model'"
                 " WHERE delegation_id = ?", (self.delegation,))
         calls = []
 
@@ -246,7 +245,7 @@ class StoppingWorkHandedHere(support.Isolated):
         hosting._answered_what_was_handed_here("bob", directory.where("bob"), Target())
 
         expected = ("bob", self.landed.conversation, self.delegation, "ava",
-                    "codex", "effective-model")
+                    "codex", "asked-model")
         self.assertEqual([expected, expected], calls)
 
 
@@ -985,8 +984,7 @@ class WhatMovesADelegationsLatestMoment(support.Isolated):
         self.assertEqual(
             {"id", "delegation_id", "to_agent", "parent_conversation", "parent_turn",
              "answered_at", "stopped_at", "stop_asked_at", "created_at", "latest_at",
-             "working_since", "requested_provider_name", "requested_model_name",
-             "provider_name", "model_name"},
+             "working_since", "provider_name", "model_name"},
             set(row.keys()))
 
 

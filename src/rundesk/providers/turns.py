@@ -723,8 +723,7 @@ def _held(request: Request, held: int, watching, saying,
     settings = (_as_settings(settled.get("agent_settings"))
                 if request.provider_name is None or provider_name == configured_provider else None)
     effective_model = request.model_name
-    if effective_model is None and (
-            request.provider_name is None or provider_name == configured_provider):
+    if effective_model is None and request.provider_name is None:
         effective_model = settled.get("model_name")
     can = protocol.parse_capabilities(adapters.capabilities(provider_name, settings))
 

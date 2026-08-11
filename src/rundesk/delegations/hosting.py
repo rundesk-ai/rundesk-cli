@@ -116,8 +116,6 @@ class CollectedAnswer(str):
         answer.turn_status = status
         answer.provider_name = provider_name
         answer.model_name = model_name
-        answer.requested_provider_name = None
-        answer.requested_model_name = None
         return answer
 
 
@@ -384,11 +382,6 @@ def _collected_what_came_back(name: str, where, answering: Answering) -> None:
                 current.to_agent, name, current.parent_turn, current.delegation_id)
             if said is None:
                 continue
-            if isinstance(said, CollectedAnswer):
-                said.requested_provider_name = current.requested_provider_name
-                said.requested_model_name = current.requested_model_name
-                said.provider_name = said.provider_name or current.provider_name or ""
-                said.model_name = said.model_name or current.model_name
             # **A requested stop is terminal, not another answer to review.** Before this branch a
             # stopped turn was converted into "finished without saying anything (stopped)" and
             # offered to `review_this`, which woke the delegating agent for one more provider turn.

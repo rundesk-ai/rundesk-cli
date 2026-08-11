@@ -236,9 +236,8 @@ class WhenOneAgentAsksAnother(support.Isolated):
         self.assertEqual(OK, code, err)
         self.assertIn("handed to forge", out)
         one = delegations.every("ava")[0]
-        self.assertEqual(("codex", "gpt-scoped", "codex", "gpt-scoped"),
-                         (one.requested_provider_name, one.requested_model_name,
-                          one.provider_name, one.model_name))
+        self.assertEqual(("codex", "gpt-scoped"),
+                         (one.provider_name, one.model_name))
         self.assertEqual(before, records.read(directory.records("forge")))
 
     def test_an_unavailable_override_is_refused_before_either_write(self):
@@ -265,9 +264,7 @@ class WhenOneAgentAsksAnother(support.Isolated):
     def test_no_override_keeps_the_existing_unscoped_admission(self):
         self.assertEqual(OK, self.ask_from_ava("forge")[0])
         one = delegations.every("ava")[0]
-        self.assertEqual((None, None, None, None),
-                         (one.requested_provider_name, one.requested_model_name,
-                          one.provider_name, one.model_name))
+        self.assertEqual((None, None), (one.provider_name, one.model_name))
 
     def test_an_unlisted_target_is_refused_before_either_delegation_write(self):
         records.stated(directory.records("ava"),

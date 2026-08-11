@@ -500,6 +500,20 @@ class CarryingAConversationOn(WithAnAgent):
 
         self.assertEqual([(support.A_STAND_IN, "scoped-model")], seen)
 
+    def test_an_override_without_a_model_does_not_infer_the_target_configured_model(self):
+        records.stated(directory.records("ava"), {"model_name": "configured-model"})
+        seen = []
+        talking = turns.adapters.talking_to
+
+        def captured(named, env, *args, **kwargs):
+            seen.append((named, env.get("RUNDESK_MODEL")))
+            return talking(named, env, *args, **kwargs)
+
+        with mock.patch.object(turns.adapters, "talking_to", side_effect=captured):
+            self.run_turn(self.asking(provider_name=support.A_STAND_IN))
+
+        self.assertEqual([(support.A_STAND_IN, None)], seen)
+
 
 class SayingSomethingIntoARunningTurn(WithAnAgent):
     def test_a_word_reaches_a_brain_that_said_it_can_be_steered(self):

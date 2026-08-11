@@ -127,18 +127,13 @@ Verify material claims before using or reporting them."""
 
 
 def _delegation_provenance(answer: str) -> str:
-    """Requested and effective provider/model carried beside one returned result."""
-    requested_provider = getattr(answer, "requested_provider_name", None)
-    requested_model = getattr(answer, "requested_model_name", None)
-    effective_provider = getattr(answer, "provider_name", None)
-    effective_model = getattr(answer, "model_name", None)
-    requested = (_named(str(requested_provider)) if requested_provider else "target default")
-    if requested_model:
-        requested += f" / {_metadata_name(str(requested_model))}"
-    effective = (_named(str(effective_provider)) if effective_provider else "not recorded")
-    if effective_model:
-        effective += f" / {_metadata_name(str(effective_model))}"
-    return f"Provider/model — requested: {requested}; effective: {effective}."
+    """Provider/model evidence from the target's actual terminal turn."""
+    provider = getattr(answer, "provider_name", None)
+    model = getattr(answer, "model_name", None)
+    actual = _named(str(provider)) if provider else "not recorded"
+    if model:
+        actual += f" / {_metadata_name(str(model))}"
+    return f"Provider/model — terminal turn: {actual}."
 
 
 TRIES = 3

@@ -1347,21 +1347,18 @@ class ADelegatedResultForReview(support.Isolated):
     def test_it_labels_the_result_unchecked_and_requires_verification(self):
         said = answering.REVIEW.format(
             agent="reviewer", answer="three findings",
-            provenance="Provider/model — requested: target default; effective: codex / gpt-5.")
+            provenance="Provider/model — terminal turn: codex / gpt-5.")
         for phrase in ("reviewer", "unchecked", "three findings", "Verify material claims"):
             self.assertIn(phrase, said)
         self.assertLessEqual(len(answering.REVIEW.encode("utf-8")), 240)
 
-    def test_it_carries_requested_and_effective_provider_model_provenance(self):
+    def test_it_carries_provider_model_evidence_from_the_terminal_turn(self):
         answer = delegations.CollectedAnswer(
             "three findings", 9, "done", "codex", "effective-model")
-        answer.requested_provider_name = "codex"
-        answer.requested_model_name = "asked-model"
 
         said = answering._delegation_provenance(answer)
 
-        self.assertIn("requested: codex / asked-model", said)
-        self.assertIn("effective: codex / effective-model", said)
+        self.assertIn("terminal turn: codex / effective-model", said)
 
 
 class ADelegatedResultReachesItsParent(Answering):

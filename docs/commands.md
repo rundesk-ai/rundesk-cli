@@ -1484,9 +1484,10 @@ Both flags are delegation admission data. They never configure bob, and `--model
 `--provider` is refused because a model belongs to one provider. The provider must resolve to an
 executable adapter before either delegation write; a missing provider therefore leaves no brief and
 no delegation row to claim. With neither flag, provider resolution remains exactly as before: bob's
-configuration is read when the turn starts. A relative provider path keeps its typed spelling as
-requested provenance but is stored as the resolved executable path, so bob's gateway cannot later
-reinterpret it from another working directory.
+configuration is read when the turn starts. With `--provider`, admission stores one canonical
+provider and only the exact model explicitly supplied; an omitted model does not inherit bob's
+configured model. A relative provider path is stored as the resolved executable path, so bob's
+gateway cannot later reinterpret it from another working directory.
 
 This is the front door rather than a second command, and it is not a convenience. Left alone, an
 agent could run a whole turn on somebody else's agent from inside its own — no record, no guards,
@@ -1527,11 +1528,11 @@ cannot be resumed. `asked resume <id> <words>` continues answered work in the pr
 already had. Each delegation has its own
 conversation, so two tasks handed to the same specialist by one parent turn cannot share an answer.
 
-`asked show <id>` names the requested and admission-effective provider/model. The unchecked result
-delivered for review carries those requested values beside the provider/model the terminal target
-turn actually recorded. A resumed delegation reuses the same stored scoped provider and its
-provider-specific session through gateway restarts; a new delegation with no override goes back to
-the target agent's ordinary default.
+`asked show <id>` names the delegation's one admitted provider and explicitly supplied model, or
+that the target/provider default will be used. The unchecked result delivered for review names the
+provider/model the terminal target turn actually recorded. A resumed delegation reuses the same
+stored scoped provider and model, and its provider-specific session, through gateway restarts; a
+new delegation with no override goes back to the target agent's ordinary default.
 
 **All three are shown where the person asked**, in the room the work was handed out in, as one line
 of small print — *updated bob*, *asked bob to stop*, *carried on with bob*. Never the words

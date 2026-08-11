@@ -149,8 +149,6 @@ def refusal(asking: Asking, to_agent: str, task: str,
 
 def admitted(asking: Asking, delegation_id: str, to_agent: str,
              parent_conversation: int,
-             requested_provider_name: Optional[str] = None,
-             requested_model_name: Optional[str] = None,
              provider_name: Optional[str] = None,
              model_name: Optional[str] = None) -> None:
     """Write the delegation down, in the **asking** agent's own store.
@@ -163,6 +161,4 @@ def admitted(asking: Asking, delegation_id: str, to_agent: str,
         raise Refused("a delegation is written down by a turn, and this is not one")
     kept.made(
         asking.agent, delegation_id, to_agent, parent_conversation, asking.run,
-        requested_provider_name=requested_provider_name,
-        requested_model_name=requested_model_name,
         provider_name=provider_name, model_name=model_name)

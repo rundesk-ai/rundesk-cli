@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 import support
-from rundesk.agents import directory, records
+from rundesk.agents import directory
 from rundesk.core import adapters as core_adapters
 from rundesk.core import paths
 from rundesk.providers import adapters
@@ -219,22 +219,20 @@ class AdmittingOneScopedOverride(Adapters):
         super().setUp()
         self.ships("configured")
         self.ships("scoped")
-        directory.made("ava", "configured")
-        records.stated(directory.records("ava"), {"model_name": "configured-model"})
 
     def test_a_different_provider_carries_no_configured_model_across(self):
-        chosen = adapters.admitted_override("ava", "scoped", None)
-        self.assertEqual(("scoped", None, "scoped", None), chosen)
+        chosen = adapters.admitted_override("scoped", None)
+        self.assertEqual(("scoped", None), chosen)
 
-    def test_the_configured_provider_keeps_its_model_when_none_was_requested(self):
-        chosen = adapters.admitted_override("ava", "configured", None)
-        self.assertEqual(("configured", None, "configured", "configured-model"), chosen)
+    def test_an_omitted_model_remains_omitted_for_any_selected_provider(self):
+        chosen = adapters.admitted_override("configured", None)
+        self.assertEqual(("configured", None), chosen)
 
-    def test_a_requested_model_becomes_the_effective_model(self):
-        chosen = adapters.admitted_override("ava", "scoped", " one-model ")
-        self.assertEqual(("scoped", "one-model", "scoped", "one-model"), chosen)
+    def test_an_explicit_model_is_kept_exactly(self):
+        chosen = adapters.admitted_override("scoped", " one-model ")
+        self.assertEqual(("scoped", " one-model "), chosen)
 
-    def test_a_relative_path_keeps_its_spelling_but_effectively_names_the_resolved_program(self):
+    def test_a_relative_path_is_stored_as_the_resolved_program(self):
         at = self.home / "brain"
         at.write_text(saying("{}"), encoding="utf-8")
         at.chmod(0o755)
@@ -242,30 +240,18 @@ class AdmittingOneScopedOverride(Adapters):
         self.addCleanup(os.chdir, here)
         os.chdir(str(self.home))
 
-        chosen = adapters.admitted_override("ava", "./brain", None)
+        chosen = adapters.admitted_override("./brain", None)
 
-        self.assertEqual("./brain", chosen.requested_provider_name)
         self.assertEqual(str(at.resolve()), chosen.provider_name)
-        os.chdir(str(directory.home("ava")))
+        os.chdir(str(self.shipped))
         self.assertEqual(at.resolve(), adapters.where(chosen.provider_name))
 
-    def test_the_effective_configured_relative_provider_keeps_its_configured_model(self):
-        at = directory.where("ava") / "brain"
-        at.write_text(saying("{}"), encoding="utf-8")
-        at.chmod(0o755)
-        records.stated(directory.records("ava"), {
-            "provider_name": "./brain", "model_name": "configured-model"})
-
-        chosen = adapters.admitted_override("ava", str(at.resolve()), None)
-
-        self.assertEqual("configured-model", chosen.model_name)
-
     def test_no_override_is_the_compatible_absent_answer(self):
-        self.assertIsNone(adapters.admitted_override("ava", None, None))
+        self.assertIsNone(adapters.admitted_override(None, None))
 
     def test_a_model_alone_is_refused(self):
         with self.assertRaisesRegex(adapters.NotRunnable, "also needs --provider"):
-            adapters.admitted_override("ava", None, "one-model")
+            adapters.admitted_override(None, "one-model")
 
 
 class TheSeamNamesNoVendor(support.Isolated):
