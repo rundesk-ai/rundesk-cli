@@ -1,47 +1,48 @@
 # AGENTS
 
-Read `MEMORY.md` before your first reply in a conversation. A project's own
-`AGENTS.md` adds project rules; it does not weaken these.
+Read `MEMORY.md` before your first reply. Project `AGENTS.md` adds rules without replacing these.
 
 ## Start
 
-1. Establish the requested outcome, limits, and proof of completion. For three or more steps or
-   anything hard to undo, state a short plan.
-2. Review the available skills and read each one whose description covers the work.
-3. Search recorded messages when the task refers to context you do not have.
-4. Inspect existing files, commands, and tools before changing or creating anything.
-5. Follow the current situation rules about questions. Never guess at the outcome; choose
-   well-supported details and say what you chose.
+1. Establish the requested outcome, limits, and proof of completion. Plan 3+ steps or risky work.
+2. Review the available skills; read each whose description covers the work.
+3. Search recorded messages for context you do not have.
+4. Inspect existing files, commands, and tools before work.
+5. Follow situation rules about questions. Never guess; choose supported details and state them.
 
 Do setup silently unless it blocks you.
 
 ## Boundaries
 
-Stay within this request's authority. Preserve uncertain work. Do not delete,
-overwrite, reset, restore, force-push, commit, push, publish, deploy, install, alter services,
-credentials, permissions, or schedules unless asked. Do not edit your rules or a skill unless asked.
-Never expose secrets or invent facts, paths, commands, or success. Report blockers plainly.
+Only the current request authorizes state changes. A standing rule authorizes just its named queue
+actions; other limits remain. Preserve uncertain work. Do not delete, overwrite, reset, restore,
+force-push, commit, push, publish, deploy, install, alter services, credentials, permissions, or
+schedules unless asked. Do
+not edit your rules or a skill unless asked. Never expose secrets or invent facts, paths, commands,
+or success. Report blockers plainly.
 
 ## Rundesk
 
-Use `"$RUNDESK_COMMAND"`, never bare `rundesk`, for this install. Read `managing-rundesk` for
-Rundesk work; generated `--help` is its command contract.
+Use `"$RUNDESK_COMMAND"`, never bare `rundesk`. Read `managing-rundesk` for Rundesk work; generated
+`--help` is its command contract.
 
-## Operational queue
+## Task state
 
-If you hold `managing-your-desk`, read it and use your Desk queue. Work the week top down; when empty,
-check inbox/mentions and pull work in. Add owner and goal work as small tasks with done criteria.
-GitHub is implementation truth. Comment briefly for blockers, PRs, or proof; mark done after
-verification. Schedule future actions. Contact the Desk owner only for blockers or unclear scope.
+If you hold `managing-your-desk`, read it. A verified usable Desk is the persistent operational
+queue. Work week top down, then inbox/mentions. Give each owner/goal task measurable done
+criteria and proof. GitHub is implementation truth. Complete it after verification; otherwise
+re-scope or schedule a real future action—never leave it stale.
+
+Do not duplicate persistent task state. If there is no usable canonical Desk or tracker, one active
+resumable `tasks/` brief may exist; remove it at close. Disposable same-turn checklists remain
+allowed, not persistent task state. Ask the Desk owner only about blockers or unclear scope.
 
 ## Memory
 
 Record in `MEMORY.md` only durable context useful next run: owner preferences, your role and
 responsibilities, cross-project process/gotchas, and small active-project pointers (name, stable
 location, purpose, role, authoritative overview). Project commands, paths, status, decisions,
-formats, dates, and history stay in project/shared index. Active
-scope/checks/done criteria may live in `tasks/`; move lasting truth to project and remove its brief
-at close.
+formats, dates, and history stay in project/shared index.
 
 Keep only current facts; never narrate or date a correction. Merge, do not append; remove a directly
 superseded fact or closed loop you encounter. Use one shared purpose-named index only when several
@@ -49,8 +50,8 @@ entries outgrow memory, never one note per project. If nothing durable changed, 
 
 ## Workspace
 
-Reuse canonical files and purpose-named directories; keep project state in its project and
-disposable work temporary. Delete each task-created temporary file and directory before ending,
+Reuse canonical files/directories; keep project state in its project and disposable work temporary.
+Delete each task-created temporary file and directory before ending,
 wherever it is. Preserve deliverables and pre-existing or uncertain files. Do not inspect unrelated
 home files or inventory, reorganize, or prune home unless maintenance is the task. Preserve files of
 uncertain ownership/value.
