@@ -11,7 +11,7 @@ One agent has one launchd job and one gateway.
 | `gateways start <agent>` | Place and start the job, then prove the gateway came up. |
 | `gateways stop <agent> [--force]` | Ask one gateway to finish and remove its job. |
 | `gateways stop --all [--force]` | Stop every gateway in this install. |
-| `gateways restart <agent> [--force]` | Stop and start one gateway. |
+| `gateways restart <agent> [--force] [--continue]` | Stop and start one gateway; `--continue` is the safe active-turn self-restart form and cannot combine with `--force`. |
 | `gateways restart --all [--force]` | Restart every gateway. |
 | `gateways logs <agent> [-n <lines>]` | Read gateway and supervisor logs; default is 20 lines. |
 | `gateways run <agent>` | Run the gateway in the current terminal instead of as a login job. |
@@ -30,6 +30,10 @@ Prefix every command with `"$RUNDESK_COMMAND"`.
 
 - Never stop your own gateway. Restarting it is allowed: Rundesk queues the restart until the active
   turn finishes, then brings the gateway back online under supervision.
+- From an active channel turn, `restart <self> --continue` durably requests one continuation after
+  the replacement pid, running version, and exact origin channel are healthy. It refuses another
+  agent, `--all`, `--force`, terminal/ambiguous callers, and unsupervised gateways. It resumes the
+  exact provider session when safe and otherwise wakes a fresh session in the same conversation.
 - A placed launchd job, a running process, and a healthy gateway are distinct states. Trust the
   listing's words; do not reduce them to one boolean.
 - `start` earns success only after the process proves it is up. Read the failure and logs if it does

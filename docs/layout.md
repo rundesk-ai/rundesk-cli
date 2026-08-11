@@ -118,6 +118,17 @@ to `domain`, which is also creation's default. Role describes the agent's work l
 does not grant skills, change provider or delegation scope, create a Desk, or confer authority.
 Rundesk uses it to group team listings and choose the initial standing-rule template.
 
+An opted-in update or safe self-gateway restart keeps its transient continuation ledger in that
+same `state.db`. A row names the origin by local turn/message ids and keeps lifecycle/continuation
+states, bounded product outcomes, and observed version/pid. It never copies an owner prompt,
+provider session handle, channel/person identity, credential, agent name, or filesystem path.
+Transactional state changes make a duplicate or crash claim at-most-once; completed, suppressed,
+and stranded `resuming` rows remain auditable and are never replayed. Ordinary update/restart paths
+create no row. A backup keeps the ledger for audit but suppresses actionable rows in its staged
+snapshot without changing the live database. Restore repeats that suppression before gateways may
+return—including for a database preserved through the byte-copy fallback—so older state cannot
+replay transient work.
+
 **Rundesk never sweeps an agent's `home/`.** New domain and specialist agents start from separate
 canonical rule templates, with identical bytes in `AGENTS.md` and `CLAUDE.md`. After creation those
 files belong to the agent and owner: changing `role` does not rewrite either one. The agent keeps

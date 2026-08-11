@@ -49,6 +49,7 @@ from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job, maintenance, standing
 from rundesk.lifecycle import backups, home, migration, packages, release, tree
+from rundesk.providers import continuations
 from rundesk.skills.catalogs import Fetching as Refreshing
 from rundesk.utils import archives, locking, programs
 
@@ -117,7 +118,9 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
                gateways: Optional[Gateways] = None) -> int:
     """Move to the newest published release, or say it is already up to date.
 
-    Takes no flags. `asking` looks up what is published, `fetching` downloads it, `refreshing`
+    With no flag it preserves the ordinary update contract. `--continue` is accepted only from one
+    active channel-backed provider turn and records that exact origin before queueing. `asking`
+    looks up what is published, `fetching` downloads it, `refreshing`
     brings down a catalog of skills, and `gateways` cycles live agents; all are resolved here rather
     than bound in the signature, so the whole command is driven with no network or launchd nearby.
 
@@ -126,16 +129,36 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
     somebody else's repository and it changes on its own schedule. It happens last, it cannot change
     this command's exit code, and `commands.skills.refreshed` says why.
     """
-    return attempt_update(
+    continuation = None
+    if getattr(_args, "continuation", False) is True:
+        try:
+            agent, turn, _conversation, message = continuations.origin()
+            how = standing.standing(directory.where(agent))
+            handoff = continuations.requested(
+                agent, turn, message, continuations.UPDATE,
+                how.pid if how.how == standing.ONLINE else None)
+            continuation = (agent, turn, handoff.id)
+        except (continuations.NoOrigin, OSError, ValueError,
+                directory.Refused, records.NotThere, records.Unreadable) as why:
+            return _failed(f"the update continuation could not be recorded ({why})")
+    attempted = attempt_update(
         _args, asking=asking, fetching=fetching, refreshing=refreshing,
-        building=building, gateways=gateways).code
+        building=building, gateways=gateways, continuation=continuation)
+    if continuation is not None and not attempted.queued:
+        continuations.finished(
+            continuation[0], continuation[2], succeeded=attempted.code == OK,
+            outcome=("the update completed and the install settled"
+                     if attempted.code == OK else
+                     "the update reached a terminal failure; its command output records details"))
+    return attempted.code
 
 
 def attempt_update(_args: argparse.Namespace, asking: Optional[release.Asking] = None,
                    fetching: Optional[Fetching] = None,
                    refreshing: Optional[Refreshing] = None,
                    building: Optional[Callable[..., programs.Ran]] = None,
-                   gateways: Optional[Gateways] = None) -> Attempt:
+                   gateways: Optional[Gateways] = None,
+                   continuation: Optional[Tuple[str, int, int]] = None) -> Attempt:
     """Run or durably queue one update, preserving that distinction for coordinators."""
     installed_before_waiting = paths.app().is_dir()
     try:
@@ -152,7 +175,8 @@ def attempt_update(_args: argparse.Namespace, asking: Optional[release.Asking] =
                 from rundesk.commands import automatic_updates
                 busy = automatic_updates._busy_reason()
                 if busy:
-                    said = automatic_updates.queued(busy)
+                    said = (automatic_updates.queued(busy, continuation=continuation)
+                            if continuation is not None else automatic_updates.queued(busy))
                     print(said, file=sys.stderr if said.startswith("the update could not") else sys.stdout)
                     failed_to_queue = said.startswith("the update could not")
                     return Attempt(FAILED if failed_to_queue else OK, not failed_to_queue)

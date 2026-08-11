@@ -12,13 +12,13 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Dict, Iterator, NamedTuple, Optional
+from typing import Callable, Dict, Iterator, NamedTuple, Optional, Tuple
 
-from rundesk.agents import directory
+from rundesk.agents import directory, records
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job
-from rundesk.providers import environment, turns
+from rundesk.providers import continuations, environment, turns
 from rundesk.schedules import firing
 from rundesk.utils import locking, logs, programs
 
@@ -61,6 +61,10 @@ class Daily(NamedTuple):
 
 class CouldNotStop(Exception):
     """An uninstall could not exclude every queued or running update."""
+
+
+class InvalidContinuation(Exception):
+    """A queued opt-in descriptor does not name one exact update handoff."""
 
 
 def coordinator(root: Optional[Path] = None, into: Optional[Path] = None) -> Coordinator:
@@ -168,7 +172,8 @@ def cancel_queued(waiting: float = 2.5) -> str:
     return ""
 
 
-def queued(reason: str, starting=None, environ: Optional[Dict[str, str]] = None) -> str:
+def queued(reason: str, starting=None, environ: Optional[Dict[str, str]] = None,
+           continuation: Optional[Tuple[str, int, int]] = None) -> str:
     """Keep one update request and ensure a detached runner is waiting for quiet.
 
     The request is written before the runner starts. If the process cannot begin, the request stays
@@ -183,11 +188,23 @@ def queued(reason: str, starting=None, environ: Optional[Dict[str, str]] = None)
         "turn": (int(values[environment.RUN])
                  if str(values.get(environment.RUN) or "").isdigit() else None),
     }
+    if continuation is not None:
+        request["continuation"] = {
+            "agent": continuation[0], "turn": continuation[1], "handoff": continuation[2]}
     try:
         # Settlement uses this same lock to compare-and-remove its observed request. Without the
         # writer joining that exclusion it could replace the pathname after the comparison and
         # before the unlink, reopening the exact completion race the identity check closes.
         with locking.only_one(paths.update_lock(), guarding="queueing this update"):
+            existing = _read_request(request_at(one))
+            existing_continuation = existing.get("continuation") if existing else None
+            if existing_continuation is not None:
+                if continuation is None or existing_continuation == request.get("continuation"):
+                    _ensure_queued_runner(one, starting)
+                    return ("update already queued until current work finishes — "
+                            f"{existing.get('reason') or reason}")
+                return ("the update could not be queued (another opted-in conversation already "
+                        "owns the queued update)")
             _written_privately(
                 request_at(one), (json.dumps(request, sort_keys=True) + "\n").encode(), 0o600)
             _ensure_queued_runner(one, starting)
@@ -235,12 +252,25 @@ def run_queued(sleeping: Callable[[float], None] = time.sleep,
                     # waiting — it must not exit and strand a request nobody else could start.
                     claimed = _claim_request(one)
                     try:
+                        try:
+                            continuation = _validated_continuation(_continuation(claimed))
+                        except InvalidContinuation as why:
+                            _note(one, f"FAILED — invalid queued continuation ({why})", logs.ERROR)
+                            _remove_claimed_request(one, claimed)
+                            return FAILED
+                        if continuation is not None:
+                            continuations.running(continuation[0], continuation[2])
                         attempt = update.attempt_update(argparse.Namespace())
                         if attempt.queued:
                             continue
                         if attempt.code == OK:
+                            _finished_continuation(continuation, succeeded=True)
                             _remove_claimed_request(one, claimed)
                             return OK
+                        if continuation is not None:
+                            _finished_continuation(continuation, succeeded=False)
+                            _remove_claimed_request(one, claimed)
+                            return attempt.code
                         # The foreground command already returned after promising eventual work.
                         # Keep that promise even when daily updates are disabled: hold off, then
                         # retry this same durable request until it succeeds or uninstall cancels it.
@@ -266,6 +296,72 @@ def _wait_to_retry(one: Coordinator, sleeping: Callable[[float], None],
         sleeping(pause)
         remaining -= pause
     return request_at(one).is_file() and (deadline is None or time.monotonic() < deadline)
+
+
+def _read_request(where: Path) -> Dict[str, object]:
+    """A queued request object, or an empty answer for absent/malformed state."""
+    try:
+        read = json.loads(where.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, UnicodeError, ValueError):
+        return {}
+    return read if isinstance(read, dict) else {}
+
+
+def _continuation(claimed: Optional[int]) -> Optional[Tuple[str, int, int]]:
+    """Validated continuation provenance from the exact request descriptor this worker pinned."""
+    if claimed is None:
+        return None
+    try:
+        os.lseek(claimed, 0, os.SEEK_SET)
+        request = json.loads(os.read(claimed, 16 * 1024).decode("utf-8"))
+        if not isinstance(request, dict) or "continuation" not in request:
+            return None
+        value = request.get("continuation")
+        agent = value.get("agent") if isinstance(value, dict) else None
+        turn = value.get("turn") if isinstance(value, dict) else None
+        handoff = value.get("handoff") if isinstance(value, dict) else None
+        if isinstance(agent, str) and isinstance(turn, int) and isinstance(handoff, int):
+            return agent, turn, handoff
+    except (OSError, UnicodeError, ValueError) as why:
+        raise InvalidContinuation("the queued request could not be read") from why
+    raise InvalidContinuation("the queued continuation identity is malformed")
+
+
+def _validated_continuation(
+        reference: Optional[Tuple[str, int, int]]) -> Optional[Tuple[str, int, int]]:
+    """Require the queue's agent, origin turn, and handoff id to identify the same row."""
+    if reference is None:
+        return None
+    try:
+        handoff = continuations.one(reference[0], reference[2])
+    except (OSError, records.NotThere, records.Unreadable, ValueError) as why:
+        raise InvalidContinuation(str(why)) from why
+    if handoff.operation != continuations.UPDATE:
+        raise InvalidContinuation(
+            f"handoff {reference[2]} is {handoff.operation}, not an update")
+    if handoff.origin_turn_id != reference[1]:
+        continuations.suppressed(
+            reference[0], reference[2],
+            "the queued update did not match its originating turn")
+        raise InvalidContinuation(
+            f"handoff {reference[2]} belongs to turn {handoff.origin_turn_id}, not {reference[1]}")
+    return reference
+
+
+def _finished_continuation(reference: Optional[Tuple[str, int, int]], *, succeeded: bool) -> None:
+    """Attach the queued update's terminal truth without changing its lifecycle result."""
+    if reference is None:
+        return
+    try:
+        continuations.finished(
+            reference[0], reference[2], succeeded=succeeded,
+            outcome=("the queued update completed and the install settled"
+                     if succeeded else
+                     "the queued update reached a terminal failure; queued logs record details"))
+    except (OSError, ValueError):
+        # The update result remains in its own durable queue log. Failure to attach an optional
+        # continuation must never turn a completed lifecycle transaction into a false failure.
+        return
 
 
 def document(one: Coordinator, update_time: str) -> Dict[str, object]:
@@ -458,10 +554,23 @@ def _run(one: Coordinator, today: str, **updating: object) -> Daily:
         from rundesk.commands import update
         claimed = _claim_request(one)
         try:
+            try:
+                continuation = _validated_continuation(_continuation(claimed))
+            except InvalidContinuation as why:
+                _remove_claimed_request(one, claimed)
+                _complete(one, today, "FAILED")
+                _note(one, f"FAILED — invalid queued continuation ({why})", logs.ERROR)
+                return Daily(FAILED)
+            if continuation is not None:
+                continuations.running(continuation[0], continuation[2])
             attempt = update.attempt_update(argparse.Namespace(), **updating)
             if attempt.queued:
                 return Daily(OK, "work began before update admission closed", True)
             if attempt.code == OK:
+                _finished_continuation(continuation, succeeded=True)
+                _remove_claimed_request(one, claimed)
+            elif continuation is not None:
+                _finished_continuation(continuation, succeeded=False)
                 _remove_claimed_request(one, claimed)
         finally:
             if claimed is not None:

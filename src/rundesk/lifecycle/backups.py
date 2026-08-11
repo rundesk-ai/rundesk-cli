@@ -505,6 +505,7 @@ def _a_snapshot(live: Path, copied: Path, said: Callable[[str], None]) -> None:
         with records.reading(live) as source:
             with contextlib.closing(sqlite3.connect(str(staged))) as into:
                 source.backup(into)
+                _without_lifecycle_handoffs(into)
                 in_wal = str(into.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal"
     except (records.NotThere, records.Unreadable, sqlite3.Error, OSError) as why:
         _litter(staged)
@@ -520,6 +521,27 @@ def _a_snapshot(live: Path, copied: Path, said: Callable[[str], None]) -> None:
     _litter(staged)
     if in_wal:
         _an_empty_log(copied)
+
+
+def _without_lifecycle_handoffs(copied: sqlite3.Connection) -> None:
+    """Make transient continuations inert in a staged snapshot, never in the live records.
+
+    A restored backup may be opened under a later gateway and process id.  Keeping an actionable
+    lifecycle row there would turn restore into an unrelated wake, so only the snapshot's pending or
+    claimed rows are suppressed.  Older databases do not have the optional ledger at all.
+    """
+    exists = copied.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'lifecycle_continuations'"
+    ).fetchone()
+    if exists is None:
+        return
+    copied.execute(
+        "UPDATE lifecycle_continuations "
+        "SET continuation_state = 'suppressed', "
+        "continuation_outcome = 'backup restores do not replay lifecycle continuations' "
+        "WHERE continuation_state IN ('requested', 'resuming')"
+    )
+    copied.commit()
 
 
 def _an_empty_log(copied: Path) -> None:
@@ -861,6 +883,7 @@ def _a_copy(at: Path, name: str) -> Path:
             f"{name} has no readable {THE_MARK}, so it is not a copy of an install's data — "
             "putting it back would leave rundesk unable to tell how far it has been carried")
     _valid_secrets(where / "secrets")
+    _valid_agent_records(where / "agents")
     return where
 
 
@@ -886,6 +909,7 @@ def _opened_copy(at: Path, name: str) -> Iterator[Path]:
                 f"{name} has no readable {DATA_PREFIX}{THE_MARK}, so it is not a copy of an "
                 "install's data")
         _valid_secrets(data / "secrets")
+        _valid_agent_records(data / "agents")
         yield data
 
 
@@ -1016,6 +1040,7 @@ def _swap(a_copy: Path, into: Path) -> None:
     try:
         shutil.copytree(a_copy, pending, symlinks=True)
         _private_secrets(pending / "secrets")
+        _valid_agent_records(pending / "agents")
     except BaseException:
         files.discard(pending)
         raise
@@ -1104,6 +1129,32 @@ def _valid_secrets(at: Path) -> None:
             raise Refused(f"{values} contains {name}, which {held.trouble}")
 
 
+def _valid_agent_records(at: Path) -> None:
+    """Refuse an agent-records path that settlement could follow outside restored data.
+
+    Agent-directory links are not agents and are deliberately skipped by ``directory.known``. The
+    agents root and a real agent's records are different: both are paths settlement opens for
+    writes, so neither may be a symbolic link. This inspection never follows a link.
+    """
+    if not at.exists() and not at.is_symlink():
+        return
+    if at.is_symlink():
+        raise Refused(f"{at} is a link, and restored agent records may not be reached through one")
+    try:
+        mode = at.lstat().st_mode
+    except OSError as why:
+        raise Refused(f"{at} cannot be inspected: {why}") from why
+    if not stat.S_ISDIR(mode):
+        raise Refused(f"{at} is not a directory")
+    for agent in at.iterdir():
+        if agent.is_symlink() or not agent.is_dir():
+            continue
+        copied = agent / directory.RECORDS
+        if copied.is_symlink():
+            raise Refused(
+                f"{copied} is a link, and restored agent records may not point outside the copy")
+
+
 def _put_back(aside: Path, into: Path) -> None:
     """Undo a half-finished swap, or say that it could not be undone."""
     try:
@@ -1140,11 +1191,43 @@ def _settle(into: Path, steps: Optional[Path], said: Callable[[str], None]) -> O
     of what was there going unmentioned because nothing got as far as printing it. `update.settle`
     catches the pair in one place for this reason and this is the same shape of call.
     """
+    lifecycle_trouble = _without_restored_lifecycle_handoffs(into)
+    if lifecycle_trouble:
+        return lifecycle_trouble
     try:
         config.fill_in(into)
         return migration.carry(into, steps, said) or _the_agents_carried(into, said)
     except (config.Unreadable, config.Refused, config.Stuck, ValueError) as why:
         return str(why)
+
+
+def _without_restored_lifecycle_handoffs(into: Path) -> Optional[str]:
+    """Suppress transient wakes after every restore, including byte-copy fallback backups.
+
+    Save normally makes each readable SQLite snapshot inert. Records that could not be snapshotted
+    are deliberately preserved byte-for-byte, so restore repeats the guard before gateways may be
+    brought back. An unreadable restored database leaves the restore unsettled instead of allowing
+    a later gateway to guess whether an old lifecycle request is actionable.
+    """
+    agents = into / paths.agents().relative_to(paths.data())
+    try:
+        _valid_agent_records(agents)
+    except Refused as why:
+        return str(why)
+    if not agents.is_dir():
+        return None
+    for agent in sorted(agents.iterdir()):
+        if agent.is_symlink() or not agent.is_dir():
+            continue
+        copied = agent / directory.RECORDS
+        if not copied.is_file():
+            continue
+        try:
+            with contextlib.closing(sqlite3.connect(str(copied))) as conn:
+                _without_lifecycle_handoffs(conn)
+        except (OSError, sqlite3.Error) as why:
+            return f"{copied} could not suppress restored lifecycle work: {why}"
+    return None
 
 
 def _the_agents_carried(into: Path, said: Callable[[str], None]) -> Optional[str]:

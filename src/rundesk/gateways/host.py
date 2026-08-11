@@ -223,7 +223,7 @@ from rundesk.delegations import hosting as delegations
 from rundesk.delegations import kept as delegations_kept
 from rundesk.exits import OK
 from rundesk.gateways import awake, delegation_query, maintenance, standing
-from rundesk.providers import answering, kept, turns
+from rundesk.providers import answering, continuations, kept, turns
 from rundesk.schedules import firing, upkeep
 from rundesk.skills import grants
 from rundesk.utils import locking, logs
@@ -327,6 +327,10 @@ ATTACHMENT_WITHIN = 10.0
 #: but it is named rather than written as a literal so that a reader of the exit finds the word
 #: `restart` rather than a `1` shared with every crash there has ever been.
 COME_BACK = 70
+
+#: An opted-in CLI self-restart exits through the placed job after admitted work is quiet. Channel
+#: adapters cannot request this stronger lifecycle handoff.
+LIFECYCLE_RESTART = "lifecycle-restart"
 
 
 class Stopped(BaseException):
@@ -624,6 +628,7 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
         # another agent sent back is reviewed in the conversation the person asked in, and a review
         # that reaches nobody is the whole of what a delegation looked like from a room.
         on_a_delegation = answering.OnADelegation(where, lambda: channels_up)
+        on_a_continuation = answering.OnAContinuation(where, lambda: channels_up)
         watching = firing.settled(name, where)
         channels_up = hosting.settled(name, where, answering=on_a_channel)
         handed = delegations.settled(name, where)
@@ -670,6 +675,9 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
             # The third tenant, and a sibling of the two above rather than something they contain:
             # the same three seams, and a gateway hosting a list rather than a hierarchy.
             handed = delegations.looked(name, where, handed, answering=on_a_delegation)
+            _finished_lifecycle_restart(name, channels_up)
+            _resumed_lifecycle(name, channels_up, on_a_continuation)
+            _requested_lifecycle_restart(name, asked_for)
             if knew is None:
                 # Establish the silent baseline before saying the gateway is online. Once a person
                 # can observe `CAME_UP`, a grant they make must be newer than the baseline and must
@@ -733,7 +741,7 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
         # anything. Under `KeepAlive {SuccessfulExit: false}` a non-zero exit *is* the request, and
         # launchd answers it. A gateway with no job behind it simply stops, and `_restarting` says
         # so to the person who asked rather than promising a return that nothing would make.
-        if asked_for and asked_for[0] == hosting.RESTART:
+        if asked_for and asked_for[0] in (hosting.RESTART, LIFECYCLE_RESTART):
             return COME_BACK
         return OK
 
@@ -1179,6 +1187,73 @@ def _asked_from_a_channel(asked_for: List[str], word: str) -> None:
     asked_for.append(word)
     with contextlib.suppress(Exception):
         os.kill(os.getpid(), signal.SIGTERM)
+
+
+def _requested_lifecycle_restart(name: str, asked_for: List[str]) -> None:
+    """Exit for one requested self-cycle only after all admitted work has settled."""
+    if asked_for:
+        return
+    waiting = []
+    try:
+        waiting = continuations.waiting(name, continuations.GATEWAY_RESTART)
+        if not waiting:
+            return
+        with locking.only_one(
+                paths.work_admission_lock(), guarding="starting a safe gateway restart"):
+            active_turns = turns.activity(name)
+            active_schedules = firing.activity(name)
+            if active_turns is None or active_schedules is None:
+                return
+            if active_turns or active_schedules:
+                return
+            continuations.running(name, waiting[0].id)
+            _asked_from_a_channel(asked_for, LIFECYCLE_RESTART)
+    except Exception as why:  # noqa: BLE001 — the gateway loop must stay alive
+        if waiting:
+            with contextlib.suppress(Exception):
+                continuations.finished(
+                    name, waiting[0].id, succeeded=False,
+                    outcome=f"the supervised restart could not begin ({why})")
+
+
+def _finished_lifecycle_restart(name: str, channels_up: hosting.Watching) -> None:
+    """Prove changed pid, running release, and exact origin channel before restart success."""
+    with contextlib.suppress(Exception):
+        for handoff in continuations.in_state(
+                name, continuations.GATEWAY_RESTART, continuations.RUNNING):
+            if handoff.requested_pid == os.getpid():
+                continue
+            channel = arriving.on_which_channel(name, handoff.conversation)
+            if channel is None:
+                continuations.suppressed(
+                    name, handoff.id,
+                    "the originating conversation is not on a resumable channel")
+                continue
+            if not hosting.connected(channels_up, channel):
+                continue
+            continuations.finished(
+                name, handoff.id, succeeded=True,
+                outcome="the supervised gateway restarted with a changed process id",
+                version=__version__, pid=os.getpid())
+
+
+def _resumed_lifecycle(name: str, channels_up: hosting.Watching,
+                       answerer: answering.OnAContinuation) -> None:
+    """Wake only this agent's safe terminal origins after their exact channel is connected."""
+    with contextlib.suppress(Exception):
+        for handoff in continuations.terminal(name):
+            channel = arriving.on_which_channel(name, handoff.conversation)
+            if channel is None:
+                continuations.suppressed(
+                    name, handoff.id,
+                    "the originating conversation is not on a resumable channel")
+                continue
+            if not hosting.connected(channels_up, channel):
+                continue
+            if handoff.observed_version is None or handoff.observed_pid is None:
+                handoff = continuations.observed(
+                    name, handoff.id, version=__version__, pid=os.getpid())
+            answerer.resume(name, handoff.id)
 
 
 def _how_it_stands(agent: str, up_at: datetime.datetime) -> str:

@@ -15,7 +15,7 @@ rundesk agents remove <agent> --confirm   # take one away, and everything it rem
 rundesk gateways                          # every agent, and how its gateway stands
 rundesk gateways start <agent>            # start one, and prove a gateway came up
 rundesk gateways stop <agent> | --all     # take the job back, gracefully
-rundesk gateways restart <agent> | --all  # stop it, prove it went, start it again
+rundesk gateways restart <agent> [--continue] | --all  # stop it, prove it went, start it again
 rundesk gateways logs <agent> [-n <lines>]  # what one gateway has been saying
 rundesk gateways run <agent>              # be the gateway, in this terminal
 rundesk schedules                         # everything every agent starts because the time came
@@ -53,7 +53,7 @@ rundesk skills profiles <catalog>/<skill>         # every account one skill is c
 rundesk skills configure <catalog>/<skill> [--profile <name>]  # set what it needs, guided
 rundesk skills forget <catalog>/<skill> [--profile <name>] --confirm   # empty one account
 rundesk skills doctor [<agent>]           # what cannot be used, and exactly why
-rundesk update                            # move to the newest release, or say it is up to date
+rundesk update [--continue]               # move to the newest release, or say it is up to date
 rundesk uninstall --confirm [--purge]     # remove rundesk; --purge also takes the data
 rundesk install [--source <dir>] [--bin-dir <dir>]   # what install.sh runs
 ```
@@ -90,7 +90,7 @@ Answers *how rundesk is*. Takes no flags.
 ```console
 $ rundesk status
 WHAT              IS
-version           0.45.1
+version           0.46.0
 home              /Users/you/.rundesk
 program           /Users/you/.rundesk/app (installed)
 data              /Users/you/.rundesk/data
@@ -131,8 +131,8 @@ running.
 
 ```console
 $ rundesk version
-rundesk 0.45.1
-        0.45.1: UP TO DATE
+rundesk 0.46.0
+        0.46.0: UP TO DATE
 ```
 
 **Being unable to ask is never reported as being up to date.** If GitHub cannot be reached the line
@@ -622,6 +622,23 @@ original pid. It reported killing and replacing a gateway it had not touched, in
 person runs `--force` to get out of. Both now go through the stop above, including its fall back to
 signalling the process directly.
 
+`--continue` is the explicit safe self-restart form for an active channel provider turn. It may
+name only that turn's own agent and cannot be combined with `--all` or `--force`. The command
+records the exact agent, turn, conversation, and admitted owner-message boundary, then returns
+normally. After that turn and any scheduled work settle, the gateway exits through its already
+placed supervisor job. A replacement must prove a changed pid, its running version, and the exact
+origin channel connected before one direct continuation turn wakes the conversation. It resumes the
+exact provider session when its provider and instruction fingerprint remain valid; otherwise it
+starts a fresh session under current rules and tells the agent how to recover the recorded
+conversation. A terminal or ambiguous caller, another agent, an unsupervised gateway, newer owner
+input, or an already-claimed handoff wakes nobody. Without the flag, restart keeps the synchronous
+stop-and-start behavior above.
+
+As with delegation, turn identity from `RUNDESK_AGENT`, `RUNDESK_RUN`, and the matching agent home
+is a correctness boundary for commands run by the brain, not containment from a hostile same-user
+process: every agent already has the owner's shell. The command cross-checks all three against the
+live turn so another agent's ordinary environment cannot be mistaken for the origin.
+
 ### gateways logs
 
 What one gateway has been saying, twenty lines by default — **and, every time, what the machine's
@@ -634,9 +651,9 @@ perfectly ordinary day log and a traceback in a file the day log knows nothing a
 $ rundesk gateways logs cole -n 5
 logs for cole in /Users/you/.rundesk/data/agents/cole/logs
         what cole's own gateway wrote, in /Users/you/.rundesk/data/agents/cole/logs:
-[2026-08-05 08:26:43-04:00] INFO:    gateway up for cole on 0.45.1 as pid 95177
+[2026-08-05 08:26:43-04:00] INFO:    gateway up for cole on 0.46.0 as pid 95177
 [2026-08-05 08:26:45-04:00] INFO:    gateway stopping for cole: asked to stop with signal 15
-[2026-08-05 08:28:40-04:00] INFO:    gateway up for cole on 0.45.1 as pid 96111
+[2026-08-05 08:28:40-04:00] INFO:    gateway up for cole on 0.46.0 as pid 96111
 [2026-08-05 08:28:42-04:00] WARNING: gateway did not start: a gateway is already running for cole as pid 96111 — one agent has one gateway, and this one is standing down
         the supervisor caught nothing in gateway.out or gateway.err — everything above is the gateway's own log
 ```
@@ -676,7 +693,7 @@ holding:
 
 ```console
 $ rundesk gateways run cole
-[2026-08-05 08:28:42-04:00] gateway cole: this process is pid 96134, running 0.45.1
+[2026-08-05 08:28:42-04:00] gateway cole: this process is pid 96134, running 0.46.0
 gateway: NOT RUNNING — a gateway is already running for cole as pid 96111 — one agent has one gateway, and this one is standing down
 ```
 
@@ -1795,7 +1812,26 @@ rundesk updated to v0.41.0
         what changed: https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.41.0
 ```
 
-Takes no flags. The order is chosen so the failure that cannot damage anything happens first: ask,
+With no flag, the command keeps the existing lifecycle below and never creates continuation work.
+`--continue` is an explicit opt-in available only to one unambiguous active channel provider turn.
+It records a compact durable handoff before the existing queued worker starts. Once the update
+reaches a truthful terminal result and that same agent's gateway and exact channel are healthy, one
+new turn wakes the exact conversation. An already-current update does not needlessly require a new
+gateway pid; a real restart does. A newer owner message, a newer turn, duplicate/crash claim, or
+already delivered continuation suppresses another turn. The exact provider session resumes only
+when its provider remains configured, supports resume, is still available, and the current
+person-facing preface exactly matches the originating instruction fingerprint. A missing session,
+changed provider, unsupported resume, or changed rules, access, or team authority starts a fresh
+session under current rules instead of suppressing the requested wake or carrying stale authority.
+
+The continuation prompt is Rundesk's lifecycle result, not a copied prompt or a synthesized owner
+message. It tells a fresh session the exact `messages` command for recovering the recorded request
+and progress, then tells the agent to verify the outcome and continue the first unfinished
+objective. It is admitted directly rather than through `rundesk ask` or delegation. The handoff stores local
+database ids, bounded lifecycle outcomes, and observed version/pid only—not owner text, provider
+session handles, channel/person ids, credentials, agent names, or paths.
+
+The update order is chosen so the failure that cannot damage anything happens first: ask,
 then fetch to a temporary directory, stand down every online gateway, then swap and settle. The swap
 stages every entry and renames them into place, putting back what was there if any part fails — so an
 interrupted update leaves the install on the release it was, never on neither. Gateways that were
@@ -1807,11 +1843,16 @@ it and will not take it offline permanently.
 If a provider turn or schedule is active, a manual update is recorded durably and returns without
 fetching or stopping anything. A detached install-level worker waits for the install to become
 quiet, closes new-work admission, and then runs the ordinary update transaction. The worker has no
-agent, conversation, turn, or delegation context, so infrastructure work never appears as activity
-inside a DM. Losing the worker does not lose the request: the daily coordinator sees the same
+live provider environment, so infrastructure work never appears as activity inside a DM. An opted-in
+request carries only its agent-local handoff identity; the worker never synthesizes a caller. Losing
+the worker does not lose the request: the daily coordinator sees the same
 `queued-update.json` and retries it. A failed attempt remains owned by the detached worker and is
-retried with a hold-off; uninstall cancels the request and excludes that worker and every other
+retried with a hold-off for ordinary requests. An opted-in failure is terminal, records a truthful
+failed/rolled-back handoff, and resumes for verification instead of retrying forever. Uninstall
+cancels the request and excludes that worker and every other
 update for the full removal transaction before it touches the coordinator or program.
+Malformed, cross-turn, or non-update continuation provenance is refused before update work begins;
+it is never silently downgraded to an ordinary queued update.
 
 The notified channel receives these maintenance notices around a successful update:
 
