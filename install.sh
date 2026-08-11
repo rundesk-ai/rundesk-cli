@@ -26,6 +26,36 @@ MIN_PYTHON_MINOR=9
 die() { echo "install: $*" >&2; exit 1; }
 say() { echo "$*" >&2; }
 
+usage() {
+  cat <<'USAGE'
+Usage:
+  ./install.sh              install the latest release, or this checkout
+  ./install.sh -h|--help    print this usage and change nothing
+
+Environment:
+  RUNDESK_HOME      where rundesk is installed (default: ~/.rundesk)
+  RUNDESK_BIN_DIR   where the rundesk command is linked
+
+Uninstall with:
+  rundesk uninstall --confirm [--purge]
+USAGE
+}
+
+# Read the whole command line before finding an interpreter, fetching a release, or handing over.
+# Inspection and refusal must be unable to enter any path that changes an install.
+if (( $# == 1 )) && [[ "$1" == "-h" || "$1" == "--help" ]]; then
+  usage
+  exit 0
+elif (( $# > 0 )); then
+  unsupported="$1"
+  if [[ "$unsupported" == "-h" || "$unsupported" == "--help" ]]; then
+    unsupported="$2"
+  fi
+  echo "install: unsupported argument '${unsupported}'" >&2
+  usage >&2
+  exit 2
+fi
+
 # --- a Python that is new enough ---------------------------------------------------------------
 # Asked of the interpreter rather than parsed out of `--version`, so the answer comes from the thing
 # that will actually run rundesk.
