@@ -30,6 +30,85 @@ raise SystemExit(1)
 """
 
 
+class TheBootstrapInstaller(support.Isolated):
+    """The shell entry point parses every argument before it hands over to the product."""
+
+    def setUp(self):
+        super().setUp()
+        self.checkout = self.home / "checkout"
+        (self.checkout / "src" / "rundesk").mkdir(parents=True)
+        shutil.copy2(support.CHECKOUT / "install.sh", self.checkout / "install.sh")
+        self.state = self.home / "installed-state"
+        self.state.mkdir()
+        self.kept = {
+            "files": "the installed program",
+            "jobs": "the loaded launch job",
+            "gateways": "the running gateway",
+            "version": "0.46.0",
+        }
+        for name, value in self.kept.items():
+            (self.state / name).write_text(value)
+        (self.checkout / "rundesk").write_text(
+            "#!/usr/bin/env python3\n"
+            "import os\n"
+            "import sys\n"
+            "from pathlib import Path\n"
+            "state = Path(os.environ['INSTALLER_TEST_STATE'])\n"
+            "for name in ('files', 'jobs', 'gateways', 'version'):\n"
+            "    (state / name).write_text('changed')\n"
+            "print('\\n'.join(sys.argv[1:]))\n"
+        )
+        (self.checkout / "rundesk").chmod(0o755)
+        self.bin = self.home / "bin"
+
+    def installer(self, *argv):
+        environment = os.environ.copy()
+        environment["RUNDESK_BIN_DIR"] = str(self.bin)
+        environment["INSTALLER_TEST_STATE"] = str(self.state)
+        return subprocess.run(
+            ["bash", str(self.checkout / "install.sh"), *argv],
+            cwd=self.checkout, env=environment, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=30,
+        )
+
+    def assert_state_was_not_changed(self):
+        self.assertEqual(
+            self.kept,
+            {name: (self.state / name).read_text() for name in self.kept},
+        )
+
+    def test_help_prints_usage_and_changes_nothing(self):
+        for option in ("--help", "-h"):
+            with self.subTest(option=option):
+                ended = self.installer(option)
+
+                self.assertEqual(0, ended.returncode, ended.stderr)
+                self.assertIn("Usage:", ended.stdout)
+                self.assertIn("rundesk uninstall --confirm [--purge]", ended.stdout)
+                self.assertEqual("", ended.stderr)
+                self.assert_state_was_not_changed()
+
+    def test_every_unsupported_argument_is_refused_with_usage_before_handoff(self):
+        for argv in (("--unknown",), ("-x",), ("uninstall",), ("--help", "--unknown")):
+            with self.subTest(argv=argv):
+                ended = self.installer(*argv)
+
+                self.assertEqual(2, ended.returncode)
+                self.assertIn("unsupported", ended.stderr)
+                self.assertIn("Usage:", ended.stderr)
+                self.assertEqual("", ended.stdout)
+                self.assert_state_was_not_changed()
+
+    def test_no_argument_keeps_the_checkout_install_handoff_compatible(self):
+        ended = self.installer()
+
+        self.assertEqual(0, ended.returncode, ended.stderr)
+        self.assertEqual(
+            ["install", "--source", str(self.checkout), "--bin-dir", str(self.bin)],
+            ended.stdout.splitlines(),
+        )
+
+
 class Installing(support.Isolated):
     """A scratch tree to install from, and a scratch place to put the command."""
 
