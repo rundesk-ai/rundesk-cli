@@ -126,6 +126,50 @@ class ANewAgent(support.Isolated):
             with self.subTest(absent=absent):
                 self.assertNotIn(absent, rules)
 
+    def test_a_domain_has_one_persistent_task_state(self):
+        rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").split())
+        for phrase in (
+                "verified usable Desk", "persistent operational queue",
+                "Do not duplicate persistent task state", "no usable canonical Desk or tracker",
+                "Disposable same-turn checklists", "remain allowed",
+                "not persistent task state"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, rules)
+
+    def test_a_domain_gives_each_task_measurable_done_criteria_and_a_disposition(self):
+        rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").split())
+        for phrase in (
+                "measurable done criteria and proof", "Complete it after verification",
+                "re-scope or schedule a real future action", "never leave it stale"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, rules)
+
+    def test_a_specialist_has_one_bounded_brief_and_no_persistent_backlog(self):
+        directory.made("forge", "a-stand-in", role="specialist")
+        rules = " ".join(
+            (directory.home("forge") / "AGENTS.md").read_text(encoding="utf-8").split())
+        for phrase in (
+                "One active resumable brief", "one bounded assignment",
+                "Never keep or own a persistent backlog", "canonical Desk or tracker",
+                "Disposable same-turn checklists", "remain allowed",
+                "not persistent task state"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, rules)
+
+    def test_both_roles_require_named_authority_for_state_mutation(self):
+        directory.made("forge", "a-stand-in", role="specialist")
+        for role, home in (("domain", self.home), ("specialist", directory.home("forge"))):
+            rules = " ".join((home / "AGENTS.md").read_text(encoding="utf-8").split())
+            with self.subTest(role=role):
+                self.assertIn("Only the current request authorizes state changes", rules)
+                self.assertIn("A standing rule authorizes just its named queue actions", rules)
+                self.assertIn("other limits remain", rules)
+
+        specialist = " ".join(
+            (directory.home("forge") / "AGENTS.md").read_text(encoding="utf-8").split())
+        self.assertIn("specialists own no queue", specialist)
+        self.assertIn("grants no persistent work", specialist)
+
     def test_the_pages_say_what_they_are(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("MEMORY.md", rules)
@@ -204,8 +248,7 @@ class ANewAgent(support.Isolated):
                        "owner preferences", "role and responsibilities", "cross-project process",
                        "name, stable location, purpose, role, authoritative overview",
                        "Project commands, paths, status, decisions", "formats, dates, and history",
-                       "stay in project/shared index", "Active scope/checks/done criteria",
-                       "in `tasks/`", "move lasting truth to project", "remove its brief at close",
+                       "stay in project/shared index",
                        "one shared purpose-named index", "never one note per project",
                        "Keep only current facts", "never narrate or date a correction",
                        "Merge, do not append", "superseded fact or closed loop",
