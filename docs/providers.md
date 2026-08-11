@@ -64,7 +64,7 @@ read or change a row for the provider; it keeps SQLite's WAL sidecars present so
 tool can invoke the documented `messages` command without needing permission to create those sibling
 files itself. The connection closes on every settlement path.
 
-### The five callers, and why they are not one
+### The six callers, and why they are not one
 
 | Caller | Runs the turn | Can steer | Conversation |
 |---|---|---|---|
@@ -72,6 +72,7 @@ files itself. The connection closes on every settlement path.
 | a channel | on a thread of its own | yes — later messages prefer its active turn | one per place |
 | a schedule (the gateway) | in a process of its own, `rundesk providers run` | no | one per schedule |
 | a delegation (the gateway) | on a thread of its own | yes — durable `asked say` guidance is polled into its active turn | one per delegation |
+| an opted-in lifecycle continuation (the gateway) | on a thread of its own | yes — later real owner input uses normal live steering | the exact originating channel conversation |
 | `rundesk providers run` | there | no | the schedule's |
 
 A channel turn runs on a thread because the thread that reads a channel adapter **cannot fall
@@ -79,6 +80,16 @@ behind**: a turn takes minutes, and running one inline would stop that channel r
 the length of it — including the next message and including a stop.
 
 A scheduled turn is a *process* because that is how its claim survives the gateway that started it.
+
+A lifecycle continuation is admitted directly under the originating conversation lock after the
+gateway and exact channel are healthy. It recomposes the originating person-facing instructions
+byte-for-byte and resumes the existing provider session only when the provider, capability, handle,
+and instruction fingerprint are still valid. Otherwise it starts a fresh provider session under
+current rules and directs the agent to recover the recorded conversation with `rundesk messages`.
+Its task is Rundesk's bounded lifecycle result: no new owner message is written, no original prompt
+is replayed, and no target agent or delegation is created. The durable claim and newer-owner check
+happen while that conversation lock is held, closing the race between deciding a handoff is current
+and starting its single turn.
 
 ### What is written down
 

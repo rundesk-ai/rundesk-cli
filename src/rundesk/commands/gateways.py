@@ -119,11 +119,12 @@ import time
 from pathlib import Path
 from typing import List, NamedTuple, Optional, Tuple
 
-from rundesk.agents import directory
+from rundesk.agents import directory, records
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.gateways import host, job, standing
+from rundesk.providers import continuations
 from rundesk.utils import logs, programs
 from rundesk.utils.terminal import as_table
 
@@ -342,6 +343,9 @@ def register(sub: Subcommands) -> None:
     again.add_argument("--all", action="store_true", dest="every",
                        help="every agent on this install")
     again.add_argument("--force", action="store_true", help=FORCE)
+    again.add_argument(
+        "--continue", action="store_true", dest="continuation",
+        help="resume this channel conversation after its own supervised gateway is healthy")
 
     said = what.add_parser("logs", help="what one agent's gateway has been saying")
     said.add_argument("agent", metavar="<agent>", help="which one, as `rundesk agents` lists it")
@@ -372,6 +376,9 @@ def cmd_gateways(args: argparse.Namespace, supervising: Optional[job.Supervising
     if what == "stop":
         return _stopped(args.agent, args.every, args.force, _supervisor(supervising))
     if what == "restart":
+        if args.continuation:
+            return _continued_restart(
+                args.agent, args.every, args.force, _supervisor(supervising))
         return _restarted(args.agent, args.every, args.force, _supervisor(supervising))
     if what == "logs":
         return _said(args.agent, args.lines)
@@ -708,6 +715,9 @@ def _stopped_one(name: str, by: job.Supervising, forcing: bool = False) -> int:
         return _failed(f"the job for {name} could not be taken back — {why}",
                        f"the gateway for {name} may still be running, and its job may still be "
                        "loaded")
+    continuations.superseded(
+        name, continuations.GATEWAY_RESTART,
+        "a newer gateway stop or restart took the supervisor job back")
 
     if not _went_away(at):
         # **The job came back cleanly and something is still holding the name**, which is the proof
@@ -751,6 +761,46 @@ def _restarted(name: Optional[str], every: bool, forcing: bool, by: job.Supervis
         if went != OK:
             worst = FAILED
     return worst
+
+
+def _continued_restart(name: Optional[str], every: bool, forcing: bool,
+                       by: job.Supervising) -> int:
+    """Queue this active turn's own supervised gateway cycle after admitted work settles."""
+    if every or forcing:
+        return _mistyped(
+            "--continue is only for one safe self-gateway restart",
+            "use it as: rundesk gateways restart <agent> --continue")
+    if name is None:
+        return _mistyped(
+            "restart --continue was not told which gateway",
+            "use it as: rundesk gateways restart <agent> --continue")
+    try:
+        agent, turn, _conversation, message = continuations.origin()
+    except continuations.NoOrigin as why:
+        return _failed(str(why), "no restart was requested")
+    if name != agent:
+        return _failed(
+            f"--continue may restart only this turn's own gateway ({_as_typed(agent)})",
+            f"nothing was requested for {_as_typed(name)}")
+    how = standing.standing(directory.where(name))
+    if how.how != standing.ONLINE or how.pid is None:
+        return _failed(
+            f"the gateway for {_as_typed(name)} is not provably running",
+            "no restart was requested")
+    stood = _stood(name, by)
+    if stood.supervised != job.PLACED:
+        return _failed(
+            f"the gateway for {_as_typed(name)} is not supervised by a placed job",
+            "no restart was requested")
+    try:
+        continuations.requested(
+            name, turn, message, continuations.GATEWAY_RESTART, how.pid)
+    except (OSError, ValueError, records.NotThere, records.Unreadable) as why:
+        return _failed(
+            f"the restart continuation could not be recorded ({why})",
+            "no restart was requested")
+    print(f"gateway restart queued for {name} until its active work finishes")
+    return OK
 
 
 def _restarted_one(name: str, by: job.Supervising, forcing: bool = False) -> int:
@@ -846,6 +896,9 @@ def _signalled_directly(name: str, at: Path, forcing: bool, why_there_is_no_job:
     if how.how != standing.ONLINE:
         # Nothing is holding the name, and there was no job to take back either — so there is
         # nothing here to stop, which is the state that was asked for.
+        continuations.superseded(
+            name, continuations.GATEWAY_RESTART,
+            "a newer gateway stop found this gateway already offline")
         print(f"{name} is not running")
         return OK
     if how.pid is None:
@@ -861,6 +914,9 @@ def _signalled_directly(name: str, at: Path, forcing: bool, why_there_is_no_job:
         return _failed(f"{went_wrong} — {trouble}" if trouble else went_wrong,
                        f"it is still holding the name{_as_pid(how.pid)}", "nothing was stopped")
 
+    continuations.superseded(
+        name, continuations.GATEWAY_RESTART,
+        "a newer gateway stop superseded the requested self-restart")
     print(f"gateway stopped for {name}{_as_pid(how.pid)}")
     print(f"        {BY_SIGNAL}")
     print(f"        why    {why_there_is_no_job}")

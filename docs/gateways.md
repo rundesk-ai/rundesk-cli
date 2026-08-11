@@ -218,6 +218,18 @@ before it says it restarted anything.
 job the supervisor is still holding keeps the definition it already had *without failing*, so a
 restart that started first would report a restart and go on running the old program for ever.
 
+An opted-in `rundesk gateways restart <agent> --continue` is deliberately a different, asynchronous
+self-restart. Only the active channel turn hosted by that named agent may request it, and only when
+the gateway is already under a placed supervisor job. The gateway waits for admitted turns and
+schedules to settle under the ordinary work-admission barrier, marks the handoff running, and exits
+nonzero so launchd creates a fresh process. The restored gateway requires a changed pid, its running
+version, and the exact originating adapter connected before it atomically claims one continuation.
+`--all`, `--force`, another agent, terminal/schedule/delegation callers, or a newer owner message are
+refused or suppressed without a wake. A missing or unsafe original provider session still wakes the
+same conversation in a fresh session under current rules.
+A newer ordinary stop or restart suppresses the queued self-cycle when it takes the supervisor job
+back, so the earlier handoff cannot later wake or claim that the superseded restart completed.
+
 ### A gateway with no job is stopped by signalling it directly
 
 Every stop above goes through the job, and for most gateways that is the whole story. Two do not have

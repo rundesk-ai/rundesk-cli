@@ -146,7 +146,11 @@ def _register_install(sub: Subcommands) -> None:
 
 
 def _register_update(sub: Subcommands) -> None:
-    sub.add_parser("update", help="move to the newest published release, or say it is up to date")
+    update = sub.add_parser(
+        "update", help="move to the newest published release, or say it is up to date")
+    update.add_argument(
+        "--continue", action="store_true", dest="continuation",
+        help="resume this channel conversation once the guarded update has a terminal outcome")
 
 
 def _register_uninstall(sub: Subcommands) -> None:

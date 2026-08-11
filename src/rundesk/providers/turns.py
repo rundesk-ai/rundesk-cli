@@ -150,6 +150,13 @@ class Request(NamedTuple):
     #: Inbound messages this turn is answering. Delegated guidance uses this durable boundary so a
     #: reply cannot accidentally consume guidance that arrived after the turn began.
     inbound_messages: Tuple[int, ...] = ()
+    #: Lifecycle recovery resumes the exact prior session only while its provider and instructions
+    #: remain safe; otherwise it must still wake this conversation in a fresh provider session.
+    lifecycle_continuation: bool = False
+    #: The brain the originating turn used. A configured-provider change requires a fresh wake.
+    expected_provider: Optional[str] = None
+    #: The original preface fingerprint. A mismatch requires a fresh wake under current rules.
+    expected_instructions: Optional[str] = None
 
 
 class Outcome(NamedTuple):
@@ -676,6 +683,23 @@ def run(request: Request, watching: Optional[Callable[[Dict[str, Any]], None]] =
             return _held(request, held, watching, saying, ours, admitted)
 
 
+def run_if(request: Request, admitting: Callable[[], bool],
+           watching: Optional[Callable[[Dict[str, Any]], None]] = None,
+           admitted: Optional[Callable[[], None]] = None) -> Optional[Outcome]:
+    """Run only when ``admitting`` still accepts the origin under the conversation claim.
+
+    The claim closes the newer-owner race: a platform message may be recorded before this wins and
+    is then visible to ``admitting``; after this wins it belongs to the continuation turn's normal
+    live-steering boundary. The callback is the durable once-only transition, not a preliminary
+    question with a gap after it.
+    """
+    with claiming(request.agent, request.conversation) as held:
+        if not admitting():
+            return None
+        with _stoppable(request.agent, request.conversation) as ours:
+            return _held(request, held, watching, None, ours, admitted)
+
+
 def _held(request: Request, held: int, watching, saying,
           ours: Optional[Ours] = None,
           admitted: Optional[Callable[[], None]] = None) -> Outcome:
@@ -704,7 +728,21 @@ def _held(request: Request, held: int, watching, saying,
                                 # silently. Illegal situations receive no listing at all.
                                 team=teammates)
     resume = None if request.fresh else kept.get_session(agent, request.conversation, provider_name)
-    if resume and kept.latest_instructions(agent, request.conversation, provider_name) != prompt.sha256:
+    if request.lifecycle_continuation:
+        safe_resume = bool(
+            resume
+            and can.get("resume") is True
+            and provider_name == request.expected_provider
+            and prompt.sha256 == request.expected_instructions
+            and kept.latest_instructions(
+                agent, request.conversation, provider_name) == request.expected_instructions)
+        if not safe_resume:
+            if resume:
+                # Never leave an unsafe handle available for the following turn to revive.
+                kept.delete_session(agent, request.conversation, provider_name)
+            resume = None
+    if (resume and kept.latest_instructions(
+            agent, request.conversation, provider_name) != prompt.sha256):
         # Some brains bind the preface when a session starts and accept-but-ignore replacements on
         # resume. Throw the stale handle away, rather than merely skipping it once: if this fresh
         # attempt fails before returning a new handle, the next turn must not revive old authority.

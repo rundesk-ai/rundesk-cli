@@ -8,7 +8,7 @@ machine-level operations; preserve owner data and report every refusal.
 | Command | Control |
 |---|---|
 | `install [--source <dir>] [--bin-dir <dir>]` | Install from a program tree and place the command link in the chosen PATH directory. Defaults use the running source and installer-selected bin directory. |
-| `update` | Check the published release and move to it, or prove this install is already settled. |
+| `update [--continue]` | Check the published release and move to it, optionally resuming the active originating channel turn after health returns. |
 | `uninstall [--confirm]` | Preview removal; `--confirm` removes program, job definitions, and command link while retaining owner data, backups, and credentials. |
 | `uninstall --purge [--confirm]` | Also remove owner data and the live credential store. Backups, which may contain credentials, are never removed. |
 
@@ -36,6 +36,13 @@ then brings the gateway back online.
    `update` exits nonzero when it cannot determine what to install.
 4. Run `status` and `version` again. Install migrations advance once in `config.json`; each agent's
    migrations advance independently, so one agent's failure need not conceal the others.
+
+Use `--continue` only inside the active channel provider turn that must verify and finish its own
+work afterward. It is explicit opt-in: ordinary and automatic updates never wake a conversation.
+Rundesk refuses terminal or ambiguous callers and suppresses a duplicate when newer owner input or
+a newer turn already moved the conversation on. It resumes the exact provider session when safe;
+otherwise it wakes the same conversation in a fresh session and directs context recovery through
+`messages`.
 
 ## Uninstall and purge
 

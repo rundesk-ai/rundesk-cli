@@ -21,6 +21,7 @@ checks that mechanically, because a rule of this kind stops being true quietly.
 | `team` | which specialists a turn may delegate to, with current skill names |
 | `kept` | what an agent's records hold about its turns, and finding what was said |
 | `turns` | one turn: the claim, what it resolved, what it ran, and how it settled |
+| `continuations` | a once-only lifecycle result returned to its originating turn |
 | `answering` | what answers a message, and what starts a scheduled turn |
 
 May depend on `skills`, `channels`, `schedules`, `agents`, `core` and `utils`. It reaches `channels` because a turn's answer

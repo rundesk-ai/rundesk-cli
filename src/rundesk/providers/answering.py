@@ -43,7 +43,7 @@ from rundesk.agents import directory, records
 from rundesk.channels import arriving, delivery, hosting
 from rundesk.channels import kept as channels_kept
 from rundesk.core import config
-from rundesk.providers import adapters, instructions, kept, protocol, turns
+from rundesk.providers import adapters, continuations, instructions, kept, protocol, turns
 from rundesk.schedules import due, firing
 from rundesk.schedules import kept as schedules_kept
 from rundesk.skills import grants
@@ -1088,6 +1088,77 @@ class OnADelegation(IntoAChannel):
             return
         if refused:
             _note(self._where, f"channel {kind}: {about} was not delivered — {refused}", logs.ERROR)
+
+
+class OnAContinuation(IntoAChannel):
+    """Runs a claimed lifecycle recovery directly in its originating conversation.
+
+    It is neither a user message nor a delegation: no inbound conversation row is made and no
+    target agent is selected. It resumes the original provider session when safe, otherwise starts
+    fresh under current rules. The gateway calls this only after the exact origin channel connects.
+    """
+
+    def __init__(self, where: Path, hosted: Callable[[], hosting.Watching]):
+        super().__init__(where, hosted)
+        self._starting = set()
+        self._starting_lock = threading.Lock()
+
+    def resume(self, agent: str, handoff: int) -> None:
+        """Start one daemon worker; the durable claim remains the cross-process authority."""
+        key = (agent, handoff)
+        with self._starting_lock:
+            if key in self._starting:
+                return
+            self._starting.add(key)
+        threading.Thread(
+            target=self._resumed, name=f"lifecycle-{handoff}", args=(agent, handoff),
+            daemon=True).start()
+
+    def _resumed(self, agent: str, handoff: int) -> None:
+        key = (agent, handoff)
+        try:
+            row = continuations.one(agent, handoff)
+            stands = arriving.where_it_stands(agent, row.conversation)
+            kind = arriving.on_which_channel(agent, row.conversation)
+            if stands is None or stands[0] != arriving.FROM_CHANNEL or kind is None:
+                continuations.suppressed(
+                    agent, handoff, "the originating channel conversation is no longer available")
+                return
+            _source, place = stands
+            watching = _Streaming(self, agent, kind, place)
+            got = turns.run_if(
+                turns.Request(
+                    agent=agent, prompt=continuations.prompt(agent, row),
+                    conversation=row.conversation,
+                    # Recompose the originating person-facing preface. Providers that bind rules
+                    # at session creation cannot safely receive a new recovery preface on resume;
+                    # turns.run_if requires this composition to match the origin fingerprint.
+                    situation=instructions.USER_TO_AGENT,
+                    source=arriving.FROM_CHANNEL, place=place,
+                    lifecycle_continuation=True, expected_provider=row.provider,
+                    expected_instructions=row.origin_instructions),
+                admitting=lambda: continuations.claim(agent, handoff) is not None,
+                watching=watching.heard)
+            if got is None:
+                return
+            refused = self._delivered(
+                agent, kind, place, got, linked_earlier=tuple(watching.linked))
+            outcome = "continuation turn completed"
+            if refused:
+                outcome += f"; channel delivery was refused ({refused})"
+            continuations.delivered(agent, handoff, outcome)
+        except turns.Busy:
+            # A newer owner turn won admission. Its durable turn/message makes the next claim
+            # suppress this handoff; leave it requested for that exact recheck on the next beat.
+            return
+        except Exception as why:  # noqa: BLE001 — a daemon worker, and nobody is above it
+            with contextlib.suppress(Exception):
+                continuations.suppressed(
+                    agent, handoff, f"the continuation turn could not start ({why})")
+            _note(self._where, f"lifecycle continuation {handoff} went wrong ({why})", logs.ERROR)
+        finally:
+            with self._starting_lock:
+                self._starting.discard(key)
 
 
 class OnASchedule:
