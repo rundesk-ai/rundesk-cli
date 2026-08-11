@@ -33,9 +33,9 @@ May depend on `channels`, `agents`, `core` and `utils`. Nothing here names a ven
 import hashlib
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
-from rundesk.agents import directory
+from rundesk.agents import directory, records
 from rundesk.core import adapters
 from rundesk.providers import streaming
 from rundesk.utils import logs, programs
@@ -65,6 +65,52 @@ KEPT_OVER = 256 * 1024
 KEPT_BACK = 3
 
 NotRunnable = adapters.NotRunnable
+
+
+class Override(NamedTuple):
+    """The requested and effective provider/model admitted for one piece of work."""
+
+    requested_provider_name: str
+    requested_model_name: Optional[str]
+    provider_name: str
+    model_name: Optional[str]
+
+
+def admitted_override(agent: str, named: Optional[str], model: Optional[str]) -> Optional[Override]:
+    """Resolve and prove one scoped provider override without changing agent configuration.
+
+    A model is meaningful only beside the provider it belongs to, so a model-only delegation is
+    refused.  Where the override keeps the target agent on its configured provider, an omitted model
+    keeps that provider's configured model; moving to another provider carries no model across.
+    """
+    if named is None:
+        if model is not None:
+            raise NotRunnable("a delegation model override also needs --provider")
+        return None
+    provider_name = str(named).strip()
+    if not provider_name:
+        raise NotRunnable("a delegation provider override cannot be blank")
+    model_name = str(model).strip() if model is not None else None
+    if model is not None and not model_name:
+        raise NotRunnable("a delegation model override cannot be blank")
+
+    resolved = where(provider_name)
+    effective_provider = str(resolved) if _is_a_path(provider_name) else provider_name
+    configured = records.read(directory.records(agent))
+    configured_provider = str(configured.get("provider_name") or "")
+    configured_effective = configured_provider
+    if _is_a_path(configured_provider):
+        # A supervised gateway stands in the target's agent directory. Resolve its configured
+        # relative spelling from that same place before deciding whether the scoped choice is the
+        # same brain and may inherit its model.
+        configured_path = Path(configured_provider).expanduser()
+        if not configured_path.is_absolute():
+            configured_path = directory.where(agent) / configured_path
+        configured_effective = str(configured_path.resolve())
+    effective_model = model_name
+    if effective_model is None and effective_provider == configured_effective:
+        effective_model = str(configured.get("model_name") or "") or None
+    return Override(provider_name, model_name, effective_provider, effective_model)
 
 
 def where(named: str) -> Path:

@@ -71,7 +71,7 @@ files itself. The connection closes on every settlement path.
 | `rundesk ask` | in the terminal's own process | yes — it reads later typed words | one per agent |
 | a channel | on a thread of its own | yes — later messages prefer its active turn | one per place |
 | a schedule (the gateway) | in a process of its own, `rundesk providers run` | no | one per schedule |
-| a delegation (the gateway) | on a thread of its own | yes — durable `asked say` guidance is polled into its active turn | one per delegation |
+| a delegation (the gateway) | on a thread of its own | yes — durable `asked say` guidance is polled into its active turn | one per delegation; an admitted scoped provider/model stays with it |
 | an opted-in lifecycle continuation (the gateway) | on a thread of its own | yes — later real owner input uses normal live steering | the exact originating channel conversation |
 | `rundesk providers run` | there | no | the schedule's |
 
@@ -117,6 +117,12 @@ is not in here — see below.
 
 **`provider_sessions`** — where a conversation got to on a brain, keyed by `(conversation,
 provider)`. Opaque to rundesk and never parsed.
+
+A delegation may carry an admitted provider and model of its own. That selection is read from the
+delegation on every pickup and passed into the turn request; it is never written to the target
+agent's configuration. The provider/session pair remains the key, so resuming answered work cannot
+hand one provider's opaque handle to another. Delegations with no override still resolve the target
+agent's configured provider when their turn starts.
 
 A saved handle is resumed only when this provider's latest turn has the same instruction
 fingerprint as the prompt being composed now. A changed access mode, operating rule, owner addition,

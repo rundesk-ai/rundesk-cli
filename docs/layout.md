@@ -113,6 +113,12 @@ narrow a team that already delegates. Removing an agent prunes its name from eve
 before removal, so recreating that name does not inherit prior allowlist authority; `NULL` remains
 unrestricted and inbound delegation remains unchanged.
 
+Each delegation row may also hold requested and admission-effective provider/model values for that
+one bounded task. All four are nullable: `NULL` means no scoped override and preserves late binding
+to the target agent's configuration when work is claimed. Recorded values are immutable across
+answer, failure, stop, resume, gateway replacement and process loss; none is copied into the target
+agent's configuration row.
+
 The same row keeps an explicit operating `role`: `domain` or `specialist`. Existing agents migrate
 to `domain`, which is also creation's default. Role describes the agent's work lifecycle only; it
 does not grant skills, change provider or delegation scope, create a Desk, or confer authority.

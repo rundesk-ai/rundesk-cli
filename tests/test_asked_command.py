@@ -53,6 +53,29 @@ class GuidingWorkingDelegation(support.Isolated):
         return self.rundesk("asked", "--agent", "ava", "say", self.delegation,
                             "include GUIDANCE=EMBER-284")
 
+    def test_show_names_requested_and_effective_provider_model(self):
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute(
+                "UPDATE delegations SET requested_provider_name = 'codex',"
+                " requested_model_name = 'asked-model', provider_name = 'codex',"
+                " model_name = 'effective-model' WHERE delegation_id = ?",
+                (self.delegation,))
+
+        code, out, err = self.rundesk(
+            "asked", "--agent", "ava", "show", self.delegation)
+
+        self.assertEqual(OK, code, err)
+        for value in ("provider requested", "model requested", "provider effective",
+                      "model effective", "codex", "asked-model", "effective-model"):
+            self.assertIn(value, out)
+
+    def test_show_says_late_binding_where_no_override_was_requested(self):
+        code, out, err = self.rundesk(
+            "asked", "--agent", "ava", "show", self.delegation)
+        self.assertEqual(OK, code, err)
+        self.assertIn("target default", out)
+        self.assertIn("resolved from target at claim", out)
+
     def test_say_records_guidance_for_the_active_turn_with_a_next_turn_fallback(self):
         code, out, err = self.guide()
         self.assertEqual(OK, code, err)

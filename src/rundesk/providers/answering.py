@@ -119,9 +119,27 @@ DELEGATED_MESSAGES_AT_MOST = turns.DELEGATED_MESSAGES_AT_MOST
 #: has not been checked, and nobody has been told anything yet.
 REVIEW = """{agent} returned this unchecked delegated result; nobody has received it onward.
 
+{provenance}
+
 {answer}
 
 Verify material claims before using or reporting them."""
+
+
+def _delegation_provenance(answer: str) -> str:
+    """Requested and effective provider/model carried beside one returned result."""
+    requested_provider = getattr(answer, "requested_provider_name", None)
+    requested_model = getattr(answer, "requested_model_name", None)
+    effective_provider = getattr(answer, "provider_name", None)
+    effective_model = getattr(answer, "model_name", None)
+    requested = (_named(str(requested_provider)) if requested_provider else "target default")
+    if requested_model:
+        requested += f" / {_metadata_name(str(requested_model))}"
+    effective = (_named(str(effective_provider)) if effective_provider else "not recorded")
+    if effective_model:
+        effective += f" / {_metadata_name(str(effective_model))}"
+    return f"Provider/model — requested: {requested}; effective: {effective}."
+
 
 TRIES = 3
 
@@ -865,17 +883,23 @@ class OnADelegation(IntoAChannel):
     """
 
     def answer_this(self, agent: str, conversation: int, delegation_id: str,
-                    delegator: str) -> None:
+                    delegator: str, provider_name: Optional[str] = None,
+                    model_name: Optional[str] = None) -> None:
         """Take the turn that answers another agent. The brief is already the conversation's."""
         threading.Thread(target=self._answered, name=f"delegation-{delegation_id}",
-                         args=(agent, conversation, delegation_id, delegator),
+                         args=(agent, conversation, delegation_id, delegator,
+                               provider_name, model_name),
                          daemon=True).start()
 
     def stop_this(self, agent: str, conversation: int, delegation_id: str,
-                  delegator: str) -> bool:
+                  delegator: str, provider_name: Optional[str] = None,
+                  model_name: Optional[str] = None) -> bool:
         """End delegated work, including a brief stopped before its provider began."""
         _body, messages = _delegated_prompt(agent, conversation, delegator)
-        return turns.stop_or_settle_pending(agent, conversation, messages)
+        if provider_name is None and model_name is None:
+            return turns.stop_or_settle_pending(agent, conversation, messages)
+        return turns.stop_or_settle_pending(agent, conversation, messages,
+                                            provider_name=provider_name, model_name=model_name)
 
     def review_this(self, agent: str, conversation: int, answer: str, from_agent: str,
                     delegation_id: str = "", answer_id: str = "") -> bool:
@@ -886,7 +910,9 @@ class OnADelegation(IntoAChannel):
         find, and the review turn is not guaranteed to happen at all if the agent is being torn
         down this second.
         """
-        said = REVIEW.format(agent=from_agent, answer=answer)
+        said = REVIEW.format(
+            agent=from_agent, answer=answer,
+            provenance=_delegation_provenance(answer))
         landed = arriving.said_by_rundesk_into(
             agent, conversation, said,
             external_id=f"delegation-result:{delegation_id}:{answer_id}"
@@ -926,7 +952,8 @@ class OnADelegation(IntoAChannel):
         return False
 
     def _answered(self, agent: str, conversation: int, delegation_id: str,
-                  delegator: str) -> None:
+                  delegator: str, provider_name: Optional[str],
+                  model_name: Optional[str]) -> None:
         """One turn answering one delegation. **Never raises** — this is a thread, nobody is above.
 
         The read is inside the guard and not before it, which is the difference between a claim and
@@ -941,7 +968,8 @@ class OnADelegation(IntoAChannel):
         self._take(agent, conversation, body,
                    situation=instructions.AGENT_TO_AGENT, answering=delegation_id,
                    caller_agent=delegator, about=f"delegation {delegation_id}",
-                   message_ids=message_ids)
+                   message_ids=message_ids, provider_name=provider_name,
+                   model_name=model_name)
 
     def _reviewed(self, agent: str, conversation: int, said: str, from_agent: str,
                   landed: arriving.Landed, admitted: turns.Admission) -> None:
@@ -965,7 +993,9 @@ class OnADelegation(IntoAChannel):
               answering: Optional[str], caller_agent: Optional[str], about: str,
               message_ids: Tuple[int, ...] = (),
               admitted: Optional[turns.Admission] = None,
-              schedule_id: Optional[int] = None, schedule_name: str = "") -> bool:
+              schedule_id: Optional[int] = None, schedule_name: str = "",
+              provider_name: Optional[str] = None,
+              model_name: Optional[str] = None) -> bool:
         """Start a turn, or say this into the one already running, or ask again in a moment.
 
         The same three answers `OnAChannel._answered` gives a person's message, and deliberately the
@@ -1015,7 +1045,8 @@ class OnADelegation(IntoAChannel):
                             situation=situation,
                             source=source, place=place, answering=answering,
                             schedule_id=schedule_id, schedule_name=schedule_name,
-                            caller_agent=caller_agent, inbound_messages=message_ids),
+                            caller_agent=caller_agent, inbound_messages=message_ids,
+                            provider_name=provider_name, model_name=model_name),
                             # A schedule still owes one final report, not its review activity.
                             watching=(watching.heard
                                       if watching and source == arriving.FROM_CHANNEL else None),
@@ -1237,6 +1268,11 @@ def _named(provider: str) -> str:
     the turn's own record, and a surface that showed a different word could not be matched back to it.
     """
     return PurePosixPath(provider).name if "/" in provider else provider
+
+
+def _metadata_name(value: str) -> str:
+    """One single-line model or provider value safe to carry in returned evidence."""
+    return " ".join(value.replace("\\", "/").rsplit("/", 1)[-1].split())
 
 
 def _note(where: Path, said: str, level: str = logs.INFO) -> None:
