@@ -22,7 +22,7 @@ from your home. So do this instead:
 $ ./dev status
 dev: RUNDESK_HOME=/path/to/checkout/.scratch/rundesk-home
 WHAT        IS
-version     0.47.0
+version     0.47.1
 home        /path/to/checkout/.scratch/rundesk-home
 program     /path/to/checkout
 app         /path/to/checkout/.scratch/rundesk-home/app — not there yet

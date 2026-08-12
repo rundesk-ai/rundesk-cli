@@ -13,7 +13,7 @@ from rundesk.channels import arriving, hosting
 from rundesk.core import config, paths
 from rundesk.gateways import host
 from rundesk.lifecycle import backups
-from rundesk.providers import continuations, instructions, kept, protocol, turns
+from rundesk.providers import answering, continuations, instructions, kept, protocol, turns
 
 
 class LifecycleContinuations(support.Isolated):
@@ -214,6 +214,63 @@ class LifecycleContinuations(support.Isolated):
         self.assertEqual(0, delegations)
         self.assertEqual(continuations.DELIVERED,
                          continuations.one(self.agent, handoff.id).continuation_state)
+
+    def test_an_admitted_continuation_starts_and_ends_the_channel_state(self):
+        kept.finish_turn(self.agent, self.turn, kept.DONE, {})
+        handoff = continuations.requested(
+            self.agent, self.turn, self.message, continuations.UPDATE, os.getpid())
+        continuations.finished(self.agent, handoff.id, succeeded=True, outcome="updated")
+        answerer = answering.OnAContinuation(
+            directory.logs(self.agent), lambda: hosting.Watching({}, {}, {}))
+
+        with mock.patch.object(answerer, "_delivered", return_value=""), \
+                mock.patch.object(hosting, "marked", return_value=True) as marked:
+            answerer._resumed(self.agent, handoff.id)
+
+        self.assertEqual(
+            [mock.call(self.agent, directory.logs(self.agent), mock.ANY,
+                       "discord", "1180", answering.WORKING),
+             mock.call(self.agent, directory.logs(self.agent), mock.ANY,
+                       "discord", "1180", answering.DONE)],
+            marked.call_args_list)
+
+    def test_an_admitted_continuation_failure_stops_the_channel_state(self):
+        kept.finish_turn(self.agent, self.turn, kept.DONE, {})
+        handoff = continuations.requested(
+            self.agent, self.turn, self.message, continuations.UPDATE, os.getpid())
+        continuations.finished(self.agent, handoff.id, succeeded=True, outcome="updated")
+        answerer = answering.OnAContinuation(
+            directory.logs(self.agent), lambda: hosting.Watching({}, {}, {}))
+
+        def failed(_request, admitting, watching=None, admitted=None):
+            self.assertTrue(admitting())
+            admitted()
+            raise RuntimeError("provider fell over")
+
+        with mock.patch.object(turns, "run_if", side_effect=failed), \
+                mock.patch.object(hosting, "marked", return_value=True) as marked:
+            answerer._resumed(self.agent, handoff.id)
+
+        self.assertEqual(
+            [answering.WORKING, answering.FAILED],
+            [one.args[-1] for one in marked.call_args_list])
+
+    def test_a_suppressed_continuation_never_starts_channel_state(self):
+        kept.finish_turn(self.agent, self.turn, kept.DONE, {})
+        handoff = continuations.requested(
+            self.agent, self.turn, self.message, continuations.UPDATE, os.getpid())
+        continuations.finished(self.agent, handoff.id, succeeded=True, outcome="updated")
+        arriving.recorded(self.agent, "discord", "1180", "2207", "I already continued")
+        answerer = answering.OnAContinuation(
+            directory.logs(self.agent), lambda: hosting.Watching({}, {}, {}))
+
+        with mock.patch.object(hosting, "marked", return_value=True) as marked:
+            answerer._resumed(self.agent, handoff.id)
+
+        marked.assert_not_called()
+        self.assertEqual(
+            continuations.SUPPRESSED,
+            continuations.one(self.agent, handoff.id).continuation_state)
 
     def test_missing_session_wakes_once_in_a_fresh_session(self):
         kept.finish_turn(self.agent, self.turn, kept.DONE, {})
