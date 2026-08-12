@@ -38,8 +38,7 @@ from rundesk.agents import directory, records
 from rundesk.channels import arriving
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
-from rundesk.delegations import admitting
-from rundesk.delegations import hosting
+from rundesk.delegations import admitting, hosting
 from rundesk.delegations import kept as delegations
 from rundesk.exits import OK
 from rundesk.utils import locking
