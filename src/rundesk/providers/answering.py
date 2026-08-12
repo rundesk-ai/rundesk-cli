@@ -1165,19 +1165,37 @@ class OnAContinuation(IntoAChannel):
                 return
             _source, place = stands
             watching = _Streaming(self, agent, kind, place)
-            got = turns.run_if(
-                turns.Request(
-                    agent=agent, prompt=continuations.prompt(agent, row),
-                    conversation=row.conversation,
-                    # Recompose the originating person-facing preface. Providers that bind rules
-                    # at session creation cannot safely receive a new recovery preface on resume;
-                    # turns.run_if requires this composition to match the origin fingerprint.
-                    situation=instructions.USER_TO_AGENT,
-                    source=arriving.FROM_CHANNEL, place=place,
-                    lifecycle_continuation=True, expected_provider=row.provider,
-                    expected_instructions=row.origin_instructions),
-                admitting=lambda: continuations.claim(agent, handoff) is not None,
-                watching=watching.heard)
+            typing_started = False
+            got = None
+
+            def started() -> None:
+                nonlocal typing_started
+                # A replacement adapter has no memory of the originating turn's indicator.
+                # Admission is the first point at which this continuation is real work, so replay
+                # the same state pair every other channel-backed turn owns from that boundary.
+                typing_started = hosting.marked(
+                    agent, self._where, self._hosted(), kind, place, WORKING)
+
+            try:
+                got = turns.run_if(
+                    turns.Request(
+                        agent=agent, prompt=continuations.prompt(agent, row),
+                        conversation=row.conversation,
+                        # Recompose the originating person-facing preface. Providers that bind rules
+                        # at session creation cannot safely receive a new recovery preface on resume;
+                        # turns.run_if requires this composition to match the origin fingerprint.
+                        situation=instructions.USER_TO_AGENT,
+                        source=arriving.FROM_CHANNEL, place=place,
+                        lifecycle_continuation=True, expected_provider=row.provider,
+                        expected_instructions=row.origin_instructions),
+                    admitting=lambda: continuations.claim(agent, handoff) is not None,
+                    watching=watching.heard, admitted=started)
+            finally:
+                if typing_started:
+                    became = (AS_A_STATE.get(got.turn_status, FAILED)
+                              if got is not None else FAILED)
+                    hosting.marked(
+                        agent, self._where, self._hosted(), kind, place, became)
             if got is None:
                 return
             refused = self._delivered(
