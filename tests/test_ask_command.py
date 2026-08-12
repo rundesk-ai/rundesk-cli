@@ -188,6 +188,12 @@ class WhenTheCommandLineIsWrong(Asking):
         self.assertEqual(FAILED, code)
         self.assertIn("nothing to ask", err)
 
+    def test_a_person_cannot_apply_a_delegation_provider_to_an_ordinary_turn(self):
+        code, _out, err = self.asked("--provider", "codex")
+        self.assertEqual(FAILED, code)
+        self.assertIn("scoped to work one agent delegates", err)
+        self.assertEqual([], kept.list_turns(self.agent))
+
 
 class WhenOneAgentAsksAnother(support.Isolated):
     """The configured scope is enforced at admission, not merely hidden from the prompt."""
@@ -205,11 +211,11 @@ class WhenOneAgentAsksAnother(support.Isolated):
                  "2026-08-10T00:00:00Z"))
             self.turn = int(conn.execute("SELECT id FROM turns").fetchone()[0])
 
-    def ask_from_ava(self, target):
+    def ask_from_ava(self, target, *more):
         with mock.patch.dict(os.environ, {admitting.AGENT: "ava",
                                           admitting.RUN: str(self.turn)}), \
                 standing.holding(directory.where(target)):
-            return self.rundesk("ask", target, "audit the exporter")
+            return self.rundesk("ask", target, "audit the exporter", *more)
 
     def test_an_allowed_target_is_admitted(self):
         records.stated(directory.records("ava"),
@@ -220,6 +226,82 @@ class WhenOneAgentAsksAnother(support.Isolated):
         self.assertEqual(OK, code, err)
         self.assertIn("handed to forge", out)
         self.assertEqual(["forge"], [one.to_agent for one in delegations.every("ava")])
+
+    def test_a_scoped_provider_and_model_are_admitted_without_changing_the_target(self):
+        before = records.read(directory.records("forge"))
+
+        code, out, err = self.ask_from_ava(
+            "forge", "--provider", "codex", "--model", "gpt-scoped")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("handed to forge", out)
+        one = delegations.every("ava")[0]
+        self.assertEqual(("codex", "gpt-scoped", "codex", "gpt-scoped"),
+                         (one.requested_provider_name, one.requested_model_name,
+                          one.provider_name, one.model_name))
+        self.assertEqual(before, records.read(directory.records("forge")))
+
+    def test_model_only_captures_the_target_provider_and_requested_model(self):
+        before = records.read(directory.records("forge"))
+
+        code, _out, err = self.ask_from_ava("forge", "--model", "gpt-scoped")
+
+        self.assertEqual(OK, code, err)
+        one = delegations.every("ava")[0]
+        self.assertEqual((None, "gpt-scoped", support.A_STAND_IN, "gpt-scoped"),
+                         (one.requested_provider_name, one.requested_model_name,
+                          one.provider_name, one.model_name))
+        self.assertEqual(before, records.read(directory.records("forge")))
+
+    def test_provider_only_uses_that_providers_default_model(self):
+        records.stated(directory.records("forge"), {"model_name": "configured-model"})
+        before = records.read(directory.records("forge"))
+
+        code, _out, err = self.ask_from_ava("forge", "--provider", "codex")
+
+        self.assertEqual(OK, code, err)
+        one = delegations.every("ava")[0]
+        self.assertEqual(("codex", None, "codex", None),
+                         (one.requested_provider_name, one.requested_model_name,
+                          one.provider_name, one.model_name))
+        self.assertEqual(before, records.read(directory.records("forge")))
+
+    def test_an_unavailable_override_is_refused_before_either_write(self):
+        before = records.read(directory.records("forge"))
+        with mock.patch("rundesk.commands.ask.arriving.recorded_for_a_delegation") as recorded:
+            code, out, err = self.ask_from_ava(
+                "forge", "--provider", "nothing-stands-here")
+
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("nothing-stands-here", err)
+        recorded.assert_not_called()
+        self.assertEqual([], delegations.every("ava"))
+        self.assertEqual(before, records.read(directory.records("forge")))
+
+    def test_no_override_captures_the_target_defaults_at_admission(self):
+        records.stated(directory.records("forge"), {"model_name": "configured-model"})
+        self.assertEqual(OK, self.ask_from_ava("forge")[0])
+        one = delegations.every("ava")[0]
+        self.assertEqual((None, None, support.A_STAND_IN, "configured-model"),
+                         (one.requested_provider_name, one.requested_model_name,
+                          one.provider_name, one.model_name))
+
+    def test_relative_requested_provider_spelling_is_distinct_from_effective_path(self):
+        provider = self.home / "relative-provider"
+        provider.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        provider.chmod(0o755)
+        here = os.getcwd()
+        os.chdir(str(self.home))
+        self.addCleanup(os.chdir, here)
+
+        code, _out, err = self.ask_from_ava(
+            "forge", "--provider", "./relative-provider")
+
+        self.assertEqual(OK, code, err)
+        one = delegations.every("ava")[0]
+        self.assertEqual("./relative-provider", one.requested_provider_name)
+        self.assertEqual(str(provider.resolve()), one.provider_name)
 
     def test_an_unlisted_target_is_refused_before_either_delegation_write(self):
         records.stated(directory.records("ava"),

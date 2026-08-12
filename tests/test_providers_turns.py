@@ -10,6 +10,7 @@ Run directly: `python3 tests/test_providers_turns.py`
 
 import contextlib
 import json
+import shutil
 import threading
 import time
 import unittest
@@ -24,6 +25,13 @@ from rundesk.providers import adapters, instructions, kept, protocol, turns
 from rundesk.utils import locking
 
 PATIENCE = 15.0
+
+
+def configuration_bytes(agent):
+    """The exact bytes of every durable configuration value, in schema order."""
+    with records.reading(directory.records(agent)) as conn:
+        row = conn.execute("SELECT * FROM config WHERE id = 1").fetchone()
+    return tuple(None if value is None else str(value).encode("utf-8") for value in row)
 
 
 class WithAnAgent(support.Isolated):
@@ -243,17 +251,22 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
     def test_a_delegation_stopped_before_start_is_settled_without_launching_a_provider(self):
         landed = arriving.recorded_for_a_delegation(
             self.agent, "bob", 12, "audit it", delegation_id="del-12-aabbcc")
+        before = configuration_bytes(self.agent)
         with mock.patch.object(turns.adapters, "talking_to",
                                side_effect=AssertionError("a provider was launched")):
             stopped = turns.stop_or_settle_pending(
-                self.agent, landed.conversation, (landed.message,))
+                self.agent, landed.conversation, (landed.message,),
+                provider_name=support.A_STAND_IN, model_name="scoped-model")
 
         self.assertTrue(stopped)
         recorded = kept.list_turns(self.agent)[0]
         self.assertEqual(kept.STOPPED, recorded["turn_status"])
         self.assertEqual(protocol.CANCELLED, recorded["failure_code"])
+        self.assertEqual((support.A_STAND_IN, "scoped-model"),
+                         (recorded["provider_name"], recorded["model_name"]))
         self.assertEqual(recorded["id"], arriving.turn_for_message(
             self.agent, landed.conversation, landed.message))
+        self.assertEqual(before, configuration_bytes(self.agent))
 
     def test_a_delegation_stop_reaches_a_live_turn(self):
         with turns._stoppable(self.agent, 71) as active:
@@ -399,6 +412,19 @@ class WhenTheBrainDoesNotAnswer(WithAnAgent):
             self.run_turn()
         self.assertEqual(kept.list_turns("ava"), [])
 
+    def test_failure_and_process_crash_do_not_change_the_durable_provider(self):
+        cases = ({"fail_with": protocol.UPSTREAM_ERROR},
+                 {"crash_without_finishing": True})
+        for how in cases:
+            with self.subTest(how=how):
+                self.a_stand_in_told(self.agent, **how)
+                before = configuration_bytes(self.agent)
+
+                self.run_turn(self.asking(provider_name=support.A_STAND_IN,
+                                          model_name="scoped-model"))
+
+                self.assertEqual(before, configuration_bytes(self.agent))
+
 
 class WhatThisReleaseDidNotUnderstand(WithAnAgent):
     def test_it_is_kept_with_its_own_words_and_counted(self):
@@ -446,6 +472,54 @@ class CarryingAConversationOn(WithAnAgent):
         after = self.run_turn(self.asking(additions=(("owner", "different rule"),)))
         self.assertEqual(kept.get_turn("ava", failed.turn)["session_resumed"], 0)
         self.assertEqual(kept.get_turn("ava", after.turn)["session_resumed"], 0)
+
+    def test_a_scoped_provider_resumes_itself_and_never_changes_the_agent_default(self):
+        alternate = self.home / "alternate-provider"
+        shutil.copy2(support.A_STAND_IN, alternate)
+        alternate.chmod(0o755)
+        before = configuration_bytes("ava")
+
+        first = self.run_turn(self.asking(provider_name=str(alternate), model_name="scoped-model"))
+        second = self.run_turn(self.asking(provider_name=str(alternate), model_name="scoped-model"))
+        ordinary = self.run_turn()
+
+        first_row = kept.get_turn("ava", first.turn)
+        second_row = kept.get_turn("ava", second.turn)
+        ordinary_row = kept.get_turn("ava", ordinary.turn)
+        self.assertEqual(str(alternate), first_row["provider_name"])
+        self.assertEqual(str(alternate), second_row["provider_name"])
+        self.assertEqual(1, second_row["session_resumed"])
+        self.assertEqual(support.A_STAND_IN, ordinary_row["provider_name"])
+        self.assertEqual(0, ordinary_row["session_resumed"])
+        self.assertEqual(before, configuration_bytes("ava"))
+
+    def test_a_scoped_model_is_handed_to_the_selected_provider(self):
+        seen = []
+        talking = turns.adapters.talking_to
+
+        def captured(named, env, *args, **kwargs):
+            seen.append((named, env.get("RUNDESK_MODEL")))
+            return talking(named, env, *args, **kwargs)
+
+        with mock.patch.object(turns.adapters, "talking_to", side_effect=captured):
+            self.run_turn(self.asking(provider_name=support.A_STAND_IN,
+                                      model_name="scoped-model"))
+
+        self.assertEqual([(support.A_STAND_IN, "scoped-model")], seen)
+
+    def test_an_override_without_a_model_does_not_infer_the_target_configured_model(self):
+        records.stated(directory.records("ava"), {"model_name": "configured-model"})
+        seen = []
+        talking = turns.adapters.talking_to
+
+        def captured(named, env, *args, **kwargs):
+            seen.append((named, env.get("RUNDESK_MODEL")))
+            return talking(named, env, *args, **kwargs)
+
+        with mock.patch.object(turns.adapters, "talking_to", side_effect=captured):
+            self.run_turn(self.asking(provider_name=support.A_STAND_IN))
+
+        self.assertEqual([(support.A_STAND_IN, None)], seen)
 
 
 class SayingSomethingIntoARunningTurn(WithAnAgent):

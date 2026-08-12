@@ -200,7 +200,7 @@ class StoppingWorkHandedHere(support.Isolated):
         hosting._answered_what_was_handed_here("bob", directory.where("bob"), Target())
 
         self.assertEqual([("stop", ("bob", self.landed.conversation,
-                                     self.delegation, "ava"))], calls)
+                                     self.delegation, "ava", None, None))], calls)
 
     def test_one_stop_failure_does_not_prevent_the_next_stop(self):
         second = "del-1-ddeeff"
@@ -211,7 +211,8 @@ class StoppingWorkHandedHere(support.Isolated):
         calls = []
 
         class Target:
-            def stop_this(inner, _agent, _conversation, delegation_id, _delegator):
+            def stop_this(inner, _agent, _conversation, delegation_id, _delegator,
+                          _provider_name, _model_name):
                 calls.append(delegation_id)
                 if delegation_id == self.delegation:
                     raise RuntimeError("provider is leaving")
@@ -223,6 +224,70 @@ class StoppingWorkHandedHere(support.Isolated):
         hosting._answered_what_was_handed_here("bob", directory.where("bob"), Target())
 
         self.assertEqual([self.delegation, second], calls)
+
+    def test_a_replacement_gateway_receives_the_same_scoped_provider_and_model(self):
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute(
+                "UPDATE delegations SET stop_asked_at = NULL,"
+                " provider_name = 'codex', model_name = 'asked-model'"
+                " WHERE delegation_id = ?", (self.delegation,))
+        calls = []
+
+        class Target:
+            def answer_this(inner, *args):
+                calls.append(args)
+
+            def stop_this(inner, *args):
+                raise AssertionError(f"active work was stopped: {args}")
+
+        hosting._answered_what_was_handed_here("bob", directory.where("bob"), Target())
+        # A fresh tenant represents the replacement gateway: no process-local state is shared.
+        hosting._answered_what_was_handed_here("bob", directory.where("bob"), Target())
+
+        expected = ("bob", self.landed.conversation, self.delegation, "ava",
+                    "codex", "asked-model")
+        self.assertEqual([expected, expected], calls)
+
+    def test_a_later_target_provider_change_does_not_redirect_no_override_work(self):
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute(
+                "UPDATE delegations SET stop_asked_at = NULL, provider_name = 'a-stand-in',"
+                " model_name = 'admission-model' WHERE delegation_id = ?", (self.delegation,))
+        records.stated(directory.records("bob"), {"provider_name": "changed-provider"})
+        calls = []
+
+        class Target:
+            def answer_this(inner, *args):
+                calls.append(args)
+
+            def stop_this(inner, *args):
+                raise AssertionError(f"active work was stopped: {args}")
+
+        hosting._answered_what_was_handed_here("bob", directory.where("bob"), Target())
+
+        self.assertEqual("a-stand-in", calls[0][-2])
+
+    def test_a_later_target_model_change_does_not_redirect_no_override_work(self):
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute(
+                "UPDATE delegations SET stop_asked_at = NULL, provider_name = 'a-stand-in',"
+                " model_name = 'admission-model' WHERE delegation_id = ?", (self.delegation,))
+        records.stated(directory.records("bob"), {"model_name": "changed-model"})
+        before = tuple(records.read(directory.records("bob")).items())
+        calls = []
+
+        class Target:
+            def answer_this(inner, *args):
+                calls.append(args)
+
+            def stop_this(inner, *args):
+                raise AssertionError(f"active work was stopped: {args}")
+
+        hosting._answered_what_was_handed_here("bob", directory.where("bob"), Target())
+        hosting._answered_what_was_handed_here("bob", directory.where("bob"), Target())
+
+        self.assertEqual("admission-model", calls[0][-1])
+        self.assertEqual(before, tuple(records.read(directory.records("bob")).items()))
 
 
 class WhatCountsAsTheAnswer(support.Isolated):
@@ -263,6 +328,23 @@ class WhatCountsAsTheAnswer(support.Isolated):
     def test_a_collected_answer_carries_its_terminal_status(self):
         self.answered_with("here is what I found", status=hosting.STOPPED)
         self.assertEqual(hosting.STOPPED, self.what().turn_status)
+
+    def test_a_collected_answer_carries_the_provider_and_model_that_actually_answered(self):
+        with records.writing(directory.records("bob")) as conn:
+            conn.execute(
+                "INSERT INTO turns (conversation_id, provider_name, model_name, access_mode,"
+                " turn_status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (self.landed.conversation, "codex", "effective-model", "work", "done",
+                 "2026-08-06T00:00:00Z"))
+            turn = conn.execute("SELECT id FROM turns ORDER BY id DESC LIMIT 1").fetchone()[0]
+        arriving.handled_by_turn("bob", self.landed.conversation, (self.landed.message,), turn)
+        arriving.said_by_agent("bob", kept.FROM_AGENT, kept.source_id_for("ava", 12),
+                               "here is what I found", turn=turn)
+
+        answer = self.what()
+
+        self.assertEqual(("codex", "effective-model"),
+                         (answer.provider_name, answer.model_name))
 
     def test_nothing_while_the_turn_is_still_going(self):
         self.answered_with("half a thought", status=hosting.WORKING)
@@ -943,7 +1025,8 @@ class WhatMovesADelegationsLatestMoment(support.Isolated):
         self.assertEqual(
             {"id", "delegation_id", "to_agent", "parent_conversation", "parent_turn",
              "answered_at", "stopped_at", "stop_asked_at", "created_at", "latest_at",
-             "working_since"},
+             "working_since", "requested_provider_name", "requested_model_name",
+             "provider_name", "model_name"},
             set(row.keys()))
 
 

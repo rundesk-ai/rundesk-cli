@@ -157,6 +157,10 @@ class Request(NamedTuple):
     expected_provider: Optional[str] = None
     #: The original preface fingerprint. A mismatch requires a fresh wake under current rules.
     expected_instructions: Optional[str] = None
+    #: A provider resolved before this turn claims its conversation. Appended to preserve the
+    #: positional shape older callers may use; ``None`` keeps ordinary late binding to the agent's
+    #: durable configuration.
+    provider_name: Optional[str] = None
 
 
 class Outcome(NamedTuple):
@@ -516,7 +520,9 @@ def stop(agent: str, conversation: int) -> bool:
 
 
 def stop_or_settle_pending(agent: str, conversation: int,
-                           inbound_messages: Tuple[int, ...]) -> bool:
+                           inbound_messages: Tuple[int, ...],
+                           provider_name: Optional[str] = None,
+                           model_name: Optional[str] = None) -> bool:
     """Stop a live turn, or make an unstarted inbound delegation terminal without a provider.
 
     The conversation claim closes the race with the worker thread a previous gateway beat may have
@@ -532,7 +538,9 @@ def stop_or_settle_pending(agent: str, conversation: int,
             settled = records.read(directory.records(agent))
             turn = kept.add_turn(agent, {
                 "conversation_id": conversation,
-                "provider_name": str(settled.get("provider_name") or ""),
+                "provider_name": (provider_name if provider_name is not None
+                                  else str(settled.get("provider_name") or "")),
+                "model_name": model_name,
                 "access_mode": protocol.ACCESS_WORK,
             })
             try:
@@ -708,9 +716,15 @@ def _held(request: Request, held: int, watching, saying,
     # **Resolved before anything is written down.** A provider nothing stands behind is a turn that
     # cannot start, and a row saying one was admitted would be a record of something that never was.
     settled = records.read(directory.records(agent))
-    provider_name = str(settled.get("provider_name") or "")
+    configured_provider = str(settled.get("provider_name") or "")
+    provider_name = (request.provider_name if request.provider_name is not None
+                     else configured_provider)
     adapters.where(provider_name)
-    settings = _as_settings(settled.get("agent_settings"))
+    settings = (_as_settings(settled.get("agent_settings"))
+                if request.provider_name is None or provider_name == configured_provider else None)
+    effective_model = request.model_name
+    if effective_model is None and request.provider_name is None:
+        effective_model = settled.get("model_name")
     can = protocol.parse_capabilities(adapters.capabilities(provider_name, settings))
 
     # A person-facing or scheduled work turn may hand off mutable work. Delegated turns remain
@@ -760,7 +774,7 @@ def _held(request: Request, held: int, watching, saying,
         # ledger forgets who spent the cost. The name is derived here already for the layers.
         "schedule_name": _schedule_name(request) or None,
         "provider_name": provider_name,
-        "model_name": request.model_name,
+        "model_name": effective_model if request.provider_name is not None else request.model_name,
         "access_mode": request.access_mode,
         "provider_capabilities": json.dumps(can, sort_keys=True),
         "session_resumed": 1 if resume else 0,
@@ -789,7 +803,7 @@ def _held(request: Request, held: int, watching, saying,
             agent=agent, home=directory.home(agent),
             provider_home=adapters.home(agent, provider_name),
             skills=grants.where(agent), turn=turn, access_mode=request.access_mode,
-            raw=raw, model=request.model_name or settled.get("model_name"), resume=resume,
+            raw=raw, model=effective_model, resume=resume,
             settings=settings, answering=request.answering,
             preface=prompt.text, owners=environment.owners_own())
         # **A turn nobody passed words to is still one a channel can speak into.** The words go

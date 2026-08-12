@@ -33,7 +33,7 @@ May depend on `channels`, `agents`, `core` and `utils`. Nothing here names a ven
 import hashlib
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 from rundesk.agents import directory
 from rundesk.core import adapters
@@ -65,6 +65,41 @@ KEPT_OVER = 256 * 1024
 KEPT_BACK = 3
 
 NotRunnable = adapters.NotRunnable
+
+
+class Selection(NamedTuple):
+    """What was requested and the canonical provider/model admitted for one delegation."""
+
+    requested_provider_name: Optional[str]
+    requested_model_name: Optional[str]
+    provider_name: str
+    model_name: Optional[str]
+
+
+def admitted_selection(named: Optional[str], model: Optional[str],
+                       default_provider: str,
+                       default_model: Optional[str]) -> Selection:
+    """Resolve one delegation's immutable provider/model selection.
+
+    Requested values stay exactly as supplied for provenance. The effective provider is resolved
+    once so a relative path cannot be reinterpreted by a later gateway. With no provider override,
+    the target's current provider and model are captured together; with a provider override and no
+    model, that provider chooses its own default model.
+    """
+    requested_provider = str(named) if named is not None else None
+    requested_model = str(model) if model is not None else None
+    provider_name = requested_provider if requested_provider is not None else default_provider
+    if not provider_name.strip():
+        raise NotRunnable("a delegation provider override cannot be blank")
+    if requested_model is not None and not requested_model.strip():
+        raise NotRunnable("a delegation model override cannot be blank")
+
+    resolved = where(provider_name)
+    canonical_provider = str(resolved) if _is_a_path(provider_name) else provider_name
+    effective_model = requested_model if requested_model is not None else (
+        default_model if requested_provider is None else None)
+    return Selection(requested_provider, requested_model,
+                     canonical_provider, effective_model)
 
 
 def where(named: str) -> Path:

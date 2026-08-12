@@ -38,7 +38,7 @@ from rundesk.agents import directory, records
 from rundesk.channels import arriving
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
-from rundesk.delegations import admitting
+from rundesk.delegations import admitting, hosting
 from rundesk.delegations import kept as delegations
 from rundesk.exits import OK
 from rundesk.utils import locking
@@ -120,10 +120,19 @@ def _listed(agent: str) -> int:
 def _shown(agent: str, delegation_id: str) -> int:
     """One delegation, in full."""
     one = delegations.one(agent, delegation_id)
+    actual = hosting.terminal_provenance(
+        one.to_agent, agent, one.parent_turn, one.delegation_id)
     as_table(["WHAT", "IS"],
              [["id", one.delegation_id],
               ["handed to", one.to_agent],
               ["state", _how(one)],
+              ["requested provider", one.requested_provider_name or "not requested"],
+              ["requested model", one.requested_model_name or "not requested"],
+              ["effective provider", one.provider_name or "legacy target default at claim"],
+              ["effective model", one.model_name or "provider default"],
+              ["terminal provider", actual[0] if actual else "not yet"],
+              ["terminal model", (actual[1] or "provider did not report one")
+               if actual else "not yet"],
               ["asked at", one.created_at],
               ["last change", one.latest_at],
               ["answered at", one.answered_at or "not yet"],
