@@ -106,14 +106,20 @@ class Delegation(NamedTuple):
     #: Never `None` to a reader — `_read` falls back to `created_at` for a row an older release
     #: wrote, which by construction is a row still in its first phase.
     working_since: str
-    #: The canonical provider admission selected and the model explicitly supplied for this
-    #: delegation. Both are absent with no override, preserving historical target late binding.
+    #: The request as supplied, separate from the effective selection so relative spelling and an
+    #: omitted half of an override remain inspectable after admission.
+    requested_provider_name: Optional[str]
+    requested_model_name: Optional[str]
+    #: The canonical provider and model resolved once at admission. A nullable model means the
+    #: effective provider chooses its own default; both may be absent only on a pre-step row.
     provider_name: Optional[str]
     model_name: Optional[str]
 
 
 def made(agent: str, delegation_id: str, to_agent: str, parent_conversation: int,
          parent_turn: int, now: Optional[datetime] = None,
+         requested_provider_name: Optional[str] = None,
+         requested_model_name: Optional[str] = None,
          provider_name: Optional[str] = None,
          model_name: Optional[str] = None) -> None:
     """Write down that this agent has handed work over. In the **delegator's** own store.
@@ -131,9 +137,10 @@ def made(agent: str, delegation_id: str, to_agent: str, parent_conversation: int
             conn.execute(
                 f"INSERT INTO {TABLE} (delegation_id, to_agent,"
                 " parent_conversation, parent_turn, created_at, latest_at, working_since,"
-                " provider_name, model_name)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " requested_provider_name, requested_model_name, provider_name, model_name)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (delegation_id, to_agent, parent_conversation, parent_turn, at, at, at,
+                 requested_provider_name, requested_model_name,
                  provider_name, model_name))
         except sqlite3.IntegrityError as why:
             raise Refused(f"{delegation_id} could not be written down: {why}") from why
@@ -315,6 +322,8 @@ def _read(row: Any) -> Delegation:
         # — so its only phase began when it was made. Falling back here as well as backfilling in
         # the step means a reader is never handed `None` to reason about.
         working_since=str(row["working_since"] or row["created_at"]),
+        requested_provider_name=row["requested_provider_name"],
+        requested_model_name=row["requested_model_name"],
         provider_name=row["provider_name"], model_name=row["model_name"])
 
 

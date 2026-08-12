@@ -151,7 +151,10 @@ def _handed_over(asking: admitting.Asking, to_agent: str, task: str,
             # Provider/model admission is complete before either side receives a durable write.
             # The resolved answer then travels with this delegation rather than touching the target
             # agent's configuration or being asked again after a restart.
-            override = adapters.admitted_override(provider_name, model_name)
+            target = records.read(directory.records(to_agent))
+            selection = adapters.admitted_selection(
+                provider_name, model_name,
+                str(target.get("provider_name") or ""), target.get("model_name"))
 
             delegation_id = admitting.a_name(asking.run or 0)
             # Where the answer goes: the conversation the *delegating turn* is in, read off the
@@ -163,8 +166,10 @@ def _handed_over(asking: admitting.Asking, to_agent: str, task: str,
                 delegation_id=delegation_id)
             admitting.admitted(
                 asking, delegation_id, to_agent, int(was["conversation_id"]),
-                provider_name=(override.provider_name if override else None),
-                model_name=(override.model_name if override else None))
+                requested_provider_name=selection.requested_provider_name,
+                requested_model_name=selection.requested_model_name,
+                provider_name=selection.provider_name,
+                model_name=selection.model_name)
     except (adapters.NotRunnable, admitting.Refused, delegations.Refused,
             directory.Refused, kept.Refused,
             records.NotThere, records.Unreadable, locking.Stuck, OSError) as why:

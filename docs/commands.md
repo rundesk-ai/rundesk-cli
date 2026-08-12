@@ -1480,14 +1480,15 @@ An agent may select another available provider for this delegation alone, with a
 $ rundesk ask bob "audit the exporter" --provider codex --model gpt-5.6-sol
 ```
 
-Both flags are delegation admission data. They never configure bob, and `--model` without
-`--provider` is refused because a model belongs to one provider. The provider must resolve to an
-executable adapter before either delegation write; a missing provider therefore leaves no brief and
-no delegation row to claim. With neither flag, provider resolution remains exactly as before: bob's
-configuration is read when the turn starts. With `--provider`, admission stores one canonical
-provider and only the exact model explicitly supplied; an omitted model does not inherit bob's
-configured model. A relative provider path is stored as the resolved executable path, so bob's
-gateway cannot later reinterpret it from another working directory.
+Both flags are independent delegation admission data and never configure bob. With neither, bob's
+current configured provider and model are captured; `--provider` alone uses that provider and lets
+it choose its default model; `--model` alone uses bob's current configured provider with that model;
+and both use exactly what was requested. The effective provider must resolve to an executable
+adapter before either delegation write, so a missing provider leaves no brief and no delegation row
+to claim. Admission stores the requested spellings separately from the effective provider/model. A
+relative provider request such as `./brain` remains visible that way while the effective provider is
+stored as its resolved executable path, so another gateway cannot reinterpret it from a different
+working directory.
 
 This is the front door rather than a second command, and it is not a convenience. Left alone, an
 agent could run a whole turn on somebody else's agent from inside its own — no record, no guards,
@@ -1509,7 +1510,7 @@ has reviewed it.
 | a turn already answering a delegation | work handed over cannot be handed on again |
 | a target outside the asking agent's delegation scope | change that agent's scope, or keep the work here |
 | an agent whose gateway is not running | nothing would ever answer it, so it says how to start one |
-| a model without a provider, or a provider adapter this install cannot run | correct the scoped override before anything is written |
+| a provider adapter this install cannot run, or a blank provider/model value | correct the scoped selection before anything is written |
 
 The last is the one worth knowing about operationally: **an agent you intend to delegate to needs a
 gateway running.** Its own gateway is what picks the work up, so `rundesk gateways start bob` is a
@@ -1528,11 +1529,12 @@ cannot be resumed. `asked resume <id> <words>` continues answered work in the pr
 already had. Each delegation has its own
 conversation, so two tasks handed to the same specialist by one parent turn cannot share an answer.
 
-`asked show <id>` names the delegation's one admitted provider and explicitly supplied model, or
-that the target/provider default will be used. The unchecked result delivered for review names the
-provider/model the terminal target turn actually recorded. A resumed delegation reuses the same
-stored scoped provider and model, and its provider-specific session, through gateway restarts; a
-new delegation with no override goes back to the target agent's ordinary default.
+`asked show <id>` distinguishes the requested values, the effective provider/model fixed at
+admission, and the provider/model the newest terminal target turn actually recorded. The unchecked
+result delivered for review distinguishes those same three sources. `asked say`, `asked stop`, and
+`asked resume` expose no provider/model flags and cannot change the selection. A resumed delegation
+reuses the stored effective provider/model and its provider-specific session through gateway
+restarts. A new no-override delegation captures the target's defaults again at its own admission.
 
 **All three are shown where the person asked**, in the room the work was handed out in, as one line
 of small print — *updated bob*, *asked bob to stop*, *carried on with bob*. Never the words

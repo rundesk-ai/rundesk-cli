@@ -118,11 +118,11 @@ is not in here — see below.
 **`provider_sessions`** — where a conversation got to on a brain, keyed by `(conversation,
 provider)`. Opaque to rundesk and never parsed.
 
-A delegation may carry an admitted provider and model of its own. That selection is read from the
-delegation on every pickup and passed into the turn request; it is never written to the target
-agent's configuration. The provider/session pair remains the key, so resuming answered work cannot
-hand one provider's opaque handle to another. Delegations with no override still resolve the target
-agent's configured provider when their turn starts.
+A delegation carries one effective provider/model pair resolved before it is created. That selection
+is read from the delegation on every pickup and passed into the turn request; it is never written to
+the target agent's configuration. The provider/session pair remains the key, so resuming answered
+work cannot hand one provider's opaque handle to another. No-override work captures the target's
+configured provider/model at its own admission, so a later configuration change cannot redirect it.
 
 A saved handle is resumed only when this provider's latest turn has the same instruction
 fingerprint as the prompt being composed now. A changed access mode, operating rule, owner addition,

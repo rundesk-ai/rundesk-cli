@@ -116,6 +116,10 @@ class CollectedAnswer(str):
         answer.turn_status = status
         answer.provider_name = provider_name
         answer.model_name = model_name
+        answer.requested_provider_name = None
+        answer.requested_model_name = None
+        answer.effective_provider_name = None
+        answer.effective_model_name = None
         return answer
 
 
@@ -382,6 +386,10 @@ def _collected_what_came_back(name: str, where, answering: Answering) -> None:
                 current.to_agent, name, current.parent_turn, current.delegation_id)
             if said is None:
                 continue
+            said.requested_provider_name = current.requested_provider_name
+            said.requested_model_name = current.requested_model_name
+            said.effective_provider_name = current.provider_name
+            said.effective_model_name = current.model_name
             # **A requested stop is terminal, not another answer to review.** Before this branch a
             # stopped turn was converted into "finished without saying anything (stopped)" and
             # offered to `review_this`, which woke the delegating agent for one more provider turn.
@@ -605,7 +613,7 @@ def _the_conversation(name: str, delegator: str, parent_turn: int,
 
 
 def _what_they_answered(to_agent: str, delegator: str, parent_turn: int,
-                        delegation_id: Optional[str] = None) -> Optional[str]:
+                        delegation_id: Optional[str] = None) -> Optional[CollectedAnswer]:
     """The answering agent's reply to **the newest thing this agent said**, or `None` if it has not
     replied to that yet.
 
@@ -667,6 +675,15 @@ def _what_they_answered(to_agent: str, delegator: str, parent_turn: int,
         body or f"{to_agent} finished without saying anything ({said['turn_status']})",
         int(asked["turn_id"]), str(said["turn_status"]), str(said["provider_name"] or ""),
         said["model_name"])
+
+
+def terminal_provenance(to_agent: str, delegator: str, parent_turn: int,
+                        delegation_id: str) -> Optional[Tuple[str, Optional[str]]]:
+    """The actual provider/model on this delegation's newest terminal target turn."""
+    answer = _what_they_answered(to_agent, delegator, parent_turn, delegation_id)
+    if answer is None:
+        return None
+    return answer.provider_name, answer.model_name
 
 
 def _preferred_conversation(conn: sqlite3.Connection, delegator: str, parent_turn: int,

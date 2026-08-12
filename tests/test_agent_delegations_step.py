@@ -214,17 +214,19 @@ class TheAgentsOneMayDelegateTo(OneAgentsDelegations):
 
 
 class TheProviderOneDelegationUses(OneAgentsDelegations):
-    """``0011`` adds one immutable scoped selection without backfilling a default."""
+    """``0011`` adds requested and effective provenance without inventing old history."""
 
     THE_PROVIDER_STEP = "0011_the_brain_one_delegation_uses"
-    COLUMNS = ("provider_name", "model_name")
+    COLUMNS = ("requested_provider_name", "requested_model_name",
+               "provider_name", "model_name")
 
     def test_a_made_agent_has_run_it_and_new_columns_are_nullable(self):
         self.assertIn(self.THE_PROVIDER_STEP,
                       [one[0] for one in self.rows("SELECT key FROM migrations")])
         self.a_delegation()
-        self.assertEqual([(None, None)], [tuple(one) for one in self.rows(
-            "SELECT provider_name, model_name FROM delegations")])
+        self.assertEqual([(None, None, None, None)], [tuple(one) for one in self.rows(
+            "SELECT requested_provider_name, requested_model_name, provider_name, model_name"
+            " FROM delegations")])
 
     def test_an_agent_carried_forward_keeps_rows_without_inventing_an_override(self):
         self.a_delegation()
@@ -236,20 +238,24 @@ class TheProviderOneDelegationUses(OneAgentsDelegations):
 
         columns = [one[1] for one in self.rows("PRAGMA table_info(delegations)")]
         self.assertTrue(all(column in columns for column in self.COLUMNS))
-        self.assertEqual([("del-1-aaaa", None, None)],
+        self.assertEqual([("del-1-aaaa", None, None, None, None)],
                          [tuple(one) for one in self.rows(
-                             "SELECT delegation_id, provider_name, model_name FROM delegations")])
+                             "SELECT delegation_id, requested_provider_name, requested_model_name,"
+                             " provider_name, model_name FROM delegations")])
 
     def test_running_it_twice_preserves_recorded_provenance(self):
         self.a_delegation()
-        self.write("UPDATE delegations SET provider_name = 'codex', model_name = 'asked'")
+        self.write("UPDATE delegations SET requested_provider_name = './codex',"
+                   " requested_model_name = 'asked', provider_name = '/tmp/codex',"
+                   " model_name = 'asked'")
         self.back_to_before(self.THE_PROVIDER_STEP)
 
         self.assertIsNone(migration.carry_one("ava"))
 
-        self.assertEqual([("codex", "asked")],
+        self.assertEqual([("./codex", "asked", "/tmp/codex", "asked")],
                          [tuple(one) for one in self.rows(
-                             "SELECT provider_name, model_name FROM delegations")])
+                             "SELECT requested_provider_name, requested_model_name,"
+                             " provider_name, model_name FROM delegations")])
 
 
 class TheStoppedOutcome(OneAgentsDelegations):

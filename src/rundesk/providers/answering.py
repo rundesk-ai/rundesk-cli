@@ -127,13 +127,26 @@ Verify material claims before using or reporting them."""
 
 
 def _delegation_provenance(answer: str) -> str:
-    """Provider/model evidence from the target's actual terminal turn."""
+    """Requested, effective-admission and actual terminal provider/model evidence."""
+    requested_provider = getattr(answer, "requested_provider_name", None)
+    requested_model = getattr(answer, "requested_model_name", None)
+    effective_provider = getattr(answer, "effective_provider_name", None)
+    effective_model = getattr(answer, "effective_model_name", None)
     provider = getattr(answer, "provider_name", None)
     model = getattr(answer, "model_name", None)
+    requested = _requested_provider_name(str(requested_provider)) if requested_provider else "none"
+    if requested_model:
+        requested += f" / {_metadata_name(str(requested_model))}"
+    effective = _named(str(effective_provider)) if effective_provider else "legacy late-bound"
+    if effective_model:
+        effective += f" / {_metadata_name(str(effective_model))}"
+    elif effective_provider:
+        effective += " / provider default"
     actual = _named(str(provider)) if provider else "not recorded"
     if model:
         actual += f" / {_metadata_name(str(model))}"
-    return f"Provider/model — terminal turn: {actual}."
+    return (f"Provider/model — requested: {requested}; effective at admission: {effective}; "
+            f"terminal turn: {actual}.")
 
 
 TRIES = 3
@@ -1268,6 +1281,14 @@ def _named(provider: str) -> str:
 def _metadata_name(value: str) -> str:
     """One single-line model or provider value safe to carry in returned evidence."""
     return " ".join(value.replace("\\", "/").rsplit("/", 1)[-1].split())
+
+
+def _requested_provider_name(value: str) -> str:
+    """A requested provider spelling, retaining a relative path without exposing an absolute one."""
+    one_line = " ".join(value.replace("\\", "/").split())
+    if one_line.startswith("/") or (len(one_line) > 2 and one_line[1:3] == ":/"):
+        return one_line.rsplit("/", 1)[-1]
+    return one_line
 
 
 def _note(where: Path, said: str, level: str = logs.INFO) -> None:

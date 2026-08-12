@@ -67,35 +67,39 @@ KEPT_BACK = 3
 NotRunnable = adapters.NotRunnable
 
 
-class Override(NamedTuple):
-    """The canonical provider and explicitly supplied model admitted for one piece of work."""
+class Selection(NamedTuple):
+    """What was requested and the canonical provider/model admitted for one delegation."""
 
+    requested_provider_name: Optional[str]
+    requested_model_name: Optional[str]
     provider_name: str
     model_name: Optional[str]
 
 
-def admitted_override(named: Optional[str], model: Optional[str]) -> Optional[Override]:
-    """Resolve and prove one scoped provider override without changing agent configuration.
+def admitted_selection(named: Optional[str], model: Optional[str],
+                       default_provider: str,
+                       default_model: Optional[str]) -> Selection:
+    """Resolve one delegation's immutable provider/model selection.
 
-    A model is meaningful only beside the provider it belongs to, so a model-only delegation is
-    refused. A path spelling is resolved once at admission so a later gateway cannot reinterpret it
-    from another working directory. An omitted model remains omitted; target configuration is not
-    part of a delegation override.
+    Requested values stay exactly as supplied for provenance. The effective provider is resolved
+    once so a relative path cannot be reinterpreted by a later gateway. With no provider override,
+    the target's current provider and model are captured together; with a provider override and no
+    model, that provider chooses its own default model.
     """
-    if named is None:
-        if model is not None:
-            raise NotRunnable("a delegation model override also needs --provider")
-        return None
-    provider_name = str(named).strip()
-    if not provider_name:
+    requested_provider = str(named) if named is not None else None
+    requested_model = str(model) if model is not None else None
+    provider_name = requested_provider if requested_provider is not None else default_provider
+    if not provider_name.strip():
         raise NotRunnable("a delegation provider override cannot be blank")
-    model_name = str(model) if model is not None else None
-    if model_name is not None and not model_name.strip():
+    if requested_model is not None and not requested_model.strip():
         raise NotRunnable("a delegation model override cannot be blank")
 
     resolved = where(provider_name)
     canonical_provider = str(resolved) if _is_a_path(provider_name) else provider_name
-    return Override(canonical_provider, model_name)
+    effective_model = requested_model if requested_model is not None else (
+        default_model if requested_provider is None else None)
+    return Selection(requested_provider, requested_model,
+                     canonical_provider, effective_model)
 
 
 def where(named: str) -> Path:

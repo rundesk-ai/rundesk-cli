@@ -113,12 +113,13 @@ narrow a team that already delegates. Removing an agent prunes its name from eve
 before removal, so recreating that name does not inherit prior allowlist authority; `NULL` remains
 unrestricted and inbound delegation remains unchanged.
 
-Each delegation row may also hold one admission-resolved provider and an optional explicitly
-supplied model for that bounded task. Both are nullable: `NULL` in both means no scoped override and
-preserves late binding to the target agent's configuration when work is claimed. A provider path is
-stored canonically so another working directory cannot reinterpret it. Recorded values are
-immutable across answer, failure, stop, resume, gateway replacement and process loss; none is copied
-into the target agent's configuration row.
+Each delegation row keeps the requested provider/model separately from the effective provider/model
+resolved at admission. Requested fields preserve what was supplied, including relative provider
+spelling. The effective provider is canonical and the effective model is nullable when that provider
+chooses its default. New delegations always fix the effective pair before either admission write;
+nullable fields remain only so rows created by an older release can be carried forward without
+inventing history. Recorded values are immutable across answer, failure, stop, resume, gateway
+replacement and process loss; none is copied into the target agent's configuration row.
 
 The same row keeps an explicit operating `role`: `domain` or `specialist`. Existing agents migrate
 to `domain`, which is also creation's default. Role describes the agent's work lifecycle only; it

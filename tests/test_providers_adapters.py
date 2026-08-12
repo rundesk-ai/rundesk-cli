@@ -214,23 +214,24 @@ class WhereItsThingsStand(Adapters):
                             adapters.conversation_at("ava", 8))
 
 
-class AdmittingOneScopedOverride(Adapters):
+class AdmittingOneScopedSelection(Adapters):
     def setUp(self):
         super().setUp()
         self.ships("configured")
         self.ships("scoped")
 
-    def test_a_different_provider_carries_no_configured_model_across(self):
-        chosen = adapters.admitted_override("scoped", None)
-        self.assertEqual(("scoped", None), chosen)
+    def test_provider_only_uses_that_providers_default_model(self):
+        chosen = adapters.admitted_selection("scoped", None, "configured", "configured-model")
+        self.assertEqual(("scoped", None, "scoped", None), chosen)
 
-    def test_an_omitted_model_remains_omitted_for_any_selected_provider(self):
-        chosen = adapters.admitted_override("configured", None)
-        self.assertEqual(("configured", None), chosen)
+    def test_model_only_uses_the_targets_default_provider(self):
+        chosen = adapters.admitted_selection(None, "one-model", "configured", "old-model")
+        self.assertEqual((None, "one-model", "configured", "one-model"), chosen)
 
-    def test_an_explicit_model_is_kept_exactly(self):
-        chosen = adapters.admitted_override("scoped", " one-model ")
-        self.assertEqual(("scoped", " one-model "), chosen)
+    def test_both_requested_values_are_kept_exactly(self):
+        chosen = adapters.admitted_selection(
+            "scoped", " one-model ", "configured", "configured-model")
+        self.assertEqual(("scoped", " one-model ", "scoped", " one-model "), chosen)
 
     def test_a_relative_path_is_stored_as_the_resolved_program(self):
         at = self.home / "brain"
@@ -240,18 +241,22 @@ class AdmittingOneScopedOverride(Adapters):
         self.addCleanup(os.chdir, here)
         os.chdir(str(self.home))
 
-        chosen = adapters.admitted_override("./brain", None)
+        chosen = adapters.admitted_selection(
+            "./brain", None, "configured", "configured-model")
 
+        self.assertEqual("./brain", chosen.requested_provider_name)
         self.assertEqual(str(at.resolve()), chosen.provider_name)
         os.chdir(str(self.shipped))
         self.assertEqual(at.resolve(), adapters.where(chosen.provider_name))
 
-    def test_no_override_is_the_compatible_absent_answer(self):
-        self.assertIsNone(adapters.admitted_override(None, None))
+    def test_no_override_captures_the_targets_current_defaults(self):
+        chosen = adapters.admitted_selection(
+            None, None, "configured", "configured-model")
+        self.assertEqual((None, None, "configured", "configured-model"), chosen)
 
-    def test_a_model_alone_is_refused(self):
-        with self.assertRaisesRegex(adapters.NotRunnable, "also needs --provider"):
-            adapters.admitted_override(None, "one-model")
+    def test_a_blank_model_is_refused(self):
+        with self.assertRaisesRegex(adapters.NotRunnable, "cannot be blank"):
+            adapters.admitted_selection(None, " ", "configured", None)
 
 
 class TheSeamNamesNoVendor(support.Isolated):

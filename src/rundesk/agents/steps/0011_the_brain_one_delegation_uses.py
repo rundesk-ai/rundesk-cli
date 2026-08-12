@@ -1,10 +1,8 @@
-"""Keep the provider and optional model selected for one delegation.
+"""Keep the requested and effective provider/model selected for one delegation.
 
-A delegation-scoped provider is admission data, not agent configuration. These nullable columns
-keep the one canonical provider admission resolved and only the model the delegator explicitly
-supplied, without changing the target agent's durable default. ``NULL`` in both columns is the
-compatible answer for work admitted without an override: its turn continues to resolve the target
-agent's configuration when it starts, exactly as it did before this step.
+A delegation-scoped provider is admission data, not agent configuration. Requested values remain
+separate for provenance while the effective canonical selection is fixed before either admission
+write. Nullable columns preserve rows written by an earlier release without inventing history.
 
 Imports nothing of rundesk's, never ends the runner's transaction, and is safe to run again.
 """
@@ -14,6 +12,8 @@ from pathlib import Path
 from typing import List
 
 PROVENANCE = (
+    ("requested_provider_name", "TEXT"),
+    ("requested_model_name", "TEXT"),
     ("provider_name", "TEXT"),
     ("model_name", "TEXT"),
 )

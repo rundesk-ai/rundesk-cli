@@ -27,6 +27,13 @@ from rundesk.utils import locking
 PATIENCE = 15.0
 
 
+def configuration_bytes(agent):
+    """The exact bytes of every durable configuration value, in schema order."""
+    with records.reading(directory.records(agent)) as conn:
+        row = conn.execute("SELECT * FROM config WHERE id = 1").fetchone()
+    return tuple(None if value is None else str(value).encode("utf-8") for value in row)
+
+
 class WithAnAgent(support.Isolated):
     def setUp(self):
         super().setUp()
@@ -244,7 +251,7 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
     def test_a_delegation_stopped_before_start_is_settled_without_launching_a_provider(self):
         landed = arriving.recorded_for_a_delegation(
             self.agent, "bob", 12, "audit it", delegation_id="del-12-aabbcc")
-        before = records.read(directory.records(self.agent))
+        before = configuration_bytes(self.agent)
         with mock.patch.object(turns.adapters, "talking_to",
                                side_effect=AssertionError("a provider was launched")):
             stopped = turns.stop_or_settle_pending(
@@ -259,7 +266,7 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
                          (recorded["provider_name"], recorded["model_name"]))
         self.assertEqual(recorded["id"], arriving.turn_for_message(
             self.agent, landed.conversation, landed.message))
-        self.assertEqual(before, records.read(directory.records(self.agent)))
+        self.assertEqual(before, configuration_bytes(self.agent))
 
     def test_a_delegation_stop_reaches_a_live_turn(self):
         with turns._stoppable(self.agent, 71) as active:
@@ -411,12 +418,12 @@ class WhenTheBrainDoesNotAnswer(WithAnAgent):
         for how in cases:
             with self.subTest(how=how):
                 self.a_stand_in_told(self.agent, **how)
-                before = records.read(directory.records(self.agent))
+                before = configuration_bytes(self.agent)
 
                 self.run_turn(self.asking(provider_name=support.A_STAND_IN,
                                           model_name="scoped-model"))
 
-                self.assertEqual(before, records.read(directory.records(self.agent)))
+                self.assertEqual(before, configuration_bytes(self.agent))
 
 
 class WhatThisReleaseDidNotUnderstand(WithAnAgent):
@@ -470,7 +477,7 @@ class CarryingAConversationOn(WithAnAgent):
         alternate = self.home / "alternate-provider"
         shutil.copy2(support.A_STAND_IN, alternate)
         alternate.chmod(0o755)
-        before = records.read(directory.records("ava"))
+        before = configuration_bytes("ava")
 
         first = self.run_turn(self.asking(provider_name=str(alternate), model_name="scoped-model"))
         second = self.run_turn(self.asking(provider_name=str(alternate), model_name="scoped-model"))
@@ -484,7 +491,7 @@ class CarryingAConversationOn(WithAnAgent):
         self.assertEqual(1, second_row["session_resumed"])
         self.assertEqual(support.A_STAND_IN, ordinary_row["provider_name"])
         self.assertEqual(0, ordinary_row["session_resumed"])
-        self.assertEqual(before, records.read(directory.records("ava")))
+        self.assertEqual(before, configuration_bytes("ava"))
 
     def test_a_scoped_model_is_handed_to_the_selected_provider(self):
         seen = []
