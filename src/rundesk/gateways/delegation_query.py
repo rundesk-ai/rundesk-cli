@@ -122,7 +122,7 @@ def _named_agent(agent: str, kind: str, place: str, one: delegations.Delegation,
     replaced = any(
         int(row["id"]) > one.parent_turn
         and (not bool(row["session_resumed"])
-             or str(row["provider_name"]) != str(origin_turn["provider_name"]))
+             or _provider_identity(row) != _provider_identity(origin_turn))
         for row in conversation_turns
     )
     origin = (f"conversation {one.parent_conversation}, turn {one.parent_turn}, "
@@ -150,16 +150,16 @@ def _provider_local(agent: str, conversation_turns: List[Dict[str, Any]],
     if not conversation_turns:
         return [], ""
     latest = conversation_turns[-1]
-    provider = str(latest["provider_name"])
+    provider = _provider_identity(latest)
     start = 0
     for at in range(len(conversation_turns) - 1, -1, -1):
         row = conversation_turns[at]
-        if str(row["provider_name"]) == provider and not bool(row["session_resumed"]):
+        if _provider_identity(row) == provider and not bool(row["session_resumed"]):
             start = at
             break
     current = [row for row in conversation_turns[start:]
-               if str(row["provider_name"]) == provider]
-    return _local_records(agent, current, now), _visibility(provider)
+               if _provider_identity(row) == provider]
+    return _local_records(agent, current, now), _visibility(provider[0])
 
 
 def _local_records(agent: str, current: List[Dict[str, Any]], now: datetime) -> List[Item]:
@@ -231,7 +231,16 @@ def _ago(moment: str, now: datetime) -> str:
 
 
 def _provider(row: Dict[str, Any]) -> str:
-    return _markdown(_provider_name(str(row.get("provider_name") or "unknown provider")))
+    provider, alias = _provider_identity(row)
+    shown = _provider_name(provider)
+    if alias:
+        shown += f" ({alias})"
+    return _markdown(shown)
+
+
+def _provider_identity(row: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+    return (str(row.get("provider_name") or "unknown provider"),
+            str(row["provider_alias"]) if row.get("provider_alias") else None)
 
 
 def _provider_name(provider: str) -> str:

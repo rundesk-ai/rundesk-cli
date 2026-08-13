@@ -85,6 +85,7 @@ def _one(agent: str, turn: int) -> int:
         ("was", _became(agent, row)),
         ("conversation", str(row["conversation_id"])),
         ("provider", row["provider_name"]),
+        ("account alias", row.get("provider_alias") or "provider default"),
         ("model", row["model_name"] or NOT_SAID),
         ("access", row["access_mode"]),
         ("resumed", "yes" if row["session_resumed"] else "no"),

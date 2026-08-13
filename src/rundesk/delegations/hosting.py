@@ -109,16 +109,20 @@ STILL_WORKING_EVERY = 20 * 60
 class CollectedAnswer(str):
     """Answer text carrying the terminal turn that makes one delivery cycle distinct."""
 
-    def __new__(cls, text: str, turn: int, status: str,
-                provider_name: str = "", model_name: Optional[str] = None) -> "CollectedAnswer":
+    def __new__(cls, text: str, turn: int, status: str, provider_name: str = "",
+                model_name: Optional[str] = None,
+                provider_alias: Optional[str] = None) -> "CollectedAnswer":
         answer = str.__new__(cls, text)
         answer.answer_id = str(turn)
         answer.turn_status = status
         answer.provider_name = provider_name
+        answer.provider_alias = provider_alias
         answer.model_name = model_name
         answer.requested_provider_name = None
+        answer.requested_provider_alias = None
         answer.requested_model_name = None
         answer.effective_provider_name = None
+        answer.effective_provider_alias = None
         answer.effective_model_name = None
         return answer
 
@@ -133,7 +137,8 @@ class Answering:
 
     def answer_this(self, agent: str, conversation: int, delegation_id: str,
                     delegator: str, provider_name: Optional[str] = None,
-                    model_name: Optional[str] = None) -> None:
+                    model_name: Optional[str] = None,
+                    provider_alias: Optional[str] = None) -> None:
         """Take a turn on a conversation another agent asked in. Never raises past the caller.
 
         `delegator` is who asked, and it is passed rather than looked up because the layer that
@@ -144,7 +149,8 @@ class Answering:
 
     def stop_this(self, agent: str, conversation: int, delegation_id: str,
                   delegator: str, provider_name: Optional[str] = None,
-                  model_name: Optional[str] = None) -> bool:
+                  model_name: Optional[str] = None,
+                  provider_alias: Optional[str] = None) -> bool:
         """Stop this delegation's live turn, or settle its pending brief without starting one."""
         raise NotImplementedError
 
@@ -316,8 +322,12 @@ def _answered_what_was_handed_here(name: str, where, answering: Answering) -> No
             # that owns the conversation but has not published its stream returns False and stays
             # here for the next beat; it must never fall through and start another turn.
             try:
-                answering.stop_this(name, conversation, one.delegation_id, delegator,
-                                     one.provider_name, one.model_name)
+                if one.provider_alias is None:
+                    answering.stop_this(name, conversation, one.delegation_id, delegator,
+                                         one.provider_name, one.model_name)
+                else:
+                    answering.stop_this(name, conversation, one.delegation_id, delegator,
+                                         one.provider_name, one.model_name, one.provider_alias)
             except Exception as why:  # noqa: BLE001 — see `looked`
                 logs.note(where, f"delegation {one.delegation_id} could not be stopped ({why})",
                           logs.ERROR)
@@ -325,8 +335,12 @@ def _answered_what_was_handed_here(name: str, where, answering: Answering) -> No
         if not _is_waiting_on_us(name, conversation, delegator):
             continue
         try:
-            answering.answer_this(name, conversation, one.delegation_id, delegator,
-                                  one.provider_name, one.model_name)
+            if one.provider_alias is None:
+                answering.answer_this(name, conversation, one.delegation_id, delegator,
+                                      one.provider_name, one.model_name)
+            else:
+                    answering.answer_this(name, conversation, one.delegation_id, delegator,
+                                      one.provider_name, one.model_name, one.provider_alias)
         except Exception as why:  # noqa: BLE001 — see `looked`
             logs.note(where, f"delegation {one.delegation_id} could not be answered ({why})",
                       logs.ERROR)
@@ -387,8 +401,10 @@ def _collected_what_came_back(name: str, where, answering: Answering) -> None:
             if said is None:
                 continue
             said.requested_provider_name = current.requested_provider_name
+            said.requested_provider_alias = current.requested_provider_alias
             said.requested_model_name = current.requested_model_name
             said.effective_provider_name = current.provider_name
+            said.effective_provider_alias = current.provider_alias
             said.effective_model_name = current.model_name
             # **A requested stop is terminal, not another answer to review.** Before this branch a
             # stopped turn was converted into "finished without saying anything (stopped)" and
@@ -648,10 +664,10 @@ def _what_they_answered(to_agent: str, delegator: str, parent_turn: int,
                     conn, int(conversation["id"]), delegator, to_agent)
                 if previous is None:
                     return None
-                turn, status, body, provider_name, model_name = previous
+                turn, status, body, provider_name, provider_alias, model_name = previous
                 return CollectedAnswer(
                     body or f"{to_agent} finished without saying anything ({status})", turn,
-                    status, provider_name, model_name)
+                    status, provider_name, model_name, provider_alias)
             asked = conn.execute(
                 "SELECT turn_id FROM conversation_messages"
                 " WHERE conversation_id = ? AND author_id = ? AND turn_id IS NOT NULL"
@@ -660,7 +676,7 @@ def _what_they_answered(to_agent: str, delegator: str, parent_turn: int,
             if asked is None:
                 return None
             said = conn.execute(
-                "SELECT t.turn_status, t.provider_name, t.model_name,"
+                "SELECT t.turn_status, t.provider_name, t.provider_alias, t.model_name,"
                 " (SELECT m.body FROM conversation_messages m"
                 " WHERE m.conversation_id = ? AND m.author_id = ? AND m.turn_id = t.id"
                 " ORDER BY m.id DESC LIMIT 1) AS body"
@@ -674,16 +690,17 @@ def _what_they_answered(to_agent: str, delegator: str, parent_turn: int,
     return CollectedAnswer(
         body or f"{to_agent} finished without saying anything ({said['turn_status']})",
         int(asked["turn_id"]), str(said["turn_status"]), str(said["provider_name"] or ""),
-        said["model_name"])
+        said["model_name"], said["provider_alias"])
 
 
 def terminal_provenance(to_agent: str, delegator: str, parent_turn: int,
-                        delegation_id: str) -> Optional[Tuple[str, Optional[str]]]:
-    """The actual provider/model on this delegation's newest terminal target turn."""
+                        delegation_id: str) -> Optional[
+                            Tuple[str, Optional[str], Optional[str]]]:
+    """The actual provider/alias/model on this delegation's newest terminal target turn."""
     answer = _what_they_answered(to_agent, delegator, parent_turn, delegation_id)
     if answer is None:
         return None
-    return answer.provider_name, answer.model_name
+    return answer.provider_name, answer.provider_alias, answer.model_name
 
 
 def _preferred_conversation(conn: sqlite3.Connection, delegator: str, parent_turn: int,
@@ -699,7 +716,8 @@ def _preferred_conversation(conn: sqlite3.Connection, delegator: str, parent_tur
 
 
 def _legacy_terminal_answer(conn, conversation: int, delegator: str,
-                            to_agent: str) -> Optional[Tuple[int, str, str, str, Optional[str]]]:
+                            to_agent: str) -> Optional[
+                                Tuple[int, str, str, str, Optional[str], Optional[str]]]:
     """A pre-boundary terminal turn whose inbound brief was never associated with its turn.
 
     Old turns recorded the exact prompt in their `sent` event but left the inbound message's
@@ -708,7 +726,7 @@ def _legacy_terminal_answer(conn, conversation: int, delegator: str,
     consume it and the next turn receives both messages.
     """
     turn = conn.execute(
-        "SELECT id, turn_status, provider_name, model_name FROM turns"
+        "SELECT id, turn_status, provider_name, provider_alias, model_name FROM turns"
         " WHERE conversation_id = ? AND turn_status <> ?"
         " ORDER BY id DESC LIMIT 1", (conversation, WORKING)).fetchone()
     if turn is None:
@@ -734,4 +752,4 @@ def _legacy_terminal_answer(conn, conversation: int, delegator: str,
         " ORDER BY id DESC LIMIT 1", (conversation, to_agent, turn["id"])).fetchone()
     return (int(turn["id"]), str(turn["turn_status"]),
             str(answer["body"] or "").strip() if answer else "",
-            str(turn["provider_name"] or ""), turn["model_name"])
+            str(turn["provider_name"] or ""), turn["provider_alias"], turn["model_name"])

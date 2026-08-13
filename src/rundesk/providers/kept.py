@@ -58,7 +58,8 @@ TURN_STATUSES = (WORKING, DONE, STOPPED, FAILED)
 #: identity, `state` starts at `working` and is settled by `settled`, and everything about what a
 #: turn *came to* is the records' own account — a caller that could set those could rewrite history
 #: and then read it back as fact.
-ADMITTED = ("conversation_id", "schedule_id", "schedule_name", "provider_name", "model_name",
+ADMITTED = ("conversation_id", "schedule_id", "schedule_name", "provider_name", "provider_alias",
+            "model_name",
             "access_mode", "provider_capabilities", "session_resumed", "instructions_sha256",
             "instructions_bytes")
 
@@ -269,17 +270,20 @@ def sweep_turn_records(agent: str, keeping_days: int,
 # -- where a conversation got to -------------------------------------------------------
 
 
-def get_session(agent: str, conversation: int, provider_name: str) -> Optional[str]:
+def get_session(agent: str, conversation: int, provider_name: str,
+                provider_alias: Optional[str] = None) -> Optional[str]:
     """The handle this conversation got to on this brain, or `None` for a fresh one."""
     with records.reading(directory.records(agent)) as conn:
         got = _rows(conn, agent,
-                    f"SELECT session_id FROM {SESSIONS} WHERE conversation_id = ? AND provider_name = ?",
-                    (conversation, provider_name)).fetchone()
+                    f"SELECT session_id FROM {SESSIONS} WHERE conversation_id = ? "
+                    "AND provider_name = ? AND provider_alias = ?",
+                    (conversation, provider_name, provider_alias or "")).fetchone()
     return str(got["session_id"]) if got is not None else None
 
 
 def latest_instructions(agent: str, conversation: int,
-                        provider_name: str) -> Optional[str]:
+                        provider_name: str,
+                        provider_alias: Optional[str] = None) -> Optional[str]:
     """The instruction fingerprint on this brain's latest turn in the conversation.
 
     A session handle does not carry that fingerprint itself, so the turn that last used the
@@ -291,15 +295,17 @@ def latest_instructions(agent: str, conversation: int,
         got = _rows(
             conn, agent,
             f"SELECT instructions_sha256 FROM {TURNS} "
-            "WHERE conversation_id = ? AND provider_name = ? ORDER BY id DESC LIMIT 1",
-            (conversation, provider_name),
+            "WHERE conversation_id = ? AND provider_name = ? "
+            "AND provider_alias IS ? ORDER BY id DESC LIMIT 1",
+            (conversation, provider_name, provider_alias),
         ).fetchone()
     if got is None or got["instructions_sha256"] is None:
         return None
     return str(got["instructions_sha256"])
 
 
-def save_session(agent: str, conversation: int, provider_name: str, session_id: str) -> None:
+def save_session(agent: str, conversation: int, provider_name: str, session_id: str,
+                 provider_alias: Optional[str] = None) -> None:
     """Keep where this conversation got to, replacing whatever was there.
 
     An upsert rather than a delete and an insert: two statements would leave a moment with no handle
@@ -308,21 +314,23 @@ def save_session(agent: str, conversation: int, provider_name: str, session_id: 
     """
     with records.writing(directory.records(agent)) as conn:
         _rows(conn, agent,
-              f"INSERT INTO {SESSIONS} (conversation_id, provider_name, session_id) "
-              "VALUES (?, ?, ?) ON CONFLICT (conversation_id, provider_name) "
+              f"INSERT INTO {SESSIONS} (conversation_id, provider_name, provider_alias, session_id) "
+              "VALUES (?, ?, ?, ?) ON CONFLICT (conversation_id, provider_name, provider_alias) "
               "DO UPDATE SET session_id = excluded.session_id",
-              (conversation, provider_name, session_id))
+              (conversation, provider_name, provider_alias or "", session_id))
 
 
-def delete_session(agent: str, conversation: int, provider_name: str) -> None:
+def delete_session(agent: str, conversation: int, provider_name: str,
+                   provider_alias: Optional[str] = None) -> None:
     """Throw away where this conversation got to, so the next turn starts fresh.
 
     A row that was not there is not a failure: starting fresh is what was asked for either way.
     """
     with records.writing(directory.records(agent)) as conn:
         _rows(conn, agent,
-              f"DELETE FROM {SESSIONS} WHERE conversation_id = ? AND provider_name = ?",
-              (conversation, provider_name))
+              f"DELETE FROM {SESSIONS} WHERE conversation_id = ? AND provider_name = ? "
+              "AND provider_alias = ?",
+              (conversation, provider_name, provider_alias or ""))
 
 
 def forget_sessions(agent: str, conversation: int) -> int:

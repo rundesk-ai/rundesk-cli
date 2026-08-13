@@ -41,6 +41,7 @@ from rundesk.commands import Subcommands, as_written, failed
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job, standing
+from rundesk.providers import accounts, adapters
 from rundesk.schedules import firing, kept
 from rundesk.skills import grants, library
 from rundesk.utils import locking
@@ -84,7 +85,8 @@ NO_JOB_EVER = ("this name cannot be a launchd label, so no job can ever be place
 #: and a traceback is not an answer somebody can act on.
 TROUBLE = (delegating.Refused, directory.Refused, records.NotThere, records.Unreadable,
            records.Refused,
-           migration.Ahead, migration.Broken, locking.Stuck, OSError, sqlite3.Error)
+           migration.Ahead, migration.Broken, accounts.Refused, adapters.NotRunnable,
+           locking.Stuck, OSError, sqlite3.Error)
 
 #: Everything giving a new agent the skill it operates this install with can be stopped by.
 #:
@@ -119,6 +121,8 @@ def register(sub: Subcommands) -> None:
     new.add_argument("agent", metavar="<agent>", help="what to call it")
     new.add_argument("--provider", metavar="<provider>", default=None,
                      help="required — what is behind it; recorded, and not proven")
+    new.add_argument("--alias", metavar="<alias>", default=None,
+                     help="a registered additional account for that provider")
     new.add_argument("--describes", metavar="<text>", default=None, help=WHAT_IT_IS_FOR)
     new.add_argument("--role", choices=pages.ROLES, default=pages.DEFAULT_ROLE,
                      help="how it works: domain (default) or specialist")
@@ -127,6 +131,8 @@ def register(sub: Subcommands) -> None:
     changed.add_argument("agent", metavar="<agent>", help="which one, as `rundesk agents` lists it")
     changed.add_argument("--provider", metavar="<provider>", default=None,
                          help="what is behind it; recorded, and not proven")
+    changed.add_argument("--alias", metavar="<alias>", default=None,
+                         help="a registered additional account; requires --provider")
     changed.add_argument("--describes", metavar="<text>", default=None, help=WHAT_IT_IS_FOR)
     changed.add_argument("--role", choices=pages.ROLES, default=None,
                          help="change its operating role; existing rules are not replaced")
@@ -157,10 +163,11 @@ def cmd_agents(args: argparse.Namespace) -> int:
     if what in (None, "list"):
         return _listed()
     if what == "add":
-        return _made(args.agent, args.provider, args.describes, args.role)
+        return _made(args.agent, args.provider, args.describes, args.role, args.alias)
     if what == "configure":
         return _configured(args.agent, args.provider, args.describes, args.role, args.self_improve,
-                           args.delegate_to, args.delegate_to_any, args.delegate_to_none)
+                           args.alias, args.delegate_to, args.delegate_to_any,
+                           args.delegate_to_none)
     if what == "remove":
         return _forgotten(args.agent, args.confirm)
 
@@ -232,7 +239,10 @@ def _configuration_of(name: str) -> Tuple[str, str, str, str]:
         role = str(settled["role"])
         if role not in pages.ROLES:
             raise KeyError("role")
-        return (str(settled["provider_name"]), role,
+        provider = str(settled["provider_name"])
+        if settled.get("provider_alias"):
+            provider += f" ({settled['provider_alias']})"
+        return (provider, role,
                 as_written(bool(settled["self_improve"])),
                 delegating.shown(delegating.decoded(settled.get("delegates_to"))))
     except records.NotThere:
@@ -287,7 +297,7 @@ def _the_pages_it_lives_by(home: Path) -> str:
 
 
 def _made(name: str, provider: Optional[str], describes: Optional[str] = None,
-          role: str = pages.DEFAULT_ROLE) -> int:
+          role: str = pages.DEFAULT_ROLE, provider_alias: Optional[str] = None) -> int:
     """Make an agent, and say what was made — one named thing at a time.
 
     The provider is checked here before anything is built, so somebody who left it out is told what
@@ -302,14 +312,19 @@ def _made(name: str, provider: Optional[str], describes: Optional[str] = None,
     trouble = _provider_trouble(provider, f"rundesk agents add {name} --provider <provider>")
     if trouble:
         return _failed(trouble, "nothing was made")
+    if provider_alias is not None:
+        try:
+            _checked_alias(provider or "", provider_alias)
+        except (accounts.Refused, adapters.NotRunnable) as why:
+            return _failed(str(why), "nothing was made")
 
     try:
-        at = directory.made(name, provider or "", describes or "", role)
+        at = directory.made(name, provider or "", describes or "", role, provider_alias)
     except TROUBLE as why:
         return _failed(str(why), "nothing was made")
 
     print(f"agent {name} added")
-    print(f"        provider  {provider}")
+    print(f"        provider  {_shown_provider(provider or '', provider_alias)}")
     print(f"        role      {role}")
     print(f"        home      {at / directory.HOME}")
     print(f"        logs      {at / directory.LOGS}")
@@ -325,6 +340,7 @@ def _made(name: str, provider: Optional[str], describes: Optional[str] = None,
 
 def _configured(name: str, provider: Optional[str], describes: Optional[str] = None,
                 role: Optional[str] = None, self_improve: Optional[str] = None,
+                provider_alias: Optional[str] = None,
                 delegate_to: Optional[List[str]] = None,
                 delegate_to_any: bool = False, delegate_to_none: bool = False) -> int:
     """Change what one agent is configured with, or refuse having changed nothing.
@@ -345,6 +361,7 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
     """
     changing_delegation = delegate_to is not None or delegate_to_any or delegate_to_none
     if (provider is None and describes is None and role is None and self_improve is None
+            and provider_alias is None
             and not changing_delegation):
         return _failed(f"nothing was named to change about {name}",
                        f"change one with: rundesk agents configure {name} --provider <provider>",
@@ -358,6 +375,14 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
                                     f"rundesk agents configure {name} --provider <provider>")
         if trouble:
             return _failed(trouble, "nothing was changed")
+    if provider_alias is not None and provider is None:
+        return _failed("--alias requires --provider so it cannot be interpreted against a moving "
+                       "agent default", "nothing was changed")
+    if provider_alias is not None:
+        try:
+            _checked_alias(provider or "", provider_alias)
+        except (accounts.Refused, adapters.NotRunnable) as why:
+            return _failed(str(why), "nothing was changed")
     if describes is not None:
         trouble = directory.describes_trouble(describes)
         if trouble:
@@ -390,6 +415,7 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
             moving: Dict[str, Any] = {}
             if provider is not None:
                 moving["provider_name"] = provider
+                moving["provider_alias"] = provider_alias
             if describes is not None:
                 # `None` rather than `""`, so an agent nobody has described and one described as
                 # nothing stay the same answer — which is what taking a description away means.
@@ -408,7 +434,7 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
         return _failed(str(why), "nothing was changed")
 
     if provider is not None:
-        print(f"{name}: provider is now {provider}")
+        print(f"{name}: provider is now {_shown_provider(provider, provider_alias)}")
         print(f"        {NOT_PROVEN}")
     if describes is not None:
         said = describes.strip()
@@ -426,6 +452,17 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
         else:
             print(f"{name}: may not delegate to another named agent now")
     return OK
+
+
+def _checked_alias(provider: str, alias: str) -> None:
+    """Prove the adapter supports aliases and this exact additional account is registered."""
+    if not adapters.capabilities(provider).get("account_aliases"):
+        raise adapters.NotRunnable(f"the {provider} adapter does not support account aliases")
+    accounts.account_home(provider, alias)
+
+
+def _shown_provider(provider: str, alias: Optional[str]) -> str:
+    return f"{provider} ({alias})" if alias else provider
 
 
 def _yes_or_no(said: str) -> Optional[int]:

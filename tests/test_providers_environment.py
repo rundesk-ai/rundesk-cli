@@ -52,7 +52,8 @@ class WhatIsLeftOutIsUnsetAndNeverEmpty(support.Isolated):
     def test_the_optional_ones_are_absent_when_there_is_nothing_to_say(self):
         said = built()
         for name in (environment.MODEL, environment.RESUME, environment.SETTINGS,
-                     environment.RAW, environment.PREFACE):
+                     environment.RAW, environment.PREFACE, environment.PROVIDER_ALIAS,
+                     environment.PROVIDER_ACCOUNT_HOME):
             with self.subTest(name=name):
                 self.assertNotIn(name, said)
 
@@ -67,6 +68,13 @@ class WhatIsLeftOutIsUnsetAndNeverEmpty(support.Isolated):
 
     def test_a_preface_of_only_whitespace_is_nothing_to_say(self):
         self.assertNotIn(environment.PREFACE, built(preface="   \n  "))
+
+    def test_an_additional_account_is_named_as_one_immutable_boundary(self):
+        said = built(provider_alias="work",
+                     provider_account_home=Path("/provider-accounts/mine/work/home"))
+        self.assertEqual("work", said[environment.PROVIDER_ALIAS])
+        self.assertEqual(
+            "/provider-accounts/mine/work/home", said[environment.PROVIDER_ACCOUNT_HOME])
 
 
 class TheOwnersOwnValues(support.Isolated):
@@ -103,7 +111,8 @@ class TheOwnersOwnValues(support.Isolated):
         so one stored value refused every delegation on the install.
         """
         for name in (environment.MODEL, environment.RESUME, environment.SETTINGS,
-                     environment.RAW, environment.ANSWERING, environment.PREFACE):
+                     environment.RAW, environment.ANSWERING, environment.PREFACE,
+                     environment.PROVIDER_ALIAS, environment.PROVIDER_ACCOUNT_HOME):
             with self.subTest(name=name):
                 said = built(owners={name: "hijacked"})
                 self.assertNotIn(name, said,

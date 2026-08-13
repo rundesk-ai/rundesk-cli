@@ -135,6 +135,11 @@ def skills() -> Path:
     return data() / "skills"
 
 
+def provider_accounts() -> Path:
+    """Install-wide homes for additional provider accounts, separate from adapter programs."""
+    return data() / "provider-accounts"
+
+
 def backups() -> Path:
     """Copies of what the owner keeps, which survive removal — including a purge.
 

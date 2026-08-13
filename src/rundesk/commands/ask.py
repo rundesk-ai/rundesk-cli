@@ -29,7 +29,7 @@ from rundesk.delegations import admitting
 from rundesk.delegations import kept as delegations
 from rundesk.exits import OK
 from rundesk.gateways import standing
-from rundesk.providers import adapters, instructions, kept, protocol, turns
+from rundesk.providers import accounts, adapters, instructions, kept, protocol, turns
 from rundesk.utils import locking, terminal
 
 #: What a tool that did something is shown as. Its own name is the *brain's* word for it, and putting
@@ -55,6 +55,8 @@ def register(sub: Subcommands) -> None:
                         help="ask the brain to look without changing anything")
     asking.add_argument("--provider", metavar="<provider>",
                         help="for a delegation only, which available brain answers this work")
+    asking.add_argument("--alias", metavar="<alias>",
+                        help="for a delegation only, a registered additional provider account")
     asking.add_argument("--model", metavar="<model>",
                         help="a model name the selected brain understands")
     asking.add_argument("--thinking", action="store_true",
@@ -86,10 +88,12 @@ def cmd_ask(args: argparse.Namespace) -> int:
         # somebody else's agent from inside its own: no record, no guards, and nobody owed a review.
         # The previous build found that out by shipping it — every rule the feature is made of was
         # one command away from being bypassed.
-        return _handed_over(asking, agent, said, args.provider, args.model)
+        return _handed_over(asking, agent, said, args.provider, args.model, args.alias)
 
     if args.provider is not None:
         return _failed("--provider is scoped to work one agent delegates from inside its turn")
+    if args.alias is not None:
+        return _failed("--alias is scoped to an explicit provider on delegated work")
 
     try:
         landed = arriving.asked_at_a_terminal(agent, said)
@@ -112,7 +116,8 @@ def cmd_ask(args: argparse.Namespace) -> int:
 
 def _handed_over(asking: admitting.Asking, to_agent: str, task: str,
                  provider_name: Optional[str] = None,
-                 model_name: Optional[str] = None) -> int:
+                 model_name: Optional[str] = None,
+                 provider_alias: Optional[str] = None) -> int:
     """One agent hands work to another, and this turn carries on without it.
 
     **Nothing waits.** The answer reaches the asking agent in a later turn, which is the whole shape
@@ -154,7 +159,13 @@ def _handed_over(asking: admitting.Asking, to_agent: str, task: str,
             target = records.read(directory.records(to_agent))
             selection = adapters.admitted_selection(
                 provider_name, model_name,
-                str(target.get("provider_name") or ""), target.get("model_name"))
+                str(target.get("provider_name") or ""), target.get("model_name"),
+                alias=provider_alias, default_alias=target.get("provider_alias"))
+            if selection.provider_alias is not None:
+                if not adapters.capabilities(selection.provider_name).get("account_aliases"):
+                    raise adapters.NotRunnable(
+                        f"the {selection.provider_name} adapter does not support account aliases")
+                accounts.account_home(selection.provider_name, selection.provider_alias)
 
             delegation_id = admitting.a_name(asking.run or 0)
             # Where the answer goes: the conversation the *delegating turn* is in, read off the
@@ -167,10 +178,12 @@ def _handed_over(asking: admitting.Asking, to_agent: str, task: str,
             admitting.admitted(
                 asking, delegation_id, to_agent, int(was["conversation_id"]),
                 requested_provider_name=selection.requested_provider_name,
+                requested_provider_alias=selection.requested_provider_alias,
                 requested_model_name=selection.requested_model_name,
                 provider_name=selection.provider_name,
+                provider_alias=selection.provider_alias,
                 model_name=selection.model_name)
-    except (adapters.NotRunnable, admitting.Refused, delegations.Refused,
+    except (accounts.Refused, adapters.NotRunnable, admitting.Refused, delegations.Refused,
             directory.Refused, kept.Refused,
             records.NotThere, records.Unreadable, locking.Stuck, OSError) as why:
         return _failed(str(why), "nothing was handed over")

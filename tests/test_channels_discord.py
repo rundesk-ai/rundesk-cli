@@ -1624,6 +1624,11 @@ class HowAGestureIsAnswered(Records):
         self.assertEqual("codex", said["provider"])
         self.assertEqual(str(self.interaction.id), said["ref"])
 
+    def test_the_provider_gesture_carries_an_optional_account_alias(self) -> None:
+        said = self.only(
+            self.pressed("provider", provider="claude", alias="work"), "configure")
+        self.assertEqual("work", said["alias"])
+
     def test_all_eleven_are_registered(self) -> None:
         async def exchange(reaching: Any) -> None:
             reaching.tree = adapter.discord.app_commands.CommandTree(self.client)

@@ -113,13 +113,22 @@ narrow a team that already delegates. Removing an agent prunes its name from eve
 before removal, so recreating that name does not inherit prior allowlist authority; `NULL` remains
 unrestricted and inbound delegation remains unchanged.
 
-Each delegation row keeps the requested provider/model separately from the effective provider/model
+Each delegation row keeps the requested provider/alias/model separately from the effective
+provider/alias/model
 resolved at admission. Requested fields preserve what was supplied, including relative provider
 spelling. The effective provider is canonical and the effective model is nullable when that provider
 chooses its default. New delegations always fix the effective pair before either admission write;
 nullable fields remain only so rows created by an older release can be carried forward without
 inventing history. Recorded values are immutable across answer, failure, stop, resume, gateway
-replacement and process loss; none is copied into the target agent's configuration row.
+replacement and process loss; none is copied into the target agent's configuration row. An omitted
+alias is the provider's existing ordinary account. `default` is reserved and never stored as an
+alias.
+
+Additional provider accounts stand outside every agent at
+`data/provider-accounts/<provider-key>/<alias>/home/`. The alias and directory boundary are
+Rundesk's metadata; everything inside `home/` belongs to the provider's official CLI. Rundesk does
+not inspect it, and backups omit the whole `provider-accounts/` tree so they never copy credentials.
+After a restore, aliases must be registered and authorized again.
 
 The same row keeps an explicit operating `role`: `domain` or `specialist`. Existing agents migrate
 to `domain`, which is also creation's default. Role describes the agent's work lifecycle only; it
@@ -369,6 +378,10 @@ whatever a filesystem hands back after a delete. It does not stop somebody with 
 root, or a complete backup. Protect and encrypt backup media accordingly.
 
 ## What a copy does not carry
+
+Provider-owned account homes under `data/provider-accounts/` are omitted before the backup walker
+enters them. They may contain provider credentials Rundesk is not permitted to read, copy, export,
+print, or synchronize.
 
 A copy is made with the standard library, and on macOS that quietly means **extended attributes and
 resource forks are not copied** — Finder tags, Finder comments, and anything else stored beside a

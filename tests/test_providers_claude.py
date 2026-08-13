@@ -18,6 +18,7 @@ Run directly: `python3 tests/test_providers_claude.py`
 """
 
 import json
+import os
 import subprocess
 import unittest
 
@@ -178,6 +179,53 @@ class Capabilities(support.Isolated):
         self.assertEqual(0, got.returncode)
         self.assertTrue(can["tools"])
         self.assertNotIn("claude_cli", can)
+
+    def test_it_reports_support_for_additional_account_aliases(self):
+        _got, can = self.answered()
+        self.assertTrue(can["account_aliases"])
+
+
+class AccountManagement(support.Isolated):
+    def fake_claude(self):
+        instead = self.home / "bin"
+        instead.mkdir()
+        observed = self.home / "observed-config-dir"
+        brain = instead / "claude"
+        brain.write_text(
+            "#!/bin/sh\n"
+            f"printf '%s' \"${{CLAUDE_CONFIG_DIR-unset}}\" > {observed}\n"
+            "if [ \"$1 $2 $3\" = 'auth status --json' ]; then\n"
+            "  printf '%s\\n' '{\"loggedIn\": true, \"email\": \"not-exported\"}'\n"
+            "fi\n",
+            encoding="utf-8")
+        brain.chmod(0o755)
+        return instead, observed
+
+    def test_default_status_preserves_the_existing_default_environment(self):
+        instead, observed = self.fake_claude()
+        env = os.environ.copy()
+        env.update({"PATH": f"{instead}:/usr/bin:/bin", "CLAUDE_CONFIG_DIR": "owners-value"})
+        env.pop("RUNDESK_PROVIDER_ACCOUNT_HOME", None)
+        got = subprocess.run(
+            [str(ADAPTER), "--account-status"], capture_output=True, text=True,
+            timeout=PATIENCE, env=env, check=False)
+        self.assertEqual({"state": "authenticated"}, json.loads(got.stdout))
+        self.assertEqual("owners-value", observed.read_text(encoding="utf-8"))
+        self.assertNotIn("not-exported", got.stdout)
+
+    def test_an_alias_redirects_only_claudes_official_config_directory(self):
+        instead, observed = self.fake_claude()
+        account_home = self.home / "provider-accounts" / "claude" / "work" / "home"
+        account_home.mkdir(parents=True)
+        env = os.environ.copy()
+        env.update({"PATH": f"{instead}:/usr/bin:/bin",
+                    "RUNDESK_PROVIDER_ALIAS": "work",
+                    "RUNDESK_PROVIDER_ACCOUNT_HOME": str(account_home)})
+        got = subprocess.run(
+            [str(ADAPTER), "--account-status"], capture_output=True, text=True,
+            timeout=PATIENCE, env=env, check=False)
+        self.assertEqual(0, got.returncode)
+        self.assertEqual(str(account_home), observed.read_text(encoding="utf-8"))
 
 
 class OneCapturedTurn(support.Isolated):

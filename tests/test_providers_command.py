@@ -23,7 +23,7 @@ from rundesk.agents import directory, records
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.gateways import standing
-from rundesk.providers import adapters, instructions, kept
+from rundesk.providers import adapters, instructions, kept, turns
 from rundesk.schedules import kept as schedules_kept
 from rundesk.skills import grants
 
@@ -113,6 +113,75 @@ printf '%s\\n' '{"tools": true, "codex_cli": "0.146.0"}'
     def test_asking_with_no_name_is_the_command_line_being_wrong(self):
         code, _out, _err = self.rundesk("providers", "check")
         self.assertEqual(USAGE, code)
+
+
+class AccountAliases(Providers):
+    ADAPTER = """#!/bin/sh
+if [ "$1" = "--capabilities" ]; then
+  printf '%s\\n' '{"account_aliases": true}'
+elif [ "$1" = "--account-status" ]; then
+  printf '%s\\n' '{"state": "authenticated"}'
+elif [ "$1" = "--account-login" ] || [ "$1" = "--account-logout" ]; then
+  exit 0
+else
+  exit 2
+fi
+"""
+
+    def setUp(self):
+        super().setUp()
+        self.an_adapter("a-brain", self.ADAPTER)
+
+    def test_add_list_status_login_and_logout_use_only_normalized_state(self):
+        code, out, err = self.rundesk("providers", "aliases", "add", "a-brain", "work")
+        self.assertEqual(OK, code, err)
+        self.assertIn("authenticated", out)
+
+        code, out, err = self.rundesk("providers", "aliases", "list", "a-brain")
+        self.assertEqual(OK, code, err)
+        self.assertIn("work", out)
+
+        for words in (("status", "a-brain", "--alias", "work"),
+                      ("login", "a-brain", "--alias", "work")):
+            with self.subTest(words=words):
+                code, out, err = self.rundesk("providers", *words)
+                self.assertEqual(OK, code, err)
+                self.assertIn("authenticated", out)
+
+        code, _out, err = self.rundesk(
+            "providers", "logout", "a-brain", "--alias", "work")
+        self.assertEqual(FAILED, code)
+        self.assertIn("nothing was logged out", err)
+
+    def test_remove_requires_confirmation_and_refuses_an_agent_default(self):
+        self.rundesk("providers", "aliases", "add", "a-brain", "work")
+        agent = self.an_agent(provider="a-brain")
+        records.stated(directory.records(agent), {"provider_alias": "work"})
+
+        code, _out, err = self.rundesk(
+            "providers", "aliases", "remove", "a-brain", "work", "--confirm")
+        self.assertEqual(FAILED, code)
+        self.assertIn("configured default", err)
+
+    def test_logout_refuses_to_change_an_active_turns_account_boundary(self):
+        self.rundesk("providers", "aliases", "add", "a-brain", "work")
+        self.an_agent(provider="a-brain")
+        active = {"provider_name": "a-brain", "provider_alias": "work",
+                  "conversation_id": 7}
+        with mock.patch.object(kept, "list_unfinished_turns", return_value=[active]), \
+                mock.patch.object(turns, "standing", return_value=True), \
+                mock.patch.object(adapters, "account_logout") as logged_out:
+            code, _out, err = self.rundesk(
+                "providers", "logout", "a-brain", "--alias", "work", "--confirm")
+        self.assertEqual(FAILED, code)
+        self.assertIn("active turn", err)
+        logged_out.assert_not_called()
+
+    def test_default_is_reserved_for_the_implicit_provider_account(self):
+        code, _out, err = self.rundesk(
+            "providers", "aliases", "add", "a-brain", "default")
+        self.assertEqual(FAILED, code)
+        self.assertIn("reserved", err)
 
 
 class Instructions(Providers):

@@ -40,6 +40,11 @@ CWD = "RUNDESK_CWD"
 #: session files. Named, never made — see `adapters.home`.
 PROVIDER_HOME = "RUNDESK_PROVIDER_HOME"
 
+#: The optional additional account selected for this turn. Both are absent for the provider's
+#: ordinary account, preserving the exact environment existing turns received.
+PROVIDER_ALIAS = "RUNDESK_PROVIDER_ALIAS"
+PROVIDER_ACCOUNT_HOME = "RUNDESK_PROVIDER_ACCOUNT_HOME"
+
 #: Which turn this is, for anything the adapter keeps of its own. The turn's own id, so an adapter
 #: writing a running total down beside it has a key that means something afterwards.
 RUN = "RUNDESK_RUN"
@@ -146,7 +151,8 @@ def for_turn(*, agent: str, home: Path, provider_home: Path, skills: Path, turn:
              access_mode: str, raw: Optional[Path] = None, model: Optional[str] = None,
              resume: Optional[str] = None, settings: Optional[str] = None,
              preface: str = "", owners: Optional[Mapping[str, str]] = None,
-             answering: Optional[str] = None) -> Dict[str, str]:
+             answering: Optional[str] = None, provider_alias: Optional[str] = None,
+             provider_account_home: Optional[Path] = None) -> Dict[str, str]:
     """Everything an adapter is told about this turn.
 
     Keyword-only throughout, and deliberately: this has thirteen things to say and a caller that got
@@ -181,7 +187,10 @@ def for_turn(*, agent: str, home: Path, provider_home: Path, skills: Path, turn:
     # names that always have a value.
     sometimes = ((MODEL, model), (RESUME, resume), (SETTINGS, settings),
                  (RAW, str(raw) if raw is not None else None),
-                 (ANSWERING, answering), (PREFACE, preface.strip() or None))
+                 (ANSWERING, answering), (PREFACE, preface.strip() or None),
+                 (PROVIDER_ALIAS, provider_alias),
+                 (PROVIDER_ACCOUNT_HOME,
+                  str(provider_account_home) if provider_account_home is not None else None))
     for name, value in sometimes:
         if value:
             said[name] = value

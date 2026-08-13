@@ -15,7 +15,10 @@ CLI first class rather than degraded.
 **Starting one** is not a question at all. It is a program that will run for as long as the turn
 does, which may be hours, and everything about reading it is `providers.streaming`'s.
 
-**There is no `--check`.** A channel adapter has one because it signs in to somebody else's service
+**Account management is explicit, never per-turn checking.** An alias-capable adapter may implement
+`--account-status`, `--account-login`, and `--account-logout`; login/logout stay attached to the
+owner's terminal and only normalized state returns. A channel adapter has `--check` because it
+signs in to somebody else's service
 and an owner has to find out at a terminal rather than at three in the morning. A provider adapter
 has nothing to check offline: whether a brain is signed in is a question with an answer that changes
 between one turn and the next, and asking it before every turn would double what every turn costs.
@@ -32,6 +35,7 @@ May depend on `channels`, `agents`, `core` and `utils`. Nothing here names a ven
 
 import hashlib
 import os
+import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
@@ -51,6 +55,11 @@ GIVEN_IN = "providers"
 #: runs an unvetted program before a turn has been admitted**. Without it, an adapter that is chatty
 #: or broken hangs every ask with nothing written down anywhere.
 CAPABILITIES_WITHIN = 60.0
+ACCOUNT_STATUS_WITHIN = 60.0
+
+ACCOUNT_STATES = ("authenticated", "signed_out", "unable_to_check")
+PROVIDER_ALIAS = "RUNDESK_PROVIDER_ALIAS"
+PROVIDER_ACCOUNT_HOME = "RUNDESK_PROVIDER_ACCOUNT_HOME"
 
 #: What a conversation's directory holds. The lock is the claim on it — one turn at a time — and the
 #: two files are appended across turns and rotated, rather than written one per turn: an agent taking
@@ -68,18 +77,21 @@ NotRunnable = adapters.NotRunnable
 
 
 class Selection(NamedTuple):
-    """What was requested and the canonical provider/model admitted for one delegation."""
+    """What was requested and the canonical provider/account/model admitted for one delegation."""
 
     requested_provider_name: Optional[str]
+    requested_provider_alias: Optional[str]
     requested_model_name: Optional[str]
     provider_name: str
+    provider_alias: Optional[str]
     model_name: Optional[str]
 
 
 def admitted_selection(named: Optional[str], model: Optional[str],
                        default_provider: str,
-                       default_model: Optional[str]) -> Selection:
-    """Resolve one delegation's immutable provider/model selection.
+                       default_model: Optional[str], alias: Optional[str] = None,
+                       default_alias: Optional[str] = None) -> Selection:
+    """Resolve one delegation's immutable provider/account/model selection.
 
     Requested values stay exactly as supplied for provenance. The effective provider is resolved
     once so a relative path cannot be reinterpreted by a later gateway. With no provider override,
@@ -87,7 +99,10 @@ def admitted_selection(named: Optional[str], model: Optional[str],
     model, that provider chooses its own default model.
     """
     requested_provider = str(named) if named is not None else None
+    requested_alias = str(alias) if alias is not None else None
     requested_model = str(model) if model is not None else None
+    if requested_alias is not None and requested_provider is None:
+        raise NotRunnable("a delegation alias requires an explicit provider override")
     provider_name = requested_provider if requested_provider is not None else default_provider
     if not provider_name.strip():
         raise NotRunnable("a delegation provider override cannot be blank")
@@ -98,8 +113,9 @@ def admitted_selection(named: Optional[str], model: Optional[str],
     canonical_provider = str(resolved) if _is_a_path(provider_name) else provider_name
     effective_model = requested_model if requested_model is not None else (
         default_model if requested_provider is None else None)
-    return Selection(requested_provider, requested_model,
-                     canonical_provider, effective_model)
+    effective_alias = requested_alias if requested_provider is not None else default_alias
+    return Selection(requested_provider, requested_alias, requested_model,
+                     canonical_provider, effective_alias, effective_model)
 
 
 def where(named: str) -> Path:
@@ -110,6 +126,12 @@ def where(named: str) -> Path:
     a brain rundesk has never heard of is the ordinary case this seam exists for.
     """
     return adapters.where(named, SHIPPED_IN, GIVEN_IN)
+
+
+def canonical(named: str) -> str:
+    """The durable provider identity for a name or path, resolved exactly once."""
+    resolved = where(named)
+    return str(resolved) if _is_a_path(named) else named
 
 
 def known() -> List[str]:
@@ -200,6 +222,66 @@ def capabilities(named: str, settings: Optional[str] = None,
     told = {"RUNDESK_SETTINGS": settings} if settings else {}
     return adapters.asked_offline(where(named), CAPABILITIES_WITHIN,
                                   adapters.environment(told), running)
+
+
+def account_environment(alias: Optional[str], account_home: Optional[Path]) -> Dict[str, str]:
+    """The management boundary an adapter receives, absent in both parts for the default."""
+    told = {}
+    if alias is not None:
+        if account_home is None:
+            raise NotRunnable(f"the alias {alias} has no registered account home")
+        told[PROVIDER_ALIAS] = alias
+        told[PROVIDER_ACCOUNT_HOME] = str(account_home)
+    return adapters.environment(told)
+
+
+def account_status(named: str, alias: Optional[str], account_home: Optional[Path],
+                   running: Optional[Callable[..., programs.Ran]] = None) -> str:
+    """One normalized provider-owned authentication state, with all other output discarded."""
+    if not capabilities(named).get("account_aliases"):
+        raise NotRunnable(f"the {named} adapter does not support account aliases")
+    ran = (running or programs.run)([str(where(named)), "--account-status"],
+                                    ACCOUNT_STATUS_WITHIN,
+                                    env=account_environment(alias, account_home))
+    if ran.trouble or ran.code not in (0, 1):
+        return "unable_to_check"
+    said = adapters.printed_object(ran.out)
+    state = said.get("state") if isinstance(said, dict) else None
+    return str(state) if state in ACCOUNT_STATES else "unable_to_check"
+
+
+def account_login(named: str, alias: Optional[str], account_home: Optional[Path],
+                  interacting: Optional[Callable[[List[str], Dict[str, str]], int]] = None,
+                  checking: Optional[Callable[..., str]] = None) -> str:
+    """Run official interactive login, then earn readiness with a fresh normalized status."""
+    if not capabilities(named).get("account_aliases"):
+        raise NotRunnable(f"the {named} adapter does not support account aliases")
+    code = (interacting or _interact)([str(where(named)), "--account-login"],
+                                      account_environment(alias, account_home))
+    if code != 0:
+        return "signed_out"
+    return (checking or account_status)(named, alias, account_home)
+
+
+def account_logout(named: str, alias: Optional[str], account_home: Optional[Path],
+                   interacting: Optional[Callable[[List[str], Dict[str, str]], int]] = None,
+                   checking: Optional[Callable[..., str]] = None) -> str:
+    """Run official logout for the exact boundary, then report only a fresh status."""
+    if not capabilities(named).get("account_aliases"):
+        raise NotRunnable(f"the {named} adapter does not support account aliases")
+    code = (interacting or _interact)([str(where(named)), "--account-logout"],
+                                      account_environment(alias, account_home))
+    if code != 0:
+        return "unable_to_check"
+    return (checking or account_status)(named, alias, account_home)
+
+
+def _interact(argv: List[str], env: Dict[str, str]) -> int:
+    """Run attached to the owner's terminal; no credential-bearing stream passes through Rundesk."""
+    try:
+        return subprocess.run(argv, env=env, check=False).returncode
+    except OSError:
+        return 1
 
 
 def talking_to(named: str, env: Dict[str, str], agent: str, conversation: int,

@@ -21,7 +21,7 @@ from rundesk.agents import directory, records
 from rundesk.channels import arriving
 from rundesk.commands import automatic_updates
 from rundesk.core import paths
-from rundesk.providers import adapters, instructions, kept, protocol, turns
+from rundesk.providers import accounts, adapters, instructions, kept, protocol, turns
 from rundesk.utils import locking
 
 PATIENCE = 15.0
@@ -492,6 +492,39 @@ class CarryingAConversationOn(WithAnAgent):
         self.assertEqual(support.A_STAND_IN, ordinary_row["provider_name"])
         self.assertEqual(0, ordinary_row["session_resumed"])
         self.assertEqual(before, configuration_bytes("ava"))
+
+    def test_a_scoped_alias_has_its_own_environment_session_and_never_changes_the_default(self):
+        account = accounts.registered(support.A_STAND_IN, "work")
+        self.a_stand_in_told(self.agent, capabilities={"account_aliases": True})
+        before = configuration_bytes("ava")
+        seen = []
+        talking = turns.adapters.talking_to
+
+        def captured(named, env, *args, **kwargs):
+            seen.append((env.get("RUNDESK_PROVIDER_ALIAS"),
+                         env.get("RUNDESK_PROVIDER_ACCOUNT_HOME")))
+            return talking(named, env, *args, **kwargs)
+
+        with mock.patch.object(turns.adapters, "talking_to", side_effect=captured):
+            first = self.run_turn(self.asking(
+                provider_name=support.A_STAND_IN, provider_alias="work"))
+            ordinary = self.run_turn()
+            again = self.run_turn(self.asking(
+                provider_name=support.A_STAND_IN, provider_alias="work"))
+
+        self.assertEqual(0, kept.get_turn("ava", first.turn)["session_resumed"])
+        self.assertEqual(0, kept.get_turn("ava", ordinary.turn)["session_resumed"])
+        self.assertEqual(1, kept.get_turn("ava", again.turn)["session_resumed"])
+        self.assertEqual(
+            [("work", str(account.home)), (None, None), ("work", str(account.home))], seen)
+        self.assertEqual(before, configuration_bytes("ava"))
+
+    def test_an_explicit_missing_alias_is_refused_without_a_turn_or_fallback(self):
+        self.a_stand_in_told(self.agent, capabilities={"account_aliases": True})
+        with self.assertRaisesRegex(turns.NotRunnable, "not a registered alias"):
+            self.run_turn(self.asking(
+                provider_name=support.A_STAND_IN, provider_alias="missing"))
+        self.assertEqual([], kept.list_turns("ava"))
 
     def test_a_scoped_model_is_handed_to_the_selected_provider(self):
         seen = []

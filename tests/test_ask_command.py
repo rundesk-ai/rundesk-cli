@@ -27,7 +27,7 @@ from rundesk.delegations import admitting
 from rundesk.delegations import kept as delegations
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.gateways import standing
-from rundesk.providers import kept
+from rundesk.providers import accounts, adapters, kept
 from rundesk.utils import locking
 
 
@@ -240,6 +240,35 @@ class WhenOneAgentAsksAnother(support.Isolated):
                          (one.requested_provider_name, one.requested_model_name,
                           one.provider_name, one.model_name))
         self.assertEqual(before, records.read(directory.records("forge")))
+
+    def test_a_scoped_alias_is_immutable_provenance_without_changing_the_target_default(self):
+        account = accounts.registered(support.A_STAND_IN, "work")
+        before = records.read(directory.records("forge"))
+
+        with mock.patch.object(
+                adapters, "capabilities", return_value={"account_aliases": True}):
+            code, out, err = self.ask_from_ava(
+                "forge", "--provider", support.A_STAND_IN, "--alias", "work")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("handed to forge", out)
+        one = delegations.every("ava")[0]
+        self.assertEqual(
+            ("work", "work"),
+            (one.requested_provider_alias, one.provider_alias))
+        self.assertEqual(account.home, accounts.account_home(one.provider_name, one.provider_alias))
+        self.assertEqual(before, records.read(directory.records("forge")))
+
+    def test_a_missing_explicit_alias_is_refused_before_either_delegation_write(self):
+        with mock.patch.object(
+                adapters, "capabilities", return_value={"account_aliases": True}), \
+                mock.patch("rundesk.commands.ask.arriving.recorded_for_a_delegation") as recorded:
+            code, _out, err = self.ask_from_ava(
+                "forge", "--provider", support.A_STAND_IN, "--alias", "missing")
+        self.assertEqual(FAILED, code)
+        self.assertIn("not a registered alias", err)
+        recorded.assert_not_called()
+        self.assertEqual([], delegations.every("ava"))
 
     def test_model_only_captures_the_target_provider_and_requested_model(self):
         before = records.read(directory.records("forge"))

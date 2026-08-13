@@ -16,6 +16,7 @@ import ast
 import importlib.util
 import os
 import shutil
+import sqlite3
 import threading
 import unittest
 from datetime import datetime, timezone
@@ -1110,6 +1111,24 @@ class WhatThisReleaseReallyShips(support.Isolated):
         self.assertIsNone(migration.carry_one("cole"))
         self.assertEqual([step.id for step in migration.found()],
                          sorted(migration.recorded(directory.records("cole"))))
+
+    def test_account_alias_columns_are_optional_and_sessions_partition_by_alias(self):
+        directory.made("cole", "claude")
+        with records.writing(directory.records("cole")) as conn:
+            config_columns = {row[1] for row in conn.execute("PRAGMA table_info(config)")}
+            turn_columns = {row[1] for row in conn.execute("PRAGMA table_info(turns)")}
+            delegation_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(delegations)")}
+            session_pk = [row[1] for row in conn.execute(
+                "PRAGMA table_info(provider_sessions)") if row[5]]
+            self.assertIn("provider_alias", config_columns)
+            self.assertIn("provider_alias", turn_columns)
+            self.assertLessEqual(
+                {"requested_provider_alias", "provider_alias"}, delegation_columns)
+            self.assertEqual(
+                ["conversation_id", "provider_name", "provider_alias"], session_pk)
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute("UPDATE config SET provider_alias = 'default'")
 
 
 def _imports(module: Path):
