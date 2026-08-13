@@ -10,6 +10,7 @@ Run directly: `python3 tests/test_providers_turns.py`
 
 import contextlib
 import json
+import os
 import shutil
 import threading
 import time
@@ -19,8 +20,10 @@ from unittest import mock
 import support
 from rundesk.agents import directory, records
 from rundesk.channels import arriving
+from rundesk.commands import agents as agents_command
 from rundesk.commands import automatic_updates
 from rundesk.core import paths
+from rundesk.exits import OK
 from rundesk.providers import accounts, adapters, instructions, kept, protocol, turns
 from rundesk.utils import locking
 
@@ -518,6 +521,77 @@ class CarryingAConversationOn(WithAnAgent):
         self.assertEqual(
             [("work", str(account.home)), (None, None), ("work", str(account.home))], seen)
         self.assertEqual(before, configuration_bytes("ava"))
+
+    def test_a_relative_adapter_alias_resolves_and_resumes_without_rewriting_provenance(self):
+        adapter = self.home / "relative-provider"
+        shutil.copy2(support.A_STAND_IN, adapter)
+        adapter.chmod(0o755)
+        here = os.getcwd()
+        os.chdir(str(self.home))
+        self.addCleanup(os.chdir, here)
+        account = accounts.registered(str(adapter.resolve()), "work")
+        records.stated(directory.records(self.agent), {
+            "provider_name": str(adapter.resolve()), "provider_alias": "work"})
+        self.a_stand_in_told(self.agent, capabilities={"account_aliases": True})
+        seen = []
+        talking = turns.adapters.talking_to
+
+        def captured(named, env, *args, **kwargs):
+            seen.append((named, env.get("RUNDESK_PROVIDER_ACCOUNT_HOME")))
+            return talking(named, env, *args, **kwargs)
+
+        with mock.patch.object(turns.adapters, "talking_to", side_effect=captured), \
+                mock.patch.object(turns.adapters, "capabilities", return_value={
+                    "account_aliases": True, "resume": True}):
+            first = self.run_turn(self.asking(
+                provider_name="./relative-provider", provider_alias="work"))
+            second = self.run_turn()
+
+        self.assertEqual("./relative-provider", kept.get_turn(
+            self.agent, first.turn)["provider_name"])
+        self.assertEqual(str(adapter.resolve()), kept.get_turn(
+            self.agent, second.turn)["provider_name"])
+        self.assertEqual(1, kept.get_turn(self.agent, second.turn)["session_resumed"])
+        self.assertEqual(
+            [("./relative-provider", str(account.home)),
+             (str(adapter.resolve()), str(account.home))], seen)
+
+    def test_a_default_alias_switch_changes_only_turns_admitted_after_the_switch(self):
+        accounts.registered(support.A_STAND_IN, "work")
+        accounts.registered(support.A_STAND_IN, "personal")
+        records.stated(directory.records(self.agent), {"provider_alias": "work"})
+        admitted = threading.Event()
+        release = threading.Event()
+        results = []
+        seen = []
+        talking = turns.adapters.talking_to
+
+        def paused(named, env, *args, **kwargs):
+            seen.append(env.get("RUNDESK_PROVIDER_ALIAS"))
+            if len(seen) == 1:
+                admitted.set()
+                self.assertTrue(release.wait(PATIENCE))
+            return talking(named, env, *args, **kwargs)
+
+        with mock.patch.object(turns.adapters, "talking_to", side_effect=paused), \
+                mock.patch.object(turns.adapters, "capabilities", return_value={
+                    "account_aliases": True, "resume": True}):
+            running = threading.Thread(target=lambda: results.append(self.run_turn()))
+            running.start()
+            self.assertTrue(admitted.wait(PATIENCE))
+            self.assertEqual(OK, agents_command._configured(
+                self.agent, support.A_STAND_IN, provider_alias="personal"))
+            release.set()
+            running.join(PATIENCE)
+            self.assertFalse(running.is_alive())
+            results.append(self.run_turn())
+
+        self.assertEqual(["work", "personal"], seen)
+        self.assertEqual(
+            ["work", "personal"],
+            [kept.get_turn(self.agent, one.turn)["provider_alias"] for one in results])
+        self.assertEqual("personal", records.read(
+            directory.records(self.agent))["provider_alias"])
 
     def test_an_explicit_missing_alias_is_refused_without_a_turn_or_fallback(self):
         self.a_stand_in_told(self.agent, capabilities={"account_aliases": True})

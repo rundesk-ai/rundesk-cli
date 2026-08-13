@@ -1,5 +1,6 @@
 """Provider-neutral additional-account metadata, never credential custody."""
 
+import os
 import stat
 import unittest
 
@@ -32,6 +33,19 @@ class Accounts(support.Isolated):
         self.assertEqual([], list(one.home.iterdir()))
         self.assertEqual(0o700, stat.S_IMODE(one.home.stat().st_mode))
         self.assertEqual([one], accounts.known("mine"))
+
+    def test_relative_and_absolute_adapter_spellings_share_one_alias_registry(self):
+        adapter = paths.code() / adapters.SHIPPED_IN / "mine"
+        here = os.getcwd()
+        os.chdir(adapter.parent)
+        self.addCleanup(os.chdir, here)
+
+        one = accounts.registered("./mine", "work")
+
+        self.assertEqual(str(adapter.resolve()), one.provider_name)
+        self.assertEqual(one.home, accounts.account_home(str(adapter.resolve()), "work"))
+        with self.assertRaisesRegex(accounts.Refused, "already registered"):
+            accounts.registered(str(adapter.resolve()), "work")
 
     def test_a_missing_alias_never_falls_back_to_default(self):
         with self.assertRaisesRegex(accounts.Refused, "not a registered alias"):

@@ -42,7 +42,7 @@ from rundesk import __version__
 from rundesk.agents import directory, records
 from rundesk.channels import arriving, delivery, hosting
 from rundesk.channels import kept as channels_kept
-from rundesk.core import config
+from rundesk.core import config, paths
 from rundesk.providers import accounts, adapters, continuations, instructions, kept, protocol, turns
 from rundesk.schedules import due, firing
 from rundesk.schedules import kept as schedules_kept
@@ -714,30 +714,33 @@ class Gestures:
         if allowed is None or allowed != who:
             return ("Changing the brain is an agent-wide decision, so it can only be done on a "
                     "channel that one person uses.")
-        try:
-            adapters.where(wanted)
-        except Exception:                              # noqa: BLE001 — see below
-            # **Refused before anything is written**, and named against what this install has. A
-            # default nothing stands behind is an agent whose every turn fails from the next message
-            # on, and the person who typed it would be the last to find out.
-            known = ", ".join(f"**{one}**" for one in adapters.known()) or "none"
-            return f"There is no brain called **{wanted}**. This install has: {known}."
-        if wanted_alias:
+        with locking.only_one(paths.lock(), "this install"):
             try:
-                if not adapters.capabilities(wanted).get("account_aliases", False):
-                    return f"**{wanted}** does not support additional account aliases."
-                accounts.account_home(wanted, wanted_alias)
-            except accounts.Refused as why:
-                return str(why)
-        settled = records.read(directory.records(agent))
-        if (str(settled.get("provider_name") or "") == wanted
-                and settled.get("provider_alias") == wanted_alias):
-            return f"**{agent}** already answers on **{_shown_provider(wanted, wanted_alias)}**."
-        records.stated(directory.records(agent), {
-            "provider_name": wanted, "provider_alias": wanted_alias})
-        found = arriving.standing_in(agent, place)
-        if found is not None:
-            kept.forget_sessions(agent, found)
+                adapters.where(wanted)
+            except Exception:                          # noqa: BLE001 — see below
+                # **Refused before anything is written**, and named against what this install has.
+                known = ", ".join(f"**{one}**" for one in adapters.known()) or "none"
+                return f"There is no brain called **{wanted}**. This install has: {known}."
+            if wanted_alias:
+                try:
+                    if not adapters.capabilities(wanted).get("account_aliases", False):
+                        return f"**{wanted}** does not support additional account aliases."
+                    accounts.account_home(wanted, wanted_alias)
+                except accounts.Refused as why:
+                    return str(why)
+            settled = records.read(directory.records(agent))
+            same_provider = (accounts.same(
+                str(settled.get("provider_name") or ""), settled.get("provider_alias"),
+                wanted, wanted_alias) if wanted_alias else
+                str(settled.get("provider_name") or "") == wanted)
+            if same_provider and settled.get("provider_alias") == wanted_alias:
+                return f"**{agent}** already answers on **{_shown_provider(wanted, wanted_alias)}**."
+            records.stated(directory.records(agent), {
+                "provider_name": (adapters.canonical(wanted) if wanted_alias else wanted),
+                "provider_alias": wanted_alias})
+            found = arriving.standing_in(agent, place)
+            if found is not None:
+                kept.forget_sessions(agent, found)
         shown = _shown_provider(wanted, wanted_alias)
         return f"**{agent}** now uses **{shown}**. This conversation starts fresh."
 

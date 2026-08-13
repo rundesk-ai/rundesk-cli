@@ -332,6 +332,49 @@ class WhenOneAgentAsksAnother(support.Isolated):
         self.assertEqual("./relative-provider", one.requested_provider_name)
         self.assertEqual(str(provider.resolve()), one.provider_name)
 
+    def test_relative_alias_configuration_admission_and_removal_share_canonical_identity(self):
+        provider = self.home / "relative-provider"
+        provider.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        provider.chmod(0o755)
+        here = os.getcwd()
+        os.chdir(str(self.home))
+        self.addCleanup(os.chdir, here)
+        account = accounts.registered(str(provider.resolve()), "work")
+
+        with mock.patch.object(
+                adapters, "capabilities", return_value={"account_aliases": True}):
+            code, _out, err = self.rundesk(
+                "agents", "configure", "forge", "--provider", "./relative-provider",
+                "--alias", "work")
+            self.assertEqual(OK, code, err)
+            self.assertEqual(
+                (str(provider.resolve()), "work"),
+                (records.read(directory.records("forge"))["provider_name"],
+                 records.read(directory.records("forge"))["provider_alias"]))
+
+            code, _out, err = self.rundesk(
+                "providers", "aliases", "remove", str(provider.resolve()), "work", "--confirm")
+            self.assertEqual(FAILED, code)
+            self.assertIn("configured default", err)
+
+            code, _out, err = self.ask_from_ava("forge")
+            self.assertEqual(OK, code, err)
+            one = delegations.every("ava")[0]
+            self.assertEqual((None, None),
+                             (one.requested_provider_name, one.requested_provider_alias))
+            self.assertEqual((str(provider.resolve()), "work"),
+                             (one.provider_name, one.provider_alias))
+            self.assertEqual(account.home, accounts.account_home(
+                one.provider_name, one.provider_alias))
+
+            records.stated(directory.records("forge"), {
+                "provider_name": support.A_STAND_IN, "provider_alias": None})
+            code, _out, err = self.rundesk(
+                "providers", "aliases", "remove", "./relative-provider", "work", "--confirm")
+        self.assertEqual(FAILED, code)
+        self.assertIn(one.delegation_id, err)
+        self.assertTrue(account.home.exists())
+
     def test_an_unlisted_target_is_refused_before_either_delegation_write(self):
         records.stated(directory.records("ava"),
                        {"delegates_to": json.dumps(["forge"])})

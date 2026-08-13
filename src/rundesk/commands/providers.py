@@ -39,6 +39,7 @@ from rundesk.providers import (
     team,
     turns,
 )
+from rundesk.utils import locking
 from rundesk.utils.terminal import as_table
 
 TROUBLE = (accounts.Refused, adapters.NotRunnable, answering.Refused, directory.Refused,
@@ -184,40 +185,41 @@ def _aliases(args: argparse.Namespace) -> int:
     if what is None:
         return _failed("aliases was not told what to do",
                        "list them with: rundesk providers aliases list <provider>")
-    provider = _canonical_provider(args.provider)
-    _supports_aliases(provider)
-    if what == "list":
-        there = accounts.known(provider)
-        print(f"aliases for {args.provider} in {accounts.provider_at(provider)}")
-        if not there:
-            print("        no additional accounts registered")
+    with locking.only_one(paths.lock(), "this install"):
+        provider = _canonical_provider(args.provider)
+        _supports_aliases(provider)
+        if what == "list":
+            there = accounts.known(provider)
+            print(f"aliases for {args.provider} in {accounts.provider_at(provider)}")
+            if not there:
+                print("        no additional accounts registered")
+                return OK
+            as_table(("ALIAS", "STATUS"),
+                     [(one.alias, adapters.account_status(provider, one.alias, one.home))
+                      for one in there])
             return OK
-        as_table(("ALIAS", "STATUS"),
-                 [(one.alias, adapters.account_status(provider, one.alias, one.home))
-                  for one in there])
-        return OK
-    if what == "add":
-        one = accounts.registered(provider, args.alias)
-        print(f"registered {args.provider} ({one.alias})")
-        print(f"        home    {one.home}")
-        print(f"        status  {adapters.account_status(provider, one.alias, one.home)}")
-        print(f"        login   rundesk providers login {args.provider} --alias {one.alias}")
-        return OK
-    if what == "remove":
-        home = accounts.account_home(provider, args.alias)
-        if not args.confirm:
-            return _failed(
-                f"this would remove {args.provider} ({args.alias}) and its provider-owned home",
-                f"take   {home.parent if home else ''}",
-                "nothing was removed. To go ahead:",
-                f"rundesk providers aliases remove {args.provider} {args.alias} --confirm")
-        used = _alias_in_use(provider, args.alias, include_references=True)
-        if used:
-            return _failed(used, "nothing was removed")
-        gone = accounts.removed(provider, args.alias)
-        print(f"removed {args.provider} ({args.alias})")
-        print(f"        took   {gone}")
-        return OK
+        if what == "add":
+            one = accounts.registered(provider, args.alias)
+            print(f"registered {args.provider} ({one.alias})")
+            print(f"        home    {one.home}")
+            print(f"        status  {adapters.account_status(provider, one.alias, one.home)}")
+            print(f"        login   rundesk providers login {args.provider} --alias {one.alias}")
+            return OK
+        if what == "remove":
+            home = accounts.account_home(provider, args.alias)
+            if not args.confirm:
+                return _failed(
+                    f"this would remove {args.provider} ({args.alias}) and its provider-owned home",
+                    f"take   {home.parent if home else ''}",
+                    "nothing was removed. To go ahead:",
+                    f"rundesk providers aliases remove {args.provider} {args.alias} --confirm")
+            used = _alias_in_use(provider, args.alias, include_references=True)
+            if used:
+                return _failed(used, "nothing was removed")
+            gone = accounts.removed(provider, args.alias)
+            print(f"removed {args.provider} ({args.alias})")
+            print(f"        took   {gone}")
+            return OK
     raise AssertionError(f"providers aliases {what} is registered and answered by nothing")
 
 
@@ -241,17 +243,18 @@ def _account_login(named: str, alias: Optional[str]) -> int:
 
 
 def _account_logout(named: str, alias: Optional[str], confirming: bool) -> int:
-    provider = _canonical_provider(named)
-    home = accounts.account_home(provider, alias)
-    if not confirming:
-        return _failed(f"logout would target {_shown_account(named, alias)}",
-                       "nothing was logged out. To go ahead:",
-                       f"rundesk providers logout {named}"
-                       + (f" --alias {alias}" if alias else "") + " --confirm")
-    used = _alias_in_use(provider, alias, include_references=False)
-    if used:
-        return _failed(used, "nothing was logged out")
-    state = adapters.account_logout(provider, alias, home)
+    with locking.only_one(paths.lock(), "this install"):
+        provider = _canonical_provider(named)
+        home = accounts.account_home(provider, alias)
+        if not confirming:
+            return _failed(f"logout would target {_shown_account(named, alias)}",
+                           "nothing was logged out. To go ahead:",
+                           f"rundesk providers logout {named}"
+                           + (f" --alias {alias}" if alias else "") + " --confirm")
+        used = _alias_in_use(provider, alias, include_references=False)
+        if used:
+            return _failed(used, "nothing was logged out")
+        state = adapters.account_logout(provider, alias, home)
     if state != "signed_out":
         return _failed(f"{_shown_account(named, alias)} logout did not earn signed-out status")
     print(f"{_shown_account(named, alias)}: signed_out")
@@ -275,18 +278,18 @@ def _alias_in_use(provider: str, alias: Optional[str], include_references: bool)
     """Why this exact account boundary cannot change now, or an empty string."""
     for agent in directory.known():
         for row in kept.list_unfinished_turns(agent):
-            if row["provider_name"] == provider and row.get("provider_alias") == alias:
+            if accounts.same(str(row["provider_name"]), row.get("provider_alias"), provider, alias):
                 if turns.standing(agent, int(row["conversation_id"])) is not False:
                     return (f"{_shown_account(provider, alias)} has an active turn for {agent}; "
                             "its account cannot change underneath it")
         if not include_references or alias is None:
             continue
         configured = records.read(directory.records(agent))
-        if (configured.get("provider_name") == provider
-                and configured.get("provider_alias") == alias):
+        if accounts.same(str(configured.get("provider_name") or ""),
+                         configured.get("provider_alias"), provider, alias):
             return f"{agent} uses {_shown_account(provider, alias)} as its configured default"
         for one in delegations.outstanding(agent):
-            if one.provider_name == provider and one.provider_alias == alias:
+            if accounts.same(one.provider_name, one.provider_alias, provider, alias):
                 return f"{one.delegation_id} still uses {_shown_account(provider, alias)}"
     return ""
 

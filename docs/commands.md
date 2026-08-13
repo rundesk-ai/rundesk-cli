@@ -1229,7 +1229,9 @@ pipe.
 An omitted account alias is the provider's ordinary account and preserves previous behavior.
 `default` is reserved. `login` and `logout` are interactive official provider commands; Rundesk does
 not accept or display credentials. Removal and logout refuse an account used by an active turn, and
-removal also refuses configured agent defaults and unsettled delegations.
+removal also refuses configured agent defaults and unsettled delegations. Login and ordinary default
+changes remain available during active work; prior admission stays fixed and later turns see the
+new selection. Destructive account changes serialize with durable references and turn admission.
 
 The brains this install can run. A provider is a **program rundesk runs**, never code it loads, so
 this asks about programs — where each one is, and what it says it can do. All three verbs are

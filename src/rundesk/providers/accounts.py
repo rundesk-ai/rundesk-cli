@@ -42,7 +42,19 @@ def alias_trouble(alias: str) -> str:
 
 def provider_at(provider_name: str) -> Path:
     """The registry directory for one canonical provider identity."""
-    return paths.provider_accounts() / adapters.key(provider_name)
+    return paths.provider_accounts() / adapters.key(adapters.canonical(provider_name))
+
+
+def same(provider_name: str, alias: Optional[str], other_provider: str,
+         other_alias: Optional[str]) -> bool:
+    """Whether two spellings name the same exact provider account boundary.
+
+    Provider spelling is provenance everywhere else. Only an account decision collapses a path
+    spelling to the adapter program behind it, so ``./adapter`` cannot acquire a second alias
+    registry or evade an active/reference check against its absolute spelling.
+    """
+    return alias == other_alias and adapters.canonical(provider_name) == adapters.canonical(
+        other_provider)
 
 
 def alias_at(provider_name: str, alias: str) -> Path:
@@ -71,7 +83,8 @@ def known(provider_name: str) -> List[Account]:
     root = provider_at(provider_name)
     if not root.is_dir() or root.is_symlink():
         return []
-    return [Account(provider_name, one.name, one / HOME)
+    canonical = adapters.canonical(provider_name)
+    return [Account(canonical, one.name, one / HOME)
             for one in sorted(root.iterdir(), key=lambda item: item.name.casefold())
             if one.is_dir() and not one.is_symlink() and alias_trouble(one.name) == ""]
 
@@ -92,7 +105,7 @@ def registered(provider_name: str, alias: str) -> Account:
     home = at / HOME
     home.mkdir(mode=0o700)
     os.chmod(home, 0o700)
-    return Account(provider_name, alias, home)
+    return Account(adapters.canonical(provider_name), alias, home)
 
 
 def removed(provider_name: str, alias: str) -> Path:

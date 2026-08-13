@@ -143,7 +143,10 @@ only `authenticated`, `signed_out`, or `unable_to_check`; it never reads or prin
 or credential fields. Claude aliases set `CLAUDE_CONFIG_DIR` to their private provider-owned home.
 The omitted account does not add or change that variable. Explicit delegation aliases are immutable
 through admission, child turn, environment, and session; a missing alias fails rather than falling
-back.
+back. Logout and removal refuse the exact account while a turn is active; login and ordinary default
+changes are allowed, and an admitted turn keeps its resolved selection while later turns receive the
+new default. Relative and absolute path spellings share one alias registry and aliased session
+identity; explicit delegation keeps requested spelling separate from canonical effective identity.
 
 A saved handle is resumed only when this provider's latest turn has the same instruction
 fingerprint as the prompt being composed now. A changed access mode, operating rule, owner addition,

@@ -15,17 +15,24 @@ because a schedule that cannot be tried by hand is a schedule nobody can debug.
 Run directly: `python3 tests/test_providers_command.py`
 """
 
+import threading
 import unittest
+from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest import mock
 
 import support
 from rundesk.agents import directory, records
+from rundesk.channels import arriving
+from rundesk.commands import agents as agents_command
+from rundesk.commands import providers as providers_command
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.gateways import standing
 from rundesk.providers import adapters, instructions, kept, turns
 from rundesk.schedules import kept as schedules_kept
 from rundesk.skills import grants
+from rundesk.utils import locking
 
 #: The smallest legitimate adapter: it answers `--capabilities` and can do nothing.
 SAYS_NOTHING = """#!/bin/sh
@@ -176,6 +183,126 @@ fi
         self.assertEqual(FAILED, code)
         self.assertIn("active turn", err)
         logged_out.assert_not_called()
+
+    def test_login_is_allowed_while_an_admitted_turn_keeps_its_selection(self):
+        self.an_agent(provider="a-brain")
+        active = {"provider_name": "a-brain", "provider_alias": None,
+                  "conversation_id": 7}
+        with mock.patch.object(kept, "list_unfinished_turns", return_value=[active]), \
+                mock.patch.object(turns, "standing", return_value=True), \
+                mock.patch.object(
+                    adapters, "account_login", return_value="authenticated") as logged_in:
+            code, _out, err = self.rundesk("providers", "login", "a-brain")
+        self.assertEqual(OK, code, err)
+        logged_in.assert_called_once()
+
+    def test_logout_serializes_with_the_durable_turn_admission_decision(self):
+        """A turn cannot resolve an account while provider-owned logout invalidates it."""
+        agent = self.an_agent(provider="a-brain")
+        conversation = arriving.asked_at_a_terminal(agent, "wait for authentication").conversation
+        logout_entered = threading.Event()
+        release_logout = threading.Event()
+        admission_waiting = threading.Event()
+        order = []
+        results = {}
+        lock_paths = {}
+        original_lock = locking.only_one
+
+        def paused_logout(*_args):
+            logout_entered.set()
+            self.assertTrue(release_logout.wait(2))
+            order.append("logout")
+            return "signed_out"
+
+        @contextmanager
+        def observed_lock(*args, **kwargs):
+            lock_paths[threading.current_thread().name] = args[0].resolve()
+            if threading.current_thread().name == "admission":
+                admission_waiting.set()
+            with original_lock(*args, **kwargs) as waited:
+                yield waited
+
+        def logout():
+            results["logout"] = providers_command._account_logout("a-brain", None, True)
+
+        def admit():
+            results["admission"] = turns._admit(turns.Request(
+                agent=agent, prompt="wait for authentication", conversation=conversation))
+            order.append("admission")
+
+        with mock.patch.object(adapters, "account_logout", side_effect=paused_logout), \
+                mock.patch.object(locking, "only_one", side_effect=observed_lock):
+            logout_thread = threading.Thread(target=logout, name="logout")
+            admission_thread = threading.Thread(target=admit, name="admission")
+            logout_thread.start()
+            self.assertTrue(logout_entered.wait(2))
+            admission_thread.start()
+            self.assertTrue(admission_waiting.wait(2))
+            self.assertEqual([], kept.list_turns(agent),
+                             "turn admission crossed the provider authentication change")
+            release_logout.set()
+            logout_thread.join(2)
+            admission_thread.join(2)
+
+        self.assertFalse(logout_thread.is_alive())
+        self.assertFalse(admission_thread.is_alive())
+        self.assertEqual(["logout", "admission"], order)
+        self.assertEqual(lock_paths["logout"], lock_paths["admission"])
+        self.assertEqual(OK, results["logout"])
+        self.assertEqual(1, len(kept.list_turns(agent)))
+
+    def test_alias_removal_waits_for_configuration_validation_and_its_write(self):
+        account = providers_command.accounts.registered("a-brain", "work")
+        agent = self.an_agent(provider="a-brain")
+        alias_checked = threading.Event()
+        release_configuration = threading.Event()
+        removal_waiting = threading.Event()
+        results = {}
+        lock_paths = {}
+        original_check = agents_command._checked_alias
+        original_lock = locking.only_one
+
+        def paused_check(provider, alias):
+            original_check(provider, alias)
+            alias_checked.set()
+            self.assertTrue(release_configuration.wait(2))
+
+        @contextmanager
+        def observed_lock(*args, **kwargs):
+            lock_paths[threading.current_thread().name] = args[0].resolve()
+            if threading.current_thread().name == "removal":
+                removal_waiting.set()
+            with original_lock(*args, **kwargs) as waited:
+                yield waited
+
+        def configure():
+            results["configure"] = agents_command._configured(
+                agent, "a-brain", provider_alias="work")
+
+        def remove():
+            results["remove"] = providers_command._aliases(SimpleNamespace(
+                alias_what="remove", provider="a-brain", alias="work", confirm=True))
+
+        with mock.patch.object(agents_command, "_checked_alias", side_effect=paused_check), \
+                mock.patch.object(locking, "only_one", side_effect=observed_lock):
+            configuration = threading.Thread(target=configure, name="configuration")
+            removal = threading.Thread(target=remove, name="removal")
+            configuration.start()
+            self.assertTrue(alias_checked.wait(2))
+            removal.start()
+            self.assertTrue(removal_waiting.wait(2))
+            self.assertTrue(account.home.exists())
+            release_configuration.set()
+            configuration.join(2)
+            removal.join(2)
+
+        self.assertFalse(configuration.is_alive())
+        self.assertFalse(removal.is_alive())
+        self.assertEqual(lock_paths["configuration"], lock_paths["removal"])
+        self.assertEqual(OK, results["configure"])
+        self.assertEqual(FAILED, results["remove"])
+        self.assertEqual("work", records.read(directory.records(agent))["provider_alias"])
+        self.assertTrue(account.home.exists())
 
     def test_default_is_reserved_for_the_implicit_provider_account(self):
         code, _out, err = self.rundesk(

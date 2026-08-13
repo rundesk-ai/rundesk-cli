@@ -415,23 +415,34 @@ def _collected_what_came_back(name: str, where, answering: Answering) -> None:
             if current.stop_asked_at is not None and said.turn_status == STOPPED:
                 kept.stopped(name, current.delegation_id)
                 continue
-            try:
-                admitted = answering.review_this(
-                    name, current.parent_conversation, said, current.to_agent,
-                    current.delegation_id, said.answer_id)
-            except Exception as why:  # noqa: BLE001 — see `looked`
-                logs.note(
-                    where, f"the answer to {current.delegation_id} could not be delivered ({why})",
-                    logs.ERROR)
+        # A review may start a provider turn on another thread. That turn's account admission takes
+        # the install lock, so waiting for it while holding the same process-wide lock deadlocks:
+        # reentrancy is deliberately per thread. Release around that wait, then validate the exact
+        # delegation phase and target answer again before settling it. Guidance moves `latest_at`
+        # under this lock and a carried-on target has a different terminal turn, so neither can be
+        # orphaned in this gap. The result message itself has a stable external id, making two
+        # collectors converging here one durable delivery rather than two.
+        try:
+            admitted = answering.review_this(
+                name, current.parent_conversation, said, current.to_agent,
+                current.delegation_id, said.answer_id)
+        except Exception as why:  # noqa: BLE001 — see `looked`
+            logs.note(
+                where, f"the answer to {current.delegation_id} could not be delivered ({why})",
+                logs.ERROR)
+            continue
+        if not admitted:
+            continue
+        with locking.only_one(paths.lock(), f"settlement of {one.delegation_id}"):
+            latest = kept.one(name, one.delegation_id)
+            if (latest.answered_at or latest.stopped_at
+                    or latest.latest_at != current.latest_at):
                 continue
-            # **Settled only after a receiving turn owns the durable result.** An attended parent in
-            # another process can be busy for minutes; marking first would orphan the result because
-            # no in-memory turn here can steer it. The next gateway pass retries the same deduplicated
-            # message until a live or newly started turn claims it.
-            if not admitted:
+            still_said = _what_they_answered(
+                latest.to_agent, name, latest.parent_turn, latest.delegation_id)
+            if still_said is None or still_said.answer_id != said.answer_id:
                 continue
-            if not kept.answered(name, current.delegation_id):
-                continue
+            kept.answered(name, latest.delegation_id)
 
 
 def _showed_what_is_happening(name: str, carrying: Carrying, answering: Answering) -> None:

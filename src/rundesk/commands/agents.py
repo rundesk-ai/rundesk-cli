@@ -29,7 +29,6 @@ connected to a platform as an agent that is gone.
 """
 
 import argparse
-import contextlib
 import sqlite3
 import sys
 from pathlib import Path
@@ -312,14 +311,16 @@ def _made(name: str, provider: Optional[str], describes: Optional[str] = None,
     trouble = _provider_trouble(provider, f"rundesk agents add {name} --provider <provider>")
     if trouble:
         return _failed(trouble, "nothing was made")
-    if provider_alias is not None:
-        try:
-            _checked_alias(provider or "", provider_alias)
-        except (accounts.Refused, adapters.NotRunnable) as why:
-            return _failed(str(why), "nothing was made")
-
     try:
-        at = directory.made(name, provider or "", describes or "", role, provider_alias)
+        with locking.only_one(paths.lock(), "this install"):
+            durable_provider = provider or ""
+            if provider_alias is not None:
+                _checked_alias(provider or "", provider_alias)
+                durable_provider = adapters.canonical(provider or "")
+            # `directory.made` takes this reentrant lock while the directory moves. Keeping the
+            # account lookup and creation in the same outer decision prevents alias removal from
+            # landing between validation and the durable agent reference.
+            at = directory.made(name, durable_provider, describes or "", role, provider_alias)
     except TROUBLE as why:
         return _failed(str(why), "nothing was made")
 
@@ -378,11 +379,6 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
     if provider_alias is not None and provider is None:
         return _failed("--alias requires --provider so it cannot be interpreted against a moving "
                        "agent default", "nothing was changed")
-    if provider_alias is not None:
-        try:
-            _checked_alias(provider or "", provider_alias)
-        except (accounts.Refused, adapters.NotRunnable) as why:
-            return _failed(str(why), "nothing was changed")
     if describes is not None:
         trouble = directory.describes_trouble(describes)
         if trouble:
@@ -395,16 +391,17 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
                            "nothing was changed")
 
     try:
-        guarded = (locking.only_one(paths.lock(), "this install") if changing_delegation
-                   else contextlib.nullcontext())
-        with guarded:
-            # Scope validation and its write are one install-state decision. Agent removal and
-            # direct handoff admission use this same lock, so a target cannot disappear after it
-            # was validated and a completed revocation cannot be followed by a stale read.
+        with locking.only_one(paths.lock(), "this install"):
+            # Scope and provider-account validation and their one write are an install-state
+            # decision. Agent/alias removal and direct handoff admission use this same lock, so a
+            # completed removal cannot be followed by a stale durable reference.
             gone_wrong = directory.not_an_agent(name)
             if gone_wrong:
                 return _failed(gone_wrong, "see what there is with: rundesk agents",
                                "nothing was changed")
+
+            if provider_alias is not None:
+                _checked_alias(provider or "", provider_alias)
 
             scope = None
             if delegate_to is not None:
@@ -414,7 +411,11 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
 
             moving: Dict[str, Any] = {}
             if provider is not None:
-                moving["provider_name"] = provider
+                # An aliased provider is an account-boundary identity. Keep the requested spelling
+                # for the command's display, while the durable default is the adapter program that
+                # future turns must find from any working directory.
+                moving["provider_name"] = (adapters.canonical(provider)
+                                           if provider_alias is not None else provider)
                 moving["provider_alias"] = provider_alias
             if describes is not None:
                 # `None` rather than `""`, so an agent nobody has described and one described as

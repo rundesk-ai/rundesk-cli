@@ -203,6 +203,23 @@ class Outcome(NamedTuple):
         return self.turn_status == kept.DONE
 
 
+class _TurnAdmission(NamedTuple):
+    """Resolved turn state whose account reference and row were decided under one install lock."""
+
+    settled: Dict[str, Any]
+    provider_name: str
+    provider_alias: Optional[str]
+    account_home: Any
+    settings: Optional[str]
+    effective_model: Optional[str]
+    can: Dict[str, Any]
+    teammates: str
+    prompt: instructions.Prompt
+    resume: Optional[str]
+    began: float
+    turn: int
+
+
 @contextlib.contextmanager
 def claiming(agent: str, conversation: int, waiting: bool = False) -> Iterator[int]:
     """Take this conversation's claim for the length of the block. `Busy` when somebody has it.
@@ -730,87 +747,9 @@ def _held(request: Request, held: int, watching, saying,
           admitted: Optional[Callable[[], None]] = None) -> Outcome:
     """One turn, with the conversation already claimed."""
     agent = request.agent
-    # **Resolved before anything is written down.** A provider nothing stands behind is a turn that
-    # cannot start, and a row saying one was admitted would be a record of something that never was.
-    settled = records.read(directory.records(agent))
-    configured_provider = str(settled.get("provider_name") or "")
-    configured_alias = settled.get("provider_alias")
-    provider_name = (request.provider_name if request.provider_name is not None
-                     else configured_provider)
-    adapters.where(provider_name)
-    provider_alias = (request.provider_alias if request.provider_name is not None
-                      else configured_alias)
-    try:
-        account_home = accounts.account_home(provider_name, provider_alias)
-    except accounts.Refused as why:
-        raise NotRunnable(str(why)) from why
-    settings = (_as_settings(settled.get("agent_settings"))
-                if request.provider_name is None or provider_name == configured_provider else None)
-    effective_model = request.model_name
-    if effective_model is None and request.provider_name is None:
-        effective_model = settled.get("model_name")
-    can = protocol.parse_capabilities(adapters.capabilities(provider_name, settings))
-    if provider_alias is not None and not can.get("account_aliases"):
-        raise NotRunnable(f"the {provider_name} adapter does not support account aliases")
-
-    # A person-facing or scheduled work turn may hand off mutable work. Delegated turns remain
-    # depth one, and read mode forbids creating a handoff.
-    may_hand_off = (request.situation in (instructions.USER_TO_AGENT,
-                                          instructions.SCHEDULE_TO_AGENT)
-                    and request.access_mode != protocol.ACCESS_READ)
-    teammates = team.for_agent(agent) if may_hand_off else ""
-    prompt = instructions.build(situation=request.situation,
-                                variables=_about(request, provider_name),
-                                additions=request.additions,
-                                # Who this agent may hand work to, read now rather than kept: an
-                                # agent added this morning is one it can delegate to this afternoon,
-                                # and a list cached anywhere would be a list that goes stale
-                                # silently. Illegal situations receive no listing at all.
-                                team=teammates)
-    resume = (None if request.fresh else kept.get_session(
-        agent, request.conversation, provider_name, provider_alias))
-    if request.lifecycle_continuation:
-        safe_resume = bool(
-            resume
-            and can.get("resume") is True
-            and provider_name == request.expected_provider
-            and provider_alias == request.expected_provider_alias
-            and prompt.sha256 == request.expected_instructions
-            and kept.latest_instructions(
-                agent, request.conversation, provider_name,
-                provider_alias) == request.expected_instructions)
-        if not safe_resume:
-            if resume:
-                # Never leave an unsafe handle available for the following turn to revive.
-                kept.delete_session(agent, request.conversation, provider_name, provider_alias)
-            resume = None
-    if (resume and kept.latest_instructions(
-            agent, request.conversation, provider_name, provider_alias) != prompt.sha256):
-        # Some brains bind the preface when a session starts and accept-but-ignore replacements on
-        # resume. Throw the stale handle away, rather than merely skipping it once: if this fresh
-        # attempt fails before returning a new handle, the next turn must not revive old authority.
-        kept.delete_session(agent, request.conversation, provider_name, provider_alias)
-        resume = None
-    # **From admitted to settled** (R-DIS-24) — what somebody waiting actually experienced, which
-    # starts here and not when the brain was reached: resolving a provider and building the prompt
-    # are part of the wait. Monotonic, so a clock correction mid-turn cannot make it negative.
-    began = time.monotonic()
-    turn = kept.add_turn(agent, {
-        "conversation_id": request.conversation,
-        "schedule_id": request.schedule_id,
-        # **Written beside the id, because the id does not survive the schedule.** The foreign key
-        # is `ON DELETE SET NULL`, so a schedule taken away detaches every turn it ever ran and the
-        # ledger forgets who spent the cost. The name is derived here already for the layers.
-        "schedule_name": _schedule_name(request) or None,
-        "provider_name": provider_name,
-        "provider_alias": provider_alias,
-        "model_name": effective_model if request.provider_name is not None else request.model_name,
-        "access_mode": request.access_mode,
-        "provider_capabilities": json.dumps(can, sort_keys=True),
-        "session_resumed": 1 if resume else 0,
-        "instructions_sha256": prompt.sha256,
-        "instructions_bytes": prompt.total_bytes,
-    })
+    admitted_turn = _admit(request)
+    (_settled, provider_name, provider_alias, account_home, settings, effective_model, can,
+     teammates, prompt, resume, began, turn) = admitted_turn
 
     with _settled_whatever_happens(agent, turn) as settling:
         arriving.handled_by_turn(agent, request.conversation, request.inbound_messages, turn)
@@ -861,6 +800,83 @@ def _held(request: Request, held: int, watching, saying,
             began_at, _how_big(raw), time.monotonic() - began, ours=ours,
             provider_alias=provider_alias))
     return settling.outcome
+
+
+def _admit(request: Request) -> _TurnAdmission:
+    """Resolve and record a turn without an account change crossing its admission boundary."""
+    agent = request.agent
+    with locking.only_one(paths.lock(), "this install"):
+        # **Resolved before anything is written down.** A provider nothing stands behind is a turn
+        # that cannot start, and a row claiming admission would record something that never was.
+        settled = records.read(directory.records(agent))
+        configured_provider = str(settled.get("provider_name") or "")
+        configured_alias = settled.get("provider_alias")
+        provider_name = (request.provider_name if request.provider_name is not None
+                         else configured_provider)
+        adapters.where(provider_name)
+        provider_alias = (request.provider_alias if request.provider_name is not None
+                          else configured_alias)
+        try:
+            account_home = accounts.account_home(provider_name, provider_alias)
+        except accounts.Refused as why:
+            raise NotRunnable(str(why)) from why
+        settings = (_as_settings(settled.get("agent_settings"))
+                    if request.provider_name is None or provider_name == configured_provider
+                    else None)
+        effective_model = request.model_name
+        if effective_model is None and request.provider_name is None:
+            effective_model = settled.get("model_name")
+        can = protocol.parse_capabilities(adapters.capabilities(provider_name, settings))
+        if provider_alias is not None and not can.get("account_aliases"):
+            raise NotRunnable(f"the {provider_name} adapter does not support account aliases")
+
+        may_hand_off = (request.situation in (instructions.USER_TO_AGENT,
+                                              instructions.SCHEDULE_TO_AGENT)
+                        and request.access_mode != protocol.ACCESS_READ)
+        teammates = team.for_agent(agent) if may_hand_off else ""
+        prompt = instructions.build(situation=request.situation,
+                                    variables=_about(request, provider_name),
+                                    additions=request.additions, team=teammates)
+        resume = (None if request.fresh else kept.get_session(
+            agent, request.conversation, provider_name, provider_alias))
+        if request.lifecycle_continuation:
+            safe_resume = bool(
+                resume and can.get("resume") is True
+                and provider_name == request.expected_provider
+                and provider_alias == request.expected_provider_alias
+                and prompt.sha256 == request.expected_instructions
+                and kept.latest_instructions(
+                    agent, request.conversation, provider_name,
+                    provider_alias) == request.expected_instructions)
+            if not safe_resume:
+                if resume:
+                    kept.delete_session(agent, request.conversation, provider_name, provider_alias)
+                resume = None
+        if (resume and kept.latest_instructions(
+                agent, request.conversation, provider_name, provider_alias) != prompt.sha256):
+            kept.delete_session(agent, request.conversation, provider_name, provider_alias)
+            resume = None
+
+        began = time.monotonic()
+        turn = kept.add_turn(agent, {
+            "conversation_id": request.conversation,
+            "schedule_id": request.schedule_id,
+            "schedule_name": _schedule_name(request) or None,
+            # Requested spelling remains durable provenance; only account lookup/session identity
+            # canonicalize a path adapter.
+            "provider_name": provider_name,
+            "provider_alias": provider_alias,
+            "model_name": (effective_model if request.provider_name is not None
+                           else request.model_name),
+            "access_mode": request.access_mode,
+            "provider_capabilities": json.dumps(can, sort_keys=True),
+            "session_resumed": 1 if resume else 0,
+            "instructions_sha256": prompt.sha256,
+            "instructions_bytes": prompt.total_bytes,
+        })
+        return _TurnAdmission(
+            settled, provider_name, provider_alias, account_home, settings, effective_model, can,
+            teammates, prompt, resume, began, turn)
 
 
 def admitted_message(agent: str, turn: int, message: int) -> bool:

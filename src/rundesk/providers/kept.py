@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional
 
 from rundesk.agents import directory, records
 from rundesk.core import config
-from rundesk.providers import protocol
+from rundesk.providers import adapters, protocol
 
 #: The tables, named once each.
 TURNS = "turns"
@@ -273,6 +273,7 @@ def sweep_turn_records(agent: str, keeping_days: int,
 def get_session(agent: str, conversation: int, provider_name: str,
                 provider_alias: Optional[str] = None) -> Optional[str]:
     """The handle this conversation got to on this brain, or `None` for a fresh one."""
+    provider_name = _session_provider(provider_name, provider_alias)
     with records.reading(directory.records(agent)) as conn:
         got = _rows(conn, agent,
                     f"SELECT session_id FROM {SESSIONS} WHERE conversation_id = ? "
@@ -292,16 +293,20 @@ def latest_instructions(agent: str, conversation: int,
     the saved handle is not safe to carry into the next turn.
     """
     with records.reading(directory.records(agent)) as conn:
-        got = _rows(
+        rows = _rows(
             conn, agent,
-            f"SELECT instructions_sha256 FROM {TURNS} "
-            "WHERE conversation_id = ? AND provider_name = ? "
-            "AND provider_alias IS ? ORDER BY id DESC LIMIT 1",
-            (conversation, provider_name, provider_alias),
-        ).fetchone()
-    if got is None or got["instructions_sha256"] is None:
-        return None
-    return str(got["instructions_sha256"])
+            f"SELECT provider_name, instructions_sha256 FROM {TURNS} "
+            "WHERE conversation_id = ? AND provider_alias IS ? ORDER BY id DESC",
+            (conversation, provider_alias),
+        ).fetchall()
+    wanted = _session_provider(provider_name, provider_alias)
+    for got in rows:
+        if _session_provider(str(got["provider_name"]), provider_alias) != wanted:
+            continue
+        if got["instructions_sha256"] is None:
+            return None
+        return str(got["instructions_sha256"])
+    return None
 
 
 def save_session(agent: str, conversation: int, provider_name: str, session_id: str,
@@ -312,6 +317,7 @@ def save_session(agent: str, conversation: int, provider_name: str, session_id: 
     at all, and a turn admitted in that moment would start a fresh conversation and throw away
     everything the last one had.
     """
+    provider_name = _session_provider(provider_name, provider_alias)
     with records.writing(directory.records(agent)) as conn:
         _rows(conn, agent,
               f"INSERT INTO {SESSIONS} (conversation_id, provider_name, provider_alias, session_id) "
@@ -326,11 +332,17 @@ def delete_session(agent: str, conversation: int, provider_name: str,
 
     A row that was not there is not a failure: starting fresh is what was asked for either way.
     """
+    provider_name = _session_provider(provider_name, provider_alias)
     with records.writing(directory.records(agent)) as conn:
         _rows(conn, agent,
               f"DELETE FROM {SESSIONS} WHERE conversation_id = ? AND provider_name = ? "
               "AND provider_alias = ?",
               (conversation, provider_name, provider_alias or ""))
+
+
+def _session_provider(provider_name: str, provider_alias: Optional[str]) -> str:
+    """Session identity for an alias, without changing ordinary default-account behaviour."""
+    return adapters.canonical(provider_name) if provider_alias is not None else provider_name
 
 
 def forget_sessions(agent: str, conversation: int) -> int:

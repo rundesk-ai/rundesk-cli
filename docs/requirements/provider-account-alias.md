@@ -12,9 +12,13 @@ Status: implemented with offline fixture evidence; manual two-account validation
 - R-PAA-5: An explicit missing or unsupported alias fails without fallback.
 - R-PAA-6: Login, status, and logout are provider-owned. Rundesk reports normalized state only and
   never reads, copies, exports, prints, backs up, or synchronizes provider credentials.
-- R-PAA-7: Account removal/logout cannot change an active turn's boundary; removal also refuses
-  configured defaults and unsettled delegations.
+- R-PAA-7: Logout/removal cannot invalidate an active turn's account boundary. Durable registry,
+  configuration, reference, delegation, and turn-admission decisions serialize on the install lock;
+  removal also refuses configured defaults and unsettled delegations. Login and ordinary default
+  changes remain allowed during active work and affect only later admission selections.
 - R-PAA-8: No rotation, pooling, quota/rate-limit evasion, or credential sharing is provided.
+- R-PAA-9: Path adapter spellings retain requested/display provenance, while alias registries,
+  account references, and aliased session identity use the adapter's canonical path.
 
 ## Acceptance
 
