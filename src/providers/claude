@@ -262,7 +262,7 @@ def account_status() -> int:
         got = subprocess.run([CLAUDE, "auth", "status", "--json"], capture_output=True,
                              text=True, timeout=VERSION_WITHIN, check=False,
                              env=the_environment())
-        body = json.loads(got.stdout) if got.returncode == 0 else {}
+        body = json.loads(got.stdout) if got.returncode in (0, 1) else {}
     except (OSError, ValueError, subprocess.SubprocessError):
         body = {}
     if isinstance(body, dict) and body.get("loggedIn") is True:

@@ -186,16 +186,17 @@ class Capabilities(support.Isolated):
 
 
 class AccountManagement(support.Isolated):
-    def fake_claude(self):
+    def fake_claude(self, status='{"loggedIn": true, "email": "not-exported"}', code=0):
         instead = self.home / "bin"
-        instead.mkdir()
+        instead.mkdir(exist_ok=True)
         observed = self.home / "observed-config-dir"
         brain = instead / "claude"
         brain.write_text(
             "#!/bin/sh\n"
             f"printf '%s' \"${{CLAUDE_CONFIG_DIR-unset}}\" > {observed}\n"
             "if [ \"$1 $2 $3\" = 'auth status --json' ]; then\n"
-            "  printf '%s\\n' '{\"loggedIn\": true, \"email\": \"not-exported\"}'\n"
+            f"  printf '%s\\n' '{status}'\n"
+            f"  exit {code}\n"
             "fi\n",
             encoding="utf-8")
         brain.chmod(0o755)
@@ -226,6 +227,25 @@ class AccountManagement(support.Isolated):
             timeout=PATIENCE, env=env, check=False)
         self.assertEqual(0, got.returncode)
         self.assertEqual(str(account_home), observed.read_text(encoding="utf-8"))
+
+    def test_signed_out_status_is_authoritative_when_claude_exits_one(self):
+        instead, _observed = self.fake_claude('{"loggedIn": false}', code=1)
+        got = subprocess.run(
+            [str(ADAPTER), "--account-status"], capture_output=True, text=True,
+            timeout=PATIENCE, env={"PATH": f"{instead}:/usr/bin:/bin"}, check=False)
+        self.assertEqual(0, got.returncode)
+        self.assertEqual({"state": "signed_out"}, json.loads(got.stdout))
+
+    def test_malformed_missing_and_unexpected_status_results_are_not_authoritative(self):
+        fixtures = (("not-json", 1), ("", 1), ('{"loggedIn": false}', 2))
+        for status, code in fixtures:
+            with self.subTest(status=status, code=code):
+                instead, _observed = self.fake_claude(status, code=code)
+                got = subprocess.run(
+                    [str(ADAPTER), "--account-status"], capture_output=True, text=True,
+                    timeout=PATIENCE, env={"PATH": f"{instead}:/usr/bin:/bin"}, check=False)
+                self.assertEqual(1, got.returncode)
+                self.assertEqual({"state": "unable_to_check"}, json.loads(got.stdout))
 
 
 class OneCapturedTurn(support.Isolated):
