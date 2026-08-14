@@ -27,6 +27,7 @@ from unittest import mock
 import support
 from rundesk.agents import directory, migration, records
 from rundesk.core import config, paths
+from rundesk.providers import kept
 from rundesk.utils import files
 
 #: How long a case waits for the threads it started. Generous, because it is there to end a wedged
@@ -1111,6 +1112,44 @@ class WhatThisReleaseReallyShips(support.Isolated):
         self.assertIsNone(migration.carry_one("cole"))
         self.assertEqual([step.id for step in migration.found()],
                          sorted(migration.recorded(directory.records("cole"))))
+
+    def test_an_existing_provider_session_survives_in_the_implicit_default_partition(self):
+        before_alias = self.home / "before-account-alias"
+        before_alias.mkdir()
+        alias_step = next(step for step in migration.found()
+                          if step.id == "0012_the_account_alias_one_provider_uses")
+        for step in migration.found():
+            if step.order < alias_step.order:
+                shutil.copy2(step.at, before_alias / step.at.name)
+
+        at = directory.where("cole")
+        (at / directory.HOME).mkdir(parents=True)
+        (at / directory.LOGS).mkdir()
+        self.assertIsNone(migration.carry_one("cole", before_alias))
+        records.stated(directory.records("cole"), {
+            "agent_name": "cole", "provider_name": "claude"})
+        with records.writing(directory.records("cole")) as conn:
+            conversation = conn.execute(
+                "INSERT INTO conversations (source, source_id, created_at) "
+                "VALUES ('terminal', 'existing', '2026-08-14T00:00:00Z')"
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO provider_sessions (conversation_id, provider_name, session_id) "
+                "VALUES (?, 'claude', 'existing-session')", (conversation,))
+
+        self.assertIsNone(migration.carry_one("cole"))
+
+        self.assertEqual("existing-session", kept.get_session(
+            "cole", conversation, "claude"))
+        with records.reading(directory.records("cole")) as conn:
+            row = conn.execute(
+                "SELECT provider_alias, session_id FROM provider_sessions "
+                "WHERE conversation_id = ? AND provider_name = 'claude'", (conversation,)
+            ).fetchone()
+            configured_alias = conn.execute(
+                "SELECT provider_alias FROM config WHERE id = 1").fetchone()[0]
+        self.assertEqual(("", "existing-session"), tuple(row))
+        self.assertIsNone(configured_alias)
 
     def test_account_alias_columns_are_optional_and_sessions_partition_by_alias(self):
         directory.made("cole", "claude")

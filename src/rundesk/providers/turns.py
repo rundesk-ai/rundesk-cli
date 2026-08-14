@@ -267,8 +267,13 @@ def busy(agent: str, conversation: int) -> bool:
 
 
 def standing(agent: str, conversation: int) -> Optional[bool]:
-    """Whether this conversation is active; ``None`` when the kernel cannot be asked."""
-    return locking.is_held(adapters.lock_of(agent, conversation))
+    """Whether this conversation is active; ``None`` when the kernel cannot be asked.
+
+    The shared status probe takes the same brief admission boundary as an exclusive claim. Without
+    it, a turn arriving during the probe can read that probe as another turn and be refused as busy.
+    """
+    with locking.only_one(paths.work_admission_lock(), guarding="probing provider work"):
+        return locking.is_held(adapters.lock_of(agent, conversation))
 
 
 def activity(agent: str) -> Optional[List[str]]:
@@ -278,20 +283,21 @@ def activity(agent: str) -> Optional[List[str]]:
     the row is written, deliberately, and an updater observing that admission window must still see
     the turn that already owns its conversation.
     """
-    try:
-        conversations = list(directory.conversations(agent).iterdir())
-    except FileNotFoundError:
-        return []
-    except OSError:
-        return None
-    active = []
-    for conversation in conversations:
-        held = locking.is_held(conversation / adapters.LOCK)
-        if held is None:
+    with locking.only_one(paths.work_admission_lock(), guarding="probing provider work"):
+        try:
+            conversations = list(directory.conversations(agent).iterdir())
+        except FileNotFoundError:
+            return []
+        except OSError:
             return None
-        if held:
-            active.append(conversation.name)
-    return sorted(active)
+        active = []
+        for conversation in conversations:
+            held = locking.is_held(conversation / adapters.LOCK)
+            if held is None:
+                return None
+            if held:
+                active.append(conversation.name)
+        return sorted(active)
 
 
 class Admission:

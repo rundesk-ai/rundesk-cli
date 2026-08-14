@@ -293,6 +293,30 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
 
 
 class OneTurnAtATimeInOneConversation(WithAnAgent):
+    def test_a_status_probe_cannot_make_an_arriving_turn_look_busy(self):
+        """The shared probe and exclusive claim take turns at one admission boundary."""
+        events = []
+
+        @contextlib.contextmanager
+        def admission(at, **_why):
+            self.assertEqual(paths.work_admission_lock(), at)
+            events.append("admission entered")
+            yield
+            events.append("admission left")
+
+        def probed(_at):
+            events.append("conversation probed")
+            return False
+
+        with mock.patch.object(locking, "only_one", side_effect=admission), \
+                mock.patch.object(locking, "is_held", side_effect=probed):
+            self.assertFalse(turns.standing(self.agent, 1))
+            self.assertEqual([], turns.activity(self.agent))
+
+        self.assertEqual(
+            ["admission entered", "conversation probed", "admission left",
+             "admission entered", "admission left"], events)
+
     def test_an_update_sees_the_kernel_claim_before_the_unfinished_row_exists(self):
         """Deterministically occupy run's claim-to-row gap and make the updater inspect it."""
         request = self.asking()
