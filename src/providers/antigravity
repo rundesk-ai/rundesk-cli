@@ -57,7 +57,19 @@ streams were then captured through this adapter at **1.1.13**. Their sanitized r
   place this contradicts the vendor's own word, and it is deliberately narrow: a tool error followed
   by a real answer is a successful turn, because recovering from a failed tool is ordinary work.
 
+- **The line that ends a turn ends it once.** Rundesk settles a turn on the `done` it reads, so a
+  brain that said `SUCCESS` and then went on talking must not be able to take back a status, a
+  failure message, a conversation handle or a bill the owner has already been given. Nothing after
+  the first terminal line crosses the seam; all of it is still kept verbatim, because that drift is
+  the only news in it.
+
 ## What this deliberately does not report
+
+**No `model_name`, on either version.** `model` is answered *false*, and an adapter that declares no
+and then names one anyway has settled the turn's ledger with the one thing it said it had no
+evidence for — rundesk keeps that column as the model that **answered**. 1.1.8 opens with the slug
+it was configured to use and 1.1.13 opens with none at all; a requested route is not proof of the
+route that served the turn, and `RUNDESK_MODEL` is still passed on.
 
 **No `file` records.** This brain names files it read and wrote; nothing in its stream says *this
 one was made for a person*, which is what a `file` record means and what gets attached to a message
@@ -136,12 +148,20 @@ TROUBLE_KEPT = 20
 #: What a tool this brain offers actually did, in rundesk's words. Deliberately not a guess at the
 #: whole list: an unknown tool still gets a `tool` record with **no** `did`, so a tool added next
 #: release is never handed a meaning somebody invented for it.
+#:
+#: **A name is kept once it has been read off this brain, and taken out only on evidence.** A tool
+#: missing from one release's listing is not a tool that is gone — the older stream still names it,
+#: and dropping it would silently stop reporting an act rundesk has a word for. So this grows with
+#: what 1.1.13 offers and loses nothing 1.1.8 proved.
 DID_FOR = {
     "view_file": "read", "sed_file": "read", "read_resource": "read",
     "read_url_content": "read", "read_browser_page": "read",
     "list_dir": "list", "list_resources": "list",
+    "list_browser_pages": "list", "list_permissions": "list",
     "grep_search": "search", "code_search": "search", "search_web": "search",
+    "find_by_name": "search",
     "run_command": "run", "command_status": "run", "send_command_input": "run",
+    "notebook_execution": "run", "execute_browser_javascript": "run",
     "replace_file_content": "edit", "multi_replace_file_content": "edit",
     "write_to_file": "edit", "notebook_edit": "edit",
     "generate_image": "make",
@@ -214,10 +234,19 @@ def what_this_can_do() -> dict:
 
 def the_version() -> str:
     """What `agy --version` says, or nothing. **Never a reason to fail** — a version this could not
-    read does not change what the adapter can do."""
+    read does not change what the adapter can do.
+
+    **Started with the same environment a turn is**, which is the whole of why it is worth saying:
+    this is the one place `--capabilities` runs the vendor, and a brain that took the question as an
+    invitation to fetch a new release would turn an answer that is meant to be offline and the same
+    every time into a download — and would land that release in the middle of the turn admitted
+    moments later. Nothing wider than the adapter's own environment is handed over, because that
+    environment is what rundesk built for this seam and nothing here may reach past it.
+    """
     try:
         got = subprocess.run([AGY, "--version"], capture_output=True, text=True,
-                             stdin=subprocess.DEVNULL, timeout=VERSION_WITHIN, check=False)
+                             stdin=subprocess.DEVNULL, timeout=VERSION_WITHIN, check=False,
+                             env=the_environment())
     except (OSError, subprocess.SubprocessError):
         return ""
     return got.stdout.strip().splitlines()[0] if got.stdout.strip() else ""
@@ -309,7 +338,7 @@ def the_prompt(asked: str) -> str:
 
 
 def the_environment() -> dict:
-    """What the brain is started with.
+    """What the brain is started with, on both invocations — a turn, and the version probe.
 
     **`USER` is put back, and it is not cosmetic.** This brain looks the owner's login up in the
     machine's keyring under that name, and rundesk builds an adapter's environment from a named
@@ -386,6 +415,14 @@ class Turn:
         #: turn nobody can explain, and reading two is a turn it cannot reconcile.
         self.said_done = False
 
+        #: Whether this brain has been heard from since. Said once rather than per line, because
+        #: what follows a terminal record may be a whole second turn's worth of them.
+        self.said_more_than_a_turn = False
+
+        #: How many lines were too long to hold and went whole. Counted so that the gap said about
+        #: the second one is not mistaken for a second telling of the first.
+        self.gaps = 0
+
         #: Whether this brain answered a conversation nobody asked for, which is the one and only
         #: shape a lost conversation has here. Read on the first line and acted on immediately.
         self.the_conversation_was_gone = False
@@ -393,7 +430,6 @@ class Turn:
         #: What the stream said, gathered as it goes. `ended` is whether the terminal line arrived
         #: at all — a stream that simply stopped is a turn this side has to end itself.
         self.session = None
-        self.model_name = None
         self.ended = False
         self.said_something = False
         self.a_tool_failed = None
@@ -492,9 +528,21 @@ class Turn:
             yield said
 
     def thrown_away(self) -> None:
-        """Read the rest of a line already too long, and keep none of it. Bounded on every call, for
-        the reason the caller is: what is being skipped past is by definition a stream writing
-        without ever ending a line."""
+        """Read the rest of a line already too long, keep none of it, and **say that it happened**.
+
+        Bounded on every call, for the reason the caller is: what is being skipped past is by
+        definition a stream writing without ever ending a line.
+
+        This is the only place this adapter loses something the brain really said, and it is not
+        rundesk's own drift counters that would catch it — those count what crossed the seam, and
+        this never reaches it. Nor is it kept verbatim: writing the megabyte out again is the same
+        megabyte held somewhere else, and half a record is not a smaller record. So what stands in
+        its place is one bounded line in the conversation's own error log, which is where somebody
+        asking why a stream went quiet will find that it did not.
+        """
+        self.gaps += 1
+        went_wrong(f"antigravity sent a line too long to hold (over {A_LINE_AT_MOST} bytes); "
+                   f"it was discarded whole and is gap {self.gaps} of this turn")
         while True:
             more = self.brain.stdout.readline(A_LINE_AT_MOST + 1)
             if not more or more.endswith("\n"):
@@ -541,7 +589,18 @@ class Turn:
 
         Everything not named here is dropped deliberately and kept in the raw stream, which is what
         keeps a vendor adding a line kind from breaking a turn.
+
+        **Nothing crosses the seam once the turn has ended.** Rundesk settles a turn on the `done`
+        it reads and a second one is a turn it cannot reconcile — so a brain that keeps talking
+        afterwards cannot undo a status, a message, a handle or a bill the owner has already been
+        given. What it said is still kept verbatim, because the drift is the news.
         """
+        if self.said_done:
+            if not self.said_more_than_a_turn:
+                self.said_more_than_a_turn = True
+                went_wrong("antigravity said more after the line that ended the turn; the first "
+                           "ending stands and the rest is kept only in the raw stream")
+            return []
         try:
             event = json.loads(line)
         except ValueError:
@@ -558,18 +617,18 @@ class Turn:
         return []
 
     def it_started(self, event: dict) -> list:
-        """The first line, which says which conversation this is and which model is answering.
+        """The first line, which says which conversation this is.
 
         **This is where a lost conversation is caught.** Asked to carry one on, this brain answers
         with the id it actually opened — and when that is not the one that was asked for, it has
         quietly started somewhere else. Nothing has happened yet, so stopping here costs nothing.
+
+        **What it opened with is not read as the model that answered.** 1.1.8 names here the slug it
+        was configured to use and 1.1.13 names none at all; neither is this brain saying which
+        backend served the turn. See the module docstring.
         """
-        init = an_object(event.get("init"))
         session = str(event.get("conversation_id") or "")
         self.session = session or self.session
-        named = init.get("model")
-        if isinstance(named, str) and named.strip():
-            self.model_name = named
         if self.resume and session and session != str(self.resume):
             self.the_conversation_was_gone = True
         return []
@@ -706,12 +765,15 @@ class Turn:
                 self.counted_anything = True
 
     def the_bill(self):
-        """What this turn cost, or nothing at all when nothing was measured."""
+        """What this turn cost, or nothing at all when nothing was measured.
+
+        **No `model_name`**, because this adapter answers `model: false` and the two may not
+        disagree: rundesk keeps that field as the model that *answered*, written at settlement
+        precisely because only the brain knows which one really ran.
+        """
         record = {"type": "usage", **self.counted}
         if a_count(self.context_tokens):
             record["context_tokens"] = self.context_tokens
-        if self.model_name:
-            record["model_name"] = str(self.model_name)
         return record if len(record) > 1 else None
 
     def could_not_go_on(self, said: str) -> None:

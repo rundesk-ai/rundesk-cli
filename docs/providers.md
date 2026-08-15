@@ -14,9 +14,12 @@ in `src/providers/`, and the suites in `tests/` say so.
 | `grok` | `grok agent stdio`, the Agent Client Protocol | yes |
 | `antigravity` | a prompt piped into `agy --output-format stream-json` | no |
 
-Antigravity accepts a requested model slug but its 1.1.13 stream does not name the model that
-actually answered. Its `model` capability is therefore false and it leaves `model_name` absent
-rather than treating a requested route as proof of the route that served the turn.
+Antigravity accepts a requested model slug but does not name the model that actually answered:
+1.1.13 opens a stream naming none at all, and 1.1.8 opens one naming the slug it was configured to
+use. Its `model` capability is therefore false and it emits `model_name` on **neither** version,
+rather than treating a requested route as proof of the route that served the turn. A capability that
+says *no* and a record that names one anyway are a contradiction, and the record is the half rundesk
+keeps as the model that answered.
 
 **Every turn runs with the whole machine available to it**, on all four. `RUNDESK_ACCESS_MODE` is
 still carried and is still what this page says it is below — a request rather than containment, which
@@ -520,6 +523,11 @@ in pieces, because nothing downstream could tell that apart from your brain talk
 **Say `done` whatever happens.** Rundesk reading no `done` at all is a turn nobody can explain — the
 one exception is a process killed outright, which is rundesk's to classify and the only case it can
 classify correctly.
+
+**Say it once.** Rundesk reading two takes the **last**, so a brain that keeps talking after it has
+ended a turn can otherwise take back a status, a failure message, a session handle and a bill the
+owner has already been given. Once you have ended a turn, nothing more crosses the seam — keep what
+the brain said afterwards in `RUNDESK_RAW`, where the drift is readable without being acted on.
 
 **Your exit code says what became of the *program*, and never what became of the turn.** Rundesk
 decides that from your `done` record, records your code beside it, and the two are kept apart on

@@ -9,9 +9,11 @@ the suite never reaches a vendor.
 **What the fixture is for is drift.** The day this vendor changes its stream, this file goes red with
 the reading that broke, and `cli-versions.lock` says which version the fixture came from.
 
-**Where a case writes its own stream, it says so.** Compaction, soft denial, and malformed-stream
-edges remain constructed in the scratch root. Fresh and resumed arithmetic are also checked against
-the captured 1.1.13 streams.
+**Where a case writes its own stream, it says so.** Compaction, soft denial, malformed-stream edges,
+a brain that keeps talking after it has ended a turn, a line too long to hold, and each tool name on
+its own remain constructed in the scratch root — no capture of any of them exists, and a constructed
+file put among `tests/samples/` would look like one. Fresh and resumed arithmetic are also checked
+against the captured 1.1.13 streams.
 
 The adapter is run as the program it is, through the environment it is really given. Nothing here
 imports it — it has no importable shape, deliberately, and a case that reached inside it would be
@@ -183,6 +185,31 @@ class WhatItSaysItCanDo(Antigravity):
         self.assertNotIn("antigravity_cli", answer)
         self.assertTrue(answer["tools"])
 
+    def test_asking_the_version_asks_this_brain_not_to_update_itself(self):
+        """The version probe is the one place `--capabilities` starts the vendor, and it is started
+        the same way a turn is: a brain that took the question as an invitation to fetch a new
+        release would turn an offline, deterministic answer into a download, and would land the new
+        release in the middle of whatever turn came next."""
+        instead = self.home / "bin"
+        instead.mkdir(parents=True, exist_ok=True)
+        seen = self.home / "version-environment.txt"
+        (instead / "agy").write_text(f"#!/bin/sh\nenv > {seen}\nprintf '9.9.9\\n'\n",
+                                     encoding="utf-8")
+        (instead / "agy").chmod(0o755)
+        given = {"PATH": f"{instead}:{NO_VENDOR}", "A_MARKER": "kept"}
+        self.assertEqual("9.9.9", self.asked(**given)["antigravity_cli"])
+
+        handed = dict(one.split("=", 1) for one in
+                      seen.read_text(encoding="utf-8").splitlines() if "=" in one)
+        self.assertEqual("true", handed.get("AGY_CLI_DISABLE_AUTO_UPDATE"))
+        self.assertEqual("kept", handed.get("A_MARKER"), "the probe stands in the adapter's own")
+        # The adapter was handed neither of these prefixes, so anything carrying one was invented
+        # here — and the refusal above is the only thing this may invent. An exact set rather than a
+        # subset is not available: this machine's `#!/usr/bin/env python3` shim adds toolchain names
+        # to the adapter's own environment, and they are the adapter's environment by then.
+        self.assertEqual({"AGY_CLI_DISABLE_AUTO_UPDATE"},
+                         {name for name in handed if name.startswith(("AGY_", "RUNDESK_"))})
+
 
 class OneCapturedTurn(Antigravity):
     """The whole of one real turn, read the way rundesk reads it."""
@@ -222,8 +249,7 @@ class OneCapturedTurn(Antigravity):
         input tokens are as real as the response's 3,272, and on this turn the steps sum to exactly
         what the terminal line restates."""
         self.assertEqual({"type": "usage", "input_tokens": 3390, "output_tokens": 380,
-                          "cache_read_tokens": 16274, "context_tokens": 19546,
-                          "model_name": THE_MODEL},
+                          "cache_read_tokens": 16274, "context_tokens": 19546},
                          self.only(self.said, "usage")[0])
 
     def test_a_quantity_this_brain_never_reports_stays_absent(self):
@@ -436,7 +462,7 @@ class WhatAResumedTurnCost(Antigravity):
         said, _, _ = self.replayed(captured=self.stream("resumed.jsonl", *self.RESUMED),
                                    RUNDESK_RESUME=CONVERSATION)
         self.assertEqual({"type": "usage", "input_tokens": 12, "output_tokens": 3,
-                          "cache_read_tokens": 40, "context_tokens": 52, "model_name": THE_MODEL},
+                          "cache_read_tokens": 40, "context_tokens": 52},
                          self.only(said, "usage")[0])
 
     def test_the_current_captured_resume_reports_only_the_second_turn(self):
@@ -450,10 +476,6 @@ class WhatAResumedTurnCost(Antigravity):
         self.assertEqual("REMEMBERED\n",
                          "".join(one["text"] for one in self.only(said, "text")))
 
-    def test_the_current_stream_does_not_invent_the_model_that_answered(self):
-        said, _, _ = self.replayed(captured=CURRENT)
-        self.assertNotIn("model_name", self.only(said, "usage")[0])
-
     def test_a_fresh_turn_that_reported_no_steps_falls_back_to_what_it_ended_with(self):
         """On a fresh turn the terminal block is this turn and nothing else, so a stream that carried
         no step usage still has its cost reported rather than lost."""
@@ -464,7 +486,7 @@ class WhatAResumedTurnCost(Antigravity):
                      usage={"input_tokens": 4, "output_tokens": 2, "cache_read_tokens": 1}))
         said, _, _ = self.replayed(captured=stream)
         self.assertEqual({"type": "usage", "input_tokens": 4, "output_tokens": 2,
-                          "cache_read_tokens": 1, "model_name": THE_MODEL},
+                          "cache_read_tokens": 1},
                          self.only(said, "usage")[0])
 
     def test_the_same_stream_resumed_reports_nothing_rather_than_the_whole_history(self):
@@ -475,9 +497,8 @@ class WhatAResumedTurnCost(Antigravity):
             a_result(conversation_id=CONVERSATION, status="SUCCESS", response="One whole answer.",
                      usage={"input_tokens": 400000, "output_tokens": 2, "cache_read_tokens": 1}))
         said, _, _ = self.replayed(captured=stream, RUNDESK_RESUME=CONVERSATION)
-        counted = self.only(said, "usage")
-        self.assertEqual([{"type": "usage", "model_name": THE_MODEL}], counted)
-        self.assertNotIn("input_tokens", counted[0])
+        self.assertEqual([], self.only(said, "usage"))
+        self.assertTrue(self.the_ending(said)["ok"])
 
     def test_nothing_measured_at_all_leaves_no_usage_record_to_read(self):
         """Zero and unknown are different answers, and a spend limit reading the first for the second
@@ -488,6 +509,45 @@ class WhatAResumedTurnCost(Antigravity):
             a_result(conversation_id=CONVERSATION, status="SUCCESS", response="Quiet."))
         said, _, _ = self.replayed(captured=stream)
         self.assertEqual([], self.only(said, "usage"))
+
+
+class WhichModelAnswered(Antigravity):
+    """It says it cannot name one, and then it never names one.
+
+    `model` is a claim about what to expect and rundesk records it beside the turn, so an adapter
+    that declares *no* and then writes `model_name` anyway has settled the turn's ledger with the
+    one thing it said it had no evidence for. Measured: rundesk keeps that field as **the model that
+    answered**, written at settlement precisely because only the brain knows which one really ran.
+    """
+
+    def can_it(self):
+        got = subprocess.run([str(ADAPTER), "--capabilities"], capture_output=True, text=True,
+                             timeout=PATIENCE, env={"PATH": NO_VENDOR}, check=False)
+        return json.loads(got.stdout)
+
+    def test_it_says_it_cannot_name_the_model_that_answered(self):
+        self.assertFalse(self.can_it()["model"])
+
+    def test_no_stream_this_vendor_really_produced_names_one(self):
+        for captured in (CAPTURED, CURRENT, CURRENT_RESUMED, CURRENT_TOOLS):
+            with self.subTest(captured=captured.name):
+                said, _, _ = self.replayed(captured=captured,
+                                           RUNDESK_RESUME=("conversation-current"
+                                                           if "resumed" in captured.name else None))
+                self.assertNotIn("model_name", json.dumps(said))
+
+    def test_a_slug_the_stream_opened_with_is_not_the_route_that_served_the_turn(self):
+        """1.1.8 opens with the slug it was configured to use and 1.1.13 opens with none at all.
+        Neither is the vendor saying which backend answered, and the one thing worse than not
+        knowing is a ledger that says it does."""
+        stream = self.stream(
+            "named.jsonl",
+            a_line(event="init", conversation_id=CONVERSATION, init={"model": THE_MODEL}),
+            a_result(conversation_id=CONVERSATION, status="SUCCESS", response="…",
+                     usage={"input_tokens": 4, "output_tokens": 2}))
+        said, _, _ = self.replayed(captured=stream, RUNDESK_MODEL=THE_MODEL)
+        self.assertNotIn("model_name", self.only(said, "usage")[0])
+        self.assertNotIn(THE_MODEL, json.dumps(said))
 
 
 class HowBigTheConversationGot(Antigravity):
@@ -625,6 +685,143 @@ class WhenTheConversationIsGone(Antigravity):
         self.assertEqual(1, len(ran))
 
 
+#: A conversation this turn never asked for, and the words a failing ending carries. Spelled out
+#: because both classes below turn on them being the ones that did *not* reach rundesk, and a
+#: literal repeated in six assertions is a literal that goes stale in five of them.
+ANOTHER_CONVERSATION = "a-conversation-nobody-asked-for"
+WHAT_WENT_WRONG = "your weekly limit is spent; it resets on Friday"
+
+
+class WhenTheBrainKeepsTalkingAfterTheEnd(Antigravity):
+    """A second ending is a stream this side cannot reconcile, so the first one is the turn.
+
+    Constructed rather than captured: no `agy` release has been seen to do this. It is written down
+    because the failure it guards against is silent and expensive — a turn that worked, settled and
+    was recorded, and is then overwritten by whatever the vendor said afterwards.
+    """
+
+    AFTER = (
+        a_line(event="init", conversation_id=CONVERSATION, init={}),
+        a_step(conversation_id=CONVERSATION, step_index=1, state="DONE",
+               step_type="agent_response", text_delta="The answer.",
+               usage={"input_tokens": 10, "output_tokens": 2, "cache_read_tokens": 5}),
+        a_result(conversation_id=CONVERSATION, status="SUCCESS", response="The answer."),
+        a_step(conversation_id=ANOTHER_CONVERSATION, step_index=2, state="ACTIVE",
+               step_type="agent_response", text_delta="…and one more thing."),
+        a_step(conversation_id=ANOTHER_CONVERSATION, step_index=3, state="ACTIVE",
+               step_type="tool", tool_name="view_file"),
+        a_result(conversation_id=ANOTHER_CONVERSATION, status="ERROR", response="",
+                 error="a second ending nobody can reconcile",
+                 usage={"input_tokens": 400000, "output_tokens": 900, "cache_read_tokens": 7}),
+    )
+
+    def setUp(self):
+        super().setUp()
+        self.said, self.got, _ = self.replayed(
+            captured=self.stream("talked-on.jsonl", *self.AFTER))
+
+    def test_the_turn_ends_exactly_once(self):
+        self.assertEqual(1, len(self.only(self.said, "done")))
+        self.assertEqual(["text", "usage", "done"], self.kinds(self.said))
+
+    def test_the_first_truthful_ending_is_the_one_that_stands(self):
+        """Rundesk settles a turn on the `done` it reads. A later one carrying a failure would
+        invert an answer the owner has already been given."""
+        self.assertEqual({"type": "done", "ok": True, "session_id": CONVERSATION},
+                         self.the_ending(self.said))
+
+    def test_nothing_said_afterwards_is_billed_against_the_turn(self):
+        self.assertEqual([{"type": "usage", "input_tokens": 10, "output_tokens": 2,
+                           "cache_read_tokens": 5, "context_tokens": 15}],
+                         self.only(self.said, "usage"))
+
+    def test_what_it_said_afterwards_is_still_kept_verbatim(self):
+        """The drift is the news. Dropping it from the record rundesk keeps for exactly this
+        comparison would leave nothing at all to read when somebody asks what happened."""
+        raw = self.home / "raw" / "raw.jsonl"
+        raw.parent.mkdir(parents=True, exist_ok=True)
+        self.replayed(captured=self.stream("talked-on.jsonl", *self.AFTER), RUNDESK_RAW=str(raw))
+        self.assertEqual(list(self.AFTER), raw.read_text(encoding="utf-8").splitlines())
+
+    def test_the_program_still_says_it_went_well(self):
+        self.assertEqual(0, self.got.returncode, self.got.stderr)
+
+
+class WhenTheBrainRecantsAFailure(Antigravity):
+    """The expensive half of the same defect, and the one worth writing down twice.
+
+    A failing ending carries the three things a person acts on: **why** it failed in words they can
+    do something about, **which conversation** to carry on from, and **what it cost before it
+    stopped**. Rundesk settles a turn on the *last* `done` it reads, so a brain that ends a turn
+    `ERROR` and then says `SUCCESS` about somewhere else would replace all three at once — an owner
+    told their weekly limit is spent instead reads that the turn worked, the handle written down is
+    a conversation nothing of theirs happened in, and the bill is four hundred thousand tokens that
+    were never this turn's.
+
+    Constructed, and it says so: no `agy` release has been seen to recant an ending.
+    """
+
+    RECANTED = (
+        a_line(event="init", conversation_id=CONVERSATION, init={}),
+        a_step(conversation_id=CONVERSATION, step_index=1, state="DONE",
+               step_type="agent_response", text_delta="I could not finish this.",
+               usage={"input_tokens": 11, "output_tokens": 3, "cache_read_tokens": 6}),
+        a_result(conversation_id=CONVERSATION, status="ERROR", response="",
+                 error=WHAT_WENT_WRONG),
+        a_step(conversation_id=ANOTHER_CONVERSATION, step_index=2, state="ACTIVE",
+               step_type="agent_response", text_delta="On second thoughts, here you are."),
+        a_step(conversation_id=ANOTHER_CONVERSATION, step_index=3, state="ACTIVE",
+               step_type="tool", tool_name="write_to_file"),
+        a_result(conversation_id=ANOTHER_CONVERSATION, status="SUCCESS", response="All fine.",
+                 usage={"input_tokens": 400000, "output_tokens": 900, "cache_read_tokens": 7}),
+    )
+
+    def setUp(self):
+        super().setUp()
+        self.said, self.got, _ = self.replayed(
+            captured=self.stream("recanted.jsonl", *self.RECANTED))
+
+    def test_the_turn_ends_exactly_once_and_ends_failed(self):
+        self.assertEqual(1, len(self.only(self.said, "done")))
+        self.assertEqual(["text", "usage", "done"], self.kinds(self.said))
+        self.assertIs(self.said[-1], self.the_ending(self.said))
+        self.assertFalse(self.the_ending(self.said)["ok"])
+
+    def test_the_words_the_owner_acts_on_are_the_ones_it_failed_with(self):
+        self.assertEqual(WHAT_WENT_WRONG, self.the_ending(self.said)["failure_message"])
+
+    def test_the_handle_kept_is_the_conversation_this_turn_really_was(self):
+        """A handle is what the next turn carries on from. Written down wrong, the conversation is
+        not resumed — it is silently replaced by one nothing of the owner's ever happened in."""
+        self.assertEqual(CONVERSATION, self.the_ending(self.said)["session_id"])
+        self.assertNotIn(ANOTHER_CONVERSATION, json.dumps(self.said))
+
+    def test_only_what_it_spent_before_it_stopped_is_billed(self):
+        self.assertEqual([{"type": "usage", "input_tokens": 11, "output_tokens": 3,
+                           "cache_read_tokens": 6, "context_tokens": 17}],
+                         self.only(self.said, "usage"))
+
+    def test_nothing_it_said_afterwards_is_reported_as_the_answer(self):
+        self.assertEqual("I could not finish this.",
+                         "".join(one["text"] for one in self.only(self.said, "text")))
+        self.assertEqual([], self.only(self.said, "tool"))
+
+    def test_everything_it_said_afterwards_is_still_kept_verbatim(self):
+        raw = self.home / "raw" / "raw.jsonl"
+        raw.parent.mkdir(parents=True, exist_ok=True)
+        self.replayed(captured=self.stream("recanted.jsonl", *self.RECANTED),
+                      RUNDESK_RAW=str(raw))
+        self.assertEqual(list(self.RECANTED), raw.read_text(encoding="utf-8").splitlines())
+
+    def test_the_program_exits_zero_because_the_program_did_not_go_wrong(self):
+        """An exit code says what became of the *program*, never what became of the turn. The brain
+        failed cleanly and this side relayed it correctly, so a non-zero exit here would report an
+        adapter that fell over — and a turn ended by a `done` this side suppressed is still a turn
+        this side read to the end."""
+        self.assertEqual(0, self.got.returncode, self.got.stderr)
+        self.assertIn("said more after the line that ended the turn", self.got.stderr)
+
+
 class WhenSomethingGoesWrong(Antigravity):
     """A turn that ends badly still ends, and says which side it was."""
 
@@ -715,6 +912,46 @@ class WhatItDoesNotUnderstand(Antigravity):
         said, _, _ = self.replayed(captured=stream)
         self.assertTrue(self.the_ending(said)["ok"])
 
+    def an_overlong_line(self, name, **also):
+        """A stream carrying one line longer than the megabyte this adapter will hold, between two
+        it can read. Constructed in the scratch root: no capture of one exists."""
+        too_long = a_step(conversation_id=CONVERSATION, step_index=1, state="ACTIVE",
+                          step_type="agent_response", text_delta="x" * (1024 * 1024))
+        self.assertGreater(len(too_long), 1024 * 1024)
+        lines = (a_line(event="init", conversation_id=CONVERSATION, init={}),
+                 too_long,
+                 a_result(conversation_id=CONVERSATION, status="SUCCESS", response="Still fine."))
+        said, got, _ = self.replayed(captured=self.stream(name, *lines), **also)
+        return said, got, lines
+
+    def test_a_line_too_long_to_hold_is_dropped_whole_and_the_next_one_still_read(self):
+        """Half a record is not a smaller record, it is a corrupt one, and nothing downstream could
+        tell that apart from the brain talking nonsense. So it goes whole — and the turn carries on,
+        because one unreadable line is not a reason to lose the ones after it."""
+        said, got, _ = self.an_overlong_line("too-long.jsonl")
+        self.assertEqual(["text", "done"], self.kinds(said))
+        self.assertEqual("Still fine.", self.only(said, "text")[0]["text"])
+        self.assertTrue(self.the_ending(said)["ok"])
+        self.assertEqual(0, got.returncode)
+
+    def test_a_line_too_long_to_hold_is_said_to_be_a_gap_rather_than_dropped_in_silence(self):
+        """This is the only place the adapter loses something the brain really said. Rundesk's own
+        drift counters cannot see it — the record never reaches the seam — so the conversation's
+        own error log is where it has to be visible, or a stream quietly going missing looks exactly
+        like a brain that said less."""
+        _, got, _ = self.an_overlong_line("too-long-said.jsonl")
+        self.assertIn("too long", got.stderr)
+        self.assertIn("discarded", got.stderr)
+        self.assertLess(len(got.stderr), 1024, "what is said about it is bounded too")
+
+    def test_a_line_too_long_to_hold_is_not_kept_verbatim_either(self):
+        """The bound is on what is held at once, and writing it out again would be the same
+        megabyte held in another place. The gap said above is what stands in its stead."""
+        raw = self.home / "raw" / "raw.jsonl"
+        raw.parent.mkdir(parents=True, exist_ok=True)
+        _, _, lines = self.an_overlong_line("too-long-raw.jsonl", RUNDESK_RAW=str(raw))
+        self.assertEqual([lines[0], lines[2]], raw.read_text(encoding="utf-8").splitlines())
+
     def test_a_tool_this_release_never_heard_of_is_named_and_given_no_verb(self):
         """A reader shown nothing is better off than one taught to believe a word that means
         something else here."""
@@ -726,6 +963,51 @@ class WhatItDoesNotUnderstand(Antigravity):
         said, _, _ = self.replayed(captured=stream)
         self.assertEqual({"type": "tool", "id": "agy:4", "name": "quantum_search"},
                          self.only(said, "tool")[0])
+
+
+class WhatEachToolDid(Antigravity):
+    """One of ten words, or none at all — and never a word stretched to fit.
+
+    The names below are this brain's own at 1.1.13. Only the name is written down here: what each
+    tool takes, what it answers with, and everything else the vendor lists about it is theirs.
+    """
+
+    def did(self, name):
+        stream = self.stream(
+            f"tool-{name}.jsonl",
+            a_line(event="init", conversation_id=CONVERSATION, init={}),
+            a_step(conversation_id=CONVERSATION, step_index=1, state="ACTIVE", step_type="tool",
+                   tool_name=name),
+            a_result(conversation_id=CONVERSATION, status="SUCCESS", response="."))
+        said, _, _ = self.replayed(captured=stream)
+        return self.only(said, "tool")[0].get("did")
+
+    def test_the_current_tools_are_said_in_rundesks_own_words(self):
+        """A tool this release knows and leaves wordless is worse than one it never heard of: the
+        reader is told nothing about an act rundesk has a word for and shows everywhere else."""
+        for name, did in (("find_by_name", "search"),
+                          ("list_browser_pages", "list"),
+                          ("list_permissions", "list"),
+                          ("notebook_execution", "run"),
+                          ("execute_browser_javascript", "run")):
+            with self.subTest(name=name):
+                self.assertEqual(did, self.did(name))
+
+    def test_the_ones_read_off_the_older_stream_are_not_dropped_on_a_hunch(self):
+        """A name this adapter was written against is evidence; a name missing from one release's
+        listing is not evidence that it is gone. Removing one would silently stop reporting an act
+        the older stream still names."""
+        for name, did in (("code_search", "search"), ("view_file", "read"), ("list_dir", "list"),
+                          ("run_command", "run"), ("write_to_file", "edit"),
+                          ("generate_image", "make"), ("invoke_subagent", "delegate")):
+            with self.subTest(name=name):
+                self.assertEqual(did, self.did(name))
+
+    def test_every_word_it_maps_onto_is_one_of_the_ten(self):
+        for name in ("find_by_name", "list_browser_pages", "list_permissions",
+                     "notebook_execution", "execute_browser_javascript", "code_search"):
+            with self.subTest(name=name):
+                self.assertIn(self.did(name), THE_TEN)
 
 
 class WhatTheAgentLivesBy(Antigravity):
