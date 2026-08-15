@@ -83,7 +83,7 @@ your terminal, see **[Setting up a Discord bot](#setting-up-a-discord-bot)** bel
 
 ## 🧠 Provider adapters
 
-Rundesk ships three provider adapters. They use the provider CLI and login already on
+Rundesk ships four provider adapters. They use the provider CLI and login already on
 your machine; Rundesk does not copy provider credentials. `rundesk providers` lists what
 this install can actually run.
 
@@ -92,6 +92,7 @@ this install can actually run.
 | [OpenAI Codex CLI](https://learn.chatgpt.com/docs/codex/cli) | `codex` | Live steering |
 | [Anthropic Claude Code](https://code.claude.com/docs/en/overview) | `claude` | — |
 | [xAI Grok CLI](https://docs.x.ai/build/cli/headless-scripting) | `grok` | — |
+| [Google Antigravity CLI](https://antigravity.google/docs/cli/install) | `antigravity` | Cannot be steered mid-turn |
 
 Every shipped adapter supports continuing conversations, model selection, tool activity,
 and per-turn usage.
