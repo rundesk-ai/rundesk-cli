@@ -12,9 +12,12 @@ documents.** `claude -p` with a streaming input and a streaming output is that i
 credential is read, copied or moved; the owner signs in with `claude login` and this never learns
 how that worked — see `the_environment` for the one variable this deliberately does *not* set.
 
-Two invocations, sharing almost nothing:
+Five invocations, sharing almost nothing:
 
     --capabilities   what this can do — offline, no account, the same answer every time
+    --account-status normalize official authentication status
+    --account-login  run the official interactive login
+    --account-logout run the official logout
     (no argument)    one turn: the prompt arrives as records on stdin, records come back on stdout
 
 ## What was measured rather than assumed
@@ -156,6 +159,12 @@ def main() -> int:
     if "--capabilities" in sys.argv[1:]:
         say(what_this_can_do())
         return 0
+    if "--account-status" in sys.argv[1:]:
+        return account_status()
+    if "--account-login" in sys.argv[1:]:
+        return account_login()
+    if "--account-logout" in sys.argv[1:]:
+        return account_logout()
     return one_turn()
 
 
@@ -173,7 +182,8 @@ def what_this_can_do() -> dict:
     every turn, so a vendor upgrade that changes behaviour is visible in the record afterwards
     rather than being a thing somebody has to remember.
     """
-    can = {"tools": True, "resume": True, "model": True, "usage": True, "steer": True}
+    can = {"tools": True, "resume": True, "model": True, "usage": True, "steer": True,
+           "account_aliases": True}
     version = the_version()
     if version:
         can["claude_cli"] = version
@@ -232,18 +242,55 @@ def the_environment() -> dict:
     does not include it — so without this, a signed-in machine reports itself signed out and every
     turn fails telling the owner to run a login they have already run. Bisected to this one name.
 
-    **`CLAUDE_CONFIG_DIR` is deliberately never set.** Measured: setting it does not *redirect* a
-    login, it *removes* one — pointing it at the owner's own configuration directory reported
-    `loggedIn: false`. So an adapter that gave each agent a private one would be an adapter that
-    demands a separate `claude login` per agent, and the alternative — copying a credential into it
-    — is the one thing this must never do. Not setting a variable copies nothing, which is why
-    `RUNDESK_PROVIDER_HOME` is named to this adapter and left unused.
+    **The ordinary account's environment is unchanged.** `CLAUDE_CONFIG_DIR` is set only when
+    Rundesk explicitly supplies an additional account home. That isolation deliberately requires a
+    separate provider-owned login; neither this adapter nor Rundesk reads or copies credentials.
     """
     env = os.environ.copy()
     with contextlib.suppress(Exception):
         import getpass
         env.setdefault("USER", getpass.getuser())
+    account_home = os.environ.get("RUNDESK_PROVIDER_ACCOUNT_HOME")
+    if account_home:
+        env["CLAUDE_CONFIG_DIR"] = account_home
     return env
+
+
+def account_status() -> int:
+    """Normalize Claude's official status without returning identity or credential material."""
+    try:
+        got = subprocess.run([CLAUDE, "auth", "status", "--json"], capture_output=True,
+                             text=True, timeout=VERSION_WITHIN, check=False,
+                             env=the_environment())
+        body = json.loads(got.stdout) if got.returncode in (0, 1) else {}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        body = {}
+    if isinstance(body, dict) and body.get("loggedIn") is True:
+        say({"state": "authenticated"})
+        return 0
+    if isinstance(body, dict) and body.get("loggedIn") is False:
+        say({"state": "signed_out"})
+        return 0
+    say({"state": "unable_to_check"})
+    return 1
+
+
+def account_login() -> int:
+    """Run Claude's provider-owned interactive login attached to this terminal."""
+    try:
+        return subprocess.run([CLAUDE, "auth", "login"], check=False,
+                              env=the_environment()).returncode
+    except OSError:
+        return 1
+
+
+def account_logout() -> int:
+    """Run Claude's provider-owned logout for this exact environment boundary."""
+    try:
+        return subprocess.run([CLAUDE, "auth", "logout"], check=False,
+                              env=the_environment()).returncode
+    except OSError:
+        return 1
 
 
 # ── One turn ──────────────────────────────────────────────────────────────────────────────────

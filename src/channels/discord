@@ -1795,17 +1795,20 @@ class Reaching:
 
     def _the_provider(self):
         """The one gesture that takes a value."""
-        async def gestured(interaction: Any, provider: str) -> None:
+        async def gestured(interaction: Any, provider: str, alias: Optional[str] = None) -> None:
             if not await self._may(interaction):
                 return
             if not await self._deferred(interaction):
                 return
             say({"say": "configure", "conversation": str(interaction.channel_id),
                  "user": str(interaction.user.id), "provider": provider,
+                 "alias": alias,
                  "ref": str(interaction.id)})
-        gestured.__annotations__ = {"interaction": Any, "provider": str}
+        gestured.__annotations__ = {
+            "interaction": Any, "provider": str, "alias": Optional[str]}
         return discord.app_commands.describe(
-            provider="Which brain answers — a provider name, or a path to one")(gestured)
+            provider="Which brain answers — a provider name, or a path to one",
+            alias="An additional account alias; omit for the provider default")(gestured)
 
     async def _may(self, interaction: Any) -> bool:
         """Whether this gesture is worth reporting at all. **Advisory, and never the decision.**

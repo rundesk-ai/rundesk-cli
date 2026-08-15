@@ -116,13 +116,37 @@ and what arrived through a channel, and it says in the log how many rows went. W
 is not in here — see below.
 
 **`provider_sessions`** — where a conversation got to on a brain, keyed by `(conversation,
-provider)`. Opaque to rundesk and never parsed.
+provider, alias)`. Opaque to rundesk and never parsed. The empty session-key member represents the
+ordinary provider account; provenance uses `NULL` for that same omission.
 
-A delegation carries one effective provider/model pair resolved before it is created. That selection
+A delegation carries one effective provider/alias/model selection resolved before it is created.
 is read from the delegation on every pickup and passed into the turn request; it is never written to
 the target agent's configuration. The provider/session pair remains the key, so resuming answered
 work cannot hand one provider's opaque handle to another. No-override work captures the target's
 configured provider/model at its own admission, so a later configuration change cannot redirect it.
+
+### Additional provider accounts
+
+Aliases are optional names for additional accounts of the same provider. Omission preserves the
+existing provider environment exactly; `default` is reserved and cannot be registered or stored.
+
+```console
+$ rundesk providers aliases add claude work
+$ rundesk providers login claude --alias work
+$ rundesk providers status claude --alias work
+$ rundesk agents configure reviewer --provider claude --alias work
+$ rundesk ask reviewer "review this" --provider claude --alias work
+```
+
+Login, status, and logout launch the provider adapter's official account commands. Rundesk reports
+only `authenticated`, `signed_out`, or `unable_to_check`; it never reads or prints provider identity
+or credential fields. Claude aliases set `CLAUDE_CONFIG_DIR` to their private provider-owned home.
+The omitted account does not add or change that variable. Explicit delegation aliases are immutable
+through admission, child turn, environment, and session; a missing alias fails rather than falling
+back. Logout and removal refuse the exact account while a turn is active; login and ordinary default
+changes are allowed, and an admitted turn keeps its resolved selection while later turns receive the
+new default. Relative and absolute path spellings share one alias registry and aliased session
+identity; explicit delegation keeps requested spelling separate from canonical effective identity.
 
 A saved handle is resumed only when this provider's latest turn has the same instruction
 fingerprint as the prompt being composed now. A changed access mode, operating rule, owner addition,

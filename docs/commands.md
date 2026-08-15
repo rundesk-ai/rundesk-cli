@@ -9,8 +9,8 @@ rundesk status                            # the version, where the install is, a
 rundesk version                           # the version, and whether it is out of date
 rundesk configure [--<setting> <value>]   # change what this install is configured with
 rundesk agents                            # the agents this install keeps
-rundesk agents add <agent> --provider <provider> [--describes <text>]        # make one
-rundesk agents configure <agent> [--provider <provider>] [--describes <text>] [--self-improve <true|false>] [--delegate-to <agent> ... | --delegate-to-any | --delegate-to-none]  # change one
+rundesk agents add <agent> --provider <provider> [--alias <alias>] [--describes <text>]        # make one
+rundesk agents configure <agent> [--provider <provider> [--alias <alias>]] [--describes <text>] [--self-improve <true|false>] [--delegate-to <agent> ... | --delegate-to-any | --delegate-to-none]  # change one
 rundesk agents remove <agent> --confirm   # take one away, and everything it remembers
 rundesk gateways                          # every agent, and how its gateway stands
 rundesk gateways start <agent>            # start one, and prove a gateway came up
@@ -33,6 +33,10 @@ rundesk channels configure <agent> <adapter> [--allow <id>] [--deny <id>] [--not
 rundesk channels test <agent> <adapter>   # connect again, and say what it reached
 rundesk channels remove <agent> <adapter> --confirm       # take one away
 rundesk channels doctor [<agent>]         # what cannot be used, and exactly why
+rundesk providers aliases list <provider> # additional account aliases and normalized status
+rundesk providers aliases add <provider> <alias>  # register an empty provider-owned home
+rundesk providers aliases remove <provider> <alias> --confirm  # remove an unused alias home
+rundesk providers status|login|logout <provider> [--alias <alias>]  # provider-owned auth flows
 rundesk backups                           # the copies of what rundesk keeps for you
 rundesk backups save                      # copy what rundesk keeps, now
 rundesk backups restore <backup> --confirm        # put a copy back
@@ -1226,6 +1230,13 @@ flushed first, or the summary would appear above what it summarises when both ar
 pipe.
 
 ## providers
+
+An omitted account alias is the provider's ordinary account and preserves previous behavior.
+`default` is reserved. `login` and `logout` are interactive official provider commands; Rundesk does
+not accept or display credentials. Removal and logout refuse an account used by an active turn, and
+removal also refuses configured agent defaults and unsettled delegations. Login and ordinary default
+changes remain available during active work; prior admission stays fixed and later turns see the
+new selection. Destructive account changes serialize with durable references and turn admission.
 
 The brains this install can run. A provider is a **program rundesk runs**, never code it loads, so
 this asks about programs — where each one is, and what it says it can do. All three verbs are

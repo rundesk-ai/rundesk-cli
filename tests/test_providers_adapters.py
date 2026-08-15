@@ -16,6 +16,7 @@ from rundesk.agents import directory
 from rundesk.core import adapters as core_adapters
 from rundesk.core import paths
 from rundesk.providers import adapters
+from rundesk.utils import programs
 
 #: An adapter that answers the one question asked of it offline, and nothing else. Built by
 #: replacement rather than `str.format`, because a shell body is full of braces of its own.
@@ -222,16 +223,17 @@ class AdmittingOneScopedSelection(Adapters):
 
     def test_provider_only_uses_that_providers_default_model(self):
         chosen = adapters.admitted_selection("scoped", None, "configured", "configured-model")
-        self.assertEqual(("scoped", None, "scoped", None), chosen)
+        self.assertEqual(("scoped", None, None, "scoped", None, None), chosen)
 
     def test_model_only_uses_the_targets_default_provider(self):
         chosen = adapters.admitted_selection(None, "one-model", "configured", "old-model")
-        self.assertEqual((None, "one-model", "configured", "one-model"), chosen)
+        self.assertEqual((None, None, "one-model", "configured", None, "one-model"), chosen)
 
     def test_both_requested_values_are_kept_exactly(self):
         chosen = adapters.admitted_selection(
             "scoped", " one-model ", "configured", "configured-model")
-        self.assertEqual(("scoped", " one-model ", "scoped", " one-model "), chosen)
+        self.assertEqual(
+            ("scoped", None, " one-model ", "scoped", None, " one-model "), chosen)
 
     def test_a_relative_path_is_stored_as_the_resolved_program(self):
         at = self.home / "brain"
@@ -252,7 +254,24 @@ class AdmittingOneScopedSelection(Adapters):
     def test_no_override_captures_the_targets_current_defaults(self):
         chosen = adapters.admitted_selection(
             None, None, "configured", "configured-model")
-        self.assertEqual((None, None, "configured", "configured-model"), chosen)
+        self.assertEqual(
+            (None, None, None, "configured", None, "configured-model"), chosen)
+
+    def test_an_explicit_alias_is_part_of_both_requested_and_effective_identity(self):
+        chosen = adapters.admitted_selection(
+            "scoped", None, "configured", "configured-model", alias="work")
+        self.assertEqual("work", chosen.requested_provider_alias)
+        self.assertEqual("work", chosen.provider_alias)
+
+    def test_no_override_captures_the_targets_current_alias(self):
+        chosen = adapters.admitted_selection(
+            None, None, "configured", "configured-model", default_alias="work")
+        self.assertEqual("work", chosen.provider_alias)
+
+    def test_an_alias_without_an_explicit_provider_is_refused(self):
+        with self.assertRaisesRegex(adapters.NotRunnable, "explicit provider"):
+            adapters.admitted_selection(
+                None, None, "configured", "configured-model", alias="work")
 
     def test_a_blank_model_is_refused(self):
         with self.assertRaisesRegex(adapters.NotRunnable, "cannot be blank"):
@@ -267,6 +286,45 @@ class TheSeamNamesNoVendor(support.Isolated):
             for vendor in ("claude", "anthropic", "codex", "openai", "grok", "gemini"):
                 with self.subTest(module=module.name, vendor=vendor):
                     self.assertNotIn(vendor, said)
+
+
+class ManagingAnAccount(Adapters):
+    def setUp(self):
+        super().setUp()
+        self.ships("mine", saying('{"account_aliases": true}'))
+
+    def test_default_management_environment_is_exactly_unadorned(self):
+        environment = adapters.account_environment(None, None)
+        self.assertNotIn(adapters.PROVIDER_ALIAS, environment)
+        self.assertNotIn(adapters.PROVIDER_ACCOUNT_HOME, environment)
+
+    def test_alias_management_environment_names_only_its_boundary(self):
+        account_home = self.home / "account-home"
+        environment = adapters.account_environment("work", account_home)
+        self.assertEqual("work", environment[adapters.PROVIDER_ALIAS])
+        self.assertEqual(str(account_home), environment[adapters.PROVIDER_ACCOUNT_HOME])
+
+    def test_status_normalizes_only_the_public_state(self):
+        def ran(argv, waiting, env):
+            self.assertEqual("--account-status", argv[-1])
+            return programs.Ran(0, '{"state":"authenticated","credential":"secret"}', "", None)
+
+        self.assertEqual(
+            "authenticated", adapters.account_status("mine", None, None, running=ran))
+
+    def test_login_runs_attached_and_requires_a_fresh_status(self):
+        calls = []
+
+        def interacted(argv, environment):
+            calls.append((argv[-1], environment))
+            return 0
+
+        got = adapters.account_login(
+            "mine", "work", self.home / "work", interacting=interacted,
+            checking=lambda *_args: "authenticated")
+        self.assertEqual("authenticated", got)
+        self.assertEqual("--account-login", calls[0][0])
+        self.assertEqual("work", calls[0][1][adapters.PROVIDER_ALIAS])
 
 
 class WhichInterpreterRunsOne(Adapters):

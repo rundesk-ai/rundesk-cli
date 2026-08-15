@@ -248,6 +248,30 @@ class StoppingWorkHandedHere(support.Isolated):
                     "codex", "asked-model")
         self.assertEqual([expected, expected], calls)
 
+    def test_a_replacement_gateway_receives_the_same_scoped_account_alias(self):
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute(
+                "UPDATE delegations SET stop_asked_at = NULL, provider_name = 'claude',"
+                " provider_alias = 'work' WHERE delegation_id = ?", (self.delegation,))
+        records.stated(directory.records("bob"), {
+            "provider_name": "claude", "provider_alias": None})
+        calls = []
+
+        class Target:
+            def answer_this(inner, *args):
+                calls.append(args)
+
+            def stop_this(inner, *args):
+                raise AssertionError(f"active work was stopped: {args}")
+
+        hosting._answered_what_was_handed_here("bob", directory.where("bob"), Target())
+        hosting._answered_what_was_handed_here("bob", directory.where("bob"), Target())
+
+        expected = ("bob", self.landed.conversation, self.delegation, "ava",
+                    "claude", None, "work")
+        self.assertEqual([expected, expected], calls)
+        self.assertIsNone(records.read(directory.records("bob"))["provider_alias"])
+
     def test_a_later_target_provider_change_does_not_redirect_no_override_work(self):
         with records.writing(directory.records("ava")) as conn:
             conn.execute(
@@ -1026,7 +1050,7 @@ class WhatMovesADelegationsLatestMoment(support.Isolated):
             {"id", "delegation_id", "to_agent", "parent_conversation", "parent_turn",
              "answered_at", "stopped_at", "stop_asked_at", "created_at", "latest_at",
              "working_since", "requested_provider_name", "requested_model_name",
-             "provider_name", "model_name"},
+             "requested_provider_alias", "provider_name", "provider_alias", "model_name"},
             set(row.keys()))
 
 

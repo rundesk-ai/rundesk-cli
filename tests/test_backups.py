@@ -280,6 +280,17 @@ class MakingOne(Copies):
         with self.opened_copy(name) as copied:
             self.assertTrue((copied / "config.json").is_file())
 
+    def test_the_copy_never_reads_or_copies_provider_owned_account_homes(self):
+        provider_home = self.data / "provider-accounts" / "claude" / "work" / "home"
+        provider_home.mkdir(parents=True)
+        (provider_home / "provider-state").write_text("opaque", encoding="utf-8")
+
+        name = backups.save(self.data, self.at, A_MOMENT)
+
+        with self.opened_copy(name) as copied:
+            self.assertFalse((copied / "provider-accounts").exists())
+        self.assertEqual("opaque", (provider_home / "provider-state").read_text(encoding="utf-8"))
+
     def test_a_copy_omits_the_transient_gateway_update_notice(self):
         agent = directory.made("cole", "anthropic")
         maintenance.installed(agent, "0.37.0", "https://example.test/v0.37.0")

@@ -42,8 +42,8 @@ from rundesk import __version__
 from rundesk.agents import directory, records
 from rundesk.channels import arriving, delivery, hosting
 from rundesk.channels import kept as channels_kept
-from rundesk.core import config
-from rundesk.providers import adapters, continuations, instructions, kept, protocol, turns
+from rundesk.core import config, paths
+from rundesk.providers import accounts, adapters, continuations, instructions, kept, protocol, turns
 from rundesk.schedules import due, firing
 from rundesk.schedules import kept as schedules_kept
 from rundesk.skills import grants
@@ -129,20 +129,29 @@ Verify material claims before using or reporting them."""
 def _delegation_provenance(answer: str) -> str:
     """Requested, effective-admission and actual terminal provider/model evidence."""
     requested_provider = getattr(answer, "requested_provider_name", None)
+    requested_alias = getattr(answer, "requested_provider_alias", None)
     requested_model = getattr(answer, "requested_model_name", None)
     effective_provider = getattr(answer, "effective_provider_name", None)
+    effective_alias = getattr(answer, "effective_provider_alias", None)
     effective_model = getattr(answer, "effective_model_name", None)
     provider = getattr(answer, "provider_name", None)
+    alias = getattr(answer, "provider_alias", None)
     model = getattr(answer, "model_name", None)
     requested = _requested_provider_name(str(requested_provider)) if requested_provider else "none"
+    if requested_alias:
+        requested += f" ({_metadata_name(str(requested_alias))})"
     if requested_model:
         requested += f" / {_metadata_name(str(requested_model))}"
     effective = _named(str(effective_provider)) if effective_provider else "legacy late-bound"
+    if effective_alias:
+        effective += f" ({_metadata_name(str(effective_alias))})"
     if effective_model:
         effective += f" / {_metadata_name(str(effective_model))}"
     elif effective_provider:
         effective += " / provider default"
     actual = _named(str(provider)) if provider else "not recorded"
+    if alias:
+        actual += f" ({_metadata_name(str(alias))})"
     if model:
         actual += f" / {_metadata_name(str(model))}"
     return (f"Provider/model — requested: {requested}; effective at admission: {effective}; "
@@ -307,7 +316,7 @@ class IntoAChannel:
         """
         used = got.usage
         counted = used if used.usage_reported else protocol.Usage()
-        return delivery.stats(provider=_named(got.provider_name),
+        return delivery.stats(provider=_shown_provider(got.provider_name, got.provider_alias),
                               input_tokens=counted.input_tokens,
                               output_tokens=counted.output_tokens,
                               cached_tokens=counted.cache_read_tokens,
@@ -668,7 +677,8 @@ class Gestures:
             return self._delegations(agent, kind, place)
         return ""
 
-    def configured(self, agent: str, kind: str, place: str, who: str, provider: str) -> str:
+    def configured(self, agent: str, kind: str, place: str, who: str, provider: str,
+                   alias: Optional[str] = None) -> str:
         """Change which brain answers for this agent (R-CH-26, R-DIS-25).
 
         **Only where the channel allows exactly one person, and only that person.** A provider is an
@@ -686,6 +696,9 @@ class Gestures:
         ago is the opposite of what either of those asked for.
         """
         wanted = provider.strip()
+        wanted_alias = alias.strip() if alias is not None else None
+        if alias is not None and not wanted_alias:
+            return "An account alias cannot be blank; omit it to use the provider default."
         if not wanted:
             # **Named off what this install actually has**, never a brand written down here. Two
             # reasons and both matter: nothing under `providers/` may know a vendor's name — the
@@ -701,22 +714,35 @@ class Gestures:
         if allowed is None or allowed != who:
             return ("Changing the brain is an agent-wide decision, so it can only be done on a "
                     "channel that one person uses.")
-        try:
-            adapters.where(wanted)
-        except Exception:                              # noqa: BLE001 — see below
-            # **Refused before anything is written**, and named against what this install has. A
-            # default nothing stands behind is an agent whose every turn fails from the next message
-            # on, and the person who typed it would be the last to find out.
-            known = ", ".join(f"**{one}**" for one in adapters.known()) or "none"
-            return f"There is no brain called **{wanted}**. This install has: {known}."
-        settled = records.read(directory.records(agent))
-        if str(settled.get("provider_name") or "") == wanted:
-            return f"**{agent}** already answers on **{wanted}**."
-        records.stated(directory.records(agent), {"provider_name": wanted})
-        found = arriving.standing_in(agent, place)
-        if found is not None:
-            kept.forget_sessions(agent, found)
-        return f"**{agent}** now uses **{wanted}**. This conversation starts fresh."
+        with locking.only_one(paths.lock(), "this install"):
+            try:
+                adapters.where(wanted)
+            except Exception:                          # noqa: BLE001 — see below
+                # **Refused before anything is written**, and named against what this install has.
+                known = ", ".join(f"**{one}**" for one in adapters.known()) or "none"
+                return f"There is no brain called **{wanted}**. This install has: {known}."
+            if wanted_alias:
+                try:
+                    if not adapters.capabilities(wanted).get("account_aliases", False):
+                        return f"**{wanted}** does not support additional account aliases."
+                    accounts.account_home(wanted, wanted_alias)
+                except accounts.Refused as why:
+                    return str(why)
+            settled = records.read(directory.records(agent))
+            same_provider = (accounts.same(
+                str(settled.get("provider_name") or ""), settled.get("provider_alias"),
+                wanted, wanted_alias) if wanted_alias else
+                str(settled.get("provider_name") or "") == wanted)
+            if same_provider and settled.get("provider_alias") == wanted_alias:
+                return f"**{agent}** already answers on **{_shown_provider(wanted, wanted_alias)}**."
+            records.stated(directory.records(agent), {
+                "provider_name": (adapters.canonical(wanted) if wanted_alias else wanted),
+                "provider_alias": wanted_alias})
+            found = arriving.standing_in(agent, place)
+            if found is not None:
+                kept.forget_sessions(agent, found)
+        shown = _shown_provider(wanted, wanted_alias)
+        return f"**{agent}** now uses **{shown}**. This conversation starts fresh."
 
     def _only_one(self, agent: str, kind: str) -> Optional[str]:
         """The single person this channel allows, or `None` where it allows any other number."""
@@ -808,7 +834,8 @@ def _what_agents_are() -> str:
     for agent in agents:
         try:
             row = records.read(directory.records(agent))
-            provider = _markdown_text(_named(str(row.get("provider_name") or ""))) \
+            provider = _markdown_text(_shown_provider(
+                str(row.get("provider_name") or ""), row.get("provider_alias"))) \
                 or "provider unknown"
             description = _markdown_text(row.get("describes")) or "no description"
         except Exception:                              # noqa: BLE001 — one damaged agent stays listed
@@ -892,22 +919,26 @@ class OnADelegation(IntoAChannel):
 
     def answer_this(self, agent: str, conversation: int, delegation_id: str,
                     delegator: str, provider_name: Optional[str] = None,
-                    model_name: Optional[str] = None) -> None:
+                    model_name: Optional[str] = None,
+                    provider_alias: Optional[str] = None) -> None:
         """Take the turn that answers another agent. The brief is already the conversation's."""
         threading.Thread(target=self._answered, name=f"delegation-{delegation_id}",
                          args=(agent, conversation, delegation_id, delegator,
-                               provider_name, model_name),
+                               provider_name, model_name, provider_alias),
                          daemon=True).start()
 
     def stop_this(self, agent: str, conversation: int, delegation_id: str,
                   delegator: str, provider_name: Optional[str] = None,
-                  model_name: Optional[str] = None) -> bool:
+                  model_name: Optional[str] = None,
+                  provider_alias: Optional[str] = None) -> bool:
         """End delegated work, including a brief stopped before its provider began."""
         _body, messages = _delegated_prompt(agent, conversation, delegator)
-        if provider_name is None and model_name is None:
+        if provider_name is None and provider_alias is None and model_name is None:
             return turns.stop_or_settle_pending(agent, conversation, messages)
         return turns.stop_or_settle_pending(agent, conversation, messages,
-                                            provider_name=provider_name, model_name=model_name)
+                                            provider_name=provider_name,
+                                            provider_alias=provider_alias,
+                                            model_name=model_name)
 
     def review_this(self, agent: str, conversation: int, answer: str, from_agent: str,
                     delegation_id: str = "", answer_id: str = "") -> bool:
@@ -961,7 +992,8 @@ class OnADelegation(IntoAChannel):
 
     def _answered(self, agent: str, conversation: int, delegation_id: str,
                   delegator: str, provider_name: Optional[str],
-                  model_name: Optional[str]) -> None:
+                  model_name: Optional[str],
+                  provider_alias: Optional[str]) -> None:
         """One turn answering one delegation. **Never raises** — this is a thread, nobody is above.
 
         The read is inside the guard and not before it, which is the difference between a claim and
@@ -977,6 +1009,7 @@ class OnADelegation(IntoAChannel):
                    situation=instructions.AGENT_TO_AGENT, answering=delegation_id,
                    caller_agent=delegator, about=f"delegation {delegation_id}",
                    message_ids=message_ids, provider_name=provider_name,
+                   provider_alias=provider_alias,
                    model_name=model_name)
 
     def _reviewed(self, agent: str, conversation: int, said: str, from_agent: str,
@@ -1003,6 +1036,7 @@ class OnADelegation(IntoAChannel):
               admitted: Optional[turns.Admission] = None,
               schedule_id: Optional[int] = None, schedule_name: str = "",
               provider_name: Optional[str] = None,
+              provider_alias: Optional[str] = None,
               model_name: Optional[str] = None) -> bool:
         """Start a turn, or say this into the one already running, or ask again in a moment.
 
@@ -1054,7 +1088,8 @@ class OnADelegation(IntoAChannel):
                             source=source, place=place, answering=answering,
                             schedule_id=schedule_id, schedule_name=schedule_name,
                             caller_agent=caller_agent, inbound_messages=message_ids,
-                            provider_name=provider_name, model_name=model_name),
+                            provider_name=provider_name, provider_alias=provider_alias,
+                            model_name=model_name),
                             # A schedule still owes one final report, not its review activity.
                             watching=(watching.heard
                                       if watching and source == arriving.FROM_CHANNEL else None),
@@ -1187,6 +1222,7 @@ class OnAContinuation(IntoAChannel):
                         situation=instructions.USER_TO_AGENT,
                         source=arriving.FROM_CHANNEL, place=place,
                         lifecycle_continuation=True, expected_provider=row.provider,
+                        expected_provider_alias=row.provider_alias,
                         expected_instructions=row.origin_instructions),
                     admitting=lambda: continuations.claim(agent, handoff) is not None,
                     watching=watching.heard, admitted=started)
@@ -1294,6 +1330,12 @@ def _named(provider: str) -> str:
     the turn's own record, and a surface that showed a different word could not be matched back to it.
     """
     return PurePosixPath(provider).name if "/" in provider else provider
+
+
+def _shown_provider(provider: str, alias: Optional[str]) -> str:
+    """A provider identity safe for a channel, including its optional public alias."""
+    shown = _named(provider)
+    return f"{shown} ({_metadata_name(alias)})" if alias else shown
 
 
 def _metadata_name(value: str) -> str:

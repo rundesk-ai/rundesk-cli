@@ -318,7 +318,8 @@ class Steering(Protocol):
     def asked(self, agent: str, kind: str, place: str, who: str, query: str) -> str:
         ...
 
-    def configured(self, agent: str, kind: str, place: str, who: str, provider: str) -> str:
+    def configured(self, agent: str, kind: str, place: str, who: str, provider: str,
+                   alias: Optional[str] = None) -> str:
         ...
 
 
@@ -1213,7 +1214,10 @@ def _gestured(agent: str, where: Path, one: Running, record: Dict[str, Any],
             said = one.steering.asked(agent, kind, place, who, query)
         else:
             provider = str(record.get("provider") or "")
-            said = one.steering.configured(agent, kind, place, who, provider)
+            alias = str(record["alias"]) if record.get("alias") else None
+            said = (one.steering.configured(agent, kind, place, who, provider, alias)
+                    if alias is not None
+                    else one.steering.configured(agent, kind, place, who, provider))
     except Exception as why:                           # noqa: BLE001 — see the module docstring
         _note(where, f"channel {kind}: {saying} went wrong ({why})", logs.ERROR)
         said = "That could not be done just now."

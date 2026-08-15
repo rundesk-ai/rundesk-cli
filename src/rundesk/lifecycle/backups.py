@@ -1,4 +1,4 @@
-"""Copies of what the owner keeps, and where they are kept.
+"""Copies of what the owner keeps, except provider-owned credential homes, and where they are kept.
 
 A copy is the whole of `data/` under a name that says when it was made. New copies are compressed ZIP
 archives; v0.40 directory copies remain valid restore inputs. Four things happen to them — they are
@@ -334,6 +334,7 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
         try:
             shutil.copytree(
                 from_where, pending, symlinks=True,
+                ignore=_without_provider_accounts(from_where),
                 copy_function=_copying(from_where, vanished, said))
             _without_update_intents(pending)
             # **Before the rename, so a copy is never named like one until every database in it is
@@ -475,6 +476,24 @@ def _without_update_intents(pending: Path) -> None:
         transient = copied.parent / directory.UPDATE_INTENT
         if transient.exists() or transient.is_symlink():
             files.remove_one(transient)
+
+
+def _without_provider_accounts(data: Path) -> Callable[[str, List[str]], List[str]]:
+    """Never read or copy provider-owned account homes into Rundesk backups.
+
+    Skipping the registry at its top-level boundary means the backup walker never enters an account
+    home. Aliases must therefore be registered and authorized again after restoring an install.
+    """
+    root = data.resolve()
+
+    def ignored(where: str, names: List[str]) -> List[str]:
+        try:
+            here = Path(where).resolve()
+        except OSError:
+            return []
+        return ["provider-accounts"] if here == root and "provider-accounts" in names else []
+
+    return ignored
 
 
 def _a_snapshot(live: Path, copied: Path, said: Callable[[str], None]) -> None:

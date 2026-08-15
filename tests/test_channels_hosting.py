@@ -343,8 +343,10 @@ class _SteeringStub:
         self.asked_with.append((agent, kind, place, who, query))
         return self._answer(f"{self._answering}: {query}")
 
-    def configured(self, agent, kind, place, who, provider):
-        self.configured_with.append((agent, kind, place, who, provider))
+    def configured(self, agent, kind, place, who, provider, alias=None):
+        self.configured_with.append(
+            (agent, kind, place, who, provider, alias) if alias else
+            (agent, kind, place, who, provider))
         return self._answer(f"{self._answering}: {provider}")
 
 
@@ -1758,6 +1760,16 @@ class WhatAGestureReaches(Hosting):
         self.assertTrue(support.waited_until(lambda: steering.configured_with, PATIENCE))
         self.assertEqual((self.agent, "discord", "1180", "2207", "codex"),
                          steering.configured_with[0])
+
+    def test_changing_to_an_additional_account_carries_the_alias(self):
+        steering = _SteeringStub()
+        self.gesturing(self.a_gesture(
+            say="configure", provider="claude", alias="work", control=None), steering)
+
+        self.assertTrue(support.waited_until(lambda: steering.configured_with, PATIENCE))
+        self.assertEqual(
+            (self.agent, "discord", "1180", "2207", "claude", "work"),
+            steering.configured_with[0])
 
     def test_a_word_outside_the_closed_set_is_nothing_this_gateway_does(self):
         # A gesture whose name is whatever the caller typed is a command runner with a chat window
