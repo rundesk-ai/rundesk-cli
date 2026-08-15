@@ -39,7 +39,7 @@ from rundesk.channels import kept as channels_kept
 from rundesk.core import paths
 from rundesk.delegations import hosting as delegations
 from rundesk.delegations import kept as delegations_kept
-from rundesk.providers import answering, kept, turns
+from rundesk.providers import accounts, adapters, answering, kept, turns
 from rundesk.schedules import kept as schedules_kept
 from rundesk.utils import programs
 
@@ -654,6 +654,22 @@ class AMessageOnAChannelIsAnswered(Answering):
         self.assertIn(other, said)
         self.assertEqual(other, records.read(directory.records(self.agent))["provider_name"])
 
+    def test_changing_to_an_alias_is_atomic_and_omission_restores_the_provider_default(self):
+        self.a_channel(allowed=("2207",))
+        other = self.a_provider()
+        accounts.registered(other, "work")
+        with mock.patch.object(
+                adapters, "capabilities", return_value={"account_aliases": True}):
+            said = self.a_gesture().configured(
+                self.agent, "discord", "1180", "2207", other, "work")
+            self.assertIn("work", said)
+            configured = records.read(directory.records(self.agent))
+            self.assertEqual((other, "work"),
+                             (configured["provider_name"], configured["provider_alias"]))
+
+            self.a_gesture().configured(self.agent, "discord", "1180", "2207", other)
+        self.assertIsNone(records.read(directory.records(self.agent))["provider_alias"])
+
     def test_a_brain_this_install_does_not_have_is_refused_before_anything_is_written(self):
         """A default nothing stands behind is an agent whose every turn fails from the next message
         on, and the person who typed it would be the last to find out."""
@@ -663,6 +679,15 @@ class AMessageOnAChannelIsAnswered(Answering):
         self.assertIn("no brain called", said)
         self.assertEqual(was, records.read(directory.records(self.agent))["provider_name"],
                          "a brain that does not exist was written down anyway")
+
+    def test_a_blank_alias_is_refused_before_anything_is_written(self):
+        self.a_channel(allowed=("2207",))
+        other = self.a_provider()
+        before = records.read(directory.records(self.agent))
+        said = self.a_gesture().configured(
+            self.agent, "discord", "1180", "2207", other, "  ")
+        self.assertIn("cannot be blank", said)
+        self.assertEqual(before, records.read(directory.records(self.agent)))
 
     def test_a_shared_channel_cannot_change_what_the_agent_is_for_everybody(self):
         """Being on a shared room's allow list is authority to speak to the agent there, and it is
@@ -1018,6 +1043,12 @@ class WhatAgentsSays(support.Isolated):
             said,
         )
         self.assertNotIn(str(support.CHECKOUT), said)
+
+    def test_it_shows_the_additional_account_alias_with_the_provider(self):
+        directory.made("winston", support.A_STAND_IN, provider_alias="work")
+        with mock.patch.object(answering, "_granted_skills", return_value=[]):
+            said = answering._what_agents_are()
+        self.assertIn("(a-stand-in (work))", said)
 
     def test_provider_text_cannot_reshape_the_listing_and_an_empty_one_is_named(self):
         directory.made("ada", "co*dex\nextra")

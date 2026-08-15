@@ -27,11 +27,22 @@ from rundesk.agents import directory, records
 from rundesk.channels import arriving
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
+from rundesk.delegations import kept as delegations
 from rundesk.exits import OK
-from rundesk.providers import adapters, answering, instructions, kept, protocol, team, turns
+from rundesk.providers import (
+    accounts,
+    adapters,
+    answering,
+    instructions,
+    kept,
+    protocol,
+    team,
+    turns,
+)
+from rundesk.utils import locking
 from rundesk.utils.terminal import as_table
 
-TROUBLE = (adapters.NotRunnable, answering.Refused, directory.Refused,
+TROUBLE = (accounts.Refused, adapters.NotRunnable, answering.Refused, directory.Refused,
            records.NotThere, records.Unreadable, turns.Busy, OSError)
 
 #: What a person is shown for a capability an adapter did not claim. Absent means no, and saying so
@@ -65,6 +76,27 @@ def register(sub: Subcommands) -> None:
 
     what.add_parser("list", help="every provider adapter this install can run")
 
+    aliases = what.add_parser("aliases", help="registered additional accounts for one provider")
+    alias_what = aliases.add_subparsers(dest="alias_what", metavar="<what>")
+    alias_list = alias_what.add_parser("list", help="list registered aliases and current status")
+    alias_list.add_argument("provider", metavar="<provider>")
+    alias_add = alias_what.add_parser("add", help="register one additional account")
+    alias_add.add_argument("provider", metavar="<provider>")
+    alias_add.add_argument("alias", metavar="<alias>")
+    alias_remove = alias_what.add_parser("remove", help="remove one registered alias and its home")
+    alias_remove.add_argument("provider", metavar="<provider>")
+    alias_remove.add_argument("alias", metavar="<alias>")
+    alias_remove.add_argument("--confirm", action="store_true")
+
+    for verb, help_text in (("status", "check one account with the provider's official command"),
+                            ("login", "run the provider's official interactive login"),
+                            ("logout", "run the provider's official logout")):
+        account = what.add_parser(verb, help=help_text)
+        account.add_argument("provider", metavar="<provider>")
+        account.add_argument("--alias", metavar="<alias>")
+        if verb == "logout":
+            account.add_argument("--confirm", action="store_true")
+
     asking = what.add_parser("check", help="ask one what it can do, offline")
     asking.add_argument("provider", metavar="<provider>",
                         help="a shipped name, one this install was given, or a path to a program")
@@ -95,6 +127,14 @@ def cmd_providers(args: argparse.Namespace) -> int:
             return _listed()
         if what == "check":
             return _checked(args.provider)
+        if what == "aliases":
+            return _aliases(args)
+        if what == "status":
+            return _account_status(args.provider, args.alias)
+        if what == "login":
+            return _account_login(args.provider, args.alias)
+        if what == "logout":
+            return _account_logout(args.provider, args.alias, args.confirm)
         if what == "instructions":
             return _instructions(getattr(args, "agent", None), args.situation, args.layers,
                                  args.turn)
@@ -137,6 +177,121 @@ def _checked(provider: str) -> int:
     if not said:
         print("\nit answered nothing, which is a complete answer: it can do none of the above")
     return OK
+
+
+def _aliases(args: argparse.Namespace) -> int:
+    """Register, list, or remove provider-neutral additional accounts."""
+    what = getattr(args, "alias_what", None)
+    if what is None:
+        return _failed("aliases was not told what to do",
+                       "list them with: rundesk providers aliases list <provider>")
+    with locking.only_one(paths.lock(), "this install"):
+        provider = _canonical_provider(args.provider)
+        _supports_aliases(provider)
+        if what == "list":
+            there = accounts.known(provider)
+            print(f"aliases for {args.provider} in {accounts.provider_at(provider)}")
+            if not there:
+                print("        no additional accounts registered")
+                return OK
+            as_table(("ALIAS", "STATUS"),
+                     [(one.alias, adapters.account_status(provider, one.alias, one.home))
+                      for one in there])
+            return OK
+        if what == "add":
+            one = accounts.registered(provider, args.alias)
+            print(f"registered {args.provider} ({one.alias})")
+            print(f"        home    {one.home}")
+            print(f"        status  {adapters.account_status(provider, one.alias, one.home)}")
+            print(f"        login   rundesk providers login {args.provider} --alias {one.alias}")
+            return OK
+        if what == "remove":
+            home = accounts.account_home(provider, args.alias)
+            if not args.confirm:
+                return _failed(
+                    f"this would remove {args.provider} ({args.alias}) and its provider-owned home",
+                    f"take   {home.parent if home else ''}",
+                    "nothing was removed. To go ahead:",
+                    f"rundesk providers aliases remove {args.provider} {args.alias} --confirm")
+            used = _alias_in_use(provider, args.alias, include_references=True)
+            if used:
+                return _failed(used, "nothing was removed")
+            gone = accounts.removed(provider, args.alias)
+            print(f"removed {args.provider} ({args.alias})")
+            print(f"        took   {gone}")
+            return OK
+    raise AssertionError(f"providers aliases {what} is registered and answered by nothing")
+
+
+def _account_status(named: str, alias: Optional[str]) -> int:
+    provider = _canonical_provider(named)
+    home = accounts.account_home(provider, alias)
+    state = adapters.account_status(provider, alias, home)
+    print(f"{_shown_account(named, alias)}: {state}")
+    return OK if state != "unable_to_check" else _failed(
+        f"{_shown_account(named, alias)} was unable to check authentication")
+
+
+def _account_login(named: str, alias: Optional[str]) -> int:
+    provider = _canonical_provider(named)
+    home = accounts.account_home(provider, alias)
+    state = adapters.account_login(provider, alias, home)
+    if state != "authenticated":
+        return _failed(f"{_shown_account(named, alias)} login did not earn authenticated status")
+    print(f"{_shown_account(named, alias)}: authenticated")
+    return OK
+
+
+def _account_logout(named: str, alias: Optional[str], confirming: bool) -> int:
+    with locking.only_one(paths.lock(), "this install"):
+        provider = _canonical_provider(named)
+        home = accounts.account_home(provider, alias)
+        if not confirming:
+            return _failed(f"logout would target {_shown_account(named, alias)}",
+                           "nothing was logged out. To go ahead:",
+                           f"rundesk providers logout {named}"
+                           + (f" --alias {alias}" if alias else "") + " --confirm")
+        used = _alias_in_use(provider, alias, include_references=False)
+        if used:
+            return _failed(used, "nothing was logged out")
+        state = adapters.account_logout(provider, alias, home)
+    if state != "signed_out":
+        return _failed(f"{_shown_account(named, alias)} logout did not earn signed-out status")
+    print(f"{_shown_account(named, alias)}: signed_out")
+    return OK
+
+
+def _canonical_provider(named: str) -> str:
+    return adapters.canonical(named)
+
+
+def _supports_aliases(provider: str) -> None:
+    if not adapters.capabilities(provider).get("account_aliases"):
+        raise adapters.NotRunnable(f"the {provider} adapter does not support account aliases")
+
+
+def _shown_account(provider: str, alias: Optional[str]) -> str:
+    return f"{provider} ({alias})" if alias else f"{provider} (implicit default)"
+
+
+def _alias_in_use(provider: str, alias: Optional[str], include_references: bool) -> str:
+    """Why this exact account boundary cannot change now, or an empty string."""
+    for agent in directory.known():
+        for row in kept.list_unfinished_turns(agent):
+            if accounts.same(str(row["provider_name"]), row.get("provider_alias"), provider, alias):
+                if turns.standing(agent, int(row["conversation_id"])) is not False:
+                    return (f"{_shown_account(provider, alias)} has an active turn for {agent}; "
+                            "its account cannot change underneath it")
+        if not include_references or alias is None:
+            continue
+        configured = records.read(directory.records(agent))
+        if accounts.same(str(configured.get("provider_name") or ""),
+                         configured.get("provider_alias"), provider, alias):
+            return f"{agent} uses {_shown_account(provider, alias)} as its configured default"
+        for one in delegations.outstanding(agent):
+            if accounts.same(one.provider_name, one.provider_alias, provider, alias):
+                return f"{one.delegation_id} still uses {_shown_account(provider, alias)}"
+    return ""
 
 
 def _besides_what_was_asked(said: Dict[str, Any]) -> Dict[str, Any]:

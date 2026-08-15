@@ -76,7 +76,7 @@ DID = ("read", "search", "run", "edit", "list", "make", "delegate",
 #: adapter that can be sent to mid-turn has its input held open and is given records, and one that
 #: cannot is given the prompt and told there is no more. Declared rather than attempted, because
 #: holding input open for a brain that will never read again is a turn that never ends.
-CAPABILITIES = ("tools", "resume", "model", "usage", "steer")
+CAPABILITIES = ("tools", "resume", "model", "usage", "steer", "account_aliases")
 
 #: How much of the machine a turn may touch, in rundesk's words rather than any vendor's. Two,
 #: because a posture nobody can act on is not worth carrying: an adapter maps these onto whatever

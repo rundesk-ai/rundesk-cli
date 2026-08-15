@@ -40,7 +40,7 @@ the owner's live install.
 
 import os
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Optional
 
 from rundesk.agents import pages
 from rundesk.agents.records import beside, stated
@@ -340,7 +340,8 @@ def taken(name: str) -> str:
     return ""
 
 
-def made(name: str, provider: str, describes: str = "", role: str = pages.DEFAULT_ROLE) -> Path:
+def made(name: str, provider: str, describes: str = "", role: str = pages.DEFAULT_ROLE,
+         provider_alias: Optional[str] = None) -> Path:
     """Make an agent, and hand back the directory it stands in.
 
     `describes` is what this agent is for, in one sentence, and it is optional because an install
@@ -391,11 +392,11 @@ def made(name: str, provider: str, describes: str = "", role: str = pages.DEFAUL
         trouble = taken(name)
         if trouble:
             raise Refused(trouble)
-        return _built(name, provider, describes or "", role, agents, migration)
+        return _built(name, provider, describes or "", role, agents, migration, provider_alias)
 
 
 def _built(name: str, provider: str, describes: str, role: str, agents: Path,
-           migration: Any) -> Path:
+           migration: Any, provider_alias: Optional[str] = None) -> Path:
     """Build the agent under a staged name and rename it into place. Held by `made`'s lock."""
     building = files.incoming_of(agents / name)
     files.discard(building)
@@ -431,6 +432,8 @@ def _built(name: str, provider: str, describes: str, role: str, agents: Path,
         # who deliberately said nothing, and the listing has to be able to tell an agent nobody has
         # described from one described as nothing.
         said = {"agent_name": name, "provider_name": provider}
+        if provider_alias is not None:
+            said["provider_alias"] = provider_alias
         if describes.strip():
             said["describes"] = describes.strip()
         said["role"] = role

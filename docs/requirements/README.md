@@ -14,6 +14,7 @@ current promises unless a current PRD links to them.
 | [agent-delegation.md](./agent-delegation.md) | predecessor draft | the previous build's delegation design |
 | [agent-role.md](./agent-role.md) | predecessor draft | the previous build's role-worker design |
 | [machine-permissions.md](./machine-permissions.md) | current draft | what macOS lets a rundesk process do, and whose grants an answer is about |
+| [provider-account-alias.md](./provider-account-alias.md) | implemented | optional additional provider accounts and immutable delegation selection |
 
 ## Status and evidence
 

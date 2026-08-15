@@ -49,6 +49,7 @@ class Handoff(NamedTuple):
     observed_pid: Optional[int]
     conversation: int
     provider: str
+    provider_alias: Optional[str]
     origin_instructions: str
 
 
@@ -285,6 +286,7 @@ def terminal(agent: str) -> List[Handoff]:
 
 _SELECT = (
     "SELECT lc.*, t.conversation_id AS conversation, t.provider_name AS provider, "
+    "t.provider_alias AS provider_alias, "
     "t.instructions_sha256 AS origin_instructions "
     "FROM lifecycle_continuations lc JOIN turns t ON t.id = lc.origin_turn_id"
 )
@@ -338,6 +340,7 @@ def _as_handoff(row: sqlite3.Row) -> Handoff:
                           if row["observed_version"] is not None else None),
         observed_pid=(int(row["observed_pid"]) if row["observed_pid"] is not None else None),
         conversation=int(row["conversation"]), provider=str(row["provider"]),
+        provider_alias=row["provider_alias"],
         origin_instructions=str(row["origin_instructions"] or ""),
     )
 

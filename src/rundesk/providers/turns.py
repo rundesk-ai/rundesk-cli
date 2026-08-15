@@ -61,7 +61,16 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, NamedTuple, Op
 from rundesk.agents import directory, records
 from rundesk.channels import arriving
 from rundesk.core import paths
-from rundesk.providers import adapters, environment, instructions, kept, protocol, streaming, team
+from rundesk.providers import (
+    accounts,
+    adapters,
+    environment,
+    instructions,
+    kept,
+    protocol,
+    streaming,
+    team,
+)
 from rundesk.skills import grants
 from rundesk.utils import lines, locking, logs
 
@@ -161,6 +170,10 @@ class Request(NamedTuple):
     #: positional shape older callers may use; ``None`` keeps ordinary late binding to the agent's
     #: durable configuration.
     provider_name: Optional[str] = None
+    #: The originating additional account. A mismatch is as unsafe as a provider mismatch.
+    expected_provider_alias: Optional[str] = None
+    #: The alias admitted with an explicit provider, or ``None`` for its implicit default.
+    provider_alias: Optional[str] = None
 
 
 class Outcome(NamedTuple):
@@ -178,6 +191,7 @@ class Outcome(NamedTuple):
     #: showing what a turn cost has to say which brain it cost it on — read off the turn's own
     #: resolution rather than asked again, so a surface and the ledger cannot name two.
     provider_name: str = ""
+    provider_alias: Optional[str] = None
     #: How long the turn took, from admission to settled, on a **monotonic** clock. Never a
     #: difference of wall-clock stamps: those move when the machine's time is corrected, and a turn
     #: that ran for two minutes across one of those reported a negative duration.
@@ -187,6 +201,23 @@ class Outcome(NamedTuple):
     def worked(self) -> bool:
         """Whether this is a turn anybody got an answer out of."""
         return self.turn_status == kept.DONE
+
+
+class _TurnAdmission(NamedTuple):
+    """Resolved turn state whose account reference and row were decided under one install lock."""
+
+    settled: Dict[str, Any]
+    provider_name: str
+    provider_alias: Optional[str]
+    account_home: Any
+    settings: Optional[str]
+    effective_model: Optional[str]
+    can: Dict[str, Any]
+    teammates: str
+    prompt: instructions.Prompt
+    resume: Optional[str]
+    began: float
+    turn: int
 
 
 @contextlib.contextmanager
@@ -236,8 +267,13 @@ def busy(agent: str, conversation: int) -> bool:
 
 
 def standing(agent: str, conversation: int) -> Optional[bool]:
-    """Whether this conversation is active; ``None`` when the kernel cannot be asked."""
-    return locking.is_held(adapters.lock_of(agent, conversation))
+    """Whether this conversation is active; ``None`` when the kernel cannot be asked.
+
+    The shared status probe takes the same brief admission boundary as an exclusive claim. Without
+    it, a turn arriving during the probe can read that probe as another turn and be refused as busy.
+    """
+    with locking.only_one(paths.work_admission_lock(), guarding="probing provider work"):
+        return locking.is_held(adapters.lock_of(agent, conversation))
 
 
 def activity(agent: str) -> Optional[List[str]]:
@@ -247,20 +283,21 @@ def activity(agent: str) -> Optional[List[str]]:
     the row is written, deliberately, and an updater observing that admission window must still see
     the turn that already owns its conversation.
     """
-    try:
-        conversations = list(directory.conversations(agent).iterdir())
-    except FileNotFoundError:
-        return []
-    except OSError:
-        return None
-    active = []
-    for conversation in conversations:
-        held = locking.is_held(conversation / adapters.LOCK)
-        if held is None:
+    with locking.only_one(paths.work_admission_lock(), guarding="probing provider work"):
+        try:
+            conversations = list(directory.conversations(agent).iterdir())
+        except FileNotFoundError:
+            return []
+        except OSError:
             return None
-        if held:
-            active.append(conversation.name)
-    return sorted(active)
+        active = []
+        for conversation in conversations:
+            held = locking.is_held(conversation / adapters.LOCK)
+            if held is None:
+                return None
+            if held:
+                active.append(conversation.name)
+        return sorted(active)
 
 
 class Admission:
@@ -522,6 +559,7 @@ def stop(agent: str, conversation: int) -> bool:
 def stop_or_settle_pending(agent: str, conversation: int,
                            inbound_messages: Tuple[int, ...],
                            provider_name: Optional[str] = None,
+                           provider_alias: Optional[str] = None,
                            model_name: Optional[str] = None) -> bool:
     """Stop a live turn, or make an unstarted inbound delegation terminal without a provider.
 
@@ -540,6 +578,8 @@ def stop_or_settle_pending(agent: str, conversation: int,
                 "conversation_id": conversation,
                 "provider_name": (provider_name if provider_name is not None
                                   else str(settled.get("provider_name") or "")),
+                "provider_alias": (provider_alias if provider_name is not None
+                                   else settled.get("provider_alias")),
                 "model_name": model_name,
                 "access_mode": protocol.ACCESS_WORK,
             })
@@ -713,74 +753,9 @@ def _held(request: Request, held: int, watching, saying,
           admitted: Optional[Callable[[], None]] = None) -> Outcome:
     """One turn, with the conversation already claimed."""
     agent = request.agent
-    # **Resolved before anything is written down.** A provider nothing stands behind is a turn that
-    # cannot start, and a row saying one was admitted would be a record of something that never was.
-    settled = records.read(directory.records(agent))
-    configured_provider = str(settled.get("provider_name") or "")
-    provider_name = (request.provider_name if request.provider_name is not None
-                     else configured_provider)
-    adapters.where(provider_name)
-    settings = (_as_settings(settled.get("agent_settings"))
-                if request.provider_name is None or provider_name == configured_provider else None)
-    effective_model = request.model_name
-    if effective_model is None and request.provider_name is None:
-        effective_model = settled.get("model_name")
-    can = protocol.parse_capabilities(adapters.capabilities(provider_name, settings))
-
-    # A person-facing or scheduled work turn may hand off mutable work. Delegated turns remain
-    # depth one, and read mode forbids creating a handoff.
-    may_hand_off = (request.situation in (instructions.USER_TO_AGENT,
-                                          instructions.SCHEDULE_TO_AGENT)
-                    and request.access_mode != protocol.ACCESS_READ)
-    teammates = team.for_agent(agent) if may_hand_off else ""
-    prompt = instructions.build(situation=request.situation,
-                                variables=_about(request, provider_name),
-                                additions=request.additions,
-                                # Who this agent may hand work to, read now rather than kept: an
-                                # agent added this morning is one it can delegate to this afternoon,
-                                # and a list cached anywhere would be a list that goes stale
-                                # silently. Illegal situations receive no listing at all.
-                                team=teammates)
-    resume = None if request.fresh else kept.get_session(agent, request.conversation, provider_name)
-    if request.lifecycle_continuation:
-        safe_resume = bool(
-            resume
-            and can.get("resume") is True
-            and provider_name == request.expected_provider
-            and prompt.sha256 == request.expected_instructions
-            and kept.latest_instructions(
-                agent, request.conversation, provider_name) == request.expected_instructions)
-        if not safe_resume:
-            if resume:
-                # Never leave an unsafe handle available for the following turn to revive.
-                kept.delete_session(agent, request.conversation, provider_name)
-            resume = None
-    if (resume and kept.latest_instructions(
-            agent, request.conversation, provider_name) != prompt.sha256):
-        # Some brains bind the preface when a session starts and accept-but-ignore replacements on
-        # resume. Throw the stale handle away, rather than merely skipping it once: if this fresh
-        # attempt fails before returning a new handle, the next turn must not revive old authority.
-        kept.delete_session(agent, request.conversation, provider_name)
-        resume = None
-    # **From admitted to settled** (R-DIS-24) — what somebody waiting actually experienced, which
-    # starts here and not when the brain was reached: resolving a provider and building the prompt
-    # are part of the wait. Monotonic, so a clock correction mid-turn cannot make it negative.
-    began = time.monotonic()
-    turn = kept.add_turn(agent, {
-        "conversation_id": request.conversation,
-        "schedule_id": request.schedule_id,
-        # **Written beside the id, because the id does not survive the schedule.** The foreign key
-        # is `ON DELETE SET NULL`, so a schedule taken away detaches every turn it ever ran and the
-        # ledger forgets who spent the cost. The name is derived here already for the layers.
-        "schedule_name": _schedule_name(request) or None,
-        "provider_name": provider_name,
-        "model_name": effective_model if request.provider_name is not None else request.model_name,
-        "access_mode": request.access_mode,
-        "provider_capabilities": json.dumps(can, sort_keys=True),
-        "session_resumed": 1 if resume else 0,
-        "instructions_sha256": prompt.sha256,
-        "instructions_bytes": prompt.total_bytes,
-    })
+    admitted_turn = _admit(request)
+    (_settled, provider_name, provider_alias, account_home, settings, effective_model, can,
+     teammates, prompt, resume, began, turn) = admitted_turn
 
     with _settled_whatever_happens(agent, turn) as settling:
         arriving.handled_by_turn(agent, request.conversation, request.inbound_messages, turn)
@@ -805,7 +780,8 @@ def _held(request: Request, held: int, watching, saying,
             skills=grants.where(agent), turn=turn, access_mode=request.access_mode,
             raw=raw, model=effective_model, resume=resume,
             settings=settings, answering=request.answering,
-            preface=prompt.text, owners=environment.owners_own())
+            preface=prompt.text, owners=environment.owners_own(),
+            provider_alias=provider_alias, provider_account_home=account_home)
         # **A turn nobody passed words to is still one a channel can speak into.** The words go
         # somewhere `also_say` can reach for exactly as long as this turn will read them.
         reachable = (Words(
@@ -825,9 +801,88 @@ def _held(request: Request, held: int, watching, saying,
                     request, provider_name, told, turn, held, can, watching,
                     saying if saying is not None else (reachable.each() if reachable else None),
                     reachable, ours)
-        settling.update(_became(request, turn, said, stream, can, provider_name,
-                                began_at, _how_big(raw), time.monotonic() - began, ours=ours))
+        settling.update(_became(
+            request, turn, said, stream, can, provider_name,
+            began_at, _how_big(raw), time.monotonic() - began, ours=ours,
+            provider_alias=provider_alias))
     return settling.outcome
+
+
+def _admit(request: Request) -> _TurnAdmission:
+    """Resolve and record a turn without an account change crossing its admission boundary."""
+    agent = request.agent
+    with locking.only_one(paths.lock(), "this install"):
+        # **Resolved before anything is written down.** A provider nothing stands behind is a turn
+        # that cannot start, and a row claiming admission would record something that never was.
+        settled = records.read(directory.records(agent))
+        configured_provider = str(settled.get("provider_name") or "")
+        configured_alias = settled.get("provider_alias")
+        provider_name = (request.provider_name if request.provider_name is not None
+                         else configured_provider)
+        adapters.where(provider_name)
+        provider_alias = (request.provider_alias if request.provider_name is not None
+                          else configured_alias)
+        try:
+            account_home = accounts.account_home(provider_name, provider_alias)
+        except accounts.Refused as why:
+            raise NotRunnable(str(why)) from why
+        settings = (_as_settings(settled.get("agent_settings"))
+                    if request.provider_name is None or provider_name == configured_provider
+                    else None)
+        effective_model = request.model_name
+        if effective_model is None and request.provider_name is None:
+            effective_model = settled.get("model_name")
+        can = protocol.parse_capabilities(adapters.capabilities(provider_name, settings))
+        if provider_alias is not None and not can.get("account_aliases"):
+            raise NotRunnable(f"the {provider_name} adapter does not support account aliases")
+
+        may_hand_off = (request.situation in (instructions.USER_TO_AGENT,
+                                              instructions.SCHEDULE_TO_AGENT)
+                        and request.access_mode != protocol.ACCESS_READ)
+        teammates = team.for_agent(agent) if may_hand_off else ""
+        prompt = instructions.build(situation=request.situation,
+                                    variables=_about(request, provider_name),
+                                    additions=request.additions, team=teammates)
+        resume = (None if request.fresh else kept.get_session(
+            agent, request.conversation, provider_name, provider_alias))
+        if request.lifecycle_continuation:
+            safe_resume = bool(
+                resume and can.get("resume") is True
+                and provider_name == request.expected_provider
+                and provider_alias == request.expected_provider_alias
+                and prompt.sha256 == request.expected_instructions
+                and kept.latest_instructions(
+                    agent, request.conversation, provider_name,
+                    provider_alias) == request.expected_instructions)
+            if not safe_resume:
+                if resume:
+                    kept.delete_session(agent, request.conversation, provider_name, provider_alias)
+                resume = None
+        if (resume and kept.latest_instructions(
+                agent, request.conversation, provider_name, provider_alias) != prompt.sha256):
+            kept.delete_session(agent, request.conversation, provider_name, provider_alias)
+            resume = None
+
+        began = time.monotonic()
+        turn = kept.add_turn(agent, {
+            "conversation_id": request.conversation,
+            "schedule_id": request.schedule_id,
+            "schedule_name": _schedule_name(request) or None,
+            # Requested spelling remains durable provenance; only account lookup/session identity
+            # canonicalize a path adapter.
+            "provider_name": provider_name,
+            "provider_alias": provider_alias,
+            "model_name": (effective_model if request.provider_name is not None
+                           else request.model_name),
+            "access_mode": request.access_mode,
+            "provider_capabilities": json.dumps(can, sort_keys=True),
+            "session_resumed": 1 if resume else 0,
+            "instructions_sha256": prompt.sha256,
+            "instructions_bytes": prompt.total_bytes,
+        })
+        return _TurnAdmission(
+            settled, provider_name, provider_alias, account_home, settings, effective_model, can,
+            teammates, prompt, resume, began, turn)
 
 
 def admitted_message(agent: str, turn: int, message: int) -> bool:
@@ -1013,7 +1068,8 @@ def _written_down(agent: str, turn: int, kind: str, values: Dict[str, Any],
 
 def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
             can: Dict[str, bool], provider_name: str, began_at: int, ended_at: int,
-            elapsed: Optional[float] = None, ours: Optional[Ours] = None) -> Dict[str, Any]:
+            elapsed: Optional[float] = None, ours: Optional[Ours] = None,
+            provider_alias: Optional[str] = None) -> Dict[str, Any]:
     """What this turn came to, and everything the records keep about it."""
     agent = request.agent
     # An attended outcome keeps everything the brain said for its live caller. An unattended
@@ -1044,11 +1100,12 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
     handle = protocol.resume_handle(said)
     if handle and can["resume"]:
         if ours is None:
-            kept.save_session(agent, request.conversation, provider_name, handle)
+            kept.save_session(agent, request.conversation, provider_name, handle, provider_alias)
         else:
             with _running_lock:
                 if not ours.forget_session:
-                    kept.save_session(agent, request.conversation, provider_name, handle)
+                    kept.save_session(
+                        agent, request.conversation, provider_name, handle, provider_alias)
 
     status = kept.DONE
     code = protocol.failure_code(said)
@@ -1097,7 +1154,8 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
                            last_thought=closing, failure_code=code,
                            failure_message=message, usage=used,
                            files=tuple(protocol.file_records(said)),
-                           provider_name=provider_name, elapsed_seconds=elapsed),
+                           provider_name=provider_name, provider_alias=provider_alias,
+                           elapsed_seconds=elapsed),
         "values": {
             "exit_code": gone.code,
             "failure_code": code,

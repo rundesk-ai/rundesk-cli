@@ -127,11 +127,15 @@ def _shown(agent: str, delegation_id: str) -> int:
               ["handed to", one.to_agent],
               ["state", _how(one)],
               ["requested provider", one.requested_provider_name or "not requested"],
+              ["requested account alias", one.requested_provider_alias or "not requested"],
               ["requested model", one.requested_model_name or "not requested"],
               ["effective provider", one.provider_name or "legacy target default at claim"],
+              ["effective account alias", one.provider_alias or "provider default"],
               ["effective model", one.model_name or "provider default"],
               ["terminal provider", actual[0] if actual else "not yet"],
-              ["terminal model", (actual[1] or "provider did not report one")
+              ["terminal account alias", (actual[1] or "provider default")
+               if actual else "not yet"],
+              ["terminal model", (actual[2] or "provider did not report one")
                if actual else "not yet"],
               ["asked at", one.created_at],
               ["last change", one.latest_at],
