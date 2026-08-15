@@ -377,6 +377,10 @@ as a working file being changed. **A file's name is not the test** — every che
 has an `AGENTS.md`, and an agent editing one in a repository has not rewritten its own rules. What
 qualifies is a path standing directly in `RUNDESK_CWD`.
 
+Antigravity's current `write_to_file` tool names that destination `TargetFile`; the historical
+`AbsolutePath` spelling remains understood for older streams. Neither spelling is ever emitted on
+the seam—only the continuity verb it proves.
+
 #### Why a turn stopped
 
 On the `done` record, when `ok` is false:

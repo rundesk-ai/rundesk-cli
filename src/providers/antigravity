@@ -148,11 +148,11 @@ DID_FOR = {
     "define_subagent": "delegate", "invoke_subagent": "delegate", "browser_subagent": "delegate",
 }
 
-#: Which of a tool's parameters names the file it changed. **One name, because one was measured** —
-#: a spelling this has never seen leaves an edit reported as the plain `edit` it is, which is the
-#: safe direction: saying an agent rewrote what it lives by when it did not is worse than not saying
-#: it did when it has.
-EDITED_AT = ("AbsolutePath",)
+#: Which of a tool's parameters names the file it changed. Both spellings were measured —
+#: `AbsolutePath` at 1.1.8 and `TargetFile` at 1.1.13. A spelling this has never seen leaves an edit
+#: reported as the plain `edit` it is, which is the safe direction: saying an agent rewrote what it
+#: lives by when it did not is worse than not saying it did when it has.
+EDITED_AT = ("AbsolutePath", "TargetFile")
 
 #: The steps this brain sends that are framing or state rather than something that happened:
 #: `user_input`, `checkpoint`, `system_message`, `error_message`, `unknown`. They produce no record
@@ -345,7 +345,10 @@ def one_turn() -> int:
     """
     where = os.environ.get("RUNDESK_CWD") or os.getcwd()
     access = os.environ.get("RUNDESK_ACCESS_MODE")
-    access = access if access in ("read", "work") else "work"
+    if access not in ("read", "work"):
+        finished(False, failure_code="crashed",
+                 failure_message="rundesk sent an unknown access mode")
+        return 1
 
     asked = sys.stdin.read()
     if not asked.strip():

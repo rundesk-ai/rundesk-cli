@@ -20,6 +20,8 @@ follows is everything the restoration learned on top of it.
 The 1.1.13 turns were run from the checkout through `./dev` against a scratch `RUNDESK_HOME`. The
 first stored a nonce without tools; the second process resumed the exact conversation and returned
 that nonce. A separate fresh turn used `view_file` and returned the exact scratch-file contents.
+One more isolated scratch turn used `write_to_file`: its active tool step named the exact absolute
+destination as `TargetFile`, and the turn ended with exit zero and terminal status `SUCCESS`.
 The checkout recorded zero unknown and zero lost records. The owner's live Rundesk install and
 install-local adapter were not invoked or changed.
 
@@ -87,8 +89,9 @@ and fails on any other.
 
 - A `--print-timeout 48h0m0s` turn running past the vendor's five-minute default. The value parses
   and short turns complete, but the long duration itself was not exercised.
-- Which parameter names a write tool uses besides `AbsolutePath`. An unseen spelling makes an edit to
-  a file the agent lives by report as a plain `edit`, which is the safe direction.
+- Whether a write tool other than the measured `write_to_file` uses a path spelling besides the
+  documented `TargetFile`. Historical `AbsolutePath` remains understood; an unseen spelling makes an
+  edit to a file the agent lives by report as a plain `edit`, which is the safe direction.
 - Whether `generate_image` produces a file worth reporting to a channel, and under which key. Until
   that is known the adapter emits no `file` records at all.
 - Whether any terminal `status` other than `SUCCESS` exists and whether one classifies a failure.

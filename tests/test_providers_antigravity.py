@@ -110,7 +110,10 @@ class Antigravity(support.Isolated):
         told = self.brain(captured=captured, RECORDED=str(recorded), RUNDESK_CWD=str(where),
                           RUNDESK_ACCESS_MODE="work", RUNDESK_AGENT="cole", RUNDESK_RUN="1",
                           RUNDESK_CONTINUITY="AGENTS.md=rules,MEMORY.md=memory")
-        told.update(also)
+        told.update({name: value for name, value in also.items() if value is not None})
+        for name, value in also.items():
+            if value is None:
+                told.pop(name, None)
         got = subprocess.run([str(ADAPTER)], input=prompt, capture_output=True, text=True,
                              timeout=PATIENCE, env=told, check=False)
         said = [json.loads(one) for one in got.stdout.splitlines() if one.strip()]
@@ -331,9 +334,23 @@ class WhatAccessMeansHere(Antigravity):
         argv = self.argv("work")
         self.assertEqual("accept-edits", argv[argv.index("--mode") + 1])
 
-    def test_a_word_this_release_does_not_know_is_worked_rather_than_refused(self):
-        argv = self.argv("paranoid")
-        self.assertEqual("accept-edits", argv[argv.index("--mode") + 1])
+    def test_a_word_this_release_does_not_know_cannot_silently_grant_work_access(self):
+        said, got, ran = self.replayed(RUNDESK_ACCESS_MODE="paranoid")
+        ending = self.the_ending(said)
+        self.assertFalse(ending["ok"])
+        self.assertEqual("crashed", ending["failure_code"])
+        self.assertIn("unknown access mode", ending["failure_message"])
+        self.assertNotEqual(0, got.returncode)
+        self.assertEqual([], ran)
+
+    def test_a_missing_access_mode_cannot_silently_grant_work_access(self):
+        said, got, ran = self.replayed(RUNDESK_ACCESS_MODE=None)
+        ending = self.the_ending(said)
+        self.assertFalse(ending["ok"])
+        self.assertEqual("crashed", ending["failure_code"])
+        self.assertIn("unknown access mode", ending["failure_message"])
+        self.assertNotEqual(0, got.returncode)
+        self.assertEqual([], ran)
 
     def test_no_containment_is_claimed_on_either_of_them(self):
         """`--sandbox` is the vendor's OS containment. Passing it would imply a boundary rundesk does
@@ -614,7 +631,8 @@ class WhenSomethingGoesWrong(Antigravity):
     def test_a_brain_that_is_not_on_this_machine_ends_the_turn(self):
         got = subprocess.run([str(ADAPTER)], input="hello", capture_output=True, text=True,
                              timeout=PATIENCE, check=False,
-                             env={"PATH": NO_VENDOR, "RUNDESK_CWD": str(self.home)})
+                             env={"PATH": NO_VENDOR, "RUNDESK_CWD": str(self.home),
+                                  "RUNDESK_ACCESS_MODE": "work"})
         said = [json.loads(one) for one in got.stdout.splitlines() if one.strip()]
         ending = self.the_ending(said)
         self.assertFalse(ending["ok"])
@@ -713,13 +731,13 @@ class WhatItDoesNotUnderstand(Antigravity):
 class WhatTheAgentLivesBy(Antigravity):
     """An agent rewriting what it *is* between turns is different news from a working file changing."""
 
-    def edited(self, at):
+    def edited(self, at, parameter="AbsolutePath"):
         stream = self.stream(
             f"edit-{abs(hash(at))}.jsonl",
             a_line(event="init", conversation_id=CONVERSATION, init={}),
             a_step(conversation_id=CONVERSATION, step_index=1, state="ACTIVE", step_type="tool",
                    tool_name="write_to_file",
-                   tool_info={"name": "write_to_file", "parameters": {"AbsolutePath": at}}),
+                   tool_info={"name": "write_to_file", "parameters": {parameter: at}}),
             a_result(conversation_id=CONVERSATION, status="SUCCESS", response="."))
         said, _, _ = self.replayed(captured=stream)
         return self.only(said, "tool")[0]["did"]
@@ -728,6 +746,11 @@ class WhatTheAgentLivesBy(Antigravity):
         where = self.home / "cwd"
         self.assertEqual("rules", self.edited(str(where / "AGENTS.md")))
         self.assertEqual("memory", self.edited(str(where / "MEMORY.md")))
+
+    def test_the_current_write_tool_target_names_a_continuity_file(self):
+        """Measured at 1.1.13: `write_to_file` names its absolute destination `TargetFile`."""
+        where = self.home / "cwd"
+        self.assertEqual("memory", self.edited(str(where / "MEMORY.md"), "TargetFile"))
 
     def test_a_files_name_is_not_the_test(self):
         """Every checkout on the machine has an `AGENTS.md`, and an agent editing one in a repository
