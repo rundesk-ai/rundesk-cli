@@ -53,9 +53,21 @@ class Upkeep(support.Isolated):
                 "every safe authorized local improvement", "exact owner decision",
                 "Anything unverified is blocked, not done", "no task scratch remains",
                 "Throughout every phase", "never open a symlink or its target",
+                "at most two repeated frictions", "50 messages or 20 turns",
+                "at most three full turns", "One owner correction",
+                "Never exceed 100 messages, 40 turns, or five full turns",
+                "make no durable behavioral improvement from unresolved evidence at that ceiling",
+                "Use attention only when a specific owner action can resolve a required blocker",
+                "another durable behavior change",
+                "heavy research question exists but provider helpers are unavailable, record that "
+                "unavailable route and continue only with bounded local evidence",
+                "without further helper analysis",
+                "does not count as self-improvement", "known operational failure",
+                "improved <specific behavior>", "no durable change was justified",
                 "exactly one short attention-first sentence"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, got.prompt)
+        self.assertNotIn("Upkeep completed — no owner action is needed.", got.prompt)
 
     def test_many_turns_on_one_date_count_once(self):
         one = datetime.date(2026, 2, 1)

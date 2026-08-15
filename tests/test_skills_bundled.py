@@ -289,7 +289,7 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "select the `(schedule weekly-self-improve-upkeep)` conversation",
                        "project-specific evidence in that project's own files",
                        '"$RUNDESK_COMMAND" agents', '"$RUNDESK_COMMAND" gateways',
-                       "Compare available and granted skills",
+                       "compare only the relevant available and granted skills",
                        "active gateway", "Exclude yourself",
                        "gateway state only to determine delegation availability",
                        "Never open another agent's home, memory, or records",
@@ -313,10 +313,24 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "error branch, and stated safety limit",
                        "material independent research question uses a provider-local helper",
                        "every claimed change and preservation",
-                       "Upkeep completed — no owner action is needed",
+                       "at most two repeated frictions", "50 messages or 20 turns",
+                       "at most three full turns", "record the reason before expanding",
+                       "Never exceed 100 messages, 40 turns, or five full turns",
+                       "make no durable behavioral improvement from the unresolved evidence",
+                       "Use the attention result only when a specific owner action can resolve a required blocker",
+                       "One owner correction", "explicitly states a durable preference",
+                       "another durable behavior change",
+                       "provider-local helpers are unavailable, record the unavailable route and "
+                       "continue only with bounded local evidence",
+                       "without further helper analysis",
+                       "does not count as self-improvement",
+                       "known operational failure", "Unrelated tracked work",
+                       "Upkeep completed — improved <specific behavior>",
+                       "Upkeep completed — no durable change was justified",
                        "During combined upkeep use the exact short final below"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, improving)
+        self.assertNotIn("Upkeep completed — no owner action is needed.", improving)
         self.assertNotIn("schedules add AGENT weekly-self-improve-upkeep", improving)
         self.assertNotIn("--disabled", improving)
 
@@ -330,7 +344,9 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "dissatisfaction or distrust", "Never diagnose the owner's mood",
                        "three evidence-backed bullets per section", "Keep every entry",
                        "Never delete an older retrospective merely because of age",
-                       "update the same file", "no secrets", "one durable action",
+                       "update the same file", "no secrets", "candidate action",
+                       "Do not promote a lesson from one correction",
+                       "explicit durable owner preference", "corroborates earlier evidence",
                        "leave it byte-identical",
                        "Would an existing specialist", "Would a provider-local research helper",
                        "available, granted, or new skill",
@@ -436,6 +452,14 @@ class WhatTheDocumentationClaims(support.Isolated):
             with self.subTest(verb=verb):
                 self.assertIn(f"rundesk skills {verb}", said,
                               f"`rundesk skills {verb}` exists and docs/commands.md never names it")
+
+    def test_upkeep_overview_matches_the_evidence_based_contract(self):
+        said = " ".join((support.CHECKOUT / "docs" / "commands.md").read_text(
+            encoding="utf-8").split())
+        self.assertIn("honest no-change", said)
+        self.assertIn("only when selected friction indicates a capability gap", said)
+        self.assertNotIn("and one testable improvement", said)
+        self.assertNotIn("The pass compares available and granted skills", said)
 
 
 def _sub_verbs_of(group: str):
