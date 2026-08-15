@@ -12,13 +12,29 @@ rules, memory, or capability changes.
 2. Start with previous `weekly-self-improve-upkeep` scheduled runs when they exist: inspect the schedule and its
    bounded messages with public Rundesk commands, then compare what went well, what did not, and what a
    prior action already resolved. Continue across the full bounded evidence window at listing level,
-   opening only relevant recent messages and turns. When material friction has an independent heavy
-   research question and provider-local helpers are available, launch at least one and synthesize
-   its result; otherwise record why none qualifies. Look for repeated lookups, owner corrections,
+   opening only relevant recent messages and turns. During combined upkeep, begin with at most 50
+   messages or 20 turns and open at most three full turns. Expand a listing or open another full
+   turn only when a named material question cannot be resolved from the bounded evidence; record the
+   reason before expanding. Never exceed 100 messages, 40 turns, or five full turns; if that evidence
+   cannot resolve the question, stop, make no durable behavioral improvement from the unresolved
+   evidence, and record the uncertainty rather than loading more. Use the attention result only when
+   a specific owner action can resolve a required blocker. Identify
+   candidates across the full window, then investigate at most two repeated frictions with the
+   greatest owner impact or avoidable cost. Do not audit every possible capability merely because it
+   exists. When selected friction has an independent heavy research question and provider-local
+   helpers are available, launch at least one and synthesize its result. If such a question exists but
+   provider-local helpers are unavailable, record the unavailable route and continue only with bounded
+   local evidence. If no selected friction contains such a question, record that fact without further
+   helper analysis. Look for repeated
+   lookups, owner corrections,
    failed or blocked outcomes, unsupported claims,
    missing context, avoidable rework, and useful skills or delegations that were ignored. Narrow
    before using `--full`; never open agent records directly.
 3. Classify evidence before changing anything:
+   - require two independent occurrences before promoting a lesson into memory, a standing rule,
+     automation, a skill, or another durable behavior change. One owner correction belongs in the
+     retrospective, not permanent continuity, unless it explicitly states a durable preference or
+     corroborates earlier evidence;
    - keep a durable owner preference, role fact, cross-project process, trap, or gotcha in compact
      personal continuity;
    - keep client/project mappings in a maintained shared index when several entries outgrow memory;
@@ -28,13 +44,15 @@ rules, memory, or capability changes.
    - measure avoidable token, context, tool-call, latency, and provider-cost overhead, choosing the
      smallest durable improvement that removes repeated work without creating maintenance debt; and
    - discard one-off outcomes that do not change a future action.
-4. Inspect `"$RUNDESK_COMMAND" agents` and `"$RUNDESK_COMMAND" gateways`. Compare available and
-   granted skills with `"$RUNDESK_COMMAND" skills list`, `"$RUNDESK_COMMAND" skills list <agent>`,
-   and `"$RUNDESK_COMMAND" skills doctor <agent>`. Exclude yourself. Only an active gateway is a
-   delegation candidate. Require explicit focus and skill evidence. Never infer a specialist's
-   focus from its name, or usefulness from non-use. Use gateway state only to determine delegation
-   availability; do not turn transient hosting or supervision state into a capability finding.
-   Never open another agent's home, memory, or records; these public surfaces are the boundary.
+4. When one of the selected frictions may be a capability, delegation, or grant gap, inspect
+   `"$RUNDESK_COMMAND" agents` and `"$RUNDESK_COMMAND" gateways`, then compare only the relevant
+   available and granted skills with `"$RUNDESK_COMMAND" skills list`,
+   `"$RUNDESK_COMMAND" skills list <agent>`, and `"$RUNDESK_COMMAND" skills doctor <agent>`.
+   Otherwise skip this inventory. Exclude yourself. Only an active gateway is a delegation
+   candidate. Require explicit focus and skill evidence. Never infer a specialist's focus from its
+   name, or usefulness from non-use. Use gateway state only to determine delegation availability;
+   do not turn transient hosting or supervision state into a capability finding. Never open another
+   agent's home, memory, or records; these public surfaces are the boundary.
 5. Route a proven capability gap in this order:
    - prefer a named specialist when its focus and skills make it materially better for heavy,
      self-contained work;
@@ -66,6 +84,12 @@ rules, memory, or capability changes.
    the work and turn record. During combined upkeep use the exact short final below; when this review
    is the whole task, report evidence, changes, recommendations, uncertainty, and verification.
 
+Classify the outcome honestly. A retrospective, `OPEN_ITEMS.md` reconciliation, brief update, or
+future experiment does not count as self-improvement by itself. An applied improvement must change
+future execution now, be verified at its actual boundary, and name what the next cycle will measure.
+When repeated evidence does not justify such a change, record that no durable change was justified;
+do not manufacture activity.
+
 Useful bounded entry points:
 
 ```sh
@@ -90,11 +114,14 @@ improvement.
 - Maintenance is complete and verified before retrospective work begins.
 - The retrospective covers the full bounded evidence window, compares the previous entry, records
   each material success/failure and its solution route, and is reread after any change.
-- Self-improvement either finishes every safe authorized local fix or names the exact owner decision
-  required; it checks existing and proposed specialists, provider-local research helpers, available,
-  granted and potentially new skills, memory/index changes, and verified agent-owned automation.
-- A material independent research question uses a provider-local helper when one is available, or
-  records why none qualifies; named-agent evaluation never crosses the public Rundesk boundary.
+- Self-improvement selects at most two repeated frictions, then either finishes every safe authorized
+  local fix for them or names the exact owner decision required. It checks specialists, helpers,
+  skills, memory/index changes, and automation only when a selected friction makes that route
+  relevant.
+- A selected material independent research question uses a provider-local helper when one is
+  available. When provider-local helpers are unavailable, record that route and continue only with
+  bounded local evidence. With no such selected question, record only that fact without further
+  helper analysis; named-agent evaluation never crosses the public Rundesk boundary.
 - The review identifies avoidable token/cost/repeated-work overhead and either removes one proven
   source safely or explains why no durable change is justified.
 - Any agent-owned automation is verified after its final edit against every documented input type,
@@ -112,8 +139,14 @@ references own the work and definition of done.
 
 Keep its final exactly one sentence, very short and attention-first:
 
-- No attention: `Upkeep completed — no owner action is needed.`
+- Applied improvement: `Upkeep completed — improved <specific behavior>; no owner action is needed.`
+- Honest no-change: `Upkeep completed — no durable change was justified; no owner action is needed.`
 - Attention required: `Upkeep needs attention — <the owner action and its reason>.`
 
-The detailed verification remains in turn records; the owner-facing schedule response is not an
-audit transcript. See [Schedules](schedules.md) for timing and recovery rules.
+Use the attention result when an incomplete required phase, an unverified claimed improvement, or a
+known operational failure needs owner action. Unrelated tracked work already recorded in its
+canonical source does not force attention unless this upkeep proves that record inaccurate or unsafe.
+
+The improvement phrase names the behavior changed, not the file edited. Detailed verification
+remains in turn records; the owner-facing schedule response is not an audit transcript. See
+[Schedules](schedules.md) for timing and recovery rules.

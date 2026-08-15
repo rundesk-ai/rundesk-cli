@@ -30,9 +30,12 @@ owner better; it is not daily overhead, a transcript, or a judgment of the owner
    ## What to improve
    ```
 
-   A bullet is compact: evidence, effect, lesson. Each improvement names one durable action and how
-   the next upkeep review can tell whether it worked.
-6. Put the solution in the narrowest durable home. Use `MEMORY.md` for a reusable role, preference,
+   A bullet is compact: evidence, effect, lesson. Each improvement names one candidate action or
+   evidence-gathering check and how the next upkeep review can tell whether it worked.
+6. Do not promote a lesson from one correction into memory, a standing rule, automation, a skill,
+   or another durable behavior change unless it states an explicit durable owner preference or
+   corroborates earlier evidence. Otherwise leave it as a diary candidate and measure recurrence.
+   Put a proven solution in the narrowest durable home. Use `MEMORY.md` for a reusable role, preference,
    process, trap, or gotcha; a maintained client/project index for stable mappings; project files
    for project truth; a delegation route for specialist work; `scripts/` for small verified
    cross-project automation; `research/` for reusable sourced investigation; and a skill

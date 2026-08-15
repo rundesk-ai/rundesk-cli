@@ -273,17 +273,19 @@ symlinks, and project/user files; only confirmed stale continuity and agent-crea
 are removed.
 
 The retrospective phase reads the previous weekly entry, reviews bounded public evidence, and
-updates one dated diary with what went well, where the agent failed or caused repeated asks, and one
-testable improvement. It records observable correction, dissatisfaction, or distrust without
-diagnosing the owner's mood, retains compact older entries as longitudinal evidence, and promotes a
-lesson only to its proper durable home. The final phase starts with that diary and previous
+updates one dated diary with what went well, where the agent failed or caused repeated asks, and an
+evidence-backed candidate action or honest no-change. It records observable correction,
+dissatisfaction, or distrust without diagnosing the owner's mood, retains compact older entries as
+longitudinal evidence, and promotes a lesson only after repeated evidence or an explicit durable
+owner preference. The final phase starts with that diary and previous
 `weekly-self-improve-upkeep` reports, then reviews a bounded sample of other messages and turns for repeated
 friction, corrections,
 missing context, failed outcomes, and ignored capability routes.
 Heavy specialist work stays delegated to a materially better active named agent; a same-turn helper
 is next when no standing specialist fits; a skill is recommended only for a recurring capability
-this agent must own and neither route covers. The pass compares available and granted skills, never
-revokes from non-use alone, and changes no grants or standing rules without explicit authority. Its
+this agent must own and neither route covers. The pass compares relevant available and granted skills
+only when selected friction indicates a capability gap, never revokes from non-use alone, and changes
+no grants or standing rules without explicit authority. Its
 scheduled response is deliberately short and attention-first: owner actions only, or one line saying
 upkeep completed and no action is needed.
 
@@ -734,8 +736,11 @@ cycle.
 The agent's gateway runs the policy through the ordinary schedule lock, process, output, settlement,
 and final-report lifecycle. Its hard-coded task supplies the exact evidence interval and diary date,
 then requires verified workspace/continuity maintenance, a retrospective, and evidence-based
-self-improvement in that order. The final is one short attention-first sentence; detailed evidence
-stays in the turn records. Turn it on or off per agent with
+self-improvement in that order. The review starts with bounded listings, investigates at most two
+repeated frictions, and treats bookkeeping as maintenance rather than proof of improved execution.
+The final is one short attention-first sentence naming the behavior improved, an honest no-change
+result, or the owner action a known blocker requires; detailed evidence stays in the turn records.
+Turn it on or off per agent with
 `rundesk agents configure <agent> --self-improve <true|false>`. Ordinary schedule commands cannot
 add, update, run, disable, or remove this protected name; the agent setting is its only control.
 An owner schedule already carrying that name from before the policy remains owner-controlled and
