@@ -398,9 +398,12 @@ A_BLOCK = 1024 * 1024
 #: to `O_SEARCH`. Rundesk's own walk asks for exactly this, and the two have to agree or the second
 #: check refuses what the first approved. **Nothing about the link protection changes**: every
 #: component still carries `O_NOFOLLOW`, still comes from the descriptor above it, and the flag
-#: still requires a directory. macOS calls the search-only form `O_SEARCH`; Linux exposes the
-#: equivalent path descriptor as `O_PATH`, combined here with `O_DIRECTORY`.
-A_SEARCH = getattr(os, "O_SEARCH", getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY)
+#: still requires a directory. macOS calls the search-only form `O_SEARCH` (`O_EXEC`, `0x40000000`),
+#: though some supported CPython 3.9 builds omit both names; Linux exposes the equivalent path
+#: descriptor as `O_PATH`.
+A_SEARCH = ((getattr(os, "O_SEARCH", getattr(os, "O_EXEC", 0x40000000))
+             if sys.platform == "darwin" else getattr(os, "O_PATH", os.O_RDONLY))
+            | os.O_DIRECTORY)
 
 #: What an owner has to switch on for this to work at all, said the same way everywhere it is said.
 #: One string rather than three sentences, because a person reading a refused `--check` and a person

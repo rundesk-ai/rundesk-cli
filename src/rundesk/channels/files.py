@@ -70,6 +70,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional
@@ -109,10 +110,14 @@ BLOCK = 1024 * 1024
 #:
 #: **Nothing about the link protection changes.** `O_NOFOLLOW` is still on every component, every
 #: component is still opened from the descriptor above it, and the flag still requires a directory.
-#: macOS calls the search-only form `O_SEARCH`; Linux exposes the equivalent path descriptor as
-#: `O_PATH`, which is combined with `O_DIRECTORY`. A platform with neither keeps the older read-only
-#: fallback because the standard library offers no portable search-only spelling there.
-SEARCHING = getattr(os, "O_SEARCH", getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY)
+#: macOS calls the search-only form `O_SEARCH` (`O_EXEC`, `0x40000000`); some supported CPython 3.9
+#: builds omit both names even though Darwin accepts the flag, so the stable system value is the
+#: final Darwin spelling. Linux exposes the equivalent path descriptor as `O_PATH`. A platform with
+#: neither keeps the older read-only fallback because the standard library offers no portable
+#: search-only spelling there.
+SEARCHING = ((getattr(os, "O_SEARCH", getattr(os, "O_EXEC", 0x40000000))
+              if sys.platform == "darwin" else getattr(os, "O_PATH", os.O_RDONLY))
+             | os.O_DIRECTORY)
 
 
 class Refused(Exception):

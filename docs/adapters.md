@@ -603,7 +603,8 @@ it was asked for, and nothing downstream could tell.
 **Open the directories on the way for search, not with `O_RDONLY | O_DIRECTORY`.** A walk needs to
 pass *through* a directory and never to list it, and asking for the larger of the two refuses a file
 that opens perfectly: a directory granting `--x` answers `EACCES` to the second and hands over the
-named file below it to the first. Use `O_SEARCH` on macOS and `O_PATH | O_DIRECTORY` on Linux.
+named file below it to the first. Use `O_SEARCH` (`O_EXEC`, `0x40000000`) on macOS and `O_PATH |
+O_DIRECTORY` on Linux; some supported macOS CPython 3.9 builds omit the names for the Darwin flag.
 Rundesk's approval asks for exactly this, so an adapter that asks for more refuses what rundesk
 approved and the send fails on the far side of the seam. `O_NOFOLLOW` stays on every component and
 the search descriptor still requires a directory, so a non-directory is refused exactly as before.
