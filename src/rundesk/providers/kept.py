@@ -59,15 +59,35 @@ TURN_STATUSES = (WORKING, DONE, STOPPED, FAILED)
 #: turn *came to* is the records' own account — a caller that could set those could rewrite history
 #: and then read it back as fact.
 ADMITTED = ("conversation_id", "schedule_id", "schedule_name", "provider_name", "provider_alias",
-            "model_name",
+            "model_name", "admitted_model_name",
             "access_mode", "provider_capabilities", "session_resumed", "instructions_sha256",
             "instructions_bytes")
 
 #: What may be written when a turn is settled, beside its state.
-SETTLED = ("model_name", "exit_code", "failure_code", "failure_message", "usage_reported",
+#:
+#: **The three drift counters are not here**, and their absence is the guarantee. They were written
+#: from here, by counting rows, while the thread that appends those rows could still be running — so
+#: what the ledger kept for ever depended on which of the two got there first. Step `0013` moved the
+#: counting into the insert that causes it; a settlement that could still set them could overwrite a
+#: number that is already right, which is the defect rather than a safeguard against it.
+SETTLED = ("model_name", "reported_model_name", "exit_code", "failure_code", "failure_message",
+           "usage_reported",
            "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
-           "context_tokens", "unknown_records", "lost_records",
+           "context_tokens",
            "raw_offset_start", "raw_offset_end")
+
+#: The three things rundesk writes into a turn's account that it also counts for ever, named here
+#: because this is where the columns are. **Step `0013`'s trigger spells these words too**, so a
+#: fourth kind is a new step and never an edit to this mapping alone.
+#:
+#: `UNKNOWN` and `LOST` are the drift pair: a record this release could not read, and a record that
+#: never arrived. `UNSENT` is the other direction entirely — a word rundesk could not put *into* the
+#: turn — and it is counted apart because an ordinary end-of-turn steering race is not a vendor
+#: moving underneath rundesk.
+UNKNOWN = "unknown"
+LOST = "lost"
+UNSENT = "unsent"
+COUNTED = {UNKNOWN: "unknown_records", LOST: "lost_records", UNSENT: "unsent_records"}
 
 #: How many messages a search answers with unless somebody asks for more. Small, because **the agent
 #: is the first caller and every line it reads costs tokens** — a search that answered with fifty
@@ -94,6 +114,29 @@ class Refused(Exception):
 # -- one turn --------------------------------------------------------------------------
 
 
+def model_that_answered(row: Dict[str, Any]) -> Optional[str]:
+    """Which model actually ran a turn, or `None` when nothing may honestly say.
+
+    **`model_provenance_kept` is the whole of the question.** On a row this release wrote, the answer
+    is `reported_model_name` and nothing else: `model_name` beside it falls back to what the turn was
+    *admitted* with, which is what somebody asked for and never evidence of what ran. A surface
+    reading that as the model that answered is how `rundesk asked show` came to name a configured
+    model under `terminal model` on a turn whose provider had reported nothing at all.
+
+    On a row an older release wrote there is only `model_name`, holding whichever of the two arrived
+    last. It is returned because it is the best there is — and a caller putting that in front of
+    somebody is the one that has to say which kind of row it came from, since this answers with the
+    value and not with how sure of it anybody should be. `rundesk turns` says so, under the word the
+    row was written with; the marker is on the row, so a caller that does not yet is still able to.
+
+    Asked with `.get`, so an agent whose carry failed and has none of these columns is answered
+    rather than raising: a missing marker is `0`, which is the same answer as an uncarried row.
+    """
+    if row.get("model_provenance_kept"):
+        return row.get("reported_model_name")
+    return row.get("model_name")
+
+
 def usage_of_turn(row: Dict[str, Any]) -> protocol.Usage:
     """What a settled turn cost, as the same object a running one reports.
 
@@ -101,12 +144,19 @@ def usage_of_turn(row: Dict[str, Any]) -> protocol.Usage:
     which is the point: a surface reading a row and a surface reading a live turn were formatting
     the cost independently, and the one reading the row had never picked up `context_tokens`. The
     ledger for a turn showed less than the line printed the moment that turn finished.
+
+    **`model_name` on this object is the model that answered**, everywhere it is built — a live one
+    carries what the brain reported in its usage record, so a settled one may not quietly carry what
+    was asked for instead. It is read through `model_that_answered`, which is `None` for a turn whose
+    provider named none and falls back to the one ambiguous column only for a row written before the
+    two were kept apart.
     """
     return protocol.Usage(
         usage_reported=bool(row["usage_reported"]),
+        model_name=model_that_answered(row),
         **{named: row[named] for named in
            ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
-            "context_tokens", "model_name")})
+            "context_tokens")})
 
 
 def add_turn(agent: str, values: Dict[str, Any], when: Optional[datetime] = None) -> int:
@@ -115,9 +165,15 @@ def add_turn(agent: str, values: Dict[str, Any], when: Optional[datetime] = None
     The id is what the adapter is told as `RUNDESK_RUN`, so it has to exist before anything is
     started — and writing the turn first is what makes a turn that died on its way to the brain still
     show what somebody asked for.
+
+    **`model_provenance_kept` is written here and is not a caller's to give.** It says which release
+    wrote the row, not what anybody asked for, so a caller that could set it could claim provenance
+    it does not have — and an admission path added later cannot forget it, which is the failure a
+    marker exists to make impossible. Every row this passes says `1`; every row already in the table
+    says `0`.
     """
     _only(values, ADMITTED, "given to a turn")
-    stated = dict(values, turn_status=WORKING, created_at=_now(when))
+    stated = dict(values, turn_status=WORKING, model_provenance_kept=1, created_at=_now(when))
     named = sorted(stated)
     with records.writing(directory.records(agent)) as conn:
         _known(conn, agent, named, TURNS)
@@ -225,6 +281,11 @@ def add_turn_record(agent: str, turn: int, record_type: str,
     `raw` is written **only for something this release did not understand**. For a record it did, the
     parsed event *is* the line, and storing both doubles the table for nothing — and this is the
     column drift is read from, so what is in it means something.
+
+    **A `COUNTED` kind moves its turn's permanent counter here, and this function does not do it.**
+    Step `0013`'s trigger does, inside this insert's own transaction, so a record the records did not
+    accept is still not one the summary claims — and so a writer that never heard of the counters
+    cannot leave them behind. See `SETTLED` for what counting them anywhere else cost.
     """
     with records.writing(directory.records(agent)) as conn:
         _rows(conn, agent,

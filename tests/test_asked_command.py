@@ -16,8 +16,14 @@ from rundesk.channels import hosting as channels_hosting
 from rundesk.commands import asked
 from rundesk.delegations import admitting, hosting, kept
 from rundesk.exits import FAILED, OK
-from rundesk.providers import answering, turns
+from rundesk.providers import answering, instructions, turns
 from rundesk.providers import kept as provider_kept
+
+
+def _said(out: str, about: str) -> str:
+    """What one line of `asked show` answers, by the label in front of it."""
+    line = next(one for one in out.splitlines() if one.strip().startswith(about))
+    return line.strip()[len(about):].strip()
 
 
 def _reaching_no_channel() -> channels_hosting.Watching:
@@ -64,12 +70,16 @@ class GuidingWorkingDelegation(support.Isolated):
         turn = provider_kept.add_turn("bob", {
             "conversation_id": self.landed.conversation,
             "provider_name": "/opt/codex",
-            "model_name": "actual-model",
+            "model_name": "asked-model",
+            "admitted_model_name": "asked-model",
             "access_mode": "work",
         })
         arriving.handled_by_turn(
             "bob", self.landed.conversation, (self.landed.message,), turn)
-        provider_kept.finish_turn("bob", turn, provider_kept.DONE)
+        # The brain names the model that ran, at settlement, which is the only moment anything can.
+        provider_kept.finish_turn("bob", turn, provider_kept.DONE,
+                                  {"model_name": "actual-model",
+                                   "reported_model_name": "actual-model"})
 
         code, out, err = self.rundesk(
             "asked", "--agent", "ava", "show", self.delegation)
@@ -79,6 +89,68 @@ class GuidingWorkingDelegation(support.Isolated):
                       "effective provider", "effective model", "/opt/codex",
                       "terminal provider", "terminal model", "actual-model"):
             self.assertIn(value, out)
+        self.assertEqual("actual-model", _said(out, "terminal model"))
+
+    def test_show_will_not_name_a_configured_model_the_provider_never_reported(self):
+        """**A model that was asked for is not evidence of the model that ran**, and `terminal` is
+        the column that claims it did.
+
+        Driven end to end: bob is configured with a model, answers a real delegated turn on an
+        adapter that reports none back — the shape `antigravity` ships today — and the row it leaves
+        is the row this surface reads. Before the two were kept apart, the configured model was
+        written at admission, survived a settlement that had nothing to replace it with, and was
+        then printed here as the model that had answered.
+        """
+        records.stated(directory.records("bob"), {"model_name": "configured-model"})
+        self.a_stand_in_told("bob", omit_model=True)
+        self.a_delegated_turn_bob_answers()
+
+        code, out, err = self.rundesk(
+            "asked", "--agent", "ava", "show", self.delegation)
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual("provider did not report one", _said(out, "terminal model"))
+        self.assertNotIn("configured-model", out)
+
+    def test_show_names_the_model_a_provider_did_report(self):
+        """The other half of the same run, so the surface is not merely always saying nothing."""
+        records.stated(directory.records("bob"), {"model_name": "configured-model"})
+        self.a_delegated_turn_bob_answers()
+
+        code, out, err = self.rundesk(
+            "asked", "--agent", "ava", "show", self.delegation)
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual("a-stand-in-1", _said(out, "terminal model"))
+
+    def test_show_still_reads_the_one_column_a_turn_from_an_older_release_has(self):
+        """Nothing is reinterpreted: that value is the best there is, and it is what is shown."""
+        turn = provider_kept.add_turn("bob", {
+            "conversation_id": self.landed.conversation,
+            "provider_name": support.A_STAND_IN,
+            "model_name": "either-of-them",
+            "access_mode": "work",
+        })
+        arriving.handled_by_turn(
+            "bob", self.landed.conversation, (self.landed.message,), turn)
+        provider_kept.finish_turn("bob", turn, provider_kept.DONE)
+        with records.writing(directory.records("bob")) as conn:
+            conn.execute("UPDATE turns SET model_provenance_kept = 0,"
+                         " admitted_model_name = NULL WHERE id = ?", (turn,))
+
+        code, out, err = self.rundesk(
+            "asked", "--agent", "ava", "show", self.delegation)
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual("either-of-them", _said(out, "terminal model"))
+
+    def a_delegated_turn_bob_answers(self):
+        """One real turn on the answering side, admitted and settled the way a gateway runs one."""
+        return turns.run(turns.Request(
+            agent="bob", prompt="audit it", conversation=self.landed.conversation,
+            situation=instructions.AGENT_TO_AGENT, caller_agent="ava",
+            source=arriving.FROM_AGENT, place=f"ava/{self.turn}",
+            inbound_messages=(self.landed.message,)))
 
     def test_show_identifies_a_legacy_late_bound_row(self):
         code, out, err = self.rundesk(

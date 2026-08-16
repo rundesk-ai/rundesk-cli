@@ -21,7 +21,7 @@ Run directly: `python3 tests/test_turns_command.py`
 import unittest
 
 import support
-from rundesk.agents import directory
+from rundesk.agents import directory, records
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.providers import kept
 
@@ -104,6 +104,57 @@ class OneTurnWhole(Turns):
         self.assertIn("brain said", out)
         self.assertIn("tools", out)
 
+    def test_it_says_which_model_was_asked_for_and_which_one_answered(self):
+        """Two facts, and a ledger showing one of them could not say which it had."""
+        self.a_stand_in_told(self.agent, model="the-one-that-ran")
+        self.a_turn()
+        code, out, _err = self.rundesk("turns", self.agent, "1")
+        self.assertEqual(OK, code)
+        self.assertEqual("provider default", self._said(out, "model asked for"))
+        self.assertEqual("the-one-that-ran", self._said(out, "model reported"))
+
+    def test_a_provider_that_reported_none_is_not_a_provider_that_was_given_none(self):
+        """A provider choosing for itself and a provider that reported nothing are not one answer."""
+        self.a_stand_in_told(self.agent, say_nothing_and_finish=True)
+        self.a_turn("what changed today?", "--model", "asked-for-this")
+        code, out, _err = self.rundesk("turns", self.agent, "1")
+        self.assertEqual(OK, code)
+        self.assertEqual("asked-for-this", self._said(out, "model asked for"))
+        self.assertEqual("—", self._said(out, "model reported"))
+
+    def test_a_turn_that_chose_nothing_and_was_told_nothing_is_not_read_as_an_older_row(self):
+        """**The marker decides, not the emptiness.** Both are blank here in exactly the way an
+        older row is blank, and the honest answer is two of them rather than a sentence about a
+        release that did not write this."""
+        self.a_stand_in_told(self.agent, say_nothing_and_finish=True)
+        self.a_turn()
+        code, out, _err = self.rundesk("turns", self.agent, "1")
+        self.assertEqual(OK, code)
+        self.assertEqual("provider default", self._said(out, "model asked for"))
+        self.assertEqual("—", self._said(out, "model reported"))
+        self.assertNotIn("older release", out)
+
+    def test_a_turn_an_older_release_wrote_is_shown_as_the_one_answer_it_has(self):
+        """**Old rows are not reinterpreted.** One column held whichever of the two arrived last,
+        and a surface that labelled it as either would be claiming something nobody recorded."""
+        self.a_turn()
+        with records.writing(directory.records(self.agent)) as conn:
+            conn.execute("UPDATE turns SET model_name = 'either-of-them',"
+                         " admitted_model_name = NULL, reported_model_name = NULL,"
+                         " model_provenance_kept = 0 WHERE id = 1")
+
+        code, out, _err = self.rundesk("turns", self.agent, "1")
+
+        self.assertEqual(OK, code)
+        self.assertNotIn("model asked for", out)
+        self.assertIn("either-of-them", self._said(out, "model"))
+        self.assertIn("older release", self._said(out, "model"))
+
+    def _said(self, out, about):
+        """What one line of the single-turn view answers, by the label in front of it."""
+        line = next(one for one in out.splitlines() if one.startswith(about))
+        return line[len(about):].strip()
+
     def test_every_record_is_shown_in_the_order_it_happened(self):
         self.a_turn()
         code, out, _err = self.rundesk("turns", self.agent, "1")
@@ -146,7 +197,7 @@ class TheDriftCounters(Turns):
 
     def test_a_healthy_turn_reports_nothing_unknown_and_nothing_lost(self):
         self.a_turn()
-        self.assertEqual((0, 0), self._counters(1))
+        self.assertEqual((0, 0, 0), self._counters(1))
 
     def test_a_record_this_release_never_heard_of_is_counted_and_kept(self):
         """**Kept, and shown to nobody.** A line this release cannot read must not vanish quietly —
@@ -158,9 +209,61 @@ class TheDriftCounters(Turns):
         self.assertEqual(OK, code)
         self.assertIn("unknown", out)
 
+    def test_a_word_rundesk_could_not_deliver_is_shown_apart_from_adapter_drift(self):
+        """`LOST` is the adapter moving underneath rundesk. A steering word the provider would not
+        take is rundesk's own trouble, and counting it as drift sends somebody after a vendor."""
+        self.a_turn()
+        kept.add_turn_record(self.agent, 1, kept.UNSENT,
+                             {"unsent_count": 1, "reason": "it had already finished"})
+
+        code, out, _err = self.rundesk("turns", self.agent)
+
+        self.assertEqual(OK, code)
+        self.assertIn("UNSENT", out)
+        counters = next(one for one in out.splitlines() if one.startswith("1 ")).split()[-3:]
+        self.assertEqual(["0", "0", "1"], counters)
+        self.assertEqual((0, 0, 1), self._counters(1))
+
     def _counters(self, turn):
         row = kept.get_turn(self.agent, turn)
-        return row["unknown_records"], row["lost_records"]
+        return row["unknown_records"], row["lost_records"], row["unsent_records"]
+
+
+class AnAgentWhoseCarryDidNotReachTheseColumns(Turns):
+    """**A ledger is most worth reading on the agent whose migration went wrong.**
+
+    One agent that cannot be carried does not stop the others, so an install can stand with an agent
+    whose `turns` has none of `0013`'s columns. Reaching for one by name would take the whole listing
+    down with a `KeyError` on exactly the agent somebody is trying to look into.
+    """
+
+    def as_an_older_release_left_it(self):
+        with records.writing(directory.records(self.agent)) as conn:
+            conn.execute("DROP TRIGGER IF EXISTS turn_records_after_insert")
+            for column in ("model_provenance_kept", "unsent_records",
+                           "reported_model_name", "admitted_model_name"):
+                conn.execute(f"ALTER TABLE turns DROP COLUMN {column}")
+
+    def test_the_listing_answers_and_says_it_has_no_count_rather_than_a_zero(self):
+        self.a_turn()
+        self.as_an_older_release_left_it()
+
+        code, out, err = self.rundesk("turns", self.agent)
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("UNSENT", out)
+        counters = next(one for one in out.splitlines() if one.startswith("1 ")).split()[-3:]
+        self.assertEqual(["0", "0", "—"], counters)
+
+    def test_one_turn_whole_answers_with_the_one_model_column_it_has(self):
+        self.a_turn()
+        self.as_an_older_release_left_it()
+
+        code, out, err = self.rundesk("turns", self.agent, "1")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("a-stand-in-1", out)
+        self.assertNotIn("model asked for", out)
 
 
 if __name__ == "__main__":

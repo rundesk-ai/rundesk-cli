@@ -18,14 +18,14 @@ import unittest
 from unittest import mock
 
 import support
-from rundesk.agents import directory, records
+from rundesk.agents import directory, migration, records
 from rundesk.channels import arriving
 from rundesk.commands import agents as agents_command
 from rundesk.commands import automatic_updates
 from rundesk.core import paths
 from rundesk.exits import OK
 from rundesk.providers import accounts, adapters, instructions, kept, protocol, turns
-from rundesk.utils import locking
+from rundesk.utils import lines, locking
 
 PATIENCE = 15.0
 
@@ -136,7 +136,11 @@ class ATurnThatAnswers(WithAnAgent):
         self.assertEqual(row["model_name"], "a-stand-in-1")
 
     def test_a_brain_that_names_no_model_does_not_erase_the_one_that_was_asked_for(self):
-        """A quiet brain must not take the record of what was asked for away with it."""
+        """A quiet brain must not take the record of what was asked for away with it.
+
+        `model_name` is the best-known answer and stays that: what the brain reported when it
+        reported one, and what the turn was admitted with when it did not.
+        """
         self.a_stand_in_told(self.agent, say_nothing_and_finish=True)
         got = self.run_turn(self.asking(model_name="something-particular"))
         self.assertEqual(kept.get_turn("ava", got.turn)["model_name"], "something-particular")
@@ -265,8 +269,10 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
         recorded = kept.list_turns(self.agent)[0]
         self.assertEqual(kept.STOPPED, recorded["turn_status"])
         self.assertEqual(protocol.CANCELLED, recorded["failure_code"])
-        self.assertEqual((support.A_STAND_IN, "scoped-model"),
-                         (recorded["provider_name"], recorded["model_name"]))
+        self.assertEqual((support.A_STAND_IN, "scoped-model", "scoped-model"),
+                         (recorded["provider_name"], recorded["model_name"],
+                          recorded["admitted_model_name"]))
+        self.assertIsNone(recorded["reported_model_name"], "no brain ran, so none reported one")
         self.assertEqual(recorded["id"], arriving.turn_for_message(
             self.agent, landed.conversation, landed.message))
         self.assertEqual(before, configuration_bytes(self.agent))
@@ -451,6 +457,142 @@ class WhenTheBrainDoesNotAnswer(WithAnAgent):
                                           model_name="scoped-model"))
 
                 self.assertEqual(before, configuration_bytes(self.agent))
+
+
+class TheModelAskedForAndTheModelThatAnswered(WithAnAgent):
+    """**Two facts, and one column that held whichever of them arrived last.**
+
+    An ordinary turn hands the agent's configured model to the adapter and recorded `NULL`, so a
+    ledger asked which model an agent runs on could not say. A turn that asked for one and was
+    answered by another had the asked-for value overwritten at settlement. Both directions were
+    measured; each lost the half the other kept.
+
+    `model_name` goes on being the best-known answer, so nothing reading it has to be changed to go
+    on being right. What is new is that neither fact is inferred from it any more.
+    """
+
+    def test_the_configured_model_a_turn_was_admitted_with_is_recorded(self):
+        """Measured: an agent with a configured model ran a turn on it and the ledger said none."""
+        records.stated(directory.records("ava"), {"model_name": "configured-model"})
+        self.a_stand_in_told(self.agent, say_nothing_and_finish=True)
+
+        row = kept.get_turn("ava", self.run_turn().turn)
+
+        self.assertEqual("configured-model", row["admitted_model_name"])
+        self.assertIsNone(row["reported_model_name"])
+        self.assertEqual("configured-model", row["model_name"])
+
+    def test_a_brain_naming_another_model_does_not_erase_what_was_asked_for(self):
+        row = kept.get_turn("ava", self.run_turn(self.asking(model_name="requested-model")).turn)
+        self.assertEqual(("requested-model", "a-stand-in-1", "a-stand-in-1"),
+                         (row["admitted_model_name"], row["reported_model_name"],
+                          row["model_name"]))
+
+    def test_a_brain_that_reported_no_model_is_not_a_brain_that_reported_this_one(self):
+        self.a_stand_in_told(self.agent, say_nothing_and_finish=True)
+
+        got = self.run_turn(self.asking(model_name="something-particular"))
+
+        row = kept.get_turn("ava", got.turn)
+        self.assertEqual("something-particular", row["admitted_model_name"])
+        self.assertIsNone(row["reported_model_name"])
+
+    def test_a_turn_that_selected_none_records_none_and_still_says_which_answered(self):
+        row = kept.get_turn("ava", self.run_turn().turn)
+        self.assertIsNone(row["admitted_model_name"])
+        self.assertEqual("a-stand-in-1", row["reported_model_name"])
+
+    def test_an_override_without_a_model_records_that_none_was_selected(self):
+        """The configured model is not the target's when a provider was named for this turn."""
+        records.stated(directory.records("ava"), {"model_name": "configured-model"})
+
+        got = self.run_turn(self.asking(provider_name=support.A_STAND_IN))
+
+        self.assertIsNone(kept.get_turn("ava", got.turn)["admitted_model_name"])
+
+    def test_every_turn_this_release_admits_says_that_it_kept_the_two_apart(self):
+        """**The marker, not the emptiness.** A turn that selected nothing and was told nothing is
+        empty in exactly the way a row from an older release is, so the row says which it is."""
+        self.a_stand_in_told(self.agent, say_nothing_and_finish=True)
+
+        got = self.run_turn()
+
+        row = kept.get_turn("ava", got.turn)
+        self.assertEqual(1, row["model_provenance_kept"])
+        self.assertEqual((None, None, None),
+                         (row["admitted_model_name"], row["reported_model_name"],
+                          row["model_name"]))
+
+    def test_the_model_that_answered_is_read_off_the_marker_and_not_off_the_old_column(self):
+        """What a settled turn's usage says it ran on is the brain's answer, never the request."""
+        self.a_stand_in_told(self.agent, say_nothing_and_finish=True)
+
+        got = self.run_turn(self.asking(model_name="asked-for-this"))
+
+        row = kept.get_turn("ava", got.turn)
+        self.assertEqual("asked-for-this", row["model_name"])
+        self.assertIsNone(kept.model_that_answered(row))
+        self.assertIsNone(kept.usage_of_turn(row).model_name)
+
+    def test_a_turn_an_older_release_wrote_still_answers_with_the_column_it_has(self):
+        got = self.run_turn()
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute("UPDATE turns SET model_provenance_kept = 0, admitted_model_name = NULL,"
+                         " reported_model_name = NULL, model_name = 'either-of-them'"
+                         " WHERE id = ?", (got.turn,))
+
+        row = kept.get_turn("ava", got.turn)
+
+        self.assertEqual("either-of-them", kept.model_that_answered(row))
+        self.assertEqual("either-of-them", kept.usage_of_turn(row).model_name)
+
+
+class AnAgentCarriedForwardOntoThisRelease(WithAnAgent):
+    """**A step that only ever runs against a brand new agent is a step nobody's data has been
+    through.** This one carries an agent back to before `0013` and then puts it through the whole
+    of a real turn: admitted, answered, settled, and counted."""
+
+    def back_to_before_the_step(self) -> None:
+        """This agent as it stood before `0013` — the columns gone, the trigger gone, unstamped."""
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute("DROP TRIGGER IF EXISTS turn_records_after_insert")
+            for column in ("model_provenance_kept", "unsent_records",
+                           "reported_model_name", "admitted_model_name"):
+                conn.execute(f"ALTER TABLE turns DROP COLUMN {column}")
+            conn.execute("DELETE FROM migrations WHERE key >= ?",
+                         ("0013_the_models_a_turn_knows_and_the_counters_it_keeps",))
+        self.assertIsNone(migration.carry_one("ava"))
+
+    def test_a_turn_admitted_after_the_carry_keeps_both_models_and_counts_its_own_records(self):
+        records.stated(directory.records("ava"), {"model_name": "configured-model"})
+        self.back_to_before_the_step()
+
+        got = self.run_turn()
+
+        row = kept.get_turn("ava", got.turn)
+        self.assertEqual(1, row["model_provenance_kept"])
+        self.assertEqual(("configured-model", "a-stand-in-1"),
+                         (row["admitted_model_name"], row["reported_model_name"]))
+        self.assertEqual((0, 0, 0), (row["unknown_records"], row["lost_records"],
+                                     row["unsent_records"]))
+
+        kept.add_turn_record("ava", got.turn, turns.UNSENT, {"unsent_count": 1})
+
+        self.assertEqual(1, kept.get_turn("ava", got.turn)["unsent_records"])
+
+    def test_a_turn_taken_before_the_carry_keeps_its_one_column_and_claims_nothing(self):
+        before = self.run_turn()
+        with records.writing(directory.records("ava")) as conn:
+            conn.execute("UPDATE turns SET model_provenance_kept = 0, admitted_model_name = NULL,"
+                         " reported_model_name = NULL WHERE id = ?", (before.turn,))
+
+        self.back_to_before_the_step()
+
+        row = kept.get_turn("ava", before.turn)
+        self.assertEqual(0, row["model_provenance_kept"])
+        self.assertEqual("a-stand-in-1", row["model_name"])
+        self.assertEqual((None, None),
+                         (row["admitted_model_name"], row["reported_model_name"]))
 
 
 class WhatThisReleaseDidNotUnderstand(WithAnAgent):
@@ -690,6 +832,102 @@ class SayingSomethingIntoARunningTurn(WithAnAgent):
         self.assertEqual(kept.FAILED, got.turn_status)
 
 
+class WhatNeverArrivedAndWhatCouldNotBeSaid(WithAnAgent):
+    """**`LOST` is the adapter drifting, and a word rundesk could not deliver is not that.**
+
+    Both wore the same word and shared one permanent column, so an ordinary end-of-turn steering
+    race read as a provider moving underneath rundesk — the one signal in the product that says an
+    adapter and its brain have come apart.
+
+    And the summary was counted at settlement while the feeder that writes those records may still
+    be running, so what the ledger kept for ever depended on which of the two got there first.
+    """
+
+    def a_turn(self) -> int:
+        """One admitted row to write records against, without a brain behind it."""
+        landed = arriving.recorded("ava", "discord", "ops", "2207", "audit it")
+        return kept.add_turn("ava", {
+            "conversation_id": landed.conversation,
+            "provider_name": support.A_STAND_IN,
+            "access_mode": protocol.ACCESS_WORK,
+        })
+
+    def counted(self, turn: int, of_a_kind: str) -> int:
+        return sum(1 for one in kept.list_turn_records("ava", turn)
+                   if one["record_type"] == of_a_kind)
+
+    def a_word_held_until(self, released: threading.Event):
+        """A second word the feeder offers only once a case lets it go.
+
+        **No sleep decides this.** An attended caller owns its own iterator, so teardown joins the
+        feeder for a second and then leaves it be — which means the turn settles while this
+        generator is still blocked, and a case can prove the record that follows is later than the
+        summary rather than hoping a delay outran a thread.
+        """
+        def saying():
+            yield "stop at five"
+            released.wait(PATIENCE)
+            yield "and one more thing"
+        return saying()
+
+    def a_settled_turn_with_a_word_still_to_come(self, released: threading.Event):
+        """One turn, run to settled, with its feeder still holding a word nothing has taken."""
+        self.a_stand_in_told(self.agent, steer=True, finish_after_steers=1)
+        got = self.run_turn(saying=self.a_word_held_until(released))
+        settled = kept.get_turn("ava", got.turn)
+        self.assertNotEqual(kept.WORKING, settled["turn_status"],
+                            "the turn had not settled, so nothing here is about a late record")
+        self.assertEqual(0, self.counted(got.turn, turns.UNSENT),
+                         "the word was written before settlement, so this proves nothing")
+        return got, settled
+
+    def test_a_gap_in_what_the_brain_said_is_lost_and_never_unsent(self):
+        turn = self.a_turn()
+
+        turns._heard("ava", turn, lines.Gap(2, "it fell behind"), [], None)
+
+        row = kept.get_turn("ava", turn)
+        self.assertEqual((1, 0), (row["lost_records"], row["unsent_records"]))
+
+    def test_a_word_rundesk_could_not_deliver_is_unsent_and_never_lost(self):
+        released = threading.Event()
+        try:
+            got, _settled = self.a_settled_turn_with_a_word_still_to_come(released)
+            released.set()
+
+            self.assertTrue(support.waited_until(
+                lambda: self.counted(got.turn, turns.UNSENT) == 1, PATIENCE),
+                "the word that could not be said was not written down as unsent")
+            self.assertEqual(0, self.counted(got.turn, turns.LOST))
+        finally:
+            released.set()
+
+    def test_a_record_written_after_the_turn_settled_still_reaches_its_permanent_summary(self):
+        """The count the ledger keeps for ever is the records it actually has, whenever they land.
+
+        **The order is made rather than waited for.** The turn is settled and its summary is read
+        before the feeder is let go, so the record that follows is provably later than the number
+        that used to be final — the reproduction depended on a three-second delay outrunning a
+        thread, and a delay is a hope where an event is a proof.
+        """
+        released = threading.Event()
+        try:
+            got, settled = self.a_settled_turn_with_a_word_still_to_come(released)
+            self.assertEqual(0, settled["unsent_records"])
+
+            released.set()
+
+            self.assertTrue(support.waited_until(
+                lambda: self.counted(got.turn, turns.UNSENT) == 1, PATIENCE),
+                "the word that could not be said was never written down")
+            row = kept.get_turn("ava", got.turn)
+            self.assertEqual(self.counted(got.turn, turns.UNSENT), row["unsent_records"])
+            self.assertEqual(1, row["unsent_records"])
+            self.assertEqual((0, 0), (row["lost_records"], row["unknown_records"]))
+        finally:
+            released.set()
+
+
 class DurableGuidanceIntoARunningTurn(WithAnAgent):
     class Stream:
         def __init__(self, accepts=True, raises=False):
@@ -828,9 +1066,9 @@ class DurableGuidanceIntoARunningTurn(WithAnAgent):
                 pending = arriving.messages("ava", landed.conversation)[-2:]
                 self.assertEqual([None, None], [one["turn_id"] for one in pending])
                 self.assertFalse(words.open)
-                lost = [one for one in kept.list_turn_records("ava", turn)
-                        if one["record_type"] == turns.LOST]
-                self.assertEqual(1, len(lost))
+                unsent = [one for one in kept.list_turn_records("ava", turn)
+                          if one["record_type"] == turns.UNSENT]
+                self.assertEqual(1, len(unsent))
 
     def test_a_duplicate_claim_is_refused_without_queueing_the_message_twice(self):
         landed, turn = self.admitted()

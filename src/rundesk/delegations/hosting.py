@@ -39,7 +39,7 @@ May depend on `agents`, `core` and `utils`.
 import json
 import sqlite3
 from pathlib import Path
-from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 from rundesk.agents import directory, records
 from rundesk.core import config, paths
@@ -686,8 +686,12 @@ def _what_they_answered(to_agent: str, delegator: str, parent_turn: int,
                 (conversation["id"], delegator)).fetchone()
             if asked is None:
                 return None
+            # **The whole row, and the model decided from it in one place.** Which column holds the
+            # model that actually ran depends on the release that wrote the turn, and naming the
+            # columns here would both duplicate that rule and fail outright against an agent whose
+            # carry has not reached them.
             said = conn.execute(
-                "SELECT t.turn_status, t.provider_name, t.provider_alias, t.model_name,"
+                "SELECT t.*,"
                 " (SELECT m.body FROM conversation_messages m"
                 " WHERE m.conversation_id = ? AND m.author_id = ? AND m.turn_id = t.id"
                 " ORDER BY m.id DESC LIMIT 1) AS body"
@@ -701,7 +705,27 @@ def _what_they_answered(to_agent: str, delegator: str, parent_turn: int,
     return CollectedAnswer(
         body or f"{to_agent} finished without saying anything ({said['turn_status']})",
         int(asked["turn_id"]), str(said["turn_status"]), str(said["provider_name"] or ""),
-        said["model_name"], said["provider_alias"])
+        model_that_answered(dict(said)), said["provider_alias"])
+
+
+def model_that_answered(row: Dict[str, Any]) -> Optional[str]:
+    """Which model actually ran a target's turn, or `None` when nothing may honestly say.
+
+    On a turn written from step `0013` on, `reported_model_name` and nothing else: `model_name`
+    beside it falls back to what that turn was *admitted* with, which is what somebody asked for —
+    and reading that as the model that ran is how `rundesk asked show` named a configured model
+    under `terminal model` for a provider that had reported none. Before that step there is only
+    the one ambiguous column, which is the best there is and is labelled as no better.
+
+    **The same rule as `providers.kept.model_that_answered`, written again rather than imported**:
+    `delegations` may not reach `providers` — `tests/test_layers.py` keeps that distance — and
+    `tests/test_delegations_hosting.py` proves the two answer alike on every shape of row.
+
+    Asked with `.get`, so a target agent whose carry failed is answered rather than raising.
+    """
+    if row.get("model_provenance_kept"):
+        return row.get("reported_model_name")
+    return row.get("model_name")
 
 
 def terminal_provenance(to_agent: str, delegator: str, parent_turn: int,
@@ -737,7 +761,7 @@ def _legacy_terminal_answer(conn, conversation: int, delegator: str,
     consume it and the next turn receives both messages.
     """
     turn = conn.execute(
-        "SELECT id, turn_status, provider_name, provider_alias, model_name FROM turns"
+        "SELECT * FROM turns"
         " WHERE conversation_id = ? AND turn_status <> ?"
         " ORDER BY id DESC LIMIT 1", (conversation, WORKING)).fetchone()
     if turn is None:
@@ -763,4 +787,5 @@ def _legacy_terminal_answer(conn, conversation: int, delegator: str,
         " ORDER BY id DESC LIMIT 1", (conversation, to_agent, turn["id"])).fetchone()
     return (int(turn["id"]), str(turn["turn_status"]),
             str(answer["body"] or "").strip() if answer else "",
-            str(turn["provider_name"] or ""), turn["provider_alias"], turn["model_name"])
+            str(turn["provider_name"] or ""), turn["provider_alias"],
+            model_that_answered(dict(turn)))

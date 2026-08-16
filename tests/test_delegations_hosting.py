@@ -1054,5 +1054,41 @@ class WhatMovesADelegationsLatestMoment(support.Isolated):
             set(row.keys()))
 
 
+class WhichModelActuallyRanATargetsTurn(unittest.TestCase):
+    """**One rule, written in two layers, and this is what keeps them saying the same thing.**
+
+    `delegations` may not import `providers` — `tests/test_layers.py` holds that distance — so the
+    rule for reading a turn's model lives in both. Every shape of row is put to both here, because
+    two copies of a rule with nothing comparing them is one copy and one thing that used to be true.
+    """
+
+    SHAPES = (
+        {"model_provenance_kept": 1, "admitted_model_name": "asked", "reported_model_name": "ran",
+         "model_name": "ran"},
+        {"model_provenance_kept": 1, "admitted_model_name": "asked", "reported_model_name": None,
+         "model_name": "asked"},
+        {"model_provenance_kept": 1, "admitted_model_name": None, "reported_model_name": None,
+         "model_name": None},
+        {"model_provenance_kept": 0, "admitted_model_name": None, "reported_model_name": None,
+         "model_name": "either-of-them"},
+        {"model_name": "an agent whose carry never reached these columns"},
+    )
+
+    def test_both_layers_answer_alike_on_every_shape_of_row(self):
+        for row in self.SHAPES:
+            with self.subTest(row=row):
+                self.assertEqual(provider_kept.model_that_answered(row),
+                                 hosting.model_that_answered(row))
+
+    def test_a_model_only_asked_for_is_never_the_model_that_answered(self):
+        asked_only = {"model_provenance_kept": 1, "admitted_model_name": "asked",
+                      "reported_model_name": None, "model_name": "asked"}
+        self.assertIsNone(hosting.model_that_answered(asked_only))
+
+    def test_the_one_column_an_older_row_has_is_still_the_best_there_is(self):
+        older = {"model_provenance_kept": 0, "model_name": "either-of-them"}
+        self.assertEqual("either-of-them", hosting.model_that_answered(older))
+
+
 if __name__ == "__main__":
     unittest.main()

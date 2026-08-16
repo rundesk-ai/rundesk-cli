@@ -27,6 +27,10 @@ Prefix every command with `"$RUNDESK_COMMAND"`. Quote prompts so the shell passe
   unexpectedly, or usage needs explanation.
 - Rising `UNKNOWN` means the provider emitted records Rundesk did not understand. Rising `LOST`
   means expected records never arrived. Either indicates adapter/provider drift worth investigating.
+- `UNSENT` is not drift. It counts words Rundesk could not deliver into a running turn, usually a
+  steer offered after the provider had already finished; those words stay durable for a later turn.
+- One turn shows `model asked for` beside `model reported`. A turn recorded before Rundesk kept those
+  apart shows a single `model` line saying the value may be either.
 - `ask` is the attended caller and can accept steering while a turn runs. Channel and scheduled turns
   are unattended. A busy conversation refuses a second simultaneous turn instead of queuing it.
 - `--read-only` is a request sent to the provider, not an operating-system sandbox. Keep task scope
