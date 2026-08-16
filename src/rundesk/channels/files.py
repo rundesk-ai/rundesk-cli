@@ -45,6 +45,16 @@ the adapter repeats that check before sending. This matches the authority provid
 have while avoiding a duplicate merely to cross the channel seam. Intent remains separate: merely
 reading or editing a file never sends it.
 
+**A directory on the way is searched and never read**, and **a refusal says which of the things it
+was.** Both come from one incident: an ordinary readable PNG under a directory this process could
+pass through but not list was refused, and the sentence written down said a symbolic link stood at
+a directory that was not one. `SEARCHING` is the first half and `_would_not_open` is the second —
+a link, a mode bit, a privacy grant, a component that went away and a component that is not a
+directory are five different things to go and look at. **And the component an open failed on is not
+always the one at fault** — a directory this process cannot search refuses the lookup of its own
+child, so the refusal is asked about before it is worded rather than blaming whatever name the
+error happened to carry.
+
 ## Going away
 
 Attachments are the one thing here that grows without a person deciding to keep it, so the day is in
@@ -56,12 +66,14 @@ May depend on `agents`, `core` and `utils`.
 """
 
 import contextlib
+import errno
 import fcntl
 import hashlib
 import os
 import re
 import shutil
 import stat
+import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional
@@ -92,6 +104,30 @@ KEPT_DAYS = 60
 
 #: How much is read at a time when a file is being weighed and digested.
 BLOCK = 1024 * 1024
+
+#: How a directory on the way to a file is opened: **passed through, never read.** A walk needs
+#: permission to search a directory and never permission to list what is in it, and asking for the
+#: larger of the two is how a file somebody explicitly named came to be refused for standing in a
+#: directory that grants exactly one of them — measured here: `O_RDONLY | O_DIRECTORY` on a `--x`
+#: directory is `EACCES`, and `O_SEARCH` on the same one opens and reads the named file below it.
+#:
+#: **Nothing about the link protection changes.** `O_NOFOLLOW` is still on every component, every
+#: component is still opened from the descriptor above it, and the flag still requires a directory.
+#: macOS calls the search-only form `O_SEARCH` (`O_EXEC`, `0x40000000`); some supported CPython 3.9
+#: builds omit both names even though Darwin accepts the flag, so the stable system value is the
+#: final Darwin spelling. Linux exposes the equivalent path descriptor as `O_PATH`. A platform with
+#: neither keeps the older read-only fallback because the standard library offers no portable
+#: search-only spelling there.
+#:
+#: **The two are not the same descriptor, and the difference lands on the refusals.** `O_SEARCH`
+#: asks for search permission when it opens, so a directory that grants none is refused at itself;
+#: `O_PATH` asks for nothing at all, so the same directory opens and the refusal arrives one
+#: component later, on the child that was never the problem. Which is why nothing here reads the
+#: component an open failed on as the component at fault — `_reached` asks the directory above
+#: before a refusal is worded.
+SEARCHING = ((getattr(os, "O_SEARCH", getattr(os, "O_EXEC", 0x40000000))
+              if sys.platform == "darwin" else getattr(os, "O_PATH", os.O_RDONLY))
+             | os.O_DIRECTORY)
 
 
 class Refused(Exception):
@@ -216,11 +252,16 @@ def approved(said: str) -> Sending:
     """Resolve, weigh and digest any explicitly named ordinary local file.
 
     A symbolic spelling is resolved once, then **every component of that canonical path is opened
-    with `O_NOFOLLOW`**. The adapter receives the canonical path and repeats the same walk, size and
-    digest check, so a later replacement is refused instead of becoming a different attachment.
+    with `O_NOFOLLOW`** — the directories on the way searched rather than read, per `SEARCHING`.
+    The adapter receives the canonical path and repeats the same walk, size and digest check, so a
+    later replacement is refused instead of becoming a different attachment.
 
     What comes back is measured from the descriptor this opened, never from a second look at the
     path — so the size and digest describe one file rather than whatever stood at that name twice.
+
+    **Every refusal names what actually stopped it**, including the one raised before the walk
+    begins: a path that will not canonicalize is a missing file, a permission, or a loop, and
+    collapsing the three loses the only thing anybody could act on.
     """
     at = Path(said)
     if not at.is_absolute():
@@ -237,7 +278,8 @@ def approved(said: str) -> Sending:
     except (ValueError, RuntimeError) as why:
         raise Refused(f"{said!r} could not be resolved to a file on this machine") from why
     except OSError as why:
-        raise Refused(f"{said} could not be resolved to a file on this machine") from why
+        raise Refused(f"{said} could not be resolved to a file on this machine "
+                      f"({_named(why)}: {why.strerror or why})") from why
     held = _opened_without_following(at)
     try:
         how = _ordinary_file(held, at)
@@ -298,14 +340,14 @@ def _opened_without_following(at: Path) -> int:
     if not parts:
         raise Refused(f"{at} is a directory, and a directory is not a file to send")
 
-    holding = os.open(str(root), os.O_RDONLY | os.O_DIRECTORY)
+    holding = os.open(str(root), SEARCHING)
     try:
-        for part in parts[:-1]:
+        for nth, part in enumerate(parts[:-1]):
             try:
-                stepping = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                   dir_fd=holding)
+                stepping = os.open(part, SEARCHING | os.O_NOFOLLOW, dir_fd=holding)
             except OSError as why:
-                raise Refused(f"{at} could not be opened without following a link at {part}") from why
+                raise _would_not_open(why, at, root.joinpath(*parts[:nth + 1]), part,
+                                      holding) from why
             os.close(holding)
             holding = stepping
         try:
@@ -316,9 +358,106 @@ def _opened_without_following(at: Path) -> int:
             # thing this is has been established.
             return os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=holding)
         except OSError as why:
-            raise Refused(f"{at} could not be opened without following a link") from why
+            raise _would_not_open(why, at, at, parts[-1], holding) from why
     finally:
         os.close(holding)
+
+
+def _would_not_open(why: OSError, at: Path, standing: Path, part: str, holding: int) -> Refused:
+    """Why one component of an approved path would not open, in the terms of what happened.
+
+    **Every failure here used to be reported as a link, and one of them was not one.** A gateway
+    refused a directory it holds no privacy grant for was told `could not be opened without
+    following a link at Downloads` — about a directory that was not a link, for a file that was an
+    ordinary readable PNG — and whoever read it went looking for a link that had never been there.
+    The open is refused either way; what changes is whether the sentence is true.
+
+    So the errno is carried into the words, the component is named where it actually stands, and a
+    refusal to read is never called a link. A permission this process does not hold is **this
+    process's** — the same file may open perfectly from a terminal — which is why the sentence says
+    so rather than leaving somebody to read a grant proved somewhere else as one that holds here.
+
+    **The component an open failed on is not always the component at fault.** A descriptor held on
+    a directory this process cannot search refuses every lookup made through it, so the child is
+    where the error surfaces and the parent is where the mode bit is — which is what `O_PATH`
+    produces on Linux for a directory `O_SEARCH` would have refused outright on macOS, and what any
+    platform produces when a directory loses its mode between the walk opening it and the walk
+    stepping through it. Naming the child there is the same class of untrue sentence as naming a
+    link: it sends whoever reads it to change permissions on a file that was never refused. So a
+    refusal to search is asked about before it is worded, and the answer is the same on both
+    platforms.
+    """
+    code = _named(why)
+    if why.errno == errno.ELOOP or (why.errno == errno.ENOTDIR and _a_link(part, holding)):
+        # **Which errno arrives says nothing on its own.** A link opened `O_NOFOLLOW | O_DIRECTORY`
+        # answers `ENOTDIR` on this platform and one opened as a file answers `ELOOP`, so the
+        # component itself is asked about — *after* it has already been refused. This decides the
+        # wording of a refusal and never whether to refuse.
+        return Refused(f"{at} could not be opened to be sent: a symbolic link stands at {standing} "
+                       f"and no component of a path being sent is ever followed ({code})")
+    if why.errno in (errno.EPERM, errno.EACCES) and not _reached(part, holding):
+        return Refused(f"{at} could not be opened to be sent: {standing.parent} cannot be searched "
+                       f"by this process ({code}), so {standing} under it was never reached — the "
+                       f"refusal belongs to that directory above and not to what was named under "
+                       f"it, and it is not a link")
+    if why.errno == errno.EPERM:
+        return Refused(f"{at} could not be opened to be sent: the machine refuses this process "
+                       f"{standing} ({code}) — on macOS that is a privacy grant, which belongs to "
+                       f"the program this process runs as and not to the file, and it is not a "
+                       f"link. A grant proved in another lineage is not this one's")
+    if why.errno == errno.EACCES:
+        return Refused(f"{at} could not be opened to be sent: {standing} refuses this process by "
+                       f"its own permissions ({code}), which is a mode bit rather than a link")
+    if why.errno == errno.ENOENT:
+        return Refused(f"{at} could not be opened to be sent: {standing} was there when the path "
+                       f"was resolved and is not there now ({code})")
+    if why.errno == errno.ENOTDIR:
+        return Refused(f"{at} could not be opened to be sent: {standing} is not a directory "
+                       f"({code}), so nothing stands below it")
+    return Refused(f"{at} could not be opened to be sent: {standing} would not open "
+                   f"({code}: {why.strerror or why})")
+
+
+def _named(why: OSError) -> str:
+    """The name this platform gives the errno something failed with, carried into every sentence.
+
+    The number alone is what a person then has to go and look up, and no number at all is what left
+    a refusal saying only that something could not be opened.
+    """
+    return errno.errorcode.get(why.errno or 0) or f"errno {why.errno}"
+
+
+def _a_link(part: str, holding: int) -> bool:
+    """Whether this component is a symbolic link, asked of the directory it stands in.
+
+    Only ever asked to word a refusal that has already happened, so a component that has changed
+    again in between costs a sentence and never a decision.
+    """
+    try:
+        return stat.S_ISLNK(os.lstat(part, dir_fd=holding).st_mode)
+    except OSError:
+        return False
+
+
+def _reached(part: str, holding: int) -> bool:
+    """Whether this component could be looked up at all in the directory above it.
+
+    **A lookup needs search permission on the directory it is asked of and no permission at all on
+    what it finds**, which is what makes it the question that separates the two. Refused here, and
+    the directory above is the one holding the mode bit — the component named under it was never
+    reached and its own permissions were never consulted. Answered here, and the refusal really is
+    the component's own.
+
+    Only ever asked to word a refusal that has already happened, so a component that has changed
+    again in between costs a sentence and never a decision. Anything other than a refusal to search
+    — the component going away between the open and this — leaves the refusal with the component,
+    which is where the errno already pointed.
+    """
+    try:
+        os.lstat(part, dir_fd=holding)
+    except OSError as why:
+        return why.errno not in (errno.EACCES, errno.EPERM)
+    return True
 
 
 def _ordinary_file(held: int, at: Path) -> os.stat_result:

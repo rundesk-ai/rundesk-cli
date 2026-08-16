@@ -24,6 +24,15 @@ A_GATEWAY = lineage.Lineage(lineage.GATEWAY, PYTHON, "marcus", ["launchd"], "its
 A_TERMINAL = lineage.Lineage(lineage.TERMINAL, "com.googlecode.iterm2", None, ["iTerm2"], "iTerm")
 NOBODY = lineage.Lineage(lineage.CANNOT_TELL, "", None, [], "/bin/ps would not answer")
 
+#: What a `permissions check` run through a brain's tool call was measured answering: the tool
+#: re-parents what it starts, the gateway shim is gone from the chain, and the client proved is the
+#: brain's own program. It reads as an ordinary successful check and is about nobody's gateway.
+A_TOOL = lineage.Lineage(lineage.UNKNOWN, "/opt/homebrew/bin/codex", "marcus", ["codex"],
+                         "the parent chain was read whole and matched no lineage this release knows")
+
+ANOTHER_TERMINAL = lineage.Lineage(lineage.TERMINAL, "com.apple.Terminal", None, ["Terminal"],
+                                   "Terminal.app is responsible for this process")
+
 
 class Permissions(support.Isolated):
     """A scratch install, with the lineage decided by the case rather than by the machine."""
@@ -173,6 +182,34 @@ class WhatItKeeps(Permissions):
                          machine=support.AMachine(**{"-c": support.ran(0, "read")}))
         _code, out, _err, _machine = self.permissions(whose=A_GATEWAY)
         self.assertIn("proved somewhere else", out)
+
+    def test_an_answer_proved_outside_a_gateway_never_reads_as_one_about_a_gateway(self) -> None:
+        """Measured: a check run through a brain's tool call proved `unknown` and stored `ready`.
+
+        Read back from that same lineage nothing was said at all — the two agree, so the line about
+        another lineage does not fire — and the row said `files/downloads ready` above a heading
+        naming a program that is not the gateway. A gateway holds what *it* was granted, so this
+        says so whatever lineage is reading.
+        """
+        machine = support.AMachine(**{"-c": support.ran(0, "read")})
+        self.permissions("check", "files", whose=A_TOOL, machine=machine)
+        _code, out, _err, _machine = self.permissions(whose=A_TOOL)
+        self.assertIn("nothing here was proved in a gateway", out)
+        self.assertIn("/opt/homebrew/bin/codex", out)
+
+    def test_a_gateways_own_answer_is_not_qualified_out_of_existence(self) -> None:
+        """The one lineage the line must not appear under, or nobody reads any of them."""
+        self.permissions("check", "files", machine=support.AMachine(**{"-c": support.ran(0, "read")}))
+        _code, out, _err, _machine = self.permissions(whose=A_GATEWAY)
+        self.assertNotIn("nothing here was proved in a gateway", out)
+
+    def test_another_client_of_the_same_kind_is_still_another_client(self) -> None:
+        """Two terminals are two rows in a privacy pane, and `how` alone cannot tell them apart."""
+        self.permissions("check", "files", whose=A_TERMINAL,
+                         machine=support.AMachine(**{"-c": support.ran(0, "read")}))
+        _code, out, _err, _machine = self.permissions(whose=ANOTHER_TERMINAL)
+        self.assertIn("different client", out)
+        self.assertIn("com.googlecode.iterm2", out)
 
     def test_it_is_valid_json_on_disk(self) -> None:
         self.permissions("check", "files", machine=support.AMachine(**{"-c": support.ran(0, "read")}))

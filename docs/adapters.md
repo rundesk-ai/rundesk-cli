@@ -600,6 +600,30 @@ link to somewhere else — and only a re-open sees that. Refuse the whole delive
 posting the words and quietly leaving the file behind reports a delivery that did not happen the way
 it was asked for, and nothing downstream could tell.
 
+**Open the directories on the way for search, not with `O_RDONLY | O_DIRECTORY`.** A walk needs to
+pass *through* a directory and never to list it, and asking for the larger of the two refuses a file
+that opens perfectly: a directory granting `--x` answers `EACCES` to the second and hands over the
+named file below it to the first. Use `O_SEARCH` (`O_EXEC`, `0x40000000`) on macOS and `O_PATH |
+O_DIRECTORY` on Linux; some supported macOS CPython 3.9 builds omit the names for the Darwin flag.
+Rundesk's approval asks for exactly this, so an adapter that asks for more refuses what rundesk
+approved and the send fails on the far side of the seam. `O_NOFOLLOW` stays on every component and
+the search descriptor still requires a directory, so a non-directory is refused exactly as before.
+
+**Say which component would not open, and what the machine answered.** A refusal reading only *could
+not be opened without following a link* was written down for a directory that was not a link, and
+the file was an ordinary readable PNG — the process simply could not open that directory. Carry the
+errno into the sentence and name the component at fault; a link, a mode bit, a privacy grant
+and a component that went away are four different things to go and look at.
+
+**The component the error arrives on is not always the component at fault**, and the two flags above
+are exactly where they part. `O_SEARCH` refuses an unsearchable directory at that directory;
+`O_PATH` opens it and lets the refusal land one component lower, on a child whose own permissions
+were never consulted — so the same machine state produces two different sentences blaming two
+different components, and only one of them is true. On `EACCES` or `EPERM`, ask the directory above
+first: look the component up in it (`lstat` with `dir_fd`, which needs search permission there and
+none at all on what it finds). Refused, the directory above is what holds the mode bit and is what
+the sentence must name; answered, the refusal really is the named component's own.
+
 **The interpreter arrives on `PATH`. Never count directories.** Covered above; it cost the previous
 build a whole release.
 

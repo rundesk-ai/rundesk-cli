@@ -153,6 +153,22 @@ def _reported() -> int:
         # stored `ready` as though it were about the process they are asking on behalf of.
         print(f"  this is a {mine.how} — what is below was proved somewhere else and may not "
               "hold here")
+    elif whose.get(HOW) and mine.certain and whose.get(NAMED) and mine.named \
+            and whose.get(NAMED) != mine.named:
+        # Same kind of lineage and a different client, which the kind alone cannot show: two
+        # terminals are two rows in a privacy pane, and an interpreter that moved is the hazard
+        # this command exists to find.
+        print(f"  this process is {mine.named}, and what is below was proved by "
+              f"{whose.get(NAMED)} — a different client, holding its own grants")
+    if whose.get(HOW) and whose.get(HOW) != lineage.GATEWAY:
+        # **Measured, and the reason this line is unconditional.** A `permissions check` run by a
+        # brain's tool call inside a turn was expected to be a descendant of the gateway shim and
+        # reported `unknown` — the tool re-parents what it starts, so the shim is gone from the
+        # chain — and it wrote down `ready` for a lineage that is not the gateway's. Read back from
+        # any lineage but the one it was proved in, the row above would otherwise be taken for what
+        # a gateway may do, and a gateway holds whatever *it* was granted and nothing lent to it.
+        print(f"  nothing here was proved in a gateway, so none of it says what a gateway may do — "
+              f"it is about {whose.get(NAMED) or whose.get(HOW)}")
     print()
     rows: List[Tuple[str, ...]] = []
     for one in proving.every():
@@ -229,7 +245,12 @@ def _about(whose: lineage.Lineage) -> str:
     named = f" ({whose.named})" if whose.named else ""
     if whose.how == lineage.GATEWAY:
         return f"these answers are about this gateway{named}"
-    return (f"these answers are about {whose.how}{named}, which this command is a descendant of — "
+    # **Said for every lineage that is not a gateway, and `unknown` is the one that had to be
+    # measured.** Running this from inside a turn was documented as the way to ask on a gateway's
+    # behalf; asked through a brain's tool call it answered `unknown`, named the brain's own
+    # program, and proved that program's grants. Whatever this is a descendant of, it is not the
+    # gateway unless it says `gateway`.
+    return (f"these answers are about {whose.how}{named}, which this command was started under — "
             "a gateway is a different process and may be answered differently")
 
 

@@ -12,8 +12,10 @@ wrong.
 Run directly: `python3 tests/test_channels_files.py`
 """
 
+import errno
 import hashlib
 import os
+import re
 import shutil
 import unittest
 from datetime import date, datetime
@@ -329,6 +331,222 @@ class WhatMayBeSent(Files):
     def test_a_directory_is_not_a_file_to_send(self):
         with self.assertRaises(files.Refused):
             files.approved(str(directory.home(self.agent)))
+
+    def test_a_directory_that_may_be_passed_through_and_not_listed_still_sends_its_file(self):
+        """The incident, reduced to the part that can be measured on any machine.
+
+        Passing through a directory and reading what is in it are two different permissions, and a
+        walk needs only the first. Asked for the second, an ordinary readable file standing in a
+        `--x` directory was refused — and the sentence written down said a symbolic link stood
+        there.
+        """
+        box = self.home / "search-only"
+        box.mkdir(parents=True, exist_ok=True)
+        at = box / "preview.png"
+        at.write_bytes(b"pixels")
+        self.addCleanup(box.chmod, 0o755)
+        box.chmod(0o311)
+        sending = files.approved(str(at))
+        self.assertEqual(at, sending.at)
+        self.assertEqual(hashlib.sha256(b"pixels").hexdigest(), sending.sha256)
+
+
+class WhatARefusalSays(Files):
+    """**Which of the things it was**, because every one of these has a different thing to go and do.
+
+    Written for one incident: a gateway that could not open a directory was told a symbolic link
+    stood at it, about a directory that was not one and a file that was an ordinary readable PNG.
+    Whoever read it went looking for a link that had never been there.
+    """
+
+    #: How a refusal about permissions names the component it is about. Taken exactly, because
+    #: **a parent is a prefix of its own child**: every one of these sentences opens with the whole
+    #: path being sent, so asking whether the directory is mentioned somewhere in the words is
+    #: answered `yes` by a sentence blaming the file underneath it. That is the defect itself, and
+    #: an `assertIn` cannot see it.
+    BLAMED = re.compile(r"to be sent: (.+?) (?:cannot be searched by this process"
+                        r"|refuses this process by its own permissions)")
+
+    def a_walk(self, at):
+        """The walk on its own, so a link *inside* a canonical path can be put there deliberately.
+
+        `approved` canonicalizes before it walks, so the only way a component is a link by the time
+        the walk reaches it is a replacement between the two — which is exactly what the walk is
+        for, and what this reproduces without a race.
+        """
+        with self.assertRaises(files.Refused) as refused:
+            files._opened_without_following(at)
+        return str(refused.exception)
+
+    def the_component_blamed(self, said):
+        """The one component a refusal about permissions actually points at, and nothing near it."""
+        found = self.BLAMED.search(said)
+        self.assertIsNotNone(found, f"no component is named as the one refusing: {said}")
+        return found.group(1)
+
+    def losing_its_mode(self, box):
+        """Take a directory's mode away the moment the walk is holding a descriptor on it.
+
+        **This is `O_PATH`, reproduced without Linux.** `O_SEARCH` asks for search permission when
+        it opens, so macOS refuses an unsearchable directory at the directory; `O_PATH` asks for
+        nothing, so Linux opens it and refuses the *child* looked up through it. A descriptor held
+        across a `chmod` puts any platform in the second state, which is also the real race — a
+        directory whose mode changes mid-walk — so the case is a fact about both.
+        """
+        opened = files.os.open
+        self.addCleanup(setattr, files.os, "open", opened)
+
+        def dropping(name, flags, *args, **kwargs):
+            held = opened(name, flags, *args, **kwargs)
+            if name == box.name:
+                box.chmod(0o000)
+            return held
+
+        files.os.open = dropping
+
+    def test_a_directory_the_machine_refuses_this_process_is_not_reported_as_a_link(self):
+        """The incident itself: a path that resolves, an open that is refused, and no link anywhere.
+
+        `EPERM` on an open that `resolve` had no trouble with is the shape a macOS privacy refusal
+        arrives in, and it cannot be produced on a developer's machine without spending one of the
+        owner's real grants — so the refusal is put where the machine would put it. What is under
+        test is the sentence, and the sentence is what was wrong.
+        """
+        box = self.home / "downloads-like"
+        box.mkdir(parents=True, exist_ok=True)
+        at = box / "preview.png"
+        at.write_bytes(b"pixels")
+        opened = files.os.open
+        self.addCleanup(setattr, files.os, "open", opened)
+
+        def refusing(name, flags, *args, **kwargs):
+            if name == box.name:
+                raise PermissionError(errno.EPERM, "Operation not permitted", name)
+            return opened(name, flags, *args, **kwargs)
+
+        files.os.open = refusing
+        with self.assertRaises(files.Refused) as refused:
+            files.approved(str(at))
+        said = str(refused.exception)
+        self.assertIn("EPERM", said, f"the errno the machine answered with was lost: {said}")
+        self.assertIn(str(box), said, f"the component it stopped at was not named: {said}")
+        self.assertNotIn("symbolic link", said,
+                         f"a refusal to open was reported as a link: {said}")
+        self.assertIn("lineage", said,
+                      f"nothing said the grant is this process's rather than the machine's: {said}")
+
+    def test_a_link_on_a_component_is_still_refused_and_still_called_one(self):
+        outside = self.home / "outside"
+        outside.mkdir(parents=True, exist_ok=True)
+        (outside / "real.txt").write_bytes(b"somebody else's")
+        pointing = self.home / "swapped"
+        pointing.symlink_to(outside, target_is_directory=True)
+        said = self.a_walk(pointing / "real.txt")
+        self.assertIn("symbolic link", said)
+        self.assertIn(str(pointing), said, f"the component holding the link was not named: {said}")
+
+    def test_a_link_where_the_file_should_be_is_still_refused_and_still_called_one(self):
+        (self.home / "real.txt").write_bytes(b"somebody else's")
+        pointing = self.home / "swapped.txt"
+        pointing.symlink_to(self.home / "real.txt")
+        said = self.a_walk(pointing)
+        self.assertIn("symbolic link", said)
+
+    def test_a_component_that_went_away_says_so_rather_than_naming_a_link(self):
+        said = self.a_walk(self.home / "never-was" / "preview.png")
+        self.assertIn("ENOENT", said)
+        self.assertNotIn("link", said)
+
+    def test_something_that_is_not_a_directory_says_that_rather_than_naming_a_link(self):
+        (self.home / "plain.txt").write_bytes(b"x")
+        said = self.a_walk(self.home / "plain.txt" / "preview.png")
+        self.assertIn("ENOTDIR", said)
+        self.assertNotIn("link", said)
+
+    def test_a_directory_that_cannot_be_searched_is_named_and_not_the_file_under_it(self):
+        """The component the open failed on is not the component holding the mode bit.
+
+        Held on a directory it may not search, the walk is refused when it looks the *file* up, so
+        `EACCES` arrives carrying the file's name while the file itself is an ordinary readable
+        PNG. Blaming it sends whoever reads the refusal to change permissions on the one thing that
+        never refused anything.
+        """
+        box = self.home / "loses-its-mode"
+        box.mkdir(parents=True, exist_ok=True)
+        at = box / "preview.png"
+        at.write_bytes(b"pixels")
+        self.addCleanup(box.chmod, 0o755)
+        self.losing_its_mode(box)
+        said = self.a_walk(at)
+        self.assertEqual(str(box), self.the_component_blamed(said),
+                         f"the file was blamed for the mode bit on the directory above it: {said}")
+        self.assertIn("EACCES", said, f"the errno the machine answered with was lost: {said}")
+        self.assertNotIn("symbolic link", said, f"a mode bit was reported as a link: {said}")
+
+    def test_a_directory_that_cannot_be_searched_is_named_and_not_the_directory_under_it(self):
+        """The same again one component higher, where the name that arrives is a directory's.
+
+        Worth its own case because the two are different call sites — the walk's loop and its final
+        open — and a correction applied to one of them looks complete from the other.
+        """
+        inner = self.home / "outer" / "inner"
+        inner.mkdir(parents=True, exist_ok=True)
+        at = inner / "preview.png"
+        at.write_bytes(b"pixels")
+        self.addCleanup(inner.parent.chmod, 0o755)
+        self.losing_its_mode(inner.parent)
+        said = self.a_walk(at)
+        self.assertEqual(str(inner.parent), self.the_component_blamed(said),
+                         f"a directory was blamed for the mode bit on the one above it: {said}")
+        self.assertIn("EACCES", said, f"the errno the machine answered with was lost: {said}")
+
+    def test_a_directory_granting_no_search_is_named_the_same_on_either_platform(self):
+        """One directory that grants nothing, and the refusal has to name it wherever it runs.
+
+        `O_SEARCH` refuses this directory at itself and `O_PATH` opens it and refuses its child, so
+        without asking which happened the same machine state produces two different sentences that
+        blame two different components — and only one of them is true. This is the case that fails
+        on Linux and passes on macOS if the two are not reconciled.
+        """
+        box = self.home / "no-search-at-all"
+        box.mkdir(parents=True, exist_ok=True)
+        at = box / "preview.png"
+        at.write_bytes(b"pixels")
+        self.addCleanup(box.chmod, 0o755)
+        box.chmod(0o000)
+        said = self.a_walk(at)
+        self.assertEqual(str(box), self.the_component_blamed(said),
+                         f"the component named is not the directory that refuses: {said}")
+        self.assertIn("EACCES", said, f"the errno the machine answered with was lost: {said}")
+
+    def test_a_file_that_may_not_be_read_is_still_blamed_on_itself(self):
+        """The other side of the same question, so the correction cannot become blame-the-parent.
+
+        A directory that searches perfectly and a file that refuses to open is the ordinary case,
+        and moving *that* refusal onto the directory would be the same defect facing the other way.
+        """
+        at = self.home / "unreadable.png"
+        at.write_bytes(b"pixels")
+        self.addCleanup(at.chmod, 0o644)
+        at.chmod(0o000)
+        if os.geteuid() == 0:
+            self.skipTest("a mode bit refuses nothing to root, so there is no refusal to word")
+        said = self.a_walk(at)
+        self.assertEqual(str(at), self.the_component_blamed(said),
+                         f"a file's own mode bit was blamed on the directory above it: {said}")
+        self.assertIn("EACCES", said, f"the errno the machine answered with was lost: {said}")
+
+    def test_a_path_that_will_not_resolve_keeps_what_the_machine_said(self):
+        box = self.home / "unsearchable"
+        box.mkdir(parents=True, exist_ok=True)
+        at = box / "preview.png"
+        at.write_bytes(b"pixels")
+        named = str(at)
+        self.addCleanup(box.chmod, 0o755)
+        box.chmod(0o600)                  # readable, not searchable: `resolve` itself is refused
+        with self.assertRaises(files.Refused) as refused:
+            files.approved(named)
+        self.assertIn("EACCES", str(refused.exception))
 
 
 class WhatIsSweptAway(Files):
