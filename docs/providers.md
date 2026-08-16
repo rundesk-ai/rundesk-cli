@@ -112,9 +112,9 @@ and starting its single turn.
 
 Four tables, in the agent's own `state.db`. Every column exists because a question is asked of it.
 
-**`turns`** — one row per turn: which brain and which model *answered*, what the adapter said it
-could do at the time, whether the session was resumed, what it came to, what it cost, and where its
-slice of the raw stream sits.
+**`turns`** — one row per turn: which brain it was admitted with and which model *answered*, what the
+adapter said it could do at the time, whether the session was resumed, what it came to, what it cost,
+and where its slice of the raw stream sits.
 
 - The four billed quantities are kept apart because they are billed at **three different rates**. A
   single total would be a number that is real and misleading.
@@ -122,7 +122,24 @@ slice of the raw stream sits.
   cost nobody measured and a cost of nothing are different answers.
 - `unknown_records` and `lost_records` are the drift counters. Both zero on a healthy turn; both
   climbing means an adapter and its brain have drifted apart, and nothing else in the product will
-  tell you before somebody notices an agent behaving oddly.
+  tell you before somebody notices an agent behaving oddly. `unsent_records` is beside them and is
+  **not** one of them: it counts words rundesk could not deliver *into* a turn, which is an ordinary
+  end-of-turn steering race and says nothing about the adapter.
+- All three counters are kept by the insert that causes them, in a trigger rather than in the writer,
+  so a record written after the turn settles is still counted. They only ever count up: the detail is
+  swept and the summary is permanent. Carrying an agent onto `0013` raises a counter to the retained
+  records of its kind where they are more — the shape the old counting could leave behind — and never
+  lowers one, because a swept turn's summary is the only thing that still remembers those records.
+- `admitted_model_name` is what the turn was admitted with — the model asked for, or the agent's
+  configured one — and `reported_model_name` is what the brain said actually ran. `model_name` is the
+  best-known answer of the two and is what a cost belongs beside. **Both are null on a turn written
+  before agent step `0013`**, which kept one column holding whichever of the two arrived last;
+  nothing backfills them, because nothing can say which fact such a row holds.
+- `model_provenance_kept` is how a reader tells those apart, and it is a column rather than an
+  inference: a turn that selected no model and was answered by a provider that reported none is empty
+  in exactly the way an older row is. Every turn admitted from `0013` on says `1`; every row already
+  in the table says `0`. **Which model actually ran is read through it** — `reported_model_name` on a
+  marked row, and the one ambiguous column only on an unmarked one.
 - `instructions_sha256` and `instructions_bytes` are kept **instead of** the prompt. See
   [re-composing a past turn](#re-composing-what-a-turn-was-sent).
 

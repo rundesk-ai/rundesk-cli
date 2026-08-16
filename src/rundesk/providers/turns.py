@@ -82,8 +82,18 @@ NotRunnable = adapters.NotRunnable
 SENT = "sent"
 INSTRUCTIONS = "instructions"
 ADMITTED = "admitted"
-LOST = "lost"
-UNKNOWN = "unknown"
+
+#: The three kinds a turn counts for ever, taken from `kept` because the columns they move are its
+#: and a word spelled twice is two words that come to disagree.
+#:
+#: **`LOST` and `UNSENT` are opposite directions and never one number.** `LOST` is a record the brain
+#: sent that never arrived — half of how a vendor moving underneath rundesk becomes visible — and
+#: `UNSENT` is a word rundesk could not put into the turn, which is an ordinary end-of-turn race and
+#: says nothing about the adapter at all. They shared a word and a column, so a person steering a
+#: turn that had just finished was told their adapter had drifted.
+LOST = kept.LOST
+UNKNOWN = kept.UNKNOWN
+UNSENT = kept.UNSENT
 
 #: What a turn that produced nothing is recorded as having gone wrong. Prose rather than one of the
 #: closed words, because **no brain classified this** — rundesk noticed it, and a word from that set
@@ -580,7 +590,10 @@ def stop_or_settle_pending(agent: str, conversation: int,
                                   else str(settled.get("provider_name") or "")),
                 "provider_alias": (provider_alias if provider_name is not None
                                    else settled.get("provider_alias")),
+                # No brain runs on this row, so nothing will ever report a model for it. What it was
+                # admitted with is the whole of what it can say.
                 "model_name": model_name,
+                "admitted_model_name": model_name,
                 "access_mode": protocol.ACCESS_WORK,
             })
             try:
@@ -872,8 +885,13 @@ def _admit(request: Request) -> _TurnAdmission:
             # canonicalize a path adapter.
             "provider_name": provider_name,
             "provider_alias": provider_alias,
-            "model_name": (effective_model if request.provider_name is not None
-                           else request.model_name),
+            # **What was actually selected, and it is the value the adapter is handed.** This wrote
+            # `request.model_name` instead, so a turn running on the agent's configured model
+            # recorded none at all and the ledger could not say which model an agent runs on.
+            # `model_name` is the best-known answer and settlement may replace it with the one the
+            # brain reports; `admitted_model_name` is this fact and nothing overwrites it.
+            "model_name": effective_model,
+            "admitted_model_name": effective_model,
             "access_mode": request.access_mode,
             "provider_capabilities": json.dumps(can, sort_keys=True),
             "session_resumed": 1 if resume else 0,
@@ -969,8 +987,12 @@ def _speaking(agent: str, turn: int, stream, saying,
     first time somebody interrupted it.
 
     **Nothing that goes wrong in here is allowed to be silent.** A thread whose exception nobody
-    retrieves failed invisibly, so a word that could not be said is written into the account as a
-    loss rather than leaving the turn reporting that it was fine.
+    retrieves failed invisibly, so a word that could not be said is written into the account as
+    `UNSENT` rather than leaving the turn reporting that it was fine.
+
+    **`UNSENT` and never `LOST`.** A brain that finished while somebody was still typing is an
+    ordinary race with an ordinary answer — the word stays durable for the next turn — and counting
+    it as a record that never arrived sent people looking for a vendor that had not moved.
     """
     if saying is None:
         return None
@@ -991,8 +1013,9 @@ def _speaking(agent: str, turn: int, stream, saying,
                     elif guidance.messages:
                         arriving.released_by_turn(
                             agent, guidance.conversation, guidance.messages, turn)
-                    kept.add_turn_record(agent, turn, LOST, {"lost_count": 1,
-                                                             "reason": "it had already finished"})
+                    kept.add_turn_record(agent, turn, UNSENT,
+                                         {"unsent_count": 1,
+                                          "reason": "it had already finished"})
                     return
                 if reachable is not None:
                     reachable.accepted(guidance)
@@ -1005,8 +1028,8 @@ def _speaking(agent: str, turn: int, stream, saying,
                     arriving.released_by_turn(
                         agent, guidance.conversation, guidance.messages, turn)
             with contextlib.suppress(Exception):
-                kept.add_turn_record(agent, turn, LOST,
-                                     {"lost_count": 1, "reason": f"not said: {why}"})
+                kept.add_turn_record(agent, turn, UNSENT,
+                                     {"unsent_count": 1, "reason": f"not said: {why}"})
         finally:
             # **Whatever happened, the brain is told there is no more coming.** A steerable brain
             # reads until its input closes; leaving it open because *we* went wrong is a turn that
@@ -1160,17 +1183,20 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
             "exit_code": gone.code,
             "failure_code": code,
             "failure_message": (message or "")[:AN_EVENT_AT_MOST] or None,
-            # **The model that answered, not the one asked for.** Written at settlement rather
-            # than at admission because only the brain knows which one really ran, and left alone
-            # when it named none so a requested model is not erased by a brain that stayed quiet.
-            **({"model_name": used.model_name} if used.model_name else {}),
+            # **The model that answered, and it is a different fact from the one asked for.**
+            # Written at settlement because only the brain knows which one really ran, and left
+            # alone when it named none — so `model_name` stays the best-known answer rather than
+            # being emptied by a brain that stayed quiet, and `reported_model_name` says whether a
+            # brain named one at all. A row with neither is a row an older release wrote.
+            **({"model_name": used.model_name,
+                "reported_model_name": used.model_name} if used.model_name else {}),
             "usage_reported": 1 if used.usage_reported else 0,
             "input_tokens": used.input_tokens, "output_tokens": used.output_tokens,
             "cache_read_tokens": used.cache_read_tokens,
             "cache_write_tokens": used.cache_write_tokens,
             "context_tokens": used.context_tokens,
-            "unknown_records": _counted(agent, turn, UNKNOWN),
-            "lost_records": _counted(agent, turn, LOST),
+            # The three drift counters are deliberately absent: each is kept by the insert that
+            # causes it, so a record written after this runs is still counted. See `kept.SETTLED`.
             "raw_offset_start": began_at, "raw_offset_end": ended_at,
         },
     }
@@ -1283,20 +1309,6 @@ def _bounded(record: Dict[str, Any]) -> Dict[str, Any]:
             kept_of_it[name] = kept_of_it[name][:200]
     kept_of_it["truncated"] = True
     return kept_of_it
-
-
-def _counted(agent: str, turn: int, of_a_kind: str) -> int:
-    """How many records of one kind this turn left, asked of the records rather than remembered.
-
-    Counting what was written beats counting as it goes: a record the account did not accept is not
-    one this number may claim, and the two would drift the first time a write was refused.
-    """
-    try:
-        return sum(1 for one in kept.list_turn_records(agent, turn)
-                   if one["record_type"] == of_a_kind)
-    except Exception:                                  # noqa: BLE001 — a count that cannot be taken
-        # must not be the reason a turn fails to settle; nothing downstream branches on it.
-        return 0
 
 
 def _trouble(stream) -> str:

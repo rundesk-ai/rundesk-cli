@@ -220,6 +220,64 @@ class WhatATurnDid(WithAnAgent):
         self.assertEqual(kept.list_turn_records("ava", turn), [])
 
 
+class TheSummaryATurnKeepsForEver(WithAnAgent):
+    """**What a turn kept for ever has to be what its records say, whenever they were written.**
+
+    The three counters were taken at settlement, by counting rows, and the thread that writes them
+    can still be running then: a word refused a second after the brain went quiet appended its
+    record to a turn whose summary had already been finalised. The detail is swept a fortnight
+    later and the wrong permanent number is what is left.
+
+    So the count is maintained by the write that causes it, inside the same transaction — a record
+    the records did not accept is still not one this number claims.
+    """
+
+    def test_each_counted_kind_moves_its_own_column_and_no_other(self):
+        turn = self.a_turn()
+        for kind in (kept.UNKNOWN, kept.LOST, kept.UNSENT):
+            kept.add_turn_record("ava", turn, kind)
+        got = kept.get_turn("ava", turn)
+        self.assertEqual((1, 1, 1),
+                         (got["unknown_records"], got["lost_records"], got["unsent_records"]))
+
+    def test_an_ordinary_record_counts_towards_nothing(self):
+        turn = self.a_turn()
+        for kind in ("tool", "result", "sent", "done"):
+            kept.add_turn_record("ava", turn, kind)
+        got = kept.get_turn("ava", turn)
+        self.assertEqual((0, 0, 0),
+                         (got["unknown_records"], got["lost_records"], got["unsent_records"]))
+
+    def test_a_record_written_after_the_turn_settled_still_reaches_the_summary(self):
+        turn = self.a_turn()
+        kept.add_turn_record("ava", turn, kept.LOST, {"lost_count": 1})
+        kept.finish_turn("ava", turn, kept.DONE)
+
+        kept.add_turn_record("ava", turn, kept.LOST, {"lost_count": 1})
+
+        self.assertEqual(2, kept.get_turn("ava", turn)["lost_records"])
+
+    def test_the_summary_survives_the_sweep_that_takes_the_detail_away(self):
+        """The detail is diagnostic and goes; the ledger is permanent and must still be right."""
+        turn = self.a_turn()
+        kept.add_turn_record("ava", turn, kept.LOST, when=LONG_AGO)
+        kept.finish_turn("ava", turn, kept.DONE)
+
+        self.assertEqual(1, kept.sweep_turn_records("ava", 14))
+
+        self.assertEqual([], kept.list_turn_records("ava", turn))
+        self.assertEqual(1, kept.get_turn("ava", turn)["lost_records"])
+
+    def test_settling_a_turn_may_not_write_a_counter_of_its_own(self):
+        """Settlement counting rows is the defect. A caller that could still set these could
+        overwrite a count that is already right."""
+        turn = self.a_turn()
+        for named in ("unknown_records", "lost_records", "unsent_records"):
+            with self.subTest(named=named):
+                with self.assertRaises(kept.Refused):
+                    kept.finish_turn("ava", turn, kept.DONE, {named: 0})
+
+
 class SweepingWhatTurnsDid(WithAnAgent):
     def test_only_what_a_turn_did_is_swept_and_never_the_turn_or_the_conversation(self):
         """A turn's own row is the ledger and what was said is the owner's history. This is the one

@@ -7,7 +7,8 @@ account, a network or a token, and the suite it serves can run anywhere.
 
 Its behaviour is set by `RUNDESK_SETTINGS`, so one program covers every shape a turn has to survive:
 a brain that answers, one that says nothing, one that fails, one that never finishes, one that says
-things this release has never heard of, and one that can be steered.
+things this release has never heard of, one that answers without ever naming the model that did, and
+one that can be steered.
 """
 
 import json
@@ -128,9 +129,14 @@ def main():
     # may have succeeded, so it is said on the way to a `done` that says `ok`.
     say(type="limit", percent_left=73, resets_at="2026-08-08T03:33:24Z")
 
-    say(type="usage", input_tokens=20, output_tokens=1510, cache_read_tokens=302567,
-        cache_write_tokens=17453, context_tokens=9200,
-        model_name=how.get("model") or "a-stand-in-1")
+    # **A brain that answers and never says which model did.** `antigravity` is that adapter today:
+    # it takes a requested model slug and reports none back, because a requested route is not proof
+    # of the route that served the turn. A turn like that still costs what it costs.
+    cost = {"input_tokens": 20, "output_tokens": 1510, "cache_read_tokens": 302567,
+            "cache_write_tokens": 17453, "context_tokens": 9200}
+    if not how.get("omit_model"):
+        cost["model_name"] = how.get("model") or "a-stand-in-1"
+    say(type="usage", **cost)
     say(type="done", ok=True, session_id=how.get("session") or "thread-9")
     return 0
 

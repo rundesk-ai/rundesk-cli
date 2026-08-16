@@ -1447,9 +1447,9 @@ questions, kept apart because they are read for different reasons and answered f
 ```console
 $ rundesk turns ava
 turns ava has taken, newest first
-TURN  WHEN                  WAS   IN  COST                           UNKNOWN  LOST
-2     2026-08-06T13:39:13Z  done  2   20in 1510out 302567cr 17453cw  0        0
-1     2026-08-06T13:38:14Z  done  1   20in 1510out 302567cr 17453cw  0        0
+TURN  WHEN                  WAS   IN  COST                           UNKNOWN  LOST  UNSENT
+2     2026-08-06T13:39:13Z  done  2   20in 1510out 302567cr 17453cw  0        0     0
+1     2026-08-06T13:38:14Z  done  1   20in 1510out 302567cr 17453cw  0        0     0
 ```
 
 The four billed quantities are shown apart because they are billed at three different rates — fresh
@@ -1462,9 +1462,21 @@ this release did not understand and the second records that never arrived. Both 
 turn; both climbing means an adapter and its brain have drifted apart, and nothing else in the product
 will tell you before somebody notices an agent behaving oddly.
 
+**`UNSENT` is the other direction and is not that signal.** It counts words rundesk could not put
+*into* a turn — usually somebody steering a brain that had already finished, an ordinary race whose
+words stay durable for the next turn. It shared the `LOST` column until agent step `0013`, so a
+person typing one word too late looked exactly like an adapter coming apart.
+
 With a turn as well, it shows that one whole: what it was admitted with, what the adapter said it
 could do, every record in the order it happened, what it came to — and, where it did not answer,
 whether waiting will help or whether somebody has to act.
+
+**`model asked for` and `model reported` are two facts.** The first is what the turn was admitted
+with — the model asked for, or the agent's configured one — and the second is what the brain said
+actually ran. `provider default` means no model was selected and the provider chose; a dash under
+`model reported` means the brain named none, which is not the same as none having been chosen. A
+turn taken before agent step `0013` shows a single `model` line instead, saying that the one value
+it has may be either: that release kept both in one column and nothing can now say which it holds.
 
 ## ask
 
@@ -1565,7 +1577,13 @@ conversation, so two tasks handed to the same specialist by one parent turn cann
 
 `asked show <id>` distinguishes the requested values, the effective provider/model fixed at
 admission, and the provider/model the newest terminal target turn actually recorded. The unchecked
-result delivered for review distinguishes those same three sources. `asked say`, `asked stop`, and
+result delivered for review distinguishes those same three sources.
+
+**`terminal model` is what the target's brain reported and nothing else.** A model that was asked
+for is not evidence of the model that ran, so a target on a provider that reports none — the shape
+`antigravity` ships today — says `provider did not report one` rather than naming what it was
+configured with. On a target turn taken before agent step `0013` there is only the one column that
+release kept, and that value is shown because it is the best there is. `asked say`, `asked stop`, and
 `asked resume` expose no provider/model flags and cannot change the selection. A resumed delegation
 reuses the stored effective provider/model and its provider-specific session through gateway
 restarts. A new no-override delegation captures the target's defaults again at its own admission.

@@ -7,16 +7,21 @@ different tables.
 With an agent it lists the most recent turns. With a turn as well it shows that one whole: what it
 was admitted with, what it did in the order it happened, and what it came to.
 
-**The two counters on the right are how a vendor moving under you becomes visible.** `unknown` is
-records this release did not understand and `lost` is records that never arrived at all — both are
-zero on a healthy turn, and both climbing is the signal that an adapter and its brain have drifted
-apart. Nothing else in the product will tell you that before somebody notices an agent behaving
-oddly.
+**Two of the three counters on the right are how a vendor moving under you becomes visible.**
+`unknown` is records this release did not understand and `lost` is records that never arrived at all
+— both are zero on a healthy turn, and both climbing is the signal that an adapter and its brain have
+drifted apart. Nothing else in the product will tell you that before somebody notices an agent
+behaving oddly.
+
+**`unsent` is the opposite direction and is not that signal.** It counts words rundesk could not put
+*into* a turn — somebody steering a brain that had just finished, which is an ordinary race whose
+words stay durable for the next turn. It shared the `lost` column until `0013`, so a person typing
+one word too late looked exactly like an adapter coming apart.
 """
 
 import argparse
 import json
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 from rundesk.agents import directory, records
 from rundesk.commands import Subcommands, failed
@@ -31,6 +36,11 @@ ON_ONE_LINE = 90
 #: What a column shows for something nobody reported. **Not zero** — a cost nobody measured and a
 #: cost of nothing are different answers, and a ledger that showed them alike would be a ledger.
 NOT_SAID = "—"
+
+#: What is said about a turn whose model was written before the asked-for one and the reported one
+#: were kept apart. The value is real and which of the two it is cannot be recovered, so it is said
+#: rather than guessed at.
+FROM_ONE_COLUMN = "asked for or reported — an older release kept one column"
 
 
 def register(sub: Subcommands) -> None:
@@ -69,12 +79,27 @@ def _listed(agent: str, most: int, conversation) -> int:
         print(f"{agent} has taken no turns yet — ask it something with: rundesk ask {agent} '…'")
         return OK
     print(f"turns {agent} has taken, newest first")
-    as_table(("TURN", "WHEN", "WAS", "IN", "COST", "UNKNOWN", "LOST"),
+    # The counters are named once, in `kept`, because the trigger that keeps them names them too —
+    # a column shown under a heading it does not belong to is a number nobody can act on.
+    as_table(("TURN", "WHEN", "WAS", "IN", "COST", *(one.upper() for one in kept.COUNTED)),
              [(str(one["id"]), one["created_at"], _became(agent, one),
-               str(one["conversation_id"]),
-               _cost(one), str(one["unknown_records"]), str(one["lost_records"]))
+               str(one["conversation_id"]), _cost(one),
+               *(_counter(one, column) for column in kept.COUNTED.values()))
               for one in there])
     return OK
+
+
+def _counter(row: Dict[str, Any], column: str) -> str:
+    """One drift counter, or a dash where this agent has no such column to answer with.
+
+    **An agent whose carry failed still has a ledger worth reading.** Its turns are all there and
+    every other column means what it always did; only the counters a later step added are missing.
+    Reaching for one by name would take the whole listing down with a `KeyError` on the one agent
+    whose migration is the thing somebody is trying to look into — and a zero would be worse, since
+    a count nobody keeps is not a count of nothing.
+    """
+    said = row.get(column)
+    return NOT_SAID if said is None else str(said)
 
 
 def _one(agent: str, turn: int) -> int:
@@ -86,7 +111,7 @@ def _one(agent: str, turn: int) -> int:
         ("conversation", str(row["conversation_id"])),
         ("provider", row["provider_name"]),
         ("account alias", row.get("provider_alias") or "provider default"),
-        ("model", row["model_name"] or NOT_SAID),
+        *_models(row),
         ("access", row["access_mode"]),
         ("resumed", "yes" if row["session_resumed"] else "no"),
         ("started", row["created_at"]),
@@ -113,6 +138,28 @@ def _one(agent: str, turn: int) -> int:
     print(dim(f"\nwhat the brain itself printed:  {adapters.raw_of(agent, row['conversation_id'])}"
               f"  bytes {row['raw_offset_start']} to {row['raw_offset_end']}"))
     return OK
+
+
+def _models(row: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """Which model this turn asked for and which one answered — **or that nobody can say.**
+
+    Two facts, and a release before `0013` kept them in one column: whichever of them arrived last
+    is what such a row holds, and nothing in it says which. Labelling that value as either would be
+    this surface claiming something nobody recorded, so it is shown under the word it was written
+    under and told plainly that it is one answer where there should be two.
+
+    **Which kind of row it is is `model_provenance_kept` and never the emptiness of the two
+    columns.** A turn that selected no model and was answered by a provider that reported none is
+    empty in exactly the way an older row is, and reading that as *older* would put an honest answer
+    — `provider default`, and a dash — under a sentence about a release that did not write it. An
+    agent whose carry failed has no marker at all, which reads as an older row, which is what it is.
+    """
+    if not row.get("model_provenance_kept"):
+        if not row["model_name"]:
+            return [("model", NOT_SAID)]
+        return [("model", f"{row['model_name']}  ({FROM_ONE_COLUMN})")]
+    return [("model asked for", row.get("admitted_model_name") or "provider default"),
+            ("model reported", row.get("reported_model_name") or NOT_SAID)]
 
 
 def _became(agent: str, row: Dict[str, Any]) -> str:
