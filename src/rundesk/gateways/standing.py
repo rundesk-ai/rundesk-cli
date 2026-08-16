@@ -88,6 +88,28 @@ MISSED_BEATS = 3
 #: How long a gateway may go without saying anything before it is wedged.
 WEDGED_AFTER = BEAT_SECONDS * MISSED_BEATS
 
+#: How long a refused claim is asked again for before it is read as a gateway's.
+#:
+#: **Because asking the question excludes the answer.** `standing()` has to take a *shared* lock to
+#: find out whether anybody holds the exclusive one, and a shared lock conflicts with an exclusive
+#: one in both directions — so for the few microseconds a `rundesk status` is reading, a gateway
+#: claiming its own name is refused, and told the name belongs to a gateway that does not exist.
+#: Measured on this machine 2026-08-16, one process calling `standing()` in a loop and one calling
+#: `holding()` in a loop against an agent with no gateway at all: **903 of 159,850 claims refused**,
+#: every one of them by a reader. `gateways.host` turns that refusal into an **exit-zero** refusal,
+#: which launchd does not retry — so the losing side of a microsecond race is a gateway that stays
+#: down until somebody notices.
+#:
+#: **This is only ever spent once the kernel has already said no gateway is there.** A refused claim
+#: asks a second question — see `_only_a_reader_has_it` — and a name a gateway really holds is
+#: refused on the spot, exactly as it always was. This window is what a claim spends waiting out a
+#: *reader*, which holds the lock for the length of one question and nothing longer, and it is a
+#: ceiling rather than a wait: a reader that is somehow still there at the end is refused too.
+PAST_A_PROBE_SECONDS = 0.5
+
+#: How often the claim is asked again inside that window.
+ASKING_AGAIN_SECONDS = 0.01
+
 
 class Taken(Exception):
     """The name belongs to a gateway that is already running.
@@ -139,18 +161,23 @@ def holding(at: Path) -> Iterator[None]:
     ordinary `start` ended a live agent's whole process tree that way once. There is no version of
     this that answers a question without also taking the name.
 
-    Asked once and never waited on. A lock this one cannot have is not a busy moment to sit out: it
-    is another gateway for this agent, which is the state the caller was checking for, and waiting
-    would turn an immediate answer into a pause with nothing said during it.
+    **A gateway is never waited out, and a reader never wins.** A lock a *gateway* has is not a busy
+    moment to sit out: it is the state the caller was checking for, and waiting on it would turn an
+    immediate answer into a pause with nothing said during it. But the same lock is what `standing()`
+    takes, *shared*, for the length of one question — so an ordinary `rundesk status` refuses this
+    claim for the microseconds it is reading, and a claim asked once could lose to a reader and
+    report a gateway that is not there. Which of the two refused it is asked rather than timed:
+    `_only_a_reader_has_it` puts one more question to the kernel, and only a name held by readers is
+    asked for again, to the ceiling in `PAST_A_PROBE_SECONDS`.
 
     **Written here rather than taken from `utils.locking`**, which is the same mechanism with two
-    differences that matter. That one waits to a ceiling, because it serialises commands that take
-    turns; this one refuses at once, because a name that is held is an answer. And that one counts
-    re-entry per thread, so a second claim inside one process passes straight through — right for a
-    call stack that re-enters its own critical section, and wrong for an identity, where one process
-    hosting two gateways for one agent is exactly what must not be allowed to happen. What *is* taken
-    from there is `locking.busy`: reading a refusal apart from a real failure is one question with
-    one answer, however differently the two locks are used.
+    differences that matter. That one waits to a ceiling measured in whole seconds, because it
+    serialises commands that take turns; this one asks only past a reader, because a name a gateway
+    holds is an answer. And that one counts re-entry per thread, so a second claim inside one process
+    passes straight through — right for a call stack that re-enters its own critical section, and
+    wrong for an identity, where one process hosting two gateways for one agent is exactly what must
+    not be allowed to happen. What *is* taken from there is `locking.busy`: reading a refusal apart
+    from a real failure is one question with one answer, however differently the two locks are used.
 
     On the way out the descriptor is closed, which is what releases the lock. **The file itself is
     left alone** — see the module docstring on why unlinking it would let two gateways answer as one.
@@ -158,15 +185,54 @@ def holding(at: Path) -> Iterator[None]:
     at.mkdir(parents=True, exist_ok=True)
     held = os.open(at / LOCK, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        try:
-            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as why:
-            if not locking.busy(why):
-                raise
-            raise Taken(f"a gateway is already running for {at}") from why
+        _claimed(held, at)
         yield
     finally:
         os.close(held)
+
+
+def _claimed(held: int, at: Path) -> None:
+    """Take the name on this descriptor, or say who has it. See `holding`, which owns the reasoning.
+
+    The loop is entered only by a claim that was refused, and left by the first of three things: the
+    name coming free, the kernel saying a gateway rather than a reader is holding it, or the ceiling.
+    """
+    ceiling = time.monotonic() + PAST_A_PROBE_SECONDS
+    while True:
+        try:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except OSError as why:
+            if not locking.busy(why):
+                raise
+            refused = why
+        if not _only_a_reader_has_it(held) or time.monotonic() >= ceiling:
+            raise Taken(f"a gateway is already running for {at}") from refused
+        time.sleep(ASKING_AGAIN_SECONDS)
+
+
+def _only_a_reader_has_it(held: int) -> bool:
+    """Whether what refused the claim was a question being asked, rather than a gateway.
+
+    **The one thing that tells them apart, and it is asked rather than assumed.** A shared lock is
+    what `standing()` takes to read, and shared locks do not exclude each other — so a shared lock
+    that can be taken here means every holder is reading and none of them is a gateway, and one that
+    cannot be taken means somebody holds the exclusive lock. That is the whole of the distinction,
+    and it is why a name a gateway really has is still refused in the same instant it always was.
+
+    Asked on the descriptor the claim was refused on, because a second `open` would be a second
+    open file description and this one is already here. Let go of again immediately: what is wanted
+    is the answer, and a shared lock kept any longer would make this the very reader it is asking
+    about. Anything other than a clean yes is a no — the caller has an answer to give either way,
+    and a claim is not the place to start explaining a descriptor of its own.
+    """
+    try:
+        fcntl.flock(held, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    with contextlib.suppress(OSError):
+        fcntl.flock(held, fcntl.LOCK_UN)
+    return True
 
 
 def standing(at: Path) -> Standing:
@@ -199,8 +265,11 @@ def standing(at: Path) -> Standing:
             return _what_it_said_about_itself(at)
         return Standing(CANNOT_TELL, None, None, f"{lock} could not be asked about ({why})")
     finally:
-        # Closing is what lets go of whatever was taken. Held for the length of one question, so a
-        # gateway starting in this instant waits microseconds rather than meeting a refusal.
+        # Closing is what lets go of whatever was taken. Held for the length of one question — and
+        # a gateway claiming its name in that instant *is* refused by it, which is not something
+        # this side can avoid: asking whether the exclusive lock is free means taking a lock that
+        # conflicts with it. `holding` is where that is answered, by asking which kind of holder
+        # refused it rather than believing the first no.
         os.close(asked)
     return Standing(OFFLINE, None, None, "")
 

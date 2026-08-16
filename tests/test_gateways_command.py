@@ -43,7 +43,7 @@ from rundesk.commands import gateways
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.gateways import job, standing
-from rundesk.utils import logs, programs
+from rundesk.utils import files, logs, programs
 
 
 def ran(code: Optional[int] = 0, out: str = "", err: str = "",
@@ -174,6 +174,15 @@ class WithAnAgent(support.Isolated):
 
         Waited for rather than slept after: the case may not go on until the kernel has really
         given the lock away and the record beside it names this process.
+
+        **Watched through the record and never by probing the lock**, which is a difference this
+        suite paid for. `standing()` answers by taking a *shared* lock, and a shared lock excludes
+        the exclusive one the child is trying to take — so a wait implemented as `standing()` in a
+        loop was a wait that could refuse the very thing it was waiting for. It did, on Ubuntu under
+        CI load: the child's claim was refused in the microseconds a poll was reading, the child
+        died, and the case spent its whole ceiling waiting for a gateway nothing was going to start.
+        The record is written by `os.rename` after the lock is held, so a record naming this process
+        is proof the claim landed — and reading it takes no lock and refuses nothing.
         """
         at = directory.where(name)
         at.mkdir(parents=True, exist_ok=True)
@@ -187,9 +196,22 @@ class WithAnAgent(support.Isolated):
             start_new_session=True)
         self.addCleanup(self.ended, started)
         self.assertTrue(
-            support.waited_until(lambda: standing.standing(at).pid == started.pid, 10.0),
+            support.waited_until(lambda: self.what_it_recorded(at) == started.pid, 10.0),
             f"the gateway this case started never took {at / standing.LOCK}")
+        # Asked once, and only now that the child is already holding the name: a probe cannot refuse
+        # a claim that has already landed. This is what keeps the kernel — and not the file the
+        # child wrote — as what says a gateway is up.
+        self.assertEqual(standing.ONLINE, standing.standing(at).how,
+                         f"the record named {started.pid} but nothing was holding the name")
         return started.pid
+
+    @staticmethod
+    def what_it_recorded(at: Path) -> Optional[int]:
+        """The pid in an agent's record, read without taking a lock. `None` while there is none."""
+        how, said = files.read_json(at / standing.RECORD)
+        if how != files.READ or not isinstance(said, dict):
+            return None
+        return programs.a_pid(said.get("pid"))
 
     def ended(self, started: "subprocess.Popen") -> None:
         """Take away a process this case started, however the case ended.
