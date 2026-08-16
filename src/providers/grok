@@ -85,6 +85,10 @@ import time
 GROK = "grok"
 AGENT = ("agent", "--always-approve", "stdio")
 
+#: The documented values accepted by Grok's ACP launch surface. Kept closed rather than passing an
+#: owner's value through as an argument: settings are durable configuration, not arbitrary argv.
+REASONING_EFFORTS = ("low", "medium", "high")
+
 #: How long `grok --version` may take when `--capabilities` is asked. A local exec with no network
 #: in it; a machine where that takes longer has something else wrong.
 VERSION_WITHIN = 10.0
@@ -203,7 +207,31 @@ def the_version() -> str:
 
 # ── What a turn is asked for ──────────────────────────────────────────────────────────────────
 
-def opening(model) -> list:
+def reasoning_effort(settings) -> str:
+    """The owner's supported selection, or the inexpensive ordinary default.
+
+    Missing and empty settings are the ordinary case. A malformed recognised value is reported and
+    falls back to low; it never becomes command-line input and never gives the vendor's higher
+    default control of the turn.
+    """
+    try:
+        configured = json.loads(settings) if settings else {}
+    except (TypeError, ValueError):
+        went_wrong("grok setting reasoning_effort could not be read; using low")
+        return "low"
+    if not isinstance(configured, dict):
+        went_wrong("grok settings must be an object; using reasoning_effort low")
+        return "low"
+    effort = configured.get("reasoning_effort")
+    if effort is None or effort == "":
+        return "low"
+    if effort not in REASONING_EFFORTS:
+        went_wrong("grok setting reasoning_effort must be low, medium, or high; using low")
+        return "low"
+    return effort
+
+
+def opening(model, settings=None) -> list:
     """Everything after the program's name, and why each part of it is there.
 
     **`RUNDESK_ACCESS_MODE` is read by nothing here, and that is the owner's decision.** Every turn
@@ -219,6 +247,9 @@ def opening(model) -> list:
         # Headless means nobody is at a terminal to approve a tool. Without this, a turn that
         # reaches one ends as `cancelled` with exit 0 — an agent that cannot even read a file.
         "--permission-mode", "bypassPermissions",
+        # Grok's measured model default is high. Ordinary Rundesk work is intentionally inexpensive,
+        # while the owner may explicitly select any documented value through provider settings.
+        "--reasoning-effort", reasoning_effort(settings),
     ]
     if model:
         argv += ["-m", model]
@@ -239,7 +270,8 @@ def one_turn() -> int:
     present_the_skills(where)
     try:
         brain = subprocess.Popen(
-            [GROK, *opening(os.environ.get("RUNDESK_MODEL"))],
+            [GROK, *opening(os.environ.get("RUNDESK_MODEL"),
+                            os.environ.get("RUNDESK_SETTINGS"))],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1, cwd=where, env=os.environ.copy(),
             # **`errors="replace"`, and it is not tidiness.** A coding agent reads binary files and

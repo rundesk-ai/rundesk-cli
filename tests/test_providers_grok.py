@@ -453,6 +453,34 @@ for line in sys.stdin:
         self.assertEqual("bypassPermissions",
                          self.argv()[self.argv().index("--permission-mode") + 1])
 
+    def test_an_ordinary_fresh_turn_explicitly_uses_low_reasoning_effort(self):
+        self.spoken = self.spoke()
+        self.assertEqual("low",
+                         self.argv()[self.argv().index("--reasoning-effort") + 1])
+
+    def test_an_ordinary_resumed_turn_explicitly_uses_low_reasoning_effort(self):
+        self.spoken = self.spoke(RUNDESK_RESUME="s-1")
+        self.assertEqual("low",
+                         self.argv()[self.argv().index("--reasoning-effort") + 1])
+
+    def test_an_owner_can_override_reasoning_effort_without_a_duplicate_flag(self):
+        for effort in ("low", "medium", "high"):
+            with self.subTest(effort=effort):
+                self.spoken = self.spoke(
+                    RUNDESK_SETTINGS=json.dumps({"reasoning_effort": effort}))
+                self.assertEqual(1, self.argv().count("--reasoning-effort"))
+                self.assertEqual(
+                    effort, self.argv()[self.argv().index("--reasoning-effort") + 1])
+
+    def test_empty_and_invalid_reasoning_settings_cannot_become_arguments(self):
+        for settings in ('{"reasoning_effort": ""}', '{"reasoning_effort": "--help"}',
+                         '{"reasoning_effort": 1}', "not-json", "[]"):
+            with self.subTest(settings=settings):
+                self.spoken = self.spoke(RUNDESK_SETTINGS=settings)
+                self.assertEqual(1, self.argv().count("--reasoning-effort"))
+                self.assertEqual(
+                    "low", self.argv()[self.argv().index("--reasoning-effort") + 1])
+
     def test_every_turn_gets_the_whole_tool_set(self):
         """The owner's decision. A conversation opened as no agent of ours gets every built-in, so
         what must *not* be sent is a profile scoping it."""
