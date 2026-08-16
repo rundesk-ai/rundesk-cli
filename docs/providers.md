@@ -445,6 +445,12 @@ is left out is unset, never empty** — `${RUNDESK_MODEL:-default}` is written e
 | `RUNDESK_PREFACE` | what rundesk wants said before the brain reads a word of the task |
 | `RUNDESK_DELEGATION` | which delegation this turn is answering, or **unset** when it is answering nobody. Set only on a turn another agent asked for, and *present* is the whole signal: a `rundesk ask` run from inside one reads it and refuses, which is what makes depth one enforceable |
 
+The shipped Grok adapter maps the `reasoning_effort` setting onto Grok's documented
+`--reasoning-effort` option. Its accepted values are `low`, `medium`, and `high`; missing, empty, or
+invalid values use `low`. That low default applies to both fresh and resumed conversations. An
+explicit valid owner setting wins on either path, because effort is selected once when the Grok ACP
+process is launched, before a new session is opened or an existing session is loaded.
+
 **A name on this table is one an owner's own value may never take**, including on a turn where
 rundesk leaves it unset — deciding to say nothing is still rundesk deciding. Being unset therefore
 means rundesk had nothing to say, never that the name is free.
