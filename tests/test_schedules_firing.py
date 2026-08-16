@@ -506,8 +506,10 @@ class GoingDown(Firing):
         # it. It was refused, which is luck rather than design.
         self.given("tick")
         watching = self.look()
+        pid = watching.running["tick"].pid
         self.assertTrue(support.waited_until(
-            lambda: not firing.still_running(self.agent, "tick"), PATIENCE))
+            lambda: programs.ready_to_collect(pid), PATIENCE),
+            "the child did not finish with an exit status this gateway can reap")
 
         firing.stopping(self.agent, self.where, watching, within=10.0)
 
