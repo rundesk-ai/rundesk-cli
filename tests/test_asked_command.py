@@ -207,6 +207,12 @@ class GuidingWorkingDelegation(support.Isolated):
             "bob", modern.conversation, guidance.messages[0]))
 
     def test_guidance_cannot_land_behind_collection_that_already_settled_the_work(self):
+        """The two store transition is ordered by milestones, never by an elapsed sleep.
+
+        This used to give the collector two seconds to be released and assume that 50ms was enough
+        for the guidance thread to reach the lock. A loaded CI runner can suspend either thread
+        across those bounds, turning a correct lock into an intermittent green or red result.
+        """
         with records.writing(directory.records("bob")) as conn:
             conn.execute(
                 "INSERT INTO turns (conversation_id, provider_name, access_mode, turn_status,"
@@ -220,15 +226,22 @@ class GuidingWorkingDelegation(support.Isolated):
 
         entered = threading.Event()
         release = threading.Event()
+        guidance_reached_lock = threading.Event()
         guidance_done = threading.Event()
         results = []
         reviews = []
         original = hosting._what_they_answered
+        original_taken = asked.locking._taken
 
         def held(*values):
             entered.set()
-            self.assertTrue(release.wait(2))
+            release.wait()
             return original(*values)
+
+        def observed_taken(*values):
+            if threading.current_thread() is guiding:
+                guidance_reached_lock.set()
+            return original_taken(*values)
 
         class Reviewed(hosting.Answering):
             def review_this(inner, agent, conversation, answer, from_agent, delegation_id,
@@ -245,16 +258,26 @@ class GuidingWorkingDelegation(support.Isolated):
                 "ava", self.delegation, "include GUIDANCE=EMBER-284"))
             guidance_done.set()
 
-        with mock.patch.object(hosting, "_what_they_answered", side_effect=held):
+        with mock.patch.object(hosting, "_what_they_answered", side_effect=held), \
+                mock.patch.object(asked.locking, "_taken", side_effect=observed_taken):
             collecting = threading.Thread(target=collect)
-            collecting.start()
-            self.assertTrue(entered.wait(2))
             guiding = threading.Thread(target=guide)
-            guiding.start()
-            self.assertFalse(guidance_done.wait(0.05))
-            release.set()
-            collecting.join(2)
-            guiding.join(2)
+            collecting.start()
+            try:
+                self.assertTrue(entered.wait(10), "collection did not reach the held answer")
+                guiding.start()
+                self.assertTrue(
+                    guidance_reached_lock.wait(10), "guidance did not reach the shared lock")
+                self.assertFalse(guidance_done.is_set(), "guidance walked through a held lock")
+            finally:
+                release.set()
+            collecting.join(10)
+            if guiding.ident is not None:
+                guiding.join(10)
+
+        self.assertFalse(collecting.is_alive(), "collection did not finish")
+        self.assertIsNotNone(guiding.ident, "guidance did not start")
+        self.assertFalse(guiding.is_alive(), "guidance did not finish")
 
         self.assertEqual([FAILED], results)
         self.assertEqual(["finished report"], [one[2] for one in reviews])
