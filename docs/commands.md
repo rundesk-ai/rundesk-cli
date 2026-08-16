@@ -902,10 +902,13 @@ cannot go is named safely in the answer and logged with the full reason.
 **A directory on the way to the file is searched, never listed, and a refusal says which of the
 things it was.** Passing through a directory and reading what is in it are two different
 permissions, and asking for the second turned away a readable file standing in a directory that
-granted only the first. The log line names the component it stopped at and the errno the machine
+granted only the first. The log line names the component at fault and the errno the machine
 answered with — a symbolic link, the directory's own mode bits, a macOS privacy grant, a component
 that went away between the check and the open, and something that is not a directory are five
-different things to go and do. **A privacy grant is the asking process's**, so the same file may
+different things to go and do. **The component at fault is not always the one the error arrived
+on**: a directory nothing may search refuses the lookup of its own child, so the errno can carry the
+name of a file that refused nothing, and the line names the directory above it instead. **A privacy
+grant is the asking process's**, so the same file may
 open from a terminal and not from a gateway; `rundesk permissions` reports that, and only for the
 lineage it was proved in.
 

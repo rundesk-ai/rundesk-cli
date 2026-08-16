@@ -22,6 +22,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -822,6 +823,38 @@ class WhatADeliveryQuotes(Records):
     def asked(place: int) -> adapter.Handled:
         return adapter.Handled(place=place, ours=False)
 
+    #: How a refusal about permissions names the component it is about. Taken exactly, because
+    #: **a parent is a prefix of its own child** — every one of these sentences carries the whole
+    #: path being attached, so asking whether the directory is mentioned somewhere in the words is
+    #: answered `yes` by a sentence that blames the file standing under it.
+    BLAMED = re.compile(r"the adapter (?:cannot search|may not open) (.+?) \(E[A-Z]+\)")
+
+    def the_component_blamed(self, told: str) -> str:
+        """The one component a refusal about permissions points at, and nothing merely near it."""
+        found = self.BLAMED.search(told)
+        self.assertIsNotNone(found, f"no component is named as the one refusing: {told}")
+        return found.group(1)
+
+    def losing_its_mode(self, box: Path) -> None:
+        """Take a directory's mode away the moment the walk is holding a descriptor on it.
+
+        **This is `O_PATH`, reproduced without Linux.** `O_SEARCH` asks for search permission as it
+        opens, so macOS refuses an unsearchable directory at the directory itself; `O_PATH` asks
+        for nothing, so Linux opens it and the refusal lands on the child looked up through it. A
+        descriptor held across a `chmod` puts any platform in the second state — which is also the
+        real race, a directory whose mode changes mid-walk, so this is a fact about both.
+        """
+        opened = adapter.os.open
+        self.addCleanup(setattr, adapter.os, "open", opened)
+
+        def dropping(name: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+            held = opened(name, flags, *args, **kwargs)
+            if name == box.name:
+                box.chmod(0o000)
+            return held
+
+        adapter.os.open = dropping
+
     def test_an_answer_quotes_the_message_that_asked_and_tints_it(self) -> None:
         # The amber bar down the side of a message is drawn by the asker's own client for a
         # mention, and a reply draws it by pinging the author of what it quotes.
@@ -931,10 +964,86 @@ class WhatADeliveryQuotes(Records):
             adapter.a_verified_file(said)
         told = str(refused.exception)
         self.assertIn("EACCES", told, f"the errno the machine answered with was lost: {told}")
-        self.assertIn(str(box), told, f"the component it stopped at was not named: {told}")
+        # Exactly this directory, never the file under it. `O_SEARCH` refuses the directory at
+        # itself and `O_PATH` opens it and refuses its child, so the same machine state reaches
+        # here with two different names on it and only one of them is the component at fault.
+        self.assertEqual(str(box), self.the_component_blamed(told),
+                         f"the component it stopped at is not the one named: {told}")
         self.assertIn("adapter", told, f"which side of the seam refused is not said: {told}")
         self.assertNotIn("symbolic link", told,
                          f"a refusal to read was reported as a link: {told}")
+
+    def test_a_directory_that_cannot_be_searched_is_named_and_not_the_file_under_it(self) -> None:
+        """The name the error carries is the child's; the mode bit is the directory's.
+
+        Holding a descriptor on a directory it may not search, the adapter is refused when it looks
+        the *file* up — so `EACCES` arrives naming an ordinary readable PNG. Blamed there, the
+        refusal sends whoever reads it to change permissions on the one thing that refused nothing.
+        """
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
+        box = Path(project.name).resolve() / "loses-its-mode"
+        box.mkdir()
+        at = box / "preview.png"
+        at.write_bytes(b"pixels")
+        said = {"name": "preview.png", "at": str(at), "bytes": 6,
+                "sha256": hashlib.sha256(b"pixels").hexdigest()}
+        self.addCleanup(box.chmod, 0o755)
+        self.losing_its_mode(box)
+        with self.assertRaises(adapter.Refused) as refused:
+            adapter.a_verified_file(said)
+        told = str(refused.exception)
+        self.assertEqual(str(box), self.the_component_blamed(told),
+                         f"the file was blamed for the mode bit on the directory above it: {told}")
+        self.assertIn("EACCES", told, f"the errno the machine answered with was lost: {told}")
+        self.assertNotIn("symbolic link", told, f"a mode bit was reported as a link: {told}")
+
+    def test_a_directory_that_cannot_be_searched_is_named_and_not_the_one_under_it(self) -> None:
+        """The same one component higher, where the name that arrives belongs to a directory.
+
+        Its own case because the walk's loop and its final open are two call sites, and a
+        correction applied to one of them looks complete from the other.
+        """
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
+        inner = Path(project.name).resolve() / "outer" / "inner"
+        inner.mkdir(parents=True)
+        at = inner / "preview.png"
+        at.write_bytes(b"pixels")
+        said = {"name": "preview.png", "at": str(at), "bytes": 6,
+                "sha256": hashlib.sha256(b"pixels").hexdigest()}
+        self.addCleanup(inner.parent.chmod, 0o755)
+        self.losing_its_mode(inner.parent)
+        with self.assertRaises(adapter.Refused) as refused:
+            adapter.a_verified_file(said)
+        told = str(refused.exception)
+        self.assertEqual(str(inner.parent), self.the_component_blamed(told),
+                         f"a directory was blamed for the mode bit on the one above it: {told}")
+        self.assertIn("EACCES", told, f"the errno the machine answered with was lost: {told}")
+
+    def test_a_file_it_may_not_read_is_still_blamed_on_itself(self) -> None:
+        """The other side of the same question, so the correction cannot become blame-the-parent.
+
+        A directory that searches perfectly above a file that will not open is the ordinary case,
+        and moving that refusal up onto the directory is the same untrue sentence facing the other
+        way.
+        """
+        if os.geteuid() == 0:
+            self.skipTest("a mode bit refuses nothing to root, so there is no refusal to word")
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
+        at = Path(project.name).resolve() / "unreadable.png"
+        at.write_bytes(b"pixels")
+        said = {"name": "preview.png", "at": str(at), "bytes": 6,
+                "sha256": hashlib.sha256(b"pixels").hexdigest()}
+        self.addCleanup(at.chmod, 0o644)
+        at.chmod(0o000)
+        with self.assertRaises(adapter.Refused) as refused:
+            adapter.a_verified_file(said)
+        told = str(refused.exception)
+        self.assertEqual(str(at), self.the_component_blamed(told),
+                         f"a file's own mode bit was blamed on the directory above it: {told}")
+        self.assertIn("EACCES", told, f"the errno the machine answered with was lost: {told}")
 
     def test_a_link_swapped_in_under_the_file_is_refused_and_called_one(self) -> None:
         """The window this whole second check exists for, and it still closes."""

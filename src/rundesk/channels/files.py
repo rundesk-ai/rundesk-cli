@@ -50,7 +50,10 @@ was.** Both come from one incident: an ordinary readable PNG under a directory t
 pass through but not list was refused, and the sentence written down said a symbolic link stood at
 a directory that was not one. `SEARCHING` is the first half and `_would_not_open` is the second —
 a link, a mode bit, a privacy grant, a component that went away and a component that is not a
-directory are five different things to go and look at.
+directory are five different things to go and look at. **And the component an open failed on is not
+always the one at fault** — a directory this process cannot search refuses the lookup of its own
+child, so the refusal is asked about before it is worded rather than blaming whatever name the
+error happened to carry.
 
 ## Going away
 
@@ -115,6 +118,13 @@ BLOCK = 1024 * 1024
 #: final Darwin spelling. Linux exposes the equivalent path descriptor as `O_PATH`. A platform with
 #: neither keeps the older read-only fallback because the standard library offers no portable
 #: search-only spelling there.
+#:
+#: **The two are not the same descriptor, and the difference lands on the refusals.** `O_SEARCH`
+#: asks for search permission when it opens, so a directory that grants none is refused at itself;
+#: `O_PATH` asks for nothing at all, so the same directory opens and the refusal arrives one
+#: component later, on the child that was never the problem. Which is why nothing here reads the
+#: component an open failed on as the component at fault — `_reached` asks the directory above
+#: before a refusal is worded.
 SEARCHING = ((getattr(os, "O_SEARCH", getattr(os, "O_EXEC", 0x40000000))
               if sys.platform == "darwin" else getattr(os, "O_PATH", os.O_RDONLY))
              | os.O_DIRECTORY)
@@ -366,6 +376,16 @@ def _would_not_open(why: OSError, at: Path, standing: Path, part: str, holding: 
     refusal to read is never called a link. A permission this process does not hold is **this
     process's** — the same file may open perfectly from a terminal — which is why the sentence says
     so rather than leaving somebody to read a grant proved somewhere else as one that holds here.
+
+    **The component an open failed on is not always the component at fault.** A descriptor held on
+    a directory this process cannot search refuses every lookup made through it, so the child is
+    where the error surfaces and the parent is where the mode bit is — which is what `O_PATH`
+    produces on Linux for a directory `O_SEARCH` would have refused outright on macOS, and what any
+    platform produces when a directory loses its mode between the walk opening it and the walk
+    stepping through it. Naming the child there is the same class of untrue sentence as naming a
+    link: it sends whoever reads it to change permissions on a file that was never refused. So a
+    refusal to search is asked about before it is worded, and the answer is the same on both
+    platforms.
     """
     code = _named(why)
     if why.errno == errno.ELOOP or (why.errno == errno.ENOTDIR and _a_link(part, holding)):
@@ -375,6 +395,11 @@ def _would_not_open(why: OSError, at: Path, standing: Path, part: str, holding: 
         # wording of a refusal and never whether to refuse.
         return Refused(f"{at} could not be opened to be sent: a symbolic link stands at {standing} "
                        f"and no component of a path being sent is ever followed ({code})")
+    if why.errno in (errno.EPERM, errno.EACCES) and not _reached(part, holding):
+        return Refused(f"{at} could not be opened to be sent: {standing.parent} cannot be searched "
+                       f"by this process ({code}), so {standing} under it was never reached — the "
+                       f"refusal belongs to that directory above and not to what was named under "
+                       f"it, and it is not a link")
     if why.errno == errno.EPERM:
         return Refused(f"{at} could not be opened to be sent: the machine refuses this process "
                        f"{standing} ({code}) — on macOS that is a privacy grant, which belongs to "
@@ -412,6 +437,27 @@ def _a_link(part: str, holding: int) -> bool:
         return stat.S_ISLNK(os.lstat(part, dir_fd=holding).st_mode)
     except OSError:
         return False
+
+
+def _reached(part: str, holding: int) -> bool:
+    """Whether this component could be looked up at all in the directory above it.
+
+    **A lookup needs search permission on the directory it is asked of and no permission at all on
+    what it finds**, which is what makes it the question that separates the two. Refused here, and
+    the directory above is the one holding the mode bit — the component named under it was never
+    reached and its own permissions were never consulted. Answered here, and the refusal really is
+    the component's own.
+
+    Only ever asked to word a refusal that has already happened, so a component that has changed
+    again in between costs a sentence and never a decision. Anything other than a refusal to search
+    — the component going away between the open and this — leaves the refusal with the component,
+    which is where the errno already pointed.
+    """
+    try:
+        os.lstat(part, dir_fd=holding)
+    except OSError as why:
+        return why.errno not in (errno.EACCES, errno.EPERM)
+    return True
 
 
 def _ordinary_file(held: int, at: Path) -> os.stat_result:

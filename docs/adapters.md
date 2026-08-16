@@ -612,8 +612,17 @@ the search descriptor still requires a directory, so a non-directory is refused 
 **Say which component would not open, and what the machine answered.** A refusal reading only *could
 not be opened without following a link* was written down for a directory that was not a link, and
 the file was an ordinary readable PNG — the process simply could not open that directory. Carry the
-errno into the sentence and name the component it happened at; a link, a mode bit, a privacy grant
+errno into the sentence and name the component at fault; a link, a mode bit, a privacy grant
 and a component that went away are four different things to go and look at.
+
+**The component the error arrives on is not always the component at fault**, and the two flags above
+are exactly where they part. `O_SEARCH` refuses an unsearchable directory at that directory;
+`O_PATH` opens it and lets the refusal land one component lower, on a child whose own permissions
+were never consulted — so the same machine state produces two different sentences blaming two
+different components, and only one of them is true. On `EACCES` or `EPERM`, ask the directory above
+first: look the component up in it (`lstat` with `dir_fd`, which needs search permission there and
+none at all on what it finds). Refused, the directory above is what holds the mode bit and is what
+the sentence must name; answered, the refusal really is the named component's own.
 
 **The interpreter arrives on `PATH`. Never count directories.** Covered above; it cost the previous
 build a whole release.

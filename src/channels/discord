@@ -400,7 +400,10 @@ A_BLOCK = 1024 * 1024
 #: component still carries `O_NOFOLLOW`, still comes from the descriptor above it, and the flag
 #: still requires a directory. macOS calls the search-only form `O_SEARCH` (`O_EXEC`, `0x40000000`),
 #: though some supported CPython 3.9 builds omit both names; Linux exposes the equivalent path
-#: descriptor as `O_PATH`.
+#: descriptor as `O_PATH`. **The two answer differently and only the wording depends on it**:
+#: `O_SEARCH` refuses a directory that grants no search at that directory, `O_PATH` opens it and
+#: lets the refusal arrive one component below, so `a_refusal` asks which of the two it was rather
+#: than blaming the name the error carried.
 A_SEARCH = ((getattr(os, "O_SEARCH", getattr(os, "O_EXEC", 0x40000000))
              if sys.platform == "darwin" else getattr(os, "O_PATH", os.O_RDONLY))
             | os.O_DIRECTORY)
@@ -920,6 +923,13 @@ def a_refusal(why: OSError, at: str, standing: Path, part: str, directory: int) 
     appended, and the sentence said nothing about *which* of the components it was about or which
     side of the seam had refused. Both are in here now, with the errno kept, because the incident
     this was written for was read as a symbolic link on a directory that never was one.
+
+    **Naming the component the open failed on is not the same as naming the component at fault.** A
+    descriptor held on a directory this process cannot search refuses every lookup made through it,
+    so the error surfaces on the child and the mode bit is on the parent — which is what `O_PATH`
+    hands back on Linux for a directory `O_SEARCH` refuses outright on macOS, and what any platform
+    hands back when a directory loses its mode mid-walk. So the directory above is asked first, and
+    the sentence names the same component on either platform.
     """
     code = errno.errorcode.get(why.errno or 0) or f"errno {why.errno}"
     if why.errno == errno.ELOOP or (why.errno == errno.ENOTDIR and a_link(part, directory)):
@@ -929,6 +939,12 @@ def a_refusal(why: OSError, at: str, standing: Path, part: str, directory: int) 
         return Refused(f"could not attach {at}: the adapter re-opened it and found a symbolic link "
                        f"at {standing}, which no component of an approved path may be ({code})")
     if why.errno in (errno.EPERM, errno.EACCES):
+        if not a_reached(part, directory):
+            return Refused(f"could not attach {at}: the adapter cannot search {standing.parent} "
+                           f"({code}), so {standing} under it was never reached — the refusal "
+                           f"belongs to that directory above rather than to what was named under "
+                           f"it, it is not a link, and this adapter's own process is what was "
+                           f"refused")
         return Refused(f"could not attach {at}: the adapter may not open {standing} ({code}) — a "
                        f"refusal to read, not a link, and this adapter's own process is what was "
                        f"refused")
@@ -945,6 +961,20 @@ def a_link(part: str, directory: int) -> bool:
         return stat.S_ISLNK(os.lstat(part, dir_fd=directory).st_mode)
     except OSError:
         return False
+
+
+def a_reached(part: str, directory: int) -> bool:
+    """Whether this component could be looked up at all in the directory above it.
+
+    A lookup needs search permission on the directory it is asked of and none whatever on what it
+    finds, so a refusal here belongs to the directory above and a success leaves the refusal with
+    the component itself. Asked only to word a refusal already decided.
+    """
+    try:
+        os.lstat(part, dir_fd=directory)
+    except OSError as why:
+        return why.errno not in (errno.EACCES, errno.EPERM)
+    return True
 
 
 def an_id(said: Any, called: str) -> int:
