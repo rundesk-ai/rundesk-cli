@@ -397,7 +397,9 @@ others from being checked or rolling back an otherwise healthy CLI update.
 
 ## 🤝 Contributing
 
-Issues and pull requests are welcome.
+Issues and pull requests are welcome. Start with the **[contributing guide](CONTRIBUTING.md)**; it
+covers a safe checkout, the complete local and CI gate, commit and pull-request expectations,
+migrations, and release impact.
 
 ```sh
 python3 scripts/suites
@@ -406,6 +408,12 @@ python3 scripts/suites
 It discovers every suite rather than listing them, runs them offline, and fails when it finds none.
 Read [`docs/development.md`](docs/development.md) before running anything against a checkout: every
 location resolves under your home by default, and `./dev` is what points a run somewhere safe.
+
+- **[Report a bug](https://github.com/rundesk-ai/rundesk-cli/issues/new?template=bug.yml)** — include
+  only sanitized evidence; never publish credentials, prompts, transcripts, private messages,
+  personal names, or absolute home paths.
+- **[Request a feature](https://github.com/rundesk-ai/rundesk-cli/issues/new?template=feature.yml)** —
+  describe the need, evidence, bounded outcome, and nearest out-of-scope expansion.
 
 ## 📄 License
 
