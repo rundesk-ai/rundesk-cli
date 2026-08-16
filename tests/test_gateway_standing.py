@@ -16,6 +16,7 @@ signal, which ended the machine running it.
 Run directly: python3 tests/test_gateway_standing.py
 """
 
+import contextlib
 import datetime
 import fcntl
 import json
@@ -26,6 +27,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import support
 from rundesk.gateways import standing
@@ -148,6 +150,75 @@ class HoldingAnAgentsName(WithAnAgentDirectory):
         with self.assertRaises(standing.Taken):
             with standing.holding(self.agent):
                 pass
+
+    def test_a_claim_is_not_refused_by_somebody_reading_at_that_moment(self):
+        """**The one this suite exists to keep from coming back.**
+
+        `standing()` answers by taking a *shared* lock, and a shared lock excludes an exclusive one
+        — so for the microseconds an ordinary `rundesk status` is reading, a gateway claiming its own
+        name is refused and told a gateway is already running. Nothing is. `gateways.host` turns that
+        refusal into an **exit-zero** refusal, which launchd does not retry, so the losing side of a
+        microsecond race is an agent whose gateway stays down until a person notices.
+
+        Driven by the claim's own pause rather than by a sleep in this case: the reader lets go the
+        first time the claim waits, so what is proved is that the claim asked twice — not that this
+        machine happened to be fast enough. Against a claim that asks once, the reader is still
+        holding the lock when it asks, and this raises `Taken`.
+        """
+        reading = self.somebody_reading()
+        the_question_ended = []
+
+        def let_go_while_it_waits(_however_long: float) -> None:
+            the_question_ended.append(True)
+            fcntl.flock(reading, fcntl.LOCK_UN)
+
+        with mock.patch.object(standing.time, "sleep", let_go_while_it_waits):
+            with standing.holding(self.agent):
+                self.assertEqual(standing.ONLINE, standing.standing(self.agent).how)
+        self.assertTrue(the_question_ended, "the claim never asked a second time")
+
+    def test_a_name_a_gateway_holds_is_answered_rather_than_waited_on(self):
+        # The other half, and the reason the claim asks the kernel *which* holder refused it rather
+        # than simply asking again for a while: a name a gateway really has is not a busy moment to
+        # sit out. It is the state the caller was checking for, and a start that paused before
+        # saying so would be a pause with nothing said during it — on the one path a person runs
+        # when they already suspect two gateways are fighting over an agent.
+        self.a_running_gateway()
+        waited_for = []
+        with mock.patch.object(standing.time, "sleep", waited_for.append):
+            with self.assertRaises(standing.Taken):
+                with standing.holding(self.agent):
+                    pass
+        self.assertEqual([], waited_for,
+                         "a name a gateway holds was waited on instead of being answered")
+
+    def test_asking_past_a_reader_has_an_end(self):
+        # A reader holds the lock for the length of one question, so one that is somehow still
+        # holding it is not a question any more — and a claim with no ceiling is a `rundesk gateways
+        # run` that never returns and never says why.
+        self.somebody_reading()
+        with mock.patch.object(standing, "PAST_A_PROBE_SECONDS", 0.05):
+            with self.assertRaises(standing.Taken):
+                with standing.holding(self.agent):
+                    pass
+
+    def somebody_reading(self) -> int:
+        """A shared lock on the agent's name, taken exactly as `standing()` takes one to read.
+
+        The whole of what a `rundesk status` is to the kernel. Handed back so a case can let go of
+        it deliberately, and closed however the case ends.
+        """
+        (self.agent / standing.LOCK).touch()
+        reading = os.open(self.agent / standing.LOCK, os.O_RDONLY)
+        self.addCleanup(self.closed, reading)
+        fcntl.flock(reading, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        return reading
+
+    @staticmethod
+    def closed(descriptor: int) -> None:
+        """Let go of a descriptor a case took, whether or not the case already let go of it."""
+        with contextlib.suppress(OSError):
+            os.close(descriptor)
 
 
 class WhetherAGatewayIsOnline(WithAnAgentDirectory):
