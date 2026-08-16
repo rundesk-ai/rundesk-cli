@@ -889,6 +889,72 @@ class WhatADeliveryQuotes(Records):
         self.assertTrue(final_flags[0] & os.O_NONBLOCK,
                         "the final component may block before it is known to be regular")
 
+    def test_a_directory_that_may_only_be_passed_through_still_verifies_its_file(self) -> None:
+        """The second check has to agree with the first, or it refuses what rundesk approved.
+
+        Rundesk's walk asks a directory for permission to pass through it and never to list it. An
+        adapter asking for the larger of the two turns away a file that opened perfectly a moment
+        earlier — and the delivery fails on the far side of the seam, where nobody is looking.
+        """
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
+        box = Path(project.name).resolve() / "search-only"
+        box.mkdir()
+        at = box / "preview.png"
+        at.write_bytes(b"pixels")
+        self.addCleanup(box.chmod, 0o755)
+        box.chmod(0o311)
+        verified = adapter.a_verified_file(
+            {"name": "preview.png", "at": str(at), "bytes": 6,
+             "sha256": hashlib.sha256(b"pixels").hexdigest()})
+        self.addCleanup(verified.close)
+        self.assertEqual(b"pixels", verified.fp.read())
+
+    def test_a_directory_it_may_not_open_is_named_with_its_errno_and_not_called_a_link(self) -> None:
+        """A refusal is the whole of what somebody has to act on, so it says which of the two it is.
+
+        Measured as one sentence for every failure, with the operating system's own text appended
+        and no component named: a directory that refused an open was reported as a symbolic link,
+        for a file that was an ordinary readable PNG.
+        """
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
+        box = Path(project.name).resolve() / "closed"
+        box.mkdir()
+        at = box / "preview.png"
+        at.write_bytes(b"pixels")
+        said = {"name": "preview.png", "at": str(at), "bytes": 6,
+                "sha256": hashlib.sha256(b"pixels").hexdigest()}
+        self.addCleanup(box.chmod, 0o755)
+        box.chmod(0o000)
+        with self.assertRaises(adapter.Refused) as refused:
+            adapter.a_verified_file(said)
+        told = str(refused.exception)
+        self.assertIn("EACCES", told, f"the errno the machine answered with was lost: {told}")
+        self.assertIn(str(box), told, f"the component it stopped at was not named: {told}")
+        self.assertIn("adapter", told, f"which side of the seam refused is not said: {told}")
+        self.assertNotIn("symbolic link", told,
+                         f"a refusal to read was reported as a link: {told}")
+
+    def test_a_link_swapped_in_under_the_file_is_refused_and_called_one(self) -> None:
+        """The window this whole second check exists for, and it still closes."""
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
+        base = Path(project.name).resolve()
+        (base / "real").mkdir()
+        (base / "real" / "preview.png").write_bytes(b"pixels")
+        (base / "approved").mkdir()
+        (base / "approved" / "preview.png").write_bytes(b"pixels")
+        said = {"name": "preview.png", "at": str(base / "approved" / "preview.png"), "bytes": 6,
+                "sha256": hashlib.sha256(b"pixels").hexdigest()}
+        shutil.rmtree(base / "approved")
+        (base / "approved").symlink_to(base / "real", target_is_directory=True)
+        with self.assertRaises(adapter.Refused) as refused:
+            adapter.a_verified_file(said)
+        told = str(refused.exception)
+        self.assertIn("symbolic link", told)
+        self.assertIn(str(base / "approved"), told)
+
     def test_a_file_changed_after_approval_refuses_words_and_file_together(self) -> None:
         project = tempfile.TemporaryDirectory()
         self.addCleanup(project.cleanup)

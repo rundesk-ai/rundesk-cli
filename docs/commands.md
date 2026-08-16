@@ -899,6 +899,16 @@ A declaration made in an earlier finished remark is held and attached with the f
 than leaking its path mid-turn. Up to ten files of 32 MiB each may go with one answer; a file that
 cannot go is named safely in the answer and logged with the full reason.
 
+**A directory on the way to the file is searched, never listed, and a refusal says which of the
+things it was.** Passing through a directory and reading what is in it are two different
+permissions, and asking for the second turned away a readable file standing in a directory that
+granted only the first. The log line names the component it stopped at and the errno the machine
+answered with — a symbolic link, the directory's own mode bits, a macOS privacy grant, a component
+that went away between the check and the open, and something that is not a directory are five
+different things to go and do. **A privacy grant is the asking process's**, so the same file may
+open from a terminal and not from a gateway; `rundesk permissions` reports that, and only for the
+lineage it was proved in.
+
 **Outgoing files are not copied or deleted.** Project output remains project output, and a temporary
 Computer Use screenshot remains owned by that tool or the operating system. Discord's verification
 snapshot exists only for the send and is closed afterwards. Incoming channel files are different:
@@ -1330,7 +1340,11 @@ terminal — com.googlecode.iterm2
   below: …/Python ← /bin/zsh ← /Applications/iTerm.app/Contents/MacOS/iTerm2
 ```
 
-To ask on a gateway's behalf, ask from inside a turn: `"$RUNDESK_COMMAND" permissions check`.
+**Asking from inside a turn is not reliably asking as the gateway.** Measured: `"$RUNDESK_COMMAND"
+permissions check` run through a brain's tool call answered `unknown (…/codex)` and proved that
+program's grants, because the tool leaves the gateway shim out of the parent chain. Read the lineage
+line rather than the invocation — only a run that says `gateway` is a fact about one, and the bare
+verb says so unprompted about anything stored from another lineage.
 
 ```console
 $ rundesk permissions check

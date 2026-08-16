@@ -12,6 +12,7 @@ wrong.
 Run directly: `python3 tests/test_channels_files.py`
 """
 
+import errno
 import hashlib
 import os
 import shutil
@@ -329,6 +330,115 @@ class WhatMayBeSent(Files):
     def test_a_directory_is_not_a_file_to_send(self):
         with self.assertRaises(files.Refused):
             files.approved(str(directory.home(self.agent)))
+
+    def test_a_directory_that_may_be_passed_through_and_not_listed_still_sends_its_file(self):
+        """The incident, reduced to the part that can be measured on any machine.
+
+        Passing through a directory and reading what is in it are two different permissions, and a
+        walk needs only the first. Asked for the second, an ordinary readable file standing in a
+        `--x` directory was refused — and the sentence written down said a symbolic link stood
+        there.
+        """
+        box = self.home / "search-only"
+        box.mkdir(parents=True, exist_ok=True)
+        at = box / "preview.png"
+        at.write_bytes(b"pixels")
+        self.addCleanup(box.chmod, 0o755)
+        box.chmod(0o311)
+        sending = files.approved(str(at))
+        self.assertEqual(at, sending.at)
+        self.assertEqual(hashlib.sha256(b"pixels").hexdigest(), sending.sha256)
+
+
+class WhatARefusalSays(Files):
+    """**Which of the things it was**, because every one of these has a different thing to go and do.
+
+    Written for one incident: a gateway that could not open a directory was told a symbolic link
+    stood at it, about a directory that was not one and a file that was an ordinary readable PNG.
+    Whoever read it went looking for a link that had never been there.
+    """
+
+    def a_walk(self, at):
+        """The walk on its own, so a link *inside* a canonical path can be put there deliberately.
+
+        `approved` canonicalizes before it walks, so the only way a component is a link by the time
+        the walk reaches it is a replacement between the two — which is exactly what the walk is
+        for, and what this reproduces without a race.
+        """
+        with self.assertRaises(files.Refused) as refused:
+            files._opened_without_following(at)
+        return str(refused.exception)
+
+    def test_a_directory_the_machine_refuses_this_process_is_not_reported_as_a_link(self):
+        """The incident itself: a path that resolves, an open that is refused, and no link anywhere.
+
+        `EPERM` on an open that `resolve` had no trouble with is the shape a macOS privacy refusal
+        arrives in, and it cannot be produced on a developer's machine without spending one of the
+        owner's real grants — so the refusal is put where the machine would put it. What is under
+        test is the sentence, and the sentence is what was wrong.
+        """
+        box = self.home / "downloads-like"
+        box.mkdir(parents=True, exist_ok=True)
+        at = box / "preview.png"
+        at.write_bytes(b"pixels")
+        opened = files.os.open
+        self.addCleanup(setattr, files.os, "open", opened)
+
+        def refusing(name, flags, *args, **kwargs):
+            if name == box.name:
+                raise PermissionError(errno.EPERM, "Operation not permitted", name)
+            return opened(name, flags, *args, **kwargs)
+
+        files.os.open = refusing
+        with self.assertRaises(files.Refused) as refused:
+            files.approved(str(at))
+        said = str(refused.exception)
+        self.assertIn("EPERM", said, f"the errno the machine answered with was lost: {said}")
+        self.assertIn(str(box), said, f"the component it stopped at was not named: {said}")
+        self.assertNotIn("symbolic link", said,
+                         f"a refusal to open was reported as a link: {said}")
+        self.assertIn("lineage", said,
+                      f"nothing said the grant is this process's rather than the machine's: {said}")
+
+    def test_a_link_on_a_component_is_still_refused_and_still_called_one(self):
+        outside = self.home / "outside"
+        outside.mkdir(parents=True, exist_ok=True)
+        (outside / "real.txt").write_bytes(b"somebody else's")
+        pointing = self.home / "swapped"
+        pointing.symlink_to(outside, target_is_directory=True)
+        said = self.a_walk(pointing / "real.txt")
+        self.assertIn("symbolic link", said)
+        self.assertIn(str(pointing), said, f"the component holding the link was not named: {said}")
+
+    def test_a_link_where_the_file_should_be_is_still_refused_and_still_called_one(self):
+        (self.home / "real.txt").write_bytes(b"somebody else's")
+        pointing = self.home / "swapped.txt"
+        pointing.symlink_to(self.home / "real.txt")
+        said = self.a_walk(pointing)
+        self.assertIn("symbolic link", said)
+
+    def test_a_component_that_went_away_says_so_rather_than_naming_a_link(self):
+        said = self.a_walk(self.home / "never-was" / "preview.png")
+        self.assertIn("ENOENT", said)
+        self.assertNotIn("link", said)
+
+    def test_something_that_is_not_a_directory_says_that_rather_than_naming_a_link(self):
+        (self.home / "plain.txt").write_bytes(b"x")
+        said = self.a_walk(self.home / "plain.txt" / "preview.png")
+        self.assertIn("ENOTDIR", said)
+        self.assertNotIn("link", said)
+
+    def test_a_path_that_will_not_resolve_keeps_what_the_machine_said(self):
+        box = self.home / "unsearchable"
+        box.mkdir(parents=True, exist_ok=True)
+        at = box / "preview.png"
+        at.write_bytes(b"pixels")
+        named = str(at)
+        self.addCleanup(box.chmod, 0o755)
+        box.chmod(0o600)                  # readable, not searchable: `resolve` itself is refused
+        with self.assertRaises(files.Refused) as refused:
+            files.approved(named)
+        self.assertIn("EACCES", str(refused.exception))
 
 
 class WhatIsSweptAway(Files):

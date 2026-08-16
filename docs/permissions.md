@@ -43,8 +43,27 @@ caveat about this command; it is the reason the command prints a lineage line fi
 run at all when it cannot work out which lineage it is in. A table of verdicts with no process named
 is a claim about nobody.
 
-To ask on a gateway's behalf, ask from inside a turn — `"$RUNDESK_COMMAND" permissions check` — which
-is a descendant of the gateway and therefore the same client.
+**Asking from inside a turn is not reliably asking as the gateway, and this was measured.**
+`"$RUNDESK_COMMAND" permissions check` run through a brain's tool call answered
+`unknown (…/codex)` — the brain's program starts what it runs in a way that leaves the gateway shim
+out of the parent chain, so the command proved *that* program's grants and wrote them down under a
+lineage of `unknown`. A stored `ready` from such a run says nothing about the launchd interpreter a
+gateway actually runs as.
+
+So read the first line before any verdict below it. **Only a run that says `gateway` is a fact about
+one**, whatever started it, and the command says so unprompted on every other lineage:
+
+```console
+$ rundesk permissions
+as of 2026-08-15T10:02:11Z, about unknown (/opt/homebrew/bin/codex)
+  nothing here was proved in a gateway, so none of it says what a gateway may do — it is about
+  /opt/homebrew/bin/codex
+```
+
+Whether a turn *can* ask as its gateway depends on how the brain starts what it runs, and that is
+the brain's and not rundesk's. It has not been measured for any brain that does keep the shim in the
+chain, so the honest instruction is the lineage line rather than an invocation: **if it does not say
+`gateway`, it is not one.**
 
 ## Two things about a gateway's grants that surprise people
 

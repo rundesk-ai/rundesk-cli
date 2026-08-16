@@ -69,6 +69,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import fcntl
 import hashlib
 import json
@@ -389,6 +390,17 @@ READS_MOST = 4 * 1024 * 1024
 
 #: How much of a file is read at a time while it is being verified on its way out.
 A_BLOCK = 1024 * 1024
+
+#: How a directory on the way to that file is opened: **passed through, never read.** Re-opening a
+#: path needs permission to search each directory and never permission to list what is in one, and
+#: asking for the larger of the two refuses a file that opens perfectly — a directory granting `--x`
+#: and not `r` answers `EACCES` to `O_RDONLY | O_DIRECTORY` and hands over the named file below it
+#: to `O_SEARCH`. Rundesk's own walk asks for exactly this, and the two have to agree or the second
+#: check refuses what the first approved. **Nothing about the link protection changes**: every
+#: component still carries `O_NOFOLLOW`, still comes from the descriptor above it, and the flag
+#: still requires a directory. macOS calls the search-only form `O_SEARCH`; Linux exposes the
+#: equivalent path descriptor as `O_PATH`, combined here with `O_DIRECTORY`.
+A_SEARCH = getattr(os, "O_SEARCH", getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY)
 
 #: What an owner has to switch on for this to work at all, said the same way everywhere it is said.
 #: One string rather than three sentences, because a person reading a refused `--check` and a person
@@ -813,6 +825,11 @@ def a_verified_file(said: Dict[str, Any]):
     file that grew is refused for having grown, rather than truncated into something that would
     still hash correctly.
 
+    **A refusal says which component would not open and what the machine actually answered**, and
+    says that it was this re-open rather than rundesk's approval — the two run as different
+    processes and a permission one holds is not one the other holds, so *which of them refused* is
+    the first thing anybody looking into it needs.
+
     `Refused` on anything at all. Nothing that did not verify is ever sent.
     """
     at = said.get("at")
@@ -840,13 +857,19 @@ def a_verified_file(said: Dict[str, Any]):
         # straight past `_deliver`, which names only `Refused`, `TypeError` and `ValueError`, so
         # nothing said the delivery had failed and rundesk reported it as sent.
         snapshot = tempfile.TemporaryFile()
-        directory = os.open(path.parts[0], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        for part in path.parts[1:-1]:
-            below = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+        directory = os.open(path.parts[0], A_SEARCH | os.O_NOFOLLOW)
+        for nth, part in enumerate(path.parts[1:-1], start=1):
+            try:
+                below = os.open(part, A_SEARCH | os.O_NOFOLLOW, dir_fd=directory)
+            except OSError as why:
+                raise a_refusal(why, at, Path(*path.parts[:nth + 1]), part, directory) from why
             os.close(directory)
             directory = below
-        descriptor = os.open(path.parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-                             dir_fd=directory)
+        try:
+            descriptor = os.open(path.parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=directory)
+        except OSError as why:
+            raise a_refusal(why, at, path, path.parts[-1], directory) from why
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise OSError("it is not a regular file")
         with contextlib.suppress(OSError):
@@ -861,6 +884,13 @@ def a_verified_file(said: Dict[str, Any]):
                 size += len(block)
                 digest.update(block)
                 snapshot.write(block)
+    except Refused:
+        # Already in words of our own, from the walk above. Named before the pair below it so the
+        # snapshot is let go of on this path too: a refusal that leaked one would leave a temporary
+        # file open for as long as this process lives, which is months.
+        if snapshot is not None:
+            snapshot.close()
+        raise
     except (OSError, ValueError) as why:
         if snapshot is not None:
             snapshot.close()
@@ -878,6 +908,40 @@ def a_verified_file(said: Dict[str, Any]):
     # The name is rundesk's and has already been made its own; taken as a bare name even so,
     # because a filename with a separator in it is a filename pretending to be somewhere.
     return discord.File(snapshot, filename=Path(str(said.get("name") or path.name)).name)
+
+
+def a_refusal(why: OSError, at: str, standing: Path, part: str, directory: int) -> Refused:
+    """Why one component would not re-open, named as the thing it was rather than as a link.
+
+    Every failure in this walk used to arrive as one sentence with the operating system's own text
+    appended, and the sentence said nothing about *which* of the components it was about or which
+    side of the seam had refused. Both are in here now, with the errno kept, because the incident
+    this was written for was read as a symbolic link on a directory that never was one.
+    """
+    code = errno.errorcode.get(why.errno or 0) or f"errno {why.errno}"
+    if why.errno == errno.ELOOP or (why.errno == errno.ENOTDIR and a_link(part, directory)):
+        # A link opened `O_NOFOLLOW | O_DIRECTORY` answers `ENOTDIR` here and one opened as a file
+        # answers `ELOOP`, so the component is asked about after it has already been refused. This
+        # is exactly the replacement the second check exists to catch, and it is worth saying so.
+        return Refused(f"could not attach {at}: the adapter re-opened it and found a symbolic link "
+                       f"at {standing}, which no component of an approved path may be ({code})")
+    if why.errno in (errno.EPERM, errno.EACCES):
+        return Refused(f"could not attach {at}: the adapter may not open {standing} ({code}) — a "
+                       f"refusal to read, not a link, and this adapter's own process is what was "
+                       f"refused")
+    if why.errno == errno.ENOENT:
+        return Refused(f"could not attach {at}: {standing} was there when it was approved and is "
+                       f"not there now ({code})")
+    return Refused(f"could not attach {at}: the adapter could not open {standing} "
+                   f"({code}: {why.strerror or why})")
+
+
+def a_link(part: str, directory: int) -> bool:
+    """Whether this component is a symbolic link, asked only to word a refusal already decided."""
+    try:
+        return stat.S_ISLNK(os.lstat(part, dir_fd=directory).st_mode)
+    except OSError:
+        return False
 
 
 def an_id(said: Any, called: str) -> int:
