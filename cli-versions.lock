@@ -14,3 +14,7 @@ grok       grok 0.2.118      tests/samples/grok-acp-0.2.118.jsonl               
 grok       grok 0.2.118      tests/samples/grok-acp-0.2.118-resumed.jsonl         2026-08-06
 claude     claude 2.1.223    tests/samples/claude-2.1.223.jsonl                   2026-08-06
 claude     claude 2.1.223    tests/samples/claude-2.1.223-steered.jsonl           2026-08-06
+antigravity agy 1.1.8        tests/samples/antigravity-1.1.8.jsonl                2026-07-28
+antigravity agy 1.1.13       tests/samples/antigravity-1.1.13.jsonl               2026-08-15
+antigravity agy 1.1.13       tests/samples/antigravity-1.1.13-resumed.jsonl       2026-08-15
+antigravity agy 1.1.13       tests/samples/antigravity-1.1.13-tools.jsonl         2026-08-15

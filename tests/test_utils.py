@@ -1009,6 +1009,22 @@ class AProgramThatKeepsRunning(support.Isolated):
         pid = self.given_running("import time; time.sleep(30)")
         self.assertTrue(programs.alive(pid))
 
+    def test_finished_can_be_observed_without_consuming_the_exit_status(self):
+        pid = self.given_running("raise SystemExit(7)")
+        self.assertTrue(support.waited_until(
+            lambda: programs.ready_to_collect(pid), self.PATIENCE))
+
+        ended = programs.collected(pid)
+        self.started.remove(pid)
+
+        self.assertTrue(ended.over)
+        self.assertEqual(7, ended.code)
+
+    def test_a_running_or_unrelated_process_is_not_ready_to_collect(self):
+        pid = self.given_running("import time; time.sleep(30)")
+        self.assertFalse(programs.ready_to_collect(pid))
+        self.assertFalse(programs.ready_to_collect(os.getpid()))
+
     def test_what_it_says_is_appended_to_the_log(self):
         self.given_running("print('the gateway is up')")
         self.assertTrue(support.waited_until(

@@ -1,0 +1,6 @@
+{"event":"init","conversation_id":"conversation-current","init":{"cwd":"/workspace/agent-home","tools":["view_file","run_command"],"permission_mode":"always-proceed","expanded_commands":[{"name":"plan","type":"system"}]}}
+{"event":"step_update","step_update":{"conversation_id":"conversation-current","step_index":4,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"conversation-current","step_index":5,"state":"DONE","step_type":"system_message"}}
+{"event":"step_update","step_update":{"conversation_id":"conversation-current","step_index":6,"state":"ACTIVE","step_type":"agent_response","text_delta":"REMEMBERED"}}
+{"event":"step_update","step_update":{"conversation_id":"conversation-current","step_index":6,"state":"DONE","step_type":"agent_response","text_delta":"\n","duration_seconds":0.993049,"usage":{"input_tokens":21925,"output_tokens":79,"thinking_tokens":67,"cache_read_tokens":0,"total_tokens":22004}}}
+{"event":"result","result":{"conversation_id":"conversation-current","status":"SUCCESS","response":"REMEMBERED\n","duration_seconds":9.401235,"num_turns":2,"usage":{"input_tokens":42726,"output_tokens":314,"thinking_tokens":296,"cache_read_tokens":0,"total_tokens":43040}}}

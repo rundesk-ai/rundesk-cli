@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Stand in for a brain that is told one thing, prints a whole turn, and ends.
+
+**No account, no token, no network.** What it says is the file named in `CAPTURED`, said back a line
+at a time exactly as it stands. For the antigravity suite that file is a real `agy` capture, scrubbed
+of anything naming a machine or an owner — so every reading the adapter makes is checked against the
+vendor rather than against a stand-in written to agree with it, which is the one thing a hand-written
+fake cannot do.
+
+## Why this is none of the other three
+
+The other three stand in for brains that are *conversations*: they are told something, answer, and
+wait to be told the next thing, so what they replay has to be cut into turns and released one at a
+time. This brain cannot be steered. Print mode reads its input to the end, works, prints one turn and
+exits — there is no second thing it could be told and no request id to key anything to. A fixture
+that held its output back for a later word would be teaching an adapter to survive something that
+never happens.
+
+So there is nothing here to cut and nothing to key: read the prompt, say the capture, end. **Ending
+is part of the contract** — an adapter that never closed this side's input would hang against the
+real program in exactly the way it hangs here.
+
+## What a case can ask it to do instead
+
+`RECORDED` is where each invocation is written down — the whole argument list, the prompt as it
+arrived, and the directory it stood in — which is how a case proves the prompt never reached the
+command line and that a retry asked for a different conversation. Appended rather than replaced,
+because the one thing worth proving about the retry is that there were two.
+
+`TROUBLE` is said on the error stream, and `EXIT_CODE` is what it ends with. Between them a case can
+produce a brain that stopped mid-turn, which is the shape an adapter has to end a turn out of by
+itself.
+"""
+
+import json
+import os
+import sys
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    prompt = sys.stdin.read()
+
+    recorded = os.environ.get("RECORDED")
+    if recorded:
+        with open(recorded, "a", encoding="utf-8") as keeping:
+            keeping.write(json.dumps({"argv": argv, "prompt": prompt, "cwd": os.getcwd()}) + "\n")
+
+    trouble = os.environ.get("TROUBLE")
+    if trouble:
+        sys.stderr.write(trouble.rstrip("\n") + "\n")
+        sys.stderr.flush()
+
+    captured = os.environ.get("CAPTURED")
+    if captured:
+        with open(captured, "rb") as saying:
+            for line in saying:
+                if not line.strip():
+                    continue
+                sys.stdout.buffer.write(line if line.endswith(b"\n") else line + b"\n")
+                sys.stdout.buffer.flush()
+
+    return int(os.environ.get("EXIT_CODE") or 0)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

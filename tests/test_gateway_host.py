@@ -1470,15 +1470,22 @@ class TheChannelsItHosts(WithAnAgent):
         # did complete standing beside the one that really did fail.
         self.an_adapter()
         self.a_channel()
-        kept.added(self.name, "good", {"cron": "* * * * *", "command": "/bin/echo it worked"})
+        # Finish second on purpose: the assertion must observe both children, not inherit whichever
+        # completion order this runner happened to schedule.
+        kept.added(self.name, "good", {
+            "cron": "* * * * *", "command": "/bin/sh -c 'sleep 2; echo it worked'"})
         kept.added(self.name, "bad", {"cron": "* * * * *",
                                       "command": "/bin/sh -c 'echo it went wrong >&2; exit 3'"})
         self.a_running_gateway(beat=self.A_SHORT_BEAT)
 
+        def both_finished() -> bool:
+            return ("schedule bad failed with exit 3" in self.was_heard()
+                    and "schedule good completed" in self.its_log())
+
         self.assertTrue(support.waited_until(
-            lambda: "schedule bad failed with exit 3" in self.was_heard(), self.PATIENCE),
-            f"a failing schedule told nobody. It heard: {self.was_heard()}. "
-            f"It said: {self.its_log()}")
+            both_finished, self.PATIENCE),
+            f"the schedules did not both finish. It heard: {self.was_heard()}. "
+            f"Its log said: {self.its_log()}")
         self.assertIn("schedule good completed", self.its_log(),
                       "the schedule that worked never finished, so its silence proves nothing")
         self.assertNotIn("schedule good", self.was_heard(),
