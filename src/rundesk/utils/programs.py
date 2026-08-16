@@ -407,6 +407,21 @@ def collected(pid: int) -> Collected:
     return Collected(True, os.waitstatus_to_exitcode(status))
 
 
+def ready_to_collect(pid: int) -> bool:
+    """Whether this process's child has finished, without taking away its saved exit status.
+
+    A lock or a missing pid answers a different question: the first can be released a scheduling
+    instant before the parent observes the exit, and the second includes a zombie. ``poll`` records
+    the status on the wrapper, so a later :func:`collected` still returns the exact exit code and
+    remains the one operation that removes the child from this module's care.
+
+    ``False`` for a process this module did not start. Its status belongs to its own parent and
+    cannot be observed here without consuming or guessing it.
+    """
+    started = _STARTED.get(pid)
+    return started is not None and started.poll() is not None
+
+
 def a_pid(said: Any) -> Optional[int]:
     """A recorded process id, or `None` when it is not one anybody may act on.
 

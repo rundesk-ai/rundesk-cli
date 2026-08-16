@@ -83,7 +83,7 @@ your terminal, see **[Setting up a Discord bot](#setting-up-a-discord-bot)** bel
 
 ## 🧠 Provider adapters
 
-Rundesk ships three provider adapters. They use the provider CLI and login already on
+Rundesk ships four provider adapters. They use the provider CLI and login already on
 your machine; Rundesk does not copy provider credentials. `rundesk providers` lists what
 this install can actually run.
 
@@ -92,6 +92,7 @@ this install can actually run.
 | [OpenAI Codex CLI](https://learn.chatgpt.com/docs/codex/cli) | `codex` | Live steering |
 | [Anthropic Claude Code](https://code.claude.com/docs/en/overview) | `claude` | — |
 | [xAI Grok CLI](https://docs.x.ai/build/cli/headless-scripting) | `grok` | — |
+| [Google Antigravity CLI](https://antigravity.google/docs/cli/install) | `antigravity` | Cannot be steered mid-turn |
 
 Every shipped adapter supports continuing conversations, model selection, tool activity,
 and per-turn usage.
@@ -396,7 +397,9 @@ others from being checked or rolling back an otherwise healthy CLI update.
 
 ## 🤝 Contributing
 
-Issues and pull requests are welcome.
+Issues and pull requests are welcome. Start with the **[contributing guide](CONTRIBUTING.md)**; it
+covers a safe checkout, the complete local and CI gate, commit and pull-request expectations,
+migrations, and release impact.
 
 ```sh
 python3 scripts/suites
@@ -405,6 +408,12 @@ python3 scripts/suites
 It discovers every suite rather than listing them, runs them offline, and fails when it finds none.
 Read [`docs/development.md`](docs/development.md) before running anything against a checkout: every
 location resolves under your home by default, and `./dev` is what points a run somewhere safe.
+
+- **[Report a bug](https://github.com/rundesk-ai/rundesk-cli/issues/new?template=bug.yml)** — include
+  only sanitized evidence; never publish credentials, prompts, transcripts, private messages,
+  personal names, or absolute home paths.
+- **[Request a feature](https://github.com/rundesk-ai/rundesk-cli/issues/new?template=feature.yml)** —
+  describe the need, evidence, bounded outcome, and nearest out-of-scope expansion.
 
 ## 📄 License
 

@@ -4,19 +4,36 @@
 states a field, a bound or an exit code, it is because `src/rundesk/providers/`, the working adapters
 in `src/providers/`, and the suites in `tests/` say so.
 
-**Three brains ship**, and each was driven against the version named in
-[`cli-versions.lock`](../cli-versions.lock) rather than against notes about an older one:
+**Four brains ship**, and the stream each one is read against is the version named in
+[`cli-versions.lock`](../cli-versions.lock) rather than notes about an older one:
 
 | Adapter | Reaches it by | Can be steered |
 |---|---|---|
 | `codex` | `codex app-server`, JSON-RPC over a pipe | yes |
 | `claude` | `claude -p`, streaming JSON both ways | yes |
 | `grok` | `grok agent stdio`, the Agent Client Protocol | yes |
+| `antigravity` | a prompt piped into `agy --output-format stream-json` | no |
 
-**Every turn runs with the whole machine available to it**, on all three. `RUNDESK_ACCESS_MODE` is
+Antigravity accepts a requested model slug but does not name the model that actually answered:
+1.1.13 opens a stream naming none at all, and 1.1.8 opens one naming the slug it was configured to
+use. Its `model` capability is therefore false and it emits `model_name` on **neither** version,
+rather than treating a requested route as proof of the route that served the turn. A capability that
+says *no* and a record that names one anyway are a contradiction, and the record is the half rundesk
+keeps as the model that answered.
+
+**Every turn runs with the whole machine available to it**, on all four. `RUNDESK_ACCESS_MODE` is
 still carried and is still what this page says it is below — a request rather than containment, which
-an adapter may map onto its brain or ignore — and all three ignore it. That is the owner's decision,
-written here so that what is documented and what happens are the same thing.
+an adapter may map onto its brain or ignore. Three ignore it. `antigravity` maps `read` onto its
+brain's own `plan` workflow and `work` onto `accept-edits`, which is a request made in that brain's
+own vocabulary and **not** a boundary: it does not pass that brain's OS sandbox, because rundesk
+cannot enforce what a sandbox would imply, and a turn under `plan` still stands on the whole machine.
+That is the owner's decision, written here so that what is documented and what happens are the same
+thing.
+
+**`antigravity` is the one that cannot be steered**, and it says so: print mode reads its input to
+the end and starts, and no documented headless surface takes a word after that. It offers no
+additional accounts for the same kind of reason — its login lives in the machine's own keyring with
+no supported way to keep a second one apart, so an alias would quietly share the first.
 
 A **provider** is a brain — a vendor's own command-line tool, driven headlessly. A **provider
 adapter** is the program rundesk runs to reach one. Nothing under `src/rundesk/` names a vendor, and
@@ -137,6 +154,13 @@ $ rundesk providers status claude --alias work
 $ rundesk agents configure reviewer --provider claude --alias work
 $ rundesk ask reviewer "review this" --provider claude --alias work
 ```
+
+**An adapter that does not declare `account_aliases` has none, and every one of these verbs refuses
+rather than pretending.** `antigravity` is that adapter: `agy` signs in through the machine's own
+keyring with no documented token variable and no supported configuration-home override, so a second
+account could not be kept apart from the first. Its owner signs in once, by hand, by running `agy`
+and completing the browser sign-in it opens — rundesk never sees how that worked, and there is
+nothing for it to log in, out of, or check.
 
 Login, status, and logout launch the provider adapter's official account commands. Rundesk reports
 only `authenticated`, `signed_out`, or `unable_to_check`; it never reads or prints provider identity
@@ -356,6 +380,10 @@ as a working file being changed. **A file's name is not the test** — every che
 has an `AGENTS.md`, and an agent editing one in a repository has not rewritten its own rules. What
 qualifies is a path standing directly in `RUNDESK_CWD`.
 
+Antigravity's current `write_to_file` tool names that destination `TargetFile`; the historical
+`AbsolutePath` spelling remains understood for older streams. Neither spelling is ever emitted on
+the seam—only the continuity verb it proves.
+
 #### Why a turn stopped
 
 On the `done` record, when `ok` is false:
@@ -416,6 +444,12 @@ is left out is unset, never empty** — `${RUNDESK_MODEL:-default}` is written e
 | `RUNDESK_SETTINGS` | whatever the owner set, as one JSON object, sorted |
 | `RUNDESK_PREFACE` | what rundesk wants said before the brain reads a word of the task |
 | `RUNDESK_DELEGATION` | which delegation this turn is answering, or **unset** when it is answering nobody. Set only on a turn another agent asked for, and *present* is the whole signal: a `rundesk ask` run from inside one reads it and refuses, which is what makes depth one enforceable |
+
+The shipped Grok adapter maps the `reasoning_effort` setting onto Grok's documented
+`--reasoning-effort` option. Its accepted values are `low`, `medium`, and `high`; missing, empty, or
+invalid values use `low`. That low default applies to both fresh and resumed conversations. An
+explicit valid owner setting wins on either path, because effort is selected once when the Grok ACP
+process is launched, before a new session is opened or an existing session is loaded.
 
 **A name on this table is one an owner's own value may never take**, including on a turn where
 rundesk leaves it unset — deciding to say nothing is still rundesk deciding. Being unset therefore
@@ -496,6 +530,11 @@ in pieces, because nothing downstream could tell that apart from your brain talk
 one exception is a process killed outright, which is rundesk's to classify and the only case it can
 classify correctly.
 
+**Say it once.** Rundesk reading two takes the **last**, so a brain that keeps talking after it has
+ended a turn can otherwise take back a status, a failure message, a session handle and a bill the
+owner has already been given. Once you have ended a turn, nothing more crosses the seam — keep what
+the brain said afterwards in `RUNDESK_RAW`, where the drift is readable without being acted on.
+
 **Your exit code says what became of the *program*, and never what became of the turn.** Rundesk
 decides that from your `done` record, records your code beside it, and the two are kept apart on
 purpose: a brain that failed cleanly and an adapter that fell over are different news. So exit
@@ -526,7 +565,10 @@ rules:
 - **Drive only documented headless surfaces**, and never defeat a rate limit.
 - **Never let a test reach a vendor.** Capture a real stream, commit it, and replay it — see
   `tests/samples/codex-app-server-0.146.0.jsonl`, `tests/samples/claude-2.1.223.jsonl`,
-  `tests/samples/grok-acp-0.2.118.jsonl` and `cli-versions.lock`.
+  `tests/samples/grok-acp-0.2.118.jsonl`, `tests/samples/antigravity-1.1.8.jsonl`,
+  `tests/samples/antigravity-1.1.13.jsonl`,
+  `tests/samples/antigravity-1.1.13-resumed.jsonl`,
+  `tests/samples/antigravity-1.1.13-tools.jsonl` and `cli-versions.lock`.
 
 ---
 
@@ -570,8 +612,8 @@ than that it cost nothing.
 Capture what your brain really said during one turn, scrub out anything naming a machine or an owner,
 commit it, and replay it through your adapter. `tests/test_providers_codex.py` is the worked example.
 
-**Three stand-ins ship, and which one fits is decided by how your brain is spoken to** rather than by
-which vendor it is. Reuse one where it fits and write a fourth where none does — a shared fixture
+**Four stand-ins ship, and which one fits is decided by how your brain is spoken to** rather than by
+which vendor it is. Reuse one where it fits and write a fifth where none does — a shared fixture
 that has to branch on vendor is worse than two that do not.
 
 | Stand-in | For a brain that | Releases a capture |
@@ -579,6 +621,7 @@ that has to branch on vendor is worse than two that do not.
 | `a-captured-brain` | answers requests, and whose notifications follow the request that caused them | on each reply, everything since the last one |
 | `an-acp-brain` | answers requests, and whose notifications are caused by a *later* request than the reply they sit behind | only once the request that causes them arrives |
 | `a-streaming-brain` | is told things and answers, with no request ids at all | one turn per thing it is told |
+| `a-printing-brain` | is told one thing, prints a whole turn, and ends | all of it, once, and then exits |
 
 The difference between the first two is not cosmetic. Releasing a run of notifications before the
 request that caused it is an ordering no real server produces, and a fixture that produces one
@@ -594,6 +637,10 @@ rundesk's silence window ends it half an hour later with nothing written down.
 **A capture of a turn that started from nothing cannot prove usage arithmetic** — a turn that begins
 at zero reports the same numbers whether a baseline is subtracted or ignored. Capture a second turn
 on the same conversation, or the case that would over-report every resumed conversation goes green.
+
+**Where no capture exists, say so in the case rather than making a file that looks like one.** A
+constructed edge-case stream belongs in the scratch root. A sanitized real fresh or resumed stream
+belongs in `tests/samples/` with its exact CLI version in the filename and `cli-versions.lock`.
 
 Record which version you captured in `cli-versions.lock`. The day the vendor changes its stream, the
 suite goes red with the reading that broke and that file says what to compare against.
