@@ -63,7 +63,7 @@ import hmac
 import re
 import secrets as randomness
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
 
 from rundesk.core import paths
 from rundesk.utils import files, locking
@@ -225,6 +225,38 @@ def stated(key: str, said: str, at: Optional[Path] = None) -> None:
     if not said:
         raise Refused(f"{key} was given nothing to keep — `rundesk env unset {key}` empties a name")
     _written({key: _sealed(key, said, at)}, at)
+
+
+def changed(key: str, changing: Callable[[Optional[str]], str],
+            at: Optional[Path] = None) -> None:
+    """Read, change, seal, and replace one value while holding the install lock throughout.
+
+    This is for structured values whose writers must preserve one another's fields. A plain
+    ``value`` followed by ``stated`` has an unlocked gap between the read and write, so two writers
+    can each preserve the same old document and whichever lands last silently loses the other.
+    """
+    trouble = name_trouble(key)
+    if trouble:
+        raise Refused(trouble)
+    # Ensure the key exists before taking the same lock below; first-key creation takes that lock
+    # itself, while every later `_key` call is a read and cannot deadlock this transaction.
+    _key(at)
+    directory = at or paths.secrets()
+    _not_through_a_link(directory, "the directory the values are kept in")
+    directory.mkdir(parents=True, exist_ok=True)
+    directory.chmod(ONLY_MINE)
+    with locking.only_one(_install_lock(at), "this install",
+                          locking.WHILE_A_DIRECTORY_MOVES):
+        with files.changing_json(where(at), empty={}, private=True) as held:
+            settled = dict(held[0]) if isinstance(held[0], dict) else {}
+            before = _opened(key, settled.get(key), at)
+            if before.trouble:
+                raise Refused(f"{key} {before.trouble}")
+            after = changing(before.value)
+            if not after:
+                raise Refused(f"{key} was changed to nothing")
+            settled[key] = _sealed(key, after, at)
+            held[0] = settled
 
 
 def cleared(key: str, at: Optional[Path] = None) -> None:

@@ -32,7 +32,11 @@ from rundesk.commands.env import cmd_env
 from rundesk.commands.env import register as register_env
 from rundesk.commands.gateways import Cycled, cmd_gateways
 from rundesk.commands.gateways import register as register_gateways
+from rundesk.commands.google import cmd_google
+from rundesk.commands.google import register as register_google
 from rundesk.commands.install import cmd_install
+from rundesk.commands.login import cmd_login
+from rundesk.commands.login import register as register_login
 from rundesk.commands.messages import cmd_messages
 from rundesk.commands.messages import register as register_messages
 from rundesk.commands.permissions import cmd_permissions
@@ -49,6 +53,7 @@ from rundesk.commands.turns import register as register_turns
 from rundesk.commands.uninstall import cmd_uninstall
 from rundesk.commands.update import Fetching, cmd_update
 from rundesk.commands.version import cmd_version
+from rundesk.core import google as google_oauth
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job
 from rundesk.lifecycle import release
@@ -80,6 +85,7 @@ examples:
   rundesk backups               the copies of what rundesk keeps for you
   rundesk backups save          copy what rundesk keeps, now
   rundesk env list              the values rundesk hands to what it talks to
+  rundesk login google          connect a verified Google account in the browser
   rundesk skills                the skills this install has, and who holds which
   rundesk skills doctor         what an agent cannot use, and exactly why
   rundesk permissions           what this Mac lets rundesk do, as last checked
@@ -114,6 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_gateways(sub)
     register_backups(sub)
     register_env(sub)
+    register_login(sub)
     register_ask(sub)
     register_asked(sub)
     register_messages(sub)
@@ -123,6 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_schedules(sub)
     register_channels(sub)
     register_skills(sub)
+    register_google(sub)
     _register_install(sub)
     _register_update(sub)
     _register_uninstall(sub)
@@ -167,7 +175,9 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
          refreshing: Optional[Refreshing] = None,
          building: Optional[Building] = None,
          reaching: Optional[Reaching] = None,
-         probing: Optional[Probing] = None) -> int:
+         probing: Optional[Probing] = None,
+         google_authorizing: Optional[google_oauth.Authorizing] = None,
+         google_posting: Optional[google_oauth.Posting] = None) -> int:
     """Parse what was typed and hand it to the one module that answers it.
 
     Bare `rundesk` describes what it can do and exits `0`: somebody who typed the command with no
@@ -208,7 +218,7 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     try:
         return _the_verb(args, asking, fetching, supervising, refreshing, building, reaching,
-                         probing, parser)
+                         probing, parser, google_authorizing, google_posting)
     except KeyboardInterrupt:
         # **A stop is a normal way for a command to end, and it must read like one.** Every long
         # verb — a turn, a restore, an update — can be Ctrl-C'd or sent a `SIGTERM`, and both
@@ -225,7 +235,8 @@ def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = No
 
 
 def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshing, building,
-              reaching, probing, parser: argparse.ArgumentParser) -> int:
+              reaching, probing, parser: argparse.ArgumentParser, google_authorizing=None,
+              google_posting=None) -> int:
     """Which module answers what was typed. One `if` per verb, in the order `rundesk` lists them."""
     if args.command is None:
         parser.print_help()
@@ -242,6 +253,8 @@ def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshin
         return cmd_backups(args, _gateways(supervising))
     if args.command == "env":
         return cmd_env(args)
+    if args.command == "login":
+        return cmd_login(args, google_authorizing)
     if args.command == "ask":
         return cmd_ask(args)
     if args.command == "asked":
@@ -260,6 +273,8 @@ def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshin
         return cmd_channels(args, reaching)
     if args.command == "skills":
         return cmd_skills(args, refreshing)
+    if args.command == "_google":
+        return cmd_google(args, google_authorizing, google_posting)
     if args.command == "version":
         return cmd_version(args, asking)
     if args.command == "install":
@@ -331,7 +346,7 @@ def offered(parser: argparse.ArgumentParser) -> List[str]:
     """
     for action in parser._actions:
         if isinstance(action, Subcommands):
-            return sorted(action.choices)
+            return sorted(name for name in action.choices if not name.startswith("_"))
     return []
 
 

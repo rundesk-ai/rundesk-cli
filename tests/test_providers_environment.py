@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 import support
-from rundesk.core import config, paths, secrets
+from rundesk.core import config, google, paths, secrets
 from rundesk.providers import environment, protocol
 
 
@@ -216,6 +216,21 @@ class ReachingThisInstallsOwnCommand(support.Isolated):
 
 
 class ValuesThatCouldNotBeRead(support.Isolated):
+    def test_google_grants_are_never_exported_to_a_provider_turn(self):
+        secrets.stated(google.GRANTS, '{"refresh_token":"must-stay-inside-rundesk"}')
+        self.assertNotIn(google.GRANTS, environment.owners_own())
+
+    def test_google_client_values_default_and_profiled_are_never_exported(self):
+        names = (google.CLIENT_ID, google.CLIENT_SECRET,
+                 secrets.profiled(google.CLIENT_ID, "WORK"),
+                 secrets.profiled(google.CLIENT_SECRET, "WORK"))
+        for name in names:
+            secrets.stated(name, "must-stay-inside-rundesk")
+        handed = environment.owners_own()
+        for name in names:
+            with self.subTest(name=name):
+                self.assertNotIn(name, handed)
+
     def test_one_that_was_deliberately_emptied_is_not_a_fault(self):
         """`secrets.Held` keeps never-placed, emptied and unreadable apart, and so does this."""
         secrets.stated("A_TOKEN", "a value")

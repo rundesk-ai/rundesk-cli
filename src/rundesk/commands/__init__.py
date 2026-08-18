@@ -8,6 +8,9 @@ May depend on `lifecycle`, `core` and `utils`. Nothing in any of them may depend
 Columns are laid out by `utils.terminal`, so every listing in the product lines up the same way. What a
 value *says* is `as_written` below, and it is here rather than there on purpose: aligning columns is
 something any program does, and choosing the words this one speaks is not.
+
+`login` is the small public account surface. `google` is a hidden inherited-FD bridge used by
+integration processes; it never puts an access or refresh token in a terminal or process argument.
 """
 
 import argparse
