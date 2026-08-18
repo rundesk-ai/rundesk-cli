@@ -17,6 +17,9 @@ lifecycle of the command itself. Everything else is coming, and until it is here
    and they explain themselves; the reasoning that matters is in the docstrings.
 3. **Search before writing new logic** — reuse, extend, refactor.
 4. When the owner raises a concern, investigate before contradicting: evidence, not a hunch.
+5. **Use [`.github/pull_request_template.md`](.github/pull_request_template.md) for every pull
+   request.** Preserve its headings and checklists. Mark an item complete only from evidence
+   observed for the exact head commit; explain every item that is not applicable.
 
 ## Never
 
