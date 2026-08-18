@@ -156,6 +156,19 @@ class ANewAgent(support.Isolated):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, rules)
 
+    def test_a_specialist_delegates_only_large_parallel_work_to_same_turn_subagents(self):
+        directory.made("forge", "a-stand-in", role="specialist")
+        rules = " ".join(
+            (directory.home("forge") / "AGENTS.md").read_text(encoding="utf-8").split())
+        for phrase in (
+                "provider-local subagents", "large, independent, self-contained",
+                "same-turn helper", "Keep planning, decisions, integration, and final verification",
+                "Do not delegate routine work or review unless asked",
+                "Writers never overlap files", "delegation never expands scope or approval"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, rules)
+        self.assertIn("cannot create another named Rundesk delegation", rules)
+
     def test_both_roles_require_named_authority_for_state_mutation(self):
         directory.made("forge", "a-stand-in", role="specialist")
         for role, home in (("domain", self.home), ("specialist", directory.home("forge"))):
