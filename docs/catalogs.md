@@ -114,7 +114,7 @@ README navigation, but it links this guide and Rundesk's supported first-party c
 Use one test runner locally and in CI. It must discover and fail on missing work, validate the
 manifest and every package, compare directory/frontmatter names, bound descriptions, parse
 `rundesk.json`, check script executability, and keep the README and discovered packages in agreement.
-It also asserts root-guide byte parity and heading order, the pull-request template's seven headings,
+It also asserts root-guide byte parity and heading order, the pull-request template's eight headings,
 and the shared issue-template frontmatter and headings. Add focused offline tests for every script and
 public workflow. Run the repository's exact lint, format, parse and shell checks and inspect counts.
 
@@ -139,7 +139,8 @@ private URLs, transcripts, copied private-project language or owner-specific pat
 errors, keep secrets out of arguments and output, and test masking and refusal paths.
 
 Use the shared pull-request template and preserve its headings: Summary; Scope and compatibility;
-Critical risk; Validation; Repository gates; Release; Manual user path. Record exact commands,
+Critical risk; Validation; Repository gates; Release; Manual user path; Agent. End the Agent section
+with `🤖 by <Agent>`, replacing the placeholder with the filing agent's display name. Record exact commands,
 counts, install-preview output, compatibility conclusions and privacy review for the exact head
 commit. Required CI must pass for that head. After merge, verify the exact merge commit's `main`
 workflow before an authorized tag or release.

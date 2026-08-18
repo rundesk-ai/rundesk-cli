@@ -137,6 +137,7 @@ PR_TEMPLATE_HEADINGS = [
     "## Repository gates",
     "## Release",
     "## Manual user path",
+    "## Agent",
 ]
 
 PR_TEMPLATE_ANCHORS = [
@@ -148,6 +149,7 @@ PR_TEMPLATE_ANCHORS = [
     "- [ ] Commands report only earned outcomes and expose no operation that is not implemented.",
     "- [ ] Layer direction remains `commands` → `lifecycle` → `core` → `utils`; `utils` remains product-agnostic.",
     "- [ ] The live `~/.rundesk` install is exactly as it was before validation.",
+    "🤖 by <Agent>",
 ]
 
 ISSUE_TEMPLATE_HEADINGS = {
