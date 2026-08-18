@@ -514,7 +514,7 @@ reaches a brain, because a name rundesk decides is a name an owner's value may n
 before was point an agent's own `rundesk` at a different install, which is the defect this closes.
 
 **A provider is handed every ordinary value this install keeps**, merged in after the above and
-**never over a name rundesk decided**. Google OAuth app client values and grants are the exception:
+**never over a name rundesk decided**. OAuth app client values and grants are the exception:
 they belong to the CLI broker, and only a short-lived access token crosses its anonymous socket.
 Everything else is not scoped per agent, and that is a decision rather than an oversight: a
 channel adapter names the secrets it may have because it is a program reaching one platform on the
@@ -523,7 +523,7 @@ their shell. An allowlist in front of it would be a boundary that is not one —
 the same values off disk a moment later — so rundesk says plainly what it does instead of implying a
 containment it cannot keep.
 
-What follows from that is worth being clear about: except for brokered Google OAuth values, **an
+What follows from that is worth being clear about: except for brokered OAuth values, **an
 agent's brain can see every credential this install holds**, including ones belonging to channels
 and to other providers. Run a brain you are willing to trust with them, and keep out of `rundesk
 env` anything you are not.

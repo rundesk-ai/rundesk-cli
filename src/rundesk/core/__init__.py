@@ -10,5 +10,5 @@ every other module, so it may never depend on one of them.
 | `secrets` | the values this install keeps for what it talks to, sealed and never shown whole |
 | `config` | what this install is configured with, and how far it has been carried |
 | `adapters` | finding the programs that stand outside rundesk, and reading what one printed |
-| `google` | verified Google accounts, OAuth app grants, and the anonymous-FD token boundary |
+| `oauth` | verified accounts, OAuth app grants, and the anonymous-socket token boundary |
 """

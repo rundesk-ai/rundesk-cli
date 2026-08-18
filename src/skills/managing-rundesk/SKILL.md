@@ -72,7 +72,7 @@ to identify the exact target and consequence. Most groups list when called with 
 | [Retrospective](references/retrospective.md) | Write the bounded usage-cycle diary from evidence and compare prior improvements |
 | [Self-improvement](references/self-improvement.md) | Review proven friction, continuity, capability gaps, skills, and delegation fit |
 | [Configuration](references/configuration.md) | Status, version, install settings, and secret values |
-| [Google login](references/google-login.md) | Configure a Desktop OAuth app; connect, select, extend, or recover Google accounts |
+| [OAuth login](references/oauth-login.md) | Configure an installed provider; connect, select, extend, or recover accounts |
 | [Lifecycle](references/lifecycle.md) | Install, update, uninstall, and purge |
 
 Use `"$RUNDESK_COMMAND" <group> --help` when exact help and a reference disagree. Report the command's

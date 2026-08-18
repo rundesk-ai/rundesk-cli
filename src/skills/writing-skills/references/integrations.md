@@ -35,6 +35,52 @@ An owner configures the declared values at their own terminal:
 New values reach the next turn, not the current one; a running process cannot receive a changed
 environment.
 
+## Declare an OAuth provider
+
+When a catalog supplies an OAuth-backed integration, put `oauth-provider.json` beside the owning
+`SKILL.md`. It is declarative data, never executable code. Schema 1 has exactly these fields:
+
+```json
+{
+  "schema": 1,
+  "provider": "example",
+  "display_name": "Example",
+  "authorization_endpoint": "https://identity.example/authorize",
+  "token_endpoint": "https://identity.example/token",
+  "identity_endpoint": "https://identity.example/me",
+  "base_scopes": ["identity"],
+  "identity": {"subject": "subject", "email": "email", "email_verified": "verified"},
+  "authorization_parameters": {"prompt": "consent"},
+  "client_secret": true,
+  "capabilities": {"read-reports": "reports.read"}
+}
+```
+
+Provider and capability IDs are lowercase hyphenated names. Endpoints must be HTTPS without embedded
+credentials or fragments. Base scopes establish a verified immutable subject and email; each
+capability maps to exactly the additional scope its integration needs. Authorization parameters may
+add provider-required string values but cannot override Rundesk's client, redirect, response, scope,
+state, or PKCE fields. Duplicate provider IDs, malformed definitions, insecure endpoints, unknown
+capabilities, redirects from credential endpoints, and descriptor drift are refused.
+
+Owners run `"$RUNDESK_COMMAND" login <provider> [--profile <app-profile>]`; Rundesk prompts for
+missing app client values and seals clients and grants. `--profile` always selects an OAuth app;
+integration `--email` selects a verified account. A missing capability scope reopens consent for
+that same account. Provider-specific app-console instructions belong in this skill, not Rundesk.
+
+An integration creates `socket.socketpair()`, inherits one end, and invokes one of:
+
+```sh
+"$RUNDESK_COMMAND" _oauth accounts <provider> --response-fd <fd> [--profile <app-profile>]
+"$RUNDESK_COMMAND" _oauth access <provider> <capability> --response-fd <fd> [--profile <app-profile>] [--email <address>]
+```
+
+Read a four-byte big-endian length then bounded version-1 JSON. Access success contains only a
+short-lived bearer token plus expiry, email, and subject. Never expose the inherited FD or token in
+stdout, stderr, argv, environment, logs, or skill files. Contract tests must use socket pairs and
+injected offline authorization/token boundaries; cover multiple accounts, unknown capability,
+malformed/duplicate declarations, consent identity mismatch, and concurrent scope extension.
+
 ## Read values in a script
 
 Read values from the ordinary process environment at the moment they are used. Accept a profile as

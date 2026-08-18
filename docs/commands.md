@@ -45,7 +45,7 @@ rundesk env list                          # every value rundesk keeps, shown onl
 rundesk env check <key>                   # whether one is set
 rundesk env set <key>                     # keep one — typed, never passed as an argument
 rundesk env unset <key>                   # empty one, leaving the name
-rundesk login google [--profile <name>]  # connect a verified Google account in the browser
+rundesk login <provider> [--profile <name>]  # connect a verified account in the browser
 rundesk skills                            # every skill this install has, and who holds which
 rundesk skills list [<agent>]             # with an agent: what it holds, and what that needs
 rundesk skills catalogs                   # every catalog, its version and where it came from
@@ -66,81 +66,32 @@ rundesk install [--source <dir>] [--bin-dir <dir>]   # what install.sh runs
 Ask `rundesk --help` rather than this page when the two disagree — the command is generated from
 nothing and describes itself.
 
-## Google login and the private token bridge
+## OAuth login and the private token bridge
 
-`rundesk login google` uses the default Google OAuth app configuration. If more than one app is
-configured, `--profile <name>` selects it; an app profile is not a signed-in Google account. Client
-values are kept once as `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`, or under their
-ordinary profiled names. The browser forces account selection and stores only a UserInfo-verified
-email beside Google's immutable subject identifier. The refresh token and all grant metadata are
-sealed and are never printed.
+`rundesk login <provider>` discovers an installed catalog declaration, securely prompts for a
+missing Desktop app client ID and, when required, secret, opens the browser, and stores the verified
+account. `--profile` selects an OAuth app configuration, never an account. Repeat login to connect
+multiple accounts. Provider-specific console, consent, API, and scope setup belongs in that
+provider's catalog documentation. Never put client secrets in argv, environment, skills, or logs.
 
-Google integrations select an app with `--profile` and a signed-in account with `--email`. They use
-the hidden `_google` bridge, not a public service selector. `_google accounts --profile <name>
---response-fd <fd>` returns the account emails. `_google access
-<analytics|search-console|merchant> --profile <name> [--email <address>] --response-fd <fd>` returns
-one short-lived token, extending consent for that same immutable account when its fixed API scope
-is missing. PageSpeed is API-key based and does not use this bridge.
+Integrations select an app with `--profile` and an account with `--email`. `_oauth accounts
+<provider> [--profile <name>] --response-fd <fd>` lists emails. `_oauth access <provider>
+<capability> [--profile <name>] [--email <address>] --response-fd <fd>` returns one short-lived
+token and may extend consent for the same immutable account when its declared scope is missing.
 
 The response FD must be one end of an inherited anonymous local socket pair, never 0, 1, 2, a pipe,
 named socket, or regular file. A non-reading peer is refused after a bounded write deadline.
 Each response is a four-byte unsigned big-endian length followed by at most 65,536 bytes of compact
 UTF-8 JSON. Version 1 account-list responses are
-`{"version":1,"ok":true,"accounts":["user@example.com"]}`. Access responses are
-`{"version":1,"ok":true,"access_token":"…","expires_at":<unix-seconds>,"email":"…","sub":"…"}`.
+`{"version":1,"ok":true,"accounts":["user@example.test"]}`. Access responses are
+`{"version":1,"ok":true,"access_token":"…","token_type":"Bearer","expires_at":<unix-seconds>,"email":"…","subject":"…"}`.
 Tokens never cross stdout, stderr, argv, environment variables, logs, or skill files.
 
-### Configure a Google OAuth app safely
-
-1. In a dedicated Google Cloud project, enable only the APIs this installation will use: Google
-   Analytics Data/Admin, Search Console, and/or Merchant API. Configure Google Auth Platform's
-   branding and audience. Choose Internal only for an eligible single Workspace organization;
-   otherwise choose External and add every intended account as a test user while the app is in
-   Testing. Testing grants can expire after seven days; production use may require Google
-   verification for the requested scopes.
-2. Under Data Access, declare `openid`, `email`, and only the APIs needed here:
-   `analytics.readonly`, `webmasters`, and/or `content`. Rundesk still requests each API scope only
-   when its integration first needs it.
-3. Under Clients, create an OAuth client whose application type is **Desktop app**. Do not create a
-   Web application, add a public web callback, or use the removed copy/paste flow. Desktop clients
-   permit Rundesk's temporary `http://127.0.0.1:<random-port>/<random-path>` loopback callback; the
-   console requires no fixed redirect URI for that client type.
-4. Copy the client values once, then enter them without putting either in shell history or `ps`:
-
-   ```sh
-   rundesk env set GOOGLE_OAUTH_CLIENT_ID
-   rundesk env set GOOGLE_OAUTH_CLIENT_SECRET
-   rundesk login google
-   ```
-
-   The two `env set` commands prompt without echo. For another OAuth app profile, use its normalized
-   suffix and pass the human profile name at login:
-
-   ```sh
-   rundesk env set GOOGLE_OAUTH_CLIENT_ID__WORK
-   rundesk env set GOOGLE_OAUTH_CLIENT_SECRET__WORK
-   rundesk login google --profile work
-   ```
-
-Repeat login and choose another Google account to add another email beneath the same app profile.
-With one connected account, integrations select it automatically. With more than one, they refuse
-until given `--email user@example.com`; `--profile` continues to mean the OAuth app, not the email.
-The first use of Analytics, Search Console, or Merchant may reopen consent to extend that same
-account with the one missing scope. A different returned account is rejected without changing the
-old grant. If two consent windows extend the same account concurrently, the first completed grant
-wins and the stale one refuses without merging or overwriting scopes; retry that integration request.
-
-If consent is declined or times out, retry the same login command. If Google access was revoked,
-the client was rotated, no refresh token was returned, or a scope extension cannot be refreshed,
-run `rundesk login google [--profile <name>]` again and choose the intended email. Reauthorizing one
-Google `sub` replaces only that account under that app profile. Protect backups: sealing prevents
-accidental plaintext exposure, but the sealing key is stored beside the grants so the owner's
-account or anyone holding a backup can open them.
-
-Google's authoritative setup references are [OAuth for desktop
-apps](https://developers.google.com/identity/protocols/oauth2/native-app), [OAuth client
-management](https://support.google.com/cloud/answer/15549257), and [consent-screen
-configuration](https://support.google.com/cloud/answer/13461325).
+Use only a provider-supported Desktop/native app whose loopback policy permits Rundesk's temporary
+`http://127.0.0.1:<random-port>/<random-path>` callback. If consent is declined, times out, returns
+another account, or loses a concurrent extension race, no stale grant is written; retry. Descriptor
+drift is refused until reviewed and reconnected. Protect backups: their sealing key is stored beside
+the grants, so anyone holding a backup can open them.
 
 ## Some flags are required by the verb rather than by argparse
 

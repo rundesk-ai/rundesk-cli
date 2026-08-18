@@ -29,7 +29,7 @@ what is set, and a variable added there is protected from the moment it lands, s
 from pathlib import Path
 from typing import Dict, Mapping, Optional, Tuple
 
-from rundesk.core import adapters, config, google, paths, secrets
+from rundesk.core import adapters, config, oauth, paths, secrets
 
 #: Where a turn stands, and what stands beside it. The agent's own home, so the brain discovers the
 #: files it lives by because **they are in the directory it is in** — that is the whole mechanism,
@@ -243,7 +243,7 @@ def _also_the_owners(said: Dict[str, str], owners: Optional[Mapping[str, str]],
 def owners_own() -> Dict[str, str]:
     """Every ordinary value this install keeps, for a turn. **Never printed, never logged.**
 
-    **Google OAuth configuration is the one excluded namespace.** Its app client values and grants
+    **OAuth broker state is the one excluded namespace.** Its app client values and grants
     belong to the CLI; refresh tokens have only the private, short-lived access-token socket
     protocol as a release path. Handing any of them to a provider would turn that boundary into
     decoration.
@@ -265,15 +265,14 @@ def owners_own() -> Dict[str, str]:
     """
     given = {}
     for name, held in secrets.kept().items():
-        if held.value is not None and not _google_oauth(name):
+        if held.value is not None and not _oauth_state(name):
             given[name] = held.value
     return given
 
 
-def _google_oauth(name: str) -> bool:
-    """Whether one sealed name belongs exclusively to the Google OAuth broker."""
-    owned = (google.CLIENT_ID, google.CLIENT_SECRET, google.GRANTS)
-    return any(name == one or name.startswith(one + secrets.PROFILED_BY) for one in owned)
+def _oauth_state(name: str) -> bool:
+    """Whether sealed clients and grants belong exclusively to the OAuth broker."""
+    return name == oauth.STATE
 
 
 def unreadable() -> list:

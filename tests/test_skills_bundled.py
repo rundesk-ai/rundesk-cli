@@ -192,17 +192,16 @@ class WhatIsShipped(Bundled):
 
 
 class WhatAShippedSkillMayClaim(Bundled):
-    def test_managing_rundesk_routes_google_login_and_keeps_profile_distinct_from_account(self):
+    def test_managing_rundesk_routes_oauth_login_and_keeps_profile_distinct_from_account(self):
         root = self.skills / "managing-rundesk"
         skill = root.joinpath(library.DECLARED).read_text(encoding="utf-8")
-        reference = root.joinpath("references", "google-login.md").read_text(encoding="utf-8")
+        reference = root.joinpath("references", "oauth-login.md").read_text(encoding="utf-8")
         compact = " ".join(reference.split())
-        self.assertIn("[Google login](references/google-login.md)", skill)
-        self.assertIn('"$RUNDESK_COMMAND" login google --profile work', reference)
-        self.assertIn("A **profile** selects one Google OAuth app/client", compact)
-        self.assertIn("signed-in Google **account**", compact)
-        self.assertIn("Neither client credentials nor grants enter provider-turn environments",
-                      reference)
+        self.assertIn("[OAuth login](references/oauth-login.md)", skill)
+        self.assertIn('"$RUNDESK_COMMAND" login <provider> --profile work', reference)
+        self.assertIn("profile selects an OAuth app/client", compact)
+        self.assertIn("signed-in account", compact)
+        self.assertIn("sealed and excluded from provider turns", reference)
 
     def test_managing_rundesk_chooses_the_narrowest_relevant_command(self):
         said = (self.skills / "managing-rundesk" / library.DECLARED).read_text(encoding="utf-8")
