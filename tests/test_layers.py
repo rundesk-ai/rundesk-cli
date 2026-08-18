@@ -27,6 +27,7 @@ Run directly: `python3 tests/test_layers.py`
 """
 
 import ast
+import hashlib
 import re
 import unittest
 from pathlib import Path
@@ -112,6 +113,81 @@ MAY_IMPORT = {
 UNDERNEATH = ("rundesk", "rundesk.exits")
 
 WHERE = support.CHECKOUT / "src" / "rundesk"
+
+AGENT_GUIDE_HEADINGS = [
+    "# AGENTS",
+    "## Purpose",
+    "## Before you work",
+    "## Repository layout",
+    "## Package and artifact contract",
+    "## Safety and approval gates",
+    "## Delegation",
+    "## Architecture and conventions",
+    "## Documentation duties",
+    "## Build, test, and run",
+    "## Pull requests and releases",
+    "## Definition of done",
+]
+
+PR_TEMPLATE_HEADINGS = [
+    "## Summary",
+    "## Scope and compatibility",
+    "## Critical risk",
+    "## Validation",
+    "## Repository gates",
+    "## Release",
+    "## Manual user path",
+    "## Agent",
+]
+
+PR_TEMPLATE_ANCHORS = [
+    "- [ ] `python3 scripts/suites` passes on a current Python.",
+    "- [ ] `/usr/bin/python3 scripts/suites` passes on the Python 3.9 floor.",
+    "- [ ] `ruff check src tests scripts/suites rundesk`",
+    "- [ ] Required GitHub checks pass for the exact head commit.",
+    "- [ ] The diff contains no credential, private URL, customer data, owner-specific path, debug output, or unrelated artifact.",
+    "- [ ] Commands report only earned outcomes and expose no operation that is not implemented.",
+    "- [ ] Layer direction remains `commands` → `lifecycle` → `core` → `utils`; `utils` remains product-agnostic.",
+    "- [ ] The live `~/.rundesk` install is exactly as it was before validation.",
+    "🤖 by <Agent>",
+]
+
+ISSUE_TEMPLATE_HEADINGS = {
+    "bug-report.md": [
+        "## Problem", "## Reproduction", "## Expected behavior", "## Evidence",
+        "## Environment", "## Scope and privacy",
+    ],
+    "change-proposal.md": [
+        "## Problem", "## Desired outcome", "## Users and value",
+        "## Scope and compatibility", "## Alternatives", "## Validation",
+    ],
+}
+
+ISSUE_TEMPLATE_FRONTMATTER = {
+    "bug-report.md": [
+        "---", "name: Bug report", "about: Report reproducible incorrect behavior",
+        'title: "[Bug] "', 'labels: ""', 'assignees: ""', "---",
+    ],
+    "change-proposal.md": [
+        "---", "name: Change proposal",
+        "about: Propose a skill, integration, command, or repository improvement",
+        'title: "[Proposal] "', 'labels: ""', 'assignees: ""', "---",
+    ],
+}
+
+ISSUE_TEMPLATE_DIGESTS = {
+    "bug-report.md": "747da5c0682a73adc61c35407327fb174c648630e80278c275af4a4542da6caf",
+    "change-proposal.md": "2fe6a1d651ce91af2c3d19e98eea150ca26f41ad9a1ed95a6466a692b73eb4d7",
+}
+
+SUPPORTED_CATALOG_URLS = [
+    "https://github.com/rundesk-ai/rundesk-skills",
+    "https://github.com/rundesk-ai/rundesk-skills-apple",
+    "https://github.com/rundesk-ai/rundesk-skills-integrations",
+    "https://github.com/rundesk-ai/rundesk-skills-google",
+    "https://github.com/rundesk-ai/rundesk-skills-gamedev",
+    "https://github.com/rundesk-ai/desk-cli",
+]
 
 #: Standard library names a module in `utils/` might plausibly be given. Not the whole library —
 #: nobody is going to write `utils/xml.py` — just the ones that describe what a shared module here
@@ -432,6 +508,83 @@ class TheTwoLayersSpellADelegationTheSameWay(support.Isolated):
                                  (landed.conversation,)).fetchone()
         self.assertEqual((kept.FROM_AGENT, kept.source_id_for("ava", 12)),
                          (stood["source"], stood["source_id"]))
+
+
+class AgentGuideContract(unittest.TestCase):
+    def test_guides_are_identical_and_keep_the_required_heading_order(self):
+        agents = (support.CHECKOUT / "AGENTS.md").read_bytes()
+        claude = (support.CHECKOUT / "CLAUDE.md").read_bytes()
+
+        self.assertEqual(agents, claude, "AGENTS.md and CLAUDE.md must be byte-identical")
+        headings = [
+            line for line in agents.decode("utf-8").splitlines()
+            if re.match(r"^#{1,2} ", line)
+        ]
+        self.assertEqual(AGENT_GUIDE_HEADINGS, headings)
+        self.assertIn(b"./dev status", agents)
+        self.assertNotIn(b'RUNDESK_HOME="$(mktemp -d)" ./dev status', agents)
+
+    def test_repository_templates_keep_the_required_heading_order(self):
+        pull_request = (support.CHECKOUT / ".github" / "pull_request_template.md").read_text(
+            encoding="utf-8")
+        self.assertEqual(
+            PR_TEMPLATE_HEADINGS,
+            [line for line in pull_request.splitlines() if line.startswith("## ")])
+        for anchor in PR_TEMPLATE_ANCHORS:
+            with self.subTest(pull_request_anchor=anchor):
+                self.assertIn(anchor, pull_request)
+        issue_root = support.CHECKOUT / ".github" / "ISSUE_TEMPLATE"
+        self.assertEqual(
+            set(ISSUE_TEMPLATE_HEADINGS) | {"config.yml"},
+            {path.name for path in issue_root.iterdir() if path.is_file()})
+        self.assertEqual(
+            b"blank_issues_enabled: false\n",
+            (issue_root / "config.yml").read_bytes())
+        for name, expected in ISSUE_TEMPLATE_HEADINGS.items():
+            with self.subTest(template=name):
+                issue_bytes = (issue_root / name).read_bytes()
+                issue = issue_bytes.decode("utf-8")
+                self.assertEqual(
+                    ISSUE_TEMPLATE_DIGESTS[name],
+                    hashlib.sha256(issue_bytes).hexdigest())
+                self.assertEqual(ISSUE_TEMPLATE_FRONTMATTER[name], issue.splitlines()[:7])
+                self.assertEqual(
+                    expected,
+                    [line for line in issue.splitlines() if line.startswith("## ")])
+
+    def test_readme_and_docs_index_link_the_catalog_guide(self):
+        for path in (support.CHECKOUT / "README.md", support.CHECKOUT / "docs" / "README.md"):
+            with self.subTest(path=path.name):
+                self.assertIn("docs/catalogs.md" if path.name == "README.md"
+                              and path.parent == support.CHECKOUT else "catalogs.md",
+                              path.read_text(encoding="utf-8"))
+
+    def test_catalog_guide_preserves_the_license_contract(self):
+        guide = (support.CHECKOUT / "docs" / "catalogs.md").read_text(encoding="utf-8")
+        for required in (
+            "├── LICENSE                        required repository license",
+            "├── THIRD_PARTY_NOTICES.md         only when adapted work requires attribution",
+            "the upstream license and required notices",
+            "Never remove or weaken an upstream",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, guide)
+
+    def test_readme_lists_every_supported_first_party_catalog(self):
+        readme = (support.CHECKOUT / "README.md").read_text(encoding="utf-8")
+        directory = readme.split("#### Supported first-party catalogs", 1)[1].split(
+            "The skills under this repository's `src/skills/`", 1)[0]
+        for url in SUPPORTED_CATALOG_URLS:
+            with self.subTest(url=url):
+                self.assertIn(url, directory)
+
+    def test_readme_shell_examples_have_no_angle_bracket_metavariables(self):
+        readme = (support.CHECKOUT / "README.md").read_text(encoding="utf-8")
+        shell_blocks = re.findall(r"^```(?:sh|bash)\n(.*?)^```", readme, re.M | re.S)
+        self.assertTrue(shell_blocks, "README.md contains no shell example to check")
+        for block in shell_blocks:
+            with self.subTest(block=block.splitlines()[0] if block.splitlines() else ""):
+                self.assertIsNone(re.search(r"<[^>\n]+>", block))
 
 
 if __name__ == "__main__":

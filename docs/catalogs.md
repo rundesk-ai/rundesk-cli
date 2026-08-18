@@ -6,6 +6,150 @@ format, so nothing here is rundesk's invention and a skill you write works outsi
 A **catalog** is a repository of them. It is the unit rundesk installs, updates and removes; a skill is
 the unit it grants to an agent.
 
+## Choosing a catalog boundary
+
+Add a skill to an existing catalog unless a separate repository has an enduring boundary. Create a
+catalog only when at least one of these differs materially:
+
+- runtime or operating-system requirements;
+- permission, credential or security model;
+- accountable owner or maintainer group;
+- compatibility contract with a provider, platform or distributed CLI; or
+- release lifecycle and support cadence.
+
+Do not create a catalog merely for a topic label or one skill. Skills in one catalog may share
+repository tooling and provider infrastructure, but every installed package must work without another
+repository checkout. Copy or package required runtime support inside the owning catalog; never create
+a cross-repository runtime dependency.
+
+## Building a catalog repository
+
+Use this root layout for a shared catalog:
+
+```text
+catalog-repository/
+├── .github/
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug-report.md
+│   │   ├── change-proposal.md
+│   │   └── config.yml             disables blank issues
+│   ├── pull_request_template.md
+│   └── workflows/                 required validation gate
+├── skills/
+│   └── skill-name/
+│       ├── SKILL.md               required
+│       ├── rundesk.json           only when environment values are required
+│       ├── scripts/               only for executable behavior
+│       ├── references/            only for conditional detail
+│       └── assets/                only for reusable output material
+├── tests/                         catalog and package contract tests
+├── AGENTS.md                      repository operating contract
+├── CLAUDE.md                      byte-identical copy of AGENTS.md
+├── ENVIRONMENTS.md                only for runtime/configuration catalogs
+├── LICENSE                        required repository license
+├── README.md                      purpose, install, contents and support boundary
+├── RELEASING.md                   compatibility, validation and publication process
+├── THIRD_PARTY_NOTICES.md         only when adapted work requires attribution
+└── manifest.json                  catalog identity and version
+```
+
+Do not add an empty optional skill directory. `ENVIRONMENTS.md` belongs only in a catalog whose
+skills ship runtime code, select accounts or require configuration across environments; omit it from
+guidance-only catalogs. Keep repository instructions in the root guides, consumer setup in the
+README, environment selection in `ENVIRONMENTS.md`, and release mechanics in `RELEASING.md`.
+Every public catalog carries a `LICENSE`. When a skill adapts or distributes upstream work, preserve
+the upstream license and required notices in the package and add `THIRD_PARTY_NOTICES.md` at the
+repository root when repository-level attribution is required. Never remove or weaken an upstream
+license, copyright notice or attribution condition while adapting the work.
+
+### Agent instructions
+
+Make `AGENTS.md` an executable contract for working in the repository, not a project description.
+Keep `CLAUDE.md` as a regular byte-identical copy. Use exactly this top-level order and no additional
+`#` or `##` headings:
+
+```text
+# AGENTS
+## Purpose
+## Before you work
+## Repository layout
+## Package and artifact contract
+## Safety and approval gates
+## Delegation
+## Architecture and conventions
+## Documentation duties
+## Build, test, and run
+## Pull requests and releases
+## Definition of done
+```
+
+Under those headings, state the actual tech stack, sources of truth, architecture direction, public
+compatibility boundaries, approval gates, privacy rules, exact full test gate, release contract and
+observable definition of done. Preserve stronger repository-specific invariants. Add a gate test that
+compares the two guide files byte for byte and extracts the ordered top-level headings.
+
+### README and repository tests
+
+The README is the consumer contract. An intro and badges may precede these headings; a standalone
+catalog then uses exactly this order:
+
+```text
+## Skills
+## Install
+## Requirements
+## Repository layout
+## Development
+## Creating a skill catalog
+## Contributing
+## Releases
+## License
+```
+
+It identifies the catalog, explains the shortest preview and confirmed install path, lists every
+discovered skill with its purpose, states shared requirements and authentication boundaries, links
+environment guidance only when it exists, and directs contributors to the issue, pull-request and
+release contracts. A product repository that also bundles skills may preserve its product-oriented
+README navigation, but it links this guide and Rundesk's supported first-party catalog directory.
+
+Use one test runner locally and in CI. It must discover and fail on missing work, validate the
+manifest and every package, compare directory/frontmatter names, bound descriptions, parse
+`rundesk.json`, check script executability, and keep the README and discovered packages in agreement.
+It also asserts root-guide byte parity and heading order, the pull-request template's eight headings,
+and the shared issue-template frontmatter and headings. Add focused offline tests for every script and
+public workflow. Run the repository's exact lint, format, parse and shell checks and inspect counts.
+
+Use `.github/ISSUE_TEMPLATE/bug-report.md` with these headings in order: Problem; Reproduction;
+Expected behavior; Evidence; Environment; Scope and privacy. Use
+`.github/ISSUE_TEMPLATE/change-proposal.md` with: Problem; Desired outcome; Users and value; Scope and
+compatibility; Alternatives; Validation. Keep the shared frontmatter and concise template text
+byte-identical across first-party repositories. The issue-template directory contains exactly those
+two Markdown files and `config.yml`; keep the config byte-identical as
+`blank_issues_enabled: false` followed by one newline.
+
+### Safety, review and releases
+
+Repository and skill workflows default to read-only, offline and bounded behavior. Network access is
+explicit, timeouts and result limits are finite, and machine-readable output is preferred at
+integration seams. Authentication and account selection are explicit. A mutation states its target
+and effect, previews when possible, and requires the authority granted by the current task. Never infer
+permission to delete, publish, send, purchase, change credentials or permissions, or alter a service.
+
+Use synthetic fixtures. Never commit credentials, tokens, private identifiers, customer data,
+private URLs, transcripts, copied private-project language or owner-specific paths. Sanitize logs and
+errors, keep secrets out of arguments and output, and test masking and refusal paths.
+
+Use the shared pull-request template and preserve its headings: Summary; Scope and compatibility;
+Critical risk; Validation; Repository gates; Release; Manual user path; Agent. End the Agent section
+with `🤖 by <Agent>`, replacing the placeholder with the filing agent's display name. Record exact commands,
+counts, install-preview output, compatibility conclusions and privacy review for the exact head
+commit. Required CI must pass for that head. After merge, verify the exact merge commit's `main`
+workflow before an authorized tag or release.
+
+Bump the catalog version only when published skill, catalog or bundled runtime content changes.
+Process-only changes to `AGENTS.md`, `CLAUDE.md`, documentation, issue or pull-request templates, or
+workflow wording do not bump it. Removing or renaming a skill revokes or breaks existing grants and
+is a breaking change; state the migration and compatibility impact before publication.
+
 ## Writing one of your own
 
 Your own skills stand in the `local` catalog, which the install makes and rundesk never fetches
