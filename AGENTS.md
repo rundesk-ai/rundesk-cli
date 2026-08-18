@@ -1,201 +1,222 @@
 # AGENTS
 
-Rules for every agent working in this repository. These rules are law; where they conflict with your
-general habits, this file wins.
+Rules for every agent working in this repository. These instructions define how to work here; where they conflict with general habits, this file wins.
 
-This is the **`rundesk` command line — a lightweight, provider-agnostic multi-agent gateway, in
-standard library Python**. It is being rebuilt from the outside in, and what is here works: the
-lifecycle of the command itself. Everything else is coming, and until it is here it is not offered.
+## Purpose
+
+This repository ships `rundesk`, a lightweight provider-agnostic multi-agent gateway, its installer,
+agent-home templates, provider and channel adapters, and the bundled `rundesk` skill catalog. It is
+distributed onto machines with durable agent state, so command outcomes, stored formats, migrations,
+install/update behavior, and the Python 3.9 floor are contracts.
+
+Read [`docs/commands.md`](docs/commands.md) for the complete operation contract,
+[`docs/layout.md`](docs/layout.md) for installed state, and [`docs/development.md`](docs/development.md)
+before running a checkout. Topic documentation in `docs/` is the source of truth for its subsystem.
+Use [`docs/catalogs.md`](docs/catalogs.md) as the canonical operating contract for a
+published skill-catalog repository.
 
 ## Before you work
 
-1. **Read [`docs/`](docs/)** — three pages, and they are short. [`layout.md`](docs/layout.md) is where
-   an install keeps everything, [`commands.md`](docs/commands.md) is every operation and what it
-   guarantees, [`development.md`](docs/development.md) is how to run and test a checkout without
-   installing it. Read `development.md` before you run anything.
-2. **Read the code you are about to change, in full, before changing it.** These modules are short
-   and they explain themselves; the reasoning that matters is in the docstrings.
-3. **Search before writing new logic** — reuse, extend, refactor.
-4. When the owner raises a concern, investigate before contradicting: evidence, not a hunch.
-5. **Use [`.github/pull_request_template.md`](.github/pull_request_template.md) for every pull
-   request.** Preserve its headings and checklists. Mark an item complete only from evidence
-   observed for the exact head commit; explain every item that is not applicable.
+1. Read `docs/commands.md`, `docs/layout.md`, and `docs/development.md`; then read the relevant topic
+   docs and every file you will edit.
+2. Load the smallest complete set of applicable runtime skills. Use `writing-skills` for bundled
+   skills, `naming-grammar-conventions` before choosing or changing recurring or cross-layer terms,
+   and `managing-github` for pull requests or releases.
+3. Inspect `git status`, the relevant diff, and the current tests before editing. Preserve other
+   people's changes and treat unfamiliar files as owned data, not cleanup candidates.
+4. Search before adding logic, terminology, tests, or documentation. Reuse, extend, or refactor the
+   existing answer rather than creating a second one.
+5. Establish the requested outcome, limits, compatibility requirements, and observable proof.
+   Investigate concerns with code, tests, docs, or a safe reproduction before contradicting them.
+6. Use [`.github/pull_request_template.md`](.github/pull_request_template.md) for pull-request work;
+   preserve its headings and checklists and prove each claim against the exact head commit.
 
-## Never
+## Repository layout
 
-- **Never touch `~/.rundesk`.** It is the owner's live install with real agents in it, not a fixture.
-  Never install, uninstall, update, or write anything there, and never run a command that resolves
-  there by default. Use `./dev`, or set `RUNDESK_HOME` to a scratch directory. Pin `--bin-dir` too:
-  `install` with no `--bin-dir` writes into a real directory on your PATH. Check `ls ~/.rundesk`
-  before and after anything that writes.
-- **Never add a dependency.** The standard library is the whole toolkit. `requirements.txt` is empty
-  and an empty one means no virtualenv is built at all, which is a feature. If you believe something
-  genuinely cannot be done without a package, stop and ask.
-- Never touch secrets or commit credentials.
-- Never leave debug output or commented-out code in completed work.
-- **Never offer an operation that is not built.** A verb rundesk cannot perform is a verb rundesk
-  does not have. There is no "coming soon" surface and no exit code for one — do not reintroduce
-  either.
-- **Never let a command report a success it did not earn.** This is the rule the product is built
-  around. An installer that did not check, a removal that did not happen, an update that could not
-  ask and said "up to date" — each of those has cost this project real damage on a real machine.
-- **Never let a test reach the network.** What is published and how a release is fetched are
-  arguments, so the suite passes or fails on this code and not on somebody else's uptime.
-
-## Hard gates — ask first
-
-- **Persisted state.** Any change to what an install keeps on disk, or to a migration step that has
-  shipped, is confirmed first.
-- **Deletions.** Do not delete files outside the task's immediate scope.
-- **Commits.** Do not commit or push unless told to.
-- **This file.** Never modify `AGENTS.md` without approval.
-
-## Tech stack
-
-- **Runtime:** Python 3.9+ — the oldest a fresh macOS ships, and the floor CI pins. No build step and
-  no packaging.
-- **Dependencies:** the standard library, and nothing else.
-- **Tests:** `unittest`, run directly. `python3 scripts/suites` runs them all.
-- **Distribution:** `install.sh` fetches a release and hands off to `rundesk install`.
-
-## Architecture — the rule that matters
-
-**Four layers, and they point one way.** `commands` → `lifecycle` → `core` → `utils`. Nothing lower
-may import anything higher, and `tests/test_layers.py` checks that rather than trusting it.
-
-| Layer | Owns | May depend on |
-|---|---|---|
-| `rundesk` | finding itself and handing off | `src/rundesk/cli.py` — it holds no logic at all |
-| `src/rundesk/cli.py` | the parser and the dispatch, and nothing else | the command modules |
-| `src/rundesk/commands/` | one verb each: a `Namespace` in, an exit code out. The only layer that may know argparse | `lifecycle`, `core`, `utils` |
-| `src/rundesk/lifecycle/` | this copy of rundesk on a machine: releases, the program tree, the copies, migrations | `core`, `utils` |
-| `src/rundesk/core/` | where things are, how the install is configured, and the values it keeps | `utils` |
-| `src/rundesk/utils/` | common functionality with no opinion about rundesk: a small file kept safely, a replacement staged, a table lined up | the standard library, **and nothing of rundesk's** |
-| `install.sh` | fetching a copy and handing over | nothing — it holds no product behavior |
-
-**`utils/` is few and concrete, not many and abstract.** A module there is named for the thing you
-would go looking for, and the test is whether somebody hunting *"can this agent name be a
-directory?"* would guess the file. Nobody guesses `naming.py`; everybody guesses `files.py`. Things
-that fail together belong together — a name with a separator lands a file somewhere else and a write
-that is not staged lands it half-written, so both live in `files`. Never take a name the standard
-library has (`logging`, `types`, `select`, `signal`): anything inside the package imports yours
-instead of the real one. Keep it flat until there are eight or ten, then group by what a module
-touches — never into a drawer called `misc`. The module table in `utils/__init__.py` is checked
-against the directory by `tests/test_layers.py`, because it had already gone stale once.
-
-**`utils/` is the strict one, and the rule is a membership rule rather than a preference.** Nothing
-in it may be domain knowledge or product logic: everything there is functionality any project could
-have, and the mechanical test is that it imports the standard library and nothing of this product's —
-not `paths`, not `config`, not even `exits`. If a function had to be told what an install, a release,
-an agent or a copy is in order to be written, it belongs a layer up.
-
-The line is finer than it looks, so here is where it was drawn: `as_table` lays out columns and lives
-in `utils`; `as_written` renders an unset value as the words "not yet" and lives in `commands`,
-because choosing the words a product speaks is not common functionality. Do not put something in
-`utils` merely because two layers happen to use it today.
-
-A verb's parser is built beside the verb, in a small function. The build this replaces had one
-`build_parser()` of about 680 lines, which is where a surface goes to stop being readable.
-
-## Best practices — do / don't
-
-### A network call is an argument, not an import
-
-The decision is what breaks; the transport is not. Pass it in and the whole module is testable
-offline — and resolve it **inside** the body, because a default bound in the signature is decided
-once, when the function is defined, and nothing can reach past it.
-
-```python
-✅ def cmd_update(args, asking=None):
-       line, published, could_ask = release.standing(__version__, asking)
-❌ def cmd_update(args, asking=release.latest_published):   # bound at import; a test cannot replace it
+```text
+rundesk                         installed entry point; delegates to src/rundesk/cli.py
+dev                             checkout runner with an isolated default root
+install.sh                      fetches a release and hands off to rundesk install
+src/rundesk/                    standard-library product code
+  commands/                     argparse boundary; one verb per module
+  lifecycle/                    releases, program copies, install changes, migrations
+  core/                         paths, configuration, and stored values
+  utils/                        product-agnostic common functions
+  agents/, channels/, providers/, gateways/, schedules/, delegations/, skills/, capabilities/
+                                  bounded domain packages; dependencies are enforced by tests
+src/channels/, src/providers/   external adapter entry points
+src/skills/                     bundled catalog manifest and skill packages
+src/templates/                  domain/specialist home rules and purpose-named area templates
+tests/test_*.py                 directly runnable isolated suites
+tests/support.py                scrubbed environment, closed network, and scratch-root harness
+scripts/suites                  discovers every suite and fails on empty discovery
+docs/                           command, layout, development, and subsystem contracts
+requirements.txt                exact adapter-only runtime pins; core rundesk remains stdlib
+ruff.toml                       development/CI lint contract
 ```
 
-### Where things are is resolved on every call, never cached
+Place work in the narrowest owning package. Do not create a second path resolver, state store,
+transport, lifecycle route, migration registry, skill index, or documentation source of truth.
 
-`RUNDESK_HOME` is the **only** location this product reads, and everything else is a function of it.
-Binding a location at import is how a suite comes to write into the real install.
+## Package and artifact contract
 
-- Never add a second location variable. If you think you need one, you are about to recreate the
-  defect this rebuild exists to fix.
-- **Unset and set-to-empty are different answers**, and so are "missing" and "unreadable". Anything
-  that collapses them loses state — a value nobody could read is never written back as empty.
+- The `src/rundesk` runtime supports Python 3.9+ and uses the standard library. Preserve 3.9 syntax
+  and APIs. Adapter dependencies are exceptional, exact pins in `requirements.txt`; changing them
+  or adding a dependency requires approval.
+- Tests are `unittest` suites run directly and through `scripts/suites`. They use temporary roots,
+  injected transports, and a closed network. Test success never depends on a remote service.
+- `RUNDESK_HOME` is the only install-root variable. Resolve it on every call; unset and empty are
+  distinct. A function given a root derives every path and lock from that root.
+- Preserve command names, flags, exit behavior, installed layout, stored schemas, provider/channel
+  contracts, archive layout, copies, lock boundaries, and old-release install/update compatibility.
+- Shipped migrations under `src/rundesk/lifecycle/steps/` and `src/rundesk/agents/steps/` are
+  immutable: never renumber, rename, or edit one. Add the next discovered step, make it safe when no
+  change is needed, and settle with the release that landed in its own interpreter.
+- `src/skills/manifest.json` and each discovered `src/skills/<name>/SKILL.md` form the bundled
+  catalog. Directory and frontmatter names match; packages contain their own references and
+  metadata; no skill depends on another checkout at runtime. A bundled skill may teach only commands
+  and behavior this release actually provides. Use `writing-skills` for changes.
+- Agent-home templates in `src/templates/domain/` and `src/templates/specialist/` are shipped
+  artifacts. Preserve their role boundary and required identical `AGENTS.md`/`CLAUDE.md` pairs.
 
-### A lock belongs to the install it is changing
+## Safety and approval gates
 
-Anything handed a directory to work on derives its lock from *that* root, never from `RUNDESK_HOME`.
-A function given somewhere to work that reaches outside it to lock is the one-location defect in
-miniature — and it happened: a call passed an explicit directory and left a lock file in a live
-install that nothing else in that run went near.
+Get explicit owner approval before changing persisted state or a migration design, command or
+stored-format compatibility, Python floor or dependencies, install/update/removal/copy behavior, an
+out-of-scope deletion, these rule files, or before committing, pushing, tagging, or releasing unless
+the current request already grants that action.
 
-### Say which of the three it is
+- Never touch the live `~/.rundesk`: do not install, update, remove, write, migrate, run a command
+  that resolves there, or inspect its stored contents. Use `./dev` or an explicit disposable
+  `RUNDESK_HOME`, and pin a disposable `--bin-dir` for every install path.
+- Record the live root's directory-level before/after check around any validation capable of writing
+  and confirm it is unchanged. The check is a guard, never permission to read agent data.
+- Never commit or expose credentials, tokens, private URLs, customer data, channel/person identity,
+  private-project language, owner-specific paths, or other private identifiers. Use synthetic data.
+- Never use destructive Git commands to undo shared work, including `reset --hard`, `checkout`, or
+  `restore`. Make narrow edits and preserve unrelated worktree and index state.
+- Never let a test reach the network. Pass decisions and transports as arguments and use the closed
+  test harness.
+- Never expose an operation that is not implemented or report an outcome the command did not earn.
+  Unable to ask, unreadable, empty, current, and settled are distinct states when the product treats
+  them as distinct.
+- Never leave debug output, commented-out code, a disabled test, placeholder, or task-created
+  temporary process, root, bin directory, or artifact.
 
-Being unable to ask is not a quiet form of being up to date, an unreadable file is not an empty one,
-and being on the newest release is not the same as being settled on it. Every one of those pairs has
-a third state, and every bug of this kind looks like a feature that silently never fires.
+## Delegation
 
-### One domain verb has one meaning
+Delegate only bounded, self-contained work when it materially helps. Give each worker non-overlapping
+file ownership, the applicable rules, prohibited changes, expected evidence, and a definition of done.
+Delegation never expands scope or approval. The parent agent retains product and naming decisions,
+integration, review, and final proof. Do not duplicate delegated work or accept a summary as evidence
+without inspecting the artifact and rerunning the relevant checks.
 
-Use the product's own nouns — install, release, step, root, program, data, copy — and name the
-effect, not the mechanism. `read`/`found` do not mutate; `write`/`stated` change durable state;
-`place`/`remove` act on the program tree; `carry` moves an install forward. Comments explain the
-invariant or the failure being prevented, not the syntax below them.
+## Architecture and conventions
 
-### Anything that finds its own work fails when it finds none
+The core dependency spine points one way: `commands` -> `lifecycle` -> `core` -> `utils`. The complete
+domain-package graph is declared and enforced in `tests/test_layers.py`; update architecture and its
+mechanical proof together rather than bypassing it.
 
-A check that discovered nothing has proved nothing. `scripts/suites` fails on an empty discovery for
-exactly this reason: the runner it replaces globbed a directory that had moved, matched zero files,
-and printed success.
+- `rundesk` finds itself and delegates. `src/rundesk/cli.py` owns parser assembly and dispatch.
+  Command modules alone know `argparse`; each takes a `Namespace` and returns an exit code.
+- Lifecycle owns this program copy on a machine: releases, install/update/removal, migrations, and
+  replacement. Core owns locations, configuration, and durable values. Lower layers never import a
+  higher layer.
+- `utils/` is flat, few, concrete, and product-agnostic. It imports only the standard library and
+  its own siblings. Do not place product terms or behavior there, use a grab-bag module, or shadow a
+  standard-library module name. Keep its `__init__.py` table accurate.
+- Pass network decisions and transports as arguments and resolve replaceable callables inside the
+  function body, not as import-time default arguments.
+- Resolve locations on every call. Never cache `RUNDESK_HOME`, collapse unset into empty, or derive a
+  lock from any root other than the exact install or directory being changed.
+- Preserve tri-state distinctions. Missing is not unreadable; unable to ask is not up to date; newest
+  is not settled. Refuse or report the exact known state.
+- Use the established domain lexicon: install, release, step, root, program, data, copy, agent,
+  gateway, provider, channel, schedule, delegation, catalog, skill, grant. One domain verb has one
+  meaning: `read`/`found` do not mutate; `write`/`stated` change durable state; `place`/`remove` act
+  on the program tree; `carry` moves an install forward. Preserve published spellings and document
+  intentional layer mappings.
+- Name modules for the concrete thing a reader seeks, operations for outcomes, and values/entities
+  with noun phrases. Comments explain an invariant or prevented failure, never restate syntax.
+- A discovery check fails when it discovers nothing. Read test counts, not only `OK`.
 
-## Migrations
+## Documentation duties
 
-Two levels. **Install migrations** are here — `src/rundesk/lifecycle/steps/NNNN_name.py`, one step
-per file, found rather than listed. **Agent migrations** are a separate level and are not built yet.
+Keep documentation true in the same change as behavior.
 
-- **A step that has shipped is never renumbered, renamed or edited.** Its id is how every install on
-  every machine knows whether it has run. A step that needs changing is a new step.
-- A step is written to be safe against an install that does not need it. Check, then act.
-- A step may create and may copy; it deletes only what it has just replaced.
-- After files land, the install is settled by **the release that landed**, in its own interpreter —
-  the process doing the replacing still holds the previous release's imported modules.
+- Update `docs/commands.md` whenever the public operation list or a command guarantee changes.
+- Update `docs/layout.md` for every installed path, stored item, ownership, migration, copy, lock, or
+  lifecycle-layout change.
+- Update `docs/development.md` when the supported run, isolation, lint, or test process changes.
+- Update the owning topic document for providers, channels, skills/catalogs, gateways, schedules,
+  permissions, adapters, time, or another documented subsystem.
+- Update bundled skill instructions and references when the behavior they teach changes. Never let
+  a skill promise an unavailable verb or stale workflow.
+- Keep `AGENTS.md` and `CLAUDE.md` byte-identical. Edit one complete source and copy it to the other;
+  never maintain divergent instructions.
 
-## Build, test & run
+## Build, test, and run
 
-**There is no build step.** No packaging, no compile, no virtualenv — `requirements.txt` is empty and
-an empty one means no environment is built at all. Running the checkout *is* the build.
+There is no build or packaging step. Running the checkout is the build. Before commands capable of
+writing, capture the directory-level state of `~/.rundesk`; perform all work in disposable paths;
+then repeat the live-root check and confirm no change.
 
 ```sh
-./dev status                       # the command, against a scratch root
-python3 scripts/suites             # every suite, found rather than listed
-python3 tests/test_update.py       # one of them
-/usr/bin/python3 scripts/suites    # the 3.9 floor
-ruff check src tests scripts/suites rundesk    # what CI enforces on every pull request
+./dev status
+python3 scripts/suites
+/usr/bin/python3 scripts/suites
+ruff check src tests scripts/suites rundesk
+bash -n dev
+bash -n install.sh
+git diff --check
 ```
 
-Read the `Ran N tests` line, not the word `OK`: a suite that skipped everything is not a suite that
-passed.
+Run `python3 scripts/suites` on a current interpreter and the floor suite with a confirmed Python
+3.9 interpreter; `/usr/bin/python3` is the documented local floor only when its version check says
+3.9. CI proves both 3.9 and current Python on Linux and macOS. Run the CI-equivalent AST parse over
+`src/**/*.py`, `tests/*.py`, `scripts/suites`, and `rundesk`. Read every suite count and the final
+discovery summary. `ruff` is a development-only gate, not permission to add a product dependency.
 
-**`ruff` is not a dependency of the product.** It is configured in [`ruff.toml`](ruff.toml), fetched
-in CI, and nothing a person installs ever sees it — which is what keeps `requirements.txt` empty. You
-do not need it to work here, but the gate is not met until it is clean, so it is cheaper to have it:
-`docs/development.md` has the two lines that put it in a scratch virtualenv outside the tree.
+For install, update, removal, migration, or copy work, exercise the real path with one disposable
+`RUNDESK_HOME` and one disposable `--bin-dir`; inspect success and a material refusal/failure path,
+exit status, output, and filesystem effects. Clean both paths afterward. Record exact commands,
+versions, suite/test counts, shell checks, live-root before/after result, and observations.
+
+## Pull requests and releases
+
+- Complete the pull-request template from evidence for the exact head commit. Explain every
+  unchecked or inapplicable item; never pre-check a future result.
+- Inspect the full diff and commit-visible artifacts for credentials, private URLs, customer data,
+  channel/person identity, private-project language, owner-specific paths, and unrelated files
+  before publication. Use a GitHub noreply identity for public authorship and verify actual metadata.
+- Required CI must pass for the exact PR head. After merge, verify the exact merge commit's `main`
+  workflow before any authorized release tag.
+- A release tag `vX.Y.Z` must equal `src/rundesk/__init__.py::__version__`; publish only the expected
+  archive and preserve install/update compatibility. Follow the protected release workflow.
+- Process-only changes to `AGENTS.md`, `CLAUDE.md`, pull-request templates, or equivalent repository
+  guidance do not change runtime or bundled-catalog versions. Published command, persisted-state, or
+  skill behavior follows its normal compatibility, SemVer, migration, and release rules.
+- Do not commit, push, merge, tag, publish, deploy, install, or release unless the current request
+  explicitly grants that action.
 
 ## Definition of done
 
-These are a gate, not a checklist to sample from. Work that has not been through all of them is not
-finished, however complete it looks.
+A task is complete only when all applicable items below are observed, not inferred:
 
-1. `python3 scripts/suites` passes, on the 3.9 floor as well as on a current Python. There is no
-   build to run: an empty `requirements.txt` is the whole environment.
-2. **`ruff check src tests scripts/suites rundesk` is clean.** CI enforces it on every pull request,
-   so a branch that skipped it is a branch that fails there instead of here.
-3. **Every new guarantee is proven by a test you have watched fail.** Break the code, run the suite,
-   see red, put the code back — restoring from a `cp` copy and never from git, because the file you
-   would be restoring holds everything you have not committed. A test that stays green with the
-   feature removed is worse than none, because it is counted.
-4. Anything that touches install, update, removal or the copies is also run **for real**, against a
-   scratch `RUNDESK_HOME` and a scratch `--bin-dir`. The first defects found in this rebuild were
-   found that way and none of them was visible from a green suite.
-5. `~/.rundesk` is exactly as you found it. Check it before and after, not only after.
-6. The docs in `docs/` are true in the same task that changed reality — including the list of
-   operations in `commands.md`, which is the page that claims to be complete.
+1. The full requested scope is implemented, with no unreported stub, TODO, unrelated change,
+   temporary process, scratch root, bin directory, or artifact.
+2. Every discovered suite passes with non-zero counts on a current Python and confirmed Python 3.9;
+   the CI-equivalent AST parse, `ruff`, both shell parses, and `git diff --check` pass.
+3. Every new guarantee has a focused regression test observed failing without the implementation and
+   passing with it. A process-only guide change instead requires guide parity and heading-order proof.
+4. Any affected command, install, update, removal, migration, or copy path has isolated success and
+   material refusal/failure evidence. The live `~/.rundesk` directory-level before/after check matches.
+5. Architecture direction, immutable migrations, earned outcomes, naming semantics, Python floor,
+   offline tests, stored formats, and bundled catalog contracts remain intact unless explicitly and
+   validly changed.
+6. Documentation is current, and `AGENTS.md` and `CLAUDE.md` are byte-identical with the required
+   heading order.
+7. The final diff is narrow, clean, privacy-reviewed, and contains no secret, private identifier,
+   owner-specific path, disabled test, debug residue, or unrelated artifact.
+8. Report changed paths, exact commands and observed results, manual checks, and every unrun or
+   blocked check. Re-read this file and verify this definition before calling the work complete.

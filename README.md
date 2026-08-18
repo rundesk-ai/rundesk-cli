@@ -27,8 +27,9 @@ Rundesk gives that agent a name, a home, memory, and a way to keep working. Reac
 same agent from Discord, your terminal, or a schedule.
 
 ```sh
+discord_user_id=123456789012345678
 rundesk agents add ava --provider codex
-rundesk channels add ava discord --allow <your-discord-user-id>
+rundesk channels add ava discord --allow "$discord_user_id"
 rundesk gateways start ava
 ```
 
@@ -191,7 +192,8 @@ retry rather than a broken agent at three in the morning.
 Then:
 
 ```sh
-rundesk channels add ava discord --allow <your-discord-user-id> --notify
+discord_user_id=123456789012345678
+rundesk channels add ava discord --allow "$discord_user_id" --notify
 ```
 
 **Set `--notify` on the first channel you add, and let that be your own DM.** The two flags
@@ -299,20 +301,36 @@ rundesk skills install https://github.com/rundesk-ai/rundesk-skills --confirm
 rundesk skills grant ava python-patterns
 ```
 
-Catalog repositories use one `manifest.json` contract
-whether they publish one skill or a collection.
+Catalog repositories use one `manifest.json` contract whether they publish one skill or a
+collection. Use the [skill-catalog repository guide](docs/catalogs.md) to create or
+standardize one.
 
-First-party optional integrations use the same contract:
+#### Supported first-party catalogs
 
-- [Apple skills](https://github.com/rundesk-ai/rundesk-skills-apple) — Calendar, Contacts,
-  Mail, and Messages on macOS.
-- [Integration skills](https://github.com/rundesk-ai/rundesk-skills-integrations) —
-  Cloudflare, Confluence, Coolify, Discord, Jira, Monarch Money, Sentry, and Stripe.
+- [`rundesk-skills`](https://github.com/rundesk-ai/rundesk-skills) — general-purpose engineering,
+  research, design, planning, and operating guidance; provider-neutral and installed by default.
+- [`rundesk-skills-apple`](https://github.com/rundesk-ai/rundesk-skills-apple) — guarded Calendar,
+  Contacts, Mail, and Messages integrations; requires macOS, the relevant apps, and explicit system
+  permissions.
+- [`rundesk-skills-integrations`](https://github.com/rundesk-ai/rundesk-skills-integrations) —
+  guarded service integrations for Cloudflare, Atlassian, Coolify, Discord, Monarch Money, Sentry,
+  Slack fetching, and Stripe; requires the selected service's credentials and configuration.
+- [`rundesk-skills-google`](https://github.com/rundesk-ai/rundesk-skills-google) — guarded Search
+  Console, Analytics, PageSpeed Insights, and Merchant Center integrations; requires the selected
+  Google APIs and explicit API-key or OAuth account configuration, as required by the selected skill.
+- [`rundesk-skills-gamedev`](https://github.com/rundesk-ai/rundesk-skills-gamedev) — game design,
+  production, art, simulation, Axmol, and C++ guidance; individual skills state their engine and
+  tool requirements.
+- [`desk-cli`](https://github.com/rundesk-ai/desk-cli) — task, desk, project, page, mention, and asset
+  workflows; requires the separately installed `desk` executable and an explicitly selected,
+  appropriately scoped Desk profile.
 
-Each command is packaged inside its skill. Service integrations use the system Python standard
-library; Apple integrations use macOS system frameworks and tools. Neither catalog installs
-dependencies. Credentials use isolated owner configuration by default with an explicit shared
-dotenv option.
+The skills under this repository's `src/skills/` are different: they are bundled with the Rundesk
+release, installed as the reserved `rundesk` catalog, and version-coupled to the CLI rather than
+installed from an external catalog repository.
+
+Integration commands are packaged inside their owning skill. Runtime, credentials, permissions,
+and account-selection requirements stay explicit and isolated by catalog and skill.
 
 ### Operations and data
 
@@ -385,6 +403,7 @@ others from being checked or rolling back an otherwise healthy CLI update.
 - **[Commands](docs/commands.md)** — every operation, what it guarantees, and what each exit code means
 - **[Channel adapters](docs/adapters.md)** — writing the program behind a channel: the three invocations, and every record
 - **[Provider adapters](docs/providers.md)** — what a turn is, and writing the program behind a brain
+- **[Skills and catalogs](docs/catalogs.md)** — skill packages, repository boundaries, validation, and releases
 - **[Gateways](docs/gateways.md)** and **[Schedules](docs/schedules.md)** — what each is, and every state one can get stuck in
 - **[Where an install keeps things](docs/layout.md)** — one root, and everything derived from it
 - **[Working on a checkout](docs/development.md)** — running and testing without installing
@@ -409,11 +428,13 @@ It discovers every suite rather than listing them, runs them offline, and fails 
 Read [`docs/development.md`](docs/development.md) before running anything against a checkout: every
 location resolves under your home by default, and `./dev` is what points a run somewhere safe.
 
-- **[Report a bug](https://github.com/rundesk-ai/rundesk-cli/issues/new?template=bug.yml)** — include
+- **[Report a bug](https://github.com/rundesk-ai/rundesk-cli/issues/new?template=bug-report.md)** — include
   only sanitized evidence; never publish credentials, prompts, transcripts, private messages,
   personal names, or absolute home paths.
-- **[Request a feature](https://github.com/rundesk-ai/rundesk-cli/issues/new?template=feature.yml)** —
+- **[Propose a change](https://github.com/rundesk-ai/rundesk-cli/issues/new?template=change-proposal.md)** —
   describe the need, evidence, bounded outcome, and nearest out-of-scope expansion.
+- **[Open a pull request](.github/pull_request_template.md)** — keep every template heading and
+  record evidence for the exact head commit.
 
 ## 📄 License
 
