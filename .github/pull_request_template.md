@@ -1,37 +1,79 @@
 ## Summary
 
-<!-- What changes, and why? Keep this to one or two lines. -->
+<!-- State what changes and why in one or two lines. -->
 
-## Problem
+-
 
 <!-- State the affected user or system, the current behavior, and why it is insufficient. -->
 
 **Evidence:**
 
-- <!-- Issue, observed result, requirement, request, or measurement. -->
+- <!-- Issue, observed result, ratified requirement, request, or measurement. -->
 
 <!-- For a bug, add: **Root cause:** <responsible mechanism>. -->
 
-## Implementation
+**Issue linkage:**
 
-- <!-- Important choices, why this approach, and deliberate scope boundaries. -->
+<!-- Use one standalone `Closes #<number>.` line per issue this PR completes. Use `Refs` for partial work. -->
 
-<!-- For auth, permissions, migrations, data loss, privacy, billing, or deployment changes, add: **Critical risk:** <blast radius and mitigation>. -->
+## Scope and compatibility
+
+- Areas changed:
+- User-visible behavior:
+- Preserved behavior:
+- Implementation choices and deliberate scope boundaries:
+- Dependencies added: none
+- Persisted-state or shipped-migration changes: none
+- Install, update, removal, or copy-lifecycle changes: none
+
+## Critical risk
+
+<!-- Required for auth, permissions, migrations, data loss, privacy, billing, deployment, or other critical risk. Write "None" when no critical risk applies. -->
+
+- Risk:
+- Blast radius and guard:
 
 ## Validation
 
-- [ ] The full repository gate passed with an isolated environment.
-- [ ] Required install and uninstall checks ran in an isolated disposable station, or the exact blocker is stated below.
-- [ ] New guaranteed behavior has a ratified requirement, a cited regression test, and current documentation.
+- [ ] `python3 scripts/suites` passes on a current Python.
+- [ ] `/usr/bin/python3 scripts/suites` passes on the Python 3.9 floor.
+- [ ] `ruff check src tests scripts/suites rundesk`
+- [ ] Required install and uninstall checks ran with isolated disposable `RUNDESK_HOME` and `--bin-dir`, or the change does not affect those paths.
+- [ ] Every new guarantee has a ratified requirement, a cited regression test observed failing without the implementation, and current documentation, or no guarantee was added.
+- [ ] `git diff --check`
+- [ ] Required GitHub checks pass for the exact head commit.
 
-<!-- Add exact focused commands and fresh results. Leave a box unchecked when its claim is not proven, and explain why. -->
+```text
+# Exact focused, full-gate, and manual verification commands with observed results
+```
 
-## Issue linkage
+<!-- Leave a box unchecked when its claim is not proven. Explain every unchecked or not-applicable item. -->
 
-<!-- Use one standalone `Closes #<number>.` line per issue this PR completes. Use `Refs` for partial work. Remove this comment, but keep the heading. -->
+## Repository gates
 
-## Agent
+- [ ] The diff contains no credential, private URL, customer data, owner-specific path, debug output, or unrelated artifact.
+- [ ] Runtime code remains Python 3.9+ and standard-library only; no dependency was added without owner approval.
+- [ ] Commands report only earned outcomes and expose no operation that is not implemented.
+- [ ] Layer direction remains `commands` → `lifecycle` → `core` → `utils`; `utils` remains product-agnostic.
+- [ ] Network behavior remains injected and every test remains offline.
+- [ ] `docs/` remains true, including the complete operation list in `docs/commands.md`.
+- [ ] Persisted-state, shipped-migration, deletion, and `AGENTS.md` approval gates were honored.
+- [ ] The live `~/.rundesk` install is exactly as it was before validation.
+
+## Release
+
+- Version: `<before>` → `<after>`
+- SemVer reason:
+- Release or follow-up required after merge:
+
+## Manual user path
+
+<!-- Give the shortest representative checkout command, isolated environment, input, and observed result. Include a material refusal or failure path when behavior changed. -->
+
+```text
+
+```
+
+**Agent:** 🤖 by <Agent>
 
 <!-- Replace the placeholder with the filing agent's display name. Do not add provider, model, tool, session, or generated-by branding. -->
-
-🤖 by <Agent>
