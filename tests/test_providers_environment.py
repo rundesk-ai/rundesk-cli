@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 import support
-from rundesk.core import config, paths, secrets
+from rundesk.core import config, oauth, paths, secrets
 from rundesk.providers import environment, protocol
 
 
@@ -213,6 +213,31 @@ class ReachingThisInstallsOwnCommand(support.Isolated):
         """`providers.answering` spawns one and this puts one on a path. **One answer, one place** —
         two would let a machine with two installs reach a different one from each."""
         self.assertEqual(str(paths.program() / "rundesk"), config.the_command())
+
+
+class WhatATurnIsNotHanded(support.Isolated):
+    """Two kinds of value are withheld, and an ordinary one beside them is not."""
+
+    def test_oauth_grants_and_app_clients_never_reach_a_provider_turn(self):
+        secrets.changed((oauth.STATE,),
+                        lambda _before: {oauth.STATE: '{"version":1,"providers":{}}'})
+        secrets.stated("EXAMPLE_OAUTH_CLIENT_ID", "an-app-client")
+        secrets.stated("EXAMPLE_OAUTH_CLIENT_SECRET", "an-app-secret")
+        secrets.stated("EXAMPLE_OAUTH_CLIENT_ID__WORK", "a-second-app-client")
+        given = environment.owners_own()
+        for withheld in (oauth.STATE, "EXAMPLE_OAUTH_CLIENT_ID", "EXAMPLE_OAUTH_CLIENT_SECRET",
+                         "EXAMPLE_OAUTH_CLIENT_ID__WORK"):
+            self.assertNotIn(withheld, given)
+        self.assertNotIn("an-app-secret", "".join(given.values()))
+
+    def test_an_ordinary_value_that_merely_looks_like_one_is_still_handed_over(self):
+        for ordinary in ("EXAMPLE_ANALYTICS_CLIENT_ID", "OAUTH_CLIENT_ID",
+                         "EXAMPLE_OAUTH_CLIENT", "EXAMPLE_OAUTH_CLIENT_IDENTITY"):
+            secrets.stated(ordinary, f"value for {ordinary}")
+        given = environment.owners_own()
+        for ordinary in ("EXAMPLE_ANALYTICS_CLIENT_ID", "OAUTH_CLIENT_ID",
+                         "EXAMPLE_OAUTH_CLIENT", "EXAMPLE_OAUTH_CLIENT_IDENTITY"):
+            self.assertIn(ordinary, given)
 
 
 class ValuesThatCouldNotBeRead(support.Isolated):

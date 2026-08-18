@@ -16,6 +16,7 @@ all. Here nothing collides, because nothing shares a directory.
 | `catalogs` | fetching a catalog, keeping it up to date, and taking one away |
 | `grants` | what an agent holds, granting and revoking it, and standing it where a brain looks |
 | `needs` | what a skill says it needs, which profiles it has, and whether each of them is whole |
+| `oauth` | strict declarative OAuth provider discovery from installed catalog skills |
 | `doctor` | why a skill an agent holds cannot be used, one verdict each |
 
 May depend on `agents`, `core` and `utils`. It reaches `agents` because a grant is a directory entry

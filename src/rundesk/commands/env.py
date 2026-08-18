@@ -12,6 +12,15 @@ this product refuses those everywhere else it meets them.
 
 **Nothing here ever prints a whole value.** Not in the table, not in an error, not in a refusal that
 quotes what was typed. `secrets.hinted` is the only description of a value this command can produce.
+
+**One name is not an owner's to hold, and none of the four verbs touch it.** `secrets.ours` names
+the document the OAuth broker seals its app clients and grants into, and `rundesk login` is the only
+thing that writes it. Left visible here, `env unset` would discard every connected account with one
+word and `env set` would replace the document with a string nothing can parse — an ordinary typo
+against a name that looks like any other. Hiding it from `list` is the smaller half; refusing
+`set`, `unset` and `check` is the reason. It is not a containment claim about an agent that can
+already read the owner's files: it stops routine commands from destroying grants and stops the
+sealed document being exported to a provider turn, which is `providers.environment`'s half.
 """
 
 import argparse
@@ -23,6 +32,10 @@ from rundesk.commands import Subcommands, failed
 from rundesk.core import paths, secrets
 from rundesk.exits import FAILED, OK
 from rundesk.utils.terminal import as_table
+
+#: The most a typed or piped value may be. Long enough for any credential this product keeps — a
+#: JWT, a PEM line, an OAuth client ID — and short enough that a pipe cannot spend memory here.
+MOST = 4096
 
 
 def register(sub: Subcommands) -> None:
@@ -67,9 +80,9 @@ def cmd_env(args: argparse.Namespace) -> int:
 
 
 def _listed() -> int:
-    """Every name, in order, with only a hint of what it holds."""
+    """Every name, in order, with only a hint of what it holds. Rundesk's own is not one of them."""
     try:
-        held = secrets.kept()
+        held = {key: value for key, value in secrets.kept().items() if not secrets.ours(key)}
     except secrets.Refused as why:
         return _failed(str(why), "nothing was listed")
 
@@ -92,7 +105,7 @@ def _checked(key: str) -> int:
     words, because they are different situations, and reported the same way to a script, because a
     script only wants to know whether it can go ahead.
     """
-    trouble = secrets.name_trouble(key)
+    trouble = _not_a_name_here(key)
     if trouble:
         return _failed(trouble)
     try:
@@ -116,7 +129,7 @@ def _checked(key: str) -> int:
 
 def _stated(key: str) -> int:
     """Read a value from whoever is typing and keep it under this name."""
-    trouble = secrets.name_trouble(key)
+    trouble = _not_a_name_here(key)
     if trouble:
         return _failed(trouble)
 
@@ -135,7 +148,7 @@ def _stated(key: str) -> int:
 
 def _emptied(key: str) -> int:
     """Empty a name, leaving the name so it is visible as switched off rather than absent."""
-    trouble = secrets.name_trouble(key)
+    trouble = _not_a_name_here(key)
     if trouble:
         return _failed(trouble)
     try:
@@ -146,7 +159,21 @@ def _emptied(key: str) -> int:
     return OK
 
 
-def typed(asking: str) -> Optional[str]:
+def _not_a_name_here(key: str) -> str:
+    """Why this command may not act on that name, or `""` when it may.
+
+    Refused before anything else happens — before a prompt, before the store is read — so `env set`
+    against rundesk's own name does not ask somebody to type a value it was never going to keep.
+    """
+    trouble = secrets.name_trouble(key)
+    if trouble:
+        return trouble
+    if secrets.ours(key):
+        return secrets.KEPT_BY_RUNDESK.format(key=key)
+    return ""
+
+
+def typed(asking: str, most: int = MOST) -> Optional[str]:
     """A value from the person at the terminal, or from whatever is piping into this. `None` when
     there was nothing.
 
@@ -161,6 +188,11 @@ def typed(asking: str) -> Optional[str]:
     installer — which is the case a prompt would turn into a command that hangs for ever.
 
     Either way it never touches `argv`, and that is the point of reading it here at all.
+
+    Bounded, at `most` characters. A prompt reading a line from whatever is on the other end of a
+    pipe is a prompt something can hand a gigabyte to, and none of the values this reads — a token,
+    an OAuth client ID — is longer than a line. Over the bound comes back as nothing, the same as
+    an empty pipe: both mean "there is no value here to keep", and the caller says so.
     """
     if sys.stdin is None:
         # Not the same as an empty pipe. With fd 0 closed outright, CPython sets `sys.stdin` to
@@ -168,10 +200,13 @@ def typed(asking: str) -> Optional[str]:
         # `OSError` and reached the person as a traceback.
         return None
     try:
-        said = getpass.getpass(asking) if sys.stdin.isatty() else sys.stdin.readline()
+        said = (getpass.getpass(asking) if sys.stdin.isatty()
+                else sys.stdin.readline(most + 1))
     except (EOFError, KeyboardInterrupt, OSError, AttributeError):
         return None
     said = said.rstrip("\n")
+    if len(said) > most:
+        return None
     return said or None
 
 
