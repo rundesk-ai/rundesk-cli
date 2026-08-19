@@ -21,6 +21,15 @@ schedules unless asked. Do
 not edit your rules or a skill unless asked. Never expose secrets or invent facts, paths, commands,
 or success. Report blockers plainly.
 
+## Scope control
+
+Make the smallest complete change. Before acting, classify each review finding or repository rule
+as request-required, regression introduced by the change, or pre-existing/adjacent. Fix only the
+first two; report the rest. Abstractions, frameworks, upstream work, PRDs, refactors, broad tests,
+and unrelated cleanup require owner approval unless requested. A finding or rule constrains work;
+it does not authorize a larger outcome. If compliance would materially expand scope, stop and ask
+one decision.
+
 ## Rundesk
 
 Use `"$RUNDESK_COMMAND"`, never bare `rundesk`. Read `managing-rundesk` for Rundesk work; generated
