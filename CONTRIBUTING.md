@@ -102,11 +102,15 @@ credentials, prompts, transcripts, private messages, personal names, or absolute
 
 ## Release impact
 
-Rundesk follows semantic release impact:
+Before Rundesk declares a stable 1.0 contract, approved breaking changes advance the minor version;
+1.0 is a deliberate stability milestone rather than an automatic consequence of pre-stable work.
+Rundesk otherwise follows semantic release impact:
 
 - **Patch** — a backward-compatible correction.
-- **Minor** — a backward-compatible capability.
-- **Major** — a breaking CLI, adapter-protocol, persisted-state, or compatibility change.
+- **Minor before 1.0** — a backward-compatible capability or an approved breaking CLI,
+  adapter-protocol, persisted-state, or compatibility change.
+- **Minor after 1.0** — a backward-compatible capability.
+- **Major after 1.0** — a breaking CLI, adapter-protocol, persisted-state, or compatibility change.
 
 A pull request should describe its release impact when the change is not plainly documentation,
 tests, or internal maintenance. Releases and their notes are published through
