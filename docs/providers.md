@@ -513,17 +513,23 @@ One consequence worth stating: a value the owner keeps under either of those two
 reaches a brain, because a name rundesk decides is a name an owner's value may not take. What it did
 before was point an agent's own `rundesk` at a different install, which is the defect this closes.
 
-**A provider is handed every value this install keeps**, merged in after the above and **never over
-a name rundesk decided**. Not scoped per agent, and that is a decision rather than an oversight: a
+**A provider is handed every ordinary value this install keeps**, merged in after the above and
+**never over a name rundesk decided**. `RUNDESK_OAUTH_STATE` is the one exclusion: the OAuth
+broker's app client secrets and refresh tokens live in it, and their only release path is a
+short-lived access token for one declared capability, over an anonymous socket the asking process
+made. Exported here they would arrive in every turn as a JSON string and that socket would be
+decoration. Everything else is not scoped per agent, and that is a decision rather than an oversight: a
 channel adapter names the secrets it may have because it is a program reaching one platform on the
 owner's behalf, while a brain running under `work` access already reads the owner's files and runs
 their shell. An allowlist in front of it would be a boundary that is not one — the brain could read
 the same values off disk a moment later — so rundesk says plainly what it does instead of implying a
 containment it cannot keep.
 
-What follows from that is worth being clear about: **an agent's brain can see every credential this
-install holds**, including ones belonging to channels and to other providers. Run a brain you are
-willing to trust with them, and keep out of `rundesk env` anything you are not.
+What follows from that is worth being clear about: apart from the brokered OAuth document, **an
+agent's brain can see every credential this install holds**, including ones belonging to channels
+and to other providers. Run a brain you are willing to trust with them, and keep out of `rundesk
+env` anything you are not. The OAuth exclusion is narrow on purpose and claims nothing more than it
+does: a brain under `work` access reads the owner's files, and the sealed store is one of them.
 
 ### The bounds
 

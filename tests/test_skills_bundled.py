@@ -192,6 +192,32 @@ class WhatIsShipped(Bundled):
 
 
 class WhatAShippedSkillMayClaim(Bundled):
+    def test_managing_rundesk_teaches_the_default_app_and_demotes_the_profile(self):
+        """The owner's UX decision, checked rather than remembered.
+
+        `--profile` selects a second OAuth *app*, and an install with one app should never be told
+        to type it. A guide that leads with it teaches the wrong mental model on the first read,
+        and the first read is the one that sticks.
+        """
+        root = self.skills / "managing-rundesk"
+        skill = root.joinpath(library.DECLARED).read_text(encoding="utf-8")
+        reference = root.joinpath("references", "oauth-login.md").read_text(encoding="utf-8")
+        compact = " ".join(reference.split())
+        self.assertIn("[OAuth login](references/oauth-login.md)", skill)
+        self.assertIn('"$RUNDESK_COMMAND" login <provider>', reference)
+        self.assertIn('"$RUNDESK_COMMAND" env set <PROVIDER>_OAUTH_CLIENT_ID', reference)
+        self.assertIn("rarely needed", compact)
+        self.assertIn("different OAuth *app client*, not a different account", compact)
+        self.assertIn("`--email` to choose between them", compact)
+        self.assertIn("127.0.0.1", compact)
+        self.assertIn("Manual copy-and-paste of a *code* is not supported", compact)
+        # The fallback URL is described by what it does and does not carry, not by a claim that
+        # nothing is ever printed — which the fallback itself would make false.
+        self.assertIn("never a client secret, authorization code, refresh token, or access token",
+                      compact)
+        # The app client is placed before the sign-in, so the guide has to say so before it.
+        self.assertLess(reference.index("env set"), reference.index("login <provider>"))
+
     def test_managing_rundesk_chooses_the_narrowest_relevant_command(self):
         said = (self.skills / "managing-rundesk" / library.DECLARED).read_text(encoding="utf-8")
         self.assertIn("narrowest", said)

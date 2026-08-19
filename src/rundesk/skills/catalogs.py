@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Callable, Iterator, List, NamedTuple, Optional
 
 from rundesk.core import paths
-from rundesk.skills import library, needs
+from rundesk.skills import library, needs, oauth
 from rundesk.utils import archives, files, locking
 
 #: Where the catalog rundesk ships stands inside the release, under whatever `paths.code()` resolves
@@ -717,6 +717,12 @@ def _checked(tree: Path, name: str) -> List[str]:
     trouble = []
     for one in holding:
         why = needs.env_trouble(tree / library.INSIDE / one)
+        if why:
+            trouble.append(why)
+        # Checked at the door rather than at login. `skills.oauth.discovered` deliberately tolerates
+        # a broken declaration already on disk so one catalog cannot break every other provider;
+        # accepting one *into* an install is where the strict answer belongs.
+        why = oauth.trouble_with(tree / library.INSIDE / one)
         if why:
             trouble.append(why)
     if trouble:

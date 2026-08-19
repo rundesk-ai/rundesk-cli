@@ -24,7 +24,7 @@ from fixtures_skills import a_published_catalog, a_skill, a_tarball, written
 
 import support
 from rundesk.core import paths
-from rundesk.skills import catalogs, library, needs
+from rundesk.skills import catalogs, library, needs, oauth
 from rundesk.utils import archives
 
 
@@ -217,6 +217,37 @@ class InstallingACatalog(Catalogs):
         # ordinary path had to go round its own rule.
         self.assertEqual("", catalogs.reserved(library.DEPENDED))
         self.assertEqual("", catalogs.reserved("acme"))
+
+    def test_a_catalog_carrying_a_broken_oauth_declaration_is_refused_at_the_door(self):
+        """Strict here, lenient at `skills.oauth.discovered` — and the asymmetry is deliberate.
+
+        Refusing an install costs the person nothing but a corrected file. Refusing every provider
+        on a machine because one already-installed catalog has a typo costs them a login they were
+        in the middle of.
+        """
+        source = self.a_source()
+        skill = source / library.INSIDE / "writing-plans"
+        skill.joinpath(oauth.DECLARED).write_text("{ not json", encoding="utf-8")
+        with self.assertRaises(catalogs.Refused) as refused:
+            self.install(source)
+        self.assertIn("cannot be used", str(refused.exception))
+        self.assertEqual([], library.known())
+
+    def test_a_catalog_carrying_a_whole_oauth_declaration_installs(self):
+        source = self.a_source()
+        skill = source / library.INSIDE / "writing-plans"
+        written(skill / oauth.DECLARED, {
+            "schema": 1, "provider": "example", "display_name": "Example",
+            "authorization_endpoint": "https://identity.example.test/authorize",
+            "token_endpoint": "https://identity.example.test/token",
+            "identity_endpoint": "https://identity.example.test/me",
+            "base_scopes": ["openid", "email"],
+            "identity": {"subject": "sub", "email": "email",
+                         "email_verified": "email_verified"},
+            "authorization_parameters": {"access_type": "offline"}, "client_secret": True,
+            "capabilities": {"reports": "https://example.test/auth/reports.readonly"}})
+        self.install(source)
+        self.assertEqual(["example"], [one.provider for one in oauth.every()])
 
     def test_a_failure_partway_leaves_no_directory_wearing_the_catalogs_name(self):
         # Half a catalog is worse than none, because it is the one somebody reaches for.
