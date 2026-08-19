@@ -1,67 +1,108 @@
 # Agent instructions
 
-An agent home's `AGENTS.md` and `CLAUDE.md` hold persistent, owner-changeable behavior. Use them for
-how this agent should work on every turn, including its role, authority, boundaries, communication,
-delegation posture, and always-on quality rules. Keep both files byte-identical so providers receive
-one role contract rather than different behavior under different filenames.
+An agent home's `AGENTS.md` and `CLAUDE.md` hold persistent, owner-controlled behavior for that
+specific agent. They define its role, working behavior, and memory policy. They supplement Rundesk's
+operating instructions and never override them. Keep both files byte-identical so providers receive
+one behavior contract rather than different rules under different filenames.
 
-## Put each kind of state in one place
+## Keep each rule with its owner
 
+- Rundesk operating instructions are product-owned, injected every turn, and not user-controlled.
+  They identify Rundesk, the agent context, universal core rules, message and attachment mechanics,
+  the current situation, and the team available for named delegation. Do not copy those rules into
+  an agent's behavior contract.
 - Recorded Rundesk configuration belongs to `agents configure`: provider, operating role,
   delegation description, outbound delegation scope, and automatic self-improvement. Change it with
   `"$RUNDESK_COMMAND"`, never by editing `state.db` or restating it in agent instructions.
-- Agent instructions hold durable behavior the owner expects on every turn. Do not put current
-  assignments, changing project status, provider details, model names, or a skill inventory there.
-- Skills add conditional procedure and depth for repeatable work. Do not make a specialist load a
-  skill merely to remember its role; keep its always-on role contract in its agent instructions.
-- A project's own `AGENTS.md` holds local architecture, commands, conventions, and gates. Agent-home
-  rules require discovering and following it; they do not copy project rules out of the project.
-- `MEMORY.md` holds durable facts and preferences useful across runs. Track active outcomes in the
-  project's canonical tracker or the agent's compact operational index and resumable briefs.
+- Agent instructions hold what is true for this agent on every turn: durable role, responsibilities,
+  ownership boundary, default working behavior, decisions, communication, delegation posture, and
+  memory policy.
+- A project's own `AGENTS.md` holds what is true for anyone working in that project: architecture,
+  commands, conventions, terminology, and validation or release gates. Agent instructions do not
+  copy project rules out of the project.
+- Skills add conditional procedure and depth for a type of work. Do not make a specialist load a
+  skill merely to remember its role, and do not copy a skill inventory into agent instructions.
+- The current assignment holds its outcome, scope, authority, deliverables, and proof. It does not
+  become persistent behavior merely because the agent performed it once.
+- `MEMORY.md` holds durable facts and preferences useful across runs. It does not issue instructions
+  or grant authority; the agent instructions define when and how the agent maintains it.
 
-When one proposed instruction mixes these owners, split it before editing. A skill can teach a
-planner how to plan a database migration without becoming the reason a planning specialist knows it
-must plan rather than implement.
+Classify a proposed rule before writing it:
 
-## Write a specialist role contract
+- True for every Rundesk agent? Operating instructions.
+- True for this agent on every turn? Agent instructions.
+- True for anyone working in this project? Project instructions.
+- True only for a type of work? Skill.
+- True only for this outcome? Assignment.
+- A durable learned fact rather than a rule? Memory.
 
-Give one specialist one durable lifecycle responsibility. State the contract compactly:
+Split anything that mixes owners. Project instructions may narrow how work is performed but do not
+broaden the assignment's authority, redefine the agent's role, or override Rundesk operating rules.
 
-1. Name the assignments it accepts and the boundary that distinguishes them from another agent's.
-2. State its default authority, including whether it plans, changes files, reviews read-only, tests,
-   publishes, or must return for approval.
-3. Name the input it must ground itself in: the original owner outcome, the assignment, applicable
-   project instructions, existing work, and repository state.
-4. Define the smallest useful handback: artifact or change, observed proof, changed paths, unresolved
-   risks, and the exact decision needed when blocked.
-5. Require scope classification. Request-required work and regressions introduced by its change stay
-   in scope; pre-existing and adjacent findings are reported without becoming new work.
+## Generate a focused behavior contract
 
-Keep the role focused on responsibility rather than technology inventory. A planning specialist
-always produces decision-ready plans and does not implement. An implementation specialist makes the
-bounded change and proves it without publishing unless assigned. A review specialist independently
-compares the result with the original request and stays read-only unless fixes are assigned. Skills
-may deepen any of those roles for a framework, integration, risk, or artifact.
+Start from the recorded role, description, and delegation scope. Read both existing home instruction
+files in full, preserve owner customizations, and define only what this agent needs on every turn:
 
-Do not turn every task into the full specialist chain. The delegating owner chooses only the roles
-the work's size and risk justify, retains the outcome, and reviews every handback.
+1. State the role and durable responsibilities in one compact opening.
+2. Define its ownership boundary and explicit non-goals.
+3. State the default lifecycle it follows and the decisions it owns or escalates.
+4. Define when it works directly and when it asks a named specialist for bounded help, without
+   repeating Rundesk's delegation commands or asynchronous mechanics.
+5. Define the smallest useful handback or owner communication: result, observed proof, unresolved
+   risk, and exact decision needed when blocked.
+6. Define what durable role knowledge belongs in `MEMORY.md` and keep assignments, status, dates,
+   project commands, and history out.
+7. Remove any rule already owned by Rundesk operating instructions, project instructions, or a
+   conditional skill.
+
+Use provider-neutral language. Do not mention a provider, model, copied skill list, current task, or
+temporary project state.
+
+### Domain agents
+
+A domain agent owns an ongoing area, product, or client. Its behavior contract defines intake,
+prioritization, canonical sources of truth, continuity, direct work, specialist routing, review and
+integration of handbacks, owner decisions, and durable domain knowledge.
+
+Its default lifecycle is:
+
+`intake → ground → prioritize → delegate or work → review → integrate → communicate → maintain continuity`
+
+The domain agent retains the parent outcome. It does not turn a specialist's bounded handback into
+unreviewed owner-facing work.
+
+### Specialist agents
+
+A specialist accepts bounded assignments and returns evidence. Its behavior contract names the
+assignments it accepts, the boundary from adjacent specialists, its normal work type and authority,
+the grounding required before action, scope classification, and the artifact or proof it returns.
+
+Its default lifecycle is:
+
+`accept bounded assignment → ground → execute within authority → verify → hand back → stop`
+
+Request-required work and regressions introduced by its changes remain in scope. Pre-existing or
+adjacent findings are reported without becoming new work. A specialist does not adopt the parent
+backlog, redefine the original owner outcome, contact the original requester, or place delegated
+task detail in memory unless it creates a durable role-level lesson.
 
 ## Change instructions safely
 
 1. Run `"$RUNDESK_COMMAND" agents` and confirm the target's recorded role, description, and
-   delegation scope. A rules edit does not change any of them.
-2. Read both home instruction files in full. Identify existing customizations and any divergence
-   before preparing the smallest patch. Never replace a customized file merely because a canonical
+   delegation scope. A behavior edit does not change any of them.
+2. Read both home instruction files in full. Identify existing customizations and divergence before
+   preparing the smallest patch. Never replace a customized file merely because a canonical
    template or another agent differs.
 3. Save a Rundesk backup before a broad multi-agent rewrite or a role change whose recovery would be
    costly. One small reversible wording edit does not require backup ceremony unless the owner asks.
-4. Apply the same resulting content to `AGENTS.md` and `CLAUDE.md`. Preserve unrelated owner rules,
-   project pointers, and provider-neutral wording.
-5. Verify both files are byte-identical, the intended section appears once, and no unrelated section
-   changed. Re-run `"$RUNDESK_COMMAND" agents` when recorded configuration was changed separately.
-6. Treat the current turn as already built. Validate changed behavior in the next fresh turn with one
-   representative assignment and one close near-miss; do not claim the new contract worked merely
-   because the files contain it.
+4. Show the proposed diff before replacing customized instructions, then apply the same resulting
+   content to `AGENTS.md` and `CLAUDE.md`. Preserve unrelated owner rules.
+5. Verify both files are byte-identical, the intended section appears once, no unrelated section
+   changed, and no operating, project, skill, assignment, or memory content is duplicated.
+6. Treat the current turn as already built. Validate changed behavior in the next fresh turn with
+   one representative assignment and one close near-miss. Verify that the agent accepts appropriate
+   work and refuses or redirects inappropriate work.
 
 Do not restart a healthy gateway merely to load a rules edit. Fresh turns rebuild their instruction
 context; an already-running turn keeps the context it started with.
