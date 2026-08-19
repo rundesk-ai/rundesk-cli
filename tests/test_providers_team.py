@@ -8,7 +8,7 @@ from unittest import mock
 import support
 from rundesk.agents import directory, records
 from rundesk.gateways import standing
-from rundesk.providers import team
+from rundesk.providers import instructions, team
 from rundesk.skills import grants
 
 
@@ -50,6 +50,20 @@ class ATeamForOneAgent(support.Isolated):
         self.assertNotIn("Domain agents", said)
         self.assertNotIn("Specialist agents", said)
         self.assertLess(said.index("**cole**"), said.index("**forge**"))
+
+    def test_legacy_roles_do_not_remove_team_delegation_from_an_agents_instructions(self):
+        self.add("ava", "Coordinates work.")
+        self.add("forge", "Implements bounded changes.")
+        records.stated(directory.records("ava"), {"role": "specialist"})
+        records.stated(directory.records("forge"), {"role": "specialist"})
+
+        with self.online("forge"):
+            roster = team.for_agent("ava")
+        built = instructions.build(team=roster)
+
+        self.assertIn("**forge**", built.text)
+        self.assertIn("## Team Members", built.text)
+        self.assertIn("### Delegation", built.text)
 
     def test_it_reads_grants_at_turn_time_instead_of_caching_them(self):
         self.add("ava", "Coordinates work.")
