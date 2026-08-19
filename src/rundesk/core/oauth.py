@@ -925,10 +925,14 @@ def _callback_server(path: str, state: str):
             except ValueError:
                 query = {}
             flat = {key: values[0] for key, values in query.items() if len(values) == 1}
-            allowed = ({"state", "code"} if "code" in flat
-                       else {"state", "error", "error_description"})
-            valid = (not parsed.fragment and set(query).issubset(allowed)
-                     and len(flat) == len(query)
+            # OAuth and OpenID Connect providers may append response metadata that Rundesk does
+            # not consume. Google, for example, returns `iss`, `scope`, `authuser` and `prompt`
+            # beside the authorization code. The callback's authority comes from its random path
+            # and exact state, not from rejecting provider-owned metadata. Keep every parameter
+            # unambiguous, require exactly one terminal result, then retain only the values this
+            # flow actually uses.
+            terminal = int("code" in flat) + int("error" in flat)
+            valid = (not parsed.fragment and len(flat) == len(query) and terminal == 1
                      and hmac.compare_digest(flat.get("state", ""), state))
             if not valid:
                 # The path is right and the rest is not, which is a forgery or a stale tab rather
@@ -937,7 +941,9 @@ def _callback_server(path: str, state: str):
                 self._answer(400, "Authorization rejected",
                              "This callback was not accepted. Return to Rundesk and try again.")
                 return
-            self.server.result = flat  # type: ignore[attr-defined]
+            kept = {key: flat[key] for key in ("state", "code", "error", "error_description")
+                    if key in flat}
+            self.server.result = kept  # type: ignore[attr-defined]
             self._answer(200, "Authorization received",
                          "Return to Rundesk while it verifies the account. This tab will try to "
                          "close in <span id=count>3</span> seconds; if the browser blocks it, you "

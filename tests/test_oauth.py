@@ -1110,6 +1110,43 @@ class CallbackAndTokens(unittest.TestCase):
             server.server_close()
         self.assertEqual({"code": "c", "state": "expected-state"}, answer["result"])
 
+    def test_provider_response_metadata_does_not_reject_a_valid_callback(self):
+        """Google adds OIDC and UI metadata beside the code; none changes callback authority."""
+        server = oauth._callback_server("/random", "expected")
+        answer = {}
+        waiting = threading.Thread(
+            target=lambda: answer.update(result=oauth._awaited(server, time.monotonic() + 20)))
+        waiting.start()
+        try:
+            path = ("/random?state=expected&code=real&scope=openid%20email&authuser=0"
+                    "&prompt=consent&iss=https%3A%2F%2Faccounts.google.com")
+            self.assertEqual(200, self.asked(server, path).status)
+        finally:
+            waiting.join(20)
+            server.server_close()
+        self.assertEqual({"code": "real", "state": "expected"}, answer["result"])
+
+    def test_callback_parameters_remain_unambiguous_and_have_one_terminal_result(self):
+        server = oauth._callback_server("/random", "expected")
+        answer = {}
+        waiting = threading.Thread(
+            target=lambda: answer.update(result=oauth._awaited(server, time.monotonic() + 20)))
+        waiting.start()
+        try:
+            refused = (
+                "/random?state=expected&code=c&scope=one&scope=two",
+                "/random?state=expected&code=c&error=denied",
+                "/random?state=expected&scope=openid",
+            )
+            for path in refused:
+                self.assertEqual(400, self.asked(server, path).status)
+                self.assertTrue(waiting.is_alive())
+            self.assertEqual(200, self.asked(server, "/random?state=expected&code=c").status)
+        finally:
+            waiting.join(20)
+            server.server_close()
+        self.assertEqual({"code": "c", "state": "expected"}, answer["result"])
+
     def test_the_whole_flow_still_gives_up_when_nothing_arrives(self):
         server = oauth._callback_server("/random", "expected")
         try:
