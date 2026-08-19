@@ -231,6 +231,74 @@ the site before the token, the way a person would set it up.
 One required file with four fields and one optional file with one field is the whole contract. That is
 the amount somebody can still hold in their head in a year, which is the point.
 
+## Declaring an OAuth provider
+
+A catalog whose skills sign in to something — rather than being handed an API key — puts one more
+optional file beside a `SKILL.md`: `oauth-provider.json`. It is **data, never code**: rundesk reads
+it, validates every field against a closed schema, and executes nothing a catalog ships. That is
+what lets rundesk gain a provider without gaining a line of provider-specific code, and it is why
+`rundesk login` knows no vendor names.
+
+```json
+{
+  "schema": 1,
+  "provider": "example",
+  "display_name": "Example",
+  "authorization_endpoint": "https://identity.example/authorize",
+  "token_endpoint": "https://identity.example/token",
+  "identity_endpoint": "https://identity.example/me",
+  "base_scopes": ["identity"],
+  "identity": {"subject": "sub", "email": "email", "email_verified": "email_verified"},
+  "authorization_parameters": {"prompt": "consent"},
+  "client_secret": true,
+  "capabilities": {"read-reports": "reports.read"}
+}
+```
+
+Every key is required and no other key is allowed. What each one has to be:
+
+| Field | What it must be |
+|---|---|
+| `provider`, every capability key | a lowercase hyphenated identifier, at most 64 characters |
+| the three endpoints | HTTPS, with no embedded credentials, **no query string and no fragment** |
+| `base_scopes` | 1 to 32 non-empty strings that establish a verified immutable subject and email |
+| `identity` | exactly `subject`, `email` and `email_verified` — the field names *that provider* uses |
+| `authorization_parameters` | at most 32 string values the provider requires; none of `client_id`, `redirect_uri`, `response_type`, `scope`, `state`, `code_challenge`, `code_challenge_method` |
+| `client_secret` | a JSON boolean: whether this provider's Desktop app has one |
+| `capabilities` | 1 to 64 entries, each mapping a capability name to exactly the one extra scope its integration needs |
+
+A query or fragment on an endpoint is refused rather than merged, so that building the
+authorization URL stays unambiguous; a provider that genuinely requires an extra parameter has
+`authorization_parameters` for it. Any single string is bounded at 1,024 characters and the whole
+file at 64 KiB — a declaration is untrusted input from a repository somebody installed.
+
+**Exactly one skill on an install may declare a given provider ID.** Two that do make *both*
+unusable rather than letting the walk order decide which one a credential is handed to.
+
+Two failure boundaries, deliberately different:
+
+- **Installing** a catalog whose declaration is malformed is refused outright, along with the rest
+  of the install. That is where strictness costs nothing.
+- A malformed declaration **already on disk** makes only its own provider unusable. Every other
+  provider still works, and `rundesk login <unknown>` names which declarations could not be read.
+  One catalog's typo used to make every provider on the machine unreachable.
+
+A grant is pinned to the fingerprint of the fields above that decide *behaviour* — endpoints,
+scopes, identity fields, parameters, capabilities — so a declaration that changes underneath an
+install is refused until somebody reviews it and reconnects. `display_name` is deliberately outside
+that fingerprint: correcting a capitalisation should not make an owner reconnect every account.
+
+The provider ID also decides what the app client is called: `example` gives
+`EXAMPLE_OAUTH_CLIENT_ID` and `EXAMPLE_OAUTH_CLIENT_SECRET`, which an owner places with
+`rundesk env set` before signing in. Document exactly those two names in your skill, alongside the
+four things a person has to get right and which are easy to confuse: the **APIs** to enable, the
+**consent-screen scopes** the app requests, the **permissions the signing-in person already holds**
+on the resources, and the **account and resource** a command selects at run time.
+
+Skills consume a declared provider through rundesk's private bridge rather than by handling tokens.
+See `docs/commands.md` for the socket protocol, and the bundled `writing-skills` skill's
+integrations reference for the caller's side of it.
+
 ## The catalog rundesk ships
 
 One catalog does not come from a repository at all. `rundesk` is part of the release, kept as source

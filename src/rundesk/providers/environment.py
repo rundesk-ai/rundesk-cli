@@ -241,9 +241,24 @@ def _also_the_owners(said: Dict[str, str], owners: Optional[Mapping[str, str]],
 
 
 def owners_own() -> Dict[str, str]:
-    """Every value this install keeps, for handing to a turn. **Never printed, never logged.**
+    """Every ordinary value this install keeps, for a turn. **Never printed, never logged.**
 
-    **Every one of them, and not scoped per agent.** A channel names the secrets it may have,
+    **Two kinds of value are held back, and `secrets.withheld` is what says which.** The OAuth
+    broker's sealed document of refresh grants, and any OAuth app client ID or secret — the
+    `<PROVIDER>_OAUTH_CLIENT_ID` grammar, matched on the name rather than looked up in a catalog,
+    so it holds from the moment an owner places one and does not wait on a declaration being
+    installed. Between them they are the whole of what a person consented to; their one release
+    path is a short-lived access token, for one declared capability, down an anonymous socket the
+    asking process made. Exported here they would arrive in every turn's environment and that
+    socket would be decoration on a boundary already crossed.
+
+    The exclusion is narrow on purpose. It is about these values, not a claim that a brain under
+    `work` access is contained — it reads the owner's files, and the sealed store is one of them.
+    **On an install carried forward from before this release, a client already stored under one of
+    these names was handed to every turn**, so an owner who ran a brain they would not trust with
+    it should rotate that client in the provider's console rather than assume the upgrade undid it.
+
+    **Every other one of them, and not scoped per agent.** A channel names the secrets it may have,
     because it is a program reaching one platform on the owner's behalf; a brain under `work` access
     already reads the owner's files and runs their shell, so an allowlist here would be a boundary
     that is not one — the same values are on disk a moment later. Decided by the owner, recorded
@@ -260,7 +275,7 @@ def owners_own() -> Dict[str, str]:
     """
     given = {}
     for name, held in secrets.kept().items():
-        if held.value is not None:
+        if held.value is not None and not secrets.withheld(name):
             given[name] = held.value
     return given
 

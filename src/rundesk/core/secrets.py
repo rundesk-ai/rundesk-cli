@@ -63,7 +63,7 @@ import hmac
 import re
 import secrets as randomness
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from rundesk.core import paths
 from rundesk.utils import files, locking
@@ -108,6 +108,48 @@ NAMED = re.compile(r"^[A-Z][A-Z0-9_]*$")
 #: one name in one module is the second one silently winning, which is exactly what happened while
 #: this was being written and cost a suite to find.
 PROFILED_BY = "__"
+
+#: The one name this install keeps for *itself* rather than for an owner: `core.oauth`'s app
+#: clients and the grants made with them.
+#:
+#: **Named here rather than there, and it is not misplacement.** Three modules have to agree that
+#: this name is not an ordinary value — `commands.env`, which must not let somebody set, empty,
+#: list or check it; `providers.environment`, which must not hand it to a brain; and `core.oauth`,
+#: which owns what is inside it. The first two already import this module and may not import each
+#: other or reach up to `core.oauth`'s callers, so this is the only place all three can read one
+#: spelling. A second copy of the string is a copy that drifts, and the drift is silent: a value
+#: excluded under one spelling is exported under the other.
+#:
+#: **Exactly one name, not a prefix.** A rule like "anything beginning with `RUNDESK_`" would take
+#: names an owner may already have placed on an install that is being carried forward, and taking
+#: away a value somebody put there is not a security improvement.
+OURS = "RUNDESK_OAUTH_STATE"
+
+#: What an OAuth **app client** is called, for any provider, without this module knowing one.
+#:
+#: `<PROVIDER>_OAUTH_CLIENT_ID` and `<PROVIDER>_OAUTH_CLIENT_SECRET`, where `<PROVIDER>` is a
+#: provider ID in the spelling a shell variable takes — so a catalog declaring `google` gets
+#: `GOOGLE_OAUTH_CLIENT_ID`, and one declaring `some-provider` gets
+#: `SOME_PROVIDER_OAUTH_CLIENT_ID`. No provider name is written down anywhere in rundesk; the
+#: grammar is, and `core.oauth.client_names` is what derives one from a declaration.
+#:
+#: **A grammar rather than a list, and that is the whole point of it.** An owner sets these before
+#: the provider's catalog is installed — that is the ordinary order, since the skill is what tells
+#: them the app is needed — so the rule that keeps a client secret out of a turn cannot depend on
+#: a declaration being discoverable. Matched here, it holds from the moment the value lands.
+#:
+#: **Narrow, deliberately.** The prefix must be a real name with no doubled underscore, and the
+#: whole thing must end in exactly `_OAUTH_CLIENT_ID` or `_OAUTH_CLIENT_SECRET`. `OAUTH_CLIENT_ID`
+#: with no provider in front of it, `GOOGLE_OAUTH_CLIENT`, `GOOGLE_OAUTH_CLIENT_IDENTITY` and
+#: `GOOGLE_ANALYTICS_CLIENT_ID` are all ordinary owner values and stay visible: a rule that hid a
+#: value somebody set for their own script would be a rule that silently broke it.
+OAUTH_CLIENT = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_OAUTH_CLIENT_(?:ID|SECRET)$")
+
+#: What somebody is told when they aim an ordinary `env` verb at `OURS`. One sentence in one
+#: place, so the refusals in this module and in `commands.env` cannot come to say two different
+#: things about the same name.
+KEPT_BY_RUNDESK = ("{key} is kept by rundesk itself — `rundesk login` is what changes it, and "
+                    "no `rundesk env` verb reads or writes it")
 
 #: How much of a value is ever shown, at each end.
 SHOWN = 3
@@ -167,6 +209,39 @@ def name_trouble(key: str) -> str:
     return ""
 
 
+def ours(key: str) -> bool:
+    """Whether that name belongs to rundesk itself rather than to the owner.
+
+    A question rather than a comparison at each call site, so `OURS` growing a second member is one
+    edit instead of four — and so every caller says *why* it is excluding a name.
+    """
+    return key == OURS
+
+
+def an_oauth_client(key: str) -> bool:
+    """Whether that name is an OAuth app client ID or secret, in any profile.
+
+    The profile suffix is taken off first and checked as a name in its own right, so
+    `GOOGLE_OAUTH_CLIENT_ID__WORK` is one of these and `GOOGLE_OAUTH_CLIENT_ID__A__B` is not.
+    """
+    stem, separator, profile = key.partition(PROFILED_BY)
+    if separator and (not profile or PROFILED_BY in profile or not NAMED.match(profile)):
+        return False
+    return bool(OAUTH_CLIENT.match(stem))
+
+
+def withheld(key: str) -> bool:
+    """Whether this value is kept back from what a turn is handed.
+
+    Two kinds, and they are not the same kind of thing. `OURS` is rundesk's own sealed document of
+    grants, which no `rundesk env` verb touches at all. An OAuth app client is the *owner's* value
+    — they set it, list it and replace it exactly like any other — and it is withheld only from a
+    provider subprocess, because a client secret in every turn's environment would make the
+    short-lived-token boundary decoration.
+    """
+    return ours(key) or an_oauth_client(key)
+
+
 def profiled(key: str, profile: str) -> str:
     """The name `key` is kept under for `profile`, or the plain name when there is no profile.
 
@@ -218,13 +293,72 @@ def placed(key: str, at: Optional[Path] = None) -> bool:
 
 
 def stated(key: str, said: str, at: Optional[Path] = None) -> None:
-    """Keep a value under a name, replacing whatever was there."""
+    """Keep a value under a name, replacing whatever was there.
+
+    Refuses `OURS`, and refusing it *here* is what makes the reservation real: `commands.env`
+    refuses it before prompting so nobody types a value into nothing, and this refuses it for every
+    other caller that might arrive later. A whole-value replacement of the OAuth document is also
+    exactly the write that would discard grants nobody meant to lose — see `changed`, which is how
+    that document is written.
+    """
     trouble = name_trouble(key)
     if trouble:
         raise Refused(trouble)
+    if ours(key):
+        raise Refused(KEPT_BY_RUNDESK.format(key=key))
     if not said:
         raise Refused(f"{key} was given nothing to keep — `rundesk env unset {key}` empties a name")
     _written({key: _sealed(key, said, at)}, at)
+
+
+def changed(keys: Sequence[str],
+            changing: Callable[[Dict[str, Optional[str]]], Dict[str, Optional[str]]],
+            at: Optional[Path] = None) -> None:
+    """Read some values, change them together, and replace them, holding the install lock throughout.
+
+    Two things this buys that a `value` followed by a `stated` does not.
+
+    **No unlocked gap.** Between an ordinary read and an ordinary write, another writer can land;
+    both preserved the same old document and whichever wrote last silently lost the other. Here
+    `changing` runs *inside* the lock, sees what is really there, and what it returns is what is
+    written.
+
+    **More than one name, or none of them.** Replacing an OAuth app client also discards the grants
+    made with it, and those live under different names — a client written without its grants is an
+    install whose stored refresh tokens belong to a client that is gone. `changing` is given the
+    current value of each name, `None` where a name holds nothing, and returns the ones to write;
+    a name it leaves out is untouched, and a `None` it returns empties that name.
+
+    `OURS` is writable through this and through nothing else, so rundesk's own document is only
+    ever changed by a function that has just read it.
+    """
+    for key in keys:
+        trouble = name_trouble(key)
+        if trouble:
+            raise Refused(trouble)
+    # Ensure the key file exists before taking the same lock below; first-key creation takes that
+    # lock itself, while every later `_key` call is a read and cannot deadlock this transaction.
+    _key(at)
+    directory = at or paths.secrets()
+    _not_through_a_link(directory, "the directory the values are kept in")
+    directory.mkdir(parents=True, exist_ok=True)
+    directory.chmod(ONLY_MINE)
+    with locking.only_one(_install_lock(at), "this install",
+                          locking.WHILE_A_DIRECTORY_MOVES):
+        with files.changing_json(where(at), empty={}, private=True) as held:
+            settled = dict(held[0]) if isinstance(held[0], dict) else {}
+            before: Dict[str, Optional[str]] = {}
+            for key in keys:
+                opened = _opened(key, settled.get(key), at)
+                if opened.trouble:
+                    raise Refused(f"{key} {opened.trouble}")
+                before[key] = opened.value
+            for key, said in changing(dict(before)).items():
+                trouble = name_trouble(key)
+                if trouble:
+                    raise Refused(trouble)
+                settled[key] = _sealed(key, said, at) if said else None
+            held[0] = settled
 
 
 def cleared(key: str, at: Optional[Path] = None) -> None:
@@ -232,6 +366,8 @@ def cleared(key: str, at: Optional[Path] = None) -> None:
     trouble = name_trouble(key)
     if trouble:
         raise Refused(trouble)
+    if ours(key):
+        raise Refused(KEPT_BY_RUNDESK.format(key=key))
     _written({key: None}, at)
 
 
