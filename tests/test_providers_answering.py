@@ -1313,16 +1313,15 @@ class AScheduleThatAsksTheAgent(Answering):
         self.assertNotEqual(first_row["conversation_id"], second_row["conversation_id"])
         self.assertEqual((0, 0), (first_row["session_resumed"], second_row["session_resumed"]))
 
-    def test_a_schedule_is_shown_the_team_it_may_delegate_to(self):
-        listed = "- **bob** — verifies releases"
-        with mock.patch.object(turns.team, "for_agent", return_value=listed) as looked:
+    def test_a_schedule_is_not_shown_or_used_to_find_a_named_team(self):
+        with mock.patch.object(
+                turns.team, "for_agent", side_effect=AssertionError("team was inspected")):
             got = answering.for_a_schedule(self.agent, self.a_schedule())
 
-        looked.assert_called_once_with(self.agent)
         record = kept.list_turn_records(self.agent, got.turn)[0]
         event = json.loads(record["event_data"])
-        self.assertIn("agents", [one["name"] for one in event["layers"]])
-        self.assertEqual(listed, event["team"])
+        self.assertNotIn("agents", [one["name"] for one in event["layers"]])
+        self.assertEqual("", event["team"])
 
     def test_a_delegated_result_resumes_that_invocation_and_sends_the_final_report_to_dm(self):
         self.a_channel()

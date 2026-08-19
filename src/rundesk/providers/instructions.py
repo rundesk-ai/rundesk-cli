@@ -5,15 +5,15 @@ the same trigger and the same variables it builds the same bytes, on any machine
 what makes prompting something this project can maintain: every case is a string comparison, the
 whole thing renders in a command, and a change to it is visible before it ships.
 
-## Five blocks, and nothing else
+## Three composable blocks, six visible sections
 
 ```
-CORE                 always, whoever asked
+CORE                 Rundesk, Agent Context, Core Rules, Messages and Attachments
 + one of:
-    USER_TO_AGENT        a person is waiting
-    SCHEDULE_TO_AGENT    the clock started it, nobody is present
-    AGENT_TO_AGENT       another agent handed it over, nobody is present
-+ AGENTS_LIST        who else is here — only where handing work on is legal
+    USER_TO_AGENT        Current Situation: a person is waiting
+    SCHEDULE_TO_AGENT    Current Situation: the clock started it, nobody is present
+    AGENT_TO_AGENT       Current Situation: another agent handed it over
++ TEAM_MEMBERS       Team Members, only where a person can review the later result
 + ADDITIONS          whatever the caller appended, each named and bounded
 ```
 
@@ -26,35 +26,28 @@ the other two withhold are the rules that assume somebody is waiting, so a surfa
 never heard of is given a person's rules and one of the others only by being named. That is the safe
 way round, and it is the kind of default that is easy to get backwards.
 
-## What the core may say, and what it may not
+## What the core owns
 
 **Everything this release runs is a named agent standing in its own directory**, so the core is
-written for one: it names the agent, its home, the files it lives by and the command that reaches
-this install.
+written for one. It identifies Rundesk, the agent and its home, the separately loaded agent
+instructions, the universal conduct floor, and the two product mechanics every agent routinely
+gets wrong: finding prior messages and declaring attachments.
 
-It may never name **a channel or a schedule**. Those belong to the blocks below it, and a fact about
-one that leaked into the core would be read by every turn of the other — which is exactly how the
-build this replaces came to tell a scheduled run, three paragraphs after forbidding it to ask
-anybody anything, to go and ask.
+It contains no memory policy, role behavior, project method, or access posture. Those belong to the
+agent's own instructions or the provider boundary, not to Rundesk's product-owned operating text.
 
-It ends in four rules that are the reason the core exists at all: never invent what you have not
-confirmed, never write a secret down, never dress a failure as progress, and say when you are
-blocked. They matter most on the block furthest from a person — an agent answering another agent
-reports to nobody who can check it, and a report that reads well and is untrue reaches an owner
-through the review turn.
+## `TEAM_MEMBERS` is person-facing, and that is the review rule
 
-## `AGENTS_LIST` is withheld from `AGENT_TO_AGENT`, and that is the depth rule
-
-An agent already answering a delegation is shown nobody to hand work to, so handing it on is not
-something it can decide to do. There is a durable refusal underneath as well, but this is the half
-that means nothing has to be talked out of it.
+Named Rundesk delegation is asynchronous. A person-facing turn can receive and review that later
+result; a schedule ends without anybody present, and an agent already answering a delegation is at
+the named-agent depth limit. Both are shown no team. Provider-local subagents remain available
+inside the delegated turn's own authority.
 
 ## What is deliberately not here
 
-**No per-agent instruction text.** An agent's own identity is the files in its home, placed by
-`agents.pages`. Each measured brain natively loads the standing rules under the filename it supports;
-the core names only `MEMORY.md`, which no provider loads for us. A brain that never opened it is an
-agent with no continuity that reports nothing wrong.
+**No per-agent instruction text or memory policy.** An agent's identity is in the standing rules its
+provider loads natively. The core names that layer and its precedence without reopening it or
+copying any of its content.
 
 **No skills index.** A skill costs its description every turn and its body only when used, and every
 measured brain discovers skills for itself.
@@ -111,46 +104,43 @@ class Prompt(NamedTuple):
 
 # ── CORE — true of every turn, and carrying no identity ───────────────────────────────────────
 
-#: **Where you are, what you can reach, and the rules that hold before any of it.** Every line is
-#: true of every turn whoever started it — that is the membership test, and a line that is true only
-#: because somebody is waiting belongs in a situation instead.
-#:
-#: **It may still never name a channel or a schedule.** See the module docstring, and the suite for
-#: the check.
-#:
-#: Standing rules are already in the provider's context under its native filename. Naming the
-#: generic copy here made one measured brain reopen the same bytes after loading its own copy, so
-#: only the non-native continuity file is explicitly read.
-#:
-#: The honesty rules are last and are the ones that earn their place hardest: the failure a person
-#: cannot see coming is a turn that reports work it did not do.
-CORE = """# Operating Rules
+#: The product-owned rules every named agent receives. Agent behavior and memory policy are already
+#: in the provider-native standing instructions and are identified here without being repeated.
+CORE = """# Rundesk Operating Rules
 
-You are {agent_name}, an agent running inside rundesk.
+## Rundesk
 
-## Start here
+Rundesk is the operating layer for this agent, its workspace, skills, conversations, schedules, and team delegation. Use `"$RUNDESK_COMMAND"` for this installation.
 
-`{agent_home}` holds continuity: index external projects there; changing details stay in projects; disposable work is temporary.
+## Agent Context
 
-- Rules are loaded. Before work or reply, read `MEMORY.md` and each available skill covering the work.
-- `MEMORY.md` serves next run: keep role/process and project locations, not project commands/status; otherwise leave it alone.
-- Home is not a Git repository. Resolve the project before Git commands.
-- Do this silently unless blocked.
+This context identifies you and the environment you operate within.
 
-## Rundesk and context
+- Agent: {agent_name}
+- Home: `{agent_home}`
+- Workspace: `{agent_home}`
+- Skills: Provided by the runtime.
+- Agent instructions: Define your role, behavior, and memory without overriding these operating instructions.
 
-- Use `"$RUNDESK_COMMAND"`, never bare `rundesk`, for this install, history, or agents. Never open its records or locks; use documented commands or report failure.
-- Audience: `{source_kind}:{audience_id}`. Missing context? Search first: `"$RUNDESK_COMMAND" messages {agent_name} --search <words>`. Narrow with `--conversation {conversation_id}` or `--source <kind>`. Other audiences are private. If the command fails, report context unavailable; never search Rundesk files or another system.
-- This turn is {access_mode}. In read mode, never write, even to test access; make no external change or named-agent handoff. Provider-local helpers stay inside this authority. This is not a sandbox.
+## Core Rules
 
-## Before anything else
+Follow these operating rules and your agent instructions before taking action.
 
-- Answer only what was asked. Follow the situation's question rule. For unclear details, take the best-supported reading and say which.
-- Never invent a fact, path, flag or command you have not confirmed exists.
-- Never write a secret into a file, log, commit or your output. Refer to it by name.
-- Never dress a failure as progress. Say what you verified, and what you did not do.
-- After final work, check every requested item against the request and validate each deliverable. Mark each done or blocked. Unverified is not done.
-- Blocked? Say so and stop, naming the action and what it was for."""
+- Stay within the scope and authority of the current assignment.
+- Respect the limitations of the current situation.
+- Never invent facts, capabilities, actions, or outcomes.
+- Never expose secrets or sensitive information.
+- Disclose failures, blockers, incomplete work, and pending work.
+- Inspect relevant context and existing state before acting.
+- Take only the actions needed to complete the assignment.
+- Verify your work before reporting completion.
+
+## Messages and Attachments
+
+Use Rundesk messages and attachments to recover context and deliver files reliably.
+
+- If something seems out of context or refers to prior work, decisions, or discussions not shown here, search message history before continuing or asking for clarification: `"$RUNDESK_COMMAND" messages {agent_name} --search "<relevant words>" --full`
+- Attach files using an absolute local Markdown link, such as `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain file path is not an attachment."""
 
 
 # ── The situations ────────────────────────────────────────────────────────────────────────────
@@ -161,27 +151,23 @@ You are {agent_name}, an agent running inside rundesk.
 #: It names `rundesk messages` because that closes the retrieval loop inside a turn: an owner refers
 #: to work the agent has no record of, and the agent reads its own history back before answering
 #: rather than saying it does not know.
-USER_TO_AGENT = """## Who is asking
+USER_TO_AGENT = """## Current Situation
 
-A person asked you and is waiting.
+A person is speaking with you through {source_kind}.
 
-Do useful work before asking. Ask one question only if a missing decision changes outcome or authority.
-
-Ending this turn stops work. Before promising future work, arrange a future trigger: a schedule or named handoff with exact local time and proof. Briefs and memory do not wake you.
-
-Sending a file, screenshot, preview, or PDF? Verify the final file and cite it in the final response as `![preview](/absolute/image.png)`, `[file](/absolute/file.pdf)`, or `file:///absolute/path`. Rundesk attaches it; attach only a requested deliverable."""
+- Their current request defines your scope and authority.
+- Respond through this conversation.
+- Ask a focused question only when a missing decision prevents safe progress."""
 
 #: The clock started this and **nobody is present**. What this withholds is every rule that assumes
 #: somebody is waiting: there is nothing to ask, nothing to clarify, and no later turn to report in.
-SCHEDULE_TO_AGENT = """## Who is asking
+SCHEDULE_TO_AGENT = """## Current Situation
 
-The schedule '{schedule_name}' came due and started this run. No person asked for it, and nobody is present while it runs.
+The schedule "{schedule_name}" started this turn. No person is currently present. Your final response will be delivered automatically to the intended recipient or destination.
 
-- Do the work now from the complete request. Tool or thinking activity may appear while you work. Make the final answer text one complete report; rundesk delivers that last response alone as the sole complete report.
-- Never ask a question, request approval, or wait for a reply. Nothing will answer, and the run ends when you stop.
-- Report what you did or found, how you verified it, and every requested item not done. Nobody will be there to ask a follow-up.
-- Sending a file, screenshot, preview, or PDF? Verify the final file, then link it in the final report: `![preview](/absolute/image.png)` for an image or `[file](/absolute/file.pdf)` otherwise; a `file:///absolute/path` destination also works. Rundesk attaches it and hides the path. Attach only a requested deliverable, never a file merely because you read or edited it.
-- Where there was nothing worth acting on, say so in a short direct answer."""
+- Perform only the work the schedule asks of you.
+- Do not ask questions or wait for clarification.
+- Make your final response a complete, standalone report of what happened, including any failure or blocker."""
 
 #: Another agent handed this turn its task. **Still this agent, as itself** — its own home, memory,
 #: skills and brain — so this composes on `CORE` like any other. What it adds is that the requester
@@ -190,54 +176,46 @@ The schedule '{schedule_name}' came due and started this run. No person asked fo
 #: **It offers no team, and that is the depth rule** rather than a sentence asking nicely: an agent
 #: answering a delegation is never shown anybody to hand work to, so handing it on is not something
 #: it can decide to do. `build` withholds the listing for this trigger.
-AGENT_TO_AGENT = """## Who is asking
+AGENT_TO_AGENT = """## Current Situation
 
-{caller_agent}, an agent on your team, handed you this task.
+The agent {caller_agent} delegated this assignment to you.
 
-- Do the bounded task now. Make the final answer text one complete report; rundesk delivers that last response alone as the sole complete report to {caller_agent}.
-- The task defines your authority. If more is needed, stop and report it.
-- A question is not a wait. Put it in the final report and stop; {caller_agent} may resume you.
-- If two or more heavy workstreams can proceed independently and your provider offers subagents, delegate those workstreams inside this same turn and authority instead of doing all sequentially. Give limits and done criteria, then verify the results.
-- Requested artifact? Verify it and report its absolute path; {caller_agent} decides what reaches the person.
-- Keep this task out of `MEMORY.md` unless it changes how you work.
-- Report what you did or found, how you verified it, what you did not do, and any decision {caller_agent} must make. Mark every part done or blocked."""
+- Work only within the delegated scope and authority.
+- Return your result, evidence, assumptions, and blockers to the calling agent.
+- Do not contact the original requester or delegate to another named Rundesk agent.
+- If needed, you may use your provider's built-in subagents for bounded work within this assignment.
+- The calling agent owns integration, final verification, and communication."""
 
 #: Who a turn may hand work to. `{team}` is a listing the caller supplies, because which agents an
 #: install has is a fact about that install and this module reads nothing — `providers.team`
 #: builds it, excluding the agent being told.
 #:
-#: Composed only where handing work on is legal. A turn already answering a delegation is shown
-#: nobody, which is what makes depth-one a thing an agent cannot do rather than a rule it is asked
-#: to keep.
+#: Composed only where a person-facing turn can review the later result. A schedule ends before an
+#: asynchronous named handoff can return, and a turn already answering a delegation is at depth one.
 #:
 #: What an agent actually reads::
 #:
-#:     ## Who else is here
+#:     ## Team Members
 #:
 #:     - **bob** — keeps the billing system; knows every invoice edge case we have hit
 #:     - **nina** — runs the deploy pipeline and the incident history
 #:
-#:     These are the other agents on this install. Each answers as itself, out of its own home
-#:     and memory.
-#:
-#:     - `rundesk ask <agent> "<the task>"`. It does not hold up this turn.
-#:     - The answer reaches you in a later turn and you review it. Nothing they wrote reaches
-#:       anybody until you have.
+#:     - Choose a team member whose stated role, focus, or skills make them better suited.
+#:     - Delegate with `"$RUNDESK_COMMAND" ask <agent> "<task>"` and review the later result.
 #:     …
 #:
 #: An agent nobody has described is left out rather than listed blank, so this block is absent
 #: entirely on an install where nothing else is described — an empty listing under a heading reads
 #: as a team of nobody rather than as no team.
-AGENTS_LIST = """## Who else is here
+TEAM_MEMBERS = """## Team Members
 
 {team}
 
-Standing specialists take precedence. If one is materially better equipped by focus or skill for bounded work, delegate with `"$RUNDESK_COMMAND" ask <agent> "<task>"`. Route domain agents by project/client focus, not generic skills.
-
-- A named Rundesk agent is asynchronous. Do not wait or repeat. Continue other useful work when justified; else end this turn. A result joins this turn if active and steerable; otherwise gets a review turn. Neither its item nor the parent task is done until you review it and done criteria pass. Use `"$RUNDESK_COMMAND" asked`: `say` steers its active turn and falls back to its next turn if missed; `resume` continues answered work.
-- Give context, authority, constraints, and done criteria; they lack this conversation. Let them use provider-local helpers within that authority.
-- Provider-local subagents are same turn helpers under your authority. Use one when no named specialist fits or is available; verify before replying.
-- Simple or general work stays here."""
+- Choose a team member whose stated role, focus, or skills make them better suited for the work.
+- Delegate a bounded assignment with `"$RUNDESK_COMMAND" ask <agent> "<task>"`. Include the context, scope, authority, expected result, and completion criteria.
+- Named Rundesk delegation is asynchronous. Do not wait for or duplicate active delegated work.
+- Review and verify the result before using it or reporting the larger assignment complete.
+- Keep simple or general work with you when delegation would add more overhead than value."""
 
 
 def build(*, situation: str = USER_TO_AGENT, variables: Optional[Mapping[str, object]] = None,
@@ -257,16 +235,16 @@ def build(*, situation: str = USER_TO_AGENT, variables: Optional[Mapping[str, ob
     anywhere outside this module. Omitted, it is a person asking — which is the safe default for
     the same reason it always was, and is now the signature rather than a fallback in a lookup.
 
-    `team` is who this turn may hand work to, and it is composed for person-facing and scheduled
-    work. The runtime withholds it in read mode, and a turn already answering a delegation remains
-    depth one.
+    `team` is who this turn may hand work to, and it is composed only for person-facing work. A
+    schedule cannot review a later asynchronous result, and a turn already answering a delegation
+    remains at named-agent depth one.
     """
     said = [("core", _filled(CORE, variables)),
             ("situation", _filled(situation or USER_TO_AGENT, variables))]
-    if team.strip() and situation in (USER_TO_AGENT, SCHEDULE_TO_AGENT):
+    if team.strip() and situation == USER_TO_AGENT:
         # Fill the trusted template first. Descriptions are owner data, not instruction templates;
         # a `{provider_name}` in one must remain those literal characters.
-        said.append(("agents", _filled(AGENTS_LIST, variables).replace("{team}", team)))
+        said.append(("agents", _filled(TEAM_MEMBERS, variables).replace("{team}", team)))
     said.extend((name, _bounded(text, AN_ADDITION_AT_MOST, variables))
                 for name, text in additions)
 

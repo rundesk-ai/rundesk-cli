@@ -849,8 +849,7 @@ def _admit(request: Request) -> _TurnAdmission:
         if provider_alias is not None and not can.get("account_aliases"):
             raise NotRunnable(f"the {provider_name} adapter does not support account aliases")
 
-        may_hand_off = (request.situation in (instructions.USER_TO_AGENT,
-                                              instructions.SCHEDULE_TO_AGENT)
+        may_hand_off = (request.situation == instructions.USER_TO_AGENT
                         and request.access_mode != protocol.ACCESS_READ)
         teammates = team.for_agent(agent) if may_hand_off else ""
         prompt = instructions.build(situation=request.situation,
