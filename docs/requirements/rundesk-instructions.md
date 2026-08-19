@@ -113,9 +113,9 @@ level. An empty team also omits the section.
 ## Agent instruction template
 
 Rundesk ships one provider-neutral agent template at `src/templates/agent/AGENTS.md` and places its
-bytes under both native instruction filenames. Rundesk does not classify agents as domain or
-specialist agents. The owner molds each agent's durable role and behavior through its instructions,
-description, skills, and delegation scope.
+bytes under both native instruction filenames. The runtime does not classify agents as domain or
+specialist agents. Those terms may be used as behavior-design patterns when an owner molds an
+agent's durable role through its instructions, description, skills, and delegation scope.
 
 Agent creation, configuration, listings, and team context do not expose or depend on an agent-type
 flag. Existing customized instruction files remain untouched. A legacy stored role column remains

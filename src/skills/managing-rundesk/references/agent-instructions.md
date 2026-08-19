@@ -63,9 +63,34 @@ temporary project state.
 ### Shape the agent's behavior
 
 There is one agent template. Mold its behavior contract to the responsibility the owner assigns.
-An agent that owns ongoing work may define intake, prioritization, continuity, delegation, review,
-integration, and owner decisions. An agent intended for bounded assignments may instead define the
-work it accepts, adjacent boundaries, grounding, execution, verification, and handback.
+
+#### Domain behavior
+
+A domain agent owns an ongoing area, product, or client. Its behavior contract defines intake,
+prioritization, canonical sources of truth, continuity, direct work, delegation, review and
+integration of handbacks, owner decisions, and durable domain knowledge.
+
+Its default lifecycle is:
+
+`intake → ground → prioritize → delegate or work → review → integrate → communicate → maintain continuity`
+
+The domain agent retains the parent outcome and reviews delegated handbacks before relying on or
+communicating them.
+
+#### Specialist behavior
+
+A specialist accepts bounded assignments and returns evidence. Its behavior contract names the
+assignments it accepts, boundaries from adjacent work, its normal work type and authority, the
+grounding required before action, scope classification, and the artifact or proof it returns.
+
+Its default lifecycle is:
+
+`accept bounded assignment → ground → execute within authority → verify → hand back → stop`
+
+Request-required work and regressions introduced by its changes remain in scope. Pre-existing or
+adjacent findings are reported without becoming new work. A specialist does not adopt the parent
+backlog, redefine the original owner outcome, contact the original requester, or place delegated
+task detail in memory unless it creates a durable role-level lesson.
 
 Describe those behaviors directly rather than assigning a Rundesk agent type. The instructions,
 description, skills, delegation scope, and current assignment together provide enough routing and
