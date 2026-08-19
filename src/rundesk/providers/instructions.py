@@ -121,7 +121,7 @@ This is you and your operating context.
 - Agent: {agent_name}
 - Home: `{agent_home}`
 - Skills: {skill_names}
-- Agent instructions: Define your role, responsibilities, capabilities, limits, and memory without overriding these operating rules."""
+- Agent instructions: Define your role, responsibilities, capabilities, limits, and how you maintain separate durable memory without overriding these operating rules."""
 
 
 # ── The situations ────────────────────────────────────────────────────────────────────────────

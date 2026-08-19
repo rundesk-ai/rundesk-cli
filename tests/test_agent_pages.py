@@ -140,17 +140,16 @@ class ANewAgent(support.Isolated):
         total = sum(len((self.home / name).read_bytes()) for name in ("AGENTS.md", "MEMORY.md"))
         self.assertLessEqual(total, 5350)
 
-    def test_the_memory_scaffold_is_a_small_adaptable_index_not_a_log(self):
+    def test_the_memory_scaffold_has_only_durable_context_sections(self):
         raw = (self.home / "MEMORY.md").read_text(encoding="utf-8")
-        memory = " ".join(raw.split())
-        for heading in ("## Owner", "## Role and responsibilities", "## Response preferences",
-                        "## Cross-project process and gotchas", "## Active project pointers",
-                        "## Open loops"):
+        headings = ("# MEMORY", "## Owner preferences", "## Traps and gotchas",
+                    "## Durable facts and lessons", "## Stable references")
+        places = []
+        for heading in headings:
             with self.subTest(heading=heading):
-                self.assertIn(heading, memory)
-        self.assertIn("canonical purpose-named home indexes", memory)
-        self.assertIn("read and prune when relevant", memory)
-        self.assertIn("Adapt headings to your role", memory)
+                self.assertEqual(1, raw.count(heading))
+                places.append(raw.index(heading))
+        self.assertEqual(sorted(places), places)
         self.assertLessEqual(len(raw.encode("utf-8")), 400)
 
     def test_nothing_is_left_staged_beside_them(self):
