@@ -60,6 +60,7 @@ to identify the exact target and consequence. Most groups list when called with 
 | Area | Read for |
 |---|---|
 | [Agents](references/agents.md) | Add, describe, reassign, or remove agents |
+| [Agent instructions](references/agent-instructions.md) | Design or change persistent agent behavior and specialist role focus |
 | [Gateways](references/gateways.md) | Start, stop, restart, run, inspect, or recover gateways |
 | [Delegations](references/delegations.md) | Hand work to another agent; inspect, guide, stop, resume, or review it |
 | [Conversations](references/conversations.md) | Ask agents; inspect messages, turns, usage, and failures |

@@ -251,6 +251,28 @@ class WhatAShippedSkillMayClaim(Bundled):
             with self.subTest(reference="delegations", phrase=phrase):
                 self.assertIn(phrase, delegations)
 
+    def test_agent_instruction_customization_keeps_each_kind_of_state_with_its_owner(self):
+        skill = self.skills / "managing-rundesk"
+        main = (skill / library.DECLARED).read_text(encoding="utf-8")
+        agents = (skill / "references" / "agents.md").read_text(encoding="utf-8")
+        instructions = " ".join(
+            (skill / "references" / "agent-instructions.md").read_text(
+                encoding="utf-8").split())
+
+        link = "[Agent instructions](references/agent-instructions.md)"
+        self.assertIn(link, main)
+        self.assertIn("[Agent instructions](agent-instructions.md)", agents)
+        for phrase in ("persistent, owner-changeable behavior",
+                       "Recorded Rundesk configuration belongs to `agents configure`",
+                       "Skills add conditional procedure and depth",
+                       "Do not make a specialist load a skill merely to remember its role",
+                       "A project's own `AGENTS.md` holds local architecture",
+                       "original owner outcome", "scope classification",
+                       "Read both home instruction files in full", "byte-identical",
+                       "next fresh turn"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, instructions)
+
     def test_managing_rundesk_routes_desk_cli_catalog_and_binary_separately(self):
         skills = (self.skills / "managing-rundesk" / "references" / "skills.md").read_text(
             encoding="utf-8")
