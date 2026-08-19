@@ -26,8 +26,8 @@ EVERY_SITUATION = (instructions.USER_TO_AGENT, instructions.SCHEDULE_TO_AGENT,
 
 
 class TheAgreedSections(support.Isolated):
-    ALWAYS = ("# Rundesk Operating Rules", "## Rundesk", "## Agent Context",
-              "## Core Rules", "## Messages and Attachments")
+    ALWAYS = ("# Rundesk", "## Agent Context", "## Core Rules",
+              "## Messages and Attachments")
 
     def built(self, situation=instructions.USER_TO_AGENT, team_text=""):
         return instructions.build(situation=situation, variables=EVERYTHING, team=team_text)

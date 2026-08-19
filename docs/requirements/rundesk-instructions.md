@@ -31,12 +31,11 @@ Providers may load those layers through their native instruction mechanisms.
 
 Every rendered operating prompt contains these sections once and in this order:
 
-1. `Rundesk Operating Rules`
-2. `Rundesk`
-3. `Agent Context`
-4. `Core Rules`
-5. `Messages and Attachments`
-6. `Current Situation`
+1. `Rundesk`
+2. `Agent Context`
+3. `Core Rules`
+4. `Messages and Attachments`
+5. `Current Situation`
 
 `Team Members` follows `Current Situation` only when named Rundesk delegation is available and the
 turn can review the asynchronous result.
