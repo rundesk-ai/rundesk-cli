@@ -39,6 +39,7 @@ from rundesk.providers import (
     team,
     turns,
 )
+from rundesk.skills import grants
 from rundesk.utils import locking
 from rundesk.utils.terminal import as_table
 
@@ -380,7 +381,8 @@ def _as_that_turn_saw_it(agent: str, row: Dict[str, Any]) -> Dict[str, object]:
                  # matching id, which answered nothing at all once that schedule had been taken
                  # away — so a turn re-read after a tidy-up claimed nobody had scheduled it. The
                  # turn writes the name down at admission; what that turn saw is on the turn.
-                 "schedule_name": row["schedule_name"] or ""})
+                 "schedule_name": row["schedule_name"] or "",
+                 "skill_names": _skill_names_that_turn_saw(agent, int(row["id"]))})
     return said
 
 
@@ -394,6 +396,20 @@ def _team_that_turn_saw(agent: str, turn: int) -> str:
         except (TypeError, ValueError):
             return ""
     return ""
+
+
+def _skill_names_that_turn_saw(agent: str, turn: int) -> str:
+    """The active skill names recorded with `turn`, or today's names for an older turn."""
+    for record in kept.list_turn_records(agent, turn):
+        if record["record_type"] != turns.INSTRUCTIONS:
+            continue
+        try:
+            event = json.loads(record["event_data"])
+            if "skill_names" in event:
+                return str(event["skill_names"])
+        except (TypeError, ValueError):
+            break
+    return _skill_names(agent)
 
 
 def _shown(built: instructions.Prompt, only_layers: bool) -> int:
@@ -447,7 +463,16 @@ def _about(agent: str) -> Dict[str, object]:
         "caller_agent": "<caller agent>",
         "source_kind": "<source>",
         "audience_id": "<audience>",
+        "skill_names": _skill_names(agent),
     }
+
+
+def _skill_names(agent: str) -> str:
+    """The active granted skill names, in stable order."""
+    try:
+        return ", ".join(one.name for one in grants.held(agent)) or "none"
+    except OSError:
+        return "unavailable"
 
 
 def _failed(why: str, *and_so: str) -> int:

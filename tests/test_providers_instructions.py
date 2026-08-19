@@ -19,6 +19,7 @@ EVERYTHING = {
     "caller_agent": "bob",
     "source_kind": "terminal",
     "audience_id": "ava",
+    "skill_names": "managing-rundesk, writing-plans",
 }
 
 EVERY_SITUATION = (instructions.USER_TO_AGENT, instructions.SCHEDULE_TO_AGENT,

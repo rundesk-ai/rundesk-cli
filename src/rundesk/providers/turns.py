@@ -224,6 +224,7 @@ class _TurnAdmission(NamedTuple):
     effective_model: Optional[str]
     can: Dict[str, Any]
     teammates: str
+    skill_names: str
     prompt: instructions.Prompt
     resume: Optional[str]
     began: float
@@ -768,7 +769,7 @@ def _held(request: Request, held: int, watching, saying,
     agent = request.agent
     admitted_turn = _admit(request)
     (_settled, provider_name, provider_alias, account_home, settings, effective_model, can,
-     teammates, prompt, resume, began, turn) = admitted_turn
+     teammates, skill_names, prompt, resume, began, turn) = admitted_turn
 
     with _settled_whatever_happens(agent, turn) as settling:
         arriving.handled_by_turn(agent, request.conversation, request.inbound_messages, turn)
@@ -781,9 +782,10 @@ def _held(request: Request, held: int, watching, saying,
         kept.add_turn_record(agent, turn, INSTRUCTIONS, {
             "sha256": prompt.sha256,
             "layers": [{"name": one.name, "bytes": one.bytes_used} for one in prompt.layers],
-            # The standing team is volatile. Keep the compact snapshot so a historical instruction
-            # view can recompose the words this turn actually saw.
+            # The standing team and skill grants are volatile. Keep compact snapshots so a
+            # historical instruction view can recompose the words this turn actually saw.
             "team": teammates,
+            "skill_names": skill_names,
         })
         raw = adapters.raw_of(agent, request.conversation)
         began_at = _how_big(raw)
@@ -852,8 +854,9 @@ def _admit(request: Request) -> _TurnAdmission:
         may_hand_off = (request.situation == instructions.USER_TO_AGENT
                         and request.access_mode != protocol.ACCESS_READ)
         teammates = team.for_agent(agent) if may_hand_off else ""
+        skill_names = _skill_names(agent)
         prompt = instructions.build(situation=request.situation,
-                                    variables=_about(request, provider_name),
+                                    variables=_about(request, provider_name, skill_names),
                                     additions=request.additions, team=teammates)
         resume = (None if request.fresh else kept.get_session(
             agent, request.conversation, provider_name, provider_alias))
@@ -899,7 +902,7 @@ def _admit(request: Request) -> _TurnAdmission:
         })
         return _TurnAdmission(
             settled, provider_name, provider_alias, account_home, settings, effective_model, can,
-            teammates, prompt, resume, began, turn)
+            teammates, skill_names, prompt, resume, began, turn)
 
 
 def admitted_message(agent: str, turn: int, message: int) -> bool:
@@ -1248,7 +1251,8 @@ def _settled_whatever_happens(agent: str, turn: int) -> Iterator[_Settling]:
                  logs.WARNING)
 
 
-def _about(request: Request, provider_name: str) -> Dict[str, object]:
+def _about(request: Request, provider_name: str,
+           skill_names: Optional[str] = None) -> Dict[str, object]:
     """The variables a layer may read, for this turn."""
     return {
         "agent_name": request.agent,
@@ -1260,7 +1264,16 @@ def _about(request: Request, provider_name: str) -> Dict[str, object]:
         "source_kind": request.source,
         "audience_id": request.place or request.agent,
         "caller_agent": request.caller_agent,
+        "skill_names": _skill_names(request.agent) if skill_names is None else skill_names,
     }
+
+
+def _skill_names(agent: str) -> str:
+    """The active granted skill names, in the same order the runtime exposes them."""
+    try:
+        return ", ".join(one.name for one in grants.held(agent)) or "none"
+    except OSError:
+        return "unavailable"
 
 
 def _schedule_name(request: Request) -> str:

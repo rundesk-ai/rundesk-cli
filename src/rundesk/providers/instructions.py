@@ -49,8 +49,8 @@ inside the delegated turn's own authority.
 provider loads natively. The core names that layer and its precedence without reopening it or
 copying any of its content.
 
-**No skills index.** A skill costs its description every turn and its body only when used, and every
-measured brain discovers skills for itself.
+**No skill descriptions or bodies.** The core lists only the active skill names supplied by the
+caller. Every measured brain discovers the actual skills through its provider-native runtime.
 
 **No content-safety or refusal text.** Neither comparable product ships any, and adding it would
 spend an invariant prefix on what the model already does.
@@ -72,7 +72,7 @@ AN_ADDITION_AT_MOST = 4000
 #: the machine this turn may touch. Nothing here says Discord, or Slack, or a room — a variable that
 #: named one would be a layer that has to be rewritten for the second surface.
 VARIABLES = ("agent_name", "agent_home", "provider_name", "access_mode", "schedule_name",
-             "conversation_id", "caller_agent", "source_kind", "audience_id")
+             "conversation_id", "caller_agent", "source_kind", "audience_id", "skill_names")
 
 
 class Layer(NamedTuple):
@@ -116,7 +116,7 @@ This context identifies you and the environment you operate within.
 
 - Agent: {agent_name}
 - Home: `{agent_home}`
-- Skills: Provided by the runtime.
+- Skills: {skill_names}
 - Agent instructions: Define your role, behavior, and memory without overriding these operating instructions.
 
 ## Core Rules
