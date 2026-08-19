@@ -298,7 +298,6 @@ class WhatAShippedSkillMayClaim(Bundled):
         said = (skill / library.DECLARED).read_text(encoding="utf-8")
         maintenance = " ".join((skill / "references" / "maintenance.md").read_text(
             encoding="utf-8").split())
-        self.assertIn("focused maintenance of this agent's continuity and home", said)
         self.assertIn("[Maintenance](references/maintenance.md)", said)
         for phrase in ("retain an unavailable active mapping",
                        "durable role and responsibilities", "confirmed agent-created",
@@ -321,7 +320,6 @@ class WhatAShippedSkillMayClaim(Bundled):
         said = (skill / library.DECLARED).read_text(encoding="utf-8")
         improving = " ".join((skill / "references" / "self-improvement.md").read_text(
             encoding="utf-8").split())
-        self.assertIn("evidence-based self-improvement", said)
         self.assertIn("[Self-improvement](references/self-improvement.md)", said)
         self.assertIn("[Retrospective](references/retrospective.md)", said)
         for phrase in ("focused review, not ordinary task overhead",

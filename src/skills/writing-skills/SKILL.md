@@ -1,6 +1,6 @@
 ---
 name: writing-skills
-description: Use this skill when the user asks to create, revise, review, debug, or publish a Rundesk skill; turn repeatable work into a skill; or fix a skill that triggers incorrectly or wastes context. It supplies Rundesk's provider-neutral workflow for writing compact, reliable skills that route correctly, load only needed context, support integrations, and can be shared through catalogs. Do not use it merely to perform the workflow a skill would teach.
+description: Use this skill when work involves creating, modifying, or publishing a Rundesk skill. It supplies a workflow for writing compact instructions, organizing supporting resources, building integrations and scripts, testing the skill, and publishing it through a catalog. Do not use it merely to perform the workflow described by an existing skill.
 ---
 
 # Writing skills

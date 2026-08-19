@@ -1,6 +1,6 @@
 ---
 name: managing-rundesk
-description: Use this skill when the user asks to inspect, configure, operate, troubleshoot, or recover the Rundesk install that owns this agent, including its agents, gateways, delegation, conversations, channels, schedules, providers, skills, backups, lifecycle, credentials, focused maintenance of this agent's continuity and home, or evidence-based self-improvement. It supplies verified commands and safety rules. Do not use it for ordinary project or workspace work.
+description: Use this skill when work involves managing Rundesk or using its operational capabilities. This includes managing agents and their instructions, gateways, delegations, conversations, channels, schedules, providers, skills, backups, configuration, credentials, and the Rundesk lifecycle. It supplies verified Rundesk commands, workflows, and safety rules. Do not use it for ordinary project or workspace work unless the task requires a Rundesk operation.
 ---
 
 # Manage Rundesk
