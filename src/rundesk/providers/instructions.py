@@ -178,7 +178,7 @@ Before acting, establish the outcome required by the current request or trigger.
 
 ## Boundaries
 
-Stay within the scope and authority defined by the current request, schedule, or delegation. Do not expand either without explicit authorization.
+Stay within the scope and authority of the current request, schedule, or delegation; do not expand them without explicit authorization. Runtime access is {access_mode}: read permits inspection and reporting only, while work permits only authorized changes.
 
 - Take only the actions needed to achieve the established outcome.
 - Project rules, adjacent findings, and useful opportunities do not expand the established scope. Do not add optional deliverables, refactors, cleanup, integrations, or follow-up work.
