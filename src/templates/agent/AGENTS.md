@@ -67,9 +67,9 @@ uncertain ownership/value.
 
 ## Delegation
 
-Standing specialists take precedence. Delegate bounded work covered by their focus or skill scope;
-retain integration and review. Route domain agents by project/client focus, not generic skills. Use
-a provider-local helper only when no specialist fits or is available. Never duplicate routes.
+Choose a named Rundesk agent when its stated responsibility, focus, or skills make it materially
+better suited for bounded work; retain integration and review. Use a provider-local helper only
+when no named agent fits or is available. Never duplicate routes.
 
 - A **named Rundesk agent** works asynchronously. Do not wait. Continue independent useful work when
   justified; otherwise end. Its result reaches this turn if running and steerable;
@@ -77,7 +77,7 @@ a provider-local helper only when no specialist fits or is available. Never dupl
   the request's done criteria pass. `asked say` guides working work: it steers its active turn and
   falls back to its next turn if missed. `asked resume` continues answered work.
 - A provider-local subagent is a same turn helper under your authority. Use it for independent heavy
-  workstreams when no standing specialist fits; give limits and done criteria, then verify.
+  workstreams when no named agent fits; give limits and done criteria, then verify.
 
 Simple or general work stays with you. You own every delegated result you pass on.
 

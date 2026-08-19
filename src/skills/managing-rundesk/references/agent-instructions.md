@@ -11,8 +11,8 @@ one behavior contract rather than different rules under different filenames.
   They identify Rundesk, the agent context, universal core rules, message and attachment mechanics,
   the current situation, and the team available for named delegation. Do not copy those rules into
   an agent's behavior contract.
-- Recorded Rundesk configuration belongs to `agents configure`: provider, operating role,
-  delegation description, outbound delegation scope, and automatic self-improvement. Change it with
+- Recorded Rundesk configuration belongs to `agents configure`: provider, delegation description,
+  outbound delegation scope, and automatic self-improvement. Change it with
   `"$RUNDESK_COMMAND"`, never by editing `state.db` or restating it in agent instructions.
 - Agent instructions hold what is true for this agent on every turn: durable role, responsibilities,
   ownership boundary, default working behavior, decisions, communication, delegation posture, and
@@ -20,8 +20,8 @@ one behavior contract rather than different rules under different filenames.
 - A project's own `AGENTS.md` holds what is true for anyone working in that project: architecture,
   commands, conventions, terminology, and validation or release gates. Agent instructions do not
   copy project rules out of the project.
-- Skills add conditional procedure and depth for a type of work. Do not make a specialist load a
-  skill merely to remember its role, and do not copy a skill inventory into agent instructions.
+- Skills add conditional procedure and depth for a type of work. Do not make an agent load a skill
+  merely to remember its role, and do not copy a skill inventory into agent instructions.
 - The current assignment holds its outcome, scope, authority, deliverables, and proof. It does not
   become persistent behavior merely because the agent performed it once.
 - `MEMORY.md` holds durable facts and preferences useful across runs. It does not issue instructions
@@ -41,13 +41,14 @@ broaden the assignment's authority, redefine the agent's role, or override Runde
 
 ## Generate a focused behavior contract
 
-Start from the recorded role, description, and delegation scope. Read both existing home instruction
-files in full, preserve owner customizations, and define only what this agent needs on every turn:
+Start from the agent's description, instructions, and delegation scope. Read both existing home
+instruction files in full, preserve owner customizations, and define only what this agent needs on
+every turn:
 
 1. State the role and durable responsibilities in one compact opening.
 2. Define its ownership boundary and explicit non-goals.
 3. State the default lifecycle it follows and the decisions it owns or escalates.
-4. Define when it works directly and when it asks a named specialist for bounded help, without
+4. Define when it works directly and when it asks another named agent for bounded help, without
    repeating Rundesk's delegation commands or asynchronous mechanics.
 5. Define the smallest useful handback or owner communication: result, observed proof, unresolved
    risk, and exact decision needed when blocked.
@@ -59,43 +60,26 @@ files in full, preserve owner customizations, and define only what this agent ne
 Use provider-neutral language. Do not mention a provider, model, copied skill list, current task, or
 temporary project state.
 
-### Domain agents
+### Shape the agent's behavior
 
-A domain agent owns an ongoing area, product, or client. Its behavior contract defines intake,
-prioritization, canonical sources of truth, continuity, direct work, specialist routing, review and
-integration of handbacks, owner decisions, and durable domain knowledge.
+There is one agent template. Mold its behavior contract to the responsibility the owner assigns.
+An agent that owns ongoing work may define intake, prioritization, continuity, delegation, review,
+integration, and owner decisions. An agent intended for bounded assignments may instead define the
+work it accepts, adjacent boundaries, grounding, execution, verification, and handback.
 
-Its default lifecycle is:
-
-`intake → ground → prioritize → delegate or work → review → integrate → communicate → maintain continuity`
-
-The domain agent retains the parent outcome. It does not turn a specialist's bounded handback into
-unreviewed owner-facing work.
-
-### Specialist agents
-
-A specialist accepts bounded assignments and returns evidence. Its behavior contract names the
-assignments it accepts, the boundary from adjacent specialists, its normal work type and authority,
-the grounding required before action, scope classification, and the artifact or proof it returns.
-
-Its default lifecycle is:
-
-`accept bounded assignment → ground → execute within authority → verify → hand back → stop`
-
-Request-required work and regressions introduced by its changes remain in scope. Pre-existing or
-adjacent findings are reported without becoming new work. A specialist does not adopt the parent
-backlog, redefine the original owner outcome, contact the original requester, or place delegated
-task detail in memory unless it creates a durable role-level lesson.
+Describe those behaviors directly rather than assigning a Rundesk agent type. The instructions,
+description, skills, delegation scope, and current assignment together provide enough routing and
+execution context without a separate role flag.
 
 ## Change instructions safely
 
-1. Run `"$RUNDESK_COMMAND" agents` and confirm the target's recorded role, description, and
-   delegation scope. A behavior edit does not change any of them.
+1. Run `"$RUNDESK_COMMAND" agents` and confirm the target's description and delegation scope. A
+   behavior edit does not change either one.
 2. Read both home instruction files in full. Identify existing customizations and divergence before
    preparing the smallest patch. Never replace a customized file merely because a canonical
    template or another agent differs.
-3. Save a Rundesk backup before a broad multi-agent rewrite or a role change whose recovery would be
-   costly. One small reversible wording edit does not require backup ceremony unless the owner asks.
+3. Save a Rundesk backup before a broad multi-agent rewrite whose recovery would be costly. One
+   small reversible wording edit does not require backup ceremony unless the owner asks.
 4. Show the proposed diff before replacing customized instructions, then apply the same resulting
    content to `AGENTS.md` and `CLAUDE.md`. Preserve unrelated owner rules.
 5. Verify both files are byte-identical, the intended section appears once, no unrelated section

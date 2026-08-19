@@ -130,10 +130,9 @@ Rundesk's metadata; everything inside `home/` belongs to the provider's official
 not inspect it, and backups omit the whole `provider-accounts/` tree so they never copy credentials.
 After a restore, aliases must be registered and authorized again.
 
-The same row keeps an explicit operating `role`: `domain` or `specialist`. Existing agents migrate
-to `domain`, which is also creation's default. Role describes the agent's work lifecycle only; it
-does not grant skills, change provider or delegation scope, create a Desk, or confer authority.
-Rundesk uses it to group team listings and choose the initial standing-rule template.
+Agent records retain a legacy `role` column from releases that offered separate agent types. Current
+Rundesk does not read, expose, or change that value; the schema default still fills it only for
+compatibility with the immutable migration history.
 
 An opted-in update or safe self-gateway restart keeps its transient continuation ledger in that
 same `state.db`. A row names the origin by local turn/message ids and keeps lifecycle/continuation
@@ -146,9 +145,9 @@ snapshot without changing the live database. Restore repeats that suppression be
 return—including for a database preserved through the byte-copy fallback—so older state cannot
 replay transient work.
 
-**Rundesk never sweeps an agent's `home/`.** New domain and specialist agents start from separate
-canonical rule templates, with identical bytes in `AGENTS.md` and `CLAUDE.md`. After creation those
-files belong to the agent and owner: changing `role` does not rewrite either one. The agent keeps
+**Rundesk never sweeps an agent's `home/`.** New agents start from one canonical agent rule
+template, with identical bytes in `AGENTS.md` and `CLAUDE.md`. After creation those files belong to
+the agent and owner and are never rewritten by configuration changes. The agent keeps
 compact cross-run continuity in
 `MEMORY.md`, including small pointers to active external projects; changing project detail stays in
 its project or an earned shared index. Ordinary work removes only temporary files and directories it

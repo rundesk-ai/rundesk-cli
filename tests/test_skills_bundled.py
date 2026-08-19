@@ -262,8 +262,8 @@ class WhatAShippedSkillMayClaim(Bundled):
         self.assertIn(link, main)
         self.assertIn("[Agent instructions](agent-instructions.md)", agents)
         headings = ("# Agent instructions", "## Keep each rule with its owner",
-                    "## Generate a focused behavior contract", "### Domain agents",
-                    "### Specialist agents", "## Change instructions safely")
+                    "## Generate a focused behavior contract", "### Shape the agent's behavior",
+                    "## Change instructions safely")
         places = []
         for heading in headings:
             with self.subTest(heading=heading):
@@ -337,8 +337,8 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "active gateway", "Exclude yourself",
                        "gateway state only to determine delegation availability",
                        "Never open another agent's home, memory, or records",
-                       "Never infer a specialist's focus from its name",
-                       "named specialist", "provider-local research helper",
+                       "Never infer another agent's focus from its name",
+                       "named agent", "provider-local research helper",
                        "recurring capability gap", "Skills do not replace delegation",
                        "Before recommending a skill", "why neither route covers",
                        "Non-use alone is not evidence", "Revocation is rare",
@@ -392,7 +392,7 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "Do not promote a lesson from one correction",
                        "explicit durable owner preference", "corroborates earlier evidence",
                        "leave it byte-identical",
-                       "Would an existing specialist", "Would a provider-local research helper",
+                       "Would an existing named agent", "Would a provider-local research helper",
                        "available, granted, or new skill",
                        "exact evidence interval and diary date supplied by the initiator",
                        "Never calculate or shift that interval yourself"):

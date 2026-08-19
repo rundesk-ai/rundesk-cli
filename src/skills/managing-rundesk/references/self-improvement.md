@@ -49,23 +49,23 @@ rules, memory, or capability changes.
    available and granted skills with `"$RUNDESK_COMMAND" skills list`,
    `"$RUNDESK_COMMAND" skills list <agent>`, and `"$RUNDESK_COMMAND" skills doctor <agent>`.
    Otherwise skip this inventory. Exclude yourself. Only an active gateway is a delegation
-   candidate. Require explicit focus and skill evidence. Never infer a specialist's focus from its
+   candidate. Require explicit focus and skill evidence. Never infer another agent's focus from its
    name, or usefulness from non-use. Use gateway state only to determine delegation availability;
    do not turn transient hosting or supervision state into a capability finding. Never open another
    agent's home, memory, or records; these public surfaces are the boundary.
 5. Route a proven capability gap in this order:
-   - prefer a named specialist when its focus and skills make it materially better for heavy,
+   - prefer a named agent when its focus and skills make it materially better for heavy,
      self-contained work;
    - use a provider-local research helper for independent heavy work needed in the same turn when no
-     named specialist fits;
-   - propose a new standing specialist only when a recurring heavy boundary has no focused owner
+     named agent fits;
+   - propose a new named agent only when a recurring heavy boundary has no focused owner
      and the evidence justifies its ongoing cost; then
    - find or create a skill only for a recurring capability gap this agent must own and neither
      route covers. Skills do not replace delegation.
    Before recommending a skill, report the evidence that the gap recurs, belongs to this agent, and
    why neither route covers it.
 6. Treat grants conservatively. Non-use alone is not evidence that a skill is wrong. Revocation is
-   rare: require a confirmed role change, repeated mismatch, or proof that a standing specialist now
+   rare: require a confirmed responsibility change, repeated mismatch, or proof that another agent now
    owns the capability. Never recommend revoking the required `managing-rundesk` skill.
 7. Apply a safe local improvement when the evidence directly supports it and this schedule
    authorizes it. This includes compact agent-owned memory/index changes and a small cross-project
@@ -115,7 +115,7 @@ improvement.
 - The retrospective covers the full bounded evidence window, compares the previous entry, records
   each material success/failure and its solution route, and is reread after any change.
 - Self-improvement selects at most two repeated frictions, then either finishes every safe authorized
-  local fix for them or names the exact owner decision required. It checks specialists, helpers,
+  local fix for them or names the exact owner decision required. It checks named agents, helpers,
   skills, memory/index changes, and automation only when a selected friction makes that route
   relevant.
 - A selected material independent research question uses a provider-local helper when one is

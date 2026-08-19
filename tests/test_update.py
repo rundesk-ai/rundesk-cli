@@ -833,7 +833,7 @@ class TheGatewaySeam(support.Isolated):
         self.steps = self.home / "agent-steps"
         self.steps.mkdir(parents=True, exist_ok=True)
         shutil.copy2(agent_migration.STEPS / "0001_the_records_an_agent_keeps.py", self.steps)
-        # Fresh creation records the selected operating role, so its schema step is part of the
+        # The historical role step remains part of the immutable schema, so it is part of the
         # smallest real agent shape this seam needs before adding its synthetic waiting step.
         shutil.copy2(agent_migration.STEPS / "0009_every_agent_has_an_operating_role.py", self.steps)
         self.said: List[str] = []

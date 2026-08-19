@@ -340,7 +340,7 @@ def taken(name: str) -> str:
     return ""
 
 
-def made(name: str, provider: str, describes: str = "", role: str = pages.DEFAULT_ROLE,
+def made(name: str, provider: str, describes: str = "", *,
          provider_alias: Optional[str] = None) -> Path:
     """Make an agent, and hand back the directory it stands in.
 
@@ -380,9 +380,6 @@ def made(name: str, provider: str, describes: str = "", role: str = pages.DEFAUL
     trouble = describes_trouble(describes or "")
     if trouble:
         raise Refused(trouble)
-    if role not in pages.ROLES:
-        raise Refused(f"role must be one of {', '.join(pages.ROLES)}, and was {role!r}")
-
     agents = paths.agents()
     agents.mkdir(parents=True, exist_ok=True)
     with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
@@ -392,10 +389,10 @@ def made(name: str, provider: str, describes: str = "", role: str = pages.DEFAUL
         trouble = taken(name)
         if trouble:
             raise Refused(trouble)
-        return _built(name, provider, describes or "", role, agents, migration, provider_alias)
+        return _built(name, provider, describes or "", agents, migration, provider_alias)
 
 
-def _built(name: str, provider: str, describes: str, role: str, agents: Path,
+def _built(name: str, provider: str, describes: str, agents: Path,
            migration: Any, provider_alias: Optional[str] = None) -> Path:
     """Build the agent under a staged name and rename it into place. Held by `made`'s lock."""
     building = files.incoming_of(agents / name)
@@ -416,7 +413,7 @@ def _built(name: str, provider: str, describes: str, role: str, agents: Path,
         # layer asks `pages.wanted` afterwards and says which are missing. An `OSError` is not
         # caught here: that is this staging failing to be written, and half a home is not an agent.
         try:
-            pages.place(building / HOME, name, role=role)
+            pages.place(building / HOME, name)
         except pages.Missing:
             pass
         (building / LOGS).mkdir()
@@ -436,7 +433,6 @@ def _built(name: str, provider: str, describes: str, role: str, agents: Path,
             said["provider_alias"] = provider_alias
         if describes.strip():
             said["describes"] = describes.strip()
-        said["role"] = role
         stated(building / RECORDS, said)
         at = agents / name
         os.replace(building, at)

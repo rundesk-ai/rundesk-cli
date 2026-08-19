@@ -54,14 +54,15 @@ class Listing(support.Isolated):
         self.assertIn("cole", out)
         self.assertIn("claude", out)
 
-    def test_it_splits_domain_agents_from_specialists(self):
+    def test_it_lists_all_agents_in_one_table(self):
         self.rundesk("agents", "add", "cole", "--provider", "claude")
-        self.rundesk("agents", "add", "forge", "--provider", "claude",
-                     "--role", "specialist")
+        self.rundesk("agents", "add", "forge", "--provider", "claude")
         code, out, err = self.rundesk("agents")
         self.assertEqual(OK, code, err)
-        self.assertLess(out.index("Domain agents"), out.index("cole"))
-        self.assertLess(out.index("Specialist agents"), out.index("forge"))
+        self.assertEqual(1, out.count("AGENT"))
+        self.assertNotIn("Domain agents", out)
+        self.assertNotIn("Specialist agents", out)
+        self.assertLess(out.index("cole"), out.index("forge"))
 
     def test_it_lists_whether_each_agent_self_improves(self):
         self.rundesk("agents", "add", "cole", "--provider", "claude")
@@ -199,18 +200,11 @@ class Adding(support.Isolated):
         self.assertTrue(directory.home("cole").is_dir())
         self.assertTrue(directory.logs("cole").is_dir())
 
-    def test_role_defaults_to_domain_and_accepts_exactly_specialist(self):
-        self.assertEqual(OK, self.rundesk(
-            "agents", "add", "cole", "--provider", "claude")[0])
-        self.assertEqual("domain", records.read(directory.records("cole"))["role"])
-        self.assertEqual(OK, self.rundesk(
-            "agents", "add", "forge", "--provider", "claude",
-            "--role", "specialist")[0])
-        self.assertEqual("specialist", records.read(directory.records("forge"))["role"])
+    def test_role_is_not_an_add_option(self):
         code, _, _ = self.rundesk(
-            "agents", "add", "bad", "--provider", "claude", "--role", "owner")
+            "agents", "add", "cole", "--provider", "claude", "--role", "specialist")
         self.assertEqual(USAGE, code)
-        self.assertNotIn("bad", directory.known())
+        self.assertNotIn("cole", directory.known())
 
     def test_it_says_out_loud_that_the_provider_is_not_proven(self):
         # **Adding an agent checks nothing about its brain**, and it must not look as though it
@@ -316,29 +310,11 @@ class Configuring(support.Isolated):
         self.assertIn("rundesk agents configure cole --provider <provider>", err)
         self.assertIn("nothing was changed", err)
 
-    def test_role_changes_without_replacing_custom_rules(self):
-        agents = directory.home("cole") / "AGENTS.md"
-        claude = directory.home("cole") / "CLAUDE.md"
-        agents.write_text("custom agents\n", encoding="utf-8")
-        claude.write_text("custom claude\n", encoding="utf-8")
-
-        code, out, err = self.rundesk(
-            "agents", "configure", "cole", "--role", "specialist")
-
-        self.assertEqual(OK, code, err)
-        self.assertIn("role is now specialist", out)
-        self.assertIn("were not changed", out)
-        self.assertEqual("specialist", records.read(directory.records("cole"))["role"])
-        self.assertEqual("custom agents\n", agents.read_text(encoding="utf-8"))
-        self.assertEqual("custom claude\n", claude.read_text(encoding="utf-8"))
-
-    def test_an_invalid_role_changes_nothing(self):
+    def test_role_is_not_a_configure_option(self):
         code, _, _ = self.rundesk(
-            "agents", "configure", "cole", "--provider", "openai", "--role", "owner")
+            "agents", "configure", "cole", "--provider", "openai", "--role", "specialist")
         self.assertEqual(USAGE, code)
-        settled = records.read(directory.records("cole"))
-        self.assertEqual("domain", settled["role"])
-        self.assertEqual("claude", settled["provider_name"])
+        self.assertEqual("claude", records.read(directory.records("cole"))["provider_name"])
 
     def test_an_agent_that_is_not_there_is_refused(self):
         code, _, err = self.rundesk("agents", "configure", "nobody", "--provider", "openai")

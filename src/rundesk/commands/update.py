@@ -501,9 +501,7 @@ def settle(gateways: Optional[Gateways] = None) -> int:
         # in; one it already has is never touched, whatever it now says — see `agents.pages`. This
         # is what reaches an agent made by a release that shipped no pages at all, and a home
         # somebody deleted a file out of.
-        pages.everybody_has_theirs(
-            directory.known(), directory.home, _out_loud,
-            lambda name: str(records.read(directory.records(name))["role"]))
+        pages.everybody_has_theirs(directory.known(), directory.home, _out_loud)
         from rundesk.commands import automatic_updates
         scheduled = automatic_updates.reconcile()
         if scheduled.how == job.CANNOT_TELL:

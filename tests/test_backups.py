@@ -1011,9 +1011,9 @@ class WithRealAgents(Copies):
         # The real first step, because it is what makes a directory an agent at all. A stand-in for
         # it would be a second description of an agent's records.
         shutil.copy2(agent_migration.STEPS / "0001_the_records_an_agent_keeps.py", self.agent_steps)
-        # New-agent creation writes its explicit operating role after migration. Keep this
-        # deliberately small migration fixture representative of that current required schema
-        # without importing all unrelated historical steps into backup tests.
+        # The historical role step remains part of the immutable schema new agents are stamped
+        # onto. Keep this deliberately small migration fixture representative of that required
+        # schema without importing all unrelated historical steps into backup tests.
         shutil.copy2(agent_migration.STEPS / "0009_every_agent_has_an_operating_role.py",
                      self.agent_steps / "0002_every_agent_has_an_operating_role.py")
         stepping = mock.patch.object(agent_migration, "STEPS", self.agent_steps)
