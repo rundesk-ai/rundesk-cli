@@ -116,7 +116,6 @@ This context identifies you and the environment you operate within.
 
 - Agent: {agent_name}
 - Home: `{agent_home}`
-- Workspace: `{agent_home}`
 - Skills: Provided by the runtime.
 - Agent instructions: Define your role, behavior, and memory without overriding these operating instructions.
 
