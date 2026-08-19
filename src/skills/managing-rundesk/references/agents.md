@@ -14,6 +14,21 @@ do not edit its database to change identity or provider.
 
 Prefix every command with `"$RUNDESK_COMMAND"`.
 
+## Decide the intended behavior
+
+Before creating an agent, determine whether the owner intends it to behave primarily as a domain
+agent or a specialist. These are behavior-design patterns, not Rundesk configuration values.
+
+- A domain agent owns an ongoing project, client, or operating area. Its instructions should define
+  intake, prioritization, continuity, delegation, integration, and owner communication.
+- A specialist accepts bounded work in a focused area and returns evidence. Its instructions should
+  define accepted assignments, adjacent boundaries, execution authority, verification, handback,
+  and when to stop.
+
+Both use the same `agents add` command and the same initial template. After creation, refine the
+agent's owner-controlled instructions to express the intended behavior directly. Do not infer the
+pattern from its provider, skills, name, or delegation scope, and do not look for a role flag.
+
 Read [Agent instructions](agent-instructions.md) before designing or changing an agent's persistent
 behavior.
 
@@ -51,10 +66,12 @@ unrestricted. Do not edit `state.db`; verify `DELEGATES TO` with `agents` after 
 ## Safe operating flow
 
 1. Run `providers` and `providers check <provider>`. Recording a provider does not prove it can run.
-2. Add the agent with a name that can also be a launchd label: letters, digits, `.`, `-`, or `_`.
+2. Confirm whether the owner intends domain or specialist behavior, then add the agent with a name
+   that can also be a launchd label: letters, digits, `.`, `-`, or `_`.
 3. Run `agents` to verify the recorded result, then `gateways start <agent>` to prove it starts.
-4. Apply [Agent instructions](agent-instructions.md) when changing how the agent works. Edit
-   `MEMORY.md` only when changing durable context it should know; neither belongs in `state.db`.
+4. Apply [Agent instructions](agent-instructions.md) to mold the shared template into the intended
+   behavior. Edit `MEMORY.md` only when changing durable context it should know; neither belongs in
+   `state.db`.
 
 ## Removal and recovery
 
