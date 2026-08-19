@@ -122,6 +122,10 @@ flag. Existing customized instruction files remain untouched. A legacy stored ro
 in agent records for compatibility with immutable migration history, but current behavior does not
 read or change it.
 
+Every person-facing agent receives Team Members and Delegation whenever at least one eligible
+teammate is available under its outbound delegation scope. A legacy role value never suppresses or
+changes that section. The situation and delegation-depth exclusions defined above still apply.
+
 ## Requirements
 
 |  | ID | Requirement | Evidence |
@@ -132,6 +136,7 @@ read or change it.
 | ✅ | R-INS-4 | Team Members is present only for a person-facing turn with an available team | `test_team_members_are_only_composed_for_a_person_facing_turn`, `test_an_empty_team_has_no_heading_or_layer`, `test_a_schedule_is_not_shown_or_used_to_find_a_named_team` |
 | ✅ | R-INS-5 | Operating prompts remain deterministic, inspectable, and bounded | `test_the_same_inputs_build_the_same_bytes`, `test_the_byte_breakdown_and_fingerprint_match_the_rendered_text`, `test_static_layers_and_the_maximum_prompt_stay_bounded` |
 | ✅ | R-INS-6 | All agents start from one canonical template and public agent operations do not expose a type flag | `test_it_uses_the_single_agent_rules`, `test_role_is_not_an_add_option`, `test_role_is_not_a_configure_option`, `test_it_lists_all_agents_in_one_table` |
+| ✅ | R-INS-7 | Legacy agent roles never suppress an otherwise eligible Team Members and Delegation section | `test_legacy_roles_do_not_remove_team_delegation_from_an_agents_instructions` |
 
 ## Acceptance
 
