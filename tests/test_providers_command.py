@@ -386,16 +386,26 @@ class Instructions(Providers):
         self.assertIn("unchanged since it ran", out)
         self.assertIn(agent, out)
 
-    def test_a_past_turn_uses_its_teammate_snapshot_after_the_gateway_stops(self):
+    def test_a_past_turn_uses_its_team_and_skill_snapshots(self):
         agent = self.an_agent("ava")
         directory.made("reviewer", support.A_STAND_IN, "Reviews production risk.")
+        planning = grants.where(agent) / "planning"
+        planning.mkdir(parents=True)
+        (planning / "SKILL.md").write_text(
+            "---\nname: planning\ndescription: Plans work.\n---\n", encoding="utf-8")
         with standing.holding(directory.where("reviewer")):
             code, _out, err = self.rundesk("ask", agent, "what changed today?")
         self.assertEqual(OK, code, err)
+        debugging = grants.where(agent) / "debugging"
+        debugging.mkdir(parents=True)
+        (debugging / "SKILL.md").write_text(
+            "---\nname: debugging\ndescription: Finds causes.\n---\n", encoding="utf-8")
 
         code, out, err = self.rundesk("providers", "instructions", agent, "--turn", "1")
         self.assertEqual(OK, code, err)
         self.assertIn("Reviews production risk.", out)
+        self.assertIn("planning", out)
+        self.assertNotIn("debugging", out)
         self.assertIn("unchanged since it ran", out)
 
     def test_a_historical_record_without_a_team_snapshot_reports_drift(self):

@@ -49,8 +49,9 @@ without expanding into agent behavior.
 ### Agent Context
 
 This section makes clear that the context describes the agent itself. It identifies the agent,
-home, and runtime-provided skills, and says that the separately supplied agent
-instructions define role, behavior, and memory without overriding the operating instructions.
+home, and the comma-separated names of its active granted skills. It says that the separately
+supplied agent instructions define role, behavior, and memory without overriding the operating
+instructions.
 
 It does not name provider-native instruction files or tell the agent to load instructions that the
 provider loads automatically.
