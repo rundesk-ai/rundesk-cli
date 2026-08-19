@@ -146,11 +146,13 @@ specialist agents. Those terms may be used as behavior-design patterns when an o
 agent's durable role through its instructions, description, skills, and delegation scope.
 
 The template contains only `Agent Instructions`, `Role and Responsibilities`, and `Memory`. It
-defines the agent's durable role, responsibilities, capabilities, limits, and memory policy without
-repeating the operating outcome lifecycle. A new client, project, or assignment does not change the
-agent instructions unless the owner is changing how that agent should operate across turns. The
-separate `agent/MEMORY.md` template holds durable learned context such as preferences, traps,
-gotchas, stable facts and references, and hard-won lessons without repeating agent instructions.
+addresses the agent directly and defines what it operates, its durable responsibilities,
+role-specific capabilities and limits, and how it maintains separate memory. It contains no
+instruction-authoring or self-editing guidance and does not repeat the operating outcome lifecycle.
+The bundled `managing-rundesk` guidance owns the review and writing process for changing agent
+instructions. The separate `agent/MEMORY.md` template holds durable learned context such as
+preferences, traps, gotchas, stable facts and references, and hard-won lessons without repeating
+agent instructions.
 
 Agent creation, configuration, listings, and team context do not expose or depend on an agent-type
 flag. Existing customized instruction files remain untouched. A legacy stored role column remains
