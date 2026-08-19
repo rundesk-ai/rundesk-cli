@@ -112,28 +112,9 @@ class ANewAgent(support.Isolated):
             (pages.shipped() / "agent" / "AGENTS.md").read_bytes(),
             (self.home / "AGENTS.md").read_bytes())
 
-    def test_an_agent_has_one_persistent_task_state(self):
-        rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").split())
-        for phrase in (
-                "verified usable Desk", "persistent operational queue",
-                "Do not duplicate persistent task state", "no usable canonical Desk or tracker",
-                "Disposable same-turn checklists", "remain allowed",
-                "not persistent task state"):
-            with self.subTest(phrase=phrase):
-                self.assertIn(phrase, rules)
-
-    def test_an_agent_gives_each_task_measurable_done_criteria_and_a_disposition(self):
-        rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").split())
-        for phrase in (
-                "measurable done criteria and proof", "Complete it after verification",
-                "re-scope or schedule a real future action", "never leave it stale"):
-            with self.subTest(phrase=phrase):
-                self.assertIn(phrase, rules)
-
     def test_the_rules_have_the_required_sections(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
-        headings = ("# AGENTS", "## Start", "## Boundaries", "## Scope control", "## Rundesk",
-                    "## Task state", "## Memory", "## Workspace", "## Delegation", "## Finish")
+        headings = ("# Agent Instructions", "## Role and Responsibilities", "## Memory")
         places = []
         for heading in headings:
             with self.subTest(heading=heading):
@@ -145,21 +126,6 @@ class ANewAgent(support.Isolated):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("MEMORY.md", rules)
         self.assertIn("# MEMORY", (self.home / "MEMORY.md").read_text(encoding="utf-8"))
-
-    def test_the_rules_distinguish_named_agents_from_same_turn_subagents(self):
-        rules = (self.home / "AGENTS.md").read_text(encoding="utf-8").lower()
-        for phrase in ("named rundesk agent", "asynchronously", "provider-local subagent",
-                       "same turn", "verify", "parent task done"):
-            with self.subTest(phrase=phrase):
-                self.assertIn(phrase, rules)
-        self.assertIn("`asked say` guides working work", rules)
-        self.assertIn("steers its active turn", rules)
-        self.assertIn("falls back to its next turn", rules)
-        self.assertIn("`asked resume` continues answered work", rules)
-        self.assertIn("continue independent useful work", rules)
-        self.assertIn("result reaches this turn", rules)
-        self.assertIn("wakes a review turn", rules)
-        self.assertIn("request's done criteria pass", rules)
 
     def test_the_rules_do_not_claim_the_two_rule_files_synchronize_after_placement(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
@@ -173,71 +139,6 @@ class ANewAgent(support.Isolated):
     def test_the_complete_standing_context_has_a_budget(self):
         total = sum(len((self.home / name).read_bytes()) for name in ("AGENTS.md", "MEMORY.md"))
         self.assertLessEqual(total, 5350)
-
-    def test_the_rules_defer_question_policy_to_the_turn_situation(self):
-        rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertNotIn("Ask about goals", rules)
-        self.assertIn("situation rules", rules)
-
-    def test_start_still_orients_routes_skills_context_and_existing_work(self):
-        rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").split())
-        for phrase in ("## Start", "requested outcome, limits, and proof of completion",
-                       "Review the available skills", "description covers the work",
-                       "Search recorded messages", "context you do not have",
-                       "Inspect existing files, commands, and tools",
-                       "Do setup silently unless it blocks you"):
-            with self.subTest(phrase=phrase):
-                self.assertIn(phrase, rules)
-
-    def test_finish_does_not_leave_a_task_process_behind(self):
-        rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertIn("temporary process", rules)
-
-    def test_finish_validates_after_the_last_change_and_keeps_active_handoffs_pending(self):
-        rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").split())
-        for phrase in ("After final changes and cleanup", "validate each deliverable yourself",
-                       "named delegated work is still active", "task is explicitly pending",
-                       "Never call pending work complete"):
-            with self.subTest(phrase=phrase):
-                self.assertIn(phrase, rules)
-
-    def test_finish_is_short_and_readable_on_a_phone_or_discord(self):
-        rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").lower().split())
-        for phrase in ("direct, concrete summary", "in your words", "phone/discord concise",
-                       "bullets/no tables", "needed purpose/proof"):
-            with self.subTest(phrase=phrase):
-                self.assertIn(phrase, rules)
-
-    def test_native_rules_do_not_tell_the_brain_to_open_themselves_again(self):
-        rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertNotIn("Read this", rules)
-        self.assertIn("Read `MEMORY.md` before your first reply", rules)
-
-    def test_memory_keeps_a_project_index_without_becoming_a_project_log(self):
-        rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").split())
-        for phrase in ("durable context useful next run", "active-project pointers",
-                       "owner preferences", "role and responsibilities", "cross-project process",
-                       "name, stable location, purpose, role, authoritative overview",
-                       "Project commands, paths, status, decisions", "formats, dates, and history",
-                       "stay in project/shared index",
-                       "one shared purpose-named index", "never one note per project",
-                       "Keep only current facts", "never narrate or date a correction",
-                       "Merge, do not append", "superseded fact or closed loop",
-                       "If nothing durable changed, do not edit"):
-            with self.subTest(phrase=phrase):
-                self.assertIn(phrase, rules)
-
-    def test_ordinary_work_pays_only_for_current_task_hygiene(self):
-        rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").split())
-        for phrase in ("## Workspace", "canonical files", "project state in its project",
-                       "disposable work temporary",
-                       "Delete each task-created temporary file and directory before ending, wherever it is",
-                       "Preserve deliverables", "pre-existing or uncertain files",
-                       "files of uncertain ownership/value",
-                       "Do not inspect unrelated home files or inventory, reorganize, or prune home unless maintenance is the task"):
-            with self.subTest(phrase=phrase):
-                self.assertIn(phrase, rules)
-        self.assertNotIn("Inspect home loose files and scratch contents", rules)
 
     def test_the_memory_scaffold_is_a_small_adaptable_index_not_a_log(self):
         raw = (self.home / "MEMORY.md").read_text(encoding="utf-8")

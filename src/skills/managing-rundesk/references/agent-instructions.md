@@ -1,22 +1,22 @@
 # Agent instructions
 
 An agent home's `AGENTS.md` and `CLAUDE.md` hold persistent, owner-controlled behavior for that
-specific agent. They define its role, working behavior, and memory policy. They supplement Rundesk's
-operating instructions and never override them. Keep both files byte-identical so providers receive
-one behavior contract rather than different rules under different filenames.
+specific agent. They define its role, responsibilities, capabilities, limits, and memory policy.
+They supplement Rundesk's operating instructions and never override them. Keep both files
+byte-identical so providers receive one behavior contract rather than different rules under
+different filenames.
 
 ## Keep each rule with its owner
 
 - Rundesk operating instructions are product-owned, injected every turn, and not user-controlled.
-  They identify Rundesk, the agent context, universal core rules, message and attachment mechanics,
-  the current situation, and the team available for named delegation. Do not copy those rules into
-  an agent's behavior contract.
+  They identify Rundesk, the agent context and current situation, then define the universal outcome,
+  boundaries, execution, continuity, delegation, and completion process. Do not copy those rules
+  into an agent's behavior contract.
 - Recorded Rundesk configuration belongs to `agents configure`: provider, delegation description,
   outbound delegation scope, and automatic self-improvement. Change it with
   `"$RUNDESK_COMMAND"`, never by editing `state.db` or restating it in agent instructions.
 - Agent instructions hold what is true for this agent on every turn: durable role, responsibilities,
-  ownership boundary, default working behavior, decisions, communication, delegation posture, and
-  memory policy.
+  role-specific capabilities and limits, decision authority, and memory policy.
 - A project's own `AGENTS.md` holds what is true for anyone working in that project: architecture,
   commands, conventions, terminology, and validation or release gates. Agent instructions do not
   copy project rules out of the project.
@@ -45,16 +45,13 @@ Start from the agent's description, instructions, and delegation scope. Read bot
 instruction files in full, preserve owner customizations, and define only what this agent needs on
 every turn:
 
-1. State the role and durable responsibilities in one compact opening.
-2. Define its ownership boundary and explicit non-goals.
-3. State the default lifecycle it follows and the decisions it owns or escalates.
-4. Define when it works directly and when it asks another named agent for bounded help, without
-   repeating Rundesk's delegation commands or asynchronous mechanics.
-5. Define the smallest useful handback or owner communication: result, observed proof, unresolved
-   risk, and exact decision needed when blocked.
-6. Define what durable role knowledge belongs in `MEMORY.md` and keep assignments, status, dates,
+1. State the broad role and durable responsibilities in one compact opening.
+2. Define its decision authority, role-specific capabilities and limits, and explicit non-goals.
+3. Define any enduring direct-work or delegation posture without repeating Rundesk's delegation
+   commands, asynchronous mechanics, or outcome lifecycle.
+4. Define what durable role knowledge belongs in `MEMORY.md` and keep assignments, status, dates,
    project commands, and history out.
-7. Remove any rule already owned by Rundesk operating instructions, project instructions, or a
+5. Remove any rule already owned by Rundesk operating instructions, project instructions, or a
    conditional skill.
 
 Use provider-neutral language. Do not mention a provider, model, copied skill list, current task, or
@@ -66,31 +63,17 @@ There is one agent template. Mold its behavior contract to the responsibility th
 
 #### Domain behavior
 
-A domain agent owns an ongoing area, product, or client. Its behavior contract defines intake,
-prioritization, canonical sources of truth, continuity, direct work, delegation, review and
-integration of handbacks, owner decisions, and durable domain knowledge.
-
-Its default lifecycle is:
-
-`intake → ground → prioritize → delegate or work → review → integrate → communicate → maintain continuity`
-
-The domain agent retains the parent outcome and reviews delegated handbacks before relying on or
-communicating them.
+A domain agent owns an ongoing area, product, or client. Its behavior contract defines the durable
+area it owns, its prioritization and decision authority, the responsibilities it performs or
+coordinates, the decisions reserved for the owner, and the domain knowledge worth retaining.
 
 #### Specialist behavior
 
-A specialist accepts bounded assignments and returns evidence. Its behavior contract names the
-assignments it accepts, boundaries from adjacent work, its normal work type and authority, the
-grounding required before action, scope classification, and the artifact or proof it returns.
-
-Its default lifecycle is:
-
-`accept bounded assignment → ground → execute within authority → verify → hand back → stop`
-
-Request-required work and regressions introduced by its changes remain in scope. Pre-existing or
-adjacent findings are reported without becoming new work. A specialist does not adopt the parent
-backlog, redefine the original owner outcome, contact the original requester, or place delegated
-task detail in memory unless it creates a durable role-level lesson.
+A specialist accepts bounded work within a defined area of expertise. Its behavior contract names
+the outcomes it is equipped to handle, its role-specific capabilities and authority limits, the
+adjacent work it does not own, and the artifact or evidence it normally returns. A specialist does
+not adopt a parent backlog or place temporary delegated detail in memory unless it creates a durable
+role-level lesson.
 
 Most specialist agents should be inbound-only. Configure them with
 `"$RUNDESK_COMMAND" agents configure <agent> --delegate-to-none` unless the owner explicitly wants

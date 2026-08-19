@@ -145,6 +145,11 @@ bytes under both native instruction filenames. The runtime does not classify age
 specialist agents. Those terms may be used as behavior-design patterns when an owner molds an
 agent's durable role through its instructions, description, skills, and delegation scope.
 
+The template contains only `Agent Instructions`, `Role and Responsibilities`, and `Memory`. It
+defines the agent's durable role, responsibilities, capabilities, limits, and memory policy without
+repeating the operating outcome lifecycle. A new client, project, or assignment does not change the
+agent instructions unless the owner is changing how that agent should operate across turns.
+
 Agent creation, configuration, listings, and team context do not expose or depend on an agent-type
 flag. Existing customized instruction files remain untouched. A legacy stored role column remains
 in agent records for compatibility with immutable migration history, but current behavior does not
