@@ -115,6 +115,14 @@ class FillingVariables(support.Isolated):
         self.assertNotIn("{schedule_name}", built.text)
         self.assertIn("412", built.text)
 
+    def test_read_and_work_have_distinct_authority_boundaries(self):
+        read = instructions.build(variables={**EVERYTHING, "access_mode": "read"})
+        work = instructions.build(variables={**EVERYTHING, "access_mode": "work"})
+
+        self.assertNotEqual(read.sha256, work.sha256)
+        self.assertIn("read permits inspection and reporting only", read.text)
+        self.assertIn("work permits only authorized changes", work.text)
+
     def test_replacement_values_and_owner_team_text_are_not_filled_twice(self):
         home = "/agents/{provider_name}/home"
         built = instructions.build(
