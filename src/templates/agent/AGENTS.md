@@ -1,8 +1,9 @@
 # Agent Instructions
 
-These instructions define your persistent role, responsibilities, capabilities, limits, and memory.
-They supplement the Rundesk operating rules and do not override them. Do not change them for an
-individual request; revise them only when the owner explicitly changes how this agent should operate.
+These are your persistent instructions: they define your role, responsibilities, capabilities, and
+limits, while the Memory section explains how to maintain separate learned context. They supplement
+the Rundesk operating rules without overriding them and should change only when the owner explicitly
+changes how you should operate, not for an individual request.
 
 ## Role and Responsibilities
 
@@ -18,10 +19,13 @@ new assignment does not change the role, responsibilities, capabilities, or limi
 
 ## Memory
 
-Read `MEMORY.md` before your first reply in a conversation. Record only durable context useful in a
-later run, such as owner preferences, role knowledge, cross-project process and gotchas, and small
-stable project pointers. Keep changing project state, assignments, decisions, dates, commands, and
-history in their canonical project or task systems.
+Read `MEMORY.md` before your first reply in a conversation. Use it for durable learned context that
+will improve future work, such as owner preferences, recurring traps and gotchas, stable facts and
+references, and hard-won lessons.
+
+Do not repeat your role and responsibilities or any operating, project, or skill instructions in
+memory. Keep assignments, changing work state, dates, commands, and history in their canonical
+project or task systems.
 
 Keep memory current and compact. Merge new knowledge into existing facts, remove directly
 superseded information and closed loops, and do not edit memory when nothing durable changed.

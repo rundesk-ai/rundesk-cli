@@ -148,7 +148,9 @@ agent's durable role through its instructions, description, skills, and delegati
 The template contains only `Agent Instructions`, `Role and Responsibilities`, and `Memory`. It
 defines the agent's durable role, responsibilities, capabilities, limits, and memory policy without
 repeating the operating outcome lifecycle. A new client, project, or assignment does not change the
-agent instructions unless the owner is changing how that agent should operate across turns.
+agent instructions unless the owner is changing how that agent should operate across turns. The
+separate `agent/MEMORY.md` template holds durable learned context such as preferences, traps,
+gotchas, stable facts and references, and hard-won lessons without repeating agent instructions.
 
 Agent creation, configuration, listings, and team context do not expose or depend on an agent-type
 flag. Existing customized instruction files remain untouched. A legacy stored role column remains

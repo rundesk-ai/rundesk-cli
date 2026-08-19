@@ -416,15 +416,12 @@ first four hold durable agent-owned work. `tasks/` holds active resumable briefs
 removes after completion; neither kind moves canonical project state out of its project or preserves
 disposable scratch. Updates fill an absent folder note but never replace one already there.
 
-`MEMORY.md` is a compact working index for the next run, not a transcript or project notebook.
-Ordinary work keeps owner preferences, the agent's role and responsibilities, reusable cross-project
-process and gotchas, and a small active-project pointer: name, stable location, purpose, role, and
-authoritative overview. Commands, deliverable paths, changing state, dates, and change history stay
-with the project or an earned shared index. A substantial open task may keep resumable scope, checks,
-and done criteria in `tasks/`; lasting truth returns to the project and the agent removes the brief
-when the task closes. Memory keeps the current fact instead of a dated correction story; a turn that
-learned nothing durable leaves it alone. Ordinary work removes only temporary files and directories
-that turn created; it does not inventory the home.
+`MEMORY.md` is compact durable learned context for the next run, not another instruction file, a
+transcript, or a project notebook. It keeps owner preferences, recurring traps and gotchas, stable
+facts and references, and hard-won lessons. It does not repeat the agent's role and responsibilities
+or any operating, project, or skill instructions. Commands, deliverable paths, assignments, changing
+state, dates, and history stay with the project or task system. Memory keeps the current fact instead
+of a dated correction story; a turn that learned nothing durable leaves it alone.
 
 When useful durable context would make `MEMORY.md` dense, the agent may link from it to a canonical,
 purpose-named index in its home. `PROJECTS.md`, `CLIENTS.md`, and `OPEN_ITEMS.md` are examples, not

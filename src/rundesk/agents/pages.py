@@ -15,7 +15,7 @@ filenames; shared memory and work-area pages remain independent.
 |---|---|---|
 | `AGENTS.md` | `agent/AGENTS.md` | how this agent works |
 | `CLAUDE.md` | `agent/AGENTS.md` | the same bytes, under the name some brains look for first |
-| `MEMORY.md` | `MEMORY.md` | the scaffold it writes what it learns into |
+| `MEMORY.md` | `agent/MEMORY.md` | the scaffold it writes what it learns into |
 | `<area>/README.md` | the same path | how to use one durable work area without turning it into clutter |
 
 **`AGENTS.md` and `CLAUDE.md` are one source placed twice, identical by construction.** Two files
@@ -56,7 +56,7 @@ SHIPPED_IN = "templates"
 CONTINUITY: Dict[str, str] = {
     "AGENTS.md": "agent/AGENTS.md",
     "CLAUDE.md": "agent/AGENTS.md",
-    "MEMORY.md": "MEMORY.md",
+    "MEMORY.md": "agent/MEMORY.md",
 }
 
 #: Purpose-named places for agent-owned work. Their notes are deliberately lazy context:

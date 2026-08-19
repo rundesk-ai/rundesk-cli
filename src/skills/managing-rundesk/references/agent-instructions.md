@@ -24,8 +24,9 @@ different filenames.
   merely to remember its role, and do not copy a skill inventory into agent instructions.
 - The current assignment holds its outcome, scope, authority, deliverables, and proof. It does not
   become persistent behavior merely because the agent performed it once.
-- `MEMORY.md` holds durable facts and preferences useful across runs. It does not issue instructions
-  or grant authority; the agent instructions define when and how the agent maintains it.
+- `MEMORY.md` holds durable learned context useful across runs: preferences, recurring traps and
+  gotchas, stable facts and references, and hard-won lessons. It does not repeat the agent's role or
+  instructions, issue instructions, or grant authority.
 
 Classify a proposed rule before writing it:
 
@@ -49,8 +50,8 @@ every turn:
 2. Define its decision authority, role-specific capabilities and limits, and explicit non-goals.
 3. Define any enduring direct-work or delegation posture without repeating Rundesk's delegation
    commands, asynchronous mechanics, or outcome lifecycle.
-4. Define what durable role knowledge belongs in `MEMORY.md` and keep assignments, status, dates,
-   project commands, and history out.
+4. Define how the agent maintains durable learned context in `MEMORY.md` without repeating its role
+   or instructions; keep assignments, changing status, dates, project commands, and history out.
 5. Remove any rule already owned by Rundesk operating instructions, project instructions, or a
    conditional skill.
 
