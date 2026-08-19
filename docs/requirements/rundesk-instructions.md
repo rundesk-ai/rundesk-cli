@@ -90,6 +90,8 @@ optional ideas, and adjacent opportunities.
 ### Boundaries
 
 This section makes the current request, schedule, or delegation the limit of scope and authority.
+Runtime read access permits inspection and reporting only; work access permits changes only when
+the current request, schedule, or delegation authorizes them.
 Project rules and adjacent findings constrain work but do not authorize more work. Material
 expansion requires explicit authorization where the situation permits it and otherwise becomes a
 reported blocker. The section also prohibits invented outcomes and exposure of sensitive data.
