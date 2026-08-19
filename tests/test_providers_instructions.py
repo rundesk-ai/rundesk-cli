@@ -9,7 +9,6 @@ import unittest
 import support
 from rundesk.providers import instructions, team
 
-
 EVERYTHING = {
     "agent_name": "ava",
     "agent_home": "/agents/ava/home",
@@ -88,6 +87,7 @@ class TheAgreedSections(support.Isolated):
     def test_a_delegated_project_task_cannot_pollute_the_agents_own_memory(self):
         built = self.built(instructions.AGENT_TO_AGENT)
         self.assertNotIn("MEMORY.md", built.text)
+
 
 class FillingVariables(support.Isolated):
     def test_every_situation_fills_every_placeholder_it_uses(self):
