@@ -62,10 +62,12 @@ class TheAgreedSections(support.Isolated):
         schedule = self.built(instructions.SCHEDULE_TO_AGENT, listed)
         delegated = self.built(instructions.AGENT_TO_AGENT, listed)
         self.assertIn("## Team Members", person.text)
+        self.assertIn("### Delegation", person.text)
         self.assertEqual(["core", "situation", "agents"],
                          [one.name for one in person.layers])
         for built in (schedule, delegated):
             self.assertNotIn("## Team Members", built.text)
+            self.assertNotIn("### Delegation", built.text)
             self.assertNotIn(listed, built.text)
             self.assertEqual(["core", "situation"], [one.name for one in built.layers])
 
