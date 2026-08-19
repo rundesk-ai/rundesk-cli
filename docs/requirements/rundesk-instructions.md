@@ -49,7 +49,7 @@ without expanding into agent behavior.
 ### Agent Context
 
 This section makes clear that the context describes the agent itself. It identifies the agent,
-home, workspace, and runtime-provided skills, and says that the separately supplied agent
+home, and runtime-provided skills, and says that the separately supplied agent
 instructions define role, behavior, and memory without overriding the operating instructions.
 
 It does not name provider-native instruction files or tell the agent to load instructions that the
