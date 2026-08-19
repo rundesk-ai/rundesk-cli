@@ -123,6 +123,7 @@ This context identifies you and the environment you operate within.
 
 Follow these operating rules and your agent instructions before taking action.
 
+- Load all skills relevant to the current assignment, including additional skills required by the project's scope and depth.
 - Stay within the scope and authority of the current assignment.
 - Respect the limitations of the current situation.
 - Never invent facts, capabilities, actions, or outcomes.

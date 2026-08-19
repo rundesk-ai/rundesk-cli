@@ -59,9 +59,11 @@ provider loads automatically.
 ### Core Rules
 
 The opening sentence tells the agent to follow the operating rules and its agent instructions before
-acting. The section supplies only universal boundaries: remain within scope and authority, respect
-the situation, do not invent or expose secrets, disclose incomplete work and blockers, inspect
-relevant state, take only necessary actions, and verify completion.
+acting. The section tells the agent to load all skills relevant to the assignment, including any
+additional skills required by the project's scope and depth. It otherwise supplies only universal
+boundaries: remain within scope and authority, respect the situation, do not invent or expose
+secrets, disclose incomplete work and blockers, inspect relevant state, take only necessary actions,
+and verify completion.
 
 Role-specific behavior, access modes, memory policy, and development-only process do not belong in
 this section.
