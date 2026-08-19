@@ -97,9 +97,10 @@ restrictions of a schedule or delegation.
 
 ### Team Members
 
-This section lists the named Rundesk agents available to a person-facing turn and explains how to
-choose one, hand over one bounded assignment with `"$RUNDESK_COMMAND" ask <agent> "<task>"`, avoid
-waiting for or duplicating active work, and review the result before relying on it.
+This section briefly identifies the team members available for named Rundesk delegation, lists the
+agents available to a person-facing turn, and explains how to choose one, hand over one bounded
+assignment with `"$RUNDESK_COMMAND" ask <agent> "<task>"`, avoid waiting for or duplicating active
+work, and review the result before relying on it.
 
 It is omitted for schedules because their asynchronous result cannot return to the same turn for
 review. It is omitted for agent-to-agent delegations because named Rundesk delegation stops at one

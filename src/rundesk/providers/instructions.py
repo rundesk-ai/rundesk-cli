@@ -207,6 +207,8 @@ The agent {caller_agent} delegated this assignment to you.
 #: as a team of nobody rather than as no team.
 TEAM_MEMBERS = """## Team Members
 
+These team members are available for named Rundesk delegation.
+
 {team}
 
 - Choose a team member whose stated role, focus, or skills make them better suited for the work.
