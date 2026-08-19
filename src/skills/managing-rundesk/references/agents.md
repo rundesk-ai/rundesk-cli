@@ -28,6 +28,9 @@ If the owner explicitly asks to apply another template later, inspect both files
 prepare the replacement visibly, and make the two resulting files byte-identical. Never infer
 permission to replace rules from a role change alone.
 
+Read [Agent instructions](agent-instructions.md) before designing or changing an agent's persistent
+behavior or specialist role focus.
+
 ## Write the delegation description
 
 Treat `--describes` as a routing contract, not a biography. In one sentence, name the durable
@@ -65,8 +68,8 @@ unrestricted. Do not edit `state.db`; verify `DELEGATES TO` with `agents` after 
 2. Choose `domain` or `specialist`, then add the agent with a name that can also be a launchd label:
    letters, digits, `.`, `-`, or `_`.
 3. Run `agents` to verify the recorded result, then `gateways start <agent>` to prove it starts.
-4. Edit the agent's `AGENTS.md` and `MEMORY.md` when changing how it works or what it knows; those
-   files are its identity, not columns in `state.db`.
+4. Apply [Agent instructions](agent-instructions.md) when changing how the agent works. Edit
+   `MEMORY.md` only when changing durable context it should know; neither belongs in `state.db`.
 
 ## Removal and recovery
 
