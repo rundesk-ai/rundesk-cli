@@ -431,14 +431,14 @@ class TheTreePointsOneWay(support.Isolated):
         # A name in `LIVES_BY` is a promise the file is really given, so that is the direction
         # checked. `CLAUDE.md` is placed and is not classified separately because it is the same
         # bytes as `AGENTS.md`. Standing rules are loaded by each provider under its native name;
-        # the invariant prompt only has to tell every brain to open non-native `MEMORY.md`.
+        # the operating prompt identifies that layer without reopening or restating any home file.
         from rundesk.agents import pages
         from rundesk.providers import environment, instructions
         self.assertTrue(pages.PAGES, "agents.pages places nothing at all")
         self.assertEqual(set(), set(environment.LIVES_BY) - set(pages.PAGES),
                          "providers.environment classifies an edit to a file no release places")
-        self.assertIn("MEMORY.md", instructions.CORE)
-        self.assertNotIn("AGENTS.md", instructions.CORE)
+        for page in pages.PAGES:
+            self.assertNotIn(page, instructions.CORE)
 
     def test_a_step_is_still_held_to_the_layer_rule(self):
         # `named_in` stops at the package's own modules so a step does not have to be listed in a

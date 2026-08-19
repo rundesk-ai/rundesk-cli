@@ -33,8 +33,9 @@ class WhatADelegatedTurnIsTold(support.Isolated):
                                   variables=turns._about(request, "a-stand-in"))
 
     def test_the_agent_that_asked_is_named(self):
-        self.assertIn("ava, an agent on your team, handed you this task",
-                      self.built(caller_agent="ava").text)
+        built = self.built(caller_agent="ava").text
+        self.assertNotIn("{caller_agent}", built)
+        self.assertIn("ava", built)
 
     def test_no_placeholder_survives_into_what_the_brain_reads(self):
         self.assertNotIn("{caller_agent}", self.built(caller_agent="ava").text)

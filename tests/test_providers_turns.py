@@ -234,16 +234,15 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
                 self.assertNotIn("agents", [one["name"] for one in said["layers"]])
                 self.assertEqual("", said["team"])
 
-    def test_a_scheduled_work_turn_records_the_team_it_was_shown(self):
-        listed = "- **bob** — verifies releases · skills: reviewing-code"
-        with mock.patch.object(turns.team, "for_agent", return_value=listed) as looked:
+    def test_a_scheduled_work_turn_does_not_read_or_record_a_team(self):
+        with mock.patch.object(
+                turns.team, "for_agent", side_effect=AssertionError("team was inspected")):
             got = self.run_turn(self.asking(situation=instructions.SCHEDULE_TO_AGENT,
                                             schedule_name="nightly"))
-        looked.assert_called_once_with("ava")
         record = kept.list_turn_records("ava", got.turn)[0]
         said = json.loads(record["event_data"])
-        self.assertIn("agents", [one["name"] for one in said["layers"]])
-        self.assertEqual(listed, said["team"])
+        self.assertNotIn("agents", [one["name"] for one in said["layers"]])
+        self.assertEqual("", said["team"])
 
     def test_a_person_facing_work_turn_records_the_team_it_was_shown(self):
         listed = "- **bob** — verifies releases · skills: reviewing-code"
