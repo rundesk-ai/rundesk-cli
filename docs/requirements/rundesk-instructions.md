@@ -13,10 +13,12 @@ agent receives the context it needs without reading the same rules twice.
 ## Instruction ownership
 
 - Rundesk operating instructions are product-owned, apply to every agent, and are not user
-  controlled. They define Rundesk, agent context, universal operating rules, message and attachment
-  mechanics, the current situation, and available named-agent delegation.
-- Agent instructions are controlled per agent. They define that agent's role, behavior, working
-  method, and memory policy, but cannot override Rundesk operating instructions.
+  controlled. They define Rundesk, agent context, the universal process for working and owning an
+  outcome, message and attachment mechanics, the current situation, and available named-agent
+  delegation.
+- Agent instructions are controlled per agent. They define that agent's durable role,
+  responsibilities, role-specific capabilities and limits, and memory policy, but cannot override
+  Rundesk operating instructions.
 - Project instructions apply only while work is being done in that project. They define local
   conventions and constraints without redefining the agent or Rundesk.
 - Skills provide task-specific procedures and are supplied by the runtime. Their contents are not
@@ -33,16 +35,21 @@ Every rendered operating prompt contains these sections once and in this order:
 
 1. `Rundesk`
 2. `Agent Context`
-3. `Core Rules`
-4. `Messages and Attachments`
-5. `Current Situation`
+3. `Current Situation`
+4. `Establish the Outcome`
+5. `Boundaries`
+6. `Messages and Attachments`
+7. `Execute the Work`
+8. `Maintain Continuity`
+9. `Definition of Done`
 
-`Team Members` follows `Current Situation` only when named Rundesk delegation is available and the
-turn can review the asynchronous result.
+`Team Members`, with its `Delegation` subsection, appears between `Maintain Continuity` and
+`Definition of Done` only when named Rundesk delegation is available and the turn can review the
+asynchronous result.
 
 ### Rundesk
 
-One short definition identifies Rundesk as the operating layer for the agent, its workspace,
+One short definition identifies Rundesk as the operating layer for the agent, its home,
 skills, conversations, schedules, and team delegation. It identifies the installation command
 without expanding into agent behavior.
 
@@ -50,23 +57,41 @@ without expanding into agent behavior.
 
 This section makes clear that the context describes the agent itself. It identifies the agent,
 home, and the comma-separated names of its active granted skills. It says that the separately
-supplied agent instructions define role, behavior, and memory without overriding the operating
-instructions.
+supplied agent instructions define role, responsibilities, capabilities, limits, and memory without
+overriding the operating instructions.
 
 It does not name provider-native instruction files or tell the agent to load instructions that the
 provider loads automatically.
 
-### Core Rules
+### Current Situation
 
-The opening sentence tells the agent to follow the operating rules and its agent instructions before
-acting. The section tells the agent to load all skills relevant to the assignment, including any
-additional skills required by the project's scope and depth. It otherwise supplies only universal
-boundaries: remain within scope and authority, respect the situation, do not invent or expose
-secrets, disclose incomplete work and blockers, inspect relevant state, take only necessary actions,
-and verify completion.
+Exactly one situation is rendered:
 
-Role-specific behavior, access modes, memory policy, and development-only process do not belong in
-this section.
+- Person: states that a person is available and permits clarification only when missing context,
+  unclear scope or authority, or an unresolved decision prevents meaningful progress. A blocked
+  agent names the blocker and the information or decision needed.
+- Schedule: names the schedule, states that nobody is present, limits work to what the schedule
+  requested, forbids waiting for clarification, and says the final standalone response is delivered
+  automatically to the intended recipient or destination.
+- Agent delegation: names the calling agent, requires the delegated work to be completed and
+  verified within its outcome, scope, and authority, and returns results and evidence to that agent.
+  It forbids contacting the original requester or delegating to another named Rundesk agent.
+
+Unknown or omitted situations use the person-facing situation rather than silently adopting the
+restrictions of a schedule or delegation.
+
+### Establish the Outcome
+
+This section makes the agent identify what must be produced, changed, decided, or reported, along
+with the completion criteria and evidence. Required results remain distinct from assumptions,
+optional ideas, and adjacent opportunities.
+
+### Boundaries
+
+This section makes the current request, schedule, or delegation the limit of scope and authority.
+Project rules and adjacent findings constrain work but do not authorize more work. Material
+expansion requires explicit authorization where the situation permits it and otherwise becomes a
+reported blocker. The section also prohibits invented outcomes and exposure of sensitive data.
 
 ### Messages and Attachments
 
@@ -80,35 +105,38 @@ This section makes two high-failure mechanics explicit:
   `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain path is
   not represented as an attachment.
 
-### Current Situation
+### Execute the Work
 
-Exactly one situation is rendered:
+This section defines the universal working process: load the skills required by the work and project
+depth, inspect existing work and constraints, break larger outcomes into ordered verifiable steps,
+take the smallest complete set of actions, and adjust the approach when evidence requires it.
 
-- Person: identifies the current conversation as the response path, makes the current request the
-  source of scope and authority, and permits a focused question only when a missing decision blocks
-  safe progress.
-- Schedule: names the schedule, states that nobody is present, limits work to what the schedule
-  requested, forbids waiting for clarification, and says the final standalone response is delivered
-  automatically to the intended recipient or destination.
-- Agent delegation: names the calling agent, limits work to the delegated authority, returns
-  results and evidence to that agent, and leaves integration and final communication with the
-  caller. It forbids contacting the original requester or delegating to another named Rundesk agent,
-  while allowing bounded use of provider-local subagents.
+### Maintain Continuity
 
-Unknown or omitted situations use the person-facing situation rather than silently adopting the
-restrictions of a schedule or delegation.
+This section keeps the agent responsible for an outcome beyond one turn. The agent continues while
+useful in-scope work remains. Before ending it either verifies completion, identifies the blocker,
+or preserves status and a next action tied to a real event that will resume the work. Pending work is
+never reported as complete.
 
 ### Team Members
 
 This section briefly identifies the team members available for named Rundesk delegation, lists the
 agents available to a person-facing turn, then places its operating guidance under a `Delegation`
-subsection. That subsection explains how to choose an agent, hand over one bounded assignment with
-`"$RUNDESK_COMMAND" ask <agent> "<task>"`, avoid waiting for or duplicating active work, and review
-the result before relying on it.
+subsection. That subsection explains how to choose an agent, hand over one bounded outcome with
+`"$RUNDESK_COMMAND" ask <agent> "<task>"`, and avoid waiting for or duplicating active work. The
+result returns in a review turn. The agent reviews and verifies that result before relying on it or
+completing the larger outcome.
 
 It is omitted for schedules because their asynchronous result cannot return to the same turn for
 review. It is omitted for agent-to-agent delegations because named Rundesk delegation stops at one
 level. An empty team also omits the section.
+
+### Definition of Done
+
+This final operating section permits a completion claim only after every requested result meets its
+criteria, material claims and deliverables are verified, required asynchronous results are reviewed,
+and no known required work remains. Otherwise the agent reports the outcome as pending or blocked
+and preserves its continuation path.
 
 ## Agent instruction template
 
