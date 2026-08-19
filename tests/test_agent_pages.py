@@ -43,11 +43,10 @@ class WhatIsShipped(support.Isolated):
     def test_every_page_comes_from_a_file_that_is_really_there(self):
         said = pages.read_shipped()
         for name in pages.PAGES:
-            for role in pages.ROLES:
-                source = pages.source_for(name, role)
-                with self.subTest(name=name, role=role):
-                    self.assertTrue(
-                        said[source].strip(), f"{source} is empty, and {name} comes from it")
+            source = pages.source_for(name)
+            with self.subTest(name=name):
+                self.assertTrue(
+                    said[source].strip(), f"{source} is empty, and {name} comes from it")
 
     def test_the_rules_are_one_file_placed_twice(self):
         """Two files kept in step by anybody remembering is two files that disagree, and each brain
@@ -108,25 +107,12 @@ class ANewAgent(support.Isolated):
         self.assertEqual((self.home / "AGENTS.md").read_bytes(),
                          (self.home / "CLAUDE.md").read_bytes())
 
-    def test_domain_is_the_default_role_and_uses_the_domain_rules(self):
-        self.assertEqual("domain", records.read(directory.records("ava"))["role"])
+    def test_it_uses_the_single_agent_rules(self):
         self.assertEqual(
-            (pages.shipped() / "domain" / "AGENTS.md").read_bytes(),
+            (pages.shipped() / "agent" / "AGENTS.md").read_bytes(),
             (self.home / "AGENTS.md").read_bytes())
 
-    def test_a_specialist_gets_the_specialist_rules_identically_under_both_names(self):
-        directory.made("forge", "a-stand-in", role="specialist")
-        specialist = directory.home("forge")
-        self.assertEqual("specialist", records.read(directory.records("forge"))["role"])
-        self.assertEqual((specialist / "AGENTS.md").read_bytes(),
-                         (specialist / "CLAUDE.md").read_bytes())
-        rules = (specialist / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertIn("one bounded delegated assignment", rules)
-        for absent in ("operational queue", "managing-rundesk", "named Rundesk agent"):
-            with self.subTest(absent=absent):
-                self.assertNotIn(absent, rules)
-
-    def test_a_domain_has_one_persistent_task_state(self):
+    def test_an_agent_has_one_persistent_task_state(self):
         rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").split())
         for phrase in (
                 "verified usable Desk", "persistent operational queue",
@@ -136,7 +122,7 @@ class ANewAgent(support.Isolated):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, rules)
 
-    def test_a_domain_gives_each_task_measurable_done_criteria_and_a_disposition(self):
+    def test_an_agent_gives_each_task_measurable_done_criteria_and_a_disposition(self):
         rules = " ".join((self.home / "AGENTS.md").read_text(encoding="utf-8").split())
         for phrase in (
                 "measurable done criteria and proof", "Complete it after verification",
@@ -144,57 +130,16 @@ class ANewAgent(support.Isolated):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, rules)
 
-    def test_a_specialist_has_one_bounded_brief_and_no_persistent_backlog(self):
-        directory.made("forge", "a-stand-in", role="specialist")
-        rules = " ".join(
-            (directory.home("forge") / "AGENTS.md").read_text(encoding="utf-8").split())
-        for phrase in (
-                "One active resumable brief", "one bounded assignment",
-                "Never keep or own a persistent backlog", "canonical Desk or tracker",
-                "Disposable same-turn checklists", "remain allowed",
-                "not persistent task state"):
-            with self.subTest(phrase=phrase):
-                self.assertIn(phrase, rules)
-
-    def test_a_specialist_delegates_only_large_parallel_work_to_same_turn_subagents(self):
-        directory.made("forge", "a-stand-in", role="specialist")
-        rules = " ".join(
-            (directory.home("forge") / "AGENTS.md").read_text(encoding="utf-8").split())
-        for phrase in (
-                "provider-local subagents", "large, independent, self-contained",
-                "same-turn helper", "Keep planning, decisions, integration, and final verification",
-                "Do not delegate routine work or review unless asked",
-                "Writers never overlap files", "delegation never expands scope or approval"):
-            with self.subTest(phrase=phrase):
-                self.assertIn(phrase, rules)
-        self.assertIn("cannot create another named Rundesk delegation", rules)
-
-    def test_both_roles_require_named_authority_for_state_mutation(self):
-        directory.made("forge", "a-stand-in", role="specialist")
-        for role, home in (("domain", self.home), ("specialist", directory.home("forge"))):
-            rules = " ".join((home / "AGENTS.md").read_text(encoding="utf-8").split())
-            with self.subTest(role=role):
-                self.assertIn("Only the current request authorizes state changes", rules)
-                self.assertIn("A standing rule authorizes just its named queue actions", rules)
-                self.assertIn("other limits remain", rules)
-
-        specialist = " ".join(
-            (directory.home("forge") / "AGENTS.md").read_text(encoding="utf-8").split())
-        self.assertIn("specialists own no queue", specialist)
-        self.assertIn("grants no persistent work", specialist)
-
-    def test_both_roles_keep_findings_and_repository_rules_inside_the_assignment(self):
-        directory.made("forge", "a-stand-in", role="specialist")
-        for role, home in (("domain", self.home), ("specialist", directory.home("forge"))):
-            rules = " ".join((home / "AGENTS.md").read_text(encoding="utf-8").split())
-            with self.subTest(role=role):
-                self.assertIn("smallest complete change", rules)
-                self.assertIn("regression introduced by the change", rules)
-                self.assertIn("pre-existing/adjacent", rules)
-                self.assertIn("Fix only the first two", rules)
-                self.assertIn("upstream work, PRDs, refactors, broad tests", rules)
-                self.assertIn("does not authorize a larger outcome", rules)
-                self.assertIn("materially expand scope", rules)
+    def test_the_rules_have_the_required_sections(self):
+        rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
+        headings = ("# AGENTS", "## Start", "## Boundaries", "## Scope control", "## Rundesk",
+                    "## Task state", "## Memory", "## Workspace", "## Delegation", "## Finish")
+        places = []
+        for heading in headings:
+            with self.subTest(heading=heading):
+                self.assertEqual(1, rules.count(heading))
+                places.append(rules.index(heading))
+        self.assertEqual(sorted(places), places)
 
     def test_the_pages_say_what_they_are(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
@@ -413,6 +358,17 @@ class TheSweepEveryUpdateRuns(support.Isolated):
 
         self.assertTrue((directory.home("ava") / "tasks" / "README.md").is_file())
         self.assertTrue([one for one in said if "ava" in one and "tasks/README.md" in one], said)
+
+    def test_a_legacy_role_value_does_not_select_a_different_template(self):
+        records.stated(directory.records("ava"), {"role": "specialist"})
+        for name in ("AGENTS.md", "CLAUDE.md"):
+            (directory.home("ava") / name).unlink()
+
+        pages.everybody_has_theirs(directory.known(), directory.home)
+
+        expected = (pages.shipped() / "agent" / "AGENTS.md").read_bytes()
+        self.assertEqual(expected, (directory.home("ava") / "AGENTS.md").read_bytes())
+        self.assertEqual(expected, (directory.home("ava") / "CLAUDE.md").read_bytes())
 
     def test_an_agent_that_has_them_all_is_not_mentioned(self):
         said = []

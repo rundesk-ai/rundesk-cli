@@ -37,10 +37,10 @@ owner better; it is not daily overhead, a transcript, or a judgment of the owner
    corroborates earlier evidence. Otherwise leave it as a diary candidate and measure recurrence.
    Put a proven solution in the narrowest durable home. Use `MEMORY.md` for a reusable role, preference,
    process, trap, or gotcha; a maintained client/project index for stable mappings; project files
-   for project truth; a delegation route for specialist work; `scripts/` for small verified
+   for project truth; a delegation route for work another agent owns; `scripts/` for small verified
    cross-project automation; `research/` for reusable sourced investigation; and a skill
    recommendation only for a recurring capability the agent must own. Ask: Would an existing
-   specialist agent be materially better, or does the recurring boundary justify proposing one?
+   named agent be materially better, or does the recurring boundary justify proposing one?
    Would a provider-local research helper cover independent same-turn investigation? Would an
    available, granted, or new skill improve work this agent still owns? Would a compact script,
    mapping, or index remove repeated tool calls, tokens, latency, or cost? The diary may link to the

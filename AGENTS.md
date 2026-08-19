@@ -46,7 +46,7 @@ src/rundesk/                    standard-library product code
                                   bounded domain packages; dependencies are enforced by tests
 src/channels/, src/providers/   external adapter entry points
 src/skills/                     bundled catalog manifest and skill packages
-src/templates/                  domain/specialist home rules and purpose-named area templates
+src/templates/                  agent home rules and purpose-named area templates
 tests/test_*.py                 directly runnable isolated suites
 tests/support.py                scrubbed environment, closed network, and scratch-root harness
 scripts/suites                  discovers every suite and fails on empty discovery
@@ -76,8 +76,8 @@ transport, lifecycle route, migration registry, skill index, or documentation so
   catalog. Directory and frontmatter names match; packages contain their own references and
   metadata; no skill depends on another checkout at runtime. A bundled skill may teach only commands
   and behavior this release actually provides. Use `writing-skills` for changes.
-- Agent-home templates in `src/templates/domain/` and `src/templates/specialist/` are shipped
-  artifacts. Preserve their role boundary and required identical `AGENTS.md`/`CLAUDE.md` pairs.
+- The agent-home template in `src/templates/agent/` is a shipped artifact. Preserve the required
+  identical `AGENTS.md`/`CLAUDE.md` pair placed from that one source.
 
 ## Safety and approval gates
 

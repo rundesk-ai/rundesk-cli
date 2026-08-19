@@ -383,18 +383,17 @@ whose records are there and cannot be read is listed with a provider nobody can 
 than left out: leaving it out would say the agent is gone, and what somebody does next is make a new
 one over what survived.
 
-Listings are split into `Domain agents` and `Specialist agents`; each section preserves name order.
-Domain is the compatible default for existing and newly created agents.
+Listings use one name-ordered table. An agent's purpose, skills, and delegation scope provide the
+routing context without a separate type.
 
 ### agents add
 
 Makes an agent: its records, `home/`, `logs/`, and the files it lives by. `--provider` is required.
 
 ```console
-$ rundesk agents add cole --provider claude --role domain
+$ rundesk agents add cole --provider claude
 agent cole added
         provider  claude
-        role      domain
         home      /Users/you/.rundesk/data/agents/cole/home
         logs      /Users/you/.rundesk/data/agents/cole/logs
         records   /Users/you/.rundesk/data/agents/cole/state.db
@@ -403,13 +402,6 @@ agent cole added
         skill     rundesk/managing-rundesk — how it operates this install
         note      the provider is recorded and not proven — check it with: rundesk providers check
 ```
-
-`--role` accepts exactly `domain` or `specialist` and defaults to `domain`. A domain agent owns an
-ongoing operational area and its Desk queue when it holds `managing-your-desk`; its rules prioritize
-standing specialists for bounded work in their focus or skill scope. A specialist accepts one
-bounded assignment from its delegator and has no persistent Desk queue, Rundesk-operations workflow,
-or standing named-agent delegation policy. Role is independent of provider, skills, delegation
-scope, and whether a Desk exists.
 
 **Every agent is given the files it lives by**, in its own `home/`: `AGENTS.md` is how it works and
 `MEMORY.md` is what it has learned that is still true, and `CLAUDE.md` is the first of those under
@@ -458,8 +450,8 @@ owner preference. The final phase starts with that diary and previous
 `weekly-self-improve-upkeep` reports, then reviews a bounded sample of other messages and turns for repeated
 friction, corrections,
 missing context, failed outcomes, and ignored capability routes.
-Heavy specialist work stays delegated to a materially better active named agent; a same-turn helper
-is next when no standing specialist fits; a skill is recommended only for a recurring capability
+Heavy bounded work stays delegated to a materially better active named agent; a same-turn helper
+is next when no named agent fits; a skill is recommended only for a recurring capability
 this agent must own and neither route covers. The pass compares relevant available and granted skills
 only when selected friction indicates a capability gap, never revokes from non-use alone, and changes
 no grants or standing rules without explicit authority. Its
@@ -482,14 +474,13 @@ works, and a line implying otherwise would be a success this release did not ear
 **`--describes` is what an agent is for, in one sentence, and it is what the *other* agents read.**
 Every agent's preface lists its colleagues and what each is for, so this is how one agent decides
 whether a piece of work is somebody else's to do. An agent nobody has described is left out of that
-listing rather than named blank: a bare name in a list of specialists is an invitation to guess, and
+listing rather than named blank: a bare name in a team list is an invitation to guess, and
 guessing is what this field exists to prevent. It is capped at one sentence, because every agent's
 description is charged to every other agent's prompt on every turn.
 
-`configure` takes any combination of its flags, and every named value moves in one write. `--role
-<domain|specialist>` changes the recorded role and grouping only. It never rewrites `AGENTS.md` or
-`CLAUDE.md`, because those may contain owner customizations; applying a different template requires
-an explicit, separately reviewed edit to both files. An empty
+`configure` takes any combination of its flags, and every named value moves in one write. It never
+rewrites `AGENTS.md` or `CLAUDE.md`, because those may contain owner customizations; changing
+persistent behavior requires an explicit, separately reviewed edit to both files. An empty
 `--describes` takes the description away rather than storing a blank — unset and set-to-empty stay
 different answers, since a listing has to tell an agent nobody has described from one described as
 nothing. `--self-improve` controls Rundesk's automatic self-improvement work for this agent; it

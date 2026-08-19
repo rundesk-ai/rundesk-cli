@@ -123,8 +123,6 @@ def register(sub: Subcommands) -> None:
     new.add_argument("--alias", metavar="<alias>", default=None,
                      help="a registered additional account for that provider")
     new.add_argument("--describes", metavar="<text>", default=None, help=WHAT_IT_IS_FOR)
-    new.add_argument("--role", choices=pages.ROLES, default=pages.DEFAULT_ROLE,
-                     help="how it works: domain (default) or specialist")
 
     changed = what.add_parser("configure", help="change what an agent is configured with")
     changed.add_argument("agent", metavar="<agent>", help="which one, as `rundesk agents` lists it")
@@ -133,8 +131,6 @@ def register(sub: Subcommands) -> None:
     changed.add_argument("--alias", metavar="<alias>", default=None,
                          help="a registered additional account; requires --provider")
     changed.add_argument("--describes", metavar="<text>", default=None, help=WHAT_IT_IS_FOR)
-    changed.add_argument("--role", choices=pages.ROLES, default=None,
-                         help="change its operating role; existing rules are not replaced")
     changed.add_argument("--self-improve", metavar="<true|false>", default=None,
                          help="whether Rundesk runs automatic self improvement; yes or no")
     delegation = changed.add_mutually_exclusive_group()
@@ -162,11 +158,10 @@ def cmd_agents(args: argparse.Namespace) -> int:
     if what in (None, "list"):
         return _listed()
     if what == "add":
-        return _made(args.agent, args.provider, args.describes, args.role, args.alias)
+        return _made(args.agent, args.provider, args.describes, args.alias)
     if what == "configure":
-        return _configured(args.agent, args.provider, args.describes, args.role, args.self_improve,
-                           args.alias, args.delegate_to, args.delegate_to_any,
-                           args.delegate_to_none)
+        return _configured(args.agent, args.provider, args.describes, args.self_improve, args.alias,
+                           args.delegate_to, args.delegate_to_any, args.delegate_to_none)
     if what == "remove":
         return _forgotten(args.agent, args.confirm)
 
@@ -197,23 +192,11 @@ def _listed() -> int:
         print("        no agents yet — add one with: "
               "rundesk agents add <agent> --provider <provider>")
         return OK
-    grouped = {role: [] for role in pages.ROLES}
+    rows = []
     for name in there:
-        provider, role, self_improve, delegates_to = _configuration_of(name)
-        grouped.setdefault(role, []).append(
-            (name, provider, _skills_of(name), delegates_to, self_improve))
-    for role in pages.ROLES:
-        print(f"\n{role.capitalize()} agents")
-        rows = grouped[role]
-        if rows:
-            as_table(("AGENT", "PROVIDER", "SKILLS", "DELEGATES TO", "SELF-IMPROVE"), rows)
-        else:
-            print("        none")
-    for role, rows in grouped.items():
-        if role in pages.ROLES:
-            continue
-        print(f"\nAgents whose role cannot be read ({role})")
-        as_table(("AGENT", "PROVIDER", "SKILLS", "DELEGATES TO", "SELF-IMPROVE"), rows)
+        provider, self_improve, delegates_to = _configuration_of(name)
+        rows.append((name, provider, _skills_of(name), delegates_to, self_improve))
+    as_table(("AGENT", "PROVIDER", "SKILLS", "DELEGATES TO", "SELF-IMPROVE"), rows)
     return OK
 
 
@@ -225,7 +208,7 @@ def _skills_of(name: str) -> str:
         return "? — cannot be read"
 
 
-def _configuration_of(name: str) -> Tuple[str, str, str, str]:
+def _configuration_of(name: str) -> Tuple[str, str, str]:
     """The three listed settings of one agent, or why they could not be answered.
 
     The two ways it cannot be answered are kept apart, because they are different situations:
@@ -235,20 +218,16 @@ def _configuration_of(name: str) -> Tuple[str, str, str, str]:
     """
     try:
         settled = records.read(directory.records(name))
-        role = str(settled["role"])
-        if role not in pages.ROLES:
-            raise KeyError("role")
         provider = str(settled["provider_name"])
         if settled.get("provider_alias"):
             provider += f" ({settled['provider_alias']})"
-        return (provider, role,
-                as_written(bool(settled["self_improve"])),
+        return (provider, as_written(bool(settled["self_improve"])),
                 delegating.shown(delegating.decoded(settled.get("delegates_to"))))
     except records.NotThere:
-        return "? — its records are not there", "?", "?", "?"
+        return "? — its records are not there", "?", "?"
     except (delegating.Refused, directory.Refused, records.Unreadable, OSError, sqlite3.Error,
             KeyError):
-        return "? — its records cannot be read", "?", "?", "?"
+        return "? — its records cannot be read", "?", "?"
 
 
 def _the_skill_every_agent_holds(agent: str) -> str:
@@ -296,7 +275,7 @@ def _the_pages_it_lives_by(home: Path) -> str:
 
 
 def _made(name: str, provider: Optional[str], describes: Optional[str] = None,
-          role: str = pages.DEFAULT_ROLE, provider_alias: Optional[str] = None) -> int:
+          provider_alias: Optional[str] = None) -> int:
     """Make an agent, and say what was made — one named thing at a time.
 
     The provider is checked here before anything is built, so somebody who left it out is told what
@@ -320,13 +299,13 @@ def _made(name: str, provider: Optional[str], describes: Optional[str] = None,
             # `directory.made` takes this reentrant lock while the directory moves. Keeping the
             # account lookup and creation in the same outer decision prevents alias removal from
             # landing between validation and the durable agent reference.
-            at = directory.made(name, durable_provider, describes or "", role, provider_alias)
+            at = directory.made(
+                name, durable_provider, describes or "", provider_alias=provider_alias)
     except TROUBLE as why:
         return _failed(str(why), "nothing was made")
 
     print(f"agent {name} added")
     print(f"        provider  {_shown_provider(provider or '', provider_alias)}")
-    print(f"        role      {role}")
     print(f"        home      {at / directory.HOME}")
     print(f"        logs      {at / directory.LOGS}")
     print(f"        records   {at / directory.RECORDS}")
@@ -340,7 +319,7 @@ def _made(name: str, provider: Optional[str], describes: Optional[str] = None,
 
 
 def _configured(name: str, provider: Optional[str], describes: Optional[str] = None,
-                role: Optional[str] = None, self_improve: Optional[str] = None,
+                self_improve: Optional[str] = None,
                 provider_alias: Optional[str] = None,
                 delegate_to: Optional[List[str]] = None,
                 delegate_to_any: bool = False, delegate_to_none: bool = False) -> int:
@@ -361,13 +340,12 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
     different answers here — `None` means the flag was absent, and `""` means somebody typed it.
     """
     changing_delegation = delegate_to is not None or delegate_to_any or delegate_to_none
-    if (provider is None and describes is None and role is None and self_improve is None
+    if (provider is None and describes is None and self_improve is None
             and provider_alias is None
             and not changing_delegation):
         return _failed(f"nothing was named to change about {name}",
                        f"change one with: rundesk agents configure {name} --provider <provider>",
                        f"or: rundesk agents configure {name} --describes <text>",
-                       f"or: rundesk agents configure {name} --role <domain|specialist>",
                        f"or: rundesk agents configure {name} --self-improve <true|false>",
                        f"or: rundesk agents configure {name} --delegate-to <agent>",
                        "nothing was changed")
@@ -421,8 +399,6 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
                 # `None` rather than `""`, so an agent nobody has described and one described as
                 # nothing stay the same answer — which is what taking a description away means.
                 moving["describes"] = describes.strip() or None
-            if role is not None:
-                moving["role"] = role
             if improving is not None:
                 moving["self_improve"] = improving
             if changing_delegation:
@@ -440,9 +416,6 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
     if describes is not None:
         said = describes.strip()
         print(f"{name}: is for {said}" if said else f"{name}: is described by nothing now")
-    if role is not None:
-        print(f"{name}: role is now {role}")
-        print("        existing AGENTS.md and CLAUDE.md were not changed")
     if improving is not None:
         print(f"{name}: self improvement is now {'on' if improving else 'off'}")
     if changing_delegation:

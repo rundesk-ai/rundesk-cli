@@ -200,7 +200,7 @@ The agent {caller_agent} delegated this assignment to you.
 #:
 #:     ### Delegation
 #:
-#:     - Choose a team member whose stated role, focus, or skills make them better suited.
+#:     - Choose a team member whose stated responsibility, focus, or skills make them better suited.
 #:     - Delegate with `"$RUNDESK_COMMAND" ask <agent> "<task>"` and review the later result.
 #:     …
 #:
@@ -215,7 +215,7 @@ These team members are available for named Rundesk delegation.
 
 ### Delegation
 
-- Choose a team member whose stated role, focus, or skills make them better suited for the work.
+- Choose a team member whose stated responsibility, focus, or skills make them better suited for the work.
 - Delegate a bounded assignment with `"$RUNDESK_COMMAND" ask <agent> "<task>"`. Include the context, scope, authority, expected result, and completion criteria.
 - Named Rundesk delegation is asynchronous. Do not wait for or duplicate active delegated work.
 - Review and verify the result before using it or reporting the larger assignment complete.
