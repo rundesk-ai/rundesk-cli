@@ -216,7 +216,8 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
         first = kept.list_turn_records("ava", got.turn)[0]
         self.assertEqual(first["record_type"], turns.INSTRUCTIONS)
         said = json.loads(first["event_data"])
-        self.assertEqual([one["name"] for one in said["layers"]], ["core", "situation"])
+        self.assertEqual([one["name"] for one in said["layers"]],
+                         ["core", "situation", "rules", "completion"])
         self.assertEqual("", said["team"])
 
     def test_team_state_is_not_read_when_a_named_handoff_cannot_be_used(self):
