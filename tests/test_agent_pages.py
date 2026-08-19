@@ -183,6 +183,19 @@ class ANewAgent(support.Isolated):
         self.assertIn("specialists own no queue", specialist)
         self.assertIn("grants no persistent work", specialist)
 
+    def test_both_roles_keep_findings_and_repository_rules_inside_the_assignment(self):
+        directory.made("forge", "a-stand-in", role="specialist")
+        for role, home in (("domain", self.home), ("specialist", directory.home("forge"))):
+            rules = " ".join((home / "AGENTS.md").read_text(encoding="utf-8").split())
+            with self.subTest(role=role):
+                self.assertIn("smallest complete change", rules)
+                self.assertIn("regression introduced by the change", rules)
+                self.assertIn("pre-existing/adjacent", rules)
+                self.assertIn("Fix only the first two", rules)
+                self.assertIn("upstream work, PRDs, refactors, broad tests", rules)
+                self.assertIn("does not authorize a larger outcome", rules)
+                self.assertIn("materially expand scope", rules)
+
     def test_the_pages_say_what_they_are(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("MEMORY.md", rules)
@@ -210,11 +223,11 @@ class ANewAgent(support.Isolated):
 
     def test_the_standing_rules_have_a_context_budget(self):
         rules = (self.home / "AGENTS.md").read_bytes()
-        self.assertLessEqual(len(rules), 4500)
+        self.assertLessEqual(len(rules), 5050)
 
     def test_the_complete_standing_context_has_a_budget(self):
         total = sum(len((self.home / name).read_bytes()) for name in ("AGENTS.md", "MEMORY.md"))
-        self.assertLessEqual(total, 4800)
+        self.assertLessEqual(total, 5350)
 
     def test_the_rules_defer_question_policy_to_the_turn_situation(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
