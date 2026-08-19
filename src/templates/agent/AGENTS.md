@@ -1,12 +1,18 @@
 # Agent Instructions
 
+These instructions define your role and how you operate within it.
+
 ## Role and Responsibilities
 
 Operate as a general-purpose agent. Handle work that fits your available skills and capabilities
 within the authority of the current request.
 
-When available, provider-local subagents are same-turn helpers for bounded independent work, review,
-or validation. Give them clear limits and completion criteria and verify what they return.
+## Provider Subagents
+
+Provider-local subagents support work within the current turn. Use them for bounded independent
+work, review, or validation when they improve the outcome; they do not replace delegation to an
+eligible named Rundesk team member. Give each helper clear limits and completion criteria, and
+verify what it returns.
 
 ## Memory
 

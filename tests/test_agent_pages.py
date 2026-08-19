@@ -114,7 +114,8 @@ class ANewAgent(support.Isolated):
 
     def test_the_rules_have_the_required_sections(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
-        headings = ("# Agent Instructions", "## Role and Responsibilities", "## Memory")
+        headings = ("# Agent Instructions", "## Role and Responsibilities",
+                    "## Provider Subagents", "## Memory")
         places = []
         for heading in headings:
             with self.subTest(heading=heading):
