@@ -45,6 +45,7 @@ Two rules for a page here:
 | [`2026-08-05-designing-the-provider-system.md`](2026-08-05-designing-the-provider-system.md) | what is settled about providers, the terms-of-service position, and the nine-phase route — a proposal, not a description |
 | [`2026-08-06-what-moved-since-the-brains-were-researched.md`](2026-08-06-what-moved-since-the-brains-were-researched.md) | what the carried-over brain notes get wrong at the versions that ship, re-probed rather than assumed |
 | [`2026-08-08-what-this-mac-lets-a-process-do.md`](2026-08-08-what-this-mac-lets-a-process-do.md) | what macOS permits a gateway, measured against an ungranted launchd job — the lineage that decides an answer, and the screenshot reading that was wrong twice |
+| [`2026-08-19-agent-rule-stress-test.md`](2026-08-19-agent-rule-stress-test.md) | the reusable live-provider checklist for operating rules, agent behavior, memory and delegation, with the first Codex run |
 
 ## Carried over intact
 
