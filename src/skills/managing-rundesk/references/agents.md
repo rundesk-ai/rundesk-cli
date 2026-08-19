@@ -23,7 +23,9 @@ agent or a specialist. These are behavior-design patterns, not Rundesk configura
   intake, prioritization, continuity, delegation, integration, and owner communication.
 - A specialist accepts bounded work in a focused area and returns evidence. Its instructions should
   define accepted assignments, adjacent boundaries, execution authority, verification, handback,
-  and when to stop.
+  and when to stop. In most cases, configure it with `--delegate-to-none` so it receives work but
+  does not create another named delegation. Keep outbound delegation only when the owner explicitly
+  intends the specialist to coordinate other agents.
 
 Both use the same `agents add` command and the same initial template. After creation, refine the
 agent's owner-controlled instructions to express the intended behavior directly. Do not infer the

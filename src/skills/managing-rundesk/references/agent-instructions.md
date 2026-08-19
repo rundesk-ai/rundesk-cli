@@ -92,6 +92,11 @@ adjacent findings are reported without becoming new work. A specialist does not 
 backlog, redefine the original owner outcome, contact the original requester, or place delegated
 task detail in memory unless it creates a durable role-level lesson.
 
+Most specialist agents should be inbound-only. Configure them with
+`"$RUNDESK_COMMAND" agents configure <agent> --delegate-to-none` unless the owner explicitly wants
+that specialist to coordinate other named agents. This delegation setting reinforces the intended
+behavior but does not replace the behavior contract in its instructions.
+
 Describe those behaviors directly rather than assigning a Rundesk agent type. The instructions,
 description, skills, delegation scope, and current assignment together provide enough routing and
 execution context without a separate role flag.
