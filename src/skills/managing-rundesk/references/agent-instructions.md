@@ -40,11 +40,26 @@ Classify a proposed rule before writing it:
 Split anything that mixes owners. Project instructions may narrow how work is performed but do not
 broaden the assignment's authority, redefine the agent's role, or override Rundesk operating rules.
 
-## Generate a focused behavior contract
+## Review the agent before writing
 
-Start from the agent's description, instructions, and delegation scope. Read both existing home
-instruction files in full, preserve owner customizations, and define only what this agent needs on
-every turn:
+Do not draft or modify agent instructions until you have reviewed the agent as it currently
+operates:
+
+1. Run `"$RUNDESK_COMMAND" agents` and inspect the target's description, granted skills, and
+   outbound delegation scope.
+2. Read the target's existing `AGENTS.md` and `CLAUDE.md` in full. Identify owner customizations and
+   any divergence; do not replace either file from a template or another agent.
+3. Confirm that each requested change is durable behavior for this agent rather than a current
+   assignment, universal operating process, project convention, skill procedure, or learned fact
+   for memory.
+4. Mark what the smallest patch must preserve, change, remove, or move to the proper owner before
+   drafting it.
+
+## Write a focused behavior contract
+
+Write direct instructions to the agent about what it operates and how it should behave within its
+role. Do not include commentary about the instruction file, when it should be edited, or how to
+write instructions. Define only what this agent needs on every turn:
 
 1. State the broad role and durable responsibilities in one compact opening.
 2. Define its decision authority, role-specific capabilities and limits, and explicit non-goals.
@@ -87,18 +102,15 @@ execution context without a separate role flag.
 
 ## Change instructions safely
 
-1. Run `"$RUNDESK_COMMAND" agents` and confirm the target's description and delegation scope. A
-   behavior edit does not change either one.
-2. Read both home instruction files in full. Identify existing customizations and divergence before
-   preparing the smallest patch. Never replace a customized file merely because a canonical
-   template or another agent differs.
-3. Save a Rundesk backup before a broad multi-agent rewrite whose recovery would be costly. One
+After reviewing the agent and drafting the focused behavior contract:
+
+1. Save a Rundesk backup before a broad multi-agent rewrite whose recovery would be costly. One
    small reversible wording edit does not require backup ceremony unless the owner asks.
-4. Show the proposed diff before replacing customized instructions, then apply the same resulting
+2. Show the proposed diff before replacing customized instructions, then apply the same resulting
    content to `AGENTS.md` and `CLAUDE.md`. Preserve unrelated owner rules.
-5. Verify both files are byte-identical, the intended section appears once, no unrelated section
+3. Verify both files are byte-identical, the intended section appears once, no unrelated section
    changed, and no operating, project, skill, assignment, or memory content is duplicated.
-6. Treat the current turn as already built. Validate changed behavior in the next fresh turn with
+4. Treat the current turn as already built. Validate changed behavior in the next fresh turn with
    one representative assignment and one close near-miss. Verify that the agent accepts appropriate
    work and refuses or redirects inappropriate work.
 

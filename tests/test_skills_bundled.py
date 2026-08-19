@@ -262,9 +262,9 @@ class WhatAShippedSkillMayClaim(Bundled):
         self.assertIn(link, main)
         self.assertIn("[Agent instructions](agent-instructions.md)", agents)
         headings = ("# Agent instructions", "## Keep each rule with its owner",
-                    "## Generate a focused behavior contract", "### Shape the agent's behavior",
-                    "#### Domain behavior", "#### Specialist behavior",
-                    "## Change instructions safely")
+                    "## Review the agent before writing",
+                    "## Write a focused behavior contract", "### Shape the agent's behavior",
+                    "#### Domain behavior", "#### Specialist behavior", "## Change instructions safely")
         places = []
         for heading in headings:
             with self.subTest(heading=heading):
