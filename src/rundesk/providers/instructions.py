@@ -5,7 +5,7 @@ the same trigger and the same variables it builds the same bytes, on any machine
 what makes prompting something this project can maintain: every case is a string comparison, the
 whole thing renders in a command, and a change to it is visible before it ships.
 
-## Three composable blocks, six visible sections
+## Three composable blocks, five required sections
 
 ```
 CORE                 Rundesk, Agent Context, Core Rules, Messages and Attachments
@@ -106,9 +106,7 @@ class Prompt(NamedTuple):
 
 #: The product-owned rules every named agent receives. Agent behavior and memory policy are already
 #: in the provider-native standing instructions and are identified here without being repeated.
-CORE = """# Rundesk Operating Rules
-
-## Rundesk
+CORE = """# Rundesk
 
 Rundesk is the operating layer for this agent, its workspace, skills, conversations, schedules, and team delegation. Use `"$RUNDESK_COMMAND"` for this installation.
 
