@@ -74,8 +74,9 @@ Exactly one situation is rendered:
   requested, forbids waiting for clarification, and says the final standalone response is delivered
   automatically to the intended recipient or destination.
 - Agent delegation: names the calling agent, requires the delegated work to be completed and
-  verified within its outcome, scope, and authority, and returns results and evidence to that agent.
-  It forbids contacting the original requester or delegating to another named Rundesk agent.
+  verified within its outcome, scope, and authority, and treats the work as read-only unless the
+  delegation explicitly authorizes changes. It returns results and evidence to that agent and
+  forbids contacting the original requester or delegating to another named Rundesk agent.
 
 Unknown or omitted situations use the person-facing situation rather than silently adopting the
 restrictions of a schedule or delegation.
@@ -100,7 +101,8 @@ This section makes two high-failure mechanics explicit:
 - When a request appears out of context or refers to prior work, decisions, or discussions that are
   not present, search all of the agent's message history across conversations before continuing or
   asking for clarification. The operating instructions include the executable form
-  `"$RUNDESK_COMMAND" messages {agent_name} --search "<relevant words>" --full`.
+  `"$RUNDESK_COMMAND" messages {agent_name} --search "<relevant words>" --full`. Search results from
+  another audience remain private and cannot be used in or exposed to the current audience.
 - Attach a file or image with an absolute local Markdown link, such as
   `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain path is
   not represented as an attachment.
@@ -123,9 +125,9 @@ never reported as complete.
 This section briefly identifies the team members available for named Rundesk delegation, lists the
 agents available to a person-facing turn, then places its operating guidance under a `Delegation`
 subsection. That subsection explains how to choose an agent, hand over one bounded outcome with
-`"$RUNDESK_COMMAND" ask <agent> "<task>"`, and avoid waiting for or duplicating active work. The
-result returns in a review turn. The agent reviews and verifies that result before relying on it or
-completing the larger outcome.
+`"$RUNDESK_COMMAND" ask <agent> "<task>"`, state whether changes are authorized, and avoid waiting
+for or duplicating active work. The result returns in a review turn. The agent reviews and verifies
+that result before relying on it or completing the larger outcome.
 
 It is omitted for schedules because their asynchronous result cannot return to the same turn for
 review. It is omitted for agent-to-agent delegations because named Rundesk delegation stops at one

@@ -161,6 +161,7 @@ AGENT_TO_AGENT = """## Current Situation
 The agent {caller_agent} delegated this work to you.
 
 - Complete and verify the work within the delegated outcome, scope, and authority.
+- Treat the delegation as read-only unless it explicitly authorizes changes to files, systems, or external state.
 - Return your result, evidence, assumptions, and blockers to the calling agent.
 - Do not contact the original requester or delegate to another named Rundesk agent."""
 
@@ -190,6 +191,7 @@ Stay within the scope and authority defined by the current request, schedule, or
 Use Rundesk to recover missing context and deliver files reliably.
 
 - When something appears out of context or refers to prior work, decisions, or discussions not shown here, search all message history before continuing or asking for clarification: `"$RUNDESK_COMMAND" messages {agent_name} --search "<relevant words>" --full`
+- Use only results from the current audience `{source_kind}:{audience_id}` in the current work. Other audiences are private; never expose their content.
 - Attach a file or image with an absolute local Markdown link, such as `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain file path is not an attachment.
 
 ## Execute the Work
@@ -244,7 +246,7 @@ These team members are available for named Rundesk delegation.
 ### Delegation
 
 - Choose a team member whose responsibility, focus, or skills best fit the work.
-- Delegate one bounded outcome with `"$RUNDESK_COMMAND" ask <agent> "<task>"`, including the relevant context, scope, authority, expected result, and completion criteria.
+- Delegate one bounded outcome with `"$RUNDESK_COMMAND" ask <agent> "<task>"`, including the relevant context, scope, authority, whether changes are allowed, expected result, and completion criteria.
 - Named Rundesk delegation is asynchronous. Rundesk returns the result in a review turn; do not wait for or duplicate the delegated work.
 - Review and verify the returned result before using it or completing the larger outcome.
 - Keep the work when delegation would add more overhead than value."""
