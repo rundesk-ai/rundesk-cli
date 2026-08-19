@@ -117,6 +117,7 @@ This context identifies you and the environment you operate within.
 - Agent: {agent_name}
 - Home: `{agent_home}`
 - Workspace: `{agent_home}`
+- Conversation: {conversation_id}
 - Skills: Provided by the runtime.
 - Agent instructions: Define your role, behavior, and memory without overriding these operating instructions.
 
@@ -137,7 +138,7 @@ Follow these operating rules and your agent instructions before taking action.
 
 Use Rundesk messages and attachments to recover context and deliver files reliably.
 
-- If something seems out of context or refers to prior work, decisions, or discussions not shown here, search message history before continuing or asking for clarification: `"$RUNDESK_COMMAND" messages {agent_name} --search "<relevant words>" --full`
+- If something seems out of context or refers to prior work, decisions, or discussions not shown here, search message history before continuing or asking for clarification: `"$RUNDESK_COMMAND" messages {agent_name} --search "<relevant words>" --full`. To read only this conversation, use `"$RUNDESK_COMMAND" messages {agent_name} --conversation {conversation_id} --full`.
 - Attach files using an absolute local Markdown link, such as `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain file path is not an attachment."""
 
 
