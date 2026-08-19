@@ -197,6 +197,8 @@ The agent {caller_agent} delegated this assignment to you.
 #:     - **bob** — keeps the billing system; knows every invoice edge case we have hit
 #:     - **nina** — runs the deploy pipeline and the incident history
 #:
+#:     ### Delegation
+#:
 #:     - Choose a team member whose stated role, focus, or skills make them better suited.
 #:     - Delegate with `"$RUNDESK_COMMAND" ask <agent> "<task>"` and review the later result.
 #:     …
@@ -209,6 +211,8 @@ TEAM_MEMBERS = """## Team Members
 These team members are available for named Rundesk delegation.
 
 {team}
+
+### Delegation
 
 - Choose a team member whose stated role, focus, or skills make them better suited for the work.
 - Delegate a bounded assignment with `"$RUNDESK_COMMAND" ask <agent> "<task>"`. Include the context, scope, authority, expected result, and completion criteria.
