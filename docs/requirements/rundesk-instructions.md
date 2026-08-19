@@ -49,7 +49,7 @@ without expanding into agent behavior.
 ### Agent Context
 
 This section makes clear that the context describes the agent itself. It identifies the agent,
-home, workspace, and runtime-provided skills, and says that the separately supplied agent
+home, workspace, current conversation, and runtime-provided skills, and says that the separately supplied agent
 instructions define role, behavior, and memory without overriding the operating instructions.
 
 It does not name provider-native instruction files or tell the agent to load instructions that the
@@ -73,6 +73,10 @@ This section makes two high-failure mechanics explicit:
   not present, search the agent's messages before continuing or asking for clarification. The
   operating instructions include the executable form
   `"$RUNDESK_COMMAND" messages {agent_name} --search "<relevant words>" --full`.
+- The current conversation can be read directly with
+  `"$RUNDESK_COMMAND" messages {agent_name} --conversation {conversation_id} --full`. The
+  conversation ID is exposed because it is the identifier accepted by the command; an audience ID
+  is not presented as a search filter.
 - Attach a file or image with an absolute local Markdown link, such as
   `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain path is
   not represented as an attachment.
