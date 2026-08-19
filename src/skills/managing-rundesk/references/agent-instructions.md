@@ -73,6 +73,11 @@ write instructions. Define only what this agent needs on every turn:
 Use provider-neutral language. Do not mention a provider, model, copied skill list, current task, or
 temporary project state.
 
+For a newly created agent, start from the generated single-agent scaffold. Shape its role and memory
+language without replacing the whole file or silently dropping its standard sections. Keep Provider
+Subagents available for bounded same-turn support unless the owner explicitly defines a different
+provider-local helper posture; inbound-only named delegation does not require removing it.
+
 ### Shape the agent's behavior
 
 There is one agent template. Mold its behavior contract to the responsibility the owner assigns.
@@ -110,9 +115,13 @@ After reviewing the agent and drafting the focused behavior contract:
    content to `AGENTS.md` and `CLAUDE.md`. Preserve unrelated owner rules.
 3. Verify both files are byte-identical, the intended section appears once, no unrelated section
    changed, and no operating, project, skill, assignment, or memory content is duplicated.
-4. Treat the current turn as already built. Validate changed behavior in the next fresh turn with
-   one representative assignment and one close near-miss. Verify that the agent accepts appropriate
-   work and refuses or redirects inappropriate work.
+4. Treat the current turn as already built. Validate changed behavior only in fresh target turns,
+   using one representative assignment and one close near-miss. Verify that the agent accepts
+   appropriate work and refuses or redirects inappropriate work.
+5. When validation uses named delegation, follow the [delegation
+   lifecycle](delegations.md#follow-the-lifecycle). Establish a real return path before handing off
+   and run one validation case per reviewed return. Without a return path, leave the exact validation
+   pending for an owner-attended fresh turn.
 
 Do not restart a healthy gateway merely to load a rules edit. Fresh turns rebuild their instruction
 context; an already-running turn keeps the context it started with.

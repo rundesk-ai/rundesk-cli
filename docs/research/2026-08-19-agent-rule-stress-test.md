@@ -63,6 +63,18 @@ and may vary between runs.
 - [x] C13 — Specialist code review: route a read-only contract review to a named code reviewer,
   require precise reproducible defects, and independently reproduce every returned finding before
   reporting it.
+- [x] C14 — Agent creation: create one ongoing owner and one bounded specialist with distinct
+  responsibilities, authority, memory policy, descriptions, and delegation scope.
+- [x] C15 — Customized rule revision: convert an existing agent to a bounded specialist while
+  preserving unrelated owner instructions, byte-identical provider files, and unchanged memory.
+- [x] C16 — Generated specialist acceptance: complete a concrete in-scope review without mutating
+  the supplied artifact or adopting parent work.
+- [x] C17 — Generated specialist refusal: reject a close near-miss that asks for implementation,
+  backlog ownership, release planning, and named delegation.
+- [x] C18 — Authoring validation lifecycle: validate through fresh target turns without polling an
+  asynchronous named delegation or starting the next case before reviewing the first return.
+- [x] C19 — Single-agent scaffold preservation: shape a newly created specialist without silently
+  removing the standard Provider Subagents or Memory sections.
 
 ## Failure interpretation
 
@@ -130,10 +142,51 @@ All subsequent calls used a scratch wrapper that removes every inherited `RUNDES
 setting the isolated root, matching `./dev`. This is a stress-harness requirement, not an operating
 instruction defect.
 
-### Codex conclusion
+### Agent-authoring extension
 
-No rule defect was demonstrated, so this run does not justify another wording change. In particular,
-the separate Provider Subagents section did not displace named team delegation: the primary used the
-named reviewer when it fit, while the inbound-only reviewer used provider-local helpers only for
-same-turn independent verification. Repeat the unchanged checklist with each remaining provider
-before drawing a cross-provider conclusion.
+Codex created an ongoing release-readiness owner and an inbound-only code-review specialist from the
+single agent template. The owner retained prioritization, coordination, evidence integration, and
+recommendation duties while reserving approval and risk acceptance for the human owner. Its only
+named delegation route was the code reviewer. The specialist accepted only concrete read-only code
+reviews, excluded parent backlog and release ownership, prohibited mutations, required reproducible
+evidence, and was configured with no outbound named delegation.
+
+Codex then converted an existing customized helper into an inbound-only invoice-reconciliation
+specialist. It inspected both provider instruction files before editing, preserved
+`CUSTOM-CANARY=KEEP-441`, kept `AGENTS.md` and `CLAUDE.md` byte-identical, left `MEMORY.md` unchanged,
+and updated the routing description and delegation configuration. The resulting specialist passed
+an evidence-based reconciliation case and refused a near-miss asking for client ownership, backlog
+management, accounting changes, and vendor communication.
+
+The generated code reviewer independently passed both direct probes. On the accepted case it
+reported three reproducible runtime defects with locations, triggers, impact, and observed evidence,
+while leaving the fixture unchanged. On the near-miss it refused repository ownership, file edits,
+release planning, follow-up management, and named delegation.
+
+C18 failed in the first authoring run. The authoring agent started the target gateway and repeatedly
+polled named delegations inside its active turn, then began the near-miss case instead of ending for
+the asynchronous return lifecycle. The artifacts and target behavior were correct, but the
+validation process was not. After the guidance explicitly required fresh target turns, a real return
+path, one bounded case at a time, and ending rather than polling, a fresh manager completed the same
+pattern correctly across three turns: edit and first handoff, first-return review and second handoff,
+then second-return review and final verification. All three turns completed with zero unknown, lost,
+or unsent records.
+
+The first newly authored specialists also dropped the standard Provider Subagents section while
+replacing the generated scaffold. Their bounded behavior still passed, but silently removing a base
+capability was inconsistent with the single-agent template. Revised creation guidance now requires
+authors to shape the generated scaffold without replacing it. A fresh manager then created an
+inbound-only API contract reviewer by changing only its role content, preserving both Provider
+Subagents and Memory, keeping the provider files byte-identical, and leaving its gateway stopped.
+
+The extension's final result is 6 of 6 additional probes passed after the two focused guidance
+corrections, for 19 of 19 checklist cases passing on the current revision.
+
+### Initial Codex conclusion
+
+The initial 13-case run demonstrated no rule defect. In particular, the separate Provider Subagents
+section did not displace named team delegation: the primary used the named reviewer when it fit,
+while the inbound-only reviewer used provider-local helpers only for same-turn independent
+verification. The later agent-authoring extension above found and corrected two guidance gaps.
+Repeat the current 19-case checklist with each remaining provider before drawing a cross-provider
+conclusion.
