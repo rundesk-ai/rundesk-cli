@@ -63,14 +63,14 @@ WORKING = "working"
 STOPPED = "stopped"
 
 #: What a room is told about work this agent handed over, and the whole of that vocabulary
-#: (R-DEL-16, R-DEL-23). Six words, and they divide into two kinds that the sweep below keeps
+#: (R-DEL-16, R-DEL-23). Seven words, and they divide into two kinds that the sweep below keeps
 #: apart because a surface has to be told them under different rules.
 #:
-#: **Three are where the work stands** — it went, it is still going, it came back — and each is said
-#: once for as long as it remains true. **Three are something that just happened to it**: somebody
-#: put words into it, somebody asked it to end, somebody carried a finished one on. Those are
-#: moments rather than states, they are said once each time they occur, and the work goes on
-#: standing wherever it stood a moment before.
+#: **Four are where the work stands** — it went, it is still going, it came back, it was stopped —
+#: and each is said once for as long as it remains true. **Three are something that just happened to
+#: it**: somebody put words into it, somebody asked it to end, somebody carried a finished one on.
+#: Those are moments rather than states, they are said once each time they occur, and the work goes
+#: on standing wherever it stood a moment before.
 #:
 #: **Words and never sentences.** What each one *looks like* is the surface's — see
 #: `channels.hosting.delegating` — so a platform with a quiet register puts them in it and one
@@ -160,13 +160,19 @@ class Answering:
         raise NotImplementedError
 
     def showed(self, agent: str, conversation: int, state: str, to_agent: str,
-               delegation_id: str, seconds: Optional[int] = None) -> bool:
+               delegation_id: str, seconds: Optional[int] = None,
+               provider_name: Optional[str] = None,
+               provider_alias: Optional[str] = None) -> bool:
         """Show one of `SHOWN` in the room this conversation stands in. `False` where there is none.
 
         Handed in rather than reached for, like everything else here: what a room *is* belongs to
         `channels`, which this package may not import, and the layer that may reach both is the
         gateway. `False` for a conversation standing on no platform — a schedule, a terminal, another
         agent's ask — which is an ordinary answer and not a failure.
+
+        `provider_name` and `provider_alias` are which brain has the work, and they are the row's
+        **effective** columns rather than its requested ones — see `_showed_what_is_happening`.
+        `None` for either is *nobody knows*, which the surface leaves out rather than renders.
         """
         raise NotImplementedError
 
@@ -463,6 +469,13 @@ def _showed_what_is_happening(name: str, carrying: Carrying, answering: Answerin
     crossed a twenty-minute boundary is one piece of news and not two, and of the two the steer is
     the one somebody scrolling has not already been able to work out. The check-in it displaced is
     recorded as said, so the room hears the next one rather than that one late.
+
+    **Which brain has it goes with every one of those words, and it is the effective selection.**
+    `provider_name` and `provider_alias` are what admission resolved and what the work is actually
+    running under; `requested_provider_name` is what somebody typed, which may be a relative path
+    and may be half an override, and a room told that one would be told about a request rather than
+    about the work. A row with no effective provider — one admitted before providers travelled with
+    a delegation — is shown without one rather than shown a guess.
     """
     for one in kept.every(name):
         stood = carrying.said.get(one.delegation_id)
@@ -483,11 +496,13 @@ def _showed_what_is_happening(name: str, carrying: Carrying, answering: Answerin
                 # news about somebody reaching into it — a clause saying "· 41m" beside "updated
                 # elena" would read as how long the steering took (R-DEL-23).
                 answering.showed(name, one.parent_conversation, _as_shown(happened), one.to_agent,
-                                 one.delegation_id)
+                                 one.delegation_id, None,
+                                 one.provider_name, one.provider_alias)
                 continue
         if standing != stood:
             answering.showed(name, one.parent_conversation, _as_shown(standing), one.to_agent,
-                             one.delegation_id, since)
+                             one.delegation_id, since,
+                             one.provider_name, one.provider_alias)
     _forgotten(carrying, {one.delegation_id for one in kept.every(name)})
 
 

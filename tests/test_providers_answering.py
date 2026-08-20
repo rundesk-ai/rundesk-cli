@@ -1281,6 +1281,50 @@ class WhatARoomIsToldWhileWorkIsOut(Answering):
         self.assertTrue(self.waited_until(lambda: self.delegating()))
         self.assertEqual("20m", self.delegating()[0]["elapsed"])
 
+    def test_which_brain_has_the_work_crosses_beside_who_has_it(self):
+        """The provider and its account alias reach the surface as their own fields, so a room can
+        show which brain a delegation is running on rather than only which agent holds it."""
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        conversation = arriving.standing_in(self.agent, "1180")
+
+        self.a_delegation_tenant().showed(
+            self.agent, conversation, delegations.HANDED_OVER, "dev", "del-41-4e07c5", 0,
+            "codex", "work")
+        self.assertTrue(self.waited_until(lambda: self.delegating()))
+        said = self.delegating()[0]
+        self.assertEqual(("codex", "work"), (said["provider"], said["provider_alias"]))
+
+    def test_a_delegation_naming_no_brain_crosses_without_the_fields(self):
+        """Absent stays absent. A surface handed `""` would have to decide what an unnamed provider
+        meant; handed nothing, there is nothing to say — the rule `elapsed` already follows."""
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        conversation = arriving.standing_in(self.agent, "1180")
+
+        self.a_delegation_tenant().showed(
+            self.agent, conversation, delegations.HANDED_OVER, "dev", "del-41-4e07c5", 0)
+        self.assertTrue(self.waited_until(lambda: self.delegating()))
+        said = self.delegating()[0]
+        self.assertNotIn("provider", said)
+        self.assertNotIn("provider_alias", said)
+
+    def test_an_account_alias_never_crosses_without_the_provider_it_belongs_to(self):
+        """An alias on its own names an account of nothing, and a surface shown one would have to
+        invent which brain it belonged to."""
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        conversation = arriving.standing_in(self.agent, "1180")
+
+        self.a_delegation_tenant().showed(
+            self.agent, conversation, delegations.HANDED_OVER, "dev", "del-41-4e07c5", 0,
+            None, "work")
+        self.assertTrue(self.waited_until(lambda: self.delegating()))
+        self.assertNotIn("provider_alias", self.delegating()[0])
+
     def test_a_conversation_standing_on_no_platform_is_told_nothing(self):
         """R-DEL-16 again, at the other end: the agent answering somebody else's ask has no room."""
         landed = arriving.recorded_for_a_delegation(

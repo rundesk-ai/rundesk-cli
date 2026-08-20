@@ -969,13 +969,20 @@ class OnADelegation(IntoAChannel):
         return admitted.wait(REVIEW_ADMITTED_WITHIN) is True
 
     def showed(self, agent: str, conversation: int, state: str, to_agent: str,
-               delegation_id: str, seconds: Optional[int] = None) -> bool:
+               delegation_id: str, seconds: Optional[int] = None,
+               provider_name: Optional[str] = None,
+               provider_alias: Optional[str] = None) -> bool:
         """Say one of `delegations.hosting.SHOWN` where the work was asked for. **Never raises.**
 
         **The room, found from the conversation** — the same question `_take` asks before it answers
         out loud, and the same answer: a conversation standing on no platform has nobody to tell, so
         this is `False` and nothing else happens. That is what keeps an agent's own room quiet about
         work another agent handed *to* it.
+
+        `provider_name` and `provider_alias` are the delegation's **effective** selection, carried
+        straight through rather than looked up: which brain is doing this work was decided once at
+        admission, and a second answer read here could disagree with the one the work is running
+        under. Absent stays absent — see `channels.hosting.delegating`.
         """
         destination = self._destination(agent, conversation)
         if destination is None:
@@ -987,7 +994,8 @@ class OnADelegation(IntoAChannel):
         elapsed = delivery.duration(seconds) if seconds is not None else ""
         with contextlib.suppress(Exception):
             return hosting.delegating(agent, self._where, self._hosted(), kind, place,
-                                      state, to_agent, delegation_id, elapsed)
+                                      state, to_agent, delegation_id, elapsed,
+                                      provider_name or "", provider_alias or "")
         return False
 
     def _answered(self, agent: str, conversation: int, delegation_id: str,
