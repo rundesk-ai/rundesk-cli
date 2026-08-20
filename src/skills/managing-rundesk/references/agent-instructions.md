@@ -82,6 +82,12 @@ provider-local helper posture; inbound-only named delegation does not require re
 
 There is one agent template. Mold its behavior contract to the responsibility the owner assigns.
 
+Grant the skills that role needs on an ordinary turn, and leave the rest ungranted. A grant is what
+makes a skill loadable for the work; an unrelated one is a description every turn pays for and a
+body the agent should never open. Do not restate the loading procedure in the contract: Rundesk
+already instructs every turn to read the applicable project rules in full, load every skill that
+applies to the work, and only then act.
+
 #### Domain behavior
 
 A domain agent owns an ongoing area, product, or client. Its behavior contract defines the durable
@@ -159,7 +165,14 @@ After reviewing the agent and drafting the focused behavior contract:
 4. Treat the current turn as already built. Validate changed behavior only in fresh target turns,
    using one representative assignment and one close near-miss. Verify that the agent accepts
    appropriate work and refuses or redirects inappropriate work.
-5. When validation uses named delegation, follow the [delegation
+5. In those fresh turns, inspect whatever load evidence the provider supports — its transcript,
+   tool record, or the turn's own report — and confirm the order the turn actually took: the
+   project's own rules read in full first, then every skill applicable to the assignment loaded
+   with the references its body requires, then the remaining work. Confirm that a close but
+   irrelevant granted skill stayed unloaded, and that a body already loaded earlier in the session
+   was not loaded again. A skill named in a listing is not evidence that its body was read, and a
+   body loaded after the work began did not govern it.
+6. When validation uses named delegation, follow the [delegation
    lifecycle](delegations.md#follow-the-lifecycle). Establish a real return path before handing off
    and run one validation case per reviewed return. Without a return path, leave the exact validation
    pending for an owner-attended fresh turn.

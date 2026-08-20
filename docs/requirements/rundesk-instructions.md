@@ -127,13 +127,20 @@ This section defines the universal working process: run the skill preflight belo
 work and constraints, break larger outcomes into ordered verifiable steps, take the smallest
 complete set of actions, and adjust the approach when evidence requires it.
 
-The preflight precedes substantive action. The operating instructions direct the agent to read the
-available skill descriptions and the applicable project rules, select the smallest complete set of
-skills the work requires, and load each selected body together with every reference that body
-requires before acting. They state that a skill which is listed or granted is not a skill that is
-loaded, and that a required body or reference which cannot be loaded stops the work as a reported
-blocker rather than being replaced by its description. They say when and what; descriptions and
-bodies remain provider-native and are never copied into the prompt.
+The preflight precedes substantive action and is ordered, because the order carries the guarantee:
+
+1. Read the applicable project rules in full, along with the available skill descriptions. The
+   project's rules are an input to which skills apply, so a selection made before reading them is
+   made from half the evidence.
+2. Identify every skill applicable to this request and project, and no others.
+3. Load each applicable body, together with every reference that body requires, before any other
+   substantive action. A skill that is listed or granted is not a skill that is loaded, and a body
+   already loaded in the current session is not loaded again.
+4. Inspect, create, or change anything else only after that.
+
+A required body or reference which cannot be loaded stops the work as a reported blocker rather
+than being replaced by its description. The instructions say when and what; descriptions and bodies
+remain provider-native and are never copied into the prompt.
 
 Rundesk instructs this preflight; it does not enforce or observe it. No release records which skill
 bodies or references a turn loaded, and no acceptance test can prove a turn ran the preflight.
@@ -172,9 +179,10 @@ criteria, material claims and deliverables are verified, required asynchronous r
 and no known required work remains. Otherwise the agent reports the outcome as pending or blocked
 and preserves its continuation path.
 
-A rollout, release, or update is not reported as complete until the agent verifies the result.
-Starting, queueing, or installing one does not prove it works. Until verification finishes, the
-report names the exact state reached — queued or installed — rather than success.
+Work is not reported as complete until the agent verifies the requested outcome. A command being
+accepted or a process starting is progress rather than proof. While verification remains, the
+report states what happened and what remains to check. This holds for every situation and every
+kind of work, not only for a rollout, release, or update.
 
 ## Agent instruction template
 
@@ -210,6 +218,13 @@ project's rules.
 The separate `agent/MEMORY.md` template holds durable learned context such as preferences, traps,
 gotchas, stable facts and references, and hard-won lessons without repeating agent instructions.
 
+The bundled design step also aligns an agent's granted skills with its durable role: grant what the role
+needs on an ordinary turn, leave the rest ungranted, and do not restate Rundesk's loading procedure
+in the agent's own contract. Its validation step inspects whatever load evidence the provider
+supports in fresh turns and confirms the order actually taken — project rules first, then every
+applicable body with its required references, then the remaining work — including that a close but
+irrelevant granted skill stayed unloaded and an already-loaded body was not loaded again.
+
 `Responses` sets the durable default for answering a person: a short, direct, natural reply that
 reads like a text message, leading with the outcome and carrying only the context needed to
 understand, act on, or verify it. The agent expands that default when the work is complex or
@@ -242,11 +257,14 @@ changes that section. The situation and delegation-depth exclusions defined abov
 | ✅ | R-INS-10 | A change a person states as required is an instruction to make within the current scope, not something to agree with, propose, or wait to be asked for again | `test_a_stated_change_is_an_instruction_rather_than_a_proposal` |
 | ✅ | R-INS-11 | The one agent template sets a short, outcome-first default for answering a person and excludes a result returned to a calling agent | `test_the_rules_have_the_required_sections`, `test_a_person_is_answered_briefly_and_a_calling_agent_in_full` |
 | ✅ | R-INS-12 | Every turn is told a background command, tool session, monitor, or child process is not a continuation path and cannot deliver a result after the turn settles | `test_a_background_process_is_not_a_continuation_path` |
-| ✅ | R-INS-13 | Every turn is instructed to run a skill preflight before substantive action: select the smallest complete set, load each body and its required references, treat a granted skill as unloaded, and stop as a blocker when a required body or reference cannot be loaded | `test_every_turn_must_load_a_skill_body_before_acting` |
+| ✅ | R-INS-13 | Every turn is instructed to run an ordered skill preflight before substantive action: read the applicable project rules in full, identify every applicable skill and no others, load each applicable body and its required references before any other substantive action, treat a granted skill as unloaded, skip a body already loaded in the session, and stop as a blocker when an applicable body or reference cannot be loaded | `test_every_turn_must_load_every_applicable_skill_body_before_acting` |
 | ✅ | R-INS-14 | A person-facing turn keeps routine internal context recovery — memory, task state, instructions, prior messages, but not skills — silent, reserves a concise update for a requested status, material progress or a result that affects the person, and a blocker, risk, or decision, and never withholds an announcement a higher-priority applicable instruction requires | `test_a_person_turn_keeps_routine_internal_recovery_silent` |
-| ✅ | R-INS-15 | Every turn is told not to report a rollout, release, or update as complete before verifying the result, that starting, queueing, or installing one does not prove it works, and that an earlier report names the exact state reached — queued or installed — rather than success | `test_a_rollout_is_not_complete_until_its_own_proof_is_collected` |
+| ✅ | R-INS-15 | Every turn is told not to report work as complete before verifying the requested outcome, that a command accepted or a process started is progress rather than proof, and that a report made while verification remains states what happened and what remains to check | `test_no_work_is_reported_complete_before_its_outcome_is_verified` |
 | ✅ | R-INS-16 | The bundled specialist design step teaches a coding agent's contract to follow the target repository's own `AGENTS.md`, inspect authoritative state, mutate only in an isolated task worktree on a topic branch unless another safe workspace is named, preserve unrelated work, leave the shared checkout unchanged as found and its own task worktree clean with coherent commits on its topic branch while honoring an explicitly requested uncommitted patch, verify proportionately, change no external state without authority, and hand back exact location, state, and gaps | `test_a_coding_specialist_contract_is_specific_about_the_checkout` |
 | ✅ | R-INS-17 | That design step separates read-only code investigation and review, which creates no worktree, branch, or commit and returns findings and evidence instead of changes | `test_a_read_only_investigator_creates_no_worktree_branch_or_commit` |
+| ✅ | R-INS-18 | The bundled design step aligns granted skills with the durable role, naming both the ungranted skill the work needed and the unrelated grant every turn pays for | `test_the_design_step_grants_the_skills_the_durable_role_needs` |
+| ✅ | R-INS-19 | That guidance names Rundesk's loading procedure once and keeps it out of the fenced agent contract | `test_the_universal_loading_procedure_is_named_once_and_never_copied` |
+| ✅ | R-INS-20 | Instruction validation inspects supported load evidence in fresh turns for the order actually taken, an irrelevant granted skill left unloaded, and an already-loaded body not loaded again, while keeping the representative-and-near-miss acceptance case | `test_validation_inspects_the_order_a_fresh_turn_actually_took` |
 
 ## Acceptance
 

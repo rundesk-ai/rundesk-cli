@@ -202,23 +202,28 @@ class TheAgreedSections(support.Isolated):
                 self.assertNotIn("silent work",
                                  self.part(self.built(other).text, "## Current Situation"))
 
-    def test_a_rollout_is_not_complete_until_its_own_proof_is_collected(self):
-        # Every trigger can start one, including the two with nobody present to notice that the
-        # start was reported as the finish, so the gate is universal rather than person-facing.
+    def test_no_work_is_reported_complete_before_its_outcome_is_verified(self):
+        # Every trigger can take an action whose proof arrives later, including the two with nobody
+        # present to notice that the start was reported as the finish, so the gate is universal
+        # rather than person-facing.
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
                 done = self.part(self.built(situation).text, "## Definition of Done")
                 # Whole clauses, because the relationship is the requirement: separate fragments
-                # survive a text that says starting one proves it works, or that an earlier report
-                # names success. Each of those reversals has to fail here.
-                for clause in ("do not report a rollout, release, or update as complete until you "
-                               "verify the result",
-                               "starting, queueing, or installing it does not prove it works",
-                               "report the exact state reached—queued or installed—not success"):
+                # survive a text that says a started process proves the work, or that a report may
+                # stop at what happened. Each of those reversals has to fail here.
+                for clause in ("do not report work as complete until you verify the requested "
+                               "outcome",
+                               "a command accepted or a process started is progress, not proof",
+                               "while verification remains, report what happened and what remains "
+                               "to check"):
                     with self.subTest(clause=clause):
                         self.assertIn(clause, done)
+                # It is about work, not about the one shape of work that made it obvious. A rule
+                # narrowed back to rollouts leaves every other unverified claim permitted.
+                self.assertNotIn("rollout", done)
 
-    def test_every_turn_must_load_a_skill_body_before_acting(self):
+    def test_every_turn_must_load_every_applicable_skill_body_before_acting(self):
         # A granted skill and a loaded skill look identical from inside a turn: both arrive as a
         # name and a description. This proves the prompt asks for the load. Nothing here can prove
         # a turn performed it, and no release records what a turn loaded.
@@ -227,18 +232,34 @@ class TheAgreedSections(support.Isolated):
                 doing = self.part(self.built(situation).text, "## Execute the Work")
                 # Requirement-level: "reference", "granted" and "loaded" are ordinary words that
                 # a neighbouring bullet can satisfy, so each fragment carries its own clause.
-                for term in ("read the available skill descriptions",
-                             "the applicable project rules",
-                             "smallest complete set of skills",
-                             "load each selected skill body",
+                for term in ("the available skill descriptions",
                              "every reference that body requires",
-                             "before acting",
                              "granted is not a skill that is loaded",
                              "cannot be loaded, stop and report that as a blocker"):
                     with self.subTest(term=term):
                         self.assertIn(term, doing)
-                # Leading the section is what "before substantive action" means structurally.
-                self.assertLess(doing.index("before substantive action"),
+                # Whole clauses, because these are relationships rather than words. A text that
+                # skims the project's rules, asks for some applicable skills, drops the exclusion,
+                # or asks a turn to reload what it already read satisfies every fragment of them
+                # separately.
+                for clause in ("read the applicable project rules in full",
+                               "identify every skill applicable to this request and project, and "
+                               "no others",
+                               "load each applicable skill body",
+                               "before any other substantive action",
+                               "one already loaded in this session is not loaded again"):
+                    with self.subTest(clause=clause):
+                        self.assertIn(clause, doing)
+                # The sequence is the requirement. The project's rules decide which skills apply,
+                # so a turn that chooses them first chooses from half the evidence; and a turn
+                # that starts inspecting or changing anything first has already done the work the
+                # bodies were meant to govern. Each rule can be present in the wrong place, so the
+                # positions are asserted rather than the words alone.
+                self.assertLess(doing.index("read the applicable project rules in full"),
+                                doing.index("identify every skill applicable"))
+                self.assertLess(doing.index("identify every skill applicable"),
+                                doing.index("load each applicable skill body"))
+                self.assertLess(doing.index("load each applicable skill body"),
                                 doing.index("inspect relevant"))
         # It says when and what, never how: skill bodies stay provider-native.
         self.assertNotIn("SKILL.md", self.built().text)
