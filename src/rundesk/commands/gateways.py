@@ -32,12 +32,16 @@ had. A bare verb here is a refusal that shows both spellings and changes nothing
 `2`, because a command line that named neither is the command line itself being wrong, which is
 what `docs/commands.md` promises `2` for and what argparse already exits for a mistyped sub-verb.
 
-## Coming down gracefully is the default, and `--force` is the exception
+## Active work is protected by default, and `--force` is the exception
 
-**Both verbs are graceful unless told otherwise, and this is stated here once.** `stop` and
-`restart` take a gateway down with `bootout --wait`, which sends `SIGTERM` and then waits for the
-process to really be gone, up to the job's own `ExitTimeOut`. A gateway is holding somebody's work,
-so it gets to finish it.
+**A normal restart refuses active work before it touches any gateway.** It holds the same admission
+barrier that turns and schedules take while starting, inspects every selected gateway, and only
+begins the cycle when all of them are idle. A bulk restart is one decision: if any selected gateway
+is busy or cannot be inspected, none is stopped.
+
+**A stop remains a graceful cancellation.** It takes a gateway down with `bootout --wait`, which
+sends `SIGTERM` and gives the process its shutdown window. That lets the gateway ask its children to
+settle, but it does not mean they complete; stopping is an explicit request to end the gateway.
 
 **`--force` does not wait for that.** It ends the process where it stands with `kill SIGKILL`
 first; the `bootout --wait` that follows then returns at once, because there is nothing left to
@@ -124,8 +128,9 @@ from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.gateways import host, job, standing
-from rundesk.providers import continuations
-from rundesk.utils import logs, programs
+from rundesk.providers import continuations, turns
+from rundesk.schedules import firing
+from rundesk.utils import locking, logs, programs
 from rundesk.utils.terminal import as_table
 
 #: How many lines of a gateway's log are shown when nobody says how many.
@@ -747,7 +752,7 @@ def _stopped_one(name: str, by: job.Supervising, forcing: bool = False) -> int:
 
 
 def _restarted(name: Optional[str], every: bool, forcing: bool, by: job.Supervising) -> int:
-    """Stop and start again — or, with `--force`, end it where it stands and start it now."""
+    """Restart only idle gateways, unless `--force` explicitly takes active work away."""
     pointed = _which("restart", name, every)
     if pointed.refusal:
         return pointed.said()
@@ -755,10 +760,50 @@ def _restarted(name: Optional[str], every: bool, forcing: bool, by: job.Supervis
         print(f"no agents in {paths.agents()} — nothing to restart")
         return OK
 
+    if forcing:
+        return _restart_each(pointed.named, by, forcing=True)
+
+    try:
+        with locking.only_one(paths.work_admission_lock(), guarding="restarting gateways safely"):
+            busy = _active_work(pointed.named)
+            if busy:
+                return _failed(
+                    busy,
+                    "wait for the active work to finish; use --force only when intentionally "
+                    "taking that work away mid-flight",
+                    "nothing was restarted")
+            return _restart_each(pointed.named, by)
+    except (locking.Stuck, OSError) as why:
+        return _failed(
+            f"gateway activity could not be inspected safely ({why})",
+            "nothing was restarted")
+
+
+def _active_work(names: List[str]) -> str:
+    """The first selected gateway with active or unreadable work; otherwise `""`.
+
+    Called while the work-admission barrier is held. Both probes take that same lock re-entrantly,
+    so no turn or schedule can enter between this complete preflight and the restart decision.
+    """
+    for name in names:
+        active_turns = turns.activity(name)
+        if active_turns is None:
+            return f"{name}'s provider activity could not be inspected"
+        if active_turns:
+            return f"{name} has an active provider turn (conversation {active_turns[0]})"
+        active_schedules = firing.activity(name)
+        if active_schedules is None:
+            return f"{name}'s schedule activity could not be inspected"
+        if active_schedules:
+            return f"{name} has an active schedule ({active_schedules[0]})"
+    return ""
+
+
+def _restart_each(names: List[str], by: job.Supervising, forcing: bool = False) -> int:
+    """Restart every selected gateway after the caller has made the shared safety decision."""
     worst = OK
-    for one in pointed.named:
-        went = _restarted_one(one, by, forcing)
-        if went != OK:
+    for name in names:
+        if _restarted_one(name, by, forcing) != OK:
             worst = FAILED
     return worst
 
