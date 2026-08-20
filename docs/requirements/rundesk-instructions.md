@@ -76,7 +76,12 @@ Exactly one situation is rendered:
   wait to be asked for again; it authorizes no more than the stated change. Clarification is
   permitted only after recovering potentially relevant message history, and only when missing
   context, unclear scope or authority, or an unresolved decision still prevents meaningful
-  progress. A blocked agent names the blocker and the information or decision needed.
+  progress. Routine internal context recovery — memory, task state, instructions, and prior
+  messages — is silent work rather than narrated progress. A concise update is reserved for a
+  requested status, material progress or a result that affects the person, and a blocker, risk, or
+  decision needing attention. Skills are not on that silent list, and the default never withholds
+  an announcement that a higher-priority applicable instruction requires. A blocked agent names the
+  blocker and the information or decision needed.
 - Schedule: names the schedule, states that nobody is present, limits work to what the schedule
   requested, forbids waiting for clarification, and says the final standalone response is delivered
   automatically to the intended recipient or destination.
@@ -167,6 +172,10 @@ criteria, material claims and deliverables are verified, required asynchronous r
 and no known required work remains. Otherwise the agent reports the outcome as pending or blocked
 and preserves its continuation path.
 
+A rollout, release, or update is not reported as complete until the agent verifies the result.
+Starting, queueing, or installing one does not prove it works. Until verification finishes, the
+report names the exact state reached — queued or installed — rather than success.
+
 ## Agent instruction template
 
 Rundesk ships one provider-neutral agent template at `src/templates/agent/AGENTS.md` and places its
@@ -181,6 +190,23 @@ use of provider-local subagents, and how it maintains separate memory. It contai
 instruction-authoring or self-editing guidance and does not repeat the operating outcome lifecycle.
 Provider-local subagents do not replace eligible named Rundesk team delegation. The bundled
 `managing-rundesk` guidance owns the review and writing process for changing agent instructions.
+Its specialist design step carries a coding and code-investigation subsection: one reusable
+implementation-specialist contract, preceded by the ownership rationale and followed by the
+read-only investigator delta. The contract makes a coding agent read the target repository's own
+`AGENTS.md` before any project action and follow it alongside its own; establish the authoritative
+base, remotes, branch, existing worktrees, and uncommitted changes before acting; work in an
+isolated task worktree on a topic branch cut from that base unless the assignment names another safe
+workspace; preserve owner and unrelated changes without resetting, discarding, overwriting, or
+folding them into the task; leave the shared checkout unchanged as found and its own task worktree
+clean with coherent commits on its topic branch, keeping an explicitly requested review patch
+uncommitted and reporting that exact dirty state; run the project's verification proportionate to
+risk and report every gate that did not run; change no external state without assignment authority;
+and hand back
+the exact checkout or worktree, branch, commit or dirty files, verification and results,
+limitations, and remaining work. A read-only investigator or reviewer creates no worktree, branch,
+or commit and returns findings and evidence instead. The agent home stays an operational workspace
+and never the project checkout, and the subsection names requirements rather than copying any
+project's rules.
 The separate `agent/MEMORY.md` template holds durable learned context such as preferences, traps,
 gotchas, stable facts and references, and hard-won lessons without repeating agent instructions.
 
@@ -208,7 +234,7 @@ changes that section. The situation and delegation-depth exclusions defined abov
 | ✅ | R-INS-2 | Every prompt has the required operating sections once and in order | `test_the_always_on_sections_are_present_once_and_in_order` |
 | ✅ | R-INS-3 | Every prompt has exactly one current situation, with person-facing behavior as the default | `test_every_turn_gets_exactly_one_current_situation`, `test_the_default_situation_is_person_to_agent` |
 | ✅ | R-INS-4 | Team Members is present only for a person-facing turn with an available team | `test_team_members_are_only_composed_for_a_person_facing_turn`, `test_an_empty_team_has_no_heading_or_layer`, `test_a_schedule_is_not_shown_or_used_to_find_a_named_team` |
-| ✅ | R-INS-5 | Operating prompts remain deterministic, inspectable, and bounded | `test_the_same_inputs_build_the_same_bytes`, `test_the_byte_breakdown_and_fingerprint_match_the_rendered_text`, `test_static_layers_and_the_maximum_prompt_stay_bounded` |
+| ✅ | R-INS-5 | Operating prompts remain deterministic, inspectable, and bounded | `test_the_same_inputs_build_the_same_bytes`, `test_the_byte_breakdown_and_fingerprint_match_the_rendered_text`, `test_static_layers_and_the_largest_required_stack_stay_bounded` |
 | ✅ | R-INS-6 | All agents start from one canonical template and public agent operations do not expose a type flag | `test_it_uses_the_single_agent_rules`, `test_role_is_not_an_add_option`, `test_role_is_not_a_configure_option`, `test_it_lists_all_agents_in_one_table` |
 | ✅ | R-INS-7 | Legacy agent roles never suppress an otherwise eligible Team Members and Delegation section | `test_legacy_roles_do_not_remove_team_delegation_from_an_agents_instructions` |
 | ✅ | R-INS-8 | Every turn is told its agent home is an operational workspace rather than a Git repository, and that patch or pull-request work belongs in the project's own checkout, without naming a file the release places in that home | `test_no_turn_is_told_its_home_is_a_project_repository`, `test_the_files_an_agent_lives_by_are_spelled_the_same_way_everywhere` |
@@ -217,9 +243,24 @@ changes that section. The situation and delegation-depth exclusions defined abov
 | ✅ | R-INS-11 | The one agent template sets a short, outcome-first default for answering a person and excludes a result returned to a calling agent | `test_the_rules_have_the_required_sections`, `test_a_person_is_answered_briefly_and_a_calling_agent_in_full` |
 | ✅ | R-INS-12 | Every turn is told a background command, tool session, monitor, or child process is not a continuation path and cannot deliver a result after the turn settles | `test_a_background_process_is_not_a_continuation_path` |
 | ✅ | R-INS-13 | Every turn is instructed to run a skill preflight before substantive action: select the smallest complete set, load each body and its required references, treat a granted skill as unloaded, and stop as a blocker when a required body or reference cannot be loaded | `test_every_turn_must_load_a_skill_body_before_acting` |
+| ✅ | R-INS-14 | A person-facing turn keeps routine internal context recovery — memory, task state, instructions, prior messages, but not skills — silent, reserves a concise update for a requested status, material progress or a result that affects the person, and a blocker, risk, or decision, and never withholds an announcement a higher-priority applicable instruction requires | `test_a_person_turn_keeps_routine_internal_recovery_silent` |
+| ✅ | R-INS-15 | Every turn is told not to report a rollout, release, or update as complete before verifying the result, that starting, queueing, or installing one does not prove it works, and that an earlier report names the exact state reached — queued or installed — rather than success | `test_a_rollout_is_not_complete_until_its_own_proof_is_collected` |
+| ✅ | R-INS-16 | The bundled specialist design step teaches a coding agent's contract to follow the target repository's own `AGENTS.md`, inspect authoritative state, mutate only in an isolated task worktree on a topic branch unless another safe workspace is named, preserve unrelated work, leave the shared checkout unchanged as found and its own task worktree clean with coherent commits on its topic branch while honoring an explicitly requested uncommitted patch, verify proportionately, change no external state without authority, and hand back exact location, state, and gaps | `test_a_coding_specialist_contract_is_specific_about_the_checkout` |
+| ✅ | R-INS-17 | That design step separates read-only code investigation and review, which creates no worktree, branch, or commit and returns findings and evidence instead of changes | `test_a_read_only_investigator_creates_no_worktree_branch_or_commit` |
 
 ## Acceptance
 
 Automated acceptance tests enforce the required sections, ordering, situation composition, and layer
-boundaries. They do not freeze editorial prose. Copy may be improved without rewriting tests as long
-as the requirements and structural contract remain true.
+boundaries. The largest required stack — every discovered situation at the largest team listing a
+caller can supply, before any optional additions — is measured, so no situation is bounded only by
+the case that named it. Optional additions are bounded individually as they are supplied and are not
+part of that total. They do not freeze editorial prose: copy may be improved without rewriting tests
+as long as the requirements and structural contract remain true.
+
+Cases that assert a universal boundary derive the situation set from the instruction module rather
+than from a maintained listing, so a situation added later is covered by each of them without a test
+edit. That discovery fails when it finds no situation block, because a loop over nothing passes.
+
+Bundled guidance is accepted against the one example contract that carries each required behavior,
+scoped to the design step that owns it, rather than against a rule restated in prose and again in
+the example.

@@ -22,8 +22,27 @@ EVERYTHING = {
     "skill_names": "managing-rundesk, writing-plans",
 }
 
-EVERY_SITUATION = (instructions.USER_TO_AGENT, instructions.SCHEDULE_TO_AGENT,
-                   instructions.AGENT_TO_AGENT)
+#: Every situation the module defines, discovered by the shape of a situation block rather than
+#: listed here. A listing is a second place to keep in step: a fourth block would be composed by
+#: `build` and skipped by every universal case below, which is a gap that reports green.
+#: `TheSituationsUnderTest` fails when this discovers nothing, because a loop over nothing passes.
+EVERY_SITUATION = tuple(
+    block for _, block in sorted(vars(instructions).items())
+    if isinstance(block, str) and block.startswith("## Current Situation"))
+
+
+class TheSituationsUnderTest(support.Isolated):
+    """The set every universal case loops over, and the proof that it found anything."""
+
+    def test_discovery_finds_the_situation_blocks_the_module_defines(self):
+        # An empty discovery turns every loop over it into a green no-op, so the empty case fails
+        # once here instead of silently weakening each universal boundary.
+        self.assertTrue(EVERY_SITUATION, "no situation blocks were discovered")
+        for named in (instructions.USER_TO_AGENT, instructions.SCHEDULE_TO_AGENT,
+                      instructions.AGENT_TO_AGENT):
+            with self.subTest(situation=named[:32]):
+                self.assertIn(named, EVERY_SITUATION)
+        self.assertEqual(len(set(EVERY_SITUATION)), len(EVERY_SITUATION))
 
 
 class TheAgreedSections(support.Isolated):
@@ -157,6 +176,48 @@ class TheAgreedSections(support.Isolated):
                     with self.subTest(term=term):
                         self.assertIn(term, continuity)
 
+    def test_a_person_turn_keeps_routine_internal_recovery_silent(self):
+        person = self.built().text
+        situation = self.part(person, "## Current Situation")
+        # Requirement-level: "memory" and "status" are ordinary words the prompt already uses, so
+        # each fragment carries the clause it proves — what is silent, and what still gets said.
+        for term in ("routine internal context recovery",
+                     "memory, task state, instructions, and prior messages",
+                     "silent work", "do not narrate it or report it as progress",
+                     "asks for status", "material progress or a result affects them",
+                     "blocker, risk, or decision"):
+            with self.subTest(term=term):
+                self.assertIn(term, situation)
+        # Skills are deliberately not silenced: an assignment or a project's rules routinely
+        # require stating which guidance governed the work.
+        self.assertNotIn("skills", situation)
+        # A default, not a gag. Without this clause the rule reads as outranking the instruction
+        # that outranks it, which is how a silent default becomes a withheld announcement.
+        self.assertIn("never withholds an announcement a higher-priority applicable instruction "
+                      "requires", situation)
+        # Silence is a person's rule. A schedule's standalone report and a handback to a calling
+        # agent are read by somebody who has to verify the work, and neither of those is narration.
+        for other in (instructions.SCHEDULE_TO_AGENT, instructions.AGENT_TO_AGENT):
+            with self.subTest(situation=other[:32]):
+                self.assertNotIn("silent work",
+                                 self.part(self.built(other).text, "## Current Situation"))
+
+    def test_a_rollout_is_not_complete_until_its_own_proof_is_collected(self):
+        # Every trigger can start one, including the two with nobody present to notice that the
+        # start was reported as the finish, so the gate is universal rather than person-facing.
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:32]):
+                done = self.part(self.built(situation).text, "## Definition of Done")
+                # Whole clauses, because the relationship is the requirement: separate fragments
+                # survive a text that says starting one proves it works, or that an earlier report
+                # names success. Each of those reversals has to fail here.
+                for clause in ("do not report a rollout, release, or update as complete until you "
+                               "verify the result",
+                               "starting, queueing, or installing it does not prove it works",
+                               "report the exact state reached—queued or installed—not success"):
+                    with self.subTest(clause=clause):
+                        self.assertIn(clause, done)
+
     def test_every_turn_must_load_a_skill_body_before_acting(self):
         # A granted skill and a loaded skill look identical from inside a turn: both arrive as a
         # name and a description. This proves the prompt asks for the load. Nothing here can prove
@@ -267,7 +328,7 @@ class WhatWasSentIsProvableAfterwards(support.Isolated):
             instructions.build(situation=one, variables=EVERYTHING).sha256
             for one in EVERY_SITUATION
         }
-        self.assertEqual(3, len(fingerprints))
+        self.assertEqual(len(EVERY_SITUATION), len(fingerprints))
 
     def test_changing_the_core_changes_the_fingerprint(self):
         before = instructions.build(variables=EVERYTHING).sha256
@@ -300,22 +361,31 @@ class TheBuilderBoundary(support.Isolated):
             with self.subTest(platform=platform):
                 self.assertNotIn(platform, built)
 
-    def test_static_layers_and_the_maximum_prompt_stay_bounded(self):
+    def test_static_layers_and_the_largest_required_stack_stay_bounded(self):
         ceilings = {
             "core": (instructions.CORE, 650),
             "rules": (instructions.OPERATING_RULES, 4000),
-            "person": (instructions.USER_TO_AGENT, 650),
+            "person": (instructions.USER_TO_AGENT, 1050),
             "schedule": (instructions.SCHEDULE_TO_AGENT, 700),
             "agent": (instructions.AGENT_TO_AGENT, 800),
             "team": (instructions.TEAM_MEMBERS, 1000),
-            "completion": (instructions.DEFINITION_OF_DONE, 800),
+            "completion": (instructions.DEFINITION_OF_DONE, 850),
         }
         for name, (text, ceiling) in ceilings.items():
             with self.subTest(name=name):
                 self.assertLessEqual(len(text.encode("utf-8")), ceiling)
-        built = instructions.build(variables=EVERYTHING,
-                                   team="x" * team.TEAM_BYTES_AT_MOST)
-        self.assertLessEqual(built.total_bytes, 12200)
+        # The required stack at its largest: every discovered situation, each at the largest team
+        # listing a caller can supply, so the ceiling is the worst case this release composes on
+        # its own rather than the one situation a case happened to name. A situation added
+        # oversized fails here instead of arriving unmeasured.
+        #
+        # **Optional additions are outside this number**, and deliberately: how many a caller
+        # supplies is that caller's decision, not this module's. Each one is bounded where it comes
+        # in, which `test_each_addition_is_bounded_without_clipping_later_layers` proves.
+        largest_required = max(instructions.build(situation=situation, variables=EVERYTHING,
+                                                  team="x" * team.TEAM_BYTES_AT_MOST).total_bytes
+                               for situation in EVERY_SITUATION)
+        self.assertLessEqual(largest_required, 12800)
 
 
 if __name__ == "__main__":

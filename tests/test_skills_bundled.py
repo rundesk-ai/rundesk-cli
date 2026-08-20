@@ -264,13 +264,78 @@ class WhatAShippedSkillMayClaim(Bundled):
         headings = ("# Agent instructions", "## Keep each rule with its owner",
                     "## Review the agent before writing",
                     "## Write a focused behavior contract", "### Shape the agent's behavior",
-                    "#### Domain behavior", "#### Specialist behavior", "## Change instructions safely")
+                    "#### Domain behavior", "#### Specialist behavior",
+                    "##### Coding and code-investigation behavior",
+                    "## Change instructions safely")
         places = []
         for heading in headings:
             with self.subTest(heading=heading):
                 self.assertEqual(1, agent_instructions.count(heading))
                 places.append(agent_instructions.index(heading))
         self.assertEqual(sorted(places), places)
+
+    def coding_step(self):
+        """The example contract inside its fence, then the read-only delta after it.
+
+        Read apart rather than as one section, because an author copies the fenced contract and
+        reads the delta as what to leave out. A required sentence that drifts into the surrounding
+        rationale is no longer in the thing being copied, and a check over the whole section could
+        not tell the two apart. Whitespace is normalized so a hand-wrapped line decides nothing.
+        """
+        said = " ".join(
+            (self.skills / "managing-rundesk" / "references" / "agent-instructions.md").read_text(
+                encoding="utf-8").split())
+        step = said.split("#### Specialist behavior", 1)[1].split(
+            "## Change instructions safely", 1)[0]
+        contract, _, delta = step.partition("```markdown")[2].partition("```")
+        return contract, delta
+
+    def test_a_coding_specialist_contract_is_specific_about_the_checkout(self):
+        # An agent home is an operational workspace, and the rules governing a repository live in
+        # that repository. The design step has to ask for them by requirement: copying a project's
+        # rules into durable agent instructions is the failure the ownership split already forbids,
+        # and the copy goes stale at the first commit nobody told the agent about.
+        #
+        # One example contract carries these behaviors, and this reads that contract out of its
+        # fence: a rule the author would not copy has not been taught, however well the section
+        # around it explains itself.
+        contract, _ = self.coding_step()
+        for behavior, phrase in (
+                ("project rules", "read the target repository's `AGENTS.md` in full and follow it"),
+                ("authoritative state",
+                 "Establish the authoritative base, its remotes, the current branch, existing "
+                 "worktrees, and uncommitted changes before acting"),
+                ("not the checked-out branch", "not authoritative because it is checked out"),
+                ("isolated workspace", "Work in an isolated task worktree on a topic branch cut "
+                                       "from that base"),
+                ("named exception", "unless the assignment names another safe workspace"),
+                ("home is not a checkout", "operational workspace, never the project checkout"),
+                ("preserve other work", "Never reset, discard, overwrite, or fold somebody else's "
+                                        "work into the task"),
+                ("shared checkout untouched", "Leave the shared checkout unchanged as found"),
+                ("owned worktree clean", "Leave your own task worktree clean with coherent commits "
+                                         "on its topic branch"),
+                ("asked-for dirty state", "leave it uncommitted and report that exact dirty state"),
+                ("proportionate verification",
+                 "Run the verification the project defines, proportionate to the risk of the "
+                 "change, and report every gate that did not run"),
+                ("no external state", "Do not push, use a code-hosting service, merge, release, or "
+                                      "change external state without authority"),
+                ("handback", "Return the exact checkout or worktree path, branch, commit or dirty "
+                             "files, verification and results, limitations, and remaining work")):
+            with self.subTest(behavior=behavior):
+                self.assertIn(phrase, contract)
+
+    def test_a_read_only_investigator_creates_no_worktree_branch_or_commit(self):
+        # Read-only work that opens a worktree has already exceeded its authority. The delta is
+        # read from the prose after the fence, because a read-only rule inside the implementation
+        # contract is a rule an author copies into an implementer.
+        _, delta = self.coding_step()
+        for phrase in ("read-only code investigator or reviewer",
+                       "creates no worktree, branch, or commit",
+                       "returns findings and evidence instead of changes"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, delta)
 
     def test_managing_rundesk_routes_desk_cli_catalog_and_binary_separately(self):
         skills = (self.skills / "managing-rundesk" / "references" / "skills.md").read_text(
