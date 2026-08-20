@@ -274,6 +274,63 @@ class WhatAShippedSkillMayClaim(Bundled):
                 places.append(agent_instructions.index(heading))
         self.assertEqual(sorted(places), places)
 
+    def guidance(self):
+        """The whole agent-instruction reference, whitespace-normalized."""
+        return " ".join(
+            (self.skills / "managing-rundesk" / "references" / "agent-instructions.md").read_text(
+                encoding="utf-8").split())
+
+    def design_step(self):
+        """The behavior-shaping step, from its heading to the change procedure that follows it."""
+        return self.guidance().split("### Shape the agent's behavior", 1)[1].split(
+            "## Change instructions safely", 1)[0]
+
+    def test_the_design_step_grants_the_skills_the_durable_role_needs(self):
+        # Grants are a design decision, not a runtime one: the turn can only load what the role was
+        # granted, and every ungranted-but-needed skill becomes work done off a description. The
+        # opposite cost is just as real, so both ends are taught in the step that shapes the role
+        # rather than in one of the two behaviors below it.
+        design = self.design_step()
+        for phrase in ("Grant the skills that role needs on an ordinary turn",
+                       "leave the rest ungranted",
+                       "a description every turn pays for",
+                       "a body the agent should never open"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, design)
+
+    def test_the_universal_loading_procedure_is_named_once_and_never_copied(self):
+        # One source of truth. Rundesk injects the preflight into every turn, so an agent's durable
+        # contract that restates it carries a second copy that goes stale on the next release —
+        # and the fenced contract is the part an author copies verbatim.
+        design = self.design_step()
+        self.assertIn("Do not restate the loading procedure in the contract", design)
+        self.assertIn("read the applicable project rules in full, load every skill that applies "
+                      "to the work, and only then act", design)
+        contract, _ = self.coding_step()
+        for copied in ("skill body", "skill descriptions", "already loaded", "no others"):
+            with self.subTest(copied=copied):
+                self.assertNotIn(copied, contract)
+
+    def test_validation_inspects_the_order_a_fresh_turn_actually_took(self):
+        # A granted skill, a named skill and a loaded skill look identical in a listing, and a body
+        # loaded after the work began governed none of it. Validation therefore reads load
+        # evidence and its order; the near-miss case stays, because accepting the wrong work is a
+        # different failure from loading the wrong skill.
+        guidance = self.guidance()
+        procedure = guidance.split("## Change instructions safely", 1)[1]
+        for phrase in ("one representative assignment and one close near-miss",
+                       "inspect whatever load evidence the provider supports",
+                       "confirm the order the turn actually took",
+                       "project's own rules read in full first",
+                       "then every skill applicable to the assignment loaded with the references "
+                       "its body requires, then the remaining work",
+                       "close but irrelevant granted skill stayed unloaded",
+                       "body already loaded earlier in the session was not loaded again",
+                       "not evidence that its body was read",
+                       "body loaded after the work began did not govern it"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, procedure)
+
     def coding_step(self):
         """The example contract inside its fence, then the read-only delta after it.
 
@@ -282,10 +339,7 @@ class WhatAShippedSkillMayClaim(Bundled):
         rationale is no longer in the thing being copied, and a check over the whole section could
         not tell the two apart. Whitespace is normalized so a hand-wrapped line decides nothing.
         """
-        said = " ".join(
-            (self.skills / "managing-rundesk" / "references" / "agent-instructions.md").read_text(
-                encoding="utf-8").split())
-        step = said.split("#### Specialist behavior", 1)[1].split(
+        step = self.guidance().split("#### Specialist behavior", 1)[1].split(
             "## Change instructions safely", 1)[0]
         contract, _, delta = step.partition("```markdown")[2].partition("```")
         return contract, delta

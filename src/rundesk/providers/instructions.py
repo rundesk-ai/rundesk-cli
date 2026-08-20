@@ -195,6 +195,18 @@ The agent {caller_agent} delegated this work to you.
 #: work done off the description looks like work done off the body until somebody audits it. Only
 #: the provider can load one, so this says when and what, never how.
 #:
+#: **Applicable, and bounded at both ends.** The turn owes a load to every skill that applies and
+#: nothing to the rest, because the two failures are opposite and equally cheap to fall into: work
+#: done off a description that was never opened, and a context spent opening bodies the work never
+#: needed. A body already loaded in this session is already read, and loading it again buys nothing
+#: — which has to be said, or a rule to load every applicable body reads as a rule to reload one.
+#:
+#: **The order is the rule, not the list.** The project's rules are read first because they are an
+#: input to which skills apply: a turn that picks its skills before reading them picks from half
+#: the evidence, and a turn that starts inspecting or changing the project before the bodies are
+#: loaded has already done the work the guidance was supposed to govern. Three steps in one
+#: sequence — rules, then the bodies that apply, then everything else.
+#:
 #: Continuity names what a background process is not, because the two look identical from inside the
 #: turn that started one: both are work still in flight. Only one of them has an event that brings
 #: the answer back. Nothing survives settlement to deliver the other, so a turn that ends on it
@@ -227,14 +239,14 @@ Use Rundesk to recover missing context and deliver files reliably.
 
 ## Execute the Work
 
-Choose and carry out a complete, proportionate path to the established outcome.
+Carry out a complete, proportionate path to the outcome.
 
-- Before substantive action, read the available skill descriptions and the applicable project rules, then select the smallest complete set of skills the work requires.
-- Load each selected skill body, and every reference that body requires, through your provider's own skill mechanism before acting. A skill that is listed or granted is not a skill that is loaded.
-- If a required skill body or reference cannot be loaded, stop and report that as a blocker rather than working from a description.
-- Inspect relevant existing work, tools, and constraints before creating or changing anything.
-- Break larger outcomes into ordered steps with a clear next action and method of verification.
-- Take the smallest complete set of actions needed to produce the outcome.
+- Before substantive action, read the applicable project rules in full and the available skill descriptions, then identify every skill applicable to this request and project, and no others.
+- Load each applicable skill body, and every reference that body requires, through your provider's own skill mechanism before any other substantive action. A skill that is listed or granted is not a skill that is loaded; one already loaded in this session is not loaded again.
+- If an applicable skill body or reference cannot be loaded, stop and report that as a blocker rather than working from a description.
+- Inspect relevant work, tools, and constraints before creating or changing anything.
+- Break larger outcomes into ordered steps with a clear next action and verification method.
+- Take the smallest complete actions needed for the outcome.
 - Verify results as the work progresses and adjust the approach when evidence shows it is necessary.
 
 ## Maintain Continuity
@@ -289,11 +301,11 @@ These team members are available for named Rundesk delegation.
 #: The universal completion gate follows conditional collaboration so a result cannot be called
 #: done before any handback has been reviewed.
 #:
-#: **Queued is not installed, and installed is not verified.** A rollout is the outcome whose proof
-#: arrives after the action: the command that starts one returns long before the thing it started
-#: can be checked, so the start is available to report and the finish is not. A turn that reports
-#: the start as the finish is the failure named here, in the plainest words available — the state
-#: reached is what an earlier report says, and success is what it does not.
+#: **Accepted is not done.** Every outcome worth a completion claim has proof that arrives after the
+#: action: the command returns, the process starts, and the thing it was for is still unchecked. A
+#: turn that reports the start as the finish is the failure named here, and it is not a property of
+#: rollouts — it is what any action looks like from inside the turn that took it, so the rule is
+#: stated for work rather than for the one shape of work that made it obvious.
 DEFINITION_OF_DONE = """## Definition of Done
 
 Report an outcome as complete only when:
@@ -304,7 +316,7 @@ Report an outcome as complete only when:
 - No required action, unreviewed result, or known incomplete work remains.
 - The final response clearly states the outcome, verification performed, and any remaining limitation.
 
-Do not report a rollout, release, or update as complete until you verify the result. Starting, queueing, or installing it does not prove it works. Until verification finishes, report the exact state reached—queued or installed—not success.
+Do not report work as complete until you verify the requested outcome. A command accepted or a process started is progress, not proof. While verification remains, report what happened and what remains to check.
 
 If these conditions are not met, report the outcome as pending or blocked and preserve its continuation path."""
 
