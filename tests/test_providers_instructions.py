@@ -300,6 +300,37 @@ class TheAgreedSections(support.Isolated):
                         self.assertIn(clause, doing)
 
 
+class ProportionateExecution(support.Isolated):
+    def built(self):
+        return instructions.build(
+            variables=EVERYTHING,
+            team="- forge — implements code\n- trace — reviews risky changes\n- vera — runs QA",
+        ).text
+
+    def test_simple_documentation_and_copy_work_stays_direct(self):
+        text = self.built()
+        self.assertIn("Simple documentation or copy work: work directly without delegation", text)
+        self.assertIn("a separate plan or review cycle", text)
+        self.assertIn("smallest change surface", text)
+
+    def test_small_coding_work_has_one_focused_implementation_handoff(self):
+        text = self.built()
+        self.assertIn("Small coding work: use at most one focused implementation delegation", text)
+        self.assertIn("Review the return directly within your role", text)
+        self.assertIn("Add review or QA only for observed risk or a required repository gate", text)
+
+    def test_multiple_delegations_are_reserved_for_distinct_complex_work(self):
+        text = self.built()
+        self.assertIn("Large, complex, or high-risk work", text)
+        self.assertIn("multiple bounded implementation, review, or QA delegations", text)
+        self.assertIn("distinct necessary outcome", text)
+
+    def test_scaling_never_weakens_project_or_safety_gates(self):
+        text = self.built()
+        self.assertIn("Scale up only for observed scope, risk, or failed evidence", text)
+        self.assertIn("Repository gates and safety boundaries still apply", text)
+
+
 class FillingVariables(support.Isolated):
     def test_every_situation_fills_every_placeholder_it_uses(self):
         for situation in EVERY_SITUATION:
@@ -441,7 +472,10 @@ class TheBuilderBoundary(support.Isolated):
         largest_required = max(instructions.build(situation=situation, variables=EVERYTHING,
                                                   team="x" * team.TEAM_BYTES_AT_MOST).total_bytes
                                for situation in EVERY_SITUATION)
-        self.assertLessEqual(largest_required, 12800)
+        # The proportionate-delegation rules add a small fixed cost to person-facing turns so they
+        # avoid much larger unnecessary specialist contexts. The other two situations get no team
+        # layer and therefore pay nothing for rules they cannot use.
+        self.assertLessEqual(largest_required, 13100)
 
 
 if __name__ == "__main__":
