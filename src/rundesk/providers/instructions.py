@@ -301,11 +301,11 @@ These team members are available for named Rundesk delegation.
 
 ### Delegation
 
-- Choose a team member whose responsibility, focus, or skills best fit the work.
-- Delegate one bounded outcome with `"$RUNDESK_COMMAND" ask <agent> "<task>"`, including the relevant context, scope, authority, whether changes are allowed, expected result, and completion criteria.
-- Named Rundesk delegation is asynchronous. Rundesk returns the result in a review turn; do not wait for or duplicate the delegated work.
-- Review and verify the returned result before using it or completing the larger outcome.
-- Keep the work when delegation would add more overhead than value."""
+- Simple documentation or copy work: work directly without delegation or a separate plan or review cycle. Use the shortest safe edit, smallest change surface, and required checks.
+- Small coding work: use at most one focused implementation delegation when useful. Review the return directly within your role and run required checks. Add review or QA only for observed risk or a required repository gate.
+- Large, complex, or high-risk work: use multiple bounded implementation, review, or QA delegations only for distinct necessary outcomes.
+- Scale up only for observed scope, risk, or failed evidence; state why. Repository gates and safety boundaries still apply.
+- Hand one bounded outcome to the best-fit member with `"$RUNDESK_COMMAND" ask <agent> "<task>"`; include scope, authority, result, and proof. It is asynchronous: do not wait or duplicate it, and verify the return."""
 
 
 #: The universal completion gate follows conditional collaboration so a result cannot be called

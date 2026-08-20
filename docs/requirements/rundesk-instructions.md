@@ -172,7 +172,11 @@ agents available to a person-facing turn, then places its operating guidance und
 subsection. That subsection explains how to choose an agent, hand over one bounded outcome with
 `"$RUNDESK_COMMAND" ask <agent> "<task>"`, state whether changes are authorized, and avoid waiting
 for or duplicating active work. The result returns in a review turn. The agent reviews and verifies
-that result before relying on it or completing the larger outcome.
+that result before relying on it or completing the larger outcome. Simple documentation and copy
+work stays direct with the smallest safe change. Small coding work uses at most one focused
+implementation delegation when useful, with direct review by the owning agent. Multiple bounded
+implementation, review, or QA delegations are reserved for distinct outcomes in large, complex, or
+high-risk work, and agents scale up only for observed scope, risk, or failed evidence.
 
 It is omitted for schedules because their asynchronous result cannot return to the same turn for
 review. It is omitted for agent-to-agent delegations because named Rundesk delegation stops at one
@@ -277,6 +281,7 @@ changes that section. The situation and delegation-depth exclusions defined abov
 | ✅ | R-INS-21 | For project work the applicable project rules are the turn's first project access, read in full before any other project file, directory listing, metadata access, skill load, plan, inspection, change, or verification, while the agent's own home context stays available beforehand | `test_the_projects_own_rules_are_the_first_project_access` |
 | ✅ | R-INS-22 | Every turn is told to leave an unrelated granted skill unloaded, that non-project work has no project rules, and that file access alone does not trigger a development skill | `test_file_access_alone_does_not_trigger_a_development_skill` |
 | ✅ | R-INS-23 | The one agent template classifies a durable preference for how work is done or answered as learned context for `MEMORY.md` rather than part of the agent's role | `test_a_durable_reply_preference_is_learned_context_not_a_role_rule` |
+| ✅ | R-INS-24 | Every person-facing agent with named delegation keeps simple documentation and copy work direct, uses at most one focused implementation delegation for small coding work when useful, reviews that return within its own role, and reserves multiple bounded implementation, review, or QA delegations for distinct outcomes in large, complex, or high-risk work | `test_simple_documentation_and_copy_work_stays_direct`, `test_small_coding_work_has_one_focused_implementation_handoff`, `test_multiple_delegations_are_reserved_for_distinct_complex_work`, `test_scaling_never_weakens_project_or_safety_gates` |
 
 ## Acceptance
 
