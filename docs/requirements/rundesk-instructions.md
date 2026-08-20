@@ -1,7 +1,7 @@
 ---
 id: INS
 name: Rundesk operating and agent instructions
-last_verified: 2026-08-19
+last_verified: 2026-08-20
 ---
 
 ## What this is
@@ -129,10 +129,16 @@ complete set of actions, and adjust the approach when evidence requires it.
 
 The preflight precedes substantive action and is ordered, because the order carries the guarantee:
 
-1. Read the applicable project rules in full, along with the available skill descriptions. The
-   project's rules are an input to which skills apply, so a selection made before reading them is
-   made from half the evidence.
-2. Identify every skill applicable to this request and project, and no others.
+1. Read the applicable project rules in full. For project work they are the turn's first project
+   access, read before any other project file, directory listing, metadata access, project or task
+   skill load, plan, inspection, change, or verification; recovering the agent's own home context
+   beforehand is not project access. The project's rules are an input to which skills apply, so a
+   selection made before reading them is made from half the evidence.
+2. Read the available skill descriptions and identify every skill applicable to this request and
+   project, and no others. An unrelated granted skill stays unloaded, non-project work has no
+   project rules to read, and file access alone does not trigger a development skill. Applicability
+   follows the work itself: a standalone development task outside any repository may still need the
+   skill it names.
 3. Load each applicable body, together with every reference that body requires, before any other
    substantive action. A skill that is listed or granted is not a skill that is loaded, and a body
    already loaded in the current session is not loaded again.
@@ -216,7 +222,10 @@ or commit and returns findings and evidence instead. The agent home stays an ope
 and never the project checkout, and the subsection names requirements rather than copying any
 project's rules.
 The separate `agent/MEMORY.md` template holds durable learned context such as preferences, traps,
-gotchas, stable facts and references, and hard-won lessons without repeating agent instructions.
+gotchas, stable facts and references, and hard-won lessons without repeating agent instructions. A
+person's durable preference for how work is done or answered — brevity, candor, format, or depth of
+detail — is learned context for that file rather than part of the agent's role, so a stated reply
+preference is recorded in memory instead of becoming a role rule.
 
 The bundled design step also aligns an agent's granted skills with its durable role: grant what the role
 needs on an ordinary turn, leave the rest ungranted, and do not restate Rundesk's loading procedure
@@ -265,6 +274,9 @@ changes that section. The situation and delegation-depth exclusions defined abov
 | ✅ | R-INS-18 | The bundled design step aligns granted skills with the durable role, naming both the ungranted skill the work needed and the unrelated grant every turn pays for | `test_the_design_step_grants_the_skills_the_durable_role_needs` |
 | ✅ | R-INS-19 | That guidance names Rundesk's loading procedure once and keeps it out of the fenced agent contract | `test_the_universal_loading_procedure_is_named_once_and_never_copied` |
 | ✅ | R-INS-20 | Instruction validation inspects supported load evidence in fresh turns for the order actually taken, an irrelevant granted skill left unloaded, and an already-loaded body not loaded again, while keeping the representative-and-near-miss acceptance case | `test_validation_inspects_the_order_a_fresh_turn_actually_took` |
+| ✅ | R-INS-21 | For project work the applicable project rules are the turn's first project access, read in full before any other project file, directory listing, metadata access, skill load, plan, inspection, change, or verification, while the agent's own home context stays available beforehand | `test_the_projects_own_rules_are_the_first_project_access` |
+| ✅ | R-INS-22 | Every turn is told to leave an unrelated granted skill unloaded, that non-project work has no project rules, and that file access alone does not trigger a development skill | `test_file_access_alone_does_not_trigger_a_development_skill` |
+| ✅ | R-INS-23 | The one agent template classifies a durable preference for how work is done or answered as learned context for `MEMORY.md` rather than part of the agent's role | `test_a_durable_reply_preference_is_learned_context_not_a_role_rule` |
 
 ## Acceptance
 

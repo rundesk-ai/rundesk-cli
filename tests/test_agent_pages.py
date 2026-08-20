@@ -141,6 +141,23 @@ class ANewAgent(support.Isolated):
             with self.subTest(term=term):
                 self.assertIn(term, responses)
 
+    def test_a_durable_reply_preference_is_learned_context_not_a_role_rule(self):
+        """A person asking for shorter, blunter answers reads as a Responses rule.
+
+        The standing instructions were rewritten to hold one instead of memory, which makes a
+        learned fact permanent role behavior and loses it from the file built to carry it.
+        """
+        rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
+        memory = " ".join(
+            rules.split("## Memory", 1)[1].split("\n## ", 1)[0].split()).lower()
+        # Requirement-level: "preferences" already appears in the durable-context list, so each
+        # fragment carries the clause naming what the preference is and where it belongs.
+        for clause in ("durable preference for how work is done or answered",
+                       "brevity, candor, format, or depth of detail",
+                       "learned context for `memory.md` rather than part of your role"):
+            with self.subTest(clause=clause):
+                self.assertIn(clause, memory)
+
     def test_the_pages_say_what_they_are(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("MEMORY.md", rules)

@@ -264,6 +264,41 @@ class TheAgreedSections(support.Isolated):
         # It says when and what, never how: skill bodies stay provider-native.
         self.assertNotIn("SKILL.md", self.built().text)
 
+    def test_the_projects_own_rules_are_the_first_project_access(self):
+        # "Before substantive action" was followed as "before changing anything": turns listed the
+        # tree, opened task files and loaded project skills, and only then read the rules that
+        # decide which skills apply. The clause has to name the access itself and everything it
+        # precedes, because a text naming only the file is satisfied by reading it second.
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:32]):
+                doing = self.part(self.built(situation).text, "## Execute the Work")
+                self.assertIn("your first project access", doing)
+                # One whole clause: "listing", "plan" and "change" are ordinary words, and
+                # "change" is already a substring of the neighbouring "changing anything".
+                self.assertIn("before any other project file, listing, metadata, skill load, "
+                              "plan, inspection, change, or verification", doing)
+                # Recovering the agent's own context is not project access, or every turn that
+                # reads its memory first has broken the rule it was just given.
+                self.assertIn("your agent home is not project access", doing)
+                # It governs the access, not only the selection that follows it.
+                self.assertLess(doing.index("first project access"),
+                                doing.index("identify every skill applicable"))
+
+    def test_file_access_alone_does_not_trigger_a_development_skill(self):
+        # "And no others" sits beside a positive duty and was read as advice: a granted
+        # development workflow was opened because the turn had read one file on the machine.
+        # What the rule denies is that trigger, not the possibility — a standalone development
+        # task outside any repository can still need the skill it names — so the clause is about
+        # file access rather than about a category of work that may never load one.
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:32]):
+                doing = self.part(self.built(situation).text, "## Execute the Work")
+                for clause in ("leave an unrelated grant unloaded",
+                               "non-project work has no project rules",
+                               "file access alone does not trigger a development skill"):
+                    with self.subTest(clause=clause):
+                        self.assertIn(clause, doing)
+
 
 class FillingVariables(support.Isolated):
     def test_every_situation_fills_every_placeholder_it_uses(self):

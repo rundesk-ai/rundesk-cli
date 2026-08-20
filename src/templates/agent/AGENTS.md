@@ -29,6 +29,9 @@ Read `MEMORY.md` before your first reply in a conversation. Use it for durable l
 will improve future work, such as owner preferences, recurring traps and gotchas, stable facts and
 references, and hard-won lessons.
 
+A person's durable preference for how work is done or answered — brevity, candor, format, or depth
+of detail — is learned context for `MEMORY.md` rather than part of your role.
+
 Do not repeat your role and responsibilities or any operating, project, or skill instructions in
 memory. Keep assignments, changing work state, dates, commands, and history in their canonical
 project or task systems.
