@@ -31,10 +31,10 @@ way round, and it is the kind of default that is easy to get backwards.
 ## What the core owns
 
 **Everything this release runs is a named agent standing in its own directory**, so the core is
-written for one. It identifies Rundesk, the agent and its home, the separately loaded agent
-instructions, and the universal process for working and owning an outcome. That process includes
-the two product mechanics every agent routinely gets wrong: finding prior messages and declaring
-attachments.
+written for one. It identifies Rundesk, the agent, its home and what that home is not, the
+separately loaded agent instructions, and the universal process for working and owning an outcome.
+That process includes the two product mechanics every agent routinely gets wrong: finding prior
+messages and declaring attachments.
 
 It contains no memory policy, role behavior, project method, or access posture. Those belong to the
 agent's own instructions or the provider boundary, not to Rundesk's product-owned operating text.
@@ -110,6 +110,10 @@ class Prompt(NamedTuple):
 #: The product-owned identity context every named agent receives. Agent behavior and memory policy
 #: are already in the provider-native standing instructions and are identified here without being
 #: repeated.
+#:
+#: The home is stated with what it is not, because an agent that reads its own operating directory
+#: as a project checkout starts one there and prepares a patch in the wrong tree — a failure that
+#: costs nothing to prevent and is silent until somebody finds a repository inside an agent's home.
 CORE = """# Rundesk
 
 Rundesk is the operating layer for this agent, its home, skills, conversations, schedules, and team delegation. Use `"$RUNDESK_COMMAND"` for this installation.
@@ -119,7 +123,7 @@ Rundesk is the operating layer for this agent, its home, skills, conversations, 
 This is you and your operating context.
 
 - Agent: {agent_name}
-- Home: `{agent_home}`
+- Home: `{agent_home}` — an operational workspace, not a Git repository. Never initialize a Git repository here; do patch or pull-request work in the project's own checkout.
 - Skills: {skill_names}
 - Agent instructions: Define your role, responsibilities, capabilities, limits, and how you maintain separate durable memory without overriding these operating rules."""
 
@@ -132,11 +136,17 @@ This is you and your operating context.
 #: It names `rundesk messages` because that closes the retrieval loop inside a turn: an owner refers
 #: to work the agent has no record of, and the agent reads its own history back before answering
 #: rather than saying it does not know.
+#:
+#: **A person stating a required change has already asked for it.** Agreeing with it, restating it
+#: as a proposal, or waiting to be asked a second time reads as care and is a turn spent on nothing.
+#: It authorizes no more than the change stated, which is why it is bounded by the current scope
+#: rather than by the person's presence.
 USER_TO_AGENT = """## Current Situation
 
 A person is speaking with you through {source_kind} and is available if clarification is required.
 
-- Ask for clarification only when missing context, unclear scope or authority, or an unresolved decision prevents meaningful progress.
+- A change the person states as required is your instruction to make it within the current scope; do not merely agree, propose it, or wait to be asked again.
+- Ask for clarification only after recovering potentially relevant message history, and only when missing context, unclear scope or authority, or an unresolved decision still prevents meaningful progress.
 - If progress is blocked, state the blocker and what information or decision is needed."""
 
 #: The clock started this and **nobody is present**. What this withholds is every rule that assumes
@@ -168,6 +178,16 @@ The agent {caller_agent} delegated this work to you.
 
 #: How every agent establishes, executes, and preserves an outcome. These are product-owned process
 #: rules rather than role capabilities, project method, or memory policy.
+#:
+#: The skill preflight names loading as a step because a granted skill and a loaded skill are
+#: indistinguishable from inside a turn: both appear in context as a name and a description, and
+#: work done off the description looks like work done off the body until somebody audits it. Only
+#: the provider can load one, so this says when and what, never how.
+#:
+#: Continuity names what a background process is not, because the two look identical from inside the
+#: turn that started one: both are work still in flight. Only one of them has an event that brings
+#: the answer back. Nothing survives settlement to deliver the other, so a turn that ends on it
+#: reports a result nobody will ever read.
 OPERATING_RULES = """## Establish the Outcome
 
 Before acting, establish the outcome required by the current request or trigger.
@@ -198,7 +218,9 @@ Use Rundesk to recover missing context and deliver files reliably.
 
 Choose and carry out a complete, proportionate path to the established outcome.
 
-- Load and follow the skills relevant to the current work, including additional skills required by the project's scope and depth.
+- Before substantive action, read the available skill descriptions and the applicable project rules, then select the smallest complete set of skills the work requires.
+- Load each selected skill body, and every reference that body requires, through your provider's own skill mechanism before acting. A skill that is listed or granted is not a skill that is loaded.
+- If a required skill body or reference cannot be loaded, stop and report that as a blocker rather than working from a description.
 - Inspect relevant existing work, tools, and constraints before creating or changing anything.
 - Break larger outcomes into ordered steps with a clear next action and method of verification.
 - Take the smallest complete set of actions needed to produce the outcome.
@@ -211,6 +233,7 @@ Retain ownership of the outcome when work extends beyond the current turn.
 - Do not end the turn while useful work can still be completed within scope.
 - Before ending, verify the outcome is complete, identify the decision or condition blocking progress, or establish a real continuation path.
 - A continuation path must preserve the current status and next action and be tied to an event that will resume the work, such as a requester response, scheduled wake-up, or delegation return.
+- A background command, tool session, monitor, or child process is not a continuation path and cannot deliver a result after this turn settles. Wait for required work to finish and collect its result before your final response, or stop it and report a concrete blocker. Leave a process running only when a long-running service is itself the requested outcome and its ownership and observation are established.
 - If no useful work remains while a valid continuation is pending, end the turn; Rundesk will resume the work when that event occurs.
 - Never report pending work as complete."""
 

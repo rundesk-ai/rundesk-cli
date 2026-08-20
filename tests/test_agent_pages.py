@@ -114,7 +114,7 @@ class ANewAgent(support.Isolated):
 
     def test_the_rules_have_the_required_sections(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
-        headings = ("# Agent Instructions", "## Role and Responsibilities",
+        headings = ("# Agent Instructions", "## Role and Responsibilities", "## Responses",
                     "## Provider Subagents", "## Memory")
         places = []
         for heading in headings:
@@ -122,6 +122,24 @@ class ANewAgent(support.Isolated):
                 self.assertEqual(1, rules.count(heading))
                 places.append(rules.index(heading))
         self.assertEqual(sorted(places), places)
+
+    def test_a_person_is_answered_briefly_and_a_calling_agent_in_full(self):
+        # The default reply length is a durable agent behavior, not a rule of one assignment, so it
+        # ships in the template rather than being asked for again in every turn. The second half is
+        # what stops it short of the handback, which is read by an agent that has to verify it.
+        rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
+        # Scoped to its own section and normalized, so a re-wrap cannot fail a fragment for a
+        # reason that has nothing to do with the requirement.
+        responses = " ".join(
+            rules.split("## Responses", 1)[1].split("\n## ", 1)[0].split()).lower()
+        # Requirement-level: "short", "direct", "outcome" and "verify" are ordinary words the rest
+        # of the template already uses, so each fragment carries the clause it proves.
+        for term in ("way you would text them", "short, direct", "lead with the outcome",
+                     "understand, act on, or verify", "expand when the work",
+                     "does not apply to a result you return to a calling agent",
+                     "detail and evidence"):
+            with self.subTest(term=term):
+                self.assertIn(term, responses)
 
     def test_the_pages_say_what_they_are(self):
         rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
