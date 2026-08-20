@@ -96,6 +96,13 @@ adjacent work it does not own, and the artifact or evidence it normally returns.
 not adopt a parent backlog or place temporary delegated detail in memory unless it creates a durable
 role-level lesson.
 
+A coding or code-investigation specialist works in repositories it does not own. Its contract
+requires reading the target project's own `AGENTS.md` before any project action and following it
+alongside the contract, within the ownership split above. Name that requirement rather than the
+project's rules, which are read in the checkout at the version being worked on. State that the agent
+home is an operational workspace and never the project checkout; repository work belongs in the
+project's own checkout.
+
 Most specialist agents should be inbound-only. Configure them with
 `"$RUNDESK_COMMAND" agents configure <agent> --delegate-to-none` unless the owner explicitly wants
 that specialist to coordinate other named agents. This delegation setting reinforces the intended

@@ -272,6 +272,25 @@ class WhatAShippedSkillMayClaim(Bundled):
                 places.append(agent_instructions.index(heading))
         self.assertEqual(sorted(places), places)
 
+    def test_a_coding_specialist_is_told_to_follow_the_projects_own_rules(self):
+        # An agent home is an operational workspace, and the rules governing a repository live in
+        # that repository. The design step has to ask for them by requirement: copying a project's
+        # rules into durable agent instructions is the failure the ownership split already forbids,
+        # and the copy goes stale at the first commit nobody told the agent about.
+        agent_instructions = " ".join(
+            (self.skills / "managing-rundesk" / "references" / "agent-instructions.md").read_text(
+                encoding="utf-8").split())
+        # Scoped to the design step that owns it, so the requirement cannot be satisfied by the
+        # general ownership prose several sections above.
+        specialist = agent_instructions.split(
+            "#### Specialist behavior", 1)[1].split("## Change instructions safely", 1)[0]
+        for phrase in ("coding or code-investigation specialist",
+                       "target project's own `AGENTS.md` before any project action",
+                       "following it alongside the contract",
+                       "operational workspace and never the project checkout"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, specialist)
+
     def test_managing_rundesk_routes_desk_cli_catalog_and_binary_separately(self):
         skills = (self.skills / "managing-rundesk" / "references" / "skills.md").read_text(
             encoding="utf-8")
