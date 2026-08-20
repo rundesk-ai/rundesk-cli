@@ -209,12 +209,12 @@ class TheAgreedSections(support.Isolated):
             with self.subTest(situation=situation[:32]):
                 done = self.part(self.built(situation).text, "## Definition of Done")
                 # Whole clauses, because the relationship is the requirement: separate fragments
-                # survive a text that says the three states are the same, or that an earlier
-                # report names success. Each of those reversals has to fail here.
-                for clause in ("a rollout, release, or update has collected its own explicit proof",
-                               "queued, installed, and verified are distinct states",
-                               "an earlier report names the exact unverified state rather than "
-                               "success"):
+                # survive a text that says starting one proves it works, or that an earlier report
+                # names success. Each of those reversals has to fail here.
+                for clause in ("do not report a rollout, release, or update as complete until you "
+                               "verify the result",
+                               "starting, queueing, or installing it does not prove it works",
+                               "report the exact state reached—queued or installed—not success"):
                     with self.subTest(clause=clause):
                         self.assertIn(clause, done)
 

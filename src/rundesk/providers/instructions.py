@@ -292,18 +292,19 @@ These team members are available for named Rundesk delegation.
 #: **Queued is not installed, and installed is not verified.** A rollout is the outcome whose proof
 #: arrives after the action: the command that starts one returns long before the thing it started
 #: can be checked, so the start is available to report and the finish is not. A turn that reports
-#: the start as the finish is the failure named here, and the tri-state is what an earlier report
-#: says instead of calling it done.
+#: the start as the finish is the failure named here, in the plainest words available — the state
+#: reached is what an earlier report says, and success is what it does not.
 DEFINITION_OF_DONE = """## Definition of Done
 
 Report an outcome as complete only when:
 
 - Every requested result has been delivered and meets its completion criteria.
 - Each material claim and deliverable has been verified with appropriate evidence.
-- A rollout, release, or update has collected its own explicit proof; queued, installed, and verified are distinct states, and an earlier report names the exact unverified state rather than success.
 - Delegated or asynchronous results have been reviewed and incorporated where required.
 - No required action, unreviewed result, or known incomplete work remains.
 - The final response clearly states the outcome, verification performed, and any remaining limitation.
+
+Do not report a rollout, release, or update as complete until you verify the result. Starting, queueing, or installing it does not prove it works. Until verification finishes, report the exact state reached—queued or installed—not success.
 
 If these conditions are not met, report the outcome as pending or blocked and preserve its continuation path."""
 

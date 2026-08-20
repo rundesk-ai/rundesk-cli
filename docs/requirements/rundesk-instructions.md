@@ -172,9 +172,9 @@ criteria, material claims and deliverables are verified, required asynchronous r
 and no known required work remains. Otherwise the agent reports the outcome as pending or blocked
 and preserves its continuation path.
 
-A rollout, release, or update is complete only once its own explicit proof has been collected.
-Queued, installed, and verified are distinct states, and a status reported before that proof names
-the exact unverified state reached rather than presenting the work as successful.
+A rollout, release, or update is not reported as complete until the agent verifies the result.
+Starting, queueing, or installing one does not prove it works. Until verification finishes, the
+report names the exact state reached — queued or installed — rather than success.
 
 ## Agent instruction template
 
@@ -190,10 +190,23 @@ use of provider-local subagents, and how it maintains separate memory. It contai
 instruction-authoring or self-editing guidance and does not repeat the operating outcome lifecycle.
 Provider-local subagents do not replace eligible named Rundesk team delegation. The bundled
 `managing-rundesk` guidance owns the review and writing process for changing agent instructions.
-Its specialist design step requires a coding or code-investigation agent's contract to read the
-target project's own `AGENTS.md` before any project action and follow it alongside that contract,
-naming the requirement rather than copying the project's rules, and to state that the agent home is
-an operational workspace and never the project checkout.
+Its specialist design step carries a coding and code-investigation subsection: one reusable
+implementation-specialist contract, preceded by the ownership rationale and followed by the
+read-only investigator delta. The contract makes a coding agent read the target repository's own
+`AGENTS.md` before any project action and follow it alongside its own; establish the authoritative
+base, remotes, branch, existing worktrees, and uncommitted changes before acting; work in an
+isolated task worktree on a topic branch cut from that base unless the assignment names another safe
+workspace; preserve owner and unrelated changes without resetting, discarding, overwriting, or
+folding them into the task; leave the shared checkout unchanged as found and its own task worktree
+clean with coherent commits on its topic branch, keeping an explicitly requested review patch
+uncommitted and reporting that exact dirty state; run the project's verification proportionate to
+risk and report every gate that did not run; change no external state without assignment authority;
+and hand back
+the exact checkout or worktree, branch, commit or dirty files, verification and results,
+limitations, and remaining work. A read-only investigator or reviewer creates no worktree, branch,
+or commit and returns findings and evidence instead. The agent home stays an operational workspace
+and never the project checkout, and the subsection names requirements rather than copying any
+project's rules.
 The separate `agent/MEMORY.md` template holds durable learned context such as preferences, traps,
 gotchas, stable facts and references, and hard-won lessons without repeating agent instructions.
 
@@ -231,8 +244,9 @@ changes that section. The situation and delegation-depth exclusions defined abov
 | ✅ | R-INS-12 | Every turn is told a background command, tool session, monitor, or child process is not a continuation path and cannot deliver a result after the turn settles | `test_a_background_process_is_not_a_continuation_path` |
 | ✅ | R-INS-13 | Every turn is instructed to run a skill preflight before substantive action: select the smallest complete set, load each body and its required references, treat a granted skill as unloaded, and stop as a blocker when a required body or reference cannot be loaded | `test_every_turn_must_load_a_skill_body_before_acting` |
 | ✅ | R-INS-14 | A person-facing turn keeps routine internal context recovery — memory, task state, instructions, prior messages, but not skills — silent, reserves a concise update for a requested status, material progress or a result that affects the person, and a blocker, risk, or decision, and never withholds an announcement a higher-priority applicable instruction requires | `test_a_person_turn_keeps_routine_internal_recovery_silent` |
-| ✅ | R-INS-15 | Every turn is told a rollout, release, or update is complete only once its own explicit proof is collected, and that an earlier report names the exact unverified state among queued, installed, and verified | `test_a_rollout_is_not_complete_until_its_own_proof_is_collected` |
-| ✅ | R-INS-16 | The bundled specialist design step requires a coding or code-investigation agent to read and follow the target project's own `AGENTS.md` before project action, with the agent home stated as an operational workspace rather than the project checkout | `test_a_coding_specialist_is_told_to_follow_the_projects_own_rules` |
+| ✅ | R-INS-15 | Every turn is told not to report a rollout, release, or update as complete before verifying the result, that starting, queueing, or installing one does not prove it works, and that an earlier report names the exact state reached — queued or installed — rather than success | `test_a_rollout_is_not_complete_until_its_own_proof_is_collected` |
+| ✅ | R-INS-16 | The bundled specialist design step teaches a coding agent's contract to follow the target repository's own `AGENTS.md`, inspect authoritative state, mutate only in an isolated task worktree on a topic branch unless another safe workspace is named, preserve unrelated work, leave the shared checkout unchanged as found and its own task worktree clean with coherent commits on its topic branch while honoring an explicitly requested uncommitted patch, verify proportionately, change no external state without authority, and hand back exact location, state, and gaps | `test_a_coding_specialist_contract_is_specific_about_the_checkout` |
+| ✅ | R-INS-17 | That design step separates read-only code investigation and review, which creates no worktree, branch, or commit and returns findings and evidence instead of changes | `test_a_read_only_investigator_creates_no_worktree_branch_or_commit` |
 
 ## Acceptance
 
@@ -246,3 +260,7 @@ as long as the requirements and structural contract remain true.
 Cases that assert a universal boundary derive the situation set from the instruction module rather
 than from a maintained listing, so a situation added later is covered by each of them without a test
 edit. That discovery fails when it finds no situation block, because a loop over nothing passes.
+
+Bundled guidance is accepted against the one example contract that carries each required behavior,
+scoped to the design step that owns it, rather than against a rule restated in prose and again in
+the example.
