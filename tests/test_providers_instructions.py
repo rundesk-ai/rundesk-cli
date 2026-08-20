@@ -34,6 +34,15 @@ class TheAgreedSections(support.Isolated):
     def built(self, situation=instructions.USER_TO_AGENT, team_text=""):
         return instructions.build(situation=situation, variables=EVERYTHING, team=team_text)
 
+    def part(self, text, heading):
+        """One section's body, whitespace-normalized and folded.
+
+        Scoped because a term proves the rule sits in the section that owns it, and normalized
+        because a fragment that straddles a wrapped line fails for a reason that has nothing to do
+        with the requirement.
+        """
+        return " ".join(text.split(heading, 1)[1].split("\n## ", 1)[0].split()).lower()
+
     def test_the_always_on_sections_are_present_once_and_in_order(self):
         text = self.built().text
         places = []
@@ -95,6 +104,83 @@ class TheAgreedSections(support.Isolated):
     def test_a_delegated_project_task_cannot_pollute_the_agents_own_memory(self):
         built = self.built(instructions.AGENT_TO_AGENT)
         self.assertNotIn("MEMORY.md", built.text)
+
+    def test_no_turn_is_told_its_home_is_a_project_repository(self):
+        # Every trigger can be asked to prepare a patch, including the two with nobody present to
+        # correct it, so the boundary belongs to the core rather than to one situation.
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:32]):
+                context = self.part(self.built(situation).text, "## Agent Context")
+                for term in ("operational workspace", "git repository", "initialize", "checkout"):
+                    with self.subTest(term=term):
+                        self.assertIn(term, context)
+                # One canonical term: every repository named here is a Git repository.
+                self.assertEqual(context.count("git repository"), context.count("repository"))
+
+    def test_a_person_turn_asks_only_after_recovering_message_history(self):
+        person = self.built().text
+        situation = self.part(person, "## Current Situation")
+        # Requirement-level: asking is permitted only after the recovery, so both halves of that
+        # condition have to survive together. A bare "message history" is satisfied by the
+        # standing Messages rule and would pass on the pre-patch text.
+        self.assertIn("only after recovering", situation)
+        self.assertIn("message history", situation)
+        # The rule is only followable because the executable form travels in the same prompt.
+        self.assertIn('messages ava --search "<relevant words>" --full', person)
+
+    def test_a_stated_change_is_an_instruction_rather_than_a_proposal(self):
+        person = self.built().text
+        situation = self.part(person, "## Current Situation")
+        # Requirement-level: the bare words appear in the pre-patch situation, so each fragment
+        # carries the clause it proves.
+        for term in ("is your instruction to make it", "within the current scope",
+                     "do not merely agree, propose it"):
+            with self.subTest(term=term):
+                self.assertIn(term, situation)
+        # Bounded by the standing scope rule, not widened by a person being there.
+        self.assertIn("scope and authority", self.part(person, "## Boundaries"))
+        for other in (instructions.SCHEDULE_TO_AGENT, instructions.AGENT_TO_AGENT):
+            with self.subTest(situation=other[:32]):
+                self.assertNotIn("is your instruction to make it",
+                                 self.part(self.built(other).text, "## Current Situation"))
+
+    def test_a_background_process_is_not_a_continuation_path(self):
+        # A turn that ends on a running child reports an answer nobody will read: nothing survives
+        # settlement to deliver it. It is in the universal rules because every situation can start
+        # one, including the two with nobody present to notice the result never arrived.
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:32]):
+                continuity = self.part(self.built(situation).text, "## Maintain Continuity")
+                for term in ("background command", "tool session", "monitor", "child process",
+                             "not a continuation path", "collect", "blocker",
+                             "long-running service"):
+                    with self.subTest(term=term):
+                        self.assertIn(term, continuity)
+
+    def test_every_turn_must_load_a_skill_body_before_acting(self):
+        # A granted skill and a loaded skill look identical from inside a turn: both arrive as a
+        # name and a description. This proves the prompt asks for the load. Nothing here can prove
+        # a turn performed it, and no release records what a turn loaded.
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:32]):
+                doing = self.part(self.built(situation).text, "## Execute the Work")
+                # Requirement-level: "reference", "granted" and "loaded" are ordinary words that
+                # a neighbouring bullet can satisfy, so each fragment carries its own clause.
+                for term in ("read the available skill descriptions",
+                             "the applicable project rules",
+                             "smallest complete set of skills",
+                             "load each selected skill body",
+                             "every reference that body requires",
+                             "before acting",
+                             "granted is not a skill that is loaded",
+                             "cannot be loaded, stop and report that as a blocker"):
+                    with self.subTest(term=term):
+                        self.assertIn(term, doing)
+                # Leading the section is what "before substantive action" means structurally.
+                self.assertLess(doing.index("before substantive action"),
+                                doing.index("inspect relevant"))
+        # It says when and what, never how: skill bodies stay provider-native.
+        self.assertNotIn("SKILL.md", self.built().text)
 
 
 class FillingVariables(support.Isolated):
@@ -216,9 +302,9 @@ class TheBuilderBoundary(support.Isolated):
 
     def test_static_layers_and_the_maximum_prompt_stay_bounded(self):
         ceilings = {
-            "core": (instructions.CORE, 600),
-            "rules": (instructions.OPERATING_RULES, 3200),
-            "person": (instructions.USER_TO_AGENT, 500),
+            "core": (instructions.CORE, 650),
+            "rules": (instructions.OPERATING_RULES, 4000),
+            "person": (instructions.USER_TO_AGENT, 650),
             "schedule": (instructions.SCHEDULE_TO_AGENT, 700),
             "agent": (instructions.AGENT_TO_AGENT, 800),
             "team": (instructions.TEAM_MEMBERS, 1000),
@@ -229,7 +315,7 @@ class TheBuilderBoundary(support.Isolated):
                 self.assertLessEqual(len(text.encode("utf-8")), ceiling)
         built = instructions.build(variables=EVERYTHING,
                                    team="x" * team.TEAM_BYTES_AT_MOST)
-        self.assertLessEqual(built.total_bytes, 11000)
+        self.assertLessEqual(built.total_bytes, 12200)
 
 
 if __name__ == "__main__":

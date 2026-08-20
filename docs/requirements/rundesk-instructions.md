@@ -26,7 +26,7 @@ agent receives the context it needs without reading the same rules twice.
 - The current assignment supplies the immediate outcome and authority. It does not become durable
   agent behavior merely because it appeared in a turn.
 
-Rundesk must not duplicate agent, workspace, skill, or memory instructions in its operating layer.
+Rundesk must not duplicate agent, project, skill, or memory instructions in its operating layer.
 Providers may load those layers through their native instruction mechanisms.
 
 ## Operating instruction structure
@@ -60,6 +60,10 @@ home, and the comma-separated names of its active granted skills. It says that t
 supplied agent instructions define role, responsibilities, capabilities, limits, and memory without
 overriding the operating instructions.
 
+It states the home as an operational workspace rather than a Git repository, forbids initializing a
+Git repository there, and places patch or pull-request work in the project's own checkout. It names
+no file that a release places in the home.
+
 It does not name provider-native instruction files or tell the agent to load instructions that the
 provider loads automatically.
 
@@ -67,9 +71,12 @@ provider loads automatically.
 
 Exactly one situation is rendered:
 
-- Person: states that a person is available and permits clarification only when missing context,
-  unclear scope or authority, or an unresolved decision prevents meaningful progress. A blocked
-  agent names the blocker and the information or decision needed.
+- Person: states that a person is available. A change the person states as required is an
+  instruction to make it within the current scope rather than something to agree with, propose, or
+  wait to be asked for again; it authorizes no more than the stated change. Clarification is
+  permitted only after recovering potentially relevant message history, and only when missing
+  context, unclear scope or authority, or an unresolved decision still prevents meaningful
+  progress. A blocked agent names the blocker and the information or decision needed.
 - Schedule: names the schedule, states that nobody is present, limits work to what the schedule
   requested, forbids waiting for clarification, and says the final standalone response is delivered
   automatically to the intended recipient or destination.
@@ -111,9 +118,21 @@ This section makes two high-failure mechanics explicit:
 
 ### Execute the Work
 
-This section defines the universal working process: load the skills required by the work and project
-depth, inspect existing work and constraints, break larger outcomes into ordered verifiable steps,
-take the smallest complete set of actions, and adjust the approach when evidence requires it.
+This section defines the universal working process: run the skill preflight below, inspect existing
+work and constraints, break larger outcomes into ordered verifiable steps, take the smallest
+complete set of actions, and adjust the approach when evidence requires it.
+
+The preflight precedes substantive action. The operating instructions direct the agent to read the
+available skill descriptions and the applicable project rules, select the smallest complete set of
+skills the work requires, and load each selected body together with every reference that body
+requires before acting. They state that a skill which is listed or granted is not a skill that is
+loaded, and that a required body or reference which cannot be loaded stops the work as a reported
+blocker rather than being replaced by its description. They say when and what; descriptions and
+bodies remain provider-native and are never copied into the prompt.
+
+Rundesk instructs this preflight; it does not enforce or observe it. No release records which skill
+bodies or references a turn loaded, and no acceptance test can prove a turn ran the preflight.
+Runtime enforcement and per-turn load receipts are outside this requirement and remain unbuilt.
 
 ### Maintain Continuity
 
@@ -121,6 +140,12 @@ This section keeps the agent responsible for an outcome beyond one turn. The age
 useful in-scope work remains. Before ending it either verifies completion, identifies the blocker,
 or preserves status and a next action tied to a real event that will resume the work. Pending work is
 never reported as complete.
+
+A background command, tool session, monitor, or child process is not such an event and cannot
+deliver a result once the turn settles. The agent waits for required work to finish and collects
+its result before the final response, or stops it and reports a concrete blocker. The one exception
+is a long-running service that is itself the requested outcome, left running with its ownership and
+observation established.
 
 ### Team Members
 
@@ -149,15 +174,22 @@ bytes under both native instruction filenames. The runtime does not classify age
 specialist agents. Those terms may be used as behavior-design patterns when an owner molds an
 agent's durable role through its instructions, description, skills, and delegation scope.
 
-The template contains only `Agent Instructions`, `Role and Responsibilities`, `Provider Subagents`,
-and `Memory`. It addresses the agent directly and defines what it operates, its durable
-responsibilities, role-specific capabilities and limits, its supporting use of provider-local
-subagents, and how it maintains separate memory. It contains no instruction-authoring or
-self-editing guidance and does not repeat the operating outcome lifecycle. Provider-local subagents
-do not replace eligible named Rundesk team delegation. The bundled `managing-rundesk` guidance owns
-the review and writing process for changing agent instructions. The separate `agent/MEMORY.md`
-template holds durable learned context such as preferences, traps, gotchas, stable facts and
-references, and hard-won lessons without repeating agent instructions.
+The template contains only `Agent Instructions`, `Role and Responsibilities`, `Responses`,
+`Provider Subagents`, and `Memory`. It addresses the agent directly and defines what it operates,
+its durable responsibilities, role-specific capabilities and limits, how it answers, its supporting
+use of provider-local subagents, and how it maintains separate memory. It contains no
+instruction-authoring or self-editing guidance and does not repeat the operating outcome lifecycle.
+Provider-local subagents do not replace eligible named Rundesk team delegation. The bundled
+`managing-rundesk` guidance owns the review and writing process for changing agent instructions.
+The separate `agent/MEMORY.md` template holds durable learned context such as preferences, traps,
+gotchas, stable facts and references, and hard-won lessons without repeating agent instructions.
+
+`Responses` sets the durable default for answering a person: a short, direct, natural reply that
+reads like a text message, leading with the outcome and carrying only the context needed to
+understand, act on, or verify it. The agent expands that default when the work is complex or
+carries real risk, or when the person asks for more. A result returned to a calling agent is
+excluded from that default and carries whatever detail and evidence that agent needs to verify and
+use the work.
 
 Agent creation, configuration, listings, and team context do not expose or depend on an agent-type
 flag. Existing customized instruction files remain untouched. A legacy stored role column remains
@@ -179,6 +211,12 @@ changes that section. The situation and delegation-depth exclusions defined abov
 | ✅ | R-INS-5 | Operating prompts remain deterministic, inspectable, and bounded | `test_the_same_inputs_build_the_same_bytes`, `test_the_byte_breakdown_and_fingerprint_match_the_rendered_text`, `test_static_layers_and_the_maximum_prompt_stay_bounded` |
 | ✅ | R-INS-6 | All agents start from one canonical template and public agent operations do not expose a type flag | `test_it_uses_the_single_agent_rules`, `test_role_is_not_an_add_option`, `test_role_is_not_a_configure_option`, `test_it_lists_all_agents_in_one_table` |
 | ✅ | R-INS-7 | Legacy agent roles never suppress an otherwise eligible Team Members and Delegation section | `test_legacy_roles_do_not_remove_team_delegation_from_an_agents_instructions` |
+| ✅ | R-INS-8 | Every turn is told its agent home is an operational workspace rather than a Git repository, and that patch or pull-request work belongs in the project's own checkout, without naming a file the release places in that home | `test_no_turn_is_told_its_home_is_a_project_repository`, `test_the_files_an_agent_lives_by_are_spelled_the_same_way_everywhere` |
+| ✅ | R-INS-9 | A person-facing turn is instructed to recover potentially relevant message history before asking for clarification | `test_a_person_turn_asks_only_after_recovering_message_history` |
+| ✅ | R-INS-10 | A change a person states as required is an instruction to make within the current scope, not something to agree with, propose, or wait to be asked for again | `test_a_stated_change_is_an_instruction_rather_than_a_proposal` |
+| ✅ | R-INS-11 | The one agent template sets a short, outcome-first default for answering a person and excludes a result returned to a calling agent | `test_the_rules_have_the_required_sections`, `test_a_person_is_answered_briefly_and_a_calling_agent_in_full` |
+| ✅ | R-INS-12 | Every turn is told a background command, tool session, monitor, or child process is not a continuation path and cannot deliver a result after the turn settles | `test_a_background_process_is_not_a_continuation_path` |
+| ✅ | R-INS-13 | Every turn is instructed to run a skill preflight before substantive action: select the smallest complete set, load each body and its required references, treat a granted skill as unloaded, and stop as a blocker when a required body or reference cannot be loaded | `test_every_turn_must_load_a_skill_body_before_acting` |
 
 ## Acceptance
 
