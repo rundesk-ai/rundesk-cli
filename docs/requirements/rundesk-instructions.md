@@ -105,8 +105,9 @@ This section makes the current request, schedule, or delegation the limit of sco
 Runtime read access permits inspection and reporting only; work access permits changes only when
 the current request, schedule, or delegation authorizes them.
 Project rules and adjacent findings constrain work but do not authorize more work. Material
-expansion requires explicit authorization where the situation permits it and otherwise becomes a
-reported blocker. The section also prohibits invented outcomes and exposure of sensitive data.
+expansion makes the agent stop and request explicit approval where the situation permits, explaining
+why it is needed, the proposed expansion, and its impact; otherwise it becomes a reported blocker.
+The section also prohibits invented outcomes and exposure of sensitive data.
 
 ### Messages and Attachments
 
@@ -123,9 +124,10 @@ This section makes two high-failure mechanics explicit:
 
 ### Execute the Work
 
-This section defines the universal working process: run the skill preflight below, inspect existing
-work and constraints, break larger outcomes into ordered verifiable steps, take the smallest
-complete set of actions, and adjust the approach when evidence requires it.
+This section defines the universal working process: run the skill preflight below, inspect relevant
+constraints, define the smallest sufficient change for the requested result and required proof,
+require that change to be safe and effective, make and verify only it, and never refactor, clean up,
+redesign, or expand it unless the requester asks.
 
 The preflight precedes substantive action and is ordered, because the order carries the guarantee:
 
@@ -154,10 +156,11 @@ Runtime enforcement and per-turn load receipts are outside this requirement and 
 
 ### Maintain Continuity
 
-This section keeps the agent responsible for an outcome beyond one turn. The agent continues while
-useful in-scope work remains. Before ending it either verifies completion, identifies the blocker,
-or preserves status and a next action tied to a real event that will resume the work. Pending work is
-never reported as complete.
+This section keeps the agent responsible for an outcome beyond one turn. The agent continues only
+while useful in-scope work remains and stops once the requested result and required proof are
+complete. Before ending it either verifies completion, identifies the blocker, or preserves status
+and a next action tied to a real event that will resume the work. Pending work is never reported as
+complete.
 
 A background command, tool session, monitor, or child process is not such an event and cannot
 deliver a result once the turn settles. The agent waits for required work to finish and collects
@@ -282,6 +285,7 @@ changes that section. The situation and delegation-depth exclusions defined abov
 | ✅ | R-INS-22 | Every turn is told to leave an unrelated granted skill unloaded, that non-project work has no project rules, and that file access alone does not trigger a development skill | `test_file_access_alone_does_not_trigger_a_development_skill` |
 | ✅ | R-INS-23 | The one agent template classifies a durable preference for how work is done or answered as learned context for `MEMORY.md` rather than part of the agent's role | `test_a_durable_reply_preference_is_learned_context_not_a_role_rule` |
 | ✅ | R-INS-24 | Every person-facing agent with named delegation keeps simple documentation and copy work direct, uses at most one focused implementation delegation for small coding work when useful, reviews that return within its own role, and reserves multiple bounded implementation, review, or QA delegations for distinct outcomes in large, complex, or high-risk work | `test_simple_documentation_and_copy_work_stays_direct`, `test_small_coding_work_has_one_focused_implementation_handoff`, `test_multiple_delegations_are_reserved_for_distinct_complex_work`, `test_scaling_never_weakens_project_or_safety_gates` |
+| ✅ | R-INS-25 | Every turn defines the smallest safe and effective change sufficient for the requested result and required proof, makes and verifies only that change without unrequested refactoring, cleanup, redesign, or expansion, stops when the result and proof are complete, and requests explicit approval with the reason, proposed expansion, and impact before taking materially broader scope | `test_every_turn_defines_the_smallest_sufficient_change_before_editing`, `test_every_turn_forbids_unrequested_refactoring_and_scope_expansion`, `test_every_turn_stops_when_the_requested_result_and_proof_are_complete`, `test_broader_scope_requires_approval_with_impact` |
 
 ## Acceptance
 

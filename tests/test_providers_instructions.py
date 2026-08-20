@@ -331,6 +331,37 @@ class ProportionateExecution(support.Isolated):
         self.assertIn("Repository gates and safety boundaries still apply", text)
 
 
+class SmallestSufficientChange(support.Isolated):
+    def test_every_turn_defines_the_smallest_sufficient_change_before_editing(self):
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:32]):
+                text = instructions.build(situation=situation, variables=EVERYTHING).text
+                self.assertIn("define the smallest sufficient change", text)
+                self.assertIn("requested result and required proof", text)
+                self.assertIn("safe and effective", text)
+
+    def test_every_turn_forbids_unrequested_refactoring_and_scope_expansion(self):
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:32]):
+                text = instructions.build(situation=situation, variables=EVERYTHING).text
+                self.assertIn("Make only that change", text)
+                self.assertIn("Never refactor, clean up, redesign, or expand it", text)
+                self.assertIn("unless the requester asks", text)
+
+    def test_every_turn_stops_when_the_requested_result_and_proof_are_complete(self):
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:32]):
+                text = instructions.build(situation=situation, variables=EVERYTHING).text
+                self.assertIn("once the requested result and required proof are complete, stop", text)
+
+    def test_broader_scope_requires_approval_with_impact(self):
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:32]):
+                text = instructions.build(situation=situation, variables=EVERYTHING).text
+                self.assertIn("stop and ask for explicit approval", text)
+                self.assertIn("why, the proposed expansion, and its impact", text)
+
+
 class FillingVariables(support.Isolated):
     def test_every_situation_fills_every_placeholder_it_uses(self):
         for situation in EVERY_SITUATION:
