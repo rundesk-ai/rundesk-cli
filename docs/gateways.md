@@ -191,12 +191,19 @@ launchd** — after which nothing on the command line says the job was ever ther
 > measured. It is written down as unsettled rather than claimed, because the register is exactly
 > where a confident wrong answer costs the most.
 
-## Graceful is the default, and `--force` takes work away
+## Restart protects active work, and `--force` takes work away
 
-`rundesk gateways stop` and `rundesk gateways restart` are graceful. The gateway is sent `SIGTERM`
-and given the whole of its shutdown window — twenty-five seconds — to finish what it was holding, and
-only then does launchd insist. That is the default because a gateway is holding somebody's work, and
-a stop that does not let it finish is a stop that loses some.
+A normal `rundesk gateways restart` first closes work admission and inspects every selected
+gateway. If one has an active provider turn or schedule, or that activity cannot be inspected, the
+command refuses before stopping any gateway. `restart --all` makes that preflight for the whole set
+before its first stop, so a busy later gateway cannot leave an idle earlier one already cycled.
+Work admission remains closed through the restart decision, which prevents a turn or schedule from
+entering after the quiet check.
+
+`rundesk gateways stop` remains a graceful cancellation. The gateway is sent `SIGTERM` and given
+the whole of its shutdown window — twenty-five seconds — to settle what it was holding before
+launchd insists. A shutdown asks admitted work to stop; it does not wait indefinitely for that work
+to complete. Stopping a gateway is therefore an explicit request to end its active process tree.
 
 **That window is divided, not spent repeatedly.** Provider turns owned by the gateway are asked to
 stop first and given their share to settle; schedule children, channel adapters and delegated work
@@ -214,9 +221,10 @@ a gateway really was up.
 `--force` skips none of the proving. A forced restart still shows a new gateway holding the name
 before it says it restarted anything.
 
-**And a restart is a stop that was proved, then a start.** Never the other way round: starting over a
-job the supervisor is still holding keeps the definition it already had *without failing*, so a
-restart that started first would report a restart and go on running the old program for ever.
+**After the idle preflight, a restart is a stop that was proved, then a start.** Never the other way
+round: starting over a job the supervisor is still holding keeps the definition it already had
+*without failing*, so a restart that started first would report a restart and go on running the old
+program for ever.
 
 An opted-in `rundesk gateways restart <agent> --continue` is deliberately a different, asynchronous
 self-restart. Only the active channel turn hosted by that named agent may request it, and only when

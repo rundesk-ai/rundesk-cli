@@ -43,7 +43,9 @@ from rundesk.commands import gateways
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.gateways import job, standing
-from rundesk.utils import files, logs, programs
+from rundesk.providers import turns
+from rundesk.schedules import firing
+from rundesk.utils import files, locking, logs, programs
 
 
 def ran(code: Optional[int] = 0, out: str = "", err: str = "",
@@ -1043,6 +1045,70 @@ class Restarting(WithAnAgent):
         self.assertEqual(USAGE, code)
         self.assertIn("two different operations", err)
         self.assertEqual([], by.verbs())
+
+    def test_an_active_provider_turn_refuses_before_the_supervisor_is_asked(self):
+        by = support.ASupervisor()
+        with mock.patch.object(turns, "activity", return_value=["42"]):
+            code, out, err = self.rundesk_with(by, "gateways", "restart", "cole")
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("active provider turn (conversation 42)", err)
+        self.assertIn("nothing was restarted", err)
+        self.assertEqual([], by.verbs())
+
+    def test_all_refuses_atomically_when_a_later_agent_has_active_work(self):
+        directory.made("ada", "claude")
+        by = support.ASupervisor()
+        with mock.patch.object(
+                turns, "activity", side_effect=lambda agent: ["7"] if agent == "cole" else []):
+            code, out, err = self.rundesk_with(by, "gateways", "restart", "--all")
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("active provider turn (conversation 7)", err)
+        self.assertIn("nothing was restarted", err)
+        self.assertEqual([], by.verbs())
+
+    def test_an_active_schedule_refuses_before_the_supervisor_is_asked(self):
+        by = support.ASupervisor()
+        with mock.patch.object(turns, "activity", return_value=[]), \
+                mock.patch.object(firing, "activity", return_value=["daily-check"]):
+            code, out, err = self.rundesk_with(by, "gateways", "restart", "cole")
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("active schedule (daily-check)", err)
+        self.assertIn("nothing was restarted", err)
+        self.assertEqual([], by.verbs())
+
+    def test_activity_that_cannot_be_inspected_refuses_closed(self):
+        by = support.ASupervisor()
+        with mock.patch.object(turns, "activity", return_value=None):
+            code, out, err = self.rundesk_with(by, "gateways", "restart", "cole")
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("provider activity could not be inspected", err)
+        self.assertIn("nothing was restarted", err)
+        self.assertEqual([], by.verbs())
+
+    def test_the_admission_barrier_stays_held_through_the_restart_decision(self):
+        held = []
+
+        def restarted(_name, _by, _forcing=False):
+            held.append(locking.is_held(paths.work_admission_lock()))
+            return OK
+
+        with mock.patch.object(turns, "activity", return_value=[]), \
+                mock.patch.object(firing, "activity", return_value=[]), \
+                mock.patch.object(gateways, "_restarted_one", side_effect=restarted):
+            code, _, _ = self.rundesk("gateways", "restart", "cole")
+        self.assertEqual(OK, code)
+        self.assertEqual([True], held)
+
+    def test_force_remains_the_explicit_path_that_bypasses_the_activity_probe(self):
+        with mock.patch.object(turns, "activity", side_effect=AssertionError("activity probed")), \
+                mock.patch.object(gateways, "_restarted_one", return_value=OK) as restarted:
+            code, _, _ = self.rundesk("gateways", "restart", "cole", "--force")
+        self.assertEqual(OK, code)
+        restarted.assert_called_once()
 
     def test_it_stops_and_starts_again(self):
         by = ALaunchdThatReallyStarts(self.at)

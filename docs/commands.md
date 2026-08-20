@@ -15,7 +15,7 @@ rundesk agents remove <agent> --confirm   # take one away, and everything it rem
 rundesk gateways                          # every agent, and how its gateway stands
 rundesk gateways start <agent>            # start one, and prove a gateway came up
 rundesk gateways stop <agent> | --all     # take the job back, gracefully
-rundesk gateways restart <agent> [--continue] | --all  # stop it, prove it went, start it again
+rundesk gateways restart <agent> [--continue] | --all  # refuse active work; otherwise stop and start
 rundesk gateways logs <agent> [-n <lines>]  # what one gateway has been saying
 rundesk gateways run <agent>              # be the gateway, in this terminal
 rundesk schedules                         # everything every agent starts because the time came
@@ -774,16 +774,23 @@ See [gateways.md](./gateways.md) for why that distinction is load-bearing on mac
 
 ### gateways restart
 
-Stop, prove the old one is gone, then start — **never the other way round.** Starting over a job the
-supervisor is still holding keeps the definition it already had *without failing*, so a restart that
-started first would report a restart and go on running the old program for ever. A stop that did not
-clearly work therefore ends the cycle there, with the gateway down and the failure said out loud,
-rather than being followed by a start that cannot mean what it says.
+A normal restart closes work admission and inspects every selected gateway before it stops one. An
+active provider turn, an active schedule, or activity that cannot be inspected is a refusal:
+**nothing is restarted.** For `--all`, this is one atomic preflight across the selected set, so a
+busy later gateway cannot leave an earlier one already cycled. The admission barrier remains held
+through the restart decision, preventing new work from entering after the quiet check.
 
-`--force` means the same thing it means on `stop` and costs the same thing: the gateway is killed
-rather than asked, and whatever it was doing is taken away where it stood. What it skips is the
-*waiting*. It skips none of the proving — the new gateway is still shown to be holding the name
-before the command says it restarted anything.
+After that preflight, restart stops, proves the old one is gone, then starts — **never the other way
+round.** Starting over a job the supervisor is still holding keeps the definition it already had
+*without failing*, so a restart that started first would report a restart and go on running the old
+program for ever. A stop that did not clearly work therefore ends the cycle there, with the gateway
+down and the failure said out loud, rather than being followed by a start that cannot mean what it
+says.
+
+`--force` bypasses the active-work refusal and means the same thing it means on `stop`: the gateway
+is killed rather than asked, and whatever it was doing is taken away where it stood. What it skips
+is the preflight and the *waiting*. It skips none of the proving — the new gateway is still shown
+to be holding the name before the command says it restarted anything.
 
 **Both spellings are the same stop**, which is what makes that true. `--force` was once its own path
 that killed the launchd *label* and went straight on to bootstrap a replacement — correct only while
