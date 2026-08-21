@@ -63,6 +63,19 @@ class Listing(support.Isolated):
         self.assertIn("DESCRIPTION", out)
         self.assertIn("Owns *billing* | review.", out)
 
+    def test_a_maximum_length_multiline_description_remains_one_table_row(self):
+        description = "A" * 99 + "\n" + "B" * 100
+        self.assertEqual(200, len(description))
+        self.rundesk("agents", "add", "cole", "--provider", "claude",
+                     "--describes", description)
+
+        code, out, err = self.rundesk("agents")
+
+        self.assertEqual(OK, code, err)
+        rows = [line for line in out.splitlines() if line.startswith("cole ")]
+        self.assertEqual(1, len(rows))
+        self.assertIn("A" * 99 + " " + "B" * 100, rows[0])
+
     def test_it_distinguishes_unset_and_empty_descriptions(self):
         self.rundesk("agents", "add", "none", "--provider", "claude")
         self.rundesk("agents", "add", "empty", "--provider", "claude", "--describes", "Set.")
