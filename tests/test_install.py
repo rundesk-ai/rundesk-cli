@@ -218,6 +218,31 @@ class AFreshInstall(Installing):
         self.assertEqual(0, ended.returncode, ended.stderr)
         self.assertIn(str(self.root), ended.stdout)
 
+    def test_an_installed_launcher_selects_its_own_root_when_home_is_missing(self):
+        self.install()
+        fake_home = self.home / "default-home"
+        environment = os.environ.copy()
+        environment.pop(paths.HOME_IS, None)
+        environment["HOME"] = str(fake_home)
+        ended = subprocess.run([str(self.bin / "rundesk"), "status"],
+                               capture_output=True, text=True, env=environment,
+                               stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(0, ended.returncode, ended.stderr)
+        self.assertIn(str(self.root), ended.stdout)
+        self.assertNotIn(str(fake_home / ".rundesk"), ended.stdout)
+
+    def test_an_explicit_home_override_still_wins_over_the_launcher_root(self):
+        self.install()
+        override = self.home / "override"
+        environment = os.environ.copy()
+        environment[paths.HOME_IS] = str(override)
+        ended = subprocess.run([str(self.bin / "rundesk"), "status"],
+                               capture_output=True, text=True, env=environment,
+                               stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(0, ended.returncode, ended.stderr)
+        self.assertIn(str(override), ended.stdout)
+        self.assertNotIn(f"home        {self.root}", ended.stdout)
+
     def test_proving_the_install_never_asks_what_is_published(self):
         # The installer proves the command it placed really answers. Which verb it proves with is
         # not a detail: `version` asks GitHub, so an installer proved with it turns every install —

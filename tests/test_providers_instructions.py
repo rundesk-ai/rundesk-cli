@@ -145,7 +145,7 @@ class TheAgreedSections(support.Isolated):
         # standing Messages rule and would pass on the pre-patch text.
         self.assertIn("recover message history before asking", situation)
         # The rule is only followable because the executable form travels in the same prompt.
-        self.assertIn('RUNDESK_HOME="/rundesk/root" "$RUNDESK_COMMAND" '
+        self.assertIn('"$RUNDESK_COMMAND" '
                       'messages ava --search "<relevant words>" --full', person)
 
     def test_a_follow_up_with_a_missing_referent_requires_history_recovery(self):
@@ -174,7 +174,7 @@ class TheAgreedSections(support.Isolated):
         # A Grok no-history control inspected another fixture agent and its raw conversation after
         # the supported current-audience search returned only the ambiguous follow-up.
         for clause in ('if none, list recent: '
-                       '`rundesk_home="/rundesk/root" "$rundesk_command" messages ava --full`',
+                       '`"$rundesk_command" messages ava --full`',
                        "still unresolved: clarify or report it",
                        "never inspect conversation files/records",
                        "infer from another agent/audience"):
@@ -517,8 +517,9 @@ class WhatWasSentIsProvableAfterwards(support.Isolated):
 class TheBuilderBoundary(support.Isolated):
     def test_the_prompt_names_the_install_root_for_provider_tool_shells(self):
         built = instructions.build(variables=EVERYTHING).text
-        self.assertIn("installation's root is `/rundesk/root`", built)
-        self.assertIn('RUNDESK_HOME="/rundesk/root" "$RUNDESK_COMMAND"', built)
+        self.assertIn("launcher selects this root: `/rundesk/root`", built)
+        self.assertIn("Give people commands as `rundesk ...`", built)
+        self.assertNotIn('RUNDESK_HOME="/rundesk/root"', built)
 
     def test_it_reads_no_file_and_opens_no_database(self):
         source = (support.CHECKOUT / "src" / "rundesk" / "providers" /

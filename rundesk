@@ -7,6 +7,7 @@ follows the symlink an install places on a PATH back to the tree it points at, s
 installed copy share one layout and one code path.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -14,7 +15,16 @@ from pathlib import Path
 # that reached the file some other way.
 sys.dont_write_bytecode = True
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+launcher = Path(__file__).resolve()
+app = launcher.parent
+
+# An installed launcher is the last reliable identity when a provider tool shell drops the
+# environment it was handed. Keep an explicit RUNDESK_HOME override authoritative for scratch and
+# test installs; only infer the root from the installed <root>/app/rundesk shape.
+if app.name == "app":
+    os.environ.setdefault("RUNDESK_HOME", str(app.parent))
+
+sys.path.insert(0, str(app / "src"))
 
 from rundesk.cli import main  # noqa: E402  — the path insert above is what makes this importable
 
