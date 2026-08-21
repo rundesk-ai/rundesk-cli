@@ -289,6 +289,9 @@ not a channel that has gone wrong.
 
 **Say `ready` when you have the connection and `gone` when you lose it**, once per change and not
 once per reconnection attempt behind it — that is how somebody tells a quiet agent from a deaf one.
+Rundesk marks the channel offline on `gone`, lets the adapter recover its own session first, and
+restarts an adapter that remains disconnected beyond the host's recovery grace period. Messages held
+for that channel remain durable and are recovered only after `ready`.
 
 `note` is for something an owner should know **that you have words for**. Anything you have no words
 for goes to stderr; see [the rules](#the-rules-that-will-bite).

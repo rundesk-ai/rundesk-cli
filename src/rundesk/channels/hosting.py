@@ -123,6 +123,11 @@ ERRORS_KEPT = 3
 #: this replaces settled on.
 AGAIN_AFTER = 10.0
 
+#: How long a live adapter may remain disconnected before this gateway replaces it. The adapter's
+#: own client gets the first chance to reconnect; this is the bounded escape hatch for a client that
+#: stays alive after a network outage but no longer has a usable platform session.
+DISCONNECTED_AFTER = 60.0
+
 #: The exit code an adapter uses for a failure that starting it again cannot fix: a token that has
 #: been revoked, a close code the platform will answer with for ever. `78` is `EX_CONFIG`, which is
 #: what this is, and the number is the whole of the agreement — the two sides of this seam are two
@@ -431,6 +436,11 @@ class Running(NamedTuple):
     #: adapter's output knows, and the gateway's own loop is what waits. `None` on an adapter this
     #: process did not start, which is also one it never speaks to.
     connected: Optional[threading.Event] = None
+    #: The monotonic moment this adapter reported its platform connection gone, or `None` while it
+    #: has never disconnected or has successfully reconnected. Kept on the running record so the
+    #: gateway loop can replace a live but unreachable adapter without confusing a short reconnect
+    #: with a failure.
+    disconnected_at: Optional[float] = None
 
 
 class Watching(NamedTuple):
@@ -1094,14 +1104,18 @@ def _started(agent: str, where: Path, kind: str, watching: Watching,
                   listening=None, connected=threading.Event(),
                   since=time.monotonic(), mine=True, saying=threading.Lock(), awaiting={},
                   posted={}, refused={})
+    # Put the record in place before the reader starts. An adapter may say `ready` immediately,
+    # and the reader must be able to clear a prior disconnect hold against the record it represents.
+    watching.running[kind] = one
     listening = threading.Thread(target=_listened, name=f"channel-{kind}",
-                                 args=(agent, where, one, row), daemon=True)
-    listening.start()
+                                 args=(agent, where, one, row, watching), daemon=True)
     watching.running[kind] = one._replace(listening=listening)
+    listening.start()
     _note(where, f"channel {kind}: started as pid {talking.pid}")
 
 
-def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any]) -> None:
+def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any],
+              watching: Watching) -> None:
     """Read everything an adapter says, for as long as it says anything. **Never raises.**
 
     This is the thread the module docstring is about. It cannot fall behind the way the gateway's
@@ -1148,13 +1162,14 @@ def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any]) -> Non
             if isinstance(said, lines.Gap):
                 continue
             with contextlib.suppress(Exception):
-                _heard(agent, where, one, said, allowed)
+                _heard(agent, where, one, said, allowed, watching)
     except Exception as why:                           # noqa: BLE001 — see the module docstring
         with contextlib.suppress(Exception):
             _note(where, f"channel {kind}: this gateway stopped listening to it ({why})", logs.ERROR)
 
 
-def _heard(agent: str, where: Path, one: Running, line: str, allowed: set) -> None:
+def _heard(agent: str, where: Path, one: Running, line: str, allowed: set,
+           watching: Optional[Watching] = None) -> None:
     """One record an adapter sent. Anything unrecognised is kept quiet rather than refused loudly."""
     kind = one.kind
     said = line.strip()
@@ -1174,9 +1189,22 @@ def _heard(agent: str, where: Path, one: Running, line: str, allowed: set) -> No
     elif saying == "ready":
         if one.connected is not None:
             one.connected.set()
+        if watching is not None:
+            current = watching.running.get(kind)
+            if current is not None and current.pid == one.pid:
+                watching.running[kind] = current._replace(disconnected_at=None)
         _note(where, f"channel {kind}: connected"
                      + (f" as {record.get('as')}" if record.get("as") else ""))
     elif saying == "gone":
+        if one.connected is not None:
+            one.connected.clear()
+        if watching is not None:
+            current = watching.running.get(kind)
+            if current is not None and current.pid == one.pid:
+                watching.running[kind] = current._replace(
+                    disconnected_at=(current.disconnected_at
+                                     if current.disconnected_at is not None
+                                     else time.monotonic()))
         _note(where, f"channel {kind}: lost the connection ({record.get('why') or 'no reason given'})",
               logs.WARNING)
     elif saying == "note":
@@ -1542,7 +1570,11 @@ def _reaped(agent: str, where: Path, watching: Watching) -> None:
         if one.mine and one.pid:
             gone = programs.collected(one.pid)
             if not gone.over:
-                _ended_if_nobody_is_reading(agent, where, one, watching)
+                if one.listening is None or not one.listening.is_alive():
+                    _ended_if_nobody_is_reading(agent, where, one, watching)
+                elif _disconnected_long_enough(one):
+                    _ended(agent, where, one, watching, ENDING_WITHIN,
+                           "stayed disconnected; another is started once the hold-off has passed")
                 continue
             _note(where, f"channel {kind}: the adapter stopped"
                          + (f" with code {gone.code}" if gone.code is not None else ""),
@@ -1559,6 +1591,12 @@ def _reaped(agent: str, where: Path, watching: Watching) -> None:
             _note(where, f"channel {kind}: the adapter a previous gateway started is gone",
                   logs.WARNING)
         _let_go(agent, where, one, watching)
+
+
+def _disconnected_long_enough(one: Running) -> bool:
+    """Whether a live adapter has been offline beyond its native reconnect grace period."""
+    return bool(one.mine and one.disconnected_at is not None
+                and time.monotonic() - one.disconnected_at >= DISCONNECTED_AFTER)
 
 
 def _ended_if_nobody_is_reading(agent: str, where: Path, one: Running,
