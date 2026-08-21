@@ -17,8 +17,9 @@ start.
 
 **A platform outage does not require restarting the agent gateway.** When an adapter says its socket
 is gone, Rundesk marks that channel offline immediately and stops sending new work through it. The
-adapter gets a bounded chance to reconnect itself; if it remains disconnected, the gateway gracefully
-stops and relaunches that adapter after the normal retry hold-off. Durable channel messages wait until
+adapter gets a 120-second chance to reconnect itself; if it remains disconnected for that entire
+continuous interval, the gateway gracefully stops and relaunches that adapter after the normal retry
+hold-off. Durable channel messages wait until
 the adapter says `ready` again. A permanent credential or configuration refusal still remains given up
 for that gateway lifetime rather than being retried forever.
 

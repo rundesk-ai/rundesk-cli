@@ -125,8 +125,9 @@ AGAIN_AFTER = 10.0
 
 #: How long a live adapter may remain disconnected before this gateway replaces it. The adapter's
 #: own client gets the first chance to reconnect; this is the bounded escape hatch for a client that
-#: stays alive after a network outage but no longer has a usable platform session.
-DISCONNECTED_AFTER = 60.0
+#: stays alive after a network outage but no longer has a usable platform session. Two minutes gives
+#: a brief internet interruption room to recover without a process restart.
+DISCONNECTED_AFTER = 120.0
 
 #: The exit code an adapter uses for a failure that starting it again cannot fix: a token that has
 #: been revoked, a close code the platform will answer with for ever. `78` is `EX_CONFIG`, which is
