@@ -22,6 +22,7 @@ import support
 from rundesk.agents import directory, records
 from rundesk.channels import hosting
 from rundesk.channels import kept as channels
+from rundesk.commands import agents as agents_command
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.schedules import firing, kept
@@ -53,6 +54,43 @@ class Listing(support.Isolated):
         self.assertIn("PROVIDER", out)
         self.assertIn("cole", out)
         self.assertIn("claude", out)
+
+    def test_it_lists_the_stored_delegation_description_without_reformatting_punctuation(self):
+        self.rundesk("agents", "add", "cole", "--provider", "claude",
+                     "--describes", "Owns *billing* | review.")
+        code, out, err = self.rundesk("agents")
+        self.assertEqual(OK, code, err)
+        self.assertIn("DESCRIPTION", out)
+        self.assertIn("Owns *billing* | review.", out)
+
+    def test_a_maximum_length_multiline_description_remains_one_table_row(self):
+        description = "A" * 99 + "\n" + "B" * 100
+        self.assertEqual(200, len(description))
+        self.rundesk("agents", "add", "cole", "--provider", "claude",
+                     "--describes", description)
+
+        code, out, err = self.rundesk("agents")
+
+        self.assertEqual(OK, code, err)
+        rows = [line for line in out.splitlines() if line.startswith("cole ")]
+        self.assertEqual(1, len(rows))
+        self.assertIn("A" * 99 + " " + "B" * 100, rows[0])
+
+    def test_it_distinguishes_unset_and_empty_descriptions(self):
+        self.rundesk("agents", "add", "none", "--provider", "claude")
+        self.rundesk("agents", "add", "empty", "--provider", "claude", "--describes", "Set.")
+        records.stated(directory.records("empty"), {"describes": ""})
+        code, out, err = self.rundesk("agents")
+        self.assertEqual(OK, code, err)
+        rows = {line.split()[0]: line for line in out.splitlines()
+                if line.startswith(("empty ", "none "))}
+        self.assertIn("empty description", rows["empty"])
+        self.assertIn("not described", rows["none"])
+
+    def test_it_marks_a_description_column_missing_from_legacy_records(self):
+        with mock.patch("rundesk.commands.agents.records.read", return_value={
+                "provider_name": "claude", "self_improve": 1, "delegates_to": None}):
+            self.assertEqual("not available", agents_command._configuration_of("legacy")[1])
 
     def test_it_lists_all_agents_in_one_table(self):
         self.rundesk("agents", "add", "cole", "--provider", "claude")

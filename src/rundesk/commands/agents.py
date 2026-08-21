@@ -59,6 +59,13 @@ NOT_PROVEN = ("the provider is recorded and not proven — check it with: "
 WHAT_IT_IS_FOR = ("what it is for, in one sentence — what another agent reads while deciding "
                   "whether to delegate to it")
 
+#: The listing keeps the difference between a description nobody supplied, one a legacy record
+#: cannot expose, and one whose records could not be read. A marker rather than an empty cell makes
+#: the answer visible in a wide table and keeps an empty value from looking like a layout failure.
+NOT_DESCRIBED = "not described"
+EMPTY_DESCRIPTION = "empty description"
+DESCRIPTION_NOT_AVAILABLE = "not available"
+
 #: The same spellings every yes-or-no setting on the install accepts. Kept here because this value
 #: belongs to one agent's SQLite configuration, not to the install-wide JSON configuration.
 YES = ("yes", "true", "on", "1")
@@ -194,9 +201,9 @@ def _listed() -> int:
         return OK
     rows = []
     for name in there:
-        provider, self_improve, delegates_to = _configuration_of(name)
-        rows.append((name, provider, _skills_of(name), delegates_to, self_improve))
-    as_table(("AGENT", "PROVIDER", "SKILLS", "DELEGATES TO", "SELF-IMPROVE"), rows)
+        provider, description, self_improve, delegates_to = _configuration_of(name)
+        rows.append((name, provider, description, _skills_of(name), delegates_to, self_improve))
+    as_table(("AGENT", "PROVIDER", "DESCRIPTION", "SKILLS", "DELEGATES TO", "SELF-IMPROVE"), rows)
     return OK
 
 
@@ -208,8 +215,8 @@ def _skills_of(name: str) -> str:
         return "? — cannot be read"
 
 
-def _configuration_of(name: str) -> Tuple[str, str, str]:
-    """The three listed settings of one agent, or why they could not be answered.
+def _configuration_of(name: str) -> Tuple[str, str, str, str]:
+    """The four listed settings of one agent, or why they could not be answered.
 
     The two ways it cannot be answered are kept apart, because they are different situations:
     records that have gone away between the listing and the reading, and records that are there and
@@ -221,13 +228,31 @@ def _configuration_of(name: str) -> Tuple[str, str, str]:
         provider = str(settled["provider_name"])
         if settled.get("provider_alias"):
             provider += f" ({settled['provider_alias']})"
-        return (provider, as_written(bool(settled["self_improve"])),
+        return (provider, _shown_description(settled), as_written(bool(settled["self_improve"])),
                 delegating.shown(delegating.decoded(settled.get("delegates_to"))))
     except records.NotThere:
-        return "? — its records are not there", "?", "?"
+        marker = "? — its records are not there"
+        return marker, marker, "?", "?"
     except (delegating.Refused, directory.Refused, records.Unreadable, OSError, sqlite3.Error,
             KeyError):
-        return "? — its records cannot be read", "?", "?"
+        marker = "? — its records cannot be read"
+        return marker, marker, "?", "?"
+
+
+def _shown_description(settled: Dict[str, Any]) -> str:
+    """The stored delegation description, with empty, missing, and unreadable kept distinct.
+
+    Descriptions are bounded at write time, but old records can hold whitespace or lack the nullable
+    column altogether. Flattening whitespace keeps a stored sentence from creating a second table
+    row, while punctuation remains exactly as supplied.
+    """
+    if "describes" not in settled:
+        return DESCRIPTION_NOT_AVAILABLE
+    value = settled["describes"]
+    if value is None:
+        return NOT_DESCRIBED
+    flattened = " ".join(str(value).split())
+    return flattened or EMPTY_DESCRIPTION
 
 
 def _the_skill_every_agent_holds(agent: str) -> str:
