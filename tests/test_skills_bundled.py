@@ -222,7 +222,11 @@ class WhatAShippedSkillMayClaim(Bundled):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, main)
         for phrase in ("empty input", "malformed input", "missing file",
-                       "interrupted write", "large representative input"):
+                       "interrupted write", "large representative input",
+                       "semantic unit", "same resolved input", "Empty evidence",
+                       "every data-dependent section", "adversarial oracle",
+                       "swapping which values belong to the same record",
+                       "complete output"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, workflow)
 
@@ -231,7 +235,9 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "duplication", "reference discipline",
                        "Green script tests do not prove", "factual promise and example",
                        "observed behavior or a cited source", "test an executable claim directly",
-                       "narrow wording"):
+                       "narrow wording", "adversarial counterexample",
+                       "mutation checks cannot repair a wrong test oracle",
+                       "empty success", "duplicate evidence", "data-dependent output section"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, main)
 

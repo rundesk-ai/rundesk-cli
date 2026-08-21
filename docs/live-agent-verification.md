@@ -135,7 +135,9 @@ each result, such as `LIVE-SK07-large-output` and `LIVE-SK07-interrupted-write`.
   its summary is not proof.
 - When the skill ships a script, run representative, empty, malformed, missing, permission, repeat,
   large-output, partial-failure, and outside-working-directory cases that apply. Check stdout,
-  stderr, exit status, side effects, cleanup, and preservation of pre-existing files.
+  stderr, exit status, side effects, cleanup, and preservation of pre-existing files. Include
+  duplicate evidence, empty-success, whole-report bounds, and an adversarial semantic oracle that
+  preserves aggregates while changing the relationship the command claims to compare.
 - When the skill reaches a service, add absent and malformed configuration, authentication failure,
   permission denial, timeout, rate limit, pagination, empty result, partial page failure, duplicate
   write, bounded output, redaction, and independently read-back mutation proof as applicable.

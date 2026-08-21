@@ -22,10 +22,16 @@ State in the skill exactly when to run the command, its arguments, input formats
 side effects, and bounded output. Put executable entry points directly under `scripts/`; imported
 modules may use subdirectories.
 
+- Define the semantic unit before choosing an algorithm: record, keyed entity, relationship,
+  ordered sequence, field distribution, or whole file. An aggregate can stay identical while the
+  relationships the user cares about change. Narrow the promised outcome or preserve the identity
+  and correlation needed to prove it.
 - Accept explicit paths or standard input. Do not depend on the caller's working directory, a
   remembered checkout, or an owner-specific absolute path.
 - Validate all inputs before writing. Reject an unsupported input with a concise recovery action
   instead of guessing its format.
+- Reject the same resolved input more than once when inputs represent independent runs, votes, or
+  evidence. Repetition can manufacture a stable result or distort a ratio without adding evidence.
 - Default to read-only behavior. When output files are required, refuse an existing destination
   unless replacement is an explicit documented option.
 - Write a replacement through a temporary file in the destination directory, then rename it into
@@ -33,9 +39,13 @@ modules may use subdirectories.
 - Make repeat behavior explicit. A read-only command should be safe to repeat; a writing command
   must be idempotent or must refuse a duplicate without corrupting prior output.
 - Return `0` only for the documented completed result. Return non-zero on invalid input, partial
-  output, or an incomplete operation, and send the concise reason to stderr.
-- Keep successful output bounded and useful to the next agent decision. Summarize large results and
-  offer an explicit limit rather than dumping an unbounded file or JSON document into context.
+  output, or an incomplete operation, and send the concise reason to stderr. Empty evidence and a
+  no-op are not success merely because they produced no differences; accept them only when the
+  documented user outcome is genuinely complete.
+- Keep successful output bounded and useful to the next agent decision. Bound every data-dependent
+  section—headers, input labels and paths, identifiers, samples, omitted-item metadata, JSON arrays,
+  warnings, and errors—not only the primary result list. Summarize large results and offer an
+  explicit limit rather than dumping an unbounded file or JSON document into context.
 
 Rundesk installs no dependencies for a skill. Prefer the language's standard library. If a required
 program is justified, check for it before work begins and name the supported installation route;
@@ -62,11 +72,18 @@ cover:
 
 - representative valid input and the exact promised output;
 - empty input, malformed input, an unsupported input type, and a missing file;
+- duplicate resolved inputs when each input is meant to be independent evidence;
 - an unreadable input or unwritable destination when the platform can represent it reliably;
 - an existing destination, interrupted write, and cleanup of invocation-owned temporary files;
 - repeat the command and confirm the documented idempotent result or duplicate refusal;
 - a large representative input that proves bounded output and the configured limit; and
 - child-process failure, timeout, and partial output when the script orchestrates other commands.
+
+Add an adversarial oracle for the semantic promise, not only mutations of the implementation. For
+example, when comparing records, preserve every per-field value and count while swapping which
+values belong to the same record; a command that promises record equivalence must detect that
+change. Measure the complete output with many inputs, long paths or identifiers, and large metadata
+collections so a bounded bucket cannot hide an unbounded header or JSON field.
 
 Run every entry point directly, confirm it is executable, and test from a working directory outside
 the skill so relative-path assumptions fail visibly. Inspect stdout, stderr, exit status, filesystem

@@ -167,4 +167,8 @@ Check the skill through the same surface an agent uses:
    execution order, non-obvious judgment, concision, duplication, and reference discipline. Green
    script tests do not prove that another agent will understand or use the skill well. Trace each
    factual promise and example to an observed behavior or a cited source; test an executable claim
-   directly, and narrow wording that is true only for some inputs or tools.
+   directly, and narrow wording that is true only for some inputs or tools. Challenge semantic
+   claims with an adversarial counterexample that preserves convenient aggregates while changing
+   the relationship or outcome the user actually cares about; mutation checks cannot repair a
+   wrong test oracle. Review the whole interface, including empty success, duplicate evidence, and
+   every data-dependent output section, rather than proving only the main listing.
