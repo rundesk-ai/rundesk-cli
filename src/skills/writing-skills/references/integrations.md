@@ -1,7 +1,20 @@
-# Skills that reach external services
+# External-service integrations
 
-Read this before adding credentials, profiles, or a script that calls an API or service. A skill that
-only teaches a workflow needs none of this.
+Read this before adding credentials, profiles, OAuth, network access, or remote side effects. A skill
+that only teaches a workflow needs none of this. A deterministic local command without an external
+service uses [Reusable workflow scripts](workflow-scripts.md) instead.
+
+## Define the integration contract
+
+Name the user outcome, remote resource, allowed operations, account-selection rule, and proof before
+choosing endpoints. Request the least privilege that can produce that outcome. Keep read and write
+capabilities separate when the provider permits it; a broad grant makes every agent holding the
+skill broader than the task that caused it to load.
+
+Put provider mechanics in scripts and the decision to invoke them in `SKILL.md`. The skill must tell
+the agent which command to run, which account and resource it affects, whether the command reads or
+writes, and what observed result counts as success. Do not make the agent assemble requests or
+interpret an undocumented response shape ad hoc.
 
 ## Declare required values
 
@@ -166,6 +179,37 @@ bounded and token-lean.
 
 Prefer concise plain text over JSON when an agent will read the result. Emit structured data only when
 another program, rather than the model, needs it.
+
+Treat timeouts, rate limits, pagination, retries, and partial remote results as contract behavior:
+
+- Set a finite timeout for every request. A network wait with no deadline is an unbounded agent
+  turn.
+- Follow documented pagination until the requested boundary is satisfied. Never report the first
+  page as the complete resource.
+- Retry only documented transient failures, with a small bound and backoff. Do not retry a mutation
+  unless the provider supplies an idempotency guarantee or key.
+- Refuse an ambiguous account or resource instead of choosing one by position, recency, or a partial
+  name.
+- On failure, return a redacted error that identifies the operation and recovery action without
+  exposing a credential, authorization header, response body, or private resource content.
+
+## Test the service boundary offline
+
+Use offline contract tests with injected transports or recorded synthetic fixtures; the test suite
+must never depend on a live account. Cover the documented success response and each response shape
+the parser accepts, then cover:
+
+- missing configuration and an incomplete named profile;
+- authentication refusal and insufficient permission;
+- account or resource ambiguity;
+- timeout, rate limit, server failure, and malformed response;
+- empty results, multiple pages, and a partial page failure;
+- mutation refusal, duplicate submission, and safe retry behavior where writes exist; and
+- output bounds and redaction of tokens and sensitive remote fields.
+
+Run one explicitly authorized smoke test against the real service only when publication rules or the
+request require it. Use a disposable or non-destructive resource where possible, verify the remote
+result through an independent read, and clean up only when that cleanup is authorized.
 
 ## Diagnose configuration
 

@@ -192,6 +192,55 @@ class WhatIsShipped(Bundled):
 
 
 class WhatAShippedSkillMayClaim(Bundled):
+    def test_writing_skills_routes_reusable_automation_and_keeps_artifacts_distinct(self):
+        skill = self.skills / "writing-skills"
+        main = " ".join((skill / library.DECLARED).read_text(encoding="utf-8").split())
+        workflow = " ".join((skill / "references" / "workflow-scripts.md").read_text(
+            encoding="utf-8").split())
+
+        for phrase in ("reusable integrations or workflow scripts",
+                       "[Reusable workflow scripts](references/workflow-scripts.md)",
+                       "instruction boundary", "deterministic mechanism",
+                       "external-service boundary", "do not inspect or change the live library",
+                       "script contracts when no catalog test area owns them"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, main)
+        for phrase in ("same input produces the same output", "partial output",
+                       "repeat the command", "bounded output", "working directory",
+                       "unsupported input", "temporary files"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, workflow)
+
+    def test_writing_skills_requires_routing_and_script_edge_cases(self):
+        skill = self.skills / "writing-skills"
+        main = " ".join((skill / library.DECLARED).read_text(encoding="utf-8").split())
+        workflow = " ".join((skill / "references" / "workflow-scripts.md").read_text(
+            encoding="utf-8").split())
+
+        for phrase in ("direct request", "indirect request", "close near-miss",
+                       "without the skill", "different fresh turn"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, main)
+        for phrase in ("empty input", "malformed input", "missing file",
+                       "interrupted write", "large representative input"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, workflow)
+
+    def test_writing_skills_publishing_and_integrations_keep_their_safety_boundaries(self):
+        skill = self.skills / "writing-skills" / "references"
+        publishing = " ".join((skill / "publishing.md").read_text(encoding="utf-8").split())
+        integrations = " ".join((skill / "integrations.md").read_text(
+            encoding="utf-8").split())
+
+        for phrase in ("catalog is the release boundary", "repository rules",
+                       "preview is validation, not publication", "breaking change"):
+            with self.subTest(reference="publishing", phrase=phrase):
+                self.assertIn(phrase, publishing)
+        for phrase in ("least privilege", "timeouts", "rate limits", "pagination",
+                       "redacted error", "offline contract tests"):
+            with self.subTest(reference="integrations", phrase=phrase):
+                self.assertIn(phrase, integrations)
+
     def test_managing_rundesk_teaches_the_default_app_and_demotes_the_profile(self):
         """The owner's UX decision, checked rather than remembered.
 

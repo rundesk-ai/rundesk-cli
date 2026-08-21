@@ -1,16 +1,43 @@
 ---
 name: writing-skills
-description: Use this skill when work involves creating, modifying, or publishing a Rundesk skill. It supplies a workflow for writing compact instructions, organizing supporting resources, building integrations and scripts, testing the skill, and publishing it through a catalog. Do not use it merely to perform the workflow described by an existing skill.
+description: Use when creating, modifying, reviewing, debugging, or publishing a Rundesk skill, or when building reusable integrations or workflow scripts that automate repeated agent work. It supplies the artifact boundaries, compact writing method, script and integration guidance, behavior tests, and catalog publishing workflow needed to make the result reliable and discoverable. Do not use it merely to perform a workflow taught by an existing skill or to write one-off project automation.
 ---
 
 # Writing skills
 
-Build the smallest skill that changes how an agent performs a repeatable task.
+Build the smallest reusable package that changes how an agent performs a repeatable task.
+
+## Choose the artifact before writing it
+
+Separate the jobs before deciding which files exist:
+
+- A skill is the **instruction boundary**: when to act, which judgments to make, what procedure to
+  follow, and how to prove the outcome.
+- A workflow script is the **deterministic mechanism** for repeated local transformation,
+  validation, or orchestration. It belongs in a skill only when an agent needs the skill's routing
+  and instructions to use it correctly.
+- An integration adds an **external-service boundary**: credentials, permissions, accounts,
+  network failures, or remote side effects.
+
+Keep one-off automation in the owning project. Keep one agent's private, repeatedly useful command
+in that agent's established scripts area. Build a skill when future turns need to discover the
+capability from a request and apply reusable judgment around it. Do not wrap a script in a skill
+merely to store it, or replace deterministic code with prose an agent must reinterpret every time.
+
+Read [Reusable workflow scripts](references/workflow-scripts.md) before adding a local script or
+building reusable automation that does not call an external service. Read
+[External-service integrations](references/integrations.md) before adding credentials, profiles,
+OAuth, network access, or remote side effects.
 
 ## Choose where it belongs
 
 Put a private skill in the install's `local` catalog. Rundesk has no create verb; make the directory
 and `SKILL.md` directly.
+
+Use the live library path only when the request authorizes creating or installing the private skill
+there. For a draft, review, repository change, or isolated test, stay in the named workspace or
+temporary directory and do not inspect or change the live library merely to check where the final
+skill could go.
 
 Ask rundesk where the library is. Never derive it from `RUNDESK_HOME` or write an absolute path into
 the skill. Replace the example name before running this:
@@ -32,8 +59,8 @@ the agent taking this turn, or name another agent when the request does:
 Writing the file only makes it available. Granting makes it discoverable, starting with the agent's
 next turn because the current turn's environment is already built.
 
-Read `references/publishing.md` before creating a skill meant for other installs. Published skills
-belong in a catalog repository, not in `local`.
+Read [Publishing a skill catalog](references/publishing.md) before creating a skill meant for other
+installs. Published skills belong in a catalog repository, not in `local`.
 
 ## Use only the shape the task needs
 
@@ -42,15 +69,13 @@ belong in a catalog repository, not in `local`.
 ├── SKILL.md          required: triggering and core procedure
 ├── rundesk.json      optional: required environment values
 ├── scripts/          optional: deterministic or repeated commands
+├── tests/            optional: script contracts when no catalog test area owns them
 ├── references/       optional: detail read only in named situations
 └── assets/           optional: files copied or used in output
 ```
 
 Do not create an optional directory until it has content. Do not add a `README.md`, changelog,
 installation guide, or an account of how the skill was made.
-
-Read `references/integrations.md` before adding `rundesk.json` or a script that reaches an external
-service.
 
 ## Write the routing description first
 
@@ -92,6 +117,10 @@ the reader to conditional detail. Delete it otherwise.
   restate it in `SKILL.md`, another reference, or a consuming skill.
 - Remove general background, process history, dated claims, and anything already loaded from the
   agent's rules or the repository.
+- Record the source for a technical constraint in the repository or a focused source reference.
+  Distinguish observed contracts from the skill author's recommended default.
+- Teach known traps as symptom, cause, preferred replacement, and observable proof. Do not invent a
+  caution or example merely to make the guidance look complete.
 
 Treat 500 lines as a ceiling, not a target. If the body grows, keep universally needed procedure and
 gotchas in it; move conditional detail one level down into a reference.
@@ -104,6 +133,7 @@ gotchas in it; move conditional detail one level down into a reference.
 | `SKILL.md` body | when the provider loads it after triggering | core procedure, defaults, gotchas |
 | `references/` | only when read | conditional detail and larger examples |
 | `scripts/` | output enters context | deterministic work with bounded plain-text output |
+| `tests/` | only during validation | executable contracts for shipped commands and edge cases |
 | `assets/` | only when used | templates and output material, not instructions |
 
 Prefer a short example over another paragraph. Make scripts emit only what the agent needs next;
@@ -121,9 +151,15 @@ Check the skill through the same surface an agent uses:
    "$RUNDESK_COMMAND" skills doctor "$RUNDESK_AGENT"
    ```
 
-3. Run every shipped script with representative input and confirm it is executable.
-4. In fresh turns, try relevant requests with different wording and close near-misses that share the
-   description's terms. Tighten missed scope or false matches by category, not by copying individual
-   prompt phrases into the description.
-5. For a substantial skill, compare that result with a fresh baseline that does not hold the skill.
-   If the result is materially the same, remove instructions that are not earning their token cost.
+3. Run every shipped script with representative input and its documented edge cases. Use the
+   applicable workflow-script or integration reference for the complete matrix.
+4. In different fresh turns, try a direct request, an indirect request that implies the capability,
+   and a close near-miss that shares the description's terms but is out of scope. Confirm the body
+   and required references load before work begins. Tighten missed scope or false matches by
+   category, not by copying individual prompt phrases into the description.
+5. For a substantial skill, run the same realistic task in a fresh baseline without the skill.
+   Compare routing, decisions, failure handling, output, and proof. If the skilled result is not
+   materially better, remove instructions that are not earning their token cost or reconsider
+   whether the capability needs a skill.
+6. Have a separate test agent use the skill without being told the expected implementation. Review
+   the created artifact and observed commands directly; the agent's summary is not proof.

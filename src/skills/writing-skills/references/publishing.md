@@ -3,6 +3,15 @@
 Read this when a skill must be installable by other rundesk installs. Publish a catalog repository;
 rundesk installs, updates, and removes catalogs, then grants individual skills from them.
 
+The catalog is the release boundary. Group skills that share an owner, audience, runtime, permission
+boundary, and release cadence. Do not place a local-only workflow, private identifier, or a
+service-specific executable in a general guidance catalog merely because that catalog already
+exists.
+
+Read the target repository rules, catalog documentation, contribution template, and release process
+before changing it. Those rules decide package layout, required sources, tests, version policy, and
+publication authority; the generic shape below does not override them.
+
 ## Build the repository
 
 Put `manifest.json` at the repository root and skills under `skills/`:
@@ -47,6 +56,11 @@ Fix every reported skill together. Confirm that frontmatter names match director
 present and within 1024 characters, `rundesk.json` parses, and every file directly under `scripts/` is
 executable and tested.
 
+The preview is validation, not publication. Before pushing, run the repository's complete required
+suite, test every shipped script, exercise routing and near-miss prompts in fresh turns, inspect the
+complete diff for credentials and private data, and verify that documentation, package indexes, and
+version metadata agree.
+
 ## Publish and install
 
 Push the catalog at the root of a GitHub repository's default branch. Rundesk accepts the base
@@ -86,3 +100,9 @@ Installers can preview and apply the change:
 
 Removing a skill from the repository revokes it from every agent when the catalog updates. Treat that
 as a breaking change and state it before publishing.
+
+Changing a trigger can also be breaking when requests stop routing to the skill; changing a script
+interface can break an agent instruction or another script even when the package name stays. Follow
+the repository's version policy and release gates for those changes. A pushed branch or opened pull
+request is not a published catalog update: verify the exact default-branch commit and any required
+release artifact before telling installers the change is available.
