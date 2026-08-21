@@ -12,6 +12,7 @@ from rundesk.providers import instructions, team
 EVERYTHING = {
     "agent_name": "ava",
     "agent_home": "/agents/ava/home",
+    "install_root": "/rundesk/root",
     "provider_name": "a-stand-in",
     "access_mode": "work",
     "schedule_name": "nightly",
@@ -144,7 +145,8 @@ class TheAgreedSections(support.Isolated):
         # standing Messages rule and would pass on the pre-patch text.
         self.assertIn("recover message history before asking", situation)
         # The rule is only followable because the executable form travels in the same prompt.
-        self.assertIn('messages ava --search "<relevant words>" --full', person)
+        self.assertIn('RUNDESK_HOME="/rundesk/root" "$RUNDESK_COMMAND" '
+                      'messages ava --search "<relevant words>" --full', person)
 
     def test_a_follow_up_with_a_missing_referent_requires_history_recovery(self):
         situation = self.part(self.built().text, "## Current Situation")
@@ -171,9 +173,9 @@ class TheAgreedSections(support.Isolated):
         messages = self.part(self.built().text, "## Messages and Attachments")
         # A Grok no-history control inspected another fixture agent and its raw conversation after
         # the supported current-audience search returned only the ambiguous follow-up.
-        for clause in ('no match: list recent messages: '
-                       '`"$rundesk_command" messages ava --full`',
-                       "still unresolved: clarify or report the blocker as the situation permits",
+        for clause in ('if none, list recent: '
+                       '`rundesk_home="/rundesk/root" "$rundesk_command" messages ava --full`',
+                       "still unresolved: clarify or report it",
                        "never inspect conversation files/records",
                        "infer from another agent/audience"):
             with self.subTest(clause=clause):
@@ -391,6 +393,17 @@ class SmallestSufficientChange(support.Isolated):
                 text = instructions.build(situation=situation, variables=EVERYTHING).text
                 self.assertIn("once the requested result and required proof are complete, stop", text)
 
+    def test_every_turn_cannot_end_without_delivery_or_a_continuation_path(self):
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:32]):
+                text = instructions.build(situation=situation, variables=EVERYTHING).text
+                continuity = " ".join(
+                    text.split("## Maintain Continuity", 1)[1].split("\n## ", 1)[0].split()
+                ).lower()
+                self.assertIn("delivering and verifying the outcome", continuity)
+                self.assertIn("reporting a blocker with a real continuation path", continuity)
+                self.assertIn("never leave incomplete work", continuity)
+
     def test_broader_scope_requires_approval_with_impact(self):
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
@@ -502,6 +515,11 @@ class WhatWasSentIsProvableAfterwards(support.Isolated):
 
 
 class TheBuilderBoundary(support.Isolated):
+    def test_the_prompt_names_the_install_root_for_provider_tool_shells(self):
+        built = instructions.build(variables=EVERYTHING).text
+        self.assertIn("installation's root is `/rundesk/root`", built)
+        self.assertIn('RUNDESK_HOME="/rundesk/root" "$RUNDESK_COMMAND"', built)
+
     def test_it_reads_no_file_and_opens_no_database(self):
         source = (support.CHECKOUT / "src" / "rundesk" / "providers" /
                   "instructions.py").read_text(encoding="utf-8")

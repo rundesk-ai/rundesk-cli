@@ -74,8 +74,9 @@ AN_ADDITION_AT_MOST = 4000
 #: They are **communication concepts, not platform concepts**: an agent, a home, a brain, how much of
 #: the machine this turn may touch. Nothing here says Discord, or Slack, or a room — a variable that
 #: named one would be a layer that has to be rewritten for the second surface.
-VARIABLES = ("agent_name", "agent_home", "provider_name", "access_mode", "schedule_name",
-             "conversation_id", "caller_agent", "source_kind", "audience_id", "skill_names")
+VARIABLES = ("agent_name", "agent_home", "install_root", "provider_name", "access_mode",
+             "schedule_name", "conversation_id", "caller_agent", "source_kind", "audience_id",
+             "skill_names")
 
 
 class Layer(NamedTuple):
@@ -116,7 +117,7 @@ class Prompt(NamedTuple):
 #: costs nothing to prevent and is silent until somebody finds a repository inside an agent's home.
 CORE = """# Rundesk
 
-Rundesk is the operating layer for this agent, its home, skills, conversations, schedules, and team delegation. Use `"$RUNDESK_COMMAND"` for this installation.
+Rundesk is the operating layer for this agent. Use `"$RUNDESK_COMMAND"`; this installation's root is `{install_root}`.
 
 ## Agent Context
 
@@ -242,7 +243,7 @@ Stay within the current request, schedule, or delegation's scope and authority; 
 
 Use Rundesk to recover missing context and deliver files.
 
-- For missing context, search: `"$RUNDESK_COMMAND" messages {agent_name} --search "<relevant words>" --full`. No match: list recent messages: `"$RUNDESK_COMMAND" messages {agent_name} --full`. Still unresolved: clarify or report the blocker as the situation permits.
+- Missing context: search: `RUNDESK_HOME="{install_root}" "$RUNDESK_COMMAND" messages {agent_name} --search "<relevant words>" --full`. If none, list recent: `RUNDESK_HOME="{install_root}" "$RUNDESK_COMMAND" messages {agent_name} --full`. Still unresolved: clarify or report it.
 - Use only supported `{source_kind}:{audience_id}` results; never inspect conversation files/records or infer from another agent/audience.
 - Attach a file or image with an absolute local Markdown link, such as `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain file path is not an attachment.
 
@@ -262,8 +263,8 @@ Take a complete, proportionate path to the outcome.
 Retain ownership of the outcome beyond one turn.
 
 - Continue only while useful in-scope work remains; once the requested result and required proof are complete, stop.
-- Before ending, verify the outcome is complete, name what blocks it, or establish a real continuation path.
-- A continuation path preserves status and the next action and is tied to an event that resumes the work: a requester response, scheduled wake-up, or delegation return.
+- End after delivering and verifying the outcome, or reporting a blocker with a real continuation path; never leave incomplete work.
+- A continuation path preserves status and next action until a requester response, scheduled wake-up, or delegation return.
 - A background command, tool session, monitor, or child process is not a continuation path and cannot deliver a result after this turn settles. Wait for required work to finish and collect its result before your final response, or stop it and report a concrete blocker. Leave one running only when a long-running service is itself the outcome, with ownership and observation established.
 - If no useful work remains while a valid continuation is pending, end the turn; Rundesk resumes the work at that event.
 - Never report pending work as complete."""
