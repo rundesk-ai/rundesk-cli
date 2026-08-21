@@ -198,7 +198,7 @@ class WhatAShippedSkillMayClaim(Bundled):
         workflow = " ".join((skill / "references" / "workflow-scripts.md").read_text(
             encoding="utf-8").split())
 
-        for phrase in ("reusable integrations or workflow scripts",
+        for phrase in ("reusable workflow scripts and external integrations",
                        "[Reusable workflow scripts](references/workflow-scripts.md)",
                        "instruction boundary", "deterministic mechanism",
                        "external-service boundary", "do not inspect or change the live library",
@@ -206,7 +206,7 @@ class WhatAShippedSkillMayClaim(Bundled):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, main)
         for phrase in ("same input produces the same output", "partial output",
-                       "repeat the command", "bounded output", "working directory",
+                       "safe to repeat", "bounded output", "working directory",
                        "unsupported input", "temporary files"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, workflow)
@@ -221,21 +221,21 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "without the skill", "different fresh turn"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, main)
-        for phrase in ("empty input", "malformed input", "missing file",
-                       "interrupted write", "large representative input",
-                       "semantic unit", "same resolved input", "Empty evidence",
+        for phrase in ("empty input", "malformed input", "missing and unreadable files",
+                       "interrupted writes", "large input",
+                       "semantic unit", "same resolved input", "Empty input or a no-op",
                        "every data-dependent section", "adversarial oracle",
-                       "swapping which values belong to the same record",
-                       "complete output"):
+                       "swapping which values share a record",
+                       "complete bounded output"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, workflow)
 
         for phrase in ("generated writing separately from executable correctness",
-                       "routing precision", "non-obvious judgment", "concision",
+                       "routing precision", "useful judgment", "concision",
                        "duplication", "reference discipline",
-                       "Green script tests do not prove", "factual promise and example",
-                       "observed behavior or a cited source", "test an executable claim directly",
-                       "narrow wording", "adversarial counterexample",
+                       "Green script tests do not prove", "factual promises",
+                       "Source or observe factual promises", "test executable claims",
+                       "narrow partial truths", "adversarial counterexample",
                        "mutation checks cannot repair a wrong test oracle",
                        "empty success", "duplicate evidence", "data-dependent output section"):
             with self.subTest(phrase=phrase):

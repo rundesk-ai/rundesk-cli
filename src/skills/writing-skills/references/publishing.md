@@ -1,32 +1,15 @@
 # Publishing a skill catalog
 
-Read this when a skill must be installable by other rundesk installs. Publish a catalog repository;
-rundesk installs, updates, and removes catalogs, then grants individual skills from them.
+Read this when other Rundesk installs must install the skill. The catalog is the release boundary:
+group skills only when owner, audience, runtime, permissions, and release cadence align. Keep private
+identifiers and local-only workflows out of public catalogs.
 
-The catalog is the release boundary. Group skills that share an owner, audience, runtime, permission
-boundary, and release cadence. Do not place a local-only workflow, private identifier, or a
-service-specific executable in a general guidance catalog merely because that catalog already
-exists.
+Read the target repository rules, contribution template, and release process first. They control
+layout, sources, tests, versioning, and publication authority; this checklist does not override them.
 
-Read the target repository rules, catalog documentation, contribution template, and release process
-before changing it. Those rules decide package layout, required sources, tests, version policy, and
-publication authority; the generic shape below does not override them.
+## Build and validate
 
-## Build the repository
-
-Put `manifest.json` at the repository root and skills under `skills/`:
-
-```text
-acme-skills/
-├── manifest.json
-└── skills/
-    ├── release-notes/
-    │   └── SKILL.md
-    └── jira/
-        ├── SKILL.md
-        ├── rundesk.json
-        └── scripts/search.py
-```
+Put `manifest.json` at the repository root and packages under `skills/<name>/`:
 
 ```json
 {
@@ -37,39 +20,25 @@ acme-skills/
 }
 ```
 
-- Use schema `1`; other schemas are refused.
-- Make `name` a safe directory name. Do not use the reserved names `rundesk` or `local`.
-- Keep `version` and `description` useful to a person reading `rundesk skills catalogs`.
-- Do not list skills in the manifest. Rundesk finds every `skills/<name>/SKILL.md`.
-- Include at least one valid skill; an empty catalog is refused.
+Use schema `1`, a safe non-reserved name, and a useful version and description. Do not list skills;
+Rundesk discovers `skills/<name>/SKILL.md`. At least one valid skill is required.
 
-## Validate before publishing
-
-Preview an install from the working directory. Without `--confirm`, rundesk fetches or copies,
-validates the manifest and every skill, reports the exact install, and changes nothing:
+Preview from the working directory:
 
 ```sh
 "$RUNDESK_COMMAND" skills install ./acme-skills
 ```
 
-Fix every reported skill together. Confirm that frontmatter names match directories, descriptions are
-present and within 1024 characters, `rundesk.json` parses, and every file directly under `scripts/` is
-executable and tested.
-
-The preview is validation, not publication. Before pushing, run the repository's complete required
-suite, test every shipped script, exercise routing and near-miss prompts in fresh turns, inspect the
-complete diff for credentials and private data, and verify that documentation, package indexes, and
-version metadata agree.
+Without `--confirm`, Rundesk copies and validates the complete catalog but changes nothing. The
+preview is validation, not publication. Before pushing, fix every reported package together; run
+the repository suite, applicable script or integration matrices, and fresh routing cases; inspect
+the complete diff for credentials and private data; and reconcile documentation, indexes, and
+version metadata.
 
 ## Publish and install
 
-Push the catalog at the root of a GitHub repository's default branch. Rundesk accepts the base
-repository URL only; it does not accept a branch, subdirectory, archive URL, or another forge.
-
-The repository must be publicly readable for direct installation. Rundesk sends no GitHub
-credential when it fetches a catalog.
-
-Give installers these commands:
+Publish at a public GitHub repository's default-branch root. Direct installation accepts only the
+base repository URL and sends no GitHub credential.
 
 ```sh
 "$RUNDESK_COMMAND" skills install https://github.com/acme/acme-skills
@@ -77,32 +46,23 @@ Give installers these commands:
 "$RUNDESK_COMMAND" skills grant <agent> acme-skills/<skill>
 ```
 
-The first command is the preview; the second performs the install. A skill is not discoverable by an
-agent until it is granted.
+The first command previews, the second installs, and the grant makes a skill discoverable.
 
-For a private repository, have the owner clone it and install the clone by its absolute path, such as
-`/Users/me/catalogs/acme-skills`. Rundesk records the path exactly as typed and resolves it again on
-every update, so a relative path can fail from another working directory. Rundesk follows that
-directory, not its Git remote; the owner must pull changes into the clone before updating the catalog.
+For a private repository, the owner clones it and installs that absolute local path. Rundesk records
+the path exactly and follows the directory, not its Git remote; the owner must pull changes before
+updating. Avoid relative paths because updates may run from another working directory.
 
 ## Publish updates
 
-Change the repository and push its default branch. Bump `version` so listings explain the release,
-but do not rely on it to trigger an update: rundesk compares the catalog's content and treats the
-repository as authoritative.
-
-Installers can preview and apply the change:
+Push the default branch and bump `version` so listings explain the release. Content, not version,
+determines whether Rundesk finds an update:
 
 ```sh
 "$RUNDESK_COMMAND" skills update acme-skills
 "$RUNDESK_COMMAND" skills update acme-skills --confirm
 ```
 
-Removing a skill from the repository revokes it from every agent when the catalog updates. Treat that
-as a breaking change and state it before publishing.
-
-Changing a trigger can also be breaking when requests stop routing to the skill; changing a script
-interface can break an agent instruction or another script even when the package name stays. Follow
-the repository's version policy and release gates for those changes. A pushed branch or opened pull
-request is not a published catalog update: verify the exact default-branch commit and any required
-release artifact before telling installers the change is available.
+Removing a package revokes every grant on update. Treat that as a breaking change. Trigger changes
+can stop routing, and script-interface changes can break callers; follow repository version and
+release gates. A branch or pull request is not publication—verify the exact default-branch commit
+and required release artifact before saying an update is available.
