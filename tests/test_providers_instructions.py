@@ -49,7 +49,7 @@ class TheSituationsUnderTest(support.Isolated):
 class TheAgreedSections(support.Isolated):
     ALWAYS = ("# Rundesk", "## Agent Context", "## Current Situation",
               "## Establish the Outcome", "## Boundaries", "## Messages and Attachments",
-              "## Execute the Work", "## Maintain Continuity", "## Definition of Done")
+              "## Execute the Work", "## Outcome and Continuity")
 
     def built(self, situation=instructions.USER_TO_AGENT, team_text=""):
         return instructions.build(situation=situation, variables=EVERYTHING, team=team_text)
@@ -156,8 +156,9 @@ class TheAgreedSections(support.Isolated):
         # standing Messages rule and would pass on the pre-patch text.
         self.assertIn("recover message history before asking", situation)
         # The rule is only followable because the executable prefix travels in the same prompt.
-        self.assertIn('Internal commands use '
-                      '`RUNDESK_HOME="/rundesk/root" "$RUNDESK_COMMAND"`', person)
+        self.assertIn('inside this turn, use '
+                      '`RUNDESK_HOME="/rundesk/root" "$RUNDESK_COMMAND"` so the command reads and changes '
+                      'this install', person)
         self.assertIn('messages ava --search "<relevant words>" --full', person)
 
     def test_a_follow_up_with_a_missing_referent_requires_history_recovery(self):
@@ -219,7 +220,7 @@ class TheAgreedSections(support.Isolated):
         # one, including the two with nobody present to notice the result never arrived.
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
-                continuity = self.part(self.built(situation).text, "## Maintain Continuity")
+                continuity = self.part(self.built(situation).text, "## Outcome and Continuity")
                 for term in ("background command", "tool session", "monitor", "child process",
                              "not a continuation path", "collect", "blocker",
                              "long-running service"):
@@ -258,14 +259,14 @@ class TheAgreedSections(support.Isolated):
         # rather than person-facing.
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
-                done = self.part(self.built(situation).text, "## Definition of Done")
+                done = " ".join(self.part(self.built(situation).text,
+                                           "## Outcome and Continuity").split()).lower()
                 # Whole clauses, because the relationship is the requirement: separate fragments
                 # survive a text that says a started process proves the work, or that a report may
                 # stop at what happened. Each of those reversals has to fail here.
-                for clause in ("do not report work as complete until you verify the requested "
-                               "outcome",
-                               "a command accepted or a process started is progress, not proof",
-                               "while verification remains, report what happened and what remains "
+                for clause in ("report completion only when",
+                               "an accepted command or started process is progress, not proof",
+                               "while verification remains, state what happened and what remains "
                                "to check"):
                     with self.subTest(clause=clause):
                         self.assertIn(clause, done)
@@ -402,18 +403,18 @@ class SmallestSufficientChange(support.Isolated):
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
                 text = instructions.build(situation=situation, variables=EVERYTHING).text
-                self.assertIn("once the requested result and required proof are complete, stop", text)
+                self.assertIn("stop when the requested result and proof are complete", text)
 
     def test_every_turn_cannot_end_without_delivery_or_a_continuation_path(self):
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
                 text = instructions.build(situation=situation, variables=EVERYTHING).text
                 continuity = " ".join(
-                    text.split("## Maintain Continuity", 1)[1].split("\n## ", 1)[0].split()
+                    text.split("## Outcome and Continuity", 1)[1].split("\n## ", 1)[0].split()
                 ).lower()
-                self.assertIn("delivering and verifying the outcome", continuity)
-                self.assertIn("reporting a blocker with a real continuation path", continuity)
-                self.assertIn("never leave incomplete work", continuity)
+                self.assertIn("deliver and verify the outcome", continuity)
+                self.assertIn("report a blocker with a real continuation path", continuity)
+                self.assertIn("never report pending work as complete", continuity)
 
     def test_broader_scope_requires_approval_with_impact(self):
         for situation in EVERY_SITUATION:
@@ -528,10 +529,11 @@ class WhatWasSentIsProvableAfterwards(support.Isolated):
 class TheBuilderBoundary(support.Isolated):
     def test_the_prompt_names_the_install_root_for_provider_tool_shells(self):
         built = instructions.build(variables=EVERYTHING).text
-        self.assertIn("installed launcher selects `/rundesk/root`", built)
-        self.assertIn("Give people `rundesk ...`", built)
-        self.assertIn('Internal commands use '
-                      '`RUNDESK_HOME="/rundesk/root" "$RUNDESK_COMMAND"`', built)
+        self.assertIn("Use `rundesk ...` when giving a person a command", built)
+        self.assertIn('inside this turn, use '
+                      '`RUNDESK_HOME="/rundesk/root" "$RUNDESK_COMMAND"` so the command reads and changes '
+                      'this install', built)
+        self.assertNotIn("installed launcher selects", built)
         self.assertEqual(built.count('RUNDESK_HOME="/rundesk/root" "$RUNDESK_COMMAND"'), 1)
 
     def test_it_reads_no_file_and_opens_no_database(self):
@@ -556,7 +558,7 @@ class TheBuilderBoundary(support.Isolated):
             "schedule": (instructions.SCHEDULE_TO_AGENT, 700),
             "agent": (instructions.AGENT_TO_AGENT, 800),
             "team": (instructions.TEAM_MEMBERS, 1000),
-            "completion": (instructions.DEFINITION_OF_DONE, 850),
+            "completion": (instructions.OUTCOME_AND_CONTINUITY, 1400),
         }
         for name, (text, ceiling) in ceilings.items():
             with self.subTest(name=name):

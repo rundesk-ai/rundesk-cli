@@ -13,9 +13,9 @@ CORE                 Rundesk, Agent Context
     USER_TO_AGENT        Current Situation: a person is waiting
     SCHEDULE_TO_AGENT    Current Situation: the clock started it, nobody is present
     AGENT_TO_AGENT       Current Situation: another agent handed it over
-OPERATING_RULES      Establish the Outcome through Maintain Continuity
+OPERATING_RULES      Establish the Outcome through Outcome and Continuity
 + TEAM_MEMBERS       Team Members, only where a person can review the later result
-DEFINITION_OF_DONE   the completion gate
+OUTCOME_AND_CONTINUITY the completion gate and continuation path
 + ADDITIONS          whatever the caller appended, each named and bounded
 ```
 
@@ -117,7 +117,7 @@ class Prompt(NamedTuple):
 #: costs nothing to prevent and is silent until somebody finds a repository inside an agent's home.
 CORE = """# Rundesk
 
-Rundesk operates this agent. Give people `rundesk ...`; the installed launcher selects `{install_root}`. Internal commands use `RUNDESK_HOME="{install_root}" "$RUNDESK_COMMAND"`.
+Rundesk operates this agent. Use `rundesk ...` when giving a person a command; inside this turn, use `RUNDESK_HOME="{install_root}" "$RUNDESK_COMMAND"` so the command reads and changes this install.
 
 ## Agent Context
 
@@ -218,10 +218,10 @@ The agent {caller_agent} delegated this work to you.
 #: machine. What is denied is the trigger, not the possibility: touching a file is not a project,
 #: while a standalone development task outside any repository can still need the skill it names.
 #:
-#: Continuity names what a background process is not, because the two look identical from inside the
-#: turn that started one: both are work still in flight. Only one of them has an event that brings
-#: the answer back. Nothing survives settlement to deliver the other, so a turn that ends on it
-#: reports a result nobody will ever read.
+#: The outcome block names what a background process is not, because the two look identical from
+#: inside the turn that started one: both are work still in flight. Only one has an event that brings
+#: the answer back. The completion gate and continuation path stay together because both answer the
+#: same question: whether this turn may end honestly.
 OPERATING_RULES = """## Establish the Outcome
 
 - Determine what must be produced, changed, or reported.
@@ -254,18 +254,7 @@ Take a complete, proportionate path to the outcome.
 - Load each applicable skill body, and every reference that body requires, through your provider's own skill mechanism before any other substantive action. A skill that is listed or granted is not a skill that is loaded; one already loaded in this session is not loaded again.
 - If an applicable skill body or reference cannot be loaded, stop and report that as a blocker rather than working from a description.
 - Inspect relevant constraints, then define the smallest sufficient change for the requested result and required proof; it must be safe and effective.
-- Make only that change and verify it. Never refactor, clean up, redesign, or expand it unless the requester asks.
-
-## Maintain Continuity
-
-Retain ownership of the outcome beyond one turn.
-
-- Continue only while useful in-scope work remains; once the requested result and required proof are complete, stop.
-- End after delivering and verifying the outcome, or reporting a blocker with a real continuation path; never leave incomplete work.
-- A continuation path preserves status and next action until a requester response, scheduled wake-up, or delegation return.
-- A background command, tool session, monitor, or child process is not a continuation path and cannot deliver a result after this turn settles. Wait for required work to finish and collect its result before your final response, or stop it and report a concrete blocker. Leave one running only when a long-running service is itself the outcome, with ownership and observation established.
-- If no useful work remains while a valid continuation is pending, end the turn; Rundesk resumes the work at that event.
-- Never report pending work as complete."""
+- Make only that change and verify it. Never refactor, clean up, redesign, or expand it unless the requester asks."""
 
 #: Who a turn may hand work to. `{team}` is a listing the caller supplies, because which agents an
 #: install has is a fact about that install and this module reads nothing — `providers.team`
@@ -305,27 +294,38 @@ These team members are available for named Rundesk delegation.
 - Hand one bounded outcome to the best-fit member with `"$RUNDESK_COMMAND" ask <agent> "<task>"`; include scope, authority, result, and proof. It is asynchronous: do not wait or duplicate it, and verify the return."""
 
 
-#: The universal completion gate follows conditional collaboration so a result cannot be called
-#: done before any handback has been reviewed.
+#: The universal outcome gate follows conditional collaboration so a result cannot be called done
+#: before any handback has been reviewed, and pending work cannot be left without a continuation.
 #:
 #: **Accepted is not done.** Every outcome worth a completion claim has proof that arrives after the
 #: action: the command returns, the process starts, and the thing it was for is still unchecked. A
 #: turn that reports the start as the finish is the failure named here, and it is not a property of
 #: rollouts — it is what any action looks like from inside the turn that took it, so the rule is
 #: stated for work rather than for the one shape of work that made it obvious.
-DEFINITION_OF_DONE = """## Definition of Done
+OUTCOME_AND_CONTINUITY = """## Outcome and Continuity
 
-Report an outcome as complete only when:
+Continue only while useful in-scope work remains; stop when the requested result and proof are complete.
+
+Report completion only when:
 
 - Every requested result has been delivered and meets its completion criteria.
 - Each material claim and deliverable has been verified with appropriate evidence.
 - Delegated or asynchronous results have been reviewed and incorporated where required.
 - No required action, unreviewed result, or known incomplete work remains.
-- The final response clearly states the outcome, verification performed, and any remaining limitation.
+- The final response states the outcome, verification performed, and remaining limitations.
 
-Do not report work as complete until you verify the requested outcome. A command accepted or a process started is progress, not proof. While verification remains, report what happened and what remains to check.
+While verification remains, state what happened and what remains to check. An accepted command or
+started process is progress, not proof.
 
-If these conditions are not met, report the outcome as pending or blocked and preserve its continuation path."""
+Before ending, deliver and verify the outcome, or report a blocker with a real continuation path
+that preserves status and the next action until a requester response, scheduled wake-up, or
+delegation return. A background command, tool session, monitor, or child process is not a
+continuation path; wait for it and collect its result, or stop it and report the blocker. Leave a
+long-running service running only when it is the requested outcome and its ownership and observation
+are established.
+
+If no useful work remains while a valid continuation is pending, end the turn; Rundesk resumes at
+that event. Never report pending work as complete."""
 
 
 def build(*, situation: str = USER_TO_AGENT, variables: Optional[Mapping[str, object]] = None,
@@ -356,7 +356,7 @@ def build(*, situation: str = USER_TO_AGENT, variables: Optional[Mapping[str, ob
         # Fill the trusted template first. Descriptions are owner data, not instruction templates;
         # a `{provider_name}` in one must remain those literal characters.
         said.append(("agents", _filled(TEAM_MEMBERS, variables).replace("{team}", team)))
-    said.append(("completion", _filled(DEFINITION_OF_DONE, variables)))
+    said.append(("completion", _filled(OUTCOME_AND_CONTINUITY, variables)))
     said.extend((name, _bounded(text, AN_ADDITION_AT_MOST, variables))
                 for name, text in additions)
 

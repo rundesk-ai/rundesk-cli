@@ -1,7 +1,7 @@
 ---
 id: INS
 name: Rundesk operating and agent instructions
-last_verified: 2026-08-20
+last_verified: 2026-08-21
 ---
 
 ## What this is
@@ -40,11 +40,10 @@ Every rendered operating prompt contains these sections once and in this order:
 5. `Boundaries`
 6. `Messages and Attachments`
 7. `Execute the Work`
-8. `Maintain Continuity`
-9. `Definition of Done`
+8. `Outcome and Continuity`
 
-`Team Members`, with its `Delegation` subsection, appears between `Maintain Continuity` and
-`Definition of Done` only when named Rundesk delegation is available and the turn can review the
+`Team Members`, with its `Delegation` subsection, appears between `Execute the Work` and `Outcome
+and Continuity` only when named Rundesk delegation is available and the turn can review the
 asynchronous result.
 
 ### Rundesk
@@ -157,19 +156,20 @@ Rundesk instructs this preflight; it does not enforce or observe it. No release 
 bodies or references a turn loaded, and no acceptance test can prove a turn ran the preflight.
 Runtime enforcement and per-turn load receipts are outside this requirement and remain unbuilt.
 
-### Maintain Continuity
+### Outcome and Continuity
 
-This section keeps the agent responsible for an outcome beyond one turn. The agent continues only
-while useful in-scope work remains and stops once the requested result and required proof are
-complete. Before ending it either verifies completion, identifies the blocker, or preserves status
-and a next action tied to a real event that will resume the work. Pending work is never reported as
+This section combines the completion gate with ownership beyond one turn. The agent stops once the
+requested result and required proof are complete, and reports an outcome as complete only after
+every requested result, material claim, deliverable, and asynchronous handback has been verified.
+While verification remains, it states what happened and what remains to check.
+
+Before ending, it delivers and verifies the outcome or reports a blocker with a real continuation
+path. That path preserves status and the next action until a requester response, scheduled wake-up,
+or delegation return. A background command, tool session, monitor, or child process is not a
+continuation path; the agent waits for required work to finish and collects its result, or stops it
+and reports the blocker. A long-running service is left running only when it is the requested
+outcome and its ownership and observation are established. Pending work is never reported as
 complete.
-
-A background command, tool session, monitor, or child process is not such an event and cannot
-deliver a result once the turn settles. The agent waits for required work to finish and collects
-its result before the final response, or stops it and reports a concrete blocker. The one exception
-is a long-running service that is itself the requested outcome, left running with its ownership and
-observation established.
 
 ### Team Members
 
@@ -187,18 +187,6 @@ high-risk work, and agents scale up only for observed scope, risk, or failed evi
 It is omitted for schedules because their asynchronous result cannot return to the same turn for
 review. It is omitted for agent-to-agent delegations because named Rundesk delegation stops at one
 level. An empty team also omits the section.
-
-### Definition of Done
-
-This final operating section permits a completion claim only after every requested result meets its
-criteria, material claims and deliverables are verified, required asynchronous results are reviewed,
-and no known required work remains. Otherwise the agent reports the outcome as pending or blocked
-and preserves its continuation path.
-
-Work is not reported as complete until the agent verifies the requested outcome. A command being
-accepted or a process starting is progress rather than proof. While verification remains, the
-report states what happened and what remains to check. This holds for every situation and every
-kind of work, not only for a rollout, release, or update.
 
 ## Agent instruction template
 
