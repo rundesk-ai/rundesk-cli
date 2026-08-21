@@ -11,6 +11,19 @@ layout, sources, tests, versioning, and publication authority; this checklist do
 
 Put `manifest.json` at the repository root and packages under `skills/<name>/`:
 
+```text
+acme-skills/
+├── manifest.json
+└── skills/
+    ├── release-notes/
+    │   └── SKILL.md
+    └── jira/
+        ├── SKILL.md
+        ├── rundesk.json
+        └── scripts/
+            └── search.py
+```
+
 ```json
 {
   "schema": 1,

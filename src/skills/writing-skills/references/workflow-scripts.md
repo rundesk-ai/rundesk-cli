@@ -7,9 +7,9 @@ or remote effects.
 ## Make the script earn its place
 
 Script repeated work whose inputs, outputs, and failures can be specified. Keep judgment in
-`SKILL.md`; put parsing, transformation, validation, and mechanical orchestration here so the same
-input produces the same output without re-deriving the mechanism. Do not duplicate an ordinary tool
-that already performs the operation safely.
+`SKILL.md`; put parsing, transformation, validation, and mechanical orchestration in the script so
+the same input produces the same output without re-deriving the mechanism. Do not duplicate an
+ordinary tool that already performs the operation safely.
 
 ## Define the contract
 
@@ -45,7 +45,8 @@ execute a dependency implicitly.
 
 Automation adds no permission. Preserve preview and confirmation boundaries, accept exact targets,
 and stop before destructive or external work the user did not authorize. Never embed credentials,
-private paths, repository identities, environment dumps, or user-controlled shell evaluation.
+private paths, repository identities, or environment dumps. Never evaluate user-controlled text
+through a shell.
 
 Pass argument arrays to child processes, set deadlines, preserve exit status, and bound captured
 output. Stage multi-step work before one commit point when possible; otherwise report exactly what

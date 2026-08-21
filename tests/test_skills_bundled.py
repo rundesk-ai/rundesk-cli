@@ -221,6 +221,15 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "without the skill", "different fresh turn"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, main)
+
+        for phrase in ("Aim for two short sentences", "Include only concepts needed to route",
+                       "Omit steps, tests, benefit claims, and implementation detail",
+                       "only when it determines whether the skill should trigger",
+                       "shortest description that still routes correctly",
+                       "ceiling, not a target", "# Bad: embeds implementation",
+                       "# Good: states intent"):
+            with self.subTest(description_rule=phrase):
+                self.assertIn(phrase, main)
         for phrase in ("empty input", "malformed input", "missing and unreadable files",
                        "interrupted writes", "large input",
                        "semantic unit", "same resolved input", "Empty input or a no-op",
@@ -271,7 +280,9 @@ class WhatAShippedSkillMayClaim(Bundled):
             encoding="utf-8").split())
 
         for phrase in ("catalog is the release boundary", "repository rules",
-                       "preview is validation, not publication", "breaking change"):
+                       "preview is validation, not publication", "breaking change",
+                       "acme-skills/", "├── manifest.json", "└── skills/",
+                       "├── rundesk.json", "└── search.py"):
             with self.subTest(reference="publishing", phrase=phrase):
                 self.assertIn(phrase, publishing)
         for phrase in ("least privilege", "timeouts", "rate limits", "pagination",

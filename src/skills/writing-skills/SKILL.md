@@ -70,10 +70,21 @@ Frontmatter has only `name` and `description`.
 - Match `name` to the directory. Use at most 64 lowercase letters, digits, and single hyphens.
 - Route by user intent, including indirect requests that may not name the skill. Start with `Use
   when`, `Apply when`, or equivalent applicability language; prompt phrases are not triggers.
-- State the supplied workflow or knowledge in one short sentence. Add `Do not use` only for a likely
-  near-miss.
-- Keep the description within 1,024 characters and put every trigger there. Each holder pays for it
-  every turn, and the body is unavailable until routing succeeds.
+- Aim for two short sentences: applicability, then the specialized workflow or knowledge supplied.
+  Add `Do not use` only for a likely near-miss. Include only concepts needed to route before the
+  body loads. Omit steps, tests, benefit claims, and implementation detail; name a file type, tool,
+  or format only when it determines whether the skill should trigger.
+- Use the shortest description that still routes correctly; 1,024 characters is a ceiling, not a
+  target. Put every trigger there because each holder pays for it every turn and the body is
+  unavailable until routing succeeds.
+
+```yaml
+# Bad: embeds implementation and verification that cannot help routing.
+description: Use when creating release notes. It reads Git history, writes Markdown, groups commits, checks links, runs validation, and produces concise internal and public versions with accurate formatting.
+
+# Good: states intent, supplied judgment, and the closest boundary only.
+description: Use when preparing release notes from shipped repository changes. It supplies an audience-focused workflow grounded in verified history. Do not use for unreleased plans.
+```
 
 ## Keep only behavioral guidance
 
