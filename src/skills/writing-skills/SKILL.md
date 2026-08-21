@@ -163,3 +163,8 @@ Check the skill through the same surface an agent uses:
    whether the capability needs a skill.
 6. Have a separate test agent use the skill without being told the expected implementation. Review
    the created artifact and observed commands directly; the agent's summary is not proof.
+7. Review the generated writing separately from executable correctness. Check routing precision,
+   execution order, non-obvious judgment, concision, duplication, and reference discipline. Green
+   script tests do not prove that another agent will understand or use the skill well. Trace each
+   factual promise and example to an observed behavior or a cited source; test an executable claim
+   directly, and narrow wording that is true only for some inputs or tools.

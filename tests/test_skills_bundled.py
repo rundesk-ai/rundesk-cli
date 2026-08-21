@@ -226,6 +226,35 @@ class WhatAShippedSkillMayClaim(Bundled):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, workflow)
 
+        for phrase in ("generated writing separately from executable correctness",
+                       "routing precision", "non-obvious judgment", "concision",
+                       "duplication", "reference discipline",
+                       "Green script tests do not prove", "factual promise and example",
+                       "observed behavior or a cited source", "test an executable claim directly",
+                       "narrow wording"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, main)
+
+    def test_live_agent_verification_keeps_the_edge_matrix_and_evidence_contract(self):
+        guide = (support.CHECKOUT / "docs" / "live-agent-verification.md").read_text(
+            encoding="utf-8")
+        index = (support.CHECKOUT / "docs" / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("[live-agent-verification.md](./live-agent-verification.md)", index)
+        for phrase in ("A convincing answer alone is not a pass",
+                       "A mock proves the harness",
+                       "Use a fresh provider conversation",
+                       "Direct positive", "Indirect positive", "Close near-miss",
+                       "Forbidden access", "Failure after progress", "Completion boundary",
+                       "fresh baseline without the skill",
+                       "skill body and every conditionally required reference load",
+                       "Review the generated writing separately from runtime correctness",
+                       "pass`, `fail`, `partial`, `blocked`, or `not applicable",
+                       "Preserve failed natural cases",
+                       "Cleanup and restored state", "Preserved verification status"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guide)
+
     def test_writing_skills_publishing_and_integrations_keep_their_safety_boundaries(self):
         skill = self.skills / "writing-skills" / "references"
         publishing = " ".join((skill / "publishing.md").read_text(encoding="utf-8").split())
