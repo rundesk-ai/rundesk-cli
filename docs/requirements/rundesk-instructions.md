@@ -73,11 +73,13 @@ Exactly one situation is rendered:
 
 - Person: states that a person is available. A change the person states as required is an
   instruction to make it within the current scope rather than something to agree with, propose, or
-  wait to be asked for again; it authorizes no more than the stated change. Clarification is
-  permitted only after recovering potentially relevant message history, and only when missing
-  context, unclear scope or authority, or an unresolved decision still prevents meaningful
-  progress. Routine internal context recovery — memory, task state, instructions, and prior
-  messages — is silent work rather than narrated progress. A concise update is reserved for a
+  wait to be asked for again; it authorizes no more than the stated change. A follow-up whose
+  unstated or unclear referent is explicitly classified as missing context. Relevant message
+  history is recovered silently before asking what it refers to, and clarification is used only when missing
+  context, scope, authority, or an unresolved decision still blocks
+  progress. Routine
+  internal context recovery — memory, task state, instructions, and prior messages — is silent work
+  rather than narrated progress. A concise update is reserved for a
   requested status, material progress or a result that affects the person, and a blocker, risk, or
   decision needing attention. Skills are not on that silent list, and the default never withholds
   an announcement that a higher-priority applicable instruction requires. A blocked agent names the
@@ -113,11 +115,12 @@ The section also prohibits invented outcomes and exposure of sensitive data.
 
 This section makes two high-failure mechanics explicit:
 
-- When a request appears out of context or refers to prior work, decisions, or discussions that are
-  not present, search all of the agent's message history across conversations before continuing or
-  asking for clarification. The operating instructions include the executable form
-  `"$RUNDESK_COMMAND" messages {agent_name} --search "<relevant words>" --full`. Search results from
-  another audience remain private and cannot be used in or exposed to the current audience.
+- For missing context, search all of the agent's message history across conversations with
+  `"$RUNDESK_COMMAND" messages {agent_name} --search "<relevant words>" --full`. With no match, list
+  recent messages using the supported unfiltered command. If still unresolved, clarify or report
+  the blocker as the situation permits. Use only supported results for
+  the current audience; never inspect conversation files or records directly or infer context from
+  another agent or audience.
 - Attach a file or image with an absolute local Markdown link, such as
   `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain path is
   not represented as an attachment.
@@ -269,7 +272,7 @@ changes that section. The situation and delegation-depth exclusions defined abov
 | ✅ | R-INS-6 | All agents start from one canonical template and public agent operations do not expose a type flag | `test_it_uses_the_single_agent_rules`, `test_role_is_not_an_add_option`, `test_role_is_not_a_configure_option`, `test_it_lists_all_agents_in_one_table` |
 | ✅ | R-INS-7 | Legacy agent roles never suppress an otherwise eligible Team Members and Delegation section | `test_legacy_roles_do_not_remove_team_delegation_from_an_agents_instructions` |
 | ✅ | R-INS-8 | Every turn is told its agent home is an operational workspace rather than a Git repository, and that patch or pull-request work belongs in the project's own checkout, without naming a file the release places in that home | `test_no_turn_is_told_its_home_is_a_project_repository`, `test_the_files_an_agent_lives_by_are_spelled_the_same_way_everywhere` |
-| ✅ | R-INS-9 | A person-facing turn is instructed to recover potentially relevant message history before asking for clarification | `test_a_person_turn_asks_only_after_recovering_message_history` |
+| ✅ | R-INS-9 | A person-facing turn classifies a follow-up with an unstated or unclear referent as missing context, recovers it through supported same-audience history before asking what it refers to, forbids direct conversation-record and cross-agent/audience inference, and permits clarification only when recovery cannot unblock progress | `test_a_person_turn_asks_only_after_recovering_message_history`, `test_a_follow_up_with_a_missing_referent_requires_history_recovery`, `test_referent_recovery_is_person_facing_and_keeps_a_privacy_boundary`, `test_context_recovery_cannot_bypass_supported_audience_records`, `test_clarification_remains_available_when_recovery_cannot_unblock_progress` |
 | ✅ | R-INS-10 | A change a person states as required is an instruction to make within the current scope, not something to agree with, propose, or wait to be asked for again | `test_a_stated_change_is_an_instruction_rather_than_a_proposal` |
 | ✅ | R-INS-11 | The one agent template sets a short, outcome-first default for answering a person and excludes a result returned to a calling agent | `test_the_rules_have_the_required_sections`, `test_a_person_is_answered_briefly_and_a_calling_agent_in_full` |
 | ✅ | R-INS-12 | Every turn is told a background command, tool session, monitor, or child process is not a continuation path and cannot deliver a result after the turn settles | `test_a_background_process_is_not_a_continuation_path` |

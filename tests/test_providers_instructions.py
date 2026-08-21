@@ -142,10 +142,47 @@ class TheAgreedSections(support.Isolated):
         # Requirement-level: asking is permitted only after the recovery, so both halves of that
         # condition have to survive together. A bare "message history" is satisfied by the
         # standing Messages rule and would pass on the pre-patch text.
-        self.assertIn("only after recovering", situation)
-        self.assertIn("message history", situation)
+        self.assertIn("recover message history before asking", situation)
         # The rule is only followable because the executable form travels in the same prompt.
         self.assertIn('messages ava --search "<relevant words>" --full', person)
+
+    def test_a_follow_up_with_a_missing_referent_requires_history_recovery(self):
+        situation = self.part(self.built().text, "## Current Situation")
+        # A compacted session received only "yes please enable it" and asked what setting it meant.
+        # "Appears out of context" was present but left the model to classify that elliptical
+        # approval itself. Name the trigger so clarification cannot precede the recovery step.
+        self.assertIn("unstated or unclear referent", situation)
+        self.assertIn("silently recover message history before asking what it refers to",
+                      situation)
+        self.assertLess(situation.index("unstated or unclear referent"),
+                        situation.index("recover message history"))
+
+    def test_referent_recovery_is_person_facing_and_keeps_a_privacy_boundary(self):
+        person = self.built().text
+        messages = self.part(person, "## Messages and Attachments")
+        self.assertIn("supported `terminal:ava` results", messages)
+        self.assertIn("another agent/audience", messages)
+        for other in (instructions.SCHEDULE_TO_AGENT, instructions.AGENT_TO_AGENT):
+            with self.subTest(situation=other[:32]):
+                self.assertNotIn("unstated or unclear referent",
+                                 self.part(self.built(other).text, "## Current Situation"))
+
+    def test_context_recovery_cannot_bypass_supported_audience_records(self):
+        messages = self.part(self.built().text, "## Messages and Attachments")
+        # A Grok no-history control inspected another fixture agent and its raw conversation after
+        # the supported current-audience search returned only the ambiguous follow-up.
+        for clause in ('no match: list recent messages: '
+                       '`"$rundesk_command" messages ava --full`',
+                       "still unresolved: clarify or report the blocker as the situation permits",
+                       "never inspect conversation files/records",
+                       "infer from another agent/audience"):
+            with self.subTest(clause=clause):
+                self.assertIn(clause, messages)
+
+    def test_clarification_remains_available_when_recovery_cannot_unblock_progress(self):
+        situation = self.part(self.built().text, "## Current Situation")
+        self.assertIn("clarify only if missing context, scope, authority, or an unresolved decision "
+                      "still blocks progress", situation)
 
     def test_a_stated_change_is_an_instruction_rather_than_a_proposal(self):
         person = self.built().text
