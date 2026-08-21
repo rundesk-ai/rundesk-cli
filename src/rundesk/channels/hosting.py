@@ -721,7 +721,7 @@ def doing(agent: str, where: Path, watching: Watching, kind: str, place: str,
 
 def delegating(agent: str, where: Path, watching: Watching, kind: str, place: str,
                state: str, to_agent: str, delegation_id: str,
-               elapsed: str = "") -> bool:
+               elapsed: str = "", provider: str = "", provider_alias: str = "") -> bool:
     """What is happening to work this agent handed to another one (R-DEL-16).
 
     **Its own record rather than an `activity` line**, because the two are different news and the
@@ -731,11 +731,18 @@ def delegating(agent: str, where: Path, watching: Watching, kind: str, place: st
     where it happened. It also carries what no activity line has anywhere to put: how long the work
     has been out.
 
-    **The words are `delegations`', the marks are the adapter's.** Four fields cross and no more —
-    the closed state, who has it, which ask, and how long — and what a person is *shown* is the
-    surface's, exactly as it is for a turn's four marks and for the cost line. A sentence composed
-    here with an emoji in it would be this product deciding what Discord's small print looks like,
-    for every surface that will ever exist.
+    **The words are `delegations`', the marks are the adapter's.** Six fields cross and no more —
+    the closed state, who has it, which ask, how long, and which brain is doing it — and what a
+    person is *shown* is the surface's, exactly as it is for a turn's four marks and for the cost
+    line. A sentence composed here with an emoji in it would be this product deciding what Discord's
+    small print looks like, for every surface that will ever exist.
+
+    **`provider` is the canonical effective one and never the requested spelling.** What a room
+    reads has to be the brain actually doing the work: a delegation asked for by a relative path, or
+    asked for with only half an override, is admitted against a provider resolved once — and a
+    notice quoting the request would name something that may not be what ran. `provider_alias` is
+    the account inside that provider where one is known, which is the same pair `rundesk asked show`
+    calls the effective provider and effective account alias.
 
     **`elapsed` arrives as words and not as a number**, for the reason the cost line does: how long
     something took is rendered once, by `delivery.duration`, for every platform. Sent as seconds it
@@ -754,6 +761,15 @@ def delegating(agent: str, where: Path, watching: Watching, kind: str, place: st
     # a surface handed `""` has to decide what that meant; handed nothing, there is nothing to say.
     if elapsed:
         said["elapsed"] = elapsed
+    # The same rule again, and it is what "omit an unknown provider" means here: a delegation
+    # admitted before a provider travelled with one has no answer to give, and a surface handed `""`
+    # would have to invent what an unnamed brain looks like.
+    if provider:
+        said["provider"] = provider
+        # **Only ever beside a provider.** An account alias on its own names an account of nothing,
+        # and the pair is meaningless split.
+        if provider_alias:
+            said["provider_alias"] = provider_alias
     with contextlib.suppress(Exception):
         _said_to(where, one, said)
         return True

@@ -408,9 +408,10 @@ Five, and only five exist today.
             "sha256": "b1f3…"}]}
 {"do": "state", "place": "1180", "external_id": "8841", "state": "seen"}
 {"do": "activity", "place": "1180", "did": "run"}
-{"do": "delegation", "place": "1180", "state": "handed", "who": "dev", "ask": "del-41-4e07c5"}
+{"do": "delegation", "place": "1180", "state": "handed", "who": "dev", "ask": "del-41-4e07c5",
+ "provider": "codex"}
 {"do": "delegation", "place": "1180", "state": "answered", "who": "dev", "ask": "del-41-4e07c5",
- "elapsed": "1m"}
+ "elapsed": "1m", "provider": "claude", "provider_alias": "work"}
 {"do": "answered", "ref": "c-91f2", "text": "3 schedules, next at 09:00"}
 {"do": "stop"}
 ```
@@ -420,7 +421,7 @@ Five, and only five exist today.
 | `deliver` | `id`, `place`, `text`, sometimes `files`, sometimes `reply_to`, sometimes `cost` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed` |
 | `state` | `place`, `external_id`, `state` | show what rundesk says a turn is doing |
 | `activity` | `place`, `did`, sometimes `ok`, sometimes `who` | show what the agent is doing, while it is still doing it |
-| `delegation` | `place`, `state`, `who`, `ask`, sometimes `elapsed` | show what became of work this agent handed to another agent, and what has just been done to it |
+| `delegation` | `place`, `state`, `who`, `ask`, sometimes `elapsed`, sometimes `provider` and with it sometimes `provider_alias` | show what became of work this agent handed to another agent, which brain is doing it, and what has just been done to it |
 | `answered` | `ref`, `text` | the answer to a `control`, `query` or `configure` you sent, against the `ref` you gave it |
 | `stop` | — | stop. The signals follow either way |
 
@@ -499,17 +500,37 @@ many minutes, and the person who asked is left watching a room in the meantime.
 So do not fold it into the running commentary. Post it as a message of its own, and treat anything
 you were growing as no longer last.
 
-`state` is one of six, and the list is closed. Three say where the work stands and three say what has
-just been done to it:
+`state` is one of seven, and the list is closed. Four say where the work stands and three say what
+has just been done to it:
 
 | | What it means | How the shipped adapter renders it |
 |---|---|---|
 | `handed` | the work has gone to `who` | `-# 🤖 handed to **dev** · del-41-4e07c5` |
 | `working-still` | it is still out, said once per twenty minutes | `-# ⏳ **dev** still working · 20m` |
 | `answered` | it came back; the answer itself follows as an ordinary `deliver` | `-# ✅ **dev** answered · 1m` |
+| `stopped` | a requested stop reached its terminal outcome; no answer is owed | `-# ✋ **dev** stopped · 15s` |
 | `guided` | somebody put words into it while it runs | `-# 💬 updated **dev**` |
 | `stopping` | somebody asked it to end — a request, never an outcome | `-# 🛑 asked **dev** to stop` |
 | `carried-on` | a finished one was resumed, in the session it already had | `-# 🔁 carried on with **dev**` |
+
+`provider` is **which brain is doing the work**, and it may arrive on any of the seven. It is the
+*effective* provider — the canonical one resolved when the delegation was admitted, which is what is
+actually running — and never the spelling somebody typed, which may be a relative path and may be
+half an override. `provider_alias` is the account inside that provider, and it appears **only beside
+a `provider`**: an account alias on its own names an account of nothing. Both are the pair
+`rundesk asked show` calls the effective provider and effective account alias.
+
+**Both are absent where nothing is known**, exactly as `elapsed` is — a delegation admitted before a
+provider travelled with one has no answer to give, and rundesk leaves the field out rather than
+sending an empty one. Render a line without them as the line you rendered before this existed; do
+not invent a word like *unknown* to fill the gap.
+
+**A provider may be a path**, because an adapter somebody wrote is named by where it lives. Show its
+last component and never the directories above it, the way you already do for `who` on an `activity`
+line: posting the whole of one publishes the owner's directory layout and their username to
+everybody who can read the channel. The shipped adapter puts what is left beside the name —
+`-# 🤖 handed to **dev** (codex) · del-41-4e07c5`, and with an account alias
+`-# 🤖 handed to **dev** (claude · work) · del-41-4e07c5`.
 
 `ask` is the delegation's own name, which is what somebody types to guide, stop or carry it on —
 `rundesk asked <agent> say|stop|resume <ask>`. The shipped adapter shows it on `handed` and leaves it

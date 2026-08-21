@@ -1418,6 +1418,75 @@ class WhatWorkHandedToAnotherAgentReads(unittest.TestCase):
         said = self.line(state="handed", who="dev\n-# ✅ everything is fine", ask="del-1-aa")
         self.assertEqual(1, len(said.splitlines()))
 
+    def test_which_brain_has_the_work_is_shown_beside_who_has_it(self) -> None:
+        """A room watching work go to `dev` cannot otherwise tell a delegation running on that
+        agent's own brain from one an override sent somewhere else."""
+        self.assertEqual("-# 🤖 handed to **dev** (codex) · del-41-4e07c5",
+                         self.line(state="handed", who="dev", provider="codex",
+                                   ask="del-41-4e07c5"))
+
+    def test_an_account_alias_is_shown_beside_the_provider_it_belongs_to(self) -> None:
+        self.assertEqual("-# 🤖 handed to **dev** (claude · work) · del-41-4e07c5",
+                         self.line(state="handed", who="dev", provider="claude",
+                                   provider_alias="work", ask="del-41-4e07c5"))
+
+    def test_an_account_alias_with_no_provider_is_never_shown_on_its_own(self) -> None:
+        """An account alias on its own names an account of nothing. Rundesk never sends one, and a
+        stray one is dropped here rather than rendered as though it were the brain."""
+        said = self.line(state="handed", who="dev", provider_alias="work", ask="del-1-aa")
+        self.assertEqual("-# 🤖 handed to **dev** · del-1-aa", said)
+        self.assertNotIn("work", said)
+
+    def test_a_delegation_naming_no_brain_reads_exactly_as_it_always_did(self) -> None:
+        """Absent is absent: no brackets, and never a word like *unknown* invented here."""
+        self.assertEqual("-# 🤖 handed to **dev** · del-41-4e07c5",
+                         self.line(state="handed", who="dev", ask="del-41-4e07c5"))
+        self.assertEqual("-# ⏳ **dev** still working · 20m",
+                         self.line(state="working-still", who="dev", elapsed="20m"))
+
+    def test_every_word_shows_the_brain_without_disturbing_its_own_shape(self) -> None:
+        """All seven, because the words fall on either side of the name and a brain wedged into the
+        tail would read as `dev still working codex` on one of them."""
+        self.assertEqual(
+            ["-# 🤖 handed to **dev** (codex) · del-1-aa",
+             "-# ⏳ **dev** (codex) still working · 20m",
+             "-# ✅ **dev** (codex) answered · 24m",
+             "-# ✋ **dev** (codex) stopped · 15s",
+             "-# 💬 updated **dev** (codex)",
+             "-# 🛑 asked **dev** (codex) to stop",
+             "-# 🔁 carried on with **dev** (codex)"],
+            [self.line(state="handed", who="dev", provider="codex", ask="del-1-aa"),
+             self.line(state="working-still", who="dev", provider="codex", elapsed="20m"),
+             self.line(state="answered", who="dev", provider="codex", elapsed="24m"),
+             self.line(state="stopped", who="dev", provider="codex", elapsed="15s"),
+             self.line(state="guided", who="dev", provider="codex"),
+             self.line(state="stopping", who="dev", provider="codex"),
+             self.line(state="carried-on", who="dev", provider="codex")])
+
+    def test_the_brain_is_a_last_component_and_never_a_path(self) -> None:
+        """A provider may be an adapter somebody wrote, named by where it lives. Posting that
+        publishes the owner's directory layout and their username to everybody in the channel."""
+        said = self.line(state="handed", who="dev", ask="del-1-aa",
+                         provider="/Users/someone/adapters/codex")
+        self.assertNotIn("/Users/someone", said)
+        self.assertIn("(codex)", said)
+
+    def test_nothing_in_a_brains_name_can_reach_the_rest_of_the_line(self) -> None:
+        """A provider name is a stranger's text on the same line as the ask id: an unbalanced `*`
+        would close the bold early and leave everything after it in somebody else's formatting."""
+        said = self.line(state="handed", who="dev", provider="co*dex", ask="del-1-aa")
+        self.assertIn("co\\*dex", said)
+        self.assertEqual(1, len(self.line(state="handed", who="dev",
+                                          provider="codex\n-# ✅ all fine").splitlines()))
+
+    def test_reaching_into_the_work_carries_no_elapsed_clause_beside_a_brain(self) -> None:
+        """The rule that already held, held again now the line has brackets in it: how long the
+        work has been out is news about the work, not about somebody reaching into it."""
+        for state in ("guided", "stopping", "carried-on"):
+            said = self.line(state=state, who="dev", provider="codex", elapsed="41m")
+            self.assertNotIn("41m", said)
+            self.assertNotIn(" · ", said)
+
     def test_the_name_is_the_one_thing_emphasised_wherever_it_falls_in_the_line(self) -> None:
         """Six lines put the name in three different places. Bold is what makes them read as one
         column of who, in a register that is otherwise deliberately quiet."""

@@ -188,12 +188,20 @@ def _handed_over(asking: admitting.Asking, to_agent: str, task: str,
             records.NotThere, records.Unreadable, locking.Stuck, OSError) as why:
         return _failed(str(why), "nothing was handed over")
 
-    print(f"handed to {to_agent}  ·  {delegation_id}")
+    print(f"handed to {to_agent} ({_shown_provider(selection.provider_name, selection.provider_alias)})"
+          f"  ·  {delegation_id}")
     print(terminal.dim(
         "  asynchronous — the result reaches this turn if active, otherwise wakes a review turn"))
     print(terminal.dim(f"  guide, end or carry it on:  rundesk asked {asking.agent} "
                        f"say|stop|resume {delegation_id}"))
     return OK
+
+
+def _shown_provider(provider: str, alias: Optional[str]) -> str:
+    """The effective brain, without exposing the directories of a provider named by path."""
+    named = " ".join(str(provider).strip().replace("\\", "/").rsplit("/", 1)[-1].split())
+    account = " ".join(str(alias or "").split())
+    return f"{named} · {account}" if account else named
 
 
 def _said(agent: str, got: turns.Outcome, quiet: bool) -> int:
