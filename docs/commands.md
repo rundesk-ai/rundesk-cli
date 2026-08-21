@@ -1688,7 +1688,7 @@ it hands the work over and returns at once:
 
 ```console
 $ rundesk ask bob "audit the exporter retention policy and report what you find"
-handed to bob  ·  del-1-6c9092
+handed to bob (claude)  ·  del-1-6c9092
   asynchronous — the result reaches this turn if active and steerable; otherwise wakes a review turn
 ```
 
@@ -1707,6 +1707,10 @@ to claim. Admission stores the requested spellings separately from the effective
 relative provider request such as `./brain` remains visible that way while the effective provider is
 stored as its resolved executable path, so another gateway cannot reinterpret it from a different
 working directory.
+
+The immediate handoff line names that effective provider, plus its account alias when one was
+selected, so the terminal and channel notice agree about which brain has the work. A provider named
+by path is shown by its final component rather than exposing the directories above it.
 
 This is the front door rather than a second command, and it is not a convenience. Left alone, an
 agent could run a whole turn on somebody else's agent from inside its own — no record, no guards,
