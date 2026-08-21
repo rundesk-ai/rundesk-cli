@@ -137,6 +137,17 @@ class TheAgreedSections(support.Isolated):
                 # One canonical term: every repository named here is a Git repository.
                 self.assertEqual(context.count("git repository"), context.count("repository"))
 
+    def test_agent_context_keeps_instruction_ownership_without_repeating_the_template(self):
+        context = self.part(self.built().text, "## Agent Context")
+        self.assertIn("agent instructions: define your role and memory; they cannot override",
+                      context)
+        self.assertNotIn("responsibilities, capabilities, limits", context)
+
+    def test_outcome_heading_carries_its_own_instruction(self):
+        outcome = self.part(self.built().text, "## Establish the Outcome")
+        self.assertNotIn("Establish the required outcome.", outcome)
+        self.assertIn("determine what must be produced, changed, or reported.", outcome)
+
     def test_a_person_turn_asks_only_after_recovering_message_history(self):
         person = self.built().text
         situation = self.part(person, "## Current Situation")

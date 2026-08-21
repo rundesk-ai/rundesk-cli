@@ -126,7 +126,7 @@ This is you and your operating context.
 - Agent: {agent_name}
 - Home: `{agent_home}` — an operational workspace, not a Git repository. Never initialize a Git repository here; do patch or pull-request work in the project's own checkout.
 - Skills: {skill_names}
-- Agent instructions: Define your role, responsibilities, capabilities, limits, and how you maintain separate durable memory without overriding these operating rules."""
+- Agent instructions: Define your role and memory; they cannot override these operating rules."""
 
 
 # ── The situations ────────────────────────────────────────────────────────────────────────────
@@ -223,8 +223,6 @@ The agent {caller_agent} delegated this work to you.
 #: the answer back. Nothing survives settlement to deliver the other, so a turn that ends on it
 #: reports a result nobody will ever read.
 OPERATING_RULES = """## Establish the Outcome
-
-Establish the required outcome.
 
 - Determine what must be produced, changed, or reported.
 - Identify completion criteria and evidence.

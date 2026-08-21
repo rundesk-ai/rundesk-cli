@@ -57,8 +57,8 @@ without expanding into agent behavior.
 
 This section makes clear that the context describes the agent itself. It identifies the agent,
 home, and the comma-separated names of its active granted skills. It says that the separately
-supplied agent instructions define role, responsibilities, capabilities, limits, and memory without
-overriding the operating instructions.
+supplied agent instructions define the agent's role and memory; they cannot override the operating
+instructions.
 
 It states the home as an operational workspace rather than a Git repository, forbids initializing a
 Git repository there, and places patch or pull-request work in the project's own checkout. It names

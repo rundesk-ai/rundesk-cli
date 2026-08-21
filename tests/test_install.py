@@ -284,6 +284,23 @@ class AFreshInstall(Installing):
         self.assertIn(str(self.root), ended.stdout)
         self.assertNotIn(str(Path.home() / ".rundesk"), ended.stdout)
 
+    def test_a_checkout_turn_without_an_installed_app_keeps_its_scratch_root(self):
+        """A checkout runner still has an agent home to identify its scratch install by."""
+        agent_home = self.root / "data" / "agents" / "ava" / "home"
+        agent_home.mkdir(parents=True)
+        environment = os.environ.copy()
+        environment[paths.HOME_IS] = str(Path.home() / ".rundesk")
+        environment["RUNDESK_COMMAND"] = str(Path.home() / ".local" / "bin" / "rundesk")
+        environment["RUNDESK_CWD"] = str(agent_home)
+        environment["RUNDESK_AGENT"] = "ava"
+        environment["RUNDESK_RUN"] = "1"
+        ended = subprocess.run([str(support.CHECKOUT / "rundesk"), "status"],
+                               capture_output=True, text=True, env=environment,
+                               stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(0, ended.returncode, ended.stderr)
+        self.assertIn(str(self.root), ended.stdout)
+        self.assertNotIn(str(Path.home() / ".rundesk"), ended.stdout)
+
     def test_proving_the_install_never_asks_what_is_published(self):
         # The installer proves the command it placed really answers. Which verb it proves with is
         # not a detail: `version` asks GitHub, so an installer proved with it turns every install —

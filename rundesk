@@ -38,17 +38,21 @@ def _turn_app():
     except OSError:
         return None
     for root in (here, *here.parents):
-        app = root / "app"
-        if ((app / "rundesk").is_file()
+        installed_app = root / "app"
+        if ((installed_app / "rundesk").is_file()
                 and (root / "data" / "agents" / agent).is_dir()):
-            return app
+            return installed_app, root
+        if (app.name != "app" and (app / "rundesk").is_file()
+                and (app / "src" / "rundesk").is_dir()
+                and (root / "data" / "agents" / agent).is_dir()):
+            return app, root
     return None
 
 
 turn_app = _turn_app()
 if turn_app is not None:
-    app = turn_app
-    os.environ["RUNDESK_HOME"] = str(app.parent)
+    app, turn_root = turn_app
+    os.environ["RUNDESK_HOME"] = str(turn_root)
 
 # An installed launcher is the last reliable identity when a provider tool shell drops the
 # environment it was handed. Keep an explicit RUNDESK_HOME override authoritative for scratch and
