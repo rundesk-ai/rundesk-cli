@@ -507,10 +507,10 @@ was told the agent that was speaking is not an agent on this install. It is **de
 resolved root, never inherited** — this process may have the variable unset and still resolve one —
 the same way `schedules.firing` builds a schedule's environment and `gateways.job` writes a plist.
 
-The installed `rundesk` launcher also names its own root when `RUNDESK_HOME` is absent. This matters
-in a provider tool shell that preserves `RUNDESK_COMMAND` but drops `RUNDESK_HOME`: its command still
-reaches the install that launched the turn. An explicit `RUNDESK_HOME` remains authoritative for a
-scratch or test install, so the same launcher stays isolated there.
+The installed `rundesk` launcher also names its own root when `RUNDESK_HOME` is absent. This is the
+safe default for direct commands a person types. Internal context recovery still binds the prompt's
+resolved root explicitly, because a provider tool shell may substitute a different command path or
+drop its environment. An explicit `RUNDESK_HOME` remains authoritative for scratch and test installs.
 
 One consequence worth stating: a value the owner keeps under either of those two names no longer
 reaches a brain, because a name rundesk decides is a name an owner's value may not take. What it did

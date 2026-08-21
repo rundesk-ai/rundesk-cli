@@ -117,7 +117,7 @@ class Prompt(NamedTuple):
 #: costs nothing to prevent and is silent until somebody finds a repository inside an agent's home.
 CORE = """# Rundesk
 
-Rundesk operates this agent. Give people commands as `rundesk ...`; its installed launcher selects this root: `{install_root}`.
+Rundesk operates this agent. Give people `rundesk ...`; the installed launcher selects `{install_root}`. Internal commands use `RUNDESK_HOME="{install_root}" "$RUNDESK_COMMAND"`.
 
 ## Agent Context
 
@@ -243,7 +243,7 @@ Stay within the current request, schedule, or delegation's scope and authority; 
 
 Use Rundesk to recover missing context and deliver files.
 
-- Missing context: search: `"$RUNDESK_COMMAND" messages {agent_name} --search "<relevant words>" --full`. If none, list recent: `"$RUNDESK_COMMAND" messages {agent_name} --full`. Still unresolved: clarify or report it.
+- Missing context: search messages with `messages {agent_name} --search "<relevant words>" --full`. If none, list recent with `messages {agent_name} --full`. Still unresolved: clarify or report it.
 - Use only supported `{source_kind}:{audience_id}` results; never inspect conversation files/records or infer from another agent/audience.
 - Attach a file or image with an absolute local Markdown link, such as `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain file path is not an attachment.
 
