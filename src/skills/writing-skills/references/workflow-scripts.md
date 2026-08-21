@@ -35,7 +35,9 @@ subdirectories.
   genuinely completes the promised outcome.
 - Bound every data-dependent section: headers, labels and paths, identifiers, samples, omitted-item
   metadata, JSON arrays, warnings, and errors—not only the main list. Give an explicit limit and
-  omitted count where useful.
+  omitted count where useful. Bound collection cardinality separately from item width: truncating
+  each label does not bound a list of inputs or a structured array. Cap accepted inputs or preserve
+  their mapping in a bounded summary.
 
 Rundesk installs no dependencies for a skill. Prefer the standard library. If another program is
 required, check for it before work and name its supported installation route; never download or
@@ -64,6 +66,9 @@ skill-local `tests/` only when no owner exists. Cover:
 - large input, long paths or identifiers, many inputs and metadata values, and complete bounded
   output; and
 - child failure, timeout, and partial output when subprocesses are used.
+
+Test privacy and redaction promises through normal output, errors, name collisions, fallback labels,
+and structured output. A basename-only happy path does not prove that a full-path fallback is safe.
 
 Add an adversarial oracle for meaning, not only implementation mutations. For record comparison,
 for example, preserve each field's values and counts while swapping which values share a record; a

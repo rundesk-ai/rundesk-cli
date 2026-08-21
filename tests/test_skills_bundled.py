@@ -235,7 +235,10 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "semantic unit", "same resolved input", "Empty input or a no-op",
                        "every data-dependent section", "adversarial oracle",
                        "swapping which values share a record",
-                       "complete bounded output"):
+                       "complete bounded output", "collection cardinality",
+                       "truncating each label does not bound a list of inputs",
+                       "privacy and redaction promises", "errors, name collisions",
+                       "full-path fallback"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, workflow)
 

@@ -137,7 +137,9 @@ each result, such as `LIVE-SK07-large-output` and `LIVE-SK07-interrupted-write`.
   large-output, partial-failure, and outside-working-directory cases that apply. Check stdout,
   stderr, exit status, side effects, cleanup, and preservation of pre-existing files. Include
   duplicate evidence, empty-success, whole-report bounds, and an adversarial semantic oracle that
-  preserves aggregates while changing the relationship the command claims to compare.
+  preserves aggregates while changing the relationship the command claims to compare. Bound both
+  collection count and item width, and exercise privacy claims through errors, collisions,
+  fallbacks, and structured output.
 - When the skill reaches a service, add absent and malformed configuration, authentication failure,
   permission denial, timeout, rate limit, pagination, empty result, partial page failure, duplicate
   write, bounded output, redaction, and independently read-back mutation proof as applicable.
