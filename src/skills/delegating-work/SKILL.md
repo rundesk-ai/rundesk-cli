@@ -20,15 +20,15 @@ outcome; otherwise state the smallest safe assumption and continue.
 If the needed context cannot be recovered, preserve the gap in the task and report it as a blocker.
 Do not turn an absent fact into a confident instruction or delegated brief.
 
-## Load only applicable skills
+## Check your own skills before delegating
 
-Inspect available skill descriptions before substantive work. Select every skill whose intent matches
-the task, then read each selected `SKILL.md` completely and load the references it requires before
-using the skill. A grant makes a skill available; it does not mean the body is already loaded.
+Before deciding to delegate, inspect your available skill descriptions and load each skill whose
+intent matches the work. Apply that guidance to the delegation decision: it may give you the domain
+knowledge, workflow, or tools to handle the task directly. If another agent remains materially better
+suited, use what you learned to make the scope, constraints, evidence, and definition of done precise.
 
-Do not load unrelated skills to make the task look covered, and do not use a skill because its name
-resembles the task. If a required skill is unavailable, say so and use only the remaining authorized
-guidance; never claim that the unavailable workflow was applied.
+A grant only makes a skill available; do not treat its body as already loaded. Do not load unrelated
+skills, and do not infer a target's responsibility from its skill list.
 
 ## Decide whether to delegate
 

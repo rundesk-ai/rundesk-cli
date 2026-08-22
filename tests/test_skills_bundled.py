@@ -367,12 +367,15 @@ class WhatAShippedSkillMayClaim(Bundled):
         for phrase in ("Choose the target from its description", "Do not infer ownership"):
             with self.subTest(reference="delegating-work", phrase=phrase):
                 self.assertIn(phrase, delegating)
-        for phrase in ("Recover context before acting", "read each selected `SKILL.md` completely",
+        for phrase in ("Recover context before acting", "Check your own skills before delegating",
+                       "inspect your available skill descriptions", "handle the task directly",
+                       "use what you learned to make the scope, constraints, evidence",
                        "Availability alone is not a reason to delegate", "Task:", "Why:",
                        "Evidence required:", "Definition of done:", "Complete", "Continue",
                        "Blocked", "not a continuation path"):
             with self.subTest(reference="delegating-work", phrase=phrase):
                 self.assertIn(phrase, delegating)
+        self.assertNotIn("## Load only applicable skills", delegating)
         self.assertIn("deciding whether to delegate work to another Rundesk agent", delegating)
         self.assertIn("preparing or reviewing a handoff", delegating)
         self.assertIn("continuing delegated work to a verified outcome", delegating)
