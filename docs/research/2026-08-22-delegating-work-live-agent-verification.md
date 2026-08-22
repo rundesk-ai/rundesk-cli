@@ -3,7 +3,7 @@
 **Date:** 2026-08-22
 
 **Candidate:** PR #438 lifecycle implementation commit `c0ac509`; skill-selection revision `8f06bcb`;
-core-routing revision `8870bdc`
+core-routing revision `8870bdc`; coordination and steering revision `8c854f9`
 
 **Providers:** Claude CLI 2.1.236, reported model `claude-opus-5[1m]`; Codex CLI 0.148.0,
 reported model `gpt-5.6-sol`
@@ -40,6 +40,8 @@ used for counted evidence lived under that scratch root.
 | G — exact skill-selection delegation | Same as F | Independent contract audit plus separate scratch-install reliability assessment | Claude loaded both applicable skills, delegated only the audit to Codex with a complete contract, retained the operational assessment, retraced the return, and issued the final no-go |
 | H — exact core-routing near-miss | `8870bdc`; Claude and Codex leads each had `delegating-work` and an eligible live teammate | Friendly one-sentence response to ordinary conversation | Both replied directly; Claude loaded no skill and Codex performed only its standing memory read, with no `delegating-work` load |
 | I — exact core-routing positive control | Same as H | Decide whether an independent specialist should audit a high-risk release contract; do not start the handoff | Both classified delegation as appropriate and observably loaded `delegating-work` before deciding; neither started a handoff |
+| J — exact copy-only near-miss | `8c854f9`; same two leads and live routes | Change one British spelling to US spelling | Both returned only the corrected sentence; Claude loaded nothing and Codex performed only its standing memory read |
+| K — exact steering policy | Same as J | Judge material Codex clarification, optional Claude wording, and wrong-scope Grok work without sending guidance | Both loaded the delegation guidance, chose steer / do not steer / steer once respectively, and accurately explained native versus stop-and-continue delivery |
 
 ## Delegation decision and brief quality
 
@@ -97,6 +99,18 @@ the guidance but had no observable body load. The core was tightened to say that
 delegation option makes the skill applicable and its body must load before target choice or action.
 The exact `8870bdc` rerun then produced the observable Codex read while preserving the near-miss.
 
+Run J narrows the near-miss from conversation to actual copy work. With a granted skill and eligible
+reviewer online, both providers changed `colour` to `color` and stopped. Neither loaded
+`delegating-work` or created a handoff, showing that a teammate's presence does not turn a one-line
+copy edit into coordination work.
+
+Run K tested the provider-specific steering rule without initiating any operation. Both leads chose
+native Codex steering for a material clarification, declined to interrupt Claude for an optional
+wording preference, and chose one consolidated Grok course correction because its current scope was
+wrong. They distinguished Codex `turn/steer` from Claude interrupt-and-replace and Grok
+cancel-and-reprompt, kept the latter two sparse, and did not confuse those provider mechanics with
+delegation `stop` or `resume`.
+
 ## Steering, resuming, and review
 
 While the delegation was `working`, an attended `asked say` asked the reviewer to distinguish a
@@ -138,21 +152,24 @@ them that way.
 
 ## Exact-head confirmation and cleanup
 
-Commit `8870bdc` was installed into the restored scratch home for runs H and I. The source and
+Commit `8c854f9` was installed into the restored scratch home for runs J and K. The source and
 installed hashes were identical:
 
 | File | SHA-256 |
 |---|---|
-| `providers/instructions.py` | `6b45f786efc64d5d3bd936be44d546e1792114ed99f1b33f4e924b7203273e51` |
-| `SKILL.md` | `5932bbeb001e137030c1096edf1b061328f4dfb63fbb4780dc09103f0fb28b0a` |
-| `references/operations.md` | `ac646c907127bfb9fd2b51152f190151c9897f1bd88a6b621e7da8249bd58aaa` |
+| `providers/instructions.py` | `ad67e1b0823c90ced4d97fe079152d3751710ccac12624efdbfebd93a939dbe7` |
+| `SKILL.md` | `0d6ce05e6ec58fdbcfe955aacb0dff03ac00a9b396b75906376e44d41e10956b` |
+| `references/operations.md` | `827a0061ab39d65071cf7e313c999014b1cb238a30163618f47b432a30b08227` |
 | `references/brief-examples.md` | `a00e2ff6788cb0d67e91ed59b89512076865c1af6a0a6ef4f9bbca14efb41eae` |
 
-The focused bundled-skill suite passed 38 tests. Removing the observed steering/original-brief rule
-made that suite fail, and restoring it returned the suite to green. Both configured Python paths ran
-the full aggregate suite: 80 suites, zero failures each. One earlier `/usr/bin/python3` aggregate run
-hit the repository's timing-sensitive asked-command test; its immediate focused rerun and the later
-full rerun passed. Ruff and `git diff --check` also passed.
+The focused bundled-skill suite passed 38 tests, and the provider-instruction suite passed 46.
+Removing the copy-only direct-work guard made the provider-instruction suite fail; removing the
+native Codex `turn/steer` rule made the bundled-skill suite fail. Restoring each rule returned its
+suite to green. Both configured Python paths ran the full aggregate suite: 80 suites, zero failures
+each. One earlier `/usr/bin/python3` aggregate run hit the repository's timing-sensitive
+asked-command test; its immediate focused rerun and the later full rerun passed. The focused Claude,
+Codex, and Grok adapter suites also passed 53, 74, and 58 tests respectively. Ruff and
+`git diff --check` passed.
 
 The original runs preceded the final steering correction that their observed edge produced. Runs F
 and G provide exact-skill-body confirmation after the later skill-selection rewrite. Together they
@@ -161,6 +178,7 @@ unnecessary, while genuinely independent specialist work still receives a precis
 evidence contract, and definition of done. Runs H and I additionally prove that the reduced core
 does not load the skill for ordinary conversation but still routes genuine delegation decisions
 through it on both tested providers.
+Runs J and K extend that proof to copy-only work and provider-aware steering frequency.
 
 All manually hosted scratch gateways were stopped after evidence capture. The temporary scratch
 home was then moved to Trash, so cleanup remains recoverable. No skill, agent, provider, gateway, or
