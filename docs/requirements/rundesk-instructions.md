@@ -217,7 +217,10 @@ The template contains only `Agent Instructions`, `Role and Responsibilities`, `R
 its durable responsibilities, role-specific capabilities and limits, how it answers, its supporting
 use of provider-local subagents, and how it maintains separate memory. It contains no
 instruction-authoring or self-editing guidance and does not repeat the operating outcome lifecycle.
-Provider-local subagents do not replace eligible named Rundesk team delegation. The bundled
+Provider-local subagents serve bounded same-turn review, research, exploration, and validation that
+the parent supervises and integrates. Named Rundesk agents serve asynchronous handoffs when durable
+responsibility and specialized granted skills make one materially better suited; their answers can
+wake review turns, while provider-local work is not a durable continuation path. The bundled
 `managing-rundesk` guidance owns the review and writing process for changing agent instructions.
 Its specialist design step carries a coding and code-investigation subsection: one reusable
 implementation-specialist contract, preceded by the ownership rationale and followed by the

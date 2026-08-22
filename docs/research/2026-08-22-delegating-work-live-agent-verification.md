@@ -4,7 +4,7 @@
 
 **Candidate:** PR #438 lifecycle implementation commit `c0ac509`; skill-selection revision `8f06bcb`;
 core-routing revision `8870bdc`; coordination and steering revision `8c854f9`; grant-lifecycle
-revision `43d00f1`
+revision `43d00f1`; brief-mechanism revision at the current PR head
 
 **Providers:** Claude CLI 2.1.236, reported model `claude-opus-5[1m]`; Codex CLI 0.148.0,
 reported model `gpt-5.6-sol`
@@ -43,6 +43,7 @@ used for counted evidence lived under that scratch root.
 | I — exact core-routing positive control | Same as H | Decide whether an independent specialist should audit a high-risk release contract; do not start the handoff | Both classified delegation as appropriate and observably loaded `delegating-work` before deciding; neither started a handoff |
 | J — exact copy-only near-miss | `8c854f9`; same two leads and live routes | Change one British spelling to US spelling | Both returned only the corrected sentence; Claude loaded nothing and Codex performed only its standing memory read |
 | K — exact steering policy | Same as J | Judge material Codex clarification, optional Claude wording, and wrong-scope Grok work without sending guidance | Both loaded the delegation guidance, chose steer / do not steer / steer once respectively, and accurately explained native versus stop-and-continue delivery |
+| L — provider-local versus named brief quality | Current candidate in a new scratch install; Codex and Claude leads | Draft two same-turn provider review briefs and one asynchronous named-specialist brief, then audit every contract field | Both chose provider-local Senior and DRY reviewers for same-turn independent checks and the named Policy agent for durable skill-backed research that may outlive the turn; all three briefs carried the required contract |
 
 ## Delegation decision and brief quality
 
@@ -80,6 +81,25 @@ done conditions, and return format. Codex returned all three requirement verdict
 values, locations, verifier stdout and exit code, coverage assessment, uncertainties, and a blocker
 line. Claude independently retraced the material claims and verifier output, distinguished the
 contract verdict from the separate zero-exit integration defect, and retained the final no-go.
+
+Run L tested the revised mechanism boundary and the task-brief prose against the actual configured
+Senior Review and DRY/simplicity role contracts. Both providers kept the parent active for the two
+bounded, independent reviews and chose the named Policy agent only for work aligned to its durable
+responsibility, specialized official-source skills, and asynchronous return. Their review briefs
+named `main...feat/auth`, the original request, all acceptance criteria, clean working-tree state,
+read-only authority, exact inspection boundary, per-finding evidence, no-finding coverage,
+observable done conditions, and a structured return. Neither copied the configured roles' generic
+review checklists. The named brief preserved the missing vendor names as a blocker rather than
+selecting plausible vendors.
+
+The first Claude draft also exposed a prose defect: it invented that the implementation deliberately
+preserved a particular logout path, even though the scenario supplied no such design intent. The
+skill was tightened to forbid making a brief look complete by converting inference into fact or
+inventing intent, constraints, inputs, or acceptance criteria. A fresh scratch install reran the
+DRY-review case while explicitly withholding intent, compatibility constraints, test command,
+repository path, and the definition of activity. Claude then kept every missing fact explicit,
+classified whether it blocked the review, and produced a usable brief without turning any of them
+into implementation truth.
 
 ## Core routing and skill-loading precision
 

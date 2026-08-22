@@ -41,9 +41,17 @@ or required independent review changes the balance.
 Delegate only when another available agent is materially better suited to one bounded outcome and
 can return evidence the current agent can review. Availability alone is not a reason to delegate.
 
+Choose the mechanism that fits the work. Use a provider-local subagent for bounded review,
+research, exploration, or validation that the current turn can supervise and integrate. Keep the
+parent turn active and retain ownership of the result. Prefer a named Rundesk agent when its durable
+responsibility and specialized granted skills make it materially better suited and the work benefits
+from an asynchronous handoff that may outlive this turn. A named answer can wake a new review turn;
+a provider-local subagent is not a durable continuation path.
+
 Choose the target from its description and the delegation scope offered to the current turn. Use its
-durable responsibility, not a temporary assignment.
-Do not infer ownership from the target's name, provider, skill list, or gateway state. Gateway state
+durable responsibility, not a temporary assignment. Relevant granted skills may confirm that a
+named target has the procedure or capability the task needs, but skill names alone never establish
+ownership. Do not infer ownership from the target's name, provider, or gateway state. Gateway state
 only confirms whether the selected route can run. Do not delegate to yourself, and do not delegate
 again from a turn that is already answering a delegation.
 
@@ -65,10 +73,12 @@ it as uncertainty rather than inventing an answer.
 2. **Why** — the decision or larger outcome this supports.
 3. **Scope and authority** — what is included, excluded, and whether the target may inspect or edit.
    Never imply permission to publish, deploy, change credentials, or broaden scope.
-4. **Context and constraints** — known facts, project rules, assumptions to test, and required tools.
-5. **Evidence** — artifacts, locations, commands, test output, sources, reproduction, or comparison
+4. **Context** — the original request, acceptance criteria, current state, prior decisions, and
+   assignment-specific inputs the target will not otherwise have.
+5. **Constraints** — project rules, invariants, assumptions to test, and required tools.
+6. **Evidence** — artifacts, locations, commands, test output, sources, reproduction, or comparison
    the target must return.
-6. **Definition of done** — observable conditions that must all be true for the handoff to be complete.
+7. **Definition of done** — observable conditions that must all be true for the handoff to be complete.
 
 Use this shape:
 
@@ -77,6 +87,7 @@ Task: <one bounded outcome>
 Why: <what decision or deliverable it supports>
 Scope: <paths, system, question, and time boundary>
 Authority: <inspect only | may edit these exact files; no publish/deploy>
+Context: <original request, acceptance criteria, current state, prior decisions, and required inputs>
 Constraints: <rules, invariants, and assumptions to test>
 Evidence required: <artifacts and exact proof to return>
 Definition of done: <observable completion conditions>
@@ -86,6 +97,17 @@ Return format: <result, evidence, uncertainties, and blocker if incomplete>
 Do not write “look into this,” “fix anything needed,” or “report back” without an outcome and proof
 standard. A good `Why` prevents locally correct work from solving the wrong problem; a good
 definition of done prevents a plausible summary from being mistaken for completion.
+
+A quality brief lets the recipient begin without guessing and omits history that does not affect the
+assignment. Do not assume a named agent has the parent's conversation context. For a provider-local
+subagent, include assignment-specific context that its provider may not inherit, but do not copy the
+configured role's generic review or research instructions into the brief. For code review, identify
+the exact baseline or diff, the original request and acceptance criteria, the current working-tree
+state, and the files or nearby code that may be inspected.
+
+Never make a brief look complete by turning an inference into a fact or inventing a design intent,
+constraint, input, or acceptance criterion. Mark a material missing fact as an uncertainty or
+blocker and state what the recipient may do without it.
 
 Read [Brief examples](references/brief-examples.md) when composing or reviewing an implementation,
 code-review, or research handoff. Adapt its fields to the task; do not copy an example's authority or

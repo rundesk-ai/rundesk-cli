@@ -375,7 +375,11 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "use what you learned to make the scope, constraints, evidence",
                        "Count the full coordination cost", "copy-only, or mechanical changes",
                        "not clearly outweighed", "Availability alone is not a reason to delegate",
-                       "Task:", "Why:",
+                       "provider-local subagent", "bounded review, research, exploration, or validation",
+                       "asynchronous handoff", "specialized granted skills", "wake a new review turn",
+                       "Task:", "Why:", "Context:", "original request", "acceptance criteria",
+                       "Never make a brief look complete", "turning an inference into a fact",
+                       "design intent", "uncertainty or blocker",
                        "Evidence required:", "Definition of done:", "Complete", "Continue",
                        "Blocked", "not a continuation path"):
             with self.subTest(reference="delegating-work", phrase=phrase):
@@ -404,6 +408,7 @@ class WhatAShippedSkillMayClaim(Bundled):
             with self.subTest(reference="delegating-work/operations", phrase=phrase):
                 self.assertIn(phrase, operations)
         for phrase in ("## Coding implementation", "## Code or design review",
+                       "## Simplification review",
                        "## Research or comparison", "Return format:"):
             with self.subTest(reference="delegating-work/brief-examples", phrase=phrase):
                 self.assertIn(phrase, examples)
