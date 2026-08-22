@@ -5,6 +5,19 @@ description: Use when creating, modifying, reviewing, testing, or publishing a R
 
 # Writing skills
 
+## Reuse the existing owner
+
+Inspect existing skill catalogs before creating a package. For repository work, search the target
+catalog and every relevant source catalog in the authorized workspace. For authorized live-library
+work, use Rundesk's catalog and skill listings; do not open the live library to bypass the task's
+access boundary. Read the descriptions of plausible matches, then their bodies and relevant
+references before deciding.
+
+Extend the existing owner when the requested capability shares its user intent, workflow, and
+authority. Add a supporting script, reference, or test there instead of creating a second routing
+surface. Create a new skill only when the capability needs distinct routing, judgment, authority, or
+proof; record that distinction so a nearby name is not treated as justification by itself.
+
 ## Choose the artifact
 
 - A skill is the **instruction boundary**: when to act, what judgment to apply, which procedure to

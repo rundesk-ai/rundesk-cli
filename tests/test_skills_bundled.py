@@ -202,12 +202,16 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "[Reusable workflow scripts](references/workflow-scripts.md)",
                        "instruction boundary", "deterministic mechanism",
                        "external-service boundary", "do not inspect or change the live library",
-                       "script contracts when no catalog test area owns them"):
+                       "script contracts when no catalog test area owns them",
+                       "Inspect existing skill catalogs before creating a package",
+                       "Extend the existing owner",
+                       "distinct routing, judgment, authority, or proof"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, main)
         for phrase in ("same input produces the same output", "partial output",
                        "safe to repeat", "bounded output", "working directory",
-                       "unsupported input", "temporary files"):
+                       "unsupported input", "temporary files",
+                       "Add the script to the existing skill"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, workflow)
 
@@ -268,6 +272,8 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "Direct positive", "Indirect positive", "Close near-miss",
                        "Forbidden access", "Failure after progress", "Completion boundary",
                        "fresh baseline without the skill",
+                       "LIVE-SK11", "existing-capability reuse",
+                       "catalog surfaces before writing",
                        "skill body and every conditionally required reference load",
                        "Review the generated writing separately from runtime correctness",
                        "pass`, `fail`, `partial`, `blocked`, or `not applicable",

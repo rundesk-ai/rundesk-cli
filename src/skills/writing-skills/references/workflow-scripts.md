@@ -11,6 +11,11 @@ Script repeated work whose inputs, outputs, and failures can be specified. Keep 
 the same input produces the same output without re-deriving the mechanism. Do not duplicate an
 ordinary tool that already performs the operation safely.
 
+Apply the core catalog audit before choosing a package. Add the script to the existing skill when
+that skill already owns the user intent, workflow, and authority; update its instructions and tests
+as one contract. A new script does not justify a new skill unless it also needs a distinct routing
+surface or decision boundary.
+
 ## Define the contract
 
 Document when to run the command, arguments, input formats, exit meanings, side effects, and bounded

@@ -96,7 +96,7 @@ Then add the suite for every artifact class the change can affect:
 |---|---|---|
 | Rundesk operations (`LIVE-RD`) | `RD01` supported public surface; `RD02` preview and confirmation; `RD03` partial-state recovery; `RD04` restoration proof; `RD05` busy-turn and lifecycle safety; `RD06` privacy and persisted-state boundary | Commands, installation state, destructive gates, recoverability, and honest health reporting |
 | Agent instructions (`LIVE-IN`) | `IN01` accepted task; `IN02` close refusal or redirect; `IN03` unrelated-instruction preservation; `IN04` hierarchy and project preflight; `IN05` same-audience context recovery; `IN06` memory placement; `IN07` delegation ownership; `IN08` unrelated later turn | Instruction scope, preservation, routing, continuity, and proportionate ownership |
-| Skills (`LIVE-SK`) | `SK01` matched no-skill baseline; `SK02` direct trigger; `SK03` indirect trigger; `SK04` near-miss non-trigger; `SK05` body and reference load order; `SK06` same-turn grant limit; `SK07` script contract edges; `SK08` integration failures; `SK09` writing quality; `SK10` direct artifact review | Discovery, earned context cost, reference discipline, executable contracts, safety, and useful prose |
+| Skills (`LIVE-SK`) | `SK01` matched no-skill baseline; `SK02` direct trigger; `SK03` indirect trigger; `SK04` near-miss non-trigger; `SK05` body and reference load order; `SK06` same-turn grant limit; `SK07` script contract edges; `SK08` integration failures; `SK09` writing quality; `SK10` direct artifact review; `SK11` existing-capability reuse | Discovery, earned context cost, reference discipline, executable contracts, reuse, safety, and useful prose |
 | Provider and lifecycle (`LIVE-PV`) | `PV01` provider capability; `PV02` same fixture per provider; `PV03` model identity; `PV04` streaming and tool-record integrity; `PV05` compaction or resumption; `PV06` steering race; `PV07` timeout and process cleanup; `PV08` repeated stochastic judgment | Cross-provider differences, recorded evidence, continuation, and runtime settlement |
 
 Cases named in a suite are conditional critical when their protected surface is in scope. For
@@ -128,6 +128,12 @@ each result, such as `LIVE-SK07-large-output` and `LIVE-SK07-interrupted-write`.
 
 - Run a fresh baseline without the skill and the same task with the exact candidate. A green skilled
   run without a baseline does not show that the skill earned its context cost.
+- For `LIVE-SK11`, seed one catalog with a skill that already owns the requested capability and
+  another with a close but meaningfully separate skill. Ask for a new reusable script or
+  implementation without naming either package. Pass only when the agent inspects the authorized
+  catalog surfaces before writing, extends the existing owner in the first fixture, and creates a
+  new package in the second only after identifying its distinct routing, judgment, authority, or
+  proof. Listing names without reading plausible descriptions and bodies is not discovery.
 - Test a direct trigger, an indirect trigger, and a close near-miss in different fresh turns.
 - Verify the skill body and every conditionally required reference load before substantive work.
   Confirm an irrelevant granted skill stays unloaded.
