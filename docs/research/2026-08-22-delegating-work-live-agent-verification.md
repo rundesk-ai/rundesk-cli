@@ -2,7 +2,8 @@
 
 **Date:** 2026-08-22
 
-**Candidate:** PR #438 lifecycle implementation commit `c0ac509`; skill-selection revision `8f06bcb`
+**Candidate:** PR #438 lifecycle implementation commit `c0ac509`; skill-selection revision `8f06bcb`;
+core-routing revision `8870bdc`
 
 **Providers:** Claude CLI 2.1.236, reported model `claude-opus-5[1m]`; Codex CLI 0.148.0,
 reported model `gpt-5.6-sol`
@@ -37,6 +38,8 @@ used for counted evidence lived under that scratch root.
 | E — unavailable provider | Revised skill on a Grok lead | Scratch-isolation probe | Not counted: Grok refused to open a conversation with `Authentication required` |
 | F — exact skill-selection control | `8f06bcb` `delegating-work` and `managing-rundesk` | Decide whether the scratch install is ready for an available specialist | Claude loaded its own applicable skills, used its Rundesk expertise to find the stopped route, and declined an unnecessary handoff |
 | G — exact skill-selection delegation | Same as F | Independent contract audit plus separate scratch-install reliability assessment | Claude loaded both applicable skills, delegated only the audit to Codex with a complete contract, retained the operational assessment, retraced the return, and issued the final no-go |
+| H — exact core-routing near-miss | `8870bdc`; Claude and Codex leads each had `delegating-work` and an eligible live teammate | Friendly one-sentence response to ordinary conversation | Both replied directly; Claude loaded no skill and Codex performed only its standing memory read, with no `delegating-work` load |
+| I — exact core-routing positive control | Same as H | Decide whether an independent specialist should audit a high-risk release contract; do not start the handoff | Both classified delegation as appropriate and observably loaded `delegating-work` before deciding; neither started a handoff |
 
 ## Delegation decision and brief quality
 
@@ -75,6 +78,25 @@ values, locations, verifier stdout and exit code, coverage assessment, uncertain
 line. Claude independently retraced the material claims and verifier output, distinguished the
 contract verdict from the separate zero-exit integration defect, and retained the final no-go.
 
+## Core routing and skill-loading precision
+
+Runs H and I test the reduced always-loaded delegation instructions as a matched pair on both
+providers. Each lead had the skill granted and an eligible reviewer gateway running, so the
+near-miss could not pass merely because no delegation route existed. For ordinary conversation,
+Claude used no tools or skills; Codex performed its standing memory read only. Both returned one
+friendly sentence and did not load `delegating-work`.
+
+For the independent high-risk audit decision, both providers classified named delegation as a
+genuine option without being told the skill name. Claude used its native Skill tool to launch
+`delegating-work`. Codex read the skill body before deciding, then identified the bounded,
+independent responsibility fit and retained the final decision. Neither provider started a
+handoff, as requested.
+
+The first candidate wording at `919f5d4` exposed a real provider difference: Codex said it was using
+the guidance but had no observable body load. The core was tightened to say that a genuine
+delegation option makes the skill applicable and its body must load before target choice or action.
+The exact `8870bdc` rerun then produced the observable Codex read while preserving the near-miss.
+
 ## Steering, resuming, and review
 
 While the delegation was `working`, an attended `asked say` asked the reviewer to distinguish a
@@ -101,12 +123,13 @@ them that way.
 
 - Grok CLI 1.0.5 passed the adapter capability probe but could not authenticate, so no Grok agent
   behavior is claimed.
-- A Codex-as-lead isolation probe inherited the operator's live command path instead of the scratch
+- An earlier Codex-as-lead operational probe inherited the operator's live command path instead of the scratch
   command path. It made only read-only `status` and `agents` calls, changed no live state, and was
   excluded. The probe was repeated after `8f06bcb` with the same substitution and the same read-only
-  commands, so no Codex-as-lead behavior is claimed. Codex is counted as the scratch delegated
-  reviewer, where it received the complete stored brief, returned reproducible evidence, and kept
-  its recorded conversation, messages, and turns in the scratch install.
+  commands, so no Codex-as-lead Rundesk-operation behavior is claimed. Runs H and I count Codex as a
+  lead only for read-only routing decisions that required no Rundesk command. Codex is also counted
+  as the scratch delegated reviewer, where it received the complete stored brief and returned
+  reproducible evidence.
 - Live stop delivery was not forced because the bounded reviewer turns completed too quickly to make
   a natural stop reliable. The command, valid-state, `stopping`, and terminal `stopped` contract is
   covered by the skill's deterministic bundled tests; live runs covered `working` and `answered`.
@@ -115,12 +138,13 @@ them that way.
 
 ## Exact-head confirmation and cleanup
 
-Commit `8f06bcb` was installed into the restored scratch home for runs F and G. The source and
+Commit `8870bdc` was installed into the restored scratch home for runs H and I. The source and
 installed hashes were identical:
 
 | File | SHA-256 |
 |---|---|
-| `SKILL.md` | `72af82ab124c5bd1c6743ed6cb50e4948a05678c821a1621da9cbdf5108af30a` |
+| `providers/instructions.py` | `6b45f786efc64d5d3bd936be44d546e1792114ed99f1b33f4e924b7203273e51` |
+| `SKILL.md` | `5932bbeb001e137030c1096edf1b061328f4dfb63fbb4780dc09103f0fb28b0a` |
 | `references/operations.md` | `ac646c907127bfb9fd2b51152f190151c9897f1bd88a6b621e7da8249bd58aaa` |
 | `references/brief-examples.md` | `a00e2ff6788cb0d67e91ed59b89512076865c1af6a0a6ef4f9bbca14efb41eae` |
 
@@ -134,7 +158,9 @@ The original runs preceded the final steering correction that their observed edg
 and G provide exact-skill-body confirmation after the later skill-selection rewrite. Together they
 cover both outcomes that wording must preserve: applicable local expertise can make delegation
 unnecessary, while genuinely independent specialist work still receives a precise scope, authority,
-evidence contract, and definition of done.
+evidence contract, and definition of done. Runs H and I additionally prove that the reduced core
+does not load the skill for ordinary conversation but still routes genuine delegation decisions
+through it on both tested providers.
 
 All manually hosted scratch gateways were stopped after evidence capture. The temporary scratch
 home was then moved to Trash, so cleanup remains recoverable. No skill, agent, provider, gateway, or
