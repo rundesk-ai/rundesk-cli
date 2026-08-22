@@ -1257,6 +1257,7 @@ def _about(request: Request, provider_name: str,
     return {
         "agent_name": request.agent,
         "agent_home": str(directory.home(request.agent)),
+        "install_root": str(paths.home()),
         "provider_name": provider_name,
         "access_mode": request.access_mode,
         "schedule_name": _schedule_name(request),

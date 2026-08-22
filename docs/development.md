@@ -30,6 +30,26 @@ data        /path/to/checkout/.scratch/rundesk-home/data — not there yet
 fit to run  yes
 ```
 
+### Testing an installed scratch root
+
+When the test needs the installed launcher, make the root and command link disposable and remove
+them through Rundesk when finished. The explicit root keeps this workflow away from the owner's
+install, and `--purge` is safe here because the target is disposable:
+
+```sh
+scratch_root=$(mktemp -d /tmp/rundesk-scratch.XXXXXX)
+RUNDESK_HOME="$scratch_root" ./rundesk install --source "$PWD" --bin-dir "$scratch_root/bin"
+RUNDESK_HOME="$scratch_root" "$scratch_root/bin/rundesk" status
+
+# run the installed-agent tests here
+RUNDESK_HOME="$scratch_root" "$scratch_root/bin/rundesk" uninstall --confirm --purge
+```
+
+Do not replace the explicit `RUNDESK_HOME` with a bare checkout command. A checkout has no
+installed root to infer, while an installed `<root>/app/rundesk` launcher can safely select its own
+root when the variable is absent. An explicit value always wins, keeping scratch and test installs
+isolated.
+
 ## The ordering that matters
 
 `./dev` removes every `RUNDESK_*` variable from the environment **and then** sets the one rundesk

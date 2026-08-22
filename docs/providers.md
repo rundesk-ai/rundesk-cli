@@ -507,6 +507,13 @@ was told the agent that was speaking is not an agent on this install. It is **de
 resolved root, never inherited** — this process may have the variable unset and still resolve one —
 the same way `schedules.firing` builds a schedule's environment and `gateways.job` writes a plist.
 
+The installed `rundesk` launcher also names its own root when `RUNDESK_HOME` is absent. This is the
+safe default for direct commands a person types. Internal context recovery still binds the prompt's
+resolved root explicitly as a shell-quoted assignment, because a provider tool shell may substitute
+a different command path or drop its environment. An explicit `RUNDESK_HOME` remains authoritative
+for scratch and test installs. A directory merely named `app` is not an installed root: its parent
+must hold Rundesk's configuration file before the launcher selects it.
+
 One consequence worth stating: a value the owner keeps under either of those two names no longer
 reaches a brain, because a name rundesk decides is a name an owner's value may not take. What it did
 before was point an agent's own `rundesk` at a different install, which is the defect this closes.
@@ -665,6 +672,22 @@ belongs in `tests/samples/` with its exact CLI version in the filename and `cli-
 
 Record which version you captured in `cli-versions.lock`. The day the vendor changes its stream, the
 suite goes red with the reading that broke and that file says what to compare against.
+
+### Operating-instruction regression cases
+
+Every change to the operating rules should check these ten day-to-day agent outcomes, while
+rerunning the existing provider and prompt suites:
+
+1. Context recovery: it reconstructs an unclear or missing referent before asking the person.
+2. Useful clarification: when recovery cannot unblock the work, it asks one focused question or reports the blocker.
+3. Guidance loading: it reads project rules first and loads every applicable skill before substantive action.
+4. Scope control: it makes the requested change without inventing authority or adjacent work.
+5. Proportionate delegation: it delegates only a necessary, bounded outcome and reviews the return.
+6. Continuity: it preserves status and the next action before ending incomplete work.
+7. Outcome delivery: it actually delivers the requested result, including files or reports in the required form.
+8. Honest completion: it verifies the result and never treats a started command, background process, or unreviewed return as proof.
+9. Boundary handling: it respects access mode, supported audience history, and delegated-turn limits.
+10. Blocker handling: it states what is blocked, why, and what event or decision can resume the work.
 
 ### How to check yours
 

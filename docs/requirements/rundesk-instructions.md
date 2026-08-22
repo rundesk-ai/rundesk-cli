@@ -40,25 +40,25 @@ Every rendered operating prompt contains these sections once and in this order:
 5. `Boundaries`
 6. `Messages and Attachments`
 7. `Execute the Work`
-8. `Maintain Continuity`
-9. `Definition of Done`
+8. `Outcome and Continuity`
 
-`Team Members`, with its `Delegation` subsection, appears between `Maintain Continuity` and
-`Definition of Done` only when named Rundesk delegation is available and the turn can review the
+`Team Members`, with its `Delegation` subsection, appears between `Execute the Work` and `Outcome
+and Continuity` only when named Rundesk delegation is available and the turn can review the
 asynchronous result.
 
 ### Rundesk
 
-One short definition identifies Rundesk as the operating layer for the agent, its home,
-skills, conversations, schedules, and team delegation. It identifies the installation command
-without expanding into agent behavior.
+One short definition identifies Rundesk as operating the agent. Person-facing commands use the bare
+`rundesk ...` form. Commands inside a turn receive the resolved install root as a shell-quoted
+`RUNDESK_HOME` assignment beside `"$RUNDESK_COMMAND"`, so provider tool shells cannot silently
+substitute another install and unusual path characters cannot become shell syntax.
 
 ### Agent Context
 
 This section makes clear that the context describes the agent itself. It identifies the agent,
 home, and the comma-separated names of its active granted skills. It says that the separately
-supplied agent instructions define role, responsibilities, capabilities, limits, and memory without
-overriding the operating instructions.
+supplied agent instructions define the agent's role and memory; they cannot override the operating
+instructions.
 
 It states the home as an operational workspace rather than a Git repository, forbids initializing a
 Git repository there, and places patch or pull-request work in the project's own checkout. It names
@@ -157,19 +157,20 @@ Rundesk instructs this preflight; it does not enforce or observe it. No release 
 bodies or references a turn loaded, and no acceptance test can prove a turn ran the preflight.
 Runtime enforcement and per-turn load receipts are outside this requirement and remain unbuilt.
 
-### Maintain Continuity
+### Outcome and Continuity
 
-This section keeps the agent responsible for an outcome beyond one turn. The agent continues only
-while useful in-scope work remains and stops once the requested result and required proof are
-complete. Before ending it either verifies completion, identifies the blocker, or preserves status
-and a next action tied to a real event that will resume the work. Pending work is never reported as
+This section combines the completion gate with ownership beyond one turn. The agent stops once the
+requested result and required proof are complete, and reports an outcome as complete only after
+every requested result, material claim, deliverable, and asynchronous handback has been verified.
+While verification remains, it states what happened and what remains to check.
+
+Before ending, it delivers and verifies the outcome or reports a blocker with a real continuation
+path. That path preserves status and the next action until a requester response, scheduled wake-up,
+or delegation return. A background command, tool session, monitor, or child process is not a
+continuation path; the agent waits for required work to finish and collects its result, or stops it
+and reports the blocker. A long-running service is left running only when it is the requested
+outcome and its ownership and observation are established. Pending work is never reported as
 complete.
-
-A background command, tool session, monitor, or child process is not such an event and cannot
-deliver a result once the turn settles. The agent waits for required work to finish and collects
-its result before the final response, or stops it and reports a concrete blocker. The one exception
-is a long-running service that is itself the requested outcome, left running with its ownership and
-observation established.
 
 ### Team Members
 
@@ -192,18 +193,6 @@ resuming, and return review; the always-loaded operating layer does not repeat t
 It is omitted for schedules because their asynchronous result cannot return to the same turn for
 review. It is omitted for agent-to-agent delegations because named Rundesk delegation stops at one
 level. An empty team also omits the section.
-
-### Definition of Done
-
-This final operating section permits a completion claim only after every requested result meets its
-criteria, material claims and deliverables are verified, required asynchronous results are reviewed,
-and no known required work remains. Otherwise the agent reports the outcome as pending or blocked
-and preserves its continuation path.
-
-Work is not reported as complete until the agent verifies the requested outcome. A command being
-accepted or a process starting is progress rather than proof. While verification remains, the
-report states what happened and what remains to check. This holds for every situation and every
-kind of work, not only for a rollout, release, or update.
 
 ## Agent instruction template
 
@@ -297,6 +286,7 @@ changes that section. The situation and delegation-depth exclusions defined abov
 | ✅ | R-INS-23 | The one agent template classifies a durable preference for how work is done or answered as learned context for `MEMORY.md` rather than part of the agent's role | `test_a_durable_reply_preference_is_learned_context_not_a_role_rule` |
 | ✅ | R-INS-24 | Every person-facing agent with named delegation gets concise, balanced routing signals for when to consider delegation and when to work directly; ordinary conversation and simple documentation, formatting, or copy-only changes stay direct, availability and skill names do not trigger the skill, and a genuine delegation option requires loading `delegating-work` before choosing or acting because it owns the procedure | `test_it_names_positive_signals_for_considering_delegation`, `test_it_names_when_direct_work_is_better`, `test_it_routes_delegation_procedure_to_the_skill` |
 | ✅ | R-INS-25 | Every turn defines the smallest safe and effective change sufficient for the requested result and required proof, makes and verifies only that change without unrequested refactoring, cleanup, redesign, or expansion, stops when the result and proof are complete, and requests explicit approval with the reason, proposed expansion, and impact before taking materially broader scope | `test_every_turn_defines_the_smallest_sufficient_change_before_editing`, `test_every_turn_forbids_unrequested_refactoring_and_scope_expansion`, `test_every_turn_stops_when_the_requested_result_and_proof_are_complete`, `test_broader_scope_requires_approval_with_impact` |
+| ✅ | R-INS-26 | Every turn distinguishes person-facing `rundesk ...` commands from its own root-bound command prefix, and renders the resolved install root as one shell-safe assignment | `test_the_prompt_names_the_install_root_for_provider_tool_shells`, `test_the_prompt_shell_quotes_every_install_root_as_one_assignment` |
 
 ## Acceptance
 
