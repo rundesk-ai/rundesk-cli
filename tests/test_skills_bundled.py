@@ -428,6 +428,27 @@ class WhatAShippedSkillMayClaim(Bundled):
         self.assertNotIn("delegations.md", instructions)
         self.assertFalse((references / "delegations.md").exists())
 
+    def test_named_delegation_never_hands_off_github_delivery(self):
+        delegation_root = self.skills / "delegating-work"
+        delegating = " ".join(
+            (delegation_root / library.DECLARED).read_text(encoding="utf-8").split())
+        examples = " ".join(
+            (delegation_root / "references" / "brief-examples.md").read_text(
+                encoding="utf-8").split())
+
+        for phrase in (
+                "Never delegate GitHub delivery to a named agent",
+                "drafting or submitting issues",
+                "drafting, creating, or updating pull requests",
+                "pushing branches",
+                "monitoring or responding to checks and reviews",
+                "merging, tagging, or publishing releases",
+                "Load `managing-github` and perform those actions directly",
+                "local implementation artifacts and evidence"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, delegating)
+        self.assertIn("no push, issue, pull request, merge, tag, or release", examples)
+
     def test_agent_instruction_guidance_is_routed_and_has_each_required_section(self):
         skill = self.skills / "managing-rundesk"
         main = (skill / library.DECLARED).read_text(encoding="utf-8")
