@@ -155,11 +155,12 @@ PR_TEMPLATE_ANCHORS = [
 ISSUE_TEMPLATE_HEADINGS = {
     "bug-report.md": [
         "## Problem", "## Reproduction", "## Expected behavior", "## Evidence",
-        "## Environment", "## Scope and privacy",
+        "## Acceptance criteria", "## Environment", "## Scope and privacy",
     ],
     "change-proposal.md": [
-        "## Problem", "## Desired outcome", "## Users and value",
-        "## Scope and compatibility", "## Alternatives", "## Validation",
+        "## Problem", "## Proposed solution", "## Evidence",
+        "## Scope and compatibility", "## Acceptance criteria", "## Verification",
+        "## Alternatives considered",
     ],
 }
 
@@ -176,8 +177,8 @@ ISSUE_TEMPLATE_FRONTMATTER = {
 }
 
 ISSUE_TEMPLATE_DIGESTS = {
-    "bug-report.md": "747da5c0682a73adc61c35407327fb174c648630e80278c275af4a4542da6caf",
-    "change-proposal.md": "2fe6a1d651ce91af2c3d19e98eea150ca26f41ad9a1ed95a6466a692b73eb4d7",
+    "bug-report.md": "9b8bb222a68b4c2a592512ee368c17bc8edc8e0750c5f76ba3e4dd65837e5187",
+    "change-proposal.md": "71f68d702f29e1cedd6b5a839b8a10df899240f68bd215d734ee77f5286cd379",
 }
 
 SUPPORTED_CATALOG_URLS = [
