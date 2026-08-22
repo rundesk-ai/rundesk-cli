@@ -243,6 +243,25 @@ class AFreshInstall(Installing):
         self.assertIn(str(override), ended.stdout)
         self.assertNotIn(f"home        {self.root}", ended.stdout)
 
+    def test_a_checkout_happening_to_be_named_app_does_not_select_its_parent(self):
+        checkout = self.home / "not-an-install" / "app"
+        checkout.mkdir(parents=True)
+        shutil.copy2(support.CHECKOUT / "rundesk", checkout / "rundesk")
+        (checkout / "src").symlink_to(support.CHECKOUT / "src", target_is_directory=True)
+        fake_home = self.home / "default-home"
+        environment = os.environ.copy()
+        environment.pop(paths.HOME_IS, None)
+        environment.pop("RUNDESK_AGENT", None)
+        environment.pop("RUNDESK_RUN", None)
+        environment.pop("RUNDESK_CWD", None)
+        environment["HOME"] = str(fake_home)
+        ended = subprocess.run([str(checkout / "rundesk"), "status"],
+                               capture_output=True, text=True, env=environment,
+                               stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(0, ended.returncode, ended.stderr)
+        self.assertIn(str(fake_home / ".rundesk"), ended.stdout)
+        self.assertNotIn(str(checkout.parent), ended.stdout)
+
     def test_a_provider_turn_identity_keeps_a_rebuilt_shell_on_its_own_install(self):
         """A provider shell may restore live HOME and COMMAND, but not the turn's identity.
 
@@ -253,6 +272,7 @@ class AFreshInstall(Installing):
         self.install()
         agent_home = self.root / "data" / "agents" / "ava" / "home"
         agent_home.mkdir(parents=True)
+        (agent_home.parent / "state.db").touch()
         environment = os.environ.copy()
         environment[paths.HOME_IS] = str(Path.home() / ".rundesk")
         environment["RUNDESK_COMMAND"] = str(Path.home() / ".local" / "bin" / "rundesk")
@@ -266,11 +286,29 @@ class AFreshInstall(Installing):
         self.assertIn(str(self.root), ended.stdout)
         self.assertNotIn(str(Path.home() / ".rundesk"), ended.stdout)
 
+    def test_a_stray_agent_directory_cannot_override_an_explicit_home(self):
+        self.install()
+        agent_home = self.root / "data" / "agents" / "ava" / "home"
+        agent_home.mkdir(parents=True)
+        override = self.home / "override"
+        environment = os.environ.copy()
+        environment[paths.HOME_IS] = str(override)
+        environment["RUNDESK_CWD"] = str(agent_home)
+        environment["RUNDESK_AGENT"] = "ava"
+        environment["RUNDESK_RUN"] = "1"
+        ended = subprocess.run([str(self.bin / "rundesk"), "status"],
+                               capture_output=True, text=True, env=environment,
+                               stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(0, ended.returncode, ended.stderr)
+        self.assertIn(str(override), ended.stdout)
+        self.assertNotIn(f"home        {self.root}", ended.stdout)
+
     def test_the_checkout_launcher_applies_the_same_turn_identity_guard(self):
         """The guard is needed before an installed command is copied to a scratch root too."""
         self.install()
         agent_home = self.root / "data" / "agents" / "ava" / "home"
         agent_home.mkdir(parents=True)
+        (agent_home.parent / "state.db").touch()
         environment = os.environ.copy()
         environment[paths.HOME_IS] = str(Path.home() / ".rundesk")
         environment["RUNDESK_COMMAND"] = str(Path.home() / ".local" / "bin" / "rundesk")
@@ -288,6 +326,7 @@ class AFreshInstall(Installing):
         """A checkout runner still has an agent home to identify its scratch install by."""
         agent_home = self.root / "data" / "agents" / "ava" / "home"
         agent_home.mkdir(parents=True)
+        (agent_home.parent / "state.db").touch()
         environment = os.environ.copy()
         environment[paths.HOME_IS] = str(Path.home() / ".rundesk")
         environment["RUNDESK_COMMAND"] = str(Path.home() / ".local" / "bin" / "rundesk")

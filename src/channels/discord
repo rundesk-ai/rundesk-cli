@@ -577,14 +577,25 @@ def _a_helper(said: Any) -> str:
 MARKUP = "\\*_`~|"
 
 
+def _plain(said: str) -> str:
+    """One name as text and never as markup.
+
+    Its own function because two things on the same line need it now — the helper's name, which is
+    emphasised, and the provider beside it, which is not — and an unbalanced `*` in either would
+    close the bold early and leave the rest of the line, including the ask id, in somebody else's
+    formatting.
+    """
+    for mark in MARKUP:
+        said = said.replace(mark, f"\\{mark}")
+    return said
+
+
 def _bold(said: str) -> str:
     """One name, emphasised. `""` stays `""`, so the line it is joined into drops it rather than
     arriving with an empty pair of asterisks in the middle."""
     if not said:
         return ""
-    for mark in MARKUP:
-        said = said.replace(mark, f"\\{mark}")
-    return f"**{said}**"
+    return f"**{_plain(said)}**"
 
 
 def activity_line(it: Dict[str, Any]) -> str:
@@ -623,6 +634,17 @@ def delegation_line(it: Dict[str, Any]) -> str:
     component and flattens it, for the reason it does everywhere else: a name may be a path, and a
     newline in one is somebody ending our line and beginning their own.
 
+    **Which brain has it goes beside the name, in brackets, on every one of the seven words.** A
+    room watching work go to `dev` cannot otherwise tell a delegation running on the target's own
+    provider from one an override sent somewhere else, and that is exactly the difference somebody
+    reads these lines to see. It gets `_a_helper` too and for the same reason: a provider may be a
+    path to an adapter somebody wrote, and posting one publishes the owner's directory layout.
+
+    **Absent is absent.** Rundesk leaves `provider` out where nothing is known rather than sending
+    an empty one, and a line with no brackets is what "nobody said" looks like — never a guess and
+    never a word like *unknown* invented here. `provider_alias` is only ever rendered beside a
+    provider, because an account alias on its own names an account of nothing.
+
     `""` for a state this adapter has never heard of, which is the same answer `activity_line` gives
     and for the same reason — rundesk may be ahead of this file, and a line invented to cover a word
     nobody here understands is worse than no line.
@@ -632,6 +654,8 @@ def delegation_line(it: Dict[str, Any]) -> str:
     if not mark or not said:
         return ""
     who = _a_helper(it.get("who"))
+    provider = _a_helper(it.get("provider"))
+    alias = _a_helper(it.get("provider_alias")) if provider else ""
     ask = flat(it.get("ask"), A_HELPER_AT_MOST)
     elapsed = flat(it.get("elapsed"), A_HELPER_AT_MOST)
     before, after = said
@@ -642,7 +666,15 @@ def delegation_line(it: Dict[str, Any]) -> str:
     # else's name rather than somebody else's markup.
     # Empty sides are dropped rather than joined, so one template covers all seven words without any
     # of them arriving with a doubled space or a space before its full stop.
-    line = " ".join(part for part in (mark, before, _bold(who), after) if part)
+    #
+    # The brain rides with the name rather than in the tail, because the tail already means two
+    # other things — which ask on `handed`, how long on the three about the work — and one of the
+    # seven word orders puts words *after* the name, where `dev still working` must not become
+    # `dev still working codex`. Bracketed with the name it reads the same way in all seven.
+    named = _bold(who)
+    if named and provider:
+        named += f" ({_plain(provider)}{' · ' + _plain(alias) if alias else ''})"
+    line = " ".join(part for part in (mark, before, named, after) if part)
     # Which ask it is matters once — when it goes — because that is the name somebody types to guide
     # or stop it. After that the room already knows, and repeating it every twenty minutes is noise.
     # Only the two words about the work itself carry how long it has been out. A steer, a stop and a

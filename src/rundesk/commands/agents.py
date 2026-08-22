@@ -59,6 +59,13 @@ NOT_PROVEN = ("the provider is recorded and not proven — check it with: "
 WHAT_IT_IS_FOR = ("what it is for, in one sentence — what another agent reads while deciding "
                   "whether to delegate to it")
 
+#: The listing keeps the difference between a description nobody supplied, one a legacy record
+#: cannot expose, and one whose records could not be read. A marker rather than an empty cell makes
+#: the answer visible in a wide table and keeps an empty value from looking like a layout failure.
+NOT_DESCRIBED = "not described"
+EMPTY_DESCRIPTION = "empty description"
+DESCRIPTION_NOT_AVAILABLE = "not available"
+
 #: The same spellings every yes-or-no setting on the install accepts. Kept here because this value
 #: belongs to one agent's SQLite configuration, not to the install-wide JSON configuration.
 YES = ("yes", "true", "on", "1")
@@ -194,9 +201,9 @@ def _listed() -> int:
         return OK
     rows = []
     for name in there:
-        provider, self_improve, delegates_to = _configuration_of(name)
-        rows.append((name, provider, _skills_of(name), delegates_to, self_improve))
-    as_table(("AGENT", "PROVIDER", "SKILLS", "DELEGATES TO", "SELF-IMPROVE"), rows)
+        provider, description, self_improve, delegates_to = _configuration_of(name)
+        rows.append((name, provider, description, _skills_of(name), delegates_to, self_improve))
+    as_table(("AGENT", "PROVIDER", "DESCRIPTION", "SKILLS", "DELEGATES TO", "SELF-IMPROVE"), rows)
     return OK
 
 
@@ -208,8 +215,8 @@ def _skills_of(name: str) -> str:
         return "? — cannot be read"
 
 
-def _configuration_of(name: str) -> Tuple[str, str, str]:
-    """The three listed settings of one agent, or why they could not be answered.
+def _configuration_of(name: str) -> Tuple[str, str, str, str]:
+    """The four listed settings of one agent, or why they could not be answered.
 
     The two ways it cannot be answered are kept apart, because they are different situations:
     records that have gone away between the listing and the reading, and records that are there and
@@ -221,13 +228,31 @@ def _configuration_of(name: str) -> Tuple[str, str, str]:
         provider = str(settled["provider_name"])
         if settled.get("provider_alias"):
             provider += f" ({settled['provider_alias']})"
-        return (provider, as_written(bool(settled["self_improve"])),
+        return (provider, _shown_description(settled), as_written(bool(settled["self_improve"])),
                 delegating.shown(delegating.decoded(settled.get("delegates_to"))))
     except records.NotThere:
-        return "? — its records are not there", "?", "?"
+        marker = "? — its records are not there"
+        return marker, marker, "?", "?"
     except (delegating.Refused, directory.Refused, records.Unreadable, OSError, sqlite3.Error,
             KeyError):
-        return "? — its records cannot be read", "?", "?"
+        marker = "? — its records cannot be read"
+        return marker, marker, "?", "?"
+
+
+def _shown_description(settled: Dict[str, Any]) -> str:
+    """The stored delegation description, with empty, missing, and unreadable kept distinct.
+
+    Descriptions are bounded at write time, but old records can hold whitespace or lack the nullable
+    column altogether. Flattening whitespace keeps a stored sentence from creating a second table
+    row, while punctuation remains exactly as supplied.
+    """
+    if "describes" not in settled:
+        return DESCRIPTION_NOT_AVAILABLE
+    value = settled["describes"]
+    if value is None:
+        return NOT_DESCRIBED
+    flattened = " ".join(str(value).split())
+    return flattened or EMPTY_DESCRIPTION
 
 
 def _the_skill_every_agent_holds(agent: str) -> str:
@@ -255,6 +280,45 @@ def _the_skill_every_agent_holds(agent: str) -> str:
     except GRANTING_TROUBLE as why:
         return f"note      it has no {library.REQUIRED} yet ({why}) — rundesk update gives it"
     return f"skill     {held.catalog}/{held.skill} — how it operates this install"
+
+
+def _the_delegation_skill(agent: str, enabled: bool) -> str:
+    """Align ``delegating-work`` with whether this agent may delegate by name.
+
+    The scope is the authority and the grant is its conditional procedure. Keeping the two in the
+    same command prevents inbound-only specialists from paying for irrelevant routing guidance and
+    prevents a newly enabled delegator from having authority it lacks the workflow to use well.
+
+    This follows a completed agent write, so failure is reported as an incomplete reconciliation,
+    never as though the configuration did not move. The next ``rundesk update`` retries the same
+    invariant for every agent.
+    """
+    try:
+        held = grants.holding(agent, library.DELEGATING_SKILL)
+        if enabled:
+            if held is not None:
+                if held.address == library.DELEGATING:
+                    return ""
+                source = held.address or "an owner-managed entry"
+                return (f"note      {library.DELEGATING} could not be given because "
+                        f"{library.DELEGATING_SKILL} already stands from {source}; it was left alone")
+            given = grants.granted(agent, library.look_up(library.DELEGATING))
+            return f"skill     {given.catalog}/{given.skill} — how it delegates work"
+        if held is None:
+            return ""
+        if held.address != library.DELEGATING:
+            return (f"note      {library.DELEGATING_SKILL} is not the bundled delegation grant; "
+                    "it was left alone while named delegation was disabled")
+        grants.revoked(agent, library.DELEGATING_SKILL)
+        return f"skill     {library.DELEGATING} — removed while named delegation is disabled"
+    except grants.NotPresented as why:
+        action = "granted" if enabled else "removed"
+        return (f"note      {library.DELEGATING} was {action}, but its provider links could not "
+                f"be aligned ({why}) — rundesk update repairs them")
+    except GRANTING_TROUBLE as why:
+        action = "given" if enabled else "removed"
+        return (f"note      {library.DELEGATING} could not be {action} ({why}) — "
+                "rundesk update retries it")
 
 
 def _the_pages_it_lives_by(home: Path) -> str:
@@ -312,6 +376,7 @@ def _made(name: str, provider: Optional[str], describes: Optional[str] = None,
     print(f"        {_the_pages_it_lives_by(at / directory.HOME)}")
     print(f"        workspace {', '.join(f'{area}/' for area in pages.AREAS)} — agent-owned work, organized")
     print(f"        {_the_skill_every_agent_holds(name)}")
+    print(f"        {_the_delegation_skill(name, True)}")
     if job.name_trouble(name):
         print(f"        note      {NO_JOB_EVER}")
     print(f"        note      {NOT_PROVEN}")
@@ -368,6 +433,7 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
             return _failed(f"self improvement wants yes or no, and was given {self_improve!r}",
                            "nothing was changed")
 
+    delegation_skill = ""
     try:
         with locking.only_one(paths.lock(), "this install"):
             # Scope and provider-account validation and their one write are an install-state
@@ -405,6 +471,10 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
                 moving["delegates_to"] = delegating.encoded(
                     None if delegate_to_any else scope)
             records.stated(directory.records(name), moving)
+            if changing_delegation:
+                # The same install lock guards direct handoff admission. Keep authority and its
+                # workflow grant in one serialized change so no turn can enter between them.
+                delegation_skill = _the_delegation_skill(name, not delegate_to_none)
     except delegating.Refused as why:
         return _failed(str(why), "nothing was changed")
     except TROUBLE as why:
@@ -425,6 +495,8 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
             print(f"{name}: may now delegate to {delegating.shown(scope)}")
         else:
             print(f"{name}: may not delegate to another named agent now")
+        if delegation_skill:
+            print(f"        {delegation_skill}")
     return OK
 
 

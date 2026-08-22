@@ -38,6 +38,7 @@
 - [ ] `python3 scripts/suites` passes on a current Python.
 - [ ] `/usr/bin/python3 scripts/suites` passes on the Python 3.9 floor.
 - [ ] `ruff check src tests scripts/suites rundesk`
+- [ ] The focused documentation gate passes for a README-only change, or the change is not README-only.
 - [ ] Required install and uninstall checks ran with isolated disposable `RUNDESK_HOME` and `--bin-dir`, or the change does not affect those paths.
 - [ ] Every new guarantee has a ratified requirement, a cited regression test observed failing without the implementation, and current documentation, or no guarantee was added.
 - [ ] `git diff --check`

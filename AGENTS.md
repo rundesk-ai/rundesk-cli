@@ -161,6 +161,11 @@ There is no build or packaging step. Running the checkout is the build. Before c
 writing, capture the directory-level state of `~/.rundesk`; perform all work in disposable paths;
 then repeat the live-root check and confirm no change.
 
+A change limited to `README.md` does not require the full Python suites or Ruff locally. Run
+`python3 -B tests/test_layers.py`, render the Markdown through GitHub, verify every changed link,
+anchor, command, and product claim against its source, and run `git diff --check`. Required GitHub
+checks still run on the pull request.
+
 ```sh
 ./dev status
 python3 scripts/suites
@@ -205,8 +210,10 @@ A task is complete only when all applicable items below are observed, not inferr
 
 1. The full requested scope is implemented, with no unreported stub, TODO, unrelated change,
    temporary process, scratch root, bin directory, or artifact.
-2. Every discovered suite passes with non-zero counts on a current Python and confirmed Python 3.9;
-   the CI-equivalent AST parse, `ruff`, both shell parses, and `git diff --check` pass.
+2. For runtime changes, every discovered suite passes with non-zero counts on a current Python and
+   confirmed Python 3.9; the CI-equivalent AST parse, `ruff`, both shell parses, and
+   `git diff --check` pass. A `README.md`-only change instead passes the focused documentation gate
+   in **Build, test, and run**.
 3. Every new guarantee has a focused regression test observed failing without the implementation and
    passing with it. A process-only guide change instead requires guide parity and heading-order proof.
 4. Any affected command, install, update, removal, migration, or copy path has isolated success and

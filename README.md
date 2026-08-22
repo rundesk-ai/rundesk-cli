@@ -4,7 +4,6 @@
 
 <p align="center">
   <a href="https://github.com/rundesk-ai/rundesk-cli/actions/workflows/build.yml?query=branch%3Amain"><img src="https://github.com/rundesk-ai/rundesk-cli/actions/workflows/build.yml/badge.svg?branch=main" alt="Build"></a>
-  <a href="https://github.com/rundesk-ai/rundesk-cli/releases"><img src="https://img.shields.io/github/downloads/rundesk-ai/rundesk-cli/total?label=installs&amp;style=flat-square" alt="Installs"></a>
   <a href="https://github.com/rundesk-ai/rundesk-cli/releases/latest"><img src="https://img.shields.io/github/v/release/rundesk-ai/rundesk-cli?style=flat-square" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/rundesk-ai/rundesk-cli?style=flat-square" alt="MIT License"></a>
 </p>
@@ -20,20 +19,20 @@
   📖 <a href="#-documentation"><strong>Docs</strong></a>
 </p>
 
-A coding agent usually lives in one terminal session. Close it, and the conversation
-stops where you left it.
+Rundesk turns the coding agents you already use into durable teammates. Each one gets a
+name, a home, memory, and a way to keep working after the terminal closes.
+It runs locally on macOS with Codex, Claude Code, Grok, or Antigravity.
 
-Rundesk gives that agent a name, a home, memory, and a way to keep working. Reach the
-same agent from Discord, your terminal, or a schedule.
+Install Rundesk, create an agent, and give it a first task:
 
 ```sh
-discord_user_id=123456789012345678
+curl -fsSL https://get.rundesk.ai/rundesk | bash
 rundesk agents add ava --provider codex
-rundesk channels add ava discord --allow "$discord_user_id"
-rundesk gateways start ava
+rundesk ask ava "summarize what changed in this repository today"
 ```
 
-DM `ava` tonight. The same agent, context, and workspace are still there tomorrow.
+The next `ask` resumes the same conversation. Add Discord or a schedule when you want
+to reach the agent away from your terminal or have it work while you are away.
 
 ## ✨ Highlights
 
@@ -55,32 +54,25 @@ DM `ava` tonight. The same agent, context, and workspace are still there tomorro
 **Requires macOS · Python 3.9+ · one [supported coding CLI](#-provider-adapters)
 already installed and signed in**
 
-Install Rundesk:
+The installer fetches the latest GitHub release, places Rundesk under `~/.rundesk`, and
+adds the `rundesk` command without replacing your coding CLI or its login.
+
+Install and create your first agent:
 
 ```sh
 curl -fsSL https://get.rundesk.ai/rundesk | bash
-```
-
-Create an agent:
-
-```sh
 rundesk agents add ava --provider codex
-```
-
-Ask it to work:
-
-```sh
 rundesk ask ava "summarize what changed in this repository today"
 ```
 
-Keep it available:
+Keep it available after the terminal closes:
 
 ```sh
 rundesk gateways start ava
 ```
 
-The next terminal `ask` resumes the same conversation. To reach the agent away from
-your terminal, see **[Setting up a Discord bot](#setting-up-a-discord-bot)** below.
+To reach the same agent from Discord, see
+**[Setting up a Discord bot](#setting-up-a-discord-bot)** below.
 
 ## 🧠 Provider adapters
 

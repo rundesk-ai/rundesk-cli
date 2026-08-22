@@ -360,13 +360,17 @@ nine times in ten.
 ```console
 $ rundesk agents
 agents in /Users/you/.rundesk/data/agents
-AGENT  PROVIDER  SKILLS                                  SELF-IMPROVE
-ada    claude    managing-rundesk, researching-topics    yes
-cole   openai    managing-rundesk, reviewing-code        yes
+AGENT  PROVIDER  DESCRIPTION                  SKILLS                                DELEGATES TO  SELF-IMPROVE
+ada    claude    Owns research and synthesis. managing-rundesk, researching-topics  any           yes
+cole   openai    Owns bounded implementation. managing-rundesk, reviewing-code      forge         yes
 ```
 
-Skill names are current grants. They are shown so a person or routing agent can tell which standing
-specialty belongs behind a name without loading any skill body.
+The description is the stored routing sentence supplied with `--describes`; whitespace is flattened
+so even an older multiline value remains one table cell. `not described` means no sentence was set,
+`empty description` preserves a legacy empty value, and `not available` marks a legacy record that
+cannot expose the field. Skill names are current grants. Together with delegation scope, these let a
+person or routing agent inspect which standing specialty belongs behind a name without loading a
+skill body.
 
 Where they stand is printed even when there are none, and an install nobody has added one to says
 so rather than printing an empty table:
@@ -1688,7 +1692,7 @@ it hands the work over and returns at once:
 
 ```console
 $ rundesk ask bob "audit the exporter retention policy and report what you find"
-handed to bob  ·  del-1-6c9092
+handed to bob (claude)  ·  del-1-6c9092
   asynchronous — the result reaches this turn if active and steerable; otherwise wakes a review turn
 ```
 
@@ -1707,6 +1711,10 @@ to claim. Admission stores the requested spellings separately from the effective
 relative provider request such as `./brain` remains visible that way while the effective provider is
 stored as its resolved executable path, so another gateway cannot reinterpret it from a different
 working directory.
+
+The immediate handoff line names that effective provider, plus its account alias when one was
+selected, so the terminal and channel notice agree about which brain has the work. A provider named
+by path is shown by its final component rather than exposing the directories above it.
 
 This is the front door rather than a second command, and it is not a convenience. Left alone, an
 agent could run a whole turn on somebody else's agent from inside its own — no record, no guards,

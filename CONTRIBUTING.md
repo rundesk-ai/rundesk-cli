@@ -45,7 +45,8 @@ python3 -B tests/test_cli.py
 ```
 
 Use `-B` for repeated focused runs so stale bytecode cannot answer a mutation check. Before opening
-a pull request, run the complete suite on both the Python 3.9 floor and a current Python:
+a pull request for a runtime change, run the complete suite on both the Python 3.9 floor and a
+current Python:
 
 ```sh
 /usr/bin/python3 scripts/suites
@@ -61,9 +62,17 @@ python3 -m venv /tmp/rundesk-lint
 /tmp/rundesk-lint/bin/ruff check src tests scripts/suites rundesk
 ```
 
-The required GitHub gate runs every suite on Python 3.9 and 3.13 on both macOS and Ubuntu, then runs
-Ruff. A documentation-only change still runs that gate because commands and examples are part of
-the product contract.
+For a change limited to `README.md`, run the focused documentation gate instead:
+
+```sh
+python3 -B tests/test_layers.py
+git diff --check
+```
+
+Also render the README through GitHub and verify every changed link, anchor, command, and product
+claim against its source. The required GitHub gate still runs every suite on Python 3.9 and 3.13 on
+both macOS and Ubuntu, then runs Ruff, but the same full run is not required locally for a
+README-only pull request.
 
 ## Make a change
 
@@ -89,7 +98,7 @@ transcripts, personal information, or absolute home paths.
 Before submitting:
 
 1. Rebase or merge the current `main` branch and inspect the complete merge-base diff.
-2. Run `git diff --check` and the full gate above.
+2. Run `git diff --check` and the applicable full or focused gate above.
 3. Push a topic branch to your fork and open a pull request against `rundesk-ai/rundesk-cli:main`.
 4. Complete every applicable section of the pull-request template. Leave an unproven validation box
    unchecked and state the exact blocker.

@@ -40,11 +40,14 @@ def _turn_app():
     for root in (here, *here.parents):
         installed_app = root / "app"
         if ((installed_app / "rundesk").is_file()
-                and (root / "data" / "agents" / agent).is_dir()):
+                and (root / "data" / "config.json").is_file()
+                and (root / "data" / "agents" / agent / "state.db").is_file()
+                and (root / "data" / "agents" / agent / "home").is_dir()):
             return installed_app, root
         if (app.name != "app" and (app / "rundesk").is_file()
                 and (app / "src" / "rundesk").is_dir()
-                and (root / "data" / "agents" / agent).is_dir()):
+                and (root / "data" / "agents" / agent / "state.db").is_file()
+                and (root / "data" / "agents" / agent / "home").is_dir()):
             return app, root
     return None
 
@@ -57,7 +60,7 @@ if turn_app is not None:
 # An installed launcher is the last reliable identity when a provider tool shell drops the
 # environment it was handed. Keep an explicit RUNDESK_HOME override authoritative for scratch and
 # test installs; only infer the root from the installed <root>/app/rundesk shape.
-elif app.name == "app":
+elif app.name == "app" and (app.parent / "data" / "config.json").is_file():
     os.environ.setdefault("RUNDESK_HOME", str(app.parent))
 
 sys.path.insert(0, str(app / "src"))

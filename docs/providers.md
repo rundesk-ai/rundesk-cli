@@ -509,8 +509,10 @@ the same way `schedules.firing` builds a schedule's environment and `gateways.jo
 
 The installed `rundesk` launcher also names its own root when `RUNDESK_HOME` is absent. This is the
 safe default for direct commands a person types. Internal context recovery still binds the prompt's
-resolved root explicitly, because a provider tool shell may substitute a different command path or
-drop its environment. An explicit `RUNDESK_HOME` remains authoritative for scratch and test installs.
+resolved root explicitly as a shell-quoted assignment, because a provider tool shell may substitute
+a different command path or drop its environment. An explicit `RUNDESK_HOME` remains authoritative
+for scratch and test installs. A directory merely named `app` is not an installed root: its parent
+must hold Rundesk's configuration file before the launcher selects it.
 
 One consequence worth stating: a value the owner keeps under either of those two names no longer
 reaches a brain, because a name rundesk decides is a name an owner's value may not take. What it did

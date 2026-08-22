@@ -123,6 +123,12 @@ ERRORS_KEPT = 3
 #: this replaces settled on.
 AGAIN_AFTER = 10.0
 
+#: How long a live adapter may remain disconnected before this gateway replaces it. The adapter's
+#: own client gets the first chance to reconnect; this is the bounded escape hatch for a client that
+#: stays alive after a network outage but no longer has a usable platform session. Two minutes gives
+#: a brief internet interruption room to recover without a process restart.
+DISCONNECTED_AFTER = 120.0
+
 #: The exit code an adapter uses for a failure that starting it again cannot fix: a token that has
 #: been revoked, a close code the platform will answer with for ever. `78` is `EX_CONFIG`, which is
 #: what this is, and the number is the whole of the agreement — the two sides of this seam are two
@@ -431,6 +437,11 @@ class Running(NamedTuple):
     #: adapter's output knows, and the gateway's own loop is what waits. `None` on an adapter this
     #: process did not start, which is also one it never speaks to.
     connected: Optional[threading.Event] = None
+    #: The monotonic moment this adapter reported its platform connection gone, or `None` while it
+    #: has never disconnected or has successfully reconnected. Kept on the running record so the
+    #: gateway loop can replace a live but unreachable adapter without confusing a short reconnect
+    #: with a failure.
+    disconnected_at: Optional[float] = None
 
 
 class Watching(NamedTuple):
@@ -721,7 +732,7 @@ def doing(agent: str, where: Path, watching: Watching, kind: str, place: str,
 
 def delegating(agent: str, where: Path, watching: Watching, kind: str, place: str,
                state: str, to_agent: str, delegation_id: str,
-               elapsed: str = "") -> bool:
+               elapsed: str = "", provider: str = "", provider_alias: str = "") -> bool:
     """What is happening to work this agent handed to another one (R-DEL-16).
 
     **Its own record rather than an `activity` line**, because the two are different news and the
@@ -731,11 +742,18 @@ def delegating(agent: str, where: Path, watching: Watching, kind: str, place: st
     where it happened. It also carries what no activity line has anywhere to put: how long the work
     has been out.
 
-    **The words are `delegations`', the marks are the adapter's.** Four fields cross and no more —
-    the closed state, who has it, which ask, and how long — and what a person is *shown* is the
-    surface's, exactly as it is for a turn's four marks and for the cost line. A sentence composed
-    here with an emoji in it would be this product deciding what Discord's small print looks like,
-    for every surface that will ever exist.
+    **The words are `delegations`', the marks are the adapter's.** Six fields cross and no more —
+    the closed state, who has it, which ask, how long, and which brain is doing it — and what a
+    person is *shown* is the surface's, exactly as it is for a turn's four marks and for the cost
+    line. A sentence composed here with an emoji in it would be this product deciding what Discord's
+    small print looks like, for every surface that will ever exist.
+
+    **`provider` is the canonical effective one and never the requested spelling.** What a room
+    reads has to be the brain actually doing the work: a delegation asked for by a relative path, or
+    asked for with only half an override, is admitted against a provider resolved once — and a
+    notice quoting the request would name something that may not be what ran. `provider_alias` is
+    the account inside that provider where one is known, which is the same pair `rundesk asked show`
+    calls the effective provider and effective account alias.
 
     **`elapsed` arrives as words and not as a number**, for the reason the cost line does: how long
     something took is rendered once, by `delivery.duration`, for every platform. Sent as seconds it
@@ -754,6 +772,15 @@ def delegating(agent: str, where: Path, watching: Watching, kind: str, place: st
     # a surface handed `""` has to decide what that meant; handed nothing, there is nothing to say.
     if elapsed:
         said["elapsed"] = elapsed
+    # The same rule again, and it is what "omit an unknown provider" means here: a delegation
+    # admitted before a provider travelled with one has no answer to give, and a surface handed `""`
+    # would have to invent what an unnamed brain looks like.
+    if provider:
+        said["provider"] = provider
+        # **Only ever beside a provider.** An account alias on its own names an account of nothing,
+        # and the pair is meaningless split.
+        if provider_alias:
+            said["provider_alias"] = provider_alias
     with contextlib.suppress(Exception):
         _said_to(where, one, said)
         return True
@@ -1078,14 +1105,18 @@ def _started(agent: str, where: Path, kind: str, watching: Watching,
                   listening=None, connected=threading.Event(),
                   since=time.monotonic(), mine=True, saying=threading.Lock(), awaiting={},
                   posted={}, refused={})
+    # Put the record in place before the reader starts. An adapter may say `ready` immediately,
+    # and the reader must be able to clear a prior disconnect hold against the record it represents.
+    watching.running[kind] = one
     listening = threading.Thread(target=_listened, name=f"channel-{kind}",
-                                 args=(agent, where, one, row), daemon=True)
-    listening.start()
+                                 args=(agent, where, one, row, watching), daemon=True)
     watching.running[kind] = one._replace(listening=listening)
+    listening.start()
     _note(where, f"channel {kind}: started as pid {talking.pid}")
 
 
-def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any]) -> None:
+def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any],
+              watching: Watching) -> None:
     """Read everything an adapter says, for as long as it says anything. **Never raises.**
 
     This is the thread the module docstring is about. It cannot fall behind the way the gateway's
@@ -1132,13 +1163,14 @@ def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any]) -> Non
             if isinstance(said, lines.Gap):
                 continue
             with contextlib.suppress(Exception):
-                _heard(agent, where, one, said, allowed)
+                _heard(agent, where, one, said, allowed, watching)
     except Exception as why:                           # noqa: BLE001 — see the module docstring
         with contextlib.suppress(Exception):
             _note(where, f"channel {kind}: this gateway stopped listening to it ({why})", logs.ERROR)
 
 
-def _heard(agent: str, where: Path, one: Running, line: str, allowed: set) -> None:
+def _heard(agent: str, where: Path, one: Running, line: str, allowed: set,
+           watching: Optional[Watching] = None) -> None:
     """One record an adapter sent. Anything unrecognised is kept quiet rather than refused loudly."""
     kind = one.kind
     said = line.strip()
@@ -1158,9 +1190,22 @@ def _heard(agent: str, where: Path, one: Running, line: str, allowed: set) -> No
     elif saying == "ready":
         if one.connected is not None:
             one.connected.set()
+        if watching is not None:
+            current = watching.running.get(kind)
+            if current is not None and current.pid == one.pid:
+                watching.running[kind] = current._replace(disconnected_at=None)
         _note(where, f"channel {kind}: connected"
                      + (f" as {record.get('as')}" if record.get("as") else ""))
     elif saying == "gone":
+        if one.connected is not None:
+            one.connected.clear()
+        if watching is not None:
+            current = watching.running.get(kind)
+            if current is not None and current.pid == one.pid:
+                watching.running[kind] = current._replace(
+                    disconnected_at=(current.disconnected_at
+                                     if current.disconnected_at is not None
+                                     else time.monotonic()))
         _note(where, f"channel {kind}: lost the connection ({record.get('why') or 'no reason given'})",
               logs.WARNING)
     elif saying == "note":
@@ -1526,7 +1571,11 @@ def _reaped(agent: str, where: Path, watching: Watching) -> None:
         if one.mine and one.pid:
             gone = programs.collected(one.pid)
             if not gone.over:
-                _ended_if_nobody_is_reading(agent, where, one, watching)
+                if one.listening is None or not one.listening.is_alive():
+                    _ended_if_nobody_is_reading(agent, where, one, watching)
+                elif _disconnected_long_enough(one):
+                    _ended(agent, where, one, watching, ENDING_WITHIN,
+                           "stayed disconnected; another is started once the hold-off has passed")
                 continue
             _note(where, f"channel {kind}: the adapter stopped"
                          + (f" with code {gone.code}" if gone.code is not None else ""),
@@ -1543,6 +1592,12 @@ def _reaped(agent: str, where: Path, watching: Watching) -> None:
             _note(where, f"channel {kind}: the adapter a previous gateway started is gone",
                   logs.WARNING)
         _let_go(agent, where, one, watching)
+
+
+def _disconnected_long_enough(one: Running) -> bool:
+    """Whether a live adapter has been offline beyond its native reconnect grace period."""
+    return bool(one.mine and one.disconnected_at is not None
+                and time.monotonic() - one.disconnected_at >= DISCONNECTED_AFTER)
 
 
 def _ended_if_nobody_is_reading(agent: str, where: Path, one: Running,

@@ -219,7 +219,7 @@ count.
 
 | Check | Result | Evidence |
 |---|---|---|
-| Installed launcher with no home variable | pass | 83 install tests; launcher selected its own root |
+| Installed launcher with no home variable | pass | 87 install tests; launcher selected its own root |
 | Explicit home override outside an installed root | pass | Existing install regression remains green |
 | Provider-turn identity with hostile live `RUNDESK_HOME`/`RUNDESK_COMMAND` | pass offline | New install regression derives the root from `RUNDESK_CWD`, agent, and run, and rejects the live root |
 | Real provider invoking an explicit scratch launcher | pass | Codex reported scratch `status` home and one scratch agent |

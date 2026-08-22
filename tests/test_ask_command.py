@@ -224,7 +224,7 @@ class WhenOneAgentAsksAnother(support.Isolated):
         code, out, err = self.ask_from_ava("forge")
 
         self.assertEqual(OK, code, err)
-        self.assertIn("handed to forge", out)
+        self.assertIn(f"handed to forge ({os.path.basename(support.A_STAND_IN)})", out)
         self.assertEqual(["forge"], [one.to_agent for one in delegations.every("ava")])
 
     def test_a_scoped_provider_and_model_are_admitted_without_changing_the_target(self):
@@ -234,7 +234,7 @@ class WhenOneAgentAsksAnother(support.Isolated):
             "forge", "--provider", "codex", "--model", "gpt-scoped")
 
         self.assertEqual(OK, code, err)
-        self.assertIn("handed to forge", out)
+        self.assertIn("handed to forge (codex)", out)
         one = delegations.every("ava")[0]
         self.assertEqual(("codex", "gpt-scoped", "codex", "gpt-scoped"),
                          (one.requested_provider_name, one.requested_model_name,
@@ -251,7 +251,8 @@ class WhenOneAgentAsksAnother(support.Isolated):
                 "forge", "--provider", support.A_STAND_IN, "--alias", "work")
 
         self.assertEqual(OK, code, err)
-        self.assertIn("handed to forge", out)
+        self.assertIn(
+            f"handed to forge ({os.path.basename(support.A_STAND_IN)} · work)", out)
         one = delegations.every("ava")[0]
         self.assertEqual(
             ("work", "work"),
@@ -324,13 +325,15 @@ class WhenOneAgentAsksAnother(support.Isolated):
         os.chdir(str(self.home))
         self.addCleanup(os.chdir, here)
 
-        code, _out, err = self.ask_from_ava(
+        code, out, err = self.ask_from_ava(
             "forge", "--provider", "./relative-provider")
 
         self.assertEqual(OK, code, err)
         one = delegations.every("ava")[0]
         self.assertEqual("./relative-provider", one.requested_provider_name)
         self.assertEqual(str(provider.resolve()), one.provider_name)
+        self.assertIn("handed to forge (relative-provider)", out)
+        self.assertNotIn(str(self.home), out)
 
     def test_relative_alias_configuration_admission_and_removal_share_canonical_identity(self):
         provider = self.home / "relative-provider"

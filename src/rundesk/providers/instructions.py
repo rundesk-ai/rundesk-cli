@@ -13,7 +13,7 @@ CORE                 Rundesk, Agent Context
     USER_TO_AGENT        Current Situation: a person is waiting
     SCHEDULE_TO_AGENT    Current Situation: the clock started it, nobody is present
     AGENT_TO_AGENT       Current Situation: another agent handed it over
-OPERATING_RULES      Establish the Outcome through Outcome and Continuity
+OPERATING_RULES      Establish the Outcome through Execute the Work
 + TEAM_MEMBERS       Team Members, only where a person can review the later result
 OUTCOME_AND_CONTINUITY the completion gate and continuation path
 + ADDITIONS          whatever the caller appended, each named and bounded
@@ -61,6 +61,7 @@ spend an invariant prefix on what the model already does.
 
 import hashlib
 import re
+import shlex
 from typing import Iterable, List, Mapping, NamedTuple, Optional, Tuple
 
 #: How much of one supplied addition is used. **Bounded where it comes in, and the finished stack is
@@ -117,7 +118,7 @@ class Prompt(NamedTuple):
 #: costs nothing to prevent and is silent until somebody finds a repository inside an agent's home.
 CORE = """# Rundesk
 
-Rundesk operates this agent. Use `rundesk ...` when giving a person a command; inside this turn, use `RUNDESK_HOME="{install_root}" "$RUNDESK_COMMAND"` so the command reads and changes this install.
+Rundesk operates this agent. Use `rundesk ...` when giving a person a command; inside this turn, use `RUNDESK_HOME={install_root} "$RUNDESK_COMMAND"` so the command reads and changes this install.
 
 ## Agent Context
 
@@ -272,8 +273,9 @@ Take a complete, proportionate path to the outcome.
 #:
 #:     ### Delegation
 #:
-#:     - Choose a team member whose stated responsibility, focus, or skills make them better suited.
-#:     - Delegate with `"$RUNDESK_COMMAND" ask <agent> "<task>"` and review the later result.
+#:     - Consider delegation when a teammate's stated responsibility makes one bounded outcome a
+#:       materially better fit and the coordination is proportionate.
+#:     - Load `delegating-work` only after those signals make delegation a genuine option.
 #:     …
 #:
 #: An agent nobody has described is left out rather than listed blank, so this block is absent
@@ -287,11 +289,9 @@ These team members are available for named Rundesk delegation.
 
 ### Delegation
 
-- Simple documentation or copy work: work directly without delegation or a separate plan or review cycle. Use the shortest safe edit, smallest change surface, and required checks.
-- Small coding work: use at most one focused implementation delegation when useful. Review the return directly within your role and run required checks. Add review or QA only for observed risk or a required repository gate.
-- Large, complex, or high-risk work: use multiple bounded implementation, review, or QA delegations only for distinct necessary outcomes.
-- Scale up only for observed scope, risk, or failed evidence; state why. Repository gates and safety boundaries still apply.
-- Hand one bounded outcome to the best-fit member with `"$RUNDESK_COMMAND" ask <agent> "<task>"`; include scope, authority, result, and proof. It is asynchronous: do not wait or duplicate it, and verify the return."""
+- Consider named delegation when a teammate's stated responsibility makes them materially better suited to one bounded outcome and the coordination is proportionate. Independent expertise, parallel work, or required review are strong signals.
+- Work directly for ordinary conversation and simple documentation, formatting, or copy-only changes. Stay direct when the task is small or mechanical, needs your continuing ownership, or coordination would add more cost than value. Availability or skill names alone do not justify delegation.
+- Apply these signals before loading delegation guidance. Do not load `delegating-work` merely because a team member is available. When named delegation is a genuine option, that skill is applicable: load its body before choosing a target or acting. It owns target selection, briefing, the asynchronous lifecycle, steering, resuming, and return review."""
 
 
 #: The universal outcome gate follows conditional collaboration so a result cannot be called done
@@ -385,7 +385,12 @@ def _filled(template: str, variables: Optional[Mapping[str, object]]) -> str:
     def replacement(found: re.Match) -> str:
         name = found.group(1)
         value = values.get(name)
-        return found.group(0) if value is None else str(value)
+        if value is None:
+            return found.group(0)
+        # This value stands in a shell assignment in CORE. Quote it here, at the one substitution
+        # boundary, so spaces, quotes, dollar signs, and command substitutions remain path bytes
+        # rather than becoming shell syntax in the command an agent is told to run.
+        return shlex.quote(str(value)) if name == "install_root" else str(value)
 
     return re.sub(r"\{(" + "|".join(re.escape(one) for one in VARIABLES) + r")\}",
                   replacement, str(template or ""))

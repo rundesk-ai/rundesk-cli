@@ -503,6 +503,10 @@ class Showing:
 
     def __init__(self):
         self.said = []
+        #: Which brain each line named, kept beside `said` rather than folded into it: what is
+        #: shown and who is doing it are two questions, and a case asking one should not have to
+        #: spell the other.
+        self.brains = []
 
     def answer_this(self, *args, **more):
         raise AssertionError("this case is about what is shown, not about starting turns")
@@ -510,8 +514,10 @@ class Showing:
     def review_this(self, *args, **more):
         raise AssertionError("this case is about what is shown, not about delivering answers")
 
-    def showed(self, agent, conversation, state, to_agent, delegation_id, seconds=None):
+    def showed(self, agent, conversation, state, to_agent, delegation_id, seconds=None,
+               provider_name=None, provider_alias=None):
         self.said.append((state, to_agent, delegation_id, seconds))
+        self.brains.append((state, provider_name, provider_alias))
         return True
 
 
@@ -541,10 +547,15 @@ class ARoomWatchingWorkHandedOver:
             self.turn = conn.execute(
                 "SELECT id FROM turns ORDER BY id DESC LIMIT 1").fetchone()[0]
 
-    def handed(self, delegation_id="del-7-aabbcc", minutes_ago=0, to_agent="dev"):
-        """One delegation this agent made, handed over that many minutes before now."""
+    def handed(self, delegation_id="del-7-aabbcc", minutes_ago=0, to_agent="dev", **selection):
+        """One delegation this agent made, handed over that many minutes before now.
+
+        `selection` is `kept.made`'s provider/model columns, passed straight through so a case about
+        which brain has the work spells only that and every other case is left as it was.
+        """
         when = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
-        kept.made("ava", delegation_id, to_agent, self.conversation, self.turn, now=when)
+        kept.made("ava", delegation_id, to_agent, self.conversation, self.turn, now=when,
+                  **selection)
         return delegation_id
 
     def moment(self, minutes_ago):
@@ -691,9 +702,9 @@ class WhatARoomIsToldWhenSomebodyReachesIntoTheWork(ARoomWatchingWorkHandedOver,
     #: second** and this whole case is about telling one movement of a row from the next. Left to
     #: the clock, a hand-over and the steer after it land in the same second, the row reads as one
     #: nobody has touched, and every case below passes or fails on how fast the machine is.
-    def handed(self, delegation_id="del-7-aabbcc", minutes_ago=5, to_agent="dev"):
+    def handed(self, delegation_id="del-7-aabbcc", minutes_ago=5, to_agent="dev", **selection):
         """Handed over a few minutes back by default, so anything done to it comes after it."""
-        return super().handed(delegation_id, minutes_ago, to_agent)
+        return super().handed(delegation_id, minutes_ago, to_agent, **selection)
 
     def aged(self, minutes, delegation_id="del-7-aabbcc"):
         """Move when this phase of the work began, so a check-in window can be crossed in a test.
@@ -999,6 +1010,80 @@ class WhatARoomIsToldAfterWorkIsCarriedOn(ARoomWatchingWorkHandedOver, support.I
             config, "moment_of",
             side_effect=lambda when=None, days_ago=0: (
                 real(at, days_ago) if when is None else real(when, days_ago)))
+
+
+class WhichBrainARoomIsToldHasTheWork(ARoomWatchingWorkHandedOver, support.Isolated):
+    """R-DEL-16 with R-DEL-29's distinction kept: the room is told which provider has the work.
+
+    **The gap this closes.** A room watching work go to `dev` could not tell a delegation running on
+    the target's own brain from one an override sent to another, which is exactly the thing somebody
+    scrolling a channel is trying to see — and the answer was already written down on the row the
+    sweep reads, one column away from what it was announcing.
+
+    Everything here is about *which* provider is named, never about how a surface draws it:
+    `test_channels_discord` owns that half, and `test_providers_answering` owns the two ends
+    meeting.
+    """
+
+    def brains(self):
+        """What each line this sweep produced said about the brain doing the work."""
+        self.swept()
+        return self.showing.brains
+
+    def test_work_that_has_just_gone_out_names_the_brain_doing_it(self):
+        self.handed(provider_name="codex", model_name="a-model")
+        self.assertEqual([(hosting.HANDED_OVER, "codex", None)], self.brains())
+
+    def test_an_account_alias_is_named_beside_its_provider_when_one_is_known(self):
+        self.handed(provider_name="claude", provider_alias="work")
+        self.assertEqual([(hosting.HANDED_OVER, "claude", "work")], self.brains())
+
+    def test_a_row_that_names_no_provider_is_shown_without_one(self):
+        """Absent is absent. A delegation admitted before providers travelled with one has no
+        answer here, and a room told a guess would be told something nobody wrote down."""
+        self.handed()
+        self.assertEqual([(hosting.HANDED_OVER, None, None)], self.brains())
+
+    def test_the_effective_provider_is_named_and_never_the_requested_spelling(self):
+        """R-DEL-29 both ways. What somebody typed may be a relative path and may be half an
+        override; what is running is what admission resolved, and a room told the request would be
+        told about an ask rather than about the work."""
+        self.handed(requested_provider_name="./adapters/codex",
+                    requested_provider_alias="spare",
+                    provider_name="/opt/adapters/codex", provider_alias="work")
+        self.assertEqual([(hosting.HANDED_OVER, "/opt/adapters/codex", "work")], self.brains())
+
+    def test_a_request_nothing_was_admitted_under_names_no_brain_at_all(self):
+        """The half that would be worst to get wrong: a requested provider on a row whose effective
+        columns are empty must not be promoted into the room as though it had been honoured."""
+        self.handed(requested_provider_name="codex", requested_model_name="a-model")
+        self.assertEqual([(hosting.HANDED_OVER, None, None)], self.brains())
+
+    def test_every_word_a_room_is_told_carries_which_brain_has_the_work(self):
+        """All seven, because a person reading a check-in or a stop needs the same fact as one
+        reading the hand-over — and a state that quietly dropped it would drop it on the lines
+        somebody stares at longest."""
+        brain = {"provider_name": "codex", "provider_alias": "work"}
+        self.handed("del-7-handed", **brain)
+        self.handed("del-7-waiting", minutes_ago=21, **brain)
+        self.handed("del-7-guided", minutes_ago=5, **brain)
+        self.assertTrue(kept.guided("ava", "del-7-guided"))
+        self.handed("del-7-stopping", minutes_ago=5, **brain)
+        self.assertTrue(kept.stop_asked("ava", "del-7-stopping"))
+        self.handed("del-7-stopped", minutes_ago=5, **brain)
+        self.assertTrue(kept.stopped("ava", "del-7-stopped"))
+        self.handed("del-7-answered", minutes_ago=5, **brain)
+        self.assertTrue(kept.answered("ava", "del-7-answered"))
+        self.handed("del-7-carried", minutes_ago=5, **brain)
+        self.assertTrue(kept.answered("ava", "del-7-carried", now=self.moment(3)))
+        self.swept()
+        self.assertTrue(kept.reopened("ava", "del-7-carried", now=self.moment(1)))
+        self.swept()
+
+        said = {state: (provider, alias) for state, provider, alias in self.showing.brains}
+        self.assertEqual(set(hosting.SHOWN), set(said),
+                         "a delegation state was shown without naming which brain had the work")
+        self.assertEqual({("codex", "work")}, set(said.values()))
 
 
 class WhatMovesADelegationsLatestMoment(support.Isolated):

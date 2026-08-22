@@ -24,8 +24,9 @@ agent or a specialist. These are behavior-design patterns, not Rundesk configura
 - A specialist accepts bounded work in a focused area and returns evidence. Its instructions should
   define accepted assignments, adjacent boundaries, execution authority, verification, handback,
   and when to stop. In most cases, configure it with `--delegate-to-none` so it receives work but
-  does not create another named delegation. Keep outbound delegation only when the owner explicitly
-  intends the specialist to coordinate other agents.
+  does not create another named delegation. That setting automatically removes `delegating-work`;
+  do not grant the skill back to an inbound-only specialist. Keep outbound delegation only when the
+  owner explicitly intends the specialist to coordinate other agents.
 
 Both use the same `agents add` command and the same initial template. After creation, refine the
 agent's owner-controlled instructions to express the intended behavior directly. Do not infer the
@@ -61,15 +62,20 @@ default with an exact allowlist, `--delegate-to-none` to make an agent inbound-o
 
 This setting controls only where the configured agent may delegate. An inbound-only agent can
 still receive work. When its outbound scope is empty, Rundesk removes the entire named-agent team
-and delegation instruction block from its turns. Removing a target also removes its name from every
+and delegation instruction block from its turns and revokes the bundled `delegating-work` grant.
+An owner-managed entry that happens to use the same name is left alone. Setting an exact allowlist
+or restoring `any` grants the bundled skill when the name is absent. New agents start
+unrestricted and receive the skill by default. Removing a target also removes its name from every
 explicit allowlist, so recreating the name does not restore old authority; unrestricted scopes stay
-unrestricted. Do not edit `state.db`; verify `DELEGATES TO` with `agents` after every change.
+unrestricted. Do not edit `state.db`; verify `DELEGATES TO` and `SKILLS` with `agents` after every
+change.
 
 ## Safe operating flow
 
 1. Run `providers` and `providers check <provider>`. Recording a provider does not prove it can run.
 2. Confirm whether the owner intends domain or specialist behavior, then add the agent with a name
-   that can also be a launchd label: letters, digits, `.`, `-`, or `_`.
+   that can also be a launchd label: letters, digits, `.`, `-`, or `_`. Configure an inbound-only
+   specialist with `--delegate-to-none`; do not leave its default delegation grant in place.
 3. Run `agents` to verify the recorded result, then `gateways start <agent>` to prove it starts.
 4. Apply [Agent instructions](agent-instructions.md) to mold the shared template into the intended
    behavior. Edit `MEMORY.md` only when changing durable context it should know; neither belongs in
