@@ -361,7 +361,10 @@ class WhatAShippedSkillMayClaim(Bundled):
             (delegation_root / "references" / "brief-examples.md").read_text(
                 encoding="utf-8").split())
         for phrase in ("routing contract, not a biography", "durable responsibility it owns",
-                       "Do not use transient assignments", "Update the description when"):
+                       "Do not use transient assignments", "Update the description when",
+                       "automatically removes `delegating-work`",
+                       "do not grant the skill back to an inbound-only specialist",
+                       "New agents start unrestricted and receive the skill by default"):
             with self.subTest(reference="managing-rundesk/agents", phrase=phrase):
                 self.assertIn(phrase, agents)
         for phrase in ("Choose the target from its description", "Do not infer ownership"):

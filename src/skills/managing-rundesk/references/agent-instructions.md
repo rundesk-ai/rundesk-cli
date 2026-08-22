@@ -145,8 +145,10 @@ the state it inspected, the verification it ran, the external-state limits, and 
 
 Most specialist agents should be inbound-only. Configure them with
 `"$RUNDESK_COMMAND" agents configure <agent> --delegate-to-none` unless the owner explicitly wants
-that specialist to coordinate other named agents. This delegation setting reinforces the intended
-behavior but does not replace the behavior contract in its instructions.
+that specialist to coordinate other named agents. The setting removes `delegating-work`
+automatically; do not grant delegation procedure to an agent with no named delegation authority.
+This delegation setting reinforces the intended behavior but does not replace the behavior contract
+in its instructions.
 
 Describe those behaviors directly rather than assigning a Rundesk agent type. The instructions,
 description, skills, delegation scope, and current assignment together provide enough routing and

@@ -282,6 +282,38 @@ def _the_skill_every_agent_holds(agent: str) -> str:
     return f"skill     {held.catalog}/{held.skill} — how it operates this install"
 
 
+def _the_delegation_skill(agent: str, enabled: bool) -> str:
+    """Align ``delegating-work`` with whether this agent may delegate by name.
+
+    The scope is the authority and the grant is its conditional procedure. Keeping the two in the
+    same command prevents inbound-only specialists from paying for irrelevant routing guidance and
+    prevents a newly enabled delegator from having authority it lacks the workflow to use well.
+
+    This follows a completed agent write, so failure is reported as an incomplete reconciliation,
+    never as though the configuration did not move. The next ``rundesk update`` retries the same
+    invariant for every agent.
+    """
+    try:
+        held = grants.holding(agent, library.DELEGATING_SKILL)
+        if enabled:
+            if held is not None:
+                return ""
+            given = grants.granted(agent, library.look_up(library.DELEGATING))
+            return f"skill     {given.catalog}/{given.skill} — how it delegates work"
+        if held is None:
+            return ""
+        grants.revoked(agent, library.DELEGATING_SKILL)
+        return f"skill     {library.DELEGATING} — removed while named delegation is disabled"
+    except grants.NotPresented as why:
+        action = "granted" if enabled else "removed"
+        return (f"note      {library.DELEGATING} was {action}, but its provider links could not "
+                f"be aligned ({why}) — rundesk update repairs them")
+    except GRANTING_TROUBLE as why:
+        action = "given" if enabled else "removed"
+        return (f"note      {library.DELEGATING} could not be {action} ({why}) — "
+                "rundesk update retries it")
+
+
 def _the_pages_it_lives_by(home: Path) -> str:
     """Say which files this agent was given, or which it did not get. Never silence.
 
@@ -337,6 +369,7 @@ def _made(name: str, provider: Optional[str], describes: Optional[str] = None,
     print(f"        {_the_pages_it_lives_by(at / directory.HOME)}")
     print(f"        workspace {', '.join(f'{area}/' for area in pages.AREAS)} — agent-owned work, organized")
     print(f"        {_the_skill_every_agent_holds(name)}")
+    print(f"        {_the_delegation_skill(name, True)}")
     if job.name_trouble(name):
         print(f"        note      {NO_JOB_EVER}")
     print(f"        note      {NOT_PROVEN}")
@@ -393,6 +426,7 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
             return _failed(f"self improvement wants yes or no, and was given {self_improve!r}",
                            "nothing was changed")
 
+    delegation_skill = ""
     try:
         with locking.only_one(paths.lock(), "this install"):
             # Scope and provider-account validation and their one write are an install-state
@@ -430,6 +464,10 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
                 moving["delegates_to"] = delegating.encoded(
                     None if delegate_to_any else scope)
             records.stated(directory.records(name), moving)
+            if changing_delegation:
+                # The same install lock guards direct handoff admission. Keep authority and its
+                # workflow grant in one serialized change so no turn can enter between them.
+                delegation_skill = _the_delegation_skill(name, not delegate_to_none)
     except delegating.Refused as why:
         return _failed(str(why), "nothing was changed")
     except TROUBLE as why:
@@ -450,6 +488,8 @@ def _configured(name: str, provider: Optional[str], describes: Optional[str] = N
             print(f"{name}: may now delegate to {delegating.shown(scope)}")
         else:
             print(f"{name}: may not delegate to another named agent now")
+        if delegation_skill:
+            print(f"        {delegation_skill}")
     return OK
 
 

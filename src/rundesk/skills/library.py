@@ -96,6 +96,13 @@ REQUIRED_SKILL = "managing-rundesk"
 #: somebody can copy off a refusal. Derived rather than written out, so the catalog is named once.
 REQUIRED = f"{BUNDLED}/{REQUIRED_SKILL}"
 
+#: The skill an agent needs only while named outbound delegation is available to it. Unlike
+#: ``REQUIRED_SKILL``, this is not an unconditional floor: an inbound-only specialist pays no
+#: routing cost for work it cannot hand off. Agent creation, delegation-scope configuration, and
+#: the update sweep keep the grant aligned with that durable capability.
+DELEGATING_SKILL = "delegating-work"
+DELEGATING = f"{BUNDLED}/{DELEGATING_SKILL}"
+
 #: The catalog's own tree, exactly as it was fetched. Everything rundesk writes about a catalog
 #: stands *beside* this rather than inside it, so a re-fetch can replace the whole of it at once.
 TREE = "app"
