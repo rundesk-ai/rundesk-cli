@@ -3,7 +3,8 @@
 **Date:** 2026-08-22
 
 **Candidate:** PR #438 lifecycle implementation commit `c0ac509`; skill-selection revision `8f06bcb`;
-core-routing revision `8870bdc`; coordination and steering revision `8c854f9`
+core-routing revision `8870bdc`; coordination and steering revision `8c854f9`; grant-lifecycle
+revision `43d00f1`
 
 **Providers:** Claude CLI 2.1.236, reported model `claude-opus-5[1m]`; Codex CLI 0.148.0,
 reported model `gpt-5.6-sol`
@@ -183,6 +184,29 @@ Runs J and K extend that proof to copy-only work and provider-aware steering fre
 All manually hosted scratch gateways were stopped after evidence capture. The temporary scratch
 home was then moved to Trash, so cleanup remains recoverable. No skill, agent, provider, gateway, or
 configuration was installed into or changed in the live Rundesk home.
+
+## Delegation grant lifecycle
+
+Commit `43d00f1` was installed into a second fresh scratch home to verify the owner-facing lifecycle,
+not only its unit seams. Two new agents each listed `delegating-work` and `managing-rundesk` with
+unrestricted outbound scope. Configuring the specialist with `--delegate-to-none` removed
+`delegating-work`, left `managing-rundesk`, and listed `DELEGATES TO` as `none`. Configuring the same
+agent with `--delegate-to domain` restored `delegating-work` and listed only `domain` as its scope.
+Neither gateway was started or placed.
+
+The installed and source SHA-256 values matched for the three principal boundaries:
+
+| File | SHA-256 |
+|---|---|
+| `commands/agents.py` | `2b46d7373c0ef38438b156faee98af57d14305a0db60feb1d2ce3d83177f3f74` |
+| `skills/grants.py` | `0238866aeabe1d28028537e1c30b0f0ad798bbfd06e963355499e37e055ec01e` |
+| `managing-rundesk/references/agents.md` | `845ce5c9cda2b6e4b0f7b454643e5a28a1c132e6cb9ba7de5c30d7e59a656f1f` |
+
+The focused agent-command, grant, update, bundled-skill, layer, and requirement suites passed 78,
+80, 80, 38, 23, and 1 tests. Removing command-time grant reconciliation made three command tests
+fail; treating every agent as delegation-enabled made the inbound-only update test fail. After both
+rules were restored, both configured Python paths ran all 80 suites with zero failures. The exact
+scratch home was moved to Trash after its gateways were confirmed not running and not placed.
 
 ## Verdict
 
