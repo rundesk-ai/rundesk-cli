@@ -51,15 +51,10 @@ a provider-local subagent is not a durable continuation path.
 Choose the target from its description and the delegation scope offered to the current turn. Use its
 durable responsibility, not a temporary assignment. Relevant granted skills may confirm that a
 named target has the procedure or capability the task needs, but skill names alone never establish
-ownership. Do not infer ownership from the target's name, provider, or gateway state. Gateway state
-only confirms whether the selected route can run. Do not delegate to yourself, and do not delegate
-again from a turn that is already answering a delegation.
-
-Before handing off, confirm the selected gateway is running and make the brief a contract:
-
-```sh
-"$RUNDESK_COMMAND" gateways
-```
+ownership. Do not infer ownership from the target's name or provider. A target offered to the
+current turn is already an available route; do not add a gateway preflight. Send the handoff
+directly and let `ask` report if admission is no longer possible. Do not delegate to yourself, and
+do not delegate again from a turn that is already answering a delegation.
 
 If no permitted target materially fits, continue directly or report the routing gap. Do not bypass
 the delegation scope with an attended `ask`.

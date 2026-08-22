@@ -101,6 +101,11 @@ repository path, and the definition of activity. Claude then kept every missing 
 classified whether it blocked the review, and produced a usable brief without turning any of them
 into implementation truth.
 
+The final routing pass removed a separate `gateways` preflight from the skill. The named team offered
+to a turn is already the eligible routing surface, and `ask` owns the authoritative admission check
+and refusal if that route changes. A controlled mutation that made the preflight optional instead of
+forbidden failed the bundled-skill regression before restoration.
+
 ## Core routing and skill-loading precision
 
 Runs H and I test the reduced always-loaded delegation instructions as a matched pair on both

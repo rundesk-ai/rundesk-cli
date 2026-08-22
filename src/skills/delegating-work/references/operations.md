@@ -12,9 +12,10 @@ Inside an agent turn, `ask` hands work to another agent and returns immediately:
 "$RUNDESK_COMMAND" ask <agent> '<brief>'
 ```
 
-The target must be within this agent's delegation scope and its gateway must be running. A turn
-already answering a delegation cannot delegate again. Do not bypass either boundary with an
-attended `ask`.
+The target is selected from the team offered to the current turn. Do not inspect gateways as an
+extra preflight: `ask` enforces delegation scope and current route admission and returns a refusal
+if either no longer permits the handoff. A turn already answering a delegation cannot delegate
+again. Do not bypass either boundary with an attended `ask`.
 
 An optional provider, account alias, or model applies only to this handoff and does not reconfigure
 the target:
