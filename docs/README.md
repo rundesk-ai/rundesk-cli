@@ -18,6 +18,7 @@ anyone learns from it is not to trust the rest.
 | [schedules.md](./schedules.md) | What a schedule is, and every state one can get stuck in |
 | [time.md](./time.md) | The three clocks, and which one answers what |
 | [development.md](./development.md) | Running and testing a checkout without installing it |
+| [live-agent-verification.md](./live-agent-verification.md) | Reproducing edge-case tests for Rundesk rules, agent instructions, skills, and provider behavior |
 | [requirements/](./requirements/) | What the previous build promised, and how much of it this one owes |
 | [research/](./research/) | What was found out, kept where it can be read after the thing that taught it is gone |
 

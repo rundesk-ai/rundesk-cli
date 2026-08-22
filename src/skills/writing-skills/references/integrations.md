@@ -1,12 +1,16 @@
-# Skills that reach external services
+# External-service integrations
 
-Read this before adding credentials, profiles, or a script that calls an API or service. A skill that
-only teaches a workflow needs none of this.
+Read this in addition to [Reusable workflow scripts](workflow-scripts.md) when a command uses
+credentials, profiles, OAuth, a network, or remote effects. Define the outcome, remote resource,
+allowed operations, account selection, least privilege, and observable proof before choosing
+endpoints. Keep read and write capabilities separate when possible.
+
+Put provider mechanics in scripts. `SKILL.md` tells the agent which command to run, which account
+and resource it affects, whether it reads or writes, and what observed result proves success.
 
 ## Declare required values
 
-Put `rundesk.json` beside `SKILL.md`. Its only key is `needs`, mapping each environment variable to an
-actionable explanation:
+Put `rundesk.json` beside `SKILL.md`; its only key is `needs`:
 
 ```json
 {
@@ -18,27 +22,23 @@ actionable explanation:
 }
 ```
 
-- Declare only required values. Omit `rundesk.json` when nothing is required.
-- Use plain names. Rundesk derives named profiles from suffixed values such as
-  `JIRA_API_TOKEN__ACME`.
-- Order values as an owner should enter them: service, account, then credential.
-- Explain where to obtain each value. `doctor` repeats this text when the value is missing.
-- Never put a token or credential in the skill.
+Declare only required plain names, ordered service, account, credential. Explain how to obtain each
+value; `doctor` repeats the text when missing. Never put a credential in the skill. Rundesk derives
+named profiles from suffixes such as `JIRA_API_TOKEN__ACME`.
 
-An owner configures the declared values at their own terminal:
+The owner configures values at their terminal:
 
 ```sh
 "$RUNDESK_COMMAND" skills configure <catalog>/<skill>
 "$RUNDESK_COMMAND" skills configure <catalog>/<skill> --profile <name>
 ```
 
-New values reach the next turn, not the current one; a running process cannot receive a changed
-environment.
+New values reach the next turn, not the running process.
 
-## Declare an OAuth provider
+## Declare OAuth
 
-When a catalog supplies an OAuth-backed integration, put `oauth-provider.json` beside the owning
-`SKILL.md`. It is declarative data, never executable code. Schema 1 has exactly these fields:
+An OAuth-backed catalog puts `oauth-provider.json` beside the owning `SKILL.md`. Schema 1 has exactly
+these fields:
 
 ```json
 {
@@ -56,20 +56,18 @@ When a catalog supplies an OAuth-backed integration, put `oauth-provider.json` b
 }
 ```
 
-Provider and capability IDs are lowercase hyphenated names. Endpoints must be HTTPS with no embedded
-credentials, **no query string and no fragment** — an extra parameter a provider requires goes in
-`authorization_parameters`, which may not override Rundesk's client, redirect, response, scope,
-state, or PKCE fields. Base scopes establish a verified immutable subject and email; each capability
-maps to exactly the additional scope its integration needs. Strings are bounded at 1,024 characters,
-collections at 32 or 64 entries, and the file at 64 KiB.
+Use lowercase hyphenated provider and capability IDs. Endpoints are HTTPS with no credentials,
+query, or fragment; extra parameters go in `authorization_parameters` and cannot override client,
+redirect, response, scope, state, or PKCE fields. Base scopes establish a verified immutable subject
+and email; each capability adds exactly its needed scope. Strings are at most 1,024 characters,
+collections 32 or 64 entries, and the file 64 KiB.
 
-Exactly one installed skill may declare a given provider ID; two make both unusable. A malformed
-declaration is refused when the catalog is installed, and if one is already on disk it disables only
-its own provider. The grant is pinned to a fingerprint of the behaviour fields, so changing an
-endpoint, scope, identity field, parameter, or capability requires the owner to review and reconnect;
-changing `display_name` does not.
+Only one installed package may declare a provider ID. A malformed declaration is refused at install
+or disables only its own installed provider. Grants fingerprint behavior fields, so endpoint, scope,
+identity, parameter, or capability changes require review and reconnection; `display_name` changes do
+not.
 
-Owners place the app client as ordinary sealed values and then sign in once:
+Set the default app client, then sign in:
 
 ```sh
 "$RUNDESK_COMMAND" env set EXAMPLE_OAUTH_CLIENT_ID
@@ -77,53 +75,35 @@ Owners place the app client as ordinary sealed values and then sign in once:
 "$RUNDESK_COMMAND" login example
 ```
 
-The names are derived from the declared provider ID in the spelling a shell variable takes, so
-document exactly those two for your provider. `login` uses what is already placed and prompts only
-for what is missing. Write the setup instructions in that order — an owner is normally in the
-provider's console with both values on screen before your catalog is installed.
+Document the derived names and this order. Teach only the default app: `--profile` is the rare
+second app client and suffixes both names; one app may hold many accounts, selected with `--email`.
+Distinguish enabled provider APIs, consent scopes, the signer's existing permissions, and the
+runtime account and resource. Explain any scope that appears broader than read-only.
 
-**Document the default app and nothing else.** `--profile` selects a second OAuth *app client* and
-suffixes both names (`EXAMPLE_OAUTH_CLIENT_ID__WORK`); it is an escape hatch for the rare install
-with two apps, not the shape to teach. One app holds any number of connected accounts, and
-`--email` is how an integration chooses between them.
+## Request a short-lived token
 
-Provider-specific instructions belong in this skill, not in Rundesk, and four different things must
-be told apart plainly: which **APIs** to enable in the provider's console; which **consent-screen
-scopes** the app requests; which **permissions the signing-in person must already hold** on the
-resources; and which **account and resource** a command selects at run time. Say why any scope that
-looks broader than "read" is required. Rundesk requests the minimum: the declared base scopes at
-login, and one capability's scope when an integration first needs it.
-
-## Ask for a token over the bridge
-
-An integration never receives a refresh token, and never receives a client secret: both the sealed
-grant document and every `<PROVIDER>_OAUTH_CLIENT_ID`/`_SECRET` value are withheld from what a turn
-is handed. It creates `socket.socketpair()`,
-passes one end to a Rundesk child, and asks for one short-lived access token:
+The turn receives neither refresh token nor client secret. Create `socket.socketpair()`, pass one end
+to a Rundesk child, and request accounts or one capability token:
 
 ```sh
 "$RUNDESK_COMMAND" _oauth accounts <provider> --response-fd <fd> [--profile <app-profile>]
 "$RUNDESK_COMMAND" _oauth access <provider> <capability> --response-fd <fd> [--profile <app-profile>] [--email <address>]
 ```
 
-**Close the parent's copy of the child's socket end immediately after spawning.** Held open, the
-pair never reaches end-of-file and the caller waits on a descriptor it owns itself.
+Close the parent's copy of the child's socket end immediately after spawning or EOF never arrives.
+Read a four-byte big-endian length followed by at most 65,536 bytes of version-1 JSON. `accounts`
+success contains only account email addresses; `access` success contains only a bearer token, type,
+expiry, email, and subject. Refusal contains `ok:false` and an error while the child exits nonzero.
+Prefer that framed reason to stderr and bound the whole exchange; interactive consent may take up to
+180 seconds.
 
-Read a four-byte big-endian length, then that many bytes of version-1 JSON, bounded at 65,536.
-Success carries only a bearer token, its expiry, and the account's email and subject; a refusal
-arrives as `{"version":1,"ok":false,"error":"…"}` and the process also exits non-zero. Prefer the
-framed reason over parsing stderr. Give the whole exchange a deadline of your own: Rundesk allows a
-person 180 seconds at the browser when consent has to be widened.
+Never expose the token through stdout, stderr, argv, environment, logs, or files. Pass the FD only as
+the required numeric command argument; do not print or log it.
 
-Never put the inherited FD or the token in stdout, stderr, argv, the environment, a log, or a skill
-file. Contract tests must use socket pairs and injected offline authorization/token boundaries;
-cover multiple accounts, a single-account default, an unknown capability, a malformed or duplicated
-declaration, a consent identity mismatch, a revoked grant, and concurrent scope extension.
+## Select ordinary profiles
 
-## Read values in a script
-
-Read values from the ordinary process environment at the moment they are used. Accept a profile as
-input; rundesk does not remap a named profile onto the unsuffixed names:
+Read ordinary values from the environment at point of use. Rundesk does not remap a named profile
+onto unsuffixed names:
 
 ```python
 import argparse
@@ -140,40 +120,43 @@ base = os.environ[env_name("JIRA_BASE_URL")]
 token = os.environ[env_name("JIRA_API_TOKEN")]
 ```
 
-Never write a value into the agent's files or logs. Rundesk keeps values in its private credential
-store; backups carry the sealed store and its key, so their location must be protected.
-
-For multiple accounts, list the complete profiles and ask which one to use when the request does not
-decide:
+List complete profiles and ask which one to use when the request does not select one:
 
 ```sh
 "$RUNDESK_COMMAND" skills profiles <catalog>/<skill>
 ```
 
-A named profile carries all of its own suffixed values. Pass the selected name to the script's
-`--profile` option. Do not fall back to an unsuffixed value; that can combine one account's URL with
-another account's token.
+Pass the selected profile to the script. Never fall back to unsuffixed values; that can combine one
+account's URL with another account's token. Never write values into files or logs.
 
-## Ship commands deliberately
+## Handle and test the service boundary
 
-Put runnable commands directly under `scripts/`; use subdirectories only for code those commands
-import. Tell the agent exactly when to run each command and which arguments it takes.
+Follow the generic script contract, then add service behavior:
 
-Rundesk installs no dependencies for a skill. Keep a script self-contained with its language's
-standard library, or explicitly check for an external program and report how to obtain it. Make each
-command executable, return non-zero on failure, send the reason to stderr, and keep successful output
-bounded and token-lean.
+- Set finite timeouts. Follow pagination to the requested boundary; never call one page complete.
+- Retry only documented transient failures with a small bound and backoff. Retry mutations only with
+  a provider idempotency guarantee or key.
+- Refuse ambiguous accounts or resources instead of guessing.
+- Return a redacted error naming the operation and recovery action, without credentials, headers,
+  response bodies, or private content.
 
-Prefer concise plain text over JSON when an agent will read the result. Emit structured data only when
-another program, rather than the model, needs it.
+Use offline contract tests with injected transports or synthetic fixtures. Test the OAuth bridge
+with socket pairs and injected authorization and token boundaries so framing, EOF, and FD transfer
+are real. Cover accepted success shapes; missing or incomplete configuration; authentication and
+permission refusal; ambiguity; timeouts, rate limits, server failure, and malformed responses;
+empty results, pagination, and partial pages; mutation refusal, duplicates, and safe retries; OAuth
+account selection, unknown capabilities, malformed or duplicate declarations, identity mismatch,
+revoked grants, and concurrent scope extension; plus output bounds and redaction.
 
-## Diagnose configuration
+Run a real-service smoke test only with explicit authority. Prefer disposable or read-only data,
+verify mutation through an independent read, and clean up only when authorized.
+
+Before diagnosing the service, run both:
 
 ```sh
 "$RUNDESK_COMMAND" skills doctor <agent>
 "$RUNDESK_COMMAND" env check <NAME>
 ```
 
-`doctor` names the unusable profile, missing value, or non-executable command and prints the repair.
-`env check` distinguishes a missing value from one the install cannot read. Do not report the service
-broken until both checks pass.
+`doctor` proves skill, profile, and command readiness; `env check` distinguishes missing from
+unreadable values.
