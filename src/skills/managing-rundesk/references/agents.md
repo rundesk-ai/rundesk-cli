@@ -62,8 +62,9 @@ default with an exact allowlist, `--delegate-to-none` to make an agent inbound-o
 
 This setting controls only where the configured agent may delegate. An inbound-only agent can
 still receive work. When its outbound scope is empty, Rundesk removes the entire named-agent team
-and delegation instruction block from its turns and revokes `delegating-work`. Setting an exact
-allowlist or restoring `any` grants the bundled skill when it is absent. New agents start
+and delegation instruction block from its turns and revokes the bundled `delegating-work` grant.
+An owner-managed entry that happens to use the same name is left alone. Setting an exact allowlist
+or restoring `any` grants the bundled skill when the name is absent. New agents start
 unrestricted and receive the skill by default. Removing a target also removes its name from every
 explicit allowlist, so recreating the name does not restore old authority; unrestricted scopes stay
 unrestricted. Do not edit `state.db`; verify `DELEGATES TO` and `SKILLS` with `agents` after every

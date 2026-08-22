@@ -461,6 +461,20 @@ class Configuring(support.Isolated):
                      / library.DELEGATING_SKILL)
         self.assertFalse(presented.exists() or presented.is_symlink())
 
+    def test_delegate_to_none_leaves_an_owner_skill_of_that_name_alone(self):
+        theirs = grants.where("cole") / library.DELEGATING_SKILL
+        theirs.mkdir(parents=True)
+        declaration = theirs / library.DECLARED
+        declaration.write_text("owner data\n", encoding="utf-8")
+
+        code, out, err = self.rundesk(
+            "agents", "configure", "cole", "--delegate-to-none")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("not the bundled delegation grant", out)
+        self.assertIn("left alone", out)
+        self.assertEqual("owner data\n", declaration.read_text(encoding="utf-8"))
+
     def test_delegate_to_any_restores_the_delegation_skill(self):
         self.assertEqual(OK, self.rundesk(
             "agents", "configure", "cole", "--delegate-to-none")[0])

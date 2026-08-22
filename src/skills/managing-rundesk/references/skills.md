@@ -91,8 +91,9 @@ skill can reach every profile configured for it.
   never replaces or removes the owner's `local` catalog.
 - Revoking a skill removes the agent's presentation, not the library copy or stored profiles.
 - Rundesk manages the bundled `delegating-work` grant with outbound delegation scope: new agents and
-  agents configured for an exact or unrestricted scope hold it; `--delegate-to-none` removes it.
-  Do not manually grant it back to an inbound-only specialist.
+  agents configured for an exact or unrestricted scope hold it; `--delegate-to-none` removes the
+  bundled grant but leaves an owner-managed entry of the same name alone. Do not manually grant it
+  back to an inbound-only specialist.
 - Every agent granted a skill can reach every configured profile for it. Profiles choose coherent
   account value sets; they are not per-agent access control and never fall back to default values.
 - `forget` empties values for only the selected skill account. It requires preview and `--confirm`.

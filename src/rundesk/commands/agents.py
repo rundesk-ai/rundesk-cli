@@ -297,11 +297,18 @@ def _the_delegation_skill(agent: str, enabled: bool) -> str:
         held = grants.holding(agent, library.DELEGATING_SKILL)
         if enabled:
             if held is not None:
-                return ""
+                if held.address == library.DELEGATING:
+                    return ""
+                source = held.address or "an owner-managed entry"
+                return (f"note      {library.DELEGATING} could not be given because "
+                        f"{library.DELEGATING_SKILL} already stands from {source}; it was left alone")
             given = grants.granted(agent, library.look_up(library.DELEGATING))
             return f"skill     {given.catalog}/{given.skill} — how it delegates work"
         if held is None:
             return ""
+        if held.address != library.DELEGATING:
+            return (f"note      {library.DELEGATING_SKILL} is not the bundled delegation grant; "
+                    "it was left alone while named delegation was disabled")
         grants.revoked(agent, library.DELEGATING_SKILL)
         return f"skill     {library.DELEGATING} — removed while named delegation is disabled"
     except grants.NotPresented as why:

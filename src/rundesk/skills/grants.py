@@ -460,10 +460,10 @@ def _everybody_holds_what_they_must(said: Callable[[str], None]) -> None:
     in `tests/test_skills_bundled.py`, which goes red before the release is cut rather than on every
     machine after it.
 
-    **An enabled name already standing is left exactly as it is.** Somebody may have put their own
-    directory there, or a copy granted `--as`; enabling fills an absence and never replaces an
-    answer. An empty delegation scope is different: `delegating-work` is irrelevant procedure for
-    authority the agent does not have, so that exact standing name is removed.
+    **A name already standing is left exactly as it is unless it is the bundled delegation grant.**
+    Somebody may have put their own directory there, or a copy granted `--as`; enabling fills an
+    absence and never replaces an answer. An empty delegation scope removes only the exact bundled
+    grant, because a matching name is not proof that Rundesk owns somebody else's skill.
 
     Written directly rather than through `granted`, which presents as its last act — the presenting
     loop below is where every agent is presented once, and doing it per grant here would take a
@@ -486,6 +486,7 @@ def _everybody_holds_what_they_must(said: Callable[[str], None]) -> None:
             said(f"gave {agent} {library.REQUIRED}, which every agent holds")
 
         delegation_standing = at / library.DELEGATING_SKILL
+        delegation_grant = holding(agent, library.DELEGATING_SKILL)
         try:
             may_delegate = delegating.scope_of(agent) != ()
         except (delegating.Refused, records.NotThere, records.Unreadable, OSError, KeyError):
@@ -496,8 +497,8 @@ def _everybody_holds_what_they_must(said: Callable[[str], None]) -> None:
                 at.mkdir(parents=True, exist_ok=True)
                 delegation_standing.symlink_to(os.path.relpath(delegation_skill.at, at))
                 said(f"gave {agent} {library.DELEGATING}, because it may delegate by name")
-        elif delegation_standing.is_symlink() or delegation_standing.exists():
-            files.remove_one(delegation_standing)
+        elif delegation_grant is not None and delegation_grant.address == library.DELEGATING:
+            files.remove_one(delegation_grant.at)
             said(f"took {library.DELEGATING} from {agent}, because it is inbound-only")
 
 

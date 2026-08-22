@@ -775,6 +775,17 @@ class TheSkillEveryAgentHolds(Grants):
         self.assertTrue(any("took" in one and "alan" in one for one in said))
         self.assertTrue(any("gave" in one and "bea" in one for one in said))
 
+    def test_the_sweep_does_not_delete_an_owner_skill_with_the_delegation_name(self):
+        records.stated(directory.records("alan"), {"delegates_to": "[]"})
+        theirs = grants.where("alan") / library.DELEGATING_SKILL
+        theirs.mkdir(parents=True)
+        declaration = theirs / library.DECLARED
+        declaration.write_text("owner data\n", encoding="utf-8")
+
+        grants.refreshed()
+
+        self.assertEqual("owner data\n", declaration.read_text(encoding="utf-8"))
+
     def test_the_sweep_says_nothing_the_second_time(self):
         grants.refreshed()
         said = []
