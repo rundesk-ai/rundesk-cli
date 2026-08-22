@@ -192,6 +192,113 @@ class WhatIsShipped(Bundled):
 
 
 class WhatAShippedSkillMayClaim(Bundled):
+    def test_writing_skills_routes_reusable_automation_and_keeps_artifacts_distinct(self):
+        skill = self.skills / "writing-skills"
+        main = " ".join((skill / library.DECLARED).read_text(encoding="utf-8").split())
+        workflow = " ".join((skill / "references" / "workflow-scripts.md").read_text(
+            encoding="utf-8").split())
+
+        for phrase in ("reusable workflow scripts and external integrations",
+                       "[Reusable workflow scripts](references/workflow-scripts.md)",
+                       "instruction boundary", "deterministic mechanism",
+                       "external-service boundary", "do not inspect or change the live library",
+                       "script contracts when no catalog test area owns them",
+                       "Inspect existing skill catalogs before creating a package",
+                       "Extend the existing owner",
+                       "distinct routing, judgment, authority, or proof"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, main)
+        for phrase in ("same input produces the same output", "partial output",
+                       "safe to repeat", "bounded output", "working directory",
+                       "unsupported input", "temporary files",
+                       "Add the script to the existing skill"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, workflow)
+
+    def test_writing_skills_requires_routing_and_script_edge_cases(self):
+        skill = self.skills / "writing-skills"
+        main = " ".join((skill / library.DECLARED).read_text(encoding="utf-8").split())
+        workflow = " ".join((skill / "references" / "workflow-scripts.md").read_text(
+            encoding="utf-8").split())
+
+        for phrase in ("direct request", "indirect request", "close near-miss",
+                       "without the skill", "different fresh turn"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, main)
+
+        for phrase in ("Aim for two short sentences", "Include only concepts needed to route",
+                       "Omit steps, tests, benefit claims, and implementation detail",
+                       "only when it determines whether the skill should trigger",
+                       "shortest description that still routes correctly",
+                       "ceiling, not a target", "# Bad: embeds implementation",
+                       "# Good: states intent"):
+            with self.subTest(description_rule=phrase):
+                self.assertIn(phrase, main)
+        for phrase in ("empty input", "malformed input", "missing and unreadable files",
+                       "interrupted writes", "large input",
+                       "semantic unit", "same resolved input", "Empty input or a no-op",
+                       "every data-dependent section", "adversarial oracle",
+                       "swapping which values share a record",
+                       "complete bounded output", "collection cardinality",
+                       "truncating each label does not bound a list of inputs",
+                       "privacy and redaction promises", "errors, name collisions",
+                       "full-path fallback"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, workflow)
+
+        for phrase in ("generated writing separately from executable correctness",
+                       "routing precision", "useful judgment", "concision",
+                       "duplication", "reference discipline",
+                       "Green script tests do not prove", "factual promises",
+                       "Source or observe factual promises", "test executable claims",
+                       "narrow partial truths", "adversarial counterexample",
+                       "mutation checks cannot repair a wrong test oracle",
+                       "empty success", "duplicate evidence", "data-dependent output section"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, main)
+
+    def test_live_agent_verification_keeps_the_edge_matrix_and_evidence_contract(self):
+        guide = (support.CHECKOUT / "docs" / "live-agent-verification.md").read_text(
+            encoding="utf-8")
+        index = (support.CHECKOUT / "docs" / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("[live-agent-verification.md](./live-agent-verification.md)", index)
+        for phrase in ("A convincing answer alone is not a pass",
+                       "A mock proves the harness",
+                       "Use a fresh provider conversation",
+                       "Use stable case IDs", "Critical", "Conditional critical", "Extended",
+                       "LIVE-U01", "LIVE-U08", "LIVE-RD", "LIVE-IN", "LIVE-SK", "LIVE-PV",
+                       "LIVE-SK07-large-output", "Selected cases",
+                       "Direct positive", "Indirect positive", "Close near-miss",
+                       "Forbidden access", "Failure after progress", "Completion boundary",
+                       "fresh baseline without the skill",
+                       "LIVE-SK11", "existing-capability reuse",
+                       "catalog surfaces before writing",
+                       "skill body and every conditionally required reference load",
+                       "Review the generated writing separately from runtime correctness",
+                       "pass`, `fail`, `partial`, `blocked`, or `not applicable",
+                       "Preserve failed natural cases",
+                       "Cleanup and restored state", "Preserved verification status"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guide)
+
+    def test_writing_skills_publishing_and_integrations_keep_their_safety_boundaries(self):
+        skill = self.skills / "writing-skills" / "references"
+        publishing = " ".join((skill / "publishing.md").read_text(encoding="utf-8").split())
+        integrations = " ".join((skill / "integrations.md").read_text(
+            encoding="utf-8").split())
+
+        for phrase in ("catalog is the release boundary", "repository rules",
+                       "preview is validation, not publication", "breaking change",
+                       "acme-skills/", "├── manifest.json", "└── skills/",
+                       "├── rundesk.json", "└── search.py"):
+            with self.subTest(reference="publishing", phrase=phrase):
+                self.assertIn(phrase, publishing)
+        for phrase in ("least privilege", "timeouts", "rate limits", "pagination",
+                       "redacted error", "offline contract tests"):
+            with self.subTest(reference="integrations", phrase=phrase):
+                self.assertIn(phrase, integrations)
+
     def test_managing_rundesk_teaches_the_default_app_and_demotes_the_profile(self):
         """The owner's UX decision, checked rather than remembered.
 
