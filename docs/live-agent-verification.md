@@ -223,7 +223,7 @@ This table is an index, not a substitute for the linked evidence.
 | 2026-08-07 | Provider instruction and lifecycle probe | Revisions recorded in the report | 34 cases preserved with provider-specific passes and limitations |
 | 2026-08-19 | Agent rules and authoring | `0fc59e9` plus two documented guidance corrections | Codex passed the final 19-case checklist; other providers remained to run |
 | 2026-08-20 | Missing context and operational rules | PR #430 candidates recorded by round | Final missing-context cases passed on Codex and Claude; Grok remained failing |
-| 2026-08-21 | `writing-skills` reusable-workflow guidance | PR #435 candidate `880c16a` | [Partial: isolation and implementation passed; writing and output-bound defects remained](./research/2026-08-21-writing-skills-live-agent-verification.md) |
+| 2026-08-21 | `writing-skills` reusable-workflow guidance | PR #435 candidate `2f25532` | [Partial: reuse, distinct-owner placement, and near-miss routing passed; delegated implementations still needed adversarial corrections](./research/2026-08-21-writing-skills-live-agent-verification.md) |
 
 Add a row only after the exact candidate and cleanup are proven. Never update an earlier row to make
 a later candidate appear to have passed before it existed.
