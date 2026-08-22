@@ -1428,6 +1428,87 @@ class WhenOneStops(Hosting):
                          "the whole of the error stream was copied, not its tail")
 
 
+class RecoveringADisconnectedChannel(Hosting):
+
+    def test_a_channel_is_not_reported_connected_after_its_adapter_loses_the_socket(self):
+        self.an_adapter()
+        self.a_channel()
+        watching = self.hosting_now()
+        self.assertTrue(support.waited_until(
+            lambda: hosting.connected(watching, "discord"), PATIENCE))
+
+        one = watching.running["discord"]
+        hosting._heard(self.agent, self.where, one,
+                       json.dumps({"say": "gone", "why": "the socket closed"}), set())
+
+        self.assertFalse(hosting.connected(watching, "discord"),
+                         "a channel that reported gone was left marked connected")
+
+    def test_a_native_reconnect_clears_the_offline_hold(self):
+        self.an_adapter()
+        self.a_channel()
+        watching = self.hosting_now()
+        self.assertTrue(support.waited_until(
+            lambda: hosting.connected(watching, "discord"), PATIENCE))
+        one = watching.running["discord"]
+
+        hosting._heard(self.agent, self.where, one,
+                       json.dumps({"say": "gone", "why": "the socket closed"}), set(), watching)
+        hosting._heard(self.agent, self.where, one,
+                       json.dumps({"say": "ready", "as": "the bot"}), set(), watching)
+
+        self.assertTrue(hosting.connected(watching, "discord"),
+                        "a channel that reconnected was left offline")
+        self.assertIsNone(watching.running["discord"].disconnected_at,
+                          "a successful reconnect left a restart pending")
+
+    def test_pending_messages_wait_until_the_channel_is_ready_again(self):
+        self.an_adapter()
+        self.a_channel()
+        watching = self.hosting_now()
+        self.assertTrue(support.waited_until(
+            lambda: hosting.connected(watching, "discord"), PATIENCE))
+        one = watching.running["discord"]
+        arriving.recorded(self.agent, "discord", "1180", "2207", "please continue", "8841")
+        answering = _AnsweringStub()
+
+        hosting._heard(self.agent, self.where, one,
+                       json.dumps({"say": "gone", "why": "the socket closed"}), set(), watching)
+        hosting._answered_pending(self.agent, watching, answering)
+        self.assertEqual([], answering.answered,
+                         "a pending message was sent into a channel that reported gone")
+
+        hosting._heard(self.agent, self.where, one,
+                       json.dumps({"say": "ready", "as": "the bot"}), set(), watching)
+        hosting._answered_pending(self.agent, watching, answering)
+        self.assertEqual([("1180", "please continue", "8841")], answering.answered)
+
+    def test_a_channel_stuck_disconnected_is_gracefully_restarted(self):
+        self.an_adapter()
+        self.a_channel()
+        watching = self.hosting_now()
+        self.assertTrue(support.waited_until(
+            lambda: hosting.connected(watching, "discord"), PATIENCE))
+        one = watching.running["discord"]
+        old_pid = one.pid
+
+        was = hosting.DISCONNECTED_AFTER
+        hosting.DISCONNECTED_AFTER = 0.0
+        self.addCleanup(setattr, hosting, "DISCONNECTED_AFTER", was)
+        hosting._heard(self.agent, self.where, one,
+                       json.dumps({"say": "gone", "why": "the socket closed"}), set(), watching)
+
+        self.looked_again(watching)
+
+        self.assertNotIn("discord", watching.running,
+                         "a disconnected adapter was not taken down for recovery")
+        watching.waiting["discord"] = time.monotonic() - hosting.AGAIN_AFTER - 1
+        self.looked_again(watching)
+        self.assertIn("discord", watching.running,
+                      "the channel was not started after the recovery hold-off")
+        self.assertNotEqual(old_pid, watching.running["discord"].pid)
+
+
 class WhenOneIsKilledOutright(Hosting):
     """A `SIGKILL` lets no tidying code run anywhere, which is the only way to ask the kernel.
 

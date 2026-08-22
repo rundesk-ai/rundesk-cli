@@ -3,7 +3,7 @@ id: CAD
 name: The seam a channel adapter is reached through
 status: draft
 owner: Rundesk product owner
-last_updated: 2026-08-08
+last_updated: 2026-08-21
 ---
 
 # Channel adapter product contract
@@ -62,6 +62,7 @@ the adapter owns platform sign-in, platform vocabulary, and how shared state app
 | R-CAD-21 | Values Rundesk keeps for other purposes are not inherited by an adapter; it receives only the bounded runtime environment and credentials it declared. | Start a stand-in adapter beside sentinel environment values and inspect its environment. |
 | R-CAD-22 | The owner can list, inspect, reconnect-test, configure, remove, and diagnose a channel, with missing credentials, unreachable platforms, missing adapters, and a gateway that gave up reported as different states. | Execute the channel management flow against each state and compare the result and exit code. |
 | R-CAD-23 | An adapter declares what it can present, and the owner is shown that declaration during setup without the channel becoming unusable for abilities it lacks. | Add adapters with full and empty capability declarations and complete a conversation on both. |
+| R-CAD-24 | A transient adapter disconnect marks the channel offline immediately, gives the adapter time to reconnect itself, and replaces a live adapter that remains disconnected; durable messages wait until the channel is ready. | Simulate `ready` → `gone` → `ready`, then `ready` → `gone` without recovery; inspect channel status, adapter replacement, pending-message recovery, and permanent `EX_CONFIG` refusal. |
 
 ## Scope
 
@@ -85,5 +86,5 @@ remote adapter registry; per-place channel configuration.
 | Requirement area | Current evidence checked | Result | Last checked |
 |---|---|---|---|
 | Adapter contract | [adapters.md](../adapters.md), `src/rundesk/channels/adapters.py`, `tests/test_channels_command.py` | Current mechanics inspected; acceptance not executed in this PRD pass. | 2026-08-08 |
-| Gateway hosting and recovery | `src/rundesk/channels/hosting.py`, `src/rundesk/gateways/host.py`, `tests/test_channels_hosting.py` | Offline suite passed on current Python and macOS Python 3.9; real-platform recovery remains unvalidated. | 2026-08-08 |
+| Gateway hosting and recovery | `src/rundesk/channels/hosting.py`, `src/rundesk/gateways/host.py`, `tests/test_channels_hosting.py` | Offline suite passed on current Python and macOS Python 3.9, including transient disconnect state, native reconnect, and stuck-adapter replacement; real-platform recovery remains unvalidated. | 2026-08-21 |
 | Channel management | [commands.md](../commands.md#channels), `src/rundesk/commands/channels.py`, `tests/test_channels_command.py` | Current mechanics inspected; acceptance not executed in this PRD pass. | 2026-08-08 |

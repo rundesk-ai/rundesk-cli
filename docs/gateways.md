@@ -15,6 +15,14 @@ that could not run, a platform that is down, an adapter nobody installed, a dele
 be answered: each of those is a gateway that is *up* and complaining, never a gateway that refuses to
 start.
 
+**A platform outage does not require restarting the agent gateway.** When an adapter says its socket
+is gone, Rundesk marks that channel offline immediately and stops sending new work through it. The
+adapter gets a 120-second chance to reconnect itself; if it remains disconnected for that entire
+continuous interval, the gateway gracefully stops and relaunches that adapter after the normal retry
+hold-off. Durable channel messages wait until
+the adapter says `ready` again. A permanent credential or configuration refusal still remains given up
+for that gateway lifetime rather than being retried forever.
+
 They are siblings rather than a hierarchy, which is why adding the third was one edit and not a
 rewrite: a gateway hosts a list.
 
