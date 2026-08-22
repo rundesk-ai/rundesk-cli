@@ -7,6 +7,7 @@ follows the symlink an install places on a PATH back to the tree it points at, s
 installed copy share one layout and one code path.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -14,7 +15,55 @@ from pathlib import Path
 # that reached the file some other way.
 sys.dont_write_bytecode = True
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+launcher = Path(__file__).resolve()
+app = launcher.parent
+
+
+def _turn_app():
+    """Find the install that owns this provider turn, if one is unambiguously present.
+
+    A provider tool may rebuild a shell's environment from the owner's login context. In that
+    case its `RUNDESK_HOME` and `RUNDESK_COMMAND` can name the live install even though the turn's
+    own cwd and identity still name a scratch install. The agent home is the one durable boundary
+    that survives that rebuild. Only accept the shape Rundesk itself creates, and only while both
+    turn markers are present; ordinary terminal overrides remain authoritative.
+    """
+    agent = os.environ.get("RUNDESK_AGENT", "").strip()
+    run = os.environ.get("RUNDESK_RUN", "").strip()
+    where = os.environ.get("RUNDESK_CWD", "").strip()
+    if not agent or not run or not where:
+        return None
+    try:
+        here = Path(where).expanduser().resolve()
+    except OSError:
+        return None
+    for root in (here, *here.parents):
+        installed_app = root / "app"
+        if ((installed_app / "rundesk").is_file()
+                and (root / "data" / "config.json").is_file()
+                and (root / "data" / "agents" / agent / "state.db").is_file()
+                and (root / "data" / "agents" / agent / "home").is_dir()):
+            return installed_app, root
+        if (app.name != "app" and (app / "rundesk").is_file()
+                and (app / "src" / "rundesk").is_dir()
+                and (root / "data" / "agents" / agent / "state.db").is_file()
+                and (root / "data" / "agents" / agent / "home").is_dir()):
+            return app, root
+    return None
+
+
+turn_app = _turn_app()
+if turn_app is not None:
+    app, turn_root = turn_app
+    os.environ["RUNDESK_HOME"] = str(turn_root)
+
+# An installed launcher is the last reliable identity when a provider tool shell drops the
+# environment it was handed. Keep an explicit RUNDESK_HOME override authoritative for scratch and
+# test installs; only infer the root from the installed <root>/app/rundesk shape.
+elif app.name == "app" and (app.parent / "data" / "config.json").is_file():
+    os.environ.setdefault("RUNDESK_HOME", str(app.parent))
+
+sys.path.insert(0, str(app / "src"))
 
 from rundesk.cli import main  # noqa: E402  — the path insert above is what makes this importable
 

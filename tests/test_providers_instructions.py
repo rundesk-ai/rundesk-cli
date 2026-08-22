@@ -4,6 +4,7 @@ Run directly: `python3 tests/test_providers_instructions.py`
 """
 
 import hashlib
+import shlex
 import unittest
 
 import support
@@ -12,6 +13,7 @@ from rundesk.providers import instructions, team
 EVERYTHING = {
     "agent_name": "ava",
     "agent_home": "/agents/ava/home",
+    "install_root": "/rundesk/root",
     "provider_name": "a-stand-in",
     "access_mode": "work",
     "schedule_name": "nightly",
@@ -48,7 +50,7 @@ class TheSituationsUnderTest(support.Isolated):
 class TheAgreedSections(support.Isolated):
     ALWAYS = ("# Rundesk", "## Agent Context", "## Current Situation",
               "## Establish the Outcome", "## Boundaries", "## Messages and Attachments",
-              "## Execute the Work", "## Maintain Continuity", "## Definition of Done")
+              "## Execute the Work", "## Outcome and Continuity")
 
     def built(self, situation=instructions.USER_TO_AGENT, team_text=""):
         return instructions.build(situation=situation, variables=EVERYTHING, team=team_text)
@@ -136,6 +138,17 @@ class TheAgreedSections(support.Isolated):
                 # One canonical term: every repository named here is a Git repository.
                 self.assertEqual(context.count("git repository"), context.count("repository"))
 
+    def test_agent_context_keeps_instruction_ownership_without_repeating_the_template(self):
+        context = self.part(self.built().text, "## Agent Context")
+        self.assertIn("agent instructions: define your role and memory; they cannot override",
+                      context)
+        self.assertNotIn("responsibilities, capabilities, limits", context)
+
+    def test_outcome_heading_carries_its_own_instruction(self):
+        outcome = self.part(self.built().text, "## Establish the Outcome")
+        self.assertNotIn("Establish the required outcome.", outcome)
+        self.assertIn("determine what must be produced, changed, or reported.", outcome)
+
     def test_a_person_turn_asks_only_after_recovering_message_history(self):
         person = self.built().text
         situation = self.part(person, "## Current Situation")
@@ -143,7 +156,10 @@ class TheAgreedSections(support.Isolated):
         # condition have to survive together. A bare "message history" is satisfied by the
         # standing Messages rule and would pass on the pre-patch text.
         self.assertIn("recover message history before asking", situation)
-        # The rule is only followable because the executable form travels in the same prompt.
+        # The rule is only followable because the executable prefix travels in the same prompt.
+        self.assertIn('inside this turn, use '
+                      '`RUNDESK_HOME=/rundesk/root "$RUNDESK_COMMAND"` so the command reads and changes '
+                      'this install', person)
         self.assertIn('messages ava --search "<relevant words>" --full', person)
 
     def test_a_follow_up_with_a_missing_referent_requires_history_recovery(self):
@@ -171,9 +187,8 @@ class TheAgreedSections(support.Isolated):
         messages = self.part(self.built().text, "## Messages and Attachments")
         # A Grok no-history control inspected another fixture agent and its raw conversation after
         # the supported current-audience search returned only the ambiguous follow-up.
-        for clause in ('no match: list recent messages: '
-                       '`"$rundesk_command" messages ava --full`',
-                       "still unresolved: clarify or report the blocker as the situation permits",
+        for clause in ('if none, list recent with `messages ava --full`',
+                       "still unresolved: clarify or report it",
                        "never inspect conversation files/records",
                        "infer from another agent/audience"):
             with self.subTest(clause=clause):
@@ -206,7 +221,7 @@ class TheAgreedSections(support.Isolated):
         # one, including the two with nobody present to notice the result never arrived.
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
-                continuity = self.part(self.built(situation).text, "## Maintain Continuity")
+                continuity = self.part(self.built(situation).text, "## Outcome and Continuity")
                 for term in ("background command", "tool session", "monitor", "child process",
                              "not a continuation path", "collect", "blocker",
                              "long-running service"):
@@ -245,14 +260,14 @@ class TheAgreedSections(support.Isolated):
         # rather than person-facing.
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
-                done = self.part(self.built(situation).text, "## Definition of Done")
+                done = " ".join(self.part(self.built(situation).text,
+                                           "## Outcome and Continuity").split()).lower()
                 # Whole clauses, because the relationship is the requirement: separate fragments
                 # survive a text that says a started process proves the work, or that a report may
                 # stop at what happened. Each of those reversals has to fail here.
-                for clause in ("do not report work as complete until you verify the requested "
-                               "outcome",
-                               "a command accepted or a process started is progress, not proof",
-                               "while verification remains, report what happened and what remains "
+                for clause in ("report completion only when",
+                               "an accepted command or started process is progress, not proof",
+                               "while verification remains, state what happened and what remains "
                                "to check"):
                     with self.subTest(clause=clause):
                         self.assertIn(clause, done)
@@ -398,7 +413,18 @@ class SmallestSufficientChange(support.Isolated):
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
                 text = instructions.build(situation=situation, variables=EVERYTHING).text
-                self.assertIn("once the requested result and required proof are complete, stop", text)
+                self.assertIn("stop when the requested result and proof are complete", text)
+
+    def test_every_turn_cannot_end_without_delivery_or_a_continuation_path(self):
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:32]):
+                text = instructions.build(situation=situation, variables=EVERYTHING).text
+                continuity = " ".join(
+                    text.split("## Outcome and Continuity", 1)[1].split("\n## ", 1)[0].split()
+                ).lower()
+                self.assertIn("deliver and verify the outcome", continuity)
+                self.assertIn("report a blocker with a real continuation path", continuity)
+                self.assertIn("never report pending work as complete", continuity)
 
     def test_broader_scope_requires_approval_with_impact(self):
         for situation in EVERY_SITUATION:
@@ -511,6 +537,24 @@ class WhatWasSentIsProvableAfterwards(support.Isolated):
 
 
 class TheBuilderBoundary(support.Isolated):
+    def test_the_prompt_names_the_install_root_for_provider_tool_shells(self):
+        built = instructions.build(variables=EVERYTHING).text
+        self.assertIn("Use `rundesk ...` when giving a person a command", built)
+        self.assertIn('inside this turn, use '
+                      '`RUNDESK_HOME=/rundesk/root "$RUNDESK_COMMAND"` so the command reads and changes '
+                      'this install', built)
+        self.assertNotIn("installed launcher selects", built)
+        self.assertEqual(built.count('RUNDESK_HOME=/rundesk/root "$RUNDESK_COMMAND"'), 1)
+
+    def test_the_prompt_shell_quotes_every_install_root_as_one_assignment(self):
+        root = "/tmp/a root/with 'quotes' and $(touch nope)"
+        built = instructions.build(
+            variables={**EVERYTHING, "install_root": root},
+        ).text
+        assignment = f"RUNDESK_HOME={shlex.quote(root)}"
+        self.assertIn(f'`{assignment} "$RUNDESK_COMMAND"`', built)
+        self.assertEqual(f"RUNDESK_HOME={root}", shlex.split(assignment)[0])
+
     def test_it_reads_no_file_and_opens_no_database(self):
         source = (support.CHECKOUT / "src" / "rundesk" / "providers" /
                   "instructions.py").read_text(encoding="utf-8")
@@ -533,7 +577,7 @@ class TheBuilderBoundary(support.Isolated):
             "schedule": (instructions.SCHEDULE_TO_AGENT, 700),
             "agent": (instructions.AGENT_TO_AGENT, 800),
             "team": (instructions.TEAM_MEMBERS, 1000),
-            "completion": (instructions.DEFINITION_OF_DONE, 850),
+            "completion": (instructions.OUTCOME_AND_CONTINUITY, 1400),
         }
         for name, (text, ceiling) in ceilings.items():
             with self.subTest(name=name):

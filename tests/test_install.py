@@ -218,6 +218,128 @@ class AFreshInstall(Installing):
         self.assertEqual(0, ended.returncode, ended.stderr)
         self.assertIn(str(self.root), ended.stdout)
 
+    def test_an_installed_launcher_selects_its_own_root_when_home_is_missing(self):
+        self.install()
+        fake_home = self.home / "default-home"
+        environment = os.environ.copy()
+        environment.pop(paths.HOME_IS, None)
+        environment["HOME"] = str(fake_home)
+        ended = subprocess.run([str(self.bin / "rundesk"), "status"],
+                               capture_output=True, text=True, env=environment,
+                               stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(0, ended.returncode, ended.stderr)
+        self.assertIn(str(self.root), ended.stdout)
+        self.assertNotIn(str(fake_home / ".rundesk"), ended.stdout)
+
+    def test_an_explicit_home_override_still_wins_over_the_launcher_root(self):
+        self.install()
+        override = self.home / "override"
+        environment = os.environ.copy()
+        environment[paths.HOME_IS] = str(override)
+        ended = subprocess.run([str(self.bin / "rundesk"), "status"],
+                               capture_output=True, text=True, env=environment,
+                               stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(0, ended.returncode, ended.stderr)
+        self.assertIn(str(override), ended.stdout)
+        self.assertNotIn(f"home        {self.root}", ended.stdout)
+
+    def test_a_checkout_happening_to_be_named_app_does_not_select_its_parent(self):
+        checkout = self.home / "not-an-install" / "app"
+        checkout.mkdir(parents=True)
+        shutil.copy2(support.CHECKOUT / "rundesk", checkout / "rundesk")
+        (checkout / "src").symlink_to(support.CHECKOUT / "src", target_is_directory=True)
+        fake_home = self.home / "default-home"
+        environment = os.environ.copy()
+        environment.pop(paths.HOME_IS, None)
+        environment.pop("RUNDESK_AGENT", None)
+        environment.pop("RUNDESK_RUN", None)
+        environment.pop("RUNDESK_CWD", None)
+        environment["HOME"] = str(fake_home)
+        ended = subprocess.run([str(checkout / "rundesk"), "status"],
+                               capture_output=True, text=True, env=environment,
+                               stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(0, ended.returncode, ended.stderr)
+        self.assertIn(str(fake_home / ".rundesk"), ended.stdout)
+        self.assertNotIn(str(checkout.parent), ended.stdout)
+
+    def test_a_provider_turn_identity_keeps_a_rebuilt_shell_on_its_own_install(self):
+        """A provider shell may restore live HOME and COMMAND, but not the turn's identity.
+
+        The provider's command runtime is outside Rundesk's process. If it rebuilds those two
+        variables from the owner's login environment, an agent in a scratch install must still
+        reach its own command rather than silently operating on the live install.
+        """
+        self.install()
+        agent_home = self.root / "data" / "agents" / "ava" / "home"
+        agent_home.mkdir(parents=True)
+        (agent_home.parent / "state.db").touch()
+        environment = os.environ.copy()
+        environment[paths.HOME_IS] = str(Path.home() / ".rundesk")
+        environment["RUNDESK_COMMAND"] = str(Path.home() / ".local" / "bin" / "rundesk")
+        environment["RUNDESK_CWD"] = str(agent_home)
+        environment["RUNDESK_AGENT"] = "ava"
+        environment["RUNDESK_RUN"] = "1"
+        ended = subprocess.run([str(self.bin / "rundesk"), "status"],
+                               capture_output=True, text=True, env=environment,
+                               stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(0, ended.returncode, ended.stderr)
+        self.assertIn(str(self.root), ended.stdout)
+        self.assertNotIn(str(Path.home() / ".rundesk"), ended.stdout)
+
+    def test_a_stray_agent_directory_cannot_override_an_explicit_home(self):
+        self.install()
+        agent_home = self.root / "data" / "agents" / "ava" / "home"
+        agent_home.mkdir(parents=True)
+        override = self.home / "override"
+        environment = os.environ.copy()
+        environment[paths.HOME_IS] = str(override)
+        environment["RUNDESK_CWD"] = str(agent_home)
+        environment["RUNDESK_AGENT"] = "ava"
+        environment["RUNDESK_RUN"] = "1"
+        ended = subprocess.run([str(self.bin / "rundesk"), "status"],
+                               capture_output=True, text=True, env=environment,
+                               stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(0, ended.returncode, ended.stderr)
+        self.assertIn(str(override), ended.stdout)
+        self.assertNotIn(f"home        {self.root}", ended.stdout)
+
+    def test_the_checkout_launcher_applies_the_same_turn_identity_guard(self):
+        """The guard is needed before an installed command is copied to a scratch root too."""
+        self.install()
+        agent_home = self.root / "data" / "agents" / "ava" / "home"
+        agent_home.mkdir(parents=True)
+        (agent_home.parent / "state.db").touch()
+        environment = os.environ.copy()
+        environment[paths.HOME_IS] = str(Path.home() / ".rundesk")
+        environment["RUNDESK_COMMAND"] = str(Path.home() / ".local" / "bin" / "rundesk")
+        environment["RUNDESK_CWD"] = str(agent_home)
+        environment["RUNDESK_AGENT"] = "ava"
+        environment["RUNDESK_RUN"] = "1"
+        ended = subprocess.run([str(support.CHECKOUT / "rundesk"), "status"],
+                               capture_output=True, text=True, env=environment,
+                               stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(0, ended.returncode, ended.stderr)
+        self.assertIn(str(self.root), ended.stdout)
+        self.assertNotIn(str(Path.home() / ".rundesk"), ended.stdout)
+
+    def test_a_checkout_turn_without_an_installed_app_keeps_its_scratch_root(self):
+        """A checkout runner still has an agent home to identify its scratch install by."""
+        agent_home = self.root / "data" / "agents" / "ava" / "home"
+        agent_home.mkdir(parents=True)
+        (agent_home.parent / "state.db").touch()
+        environment = os.environ.copy()
+        environment[paths.HOME_IS] = str(Path.home() / ".rundesk")
+        environment["RUNDESK_COMMAND"] = str(Path.home() / ".local" / "bin" / "rundesk")
+        environment["RUNDESK_CWD"] = str(agent_home)
+        environment["RUNDESK_AGENT"] = "ava"
+        environment["RUNDESK_RUN"] = "1"
+        ended = subprocess.run([str(support.CHECKOUT / "rundesk"), "status"],
+                               capture_output=True, text=True, env=environment,
+                               stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(0, ended.returncode, ended.stderr)
+        self.assertIn(str(self.root), ended.stdout)
+        self.assertNotIn(str(Path.home() / ".rundesk"), ended.stdout)
+
     def test_proving_the_install_never_asks_what_is_published(self):
         # The installer proves the command it placed really answers. Which verb it proves with is
         # not a detail: `version` asks GitHub, so an installer proved with it turns every install —

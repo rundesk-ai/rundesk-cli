@@ -206,6 +206,45 @@ that decision implicitly.
 - Three same-audience Codex continuity cases recovered exact seeded values after a fingerprint
   change and matched their direct-context controls without person-facing setup narration.
 
+## PR #432 scratch-provider addendum — 2026-08-21
+
+This addendum records the provider validation run for the install-root and command-path change.
+The scratch install was created from the PR worktree under a unique root and used separate domain
+and specialist agents for antigravity, Claude, Codex, Gemini, and Grok. Domain agents were limited
+to their matching specialist; specialists were configured inbound-only. The scratch install was
+removed after the run, and the live install remained at 0.51.6 with its original status and agent
+count.
+
+### Isolation checks
+
+| Check | Result | Evidence |
+|---|---|---|
+| Installed launcher with no home variable | pass | 87 install tests; launcher selected its own root |
+| Explicit home override outside an installed root | pass | Existing install regression remains green |
+| Provider-turn identity with hostile live `RUNDESK_HOME`/`RUNDESK_COMMAND` | pass offline | New install regression derives the root from `RUNDESK_CWD`, agent, and run, and rejects the live root |
+| Real provider invoking an explicit scratch launcher | pass | Codex reported scratch `status` home and one scratch agent |
+| Real provider shell's inherited variables | fail as an environmental boundary | Codex's tool shell rewrote `RUNDESK_HOME` and `RUNDESK_COMMAND` to live values; the patched launcher guard is required before claiming bare-command scratch safety |
+
+### Natural provider control results
+
+The control prompt asked each agent, without naming the edge case, to explain how it handles missing
+context, verification, and blockers without using tools or changing state. Results were graded from
+the supported `turns` and `messages` records.
+
+| Provider | Domain control | Specialist evidence review | Notes |
+|---|---|---|---|
+| antigravity | pass | failed | Provider ended after an invalid `view_file` directory call during a read-only review |
+| Claude | pass | pass | Returned concise, path-backed risks and concrete checks |
+| Codex | pass | pass | Returned concise, path-backed risks and named unsupported claims |
+| Gemini | failed | failed | Live custom adapter entered the Grok adapter and raised `opening()` argument mismatch |
+| Grok | rate-limited | rate-limited | Provider classified the terminal rate-limit outcome; no behavior pass claimed |
+
+These are provider observations, not cross-provider passes. The clean Claude/Codex rows validate the
+current rules' handling of missing context, evidence, and blockers; antigravity, Gemini, and Grok
+remain open provider-conformance items. Numbered or tagged prose was not credited as an improvement:
+the prior controlled Codex artifact run changed presentation but did not consistently improve exact
+results, while the compact wording candidate has not earned a full provider-matrix pass.
+
 ## Release gate
 
 PR #430 must not merge, release, or install until Tim reviews this matrix and chooses the provider
