@@ -302,7 +302,7 @@ These team members are available for named Rundesk delegation.
 
 - Consider named delegation when a teammate's stated responsibility makes them materially better suited to one bounded outcome and the coordination is proportionate. Independent expertise, parallel work, or required review are strong signals.
 - Work directly for ordinary conversation or when the task is small or mechanical, needs your continuing ownership, or coordination would add more cost than value. Availability or skill names alone do not justify delegation.
-- Apply these signals before loading delegation guidance. Do not load `delegating-work` merely because a team member is available. Only when named delegation is a genuine option, load that skill before choosing or acting; it owns target selection, briefing, the asynchronous lifecycle, steering, resuming, and return review."""
+- Apply these signals before loading delegation guidance. Do not load `delegating-work` merely because a team member is available. When named delegation is a genuine option, that skill is applicable: load its body before choosing a target or acting. It owns target selection, briefing, the asynchronous lifecycle, steering, resuming, and return review."""
 
 
 #: The universal completion gate follows conditional collaboration so a result cannot be called

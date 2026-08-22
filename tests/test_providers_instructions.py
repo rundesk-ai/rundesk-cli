@@ -365,8 +365,9 @@ class DelegationRouting(support.Isolated):
         text = self.built()
         self.assertIn("Apply these signals before loading delegation guidance", text)
         self.assertIn("Do not load `delegating-work` merely because a team member is available", text)
-        self.assertIn("Only when named delegation is a genuine option, load that skill", text)
-        self.assertIn("it owns target selection, briefing, the asynchronous lifecycle, steering, "
+        self.assertIn("When named delegation is a genuine option, that skill is applicable", text)
+        self.assertIn("load its body before choosing a target or acting", text)
+        self.assertIn("It owns target selection, briefing, the asynchronous lifecycle, steering, "
                       "resuming, and return review", text)
         self.assertNotIn('`"$RUNDESK_COMMAND" ask <agent>', text)
         for repeated in ("Simple documentation or copy work", "Small coding work",

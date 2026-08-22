@@ -185,9 +185,9 @@ justify delegation.
 
 The agent applies those routing signals before loading delegation guidance. It does not load
 `delegating-work` merely because a teammate is available. Only when named delegation is a genuine
-option does it load that skill before choosing or acting. The skill owns target selection, briefing,
-asynchronous lifecycle, steering, resuming, and return review; the always-loaded operating layer
-does not repeat those procedures.
+option is that skill classified as applicable, and its body must load before the agent chooses a
+target or acts. The skill owns target selection, briefing, asynchronous lifecycle, steering,
+resuming, and return review; the always-loaded operating layer does not repeat those procedures.
 
 It is omitted for schedules because their asynchronous result cannot return to the same turn for
 review. It is omitted for agent-to-agent delegations because named Rundesk delegation stops at one
