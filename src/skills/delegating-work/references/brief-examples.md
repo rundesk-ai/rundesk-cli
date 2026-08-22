@@ -10,7 +10,7 @@ actual assignment.
 Task: Add duplicate-invoice validation to the existing create flow.
 Why: Prevent duplicate invoices without changing the response contract.
 Scope: Inspect the relevant request, model, migration, and tests; edit only the files needed.
-Authority: May edit scoped repository files and run focused tests; no publish, deploy, credentials, or unrelated refactor.
+Authority: May edit scoped repository files and run focused tests; no push, issue, pull request, merge, tag, or release; no deploy, credentials, or unrelated refactor.
 Context: The existing create flow and response contract are authoritative; acceptance requires duplicate rejection without changing successful unique creation.
 Constraints: Follow repository rules and existing validation conventions.
 Evidence required: Changed files, behavior summary, and exact focused test command and output.

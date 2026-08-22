@@ -59,6 +59,15 @@ do not delegate again from a turn that is already answering a delegation.
 If no permitted target materially fits, continue directly or report the routing gap. Do not bypass
 the delegation scope with an attended `ask`.
 
+Never delegate GitHub delivery to a named agent. The primary agent that received and owns the
+requested outcome retains drafting or submitting issues; drafting, creating, or updating pull
+requests; pushing branches; monitoring or responding to checks and reviews; and merging, tagging,
+or publishing releases. Load `managing-github` and perform those actions directly. A named
+implementation delegation ends with local implementation artifacts and evidence for primary review
+and integration, even when the target has repository access or holds `managing-github`. An agent
+asked directly by a person is primary for that request; this boundary applies when it hands work to
+another named agent.
+
 ## Write the delegation brief
 
 Include all of these fields. If a field is unknown, name the gap and require the target to preserve
@@ -67,7 +76,8 @@ it as uncertainty rather than inventing an answer.
 1. **Task** — the exact outcome or question, with the relevant files, system, and time boundary.
 2. **Why** — the decision or larger outcome this supports.
 3. **Scope and authority** — what is included, excluded, and whether the target may inspect or edit.
-   Never imply permission to publish, deploy, change credentials, or broaden scope.
+   Never imply permission to publish, deploy, change credentials, broaden scope, or perform GitHub
+   delivery reserved to the primary agent.
 4. **Context** — the original request, acceptance criteria, current state, prior decisions, and
    assignment-specific inputs the target will not otherwise have.
 5. **Constraints** — project rules, invariants, assumptions to test, and required tools.
@@ -81,7 +91,7 @@ Use this shape:
 Task: <one bounded outcome>
 Why: <what decision or deliverable it supports>
 Scope: <paths, system, question, and time boundary>
-Authority: <inspect only | may edit these exact files; no publish/deploy>
+Authority: <inspect only | may edit these exact files; no push, issue, pull request, merge, tag, release, publish, or deploy>
 Context: <original request, acceptance criteria, current state, prior decisions, and required inputs>
 Constraints: <rules, invariants, and assumptions to test>
 Evidence required: <artifacts and exact proof to return>
