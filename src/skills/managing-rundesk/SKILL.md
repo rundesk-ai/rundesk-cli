@@ -1,6 +1,6 @@
 ---
 name: managing-rundesk
-description: Use when inspecting, configuring, operating, troubleshooting, or recovering the Rundesk install that owns this agent. It supplies verified commands, workflows, and safety rules for agents, gateways, conversations, channels, schedules, providers, skills, backups, configuration, credentials, and the Rundesk lifecycle. Do not use for ordinary project work or for deciding, performing, or reviewing delegation.
+description: Use when managing this agent, any other agent in its Rundesk install, or the install itself. It supplies verified operational workflows and safety rules for agent instructions, gateways, conversations, channels, schedules, providers, skills, backups, configuration, credentials, and the Rundesk lifecycle. Do not use for ordinary project work or for deciding, performing, or reviewing delegation.
 ---
 
 # Manage Rundesk

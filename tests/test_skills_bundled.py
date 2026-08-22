@@ -396,6 +396,10 @@ class WhatAShippedSkillMayClaim(Bundled):
                 self.assertIn(phrase, examples)
         self.assertNotIn("### Coding implementation", delegating)
         self.assertIn("Do not use for ordinary project work or for deciding, performing, or reviewing delegation", main)
+        for phrase in ("managing this agent", "any other agent in its Rundesk install",
+                       "or the install itself", "verified operational workflows"):
+            with self.subTest(reference="managing-rundesk/description", phrase=phrase):
+                self.assertIn(phrase, main)
         self.assertNotIn("whether and how to delegate", main)
         self.assertNotIn("delegation decisions", main)
         self.assertNotIn("Ask an agent from this terminal", main)
