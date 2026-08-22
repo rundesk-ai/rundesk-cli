@@ -346,8 +346,12 @@ class WhatAShippedSkillMayClaim(Bundled):
                 self.assertIn(f"{preview} --confirm", skills)
 
     def test_delegation_work_is_separate_from_install_management(self):
-        skill = self.skills / "managing-rundesk" / "references"
-        agents = " ".join((skill / "agents.md").read_text(encoding="utf-8").split())
+        managing = self.skills / "managing-rundesk"
+        references = managing / "references"
+        main = " ".join((managing / library.DECLARED).read_text(encoding="utf-8").split())
+        agents = " ".join((references / "agents.md").read_text(encoding="utf-8").split())
+        instructions = " ".join(
+            (references / "agent-instructions.md").read_text(encoding="utf-8").split())
         delegating = " ".join(
             (self.skills / "delegating-work" / library.DECLARED).read_text(encoding="utf-8").split())
         for phrase in ("routing contract, not a biography", "durable responsibility it owns",
@@ -363,7 +367,12 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "Blocked", "not a continuation path"):
             with self.subTest(reference="delegating-work", phrase=phrase):
                 self.assertIn(phrase, delegating)
-        self.assertFalse((self.skills / "managing-rundesk" / "references" / "delegations.md").exists())
+        self.assertIn("deciding whether and how to delegate work through Rundesk", main)
+        self.assertIn("does not start or manage delegated work", main)
+        self.assertNotIn("Ask an agent from this terminal", main)
+        self.assertIn("`delegating-work` skill's handoff lifecycle", instructions)
+        self.assertNotIn("delegations.md", instructions)
+        self.assertFalse((references / "delegations.md").exists())
 
     def test_agent_instruction_guidance_is_routed_and_has_each_required_section(self):
         skill = self.skills / "managing-rundesk"

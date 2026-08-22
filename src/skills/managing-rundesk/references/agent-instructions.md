@@ -172,10 +172,9 @@ After reviewing the agent and drafting the focused behavior contract:
    irrelevant granted skill stayed unloaded, and that a body already loaded earlier in the session
    was not loaded again. A skill named in a listing is not evidence that its body was read, and a
    body loaded after the work began did not govern it.
-6. When validation uses named delegation, follow the [delegation
-   lifecycle](delegations.md#follow-the-lifecycle). Establish a real return path before handing off
-   and run one validation case per reviewed return. Without a return path, leave the exact validation
-   pending for an owner-attended fresh turn.
+6. When validation uses named delegation, follow the `delegating-work` skill's handoff lifecycle.
+   Establish a real return path before handing off and run one validation case per reviewed return.
+   Without a return path, leave the exact validation pending for an owner-attended fresh turn.
 
 Do not restart a healthy gateway merely to load a rules edit. Fresh turns rebuild their instruction
 context; an already-running turn keeps the context it started with.

@@ -1,11 +1,14 @@
 ---
 name: managing-rundesk
-description: Use this skill when work involves managing Rundesk or using its operational capabilities. This includes managing agents and their instructions, gateways, delegations, conversations, channels, schedules, providers, skills, backups, configuration, credentials, and the Rundesk lifecycle. It supplies verified Rundesk commands, workflows, and safety rules. Do not use it for ordinary project or workspace work unless the task requires a Rundesk operation.
+description: Use this skill when managing Rundesk state or deciding whether and how to delegate work through Rundesk. It supplies verified commands, workflows, and safety rules for agents, gateways, conversations, channels, schedules, providers, skills, backups, configuration, credentials, and the Rundesk lifecycle. Do not use it for ordinary project or workspace work unless the task requires a Rundesk operation.
 ---
 
 # Manage Rundesk
 
 Use Rundesk's commands to answer questions about this install. Do not guess at its state or paths.
+Use this skill to inform delegation decisions with verified Rundesk state; follow the active agent
+instructions for whether to delegate, choosing a target, and reviewing returned work. This skill
+does not start or manage delegated work.
 
 ## Use the right install
 
@@ -30,9 +33,8 @@ command syntax. Never report success from wording alone; read the exit code and 
 | 2 | See the agents and their providers | `"$RUNDESK_COMMAND" agents` |
 | 3 | See whether gateways are running | `"$RUNDESK_COMMAND" gateways` |
 | 4 | Explain gateway trouble | `"$RUNDESK_COMMAND" gateways logs <agent>` |
-| 5 | Ask an agent from this terminal | `"$RUNDESK_COMMAND" ask <agent> '<prompt>'` |
-| 6 | Check provider, channel, and skill readiness | `"$RUNDESK_COMMAND" providers check <provider>` · `"$RUNDESK_COMMAND" channels doctor <agent>` · `"$RUNDESK_COMMAND" skills doctor <agent>` |
-| 7 | Protect approved risky work | `"$RUNDESK_COMMAND" backups save` |
+| 5 | Check provider, channel, and skill readiness | `"$RUNDESK_COMMAND" providers check <provider>` · `"$RUNDESK_COMMAND" channels doctor <agent>` · `"$RUNDESK_COMMAND" skills doctor <agent>` |
+| 6 | Protect approved risky work | `"$RUNDESK_COMMAND" backups save` |
 
 Choose the narrowest command that answers the request. Before a mutation, inspect only enough state
 to identify the exact target and consequence. Most groups list when called with no subcommand.
@@ -69,7 +71,7 @@ to identify the exact target and consequence. Most groups list when called with 
 | [Skills](references/skills.md) | Catalogs, grants, profiles, values, and skill diagnosis |
 | [Maintenance](references/maintenance.md) | Focused upkeep of this agent's memory, indexes, and home workspace |
 | [Retrospective](references/retrospective.md) | Write the bounded usage-cycle diary from evidence and compare prior improvements |
-| [Self-improvement](references/self-improvement.md) | Review proven friction, continuity, capability gaps, skills, and delegation fit |
+| [Self-improvement](references/self-improvement.md) | Review proven friction, continuity, capability gaps, and skills |
 | [Configuration](references/configuration.md) | Status, version, install settings, and secret values |
 | [OAuth login](references/oauth-login.md) | Configure an installed provider; connect, select, extend, or recover accounts |
 | [Lifecycle](references/lifecycle.md) | Install, update, uninstall, and purge |
