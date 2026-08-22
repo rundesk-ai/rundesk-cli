@@ -352,8 +352,14 @@ class WhatAShippedSkillMayClaim(Bundled):
         agents = " ".join((references / "agents.md").read_text(encoding="utf-8").split())
         instructions = " ".join(
             (references / "agent-instructions.md").read_text(encoding="utf-8").split())
+        delegation_root = self.skills / "delegating-work"
         delegating = " ".join(
-            (self.skills / "delegating-work" / library.DECLARED).read_text(encoding="utf-8").split())
+            (delegation_root / library.DECLARED).read_text(encoding="utf-8").split())
+        operations = " ".join(
+            (delegation_root / "references" / "operations.md").read_text(encoding="utf-8").split())
+        examples = " ".join(
+            (delegation_root / "references" / "brief-examples.md").read_text(
+                encoding="utf-8").split())
         for phrase in ("routing contract, not a biography", "durable responsibility it owns",
                        "Do not use transient assignments", "Update the description when"):
             with self.subTest(reference="managing-rundesk/agents", phrase=phrase):
@@ -371,6 +377,24 @@ class WhatAShippedSkillMayClaim(Bundled):
         self.assertIn("preparing or reviewing a handoff", delegating)
         self.assertIn("continuing delegated work to a verified outcome", delegating)
         self.assertIn("Do not use for ordinary Rundesk operations", delegating)
+        self.assertIn("[Delegation operations](references/operations.md)", delegating)
+        self.assertIn("[Brief examples](references/brief-examples.md)", delegating)
+        for phrase in ("List or `show`", "`say` to steer", "`stop` to request",
+                       "`resume` to continue", "`working`", "`stopping`", "`stopped`",
+                       "`answered`"):
+            with self.subTest(reference="delegating-work", phrase=phrase):
+                self.assertIn(phrase, delegating)
+        for phrase in ("--provider <provider>", "asked --agent <delegator>",
+                       "guidance was stored", "same delegation, conversation, provider selection",
+                       "steered turn may answer the new guidance", "original brief",
+                       "resume the same delegation", "Do not poll"):
+            with self.subTest(reference="delegating-work/operations", phrase=phrase):
+                self.assertIn(phrase, operations)
+        for phrase in ("## Coding implementation", "## Code or design review",
+                       "## Research or comparison", "Return format:"):
+            with self.subTest(reference="delegating-work/brief-examples", phrase=phrase):
+                self.assertIn(phrase, examples)
+        self.assertNotIn("### Coding implementation", delegating)
         self.assertIn("Do not use for ordinary project work or for deciding, performing, or reviewing delegation", main)
         self.assertNotIn("whether and how to delegate", main)
         self.assertNotIn("delegation decisions", main)

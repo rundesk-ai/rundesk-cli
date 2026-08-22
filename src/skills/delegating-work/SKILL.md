@@ -83,11 +83,34 @@ Do not write “look into this,” “fix anything needed,” or “report back�
 standard. A good `Why` prevents locally correct work from solving the wrong problem; a good
 definition of done prevents a plausible summary from being mistaken for completion.
 
-## Start, review, and continue the handoff
+Read [Brief examples](references/brief-examples.md) when composing or reviewing an implementation,
+code-review, or research handoff. Adapt its fields to the task; do not copy an example's authority or
+proof into a different kind of work.
 
-Handing work off is non-blocking progress, not completion. Use the supported `ask` and `asked`
-commands from this turn's delegation surface; do not poll for completion or leave a background
-process as ownership of the outcome.
+## Manage the delegation
+
+Hand work over with `ask`; it returns a delegation id immediately. Keep that id as the handle for
+observing and controlling the work. Read [Delegation operations](references/operations.md) before
+starting or managing a handoff; it gives the exact commands, provider selection, state refusals, and
+return behavior.
+
+Use each operation for its one meaning:
+
+- List or `show` to inspect ownership, state, and provider provenance.
+- `say` to steer work that is still running. Guidance is durable if the live turn misses it, but it
+  does not replace the original brief or prove the next answer satisfies it.
+- `stop` to request an early terminal end. A stop request is not proof that work has stopped.
+- `resume` to continue answered work in the same provider session. Stopped work cannot resume.
+
+Treat the state as the next-action contract: `working` may be steered or stopped; `stopping` is
+waiting for the terminal stop; `stopped` is closed; `answered` requires review and may be resumed.
+Do not send `say` to answered work, resume working work, or treat a refusal as a state change.
+
+Handing work off is non-blocking progress, not completion. Do not poll for the result or leave a
+background process as ownership of the outcome. End with the delegated answer as the real resumption
+event when no other useful in-scope work remains.
+
+## Review and settle the handoff
 
 When an answer returns, review it against the original brief:
 
@@ -112,41 +135,3 @@ Before ending a turn, choose one real terminal state:
 An open shell, background process, delegation id, or “I started it” is not a continuation path. Do
 not report pending work as complete, and do not end a turn while required work remains without one of
 the two honest paths: continue with a real resumption event or report the blocker.
-
-## Examples
-
-### Coding implementation
-
-```text
-Task: Add duplicate-invoice validation to the existing create flow.
-Why: Prevent duplicate invoices without changing the response contract.
-Scope: Inspect the relevant request, model, migration, and tests; edit only the files needed.
-Authority: May edit scoped repository files and run focused tests; no publish, deploy, credentials, or unrelated refactor.
-Constraints: Follow repository rules and existing validation conventions.
-Evidence required: Changed files, behavior summary, and exact focused test command and output.
-Definition of done: Duplicate input is rejected, unique input still succeeds, tests pass, and no unrelated behavior changes.
-```
-
-Review the diff and test output yourself. “Tests passed” without the command or output is not proof.
-
-### Code or design review
-
-```text
-Task: Review the authentication-timeout diff for correctness and regression risk; do not edit.
-Why: Decide whether it is safe to merge without weakening session or logout behavior.
-Scope: Review the diff, affected auth code, and relevant tests only.
-Authority: Inspect only; do not modify files, create a PR, or change repository state.
-Evidence required: Severity, location, failure scenario, reasoning, and reproduction or test gap for each finding; checked coverage if there are no findings.
-Definition of done: Every scoped change is reviewed and the verdict is evidence-backed.
-```
-
-### Research or comparison
-
-```text
-Task: Compare the current official lifecycle commands with the local managing-rundesk guidance.
-Why: Identify documentation drift before teaching a workflow that can fail at runtime.
-Scope: Official sources and the local skill only, as of <date>.
-Authority: Inspect and report; do not edit, install, or change Rundesk state.
-Evidence required: Source links or file locations and a claim-by-claim classification.
-Definition of done: Every listed claim is confirmed, contradicted, or unverified with retraceable evidence.
-```
