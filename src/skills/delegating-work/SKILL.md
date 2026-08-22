@@ -1,6 +1,6 @@
 ---
 name: delegating-work
-description: Use when deciding whether to delegate work to another Rundesk agent, preparing or reviewing a handoff, or continuing delegated work to a verified outcome. It supplies context recovery, deliberate skill selection, necessary-only delegation, evidence requirements, and continuation discipline. Do not use for ordinary Rundesk operations or domain-specific implementation guidance.
+description: Use when named delegation is a genuine option for current work, when preparing or reviewing a handoff, or when continuing delegated work to a verified outcome. It supplies context recovery, deliberate skill selection, necessary-only delegation, evidence requirements, and continuation discipline. Do not use for ordinary Rundesk operations, domain-specific implementation guidance, or conversation with no genuine delegation option.
 ---
 
 # Work to an outcome

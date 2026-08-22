@@ -376,9 +376,10 @@ class WhatAShippedSkillMayClaim(Bundled):
             with self.subTest(reference="delegating-work", phrase=phrase):
                 self.assertIn(phrase, delegating)
         self.assertNotIn("## Load only applicable skills", delegating)
-        self.assertIn("deciding whether to delegate work to another Rundesk agent", delegating)
+        self.assertIn("named delegation is a genuine option for current work", delegating)
         self.assertIn("preparing or reviewing a handoff", delegating)
         self.assertIn("continuing delegated work to a verified outcome", delegating)
+        self.assertIn("conversation with no genuine delegation option", delegating)
         self.assertIn("Do not use for ordinary Rundesk operations", delegating)
         self.assertIn("[Delegation operations](references/operations.md)", delegating)
         self.assertIn("[Brief examples](references/brief-examples.md)", delegating)
