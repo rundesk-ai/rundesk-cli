@@ -107,7 +107,7 @@ class WhatIsShipped(Bundled):
         # The reason this catalog exists at all. A skill about writing pull requests does not change
         # when rundesk does, so shipping it here would tie a correction to it to a rundesk release —
         # it belongs in the catalog that is fetched. Everything here is about *this* rundesk.
-        self.assertEqual(["managing-rundesk", "writing-skills"], self.named())
+        self.assertEqual(["delegating-work", "managing-rundesk", "writing-skills"], self.named())
 
     def test_it_holds_the_skill_every_agent_is_required_to_have(self):
         # **This release must not ship a floor it does not satisfy.** Every agent is given
@@ -345,18 +345,25 @@ class WhatAShippedSkillMayClaim(Bundled):
                 self.assertIn(preview, skills)
                 self.assertIn(f"{preview} --confirm", skills)
 
-    def test_agent_descriptions_are_taught_as_delegation_routing_contracts(self):
+    def test_delegation_work_is_separate_from_install_management(self):
         skill = self.skills / "managing-rundesk" / "references"
         agents = " ".join((skill / "agents.md").read_text(encoding="utf-8").split())
-        delegations = " ".join(
-            (skill / "delegations.md").read_text(encoding="utf-8").split())
+        delegating = " ".join(
+            (self.skills / "delegating-work" / library.DECLARED).read_text(encoding="utf-8").split())
         for phrase in ("routing contract, not a biography", "durable responsibility it owns",
                        "Do not use transient assignments", "Update the description when"):
-            with self.subTest(reference="agents", phrase=phrase):
+            with self.subTest(reference="managing-rundesk/agents", phrase=phrase):
                 self.assertIn(phrase, agents)
         for phrase in ("Choose the target from its description", "Do not infer ownership"):
-            with self.subTest(reference="delegations", phrase=phrase):
-                self.assertIn(phrase, delegations)
+            with self.subTest(reference="delegating-work", phrase=phrase):
+                self.assertIn(phrase, delegating)
+        for phrase in ("Recover context before acting", "read each selected `SKILL.md` completely",
+                       "Availability alone is not a reason to delegate", "Task:", "Why:",
+                       "Evidence required:", "Definition of done:", "Complete", "Continue",
+                       "Blocked", "not a continuation path"):
+            with self.subTest(reference="delegating-work", phrase=phrase):
+                self.assertIn(phrase, delegating)
+        self.assertFalse((self.skills / "managing-rundesk" / "references" / "delegations.md").exists())
 
     def test_agent_instruction_guidance_is_routed_and_has_each_required_section(self):
         skill = self.skills / "managing-rundesk"

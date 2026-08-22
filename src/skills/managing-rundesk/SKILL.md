@@ -31,9 +31,8 @@ command syntax. Never report success from wording alone; read the exit code and 
 | 3 | See whether gateways are running | `"$RUNDESK_COMMAND" gateways` |
 | 4 | Explain gateway trouble | `"$RUNDESK_COMMAND" gateways logs <agent>` |
 | 5 | Ask an agent from this terminal | `"$RUNDESK_COMMAND" ask <agent> '<prompt>'` |
-| 6 | Inspect work this agent delegated | `"$RUNDESK_COMMAND" asked` |
-| 7 | Check provider, channel, and skill readiness | `"$RUNDESK_COMMAND" providers check <provider>` · `"$RUNDESK_COMMAND" channels doctor <agent>` · `"$RUNDESK_COMMAND" skills doctor <agent>` |
-| 8 | Protect approved risky work | `"$RUNDESK_COMMAND" backups save` |
+| 6 | Check provider, channel, and skill readiness | `"$RUNDESK_COMMAND" providers check <provider>` · `"$RUNDESK_COMMAND" channels doctor <agent>` · `"$RUNDESK_COMMAND" skills doctor <agent>` |
+| 7 | Protect approved risky work | `"$RUNDESK_COMMAND" backups save` |
 
 Choose the narrowest command that answers the request. Before a mutation, inspect only enough state
 to identify the exact target and consequence. Most groups list when called with no subcommand.
@@ -62,7 +61,6 @@ to identify the exact target and consequence. Most groups list when called with 
 | [Agents](references/agents.md) | Add, describe, reassign, or remove agents |
 | [Agent instructions](references/agent-instructions.md) | Design or change persistent agent behavior |
 | [Gateways](references/gateways.md) | Start, stop, restart, run, inspect, or recover gateways |
-| [Delegations](references/delegations.md) | Hand work to another agent; inspect, guide, stop, resume, or review it |
 | [Conversations](references/conversations.md) | Ask agents; inspect messages, turns, usage, and failures |
 | [Backups](references/backups.md) | Save, locate, move, or restore copies |
 | [Schedules](references/schedules.md) | Create timed work and proactive verification check-ins |
