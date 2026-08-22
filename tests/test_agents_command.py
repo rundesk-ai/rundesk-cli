@@ -209,18 +209,21 @@ class Adding(support.Isolated):
             self.assertIn(one, out, f"the line naming {one} is not there")
         self.assertIn("plans/, research/, scripts/, retros/, tasks/", out)
 
-    def test_it_is_given_the_skill_it_operates_this_install_with(self):
-        # Shipped, undeletable as a catalog, and held by nobody was the state this closes: an agent
-        # that cannot operate the install running it answers questions about this machine by
-        # guessing, and that reads as a model being unhelpful rather than as a skill nobody granted.
+    def test_a_new_agent_is_given_the_delegation_skill_its_default_scope_needs(self):
+        # A new agent is unrestricted, so its two default grants match its actual capabilities:
+        # operating the install and deciding, briefing, and reviewing named delegation.
         catalogs.place_bundled()
         code, out, _ = self.rundesk("agents", "add", "cole", "--provider", "claude")
         self.assertEqual(OK, code)
         self.assertIn(library.REQUIRED, out)
         self.assertIsNotNone(grants.holding("cole", library.REQUIRED_SKILL))
+        self.assertIn(library.DELEGATING, out)
+        self.assertIsNotNone(grants.holding("cole", library.DELEGATING_SKILL))
         # And where a brain looks, not merely in the agent's own directory.
-        self.assertTrue((directory.home("cole") / ".claude" / "skills"
-                         / library.REQUIRED_SKILL).is_symlink())
+        for skill in (library.REQUIRED_SKILL, library.DELEGATING_SKILL):
+            with self.subTest(skill=skill):
+                self.assertTrue((directory.home("cole") / ".claude" / "skills"
+                                 / skill).is_symlink())
 
     def test_an_install_with_no_catalog_still_makes_the_agent_and_says_what_gives_it_one(self):
         # The grant is best-effort and may never fail the agent. An install whose catalogs have not
@@ -427,6 +430,7 @@ class Configuring(support.Isolated):
         self.assertRegex(out, r"yes\s+or no")
 
     def test_repeated_delegate_targets_replace_the_scope_as_one_setting(self):
+        catalogs.place_bundled()
         for name in ("forge", "trace"):
             self.rundesk("agents", "add", name, "--provider", "claude")
 
@@ -439,19 +443,42 @@ class Configuring(support.Isolated):
         self.assertIn("trace", out)
         settled = json.loads(records.read(directory.records("cole"))["delegates_to"])
         self.assertEqual({"forge", "trace"}, set(settled))
+        self.assertIsNotNone(grants.holding("cole", library.DELEGATING_SKILL))
 
-    def test_delegate_to_none_makes_an_agent_inbound_only(self):
+    def test_delegate_to_none_removes_the_delegation_skill(self):
+        catalogs.place_bundled()
+        grants.granted("cole", library.look_up(library.DELEGATING))
         code, out, err = self.rundesk(
             "agents", "configure", "cole", "--delegate-to-none")
 
         self.assertEqual(OK, code, err)
         self.assertIn("may not delegate to another named agent now", out)
+        self.assertIn("removed while named delegation is disabled", out)
         self.assertEqual([], json.loads(
             records.read(directory.records("cole"))["delegates_to"]))
+        self.assertIsNone(grants.holding("cole", library.DELEGATING_SKILL))
+        presented = (directory.home("cole") / ".claude" / "skills"
+                     / library.DELEGATING_SKILL)
+        self.assertFalse(presented.exists() or presented.is_symlink())
 
-    def test_delegate_to_any_restores_the_compatible_default(self):
+    def test_delegate_to_none_leaves_an_owner_skill_of_that_name_alone(self):
+        theirs = grants.where("cole") / library.DELEGATING_SKILL
+        theirs.mkdir(parents=True)
+        declaration = theirs / library.DECLARED
+        declaration.write_text("owner data\n", encoding="utf-8")
+
+        code, out, err = self.rundesk(
+            "agents", "configure", "cole", "--delegate-to-none")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("not the bundled delegation grant", out)
+        self.assertIn("left alone", out)
+        self.assertEqual("owner data\n", declaration.read_text(encoding="utf-8"))
+
+    def test_delegate_to_any_restores_the_delegation_skill(self):
         self.assertEqual(OK, self.rundesk(
             "agents", "configure", "cole", "--delegate-to-none")[0])
+        catalogs.place_bundled()
 
         code, out, err = self.rundesk(
             "agents", "configure", "cole", "--delegate-to-any")
@@ -459,8 +486,10 @@ class Configuring(support.Isolated):
         self.assertEqual(OK, code, err)
         self.assertIn("any", out)
         self.assertIsNone(records.read(directory.records("cole"))["delegates_to"])
+        self.assertIsNotNone(grants.holding("cole", library.DELEGATING_SKILL))
 
     def test_an_unknown_delegate_target_refuses_every_named_change(self):
+        catalogs.place_bundled()
         code, out, err = self.rundesk(
             "agents", "configure", "cole", "--provider", "openai",
             "--delegate-to", "not-an-agent")
@@ -471,6 +500,7 @@ class Configuring(support.Isolated):
         settled = records.read(directory.records("cole"))
         self.assertEqual("claude", settled["provider_name"])
         self.assertIsNone(settled["delegates_to"])
+        self.assertIsNone(grants.holding("cole", library.DELEGATING_SKILL))
 
     def test_an_agent_cannot_put_itself_in_its_delegate_scope(self):
         code, out, err = self.rundesk(

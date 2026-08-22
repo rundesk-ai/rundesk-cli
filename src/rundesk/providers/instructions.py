@@ -284,8 +284,9 @@ Retain ownership of the outcome beyond one turn.
 #:
 #:     ### Delegation
 #:
-#:     - Choose a team member whose stated responsibility, focus, or skills make them better suited.
-#:     - Delegate with `"$RUNDESK_COMMAND" ask <agent> "<task>"` and review the later result.
+#:     - Consider delegation when a teammate's stated responsibility makes one bounded outcome a
+#:       materially better fit and the coordination is proportionate.
+#:     - Load `delegating-work` only after those signals make delegation a genuine option.
 #:     …
 #:
 #: An agent nobody has described is left out rather than listed blank, so this block is absent
@@ -299,11 +300,9 @@ These team members are available for named Rundesk delegation.
 
 ### Delegation
 
-- Simple documentation or copy work: work directly without delegation or a separate plan or review cycle. Use the shortest safe edit, smallest change surface, and required checks.
-- Small coding work: use at most one focused implementation delegation when useful. Review the return directly within your role and run required checks. Add review or QA only for observed risk or a required repository gate.
-- Large, complex, or high-risk work: use multiple bounded implementation, review, or QA delegations only for distinct necessary outcomes.
-- Scale up only for observed scope, risk, or failed evidence; state why. Repository gates and safety boundaries still apply.
-- Hand one bounded outcome to the best-fit member with `"$RUNDESK_COMMAND" ask <agent> "<task>"`; include scope, authority, result, and proof. It is asynchronous: do not wait or duplicate it, and verify the return."""
+- Consider named delegation when a teammate's stated responsibility makes them materially better suited to one bounded outcome and the coordination is proportionate. Independent expertise, parallel work, or required review are strong signals.
+- Work directly for ordinary conversation and simple documentation, formatting, or copy-only changes. Stay direct when the task is small or mechanical, needs your continuing ownership, or coordination would add more cost than value. Availability or skill names alone do not justify delegation.
+- Apply these signals before loading delegation guidance. Do not load `delegating-work` merely because a team member is available. When named delegation is a genuine option, that skill is applicable: load its body before choosing a target or acting. It owns target selection, briefing, the asynchronous lifecycle, steering, resuming, and return review."""
 
 
 #: The universal completion gate follows conditional collaboration so a result cannot be called

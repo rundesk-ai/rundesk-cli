@@ -18,7 +18,7 @@ from unittest import mock
 from fixtures_skills import a_published_catalog
 
 import support
-from rundesk.agents import directory
+from rundesk.agents import directory, records
 from rundesk.core import paths
 from rundesk.skills import catalogs, grants, library
 from rundesk.utils import locking
@@ -761,6 +761,30 @@ class TheSkillEveryAgentHolds(Grants):
         for root in grants.VENDOR_ROOTS:
             with self.subTest(root=root):
                 self.assertTrue(self.vendor("alan", root, library.REQUIRED_SKILL).is_symlink())
+
+    def test_the_sweep_aligns_the_delegation_skill_with_each_agents_scope(self):
+        directory.made("bea", "claude")
+        records.stated(directory.records("alan"), {"delegates_to": "[]"})
+        grants.granted("alan", library.look_up(library.DELEGATING))
+
+        said = []
+        grants.refreshed(said.append)
+
+        self.assertIsNone(grants.holding("alan", library.DELEGATING_SKILL))
+        self.assertIsNotNone(grants.holding("bea", library.DELEGATING_SKILL))
+        self.assertTrue(any("took" in one and "alan" in one for one in said))
+        self.assertTrue(any("gave" in one and "bea" in one for one in said))
+
+    def test_the_sweep_does_not_delete_an_owner_skill_with_the_delegation_name(self):
+        records.stated(directory.records("alan"), {"delegates_to": "[]"})
+        theirs = grants.where("alan") / library.DELEGATING_SKILL
+        theirs.mkdir(parents=True)
+        declaration = theirs / library.DECLARED
+        declaration.write_text("owner data\n", encoding="utf-8")
+
+        grants.refreshed()
+
+        self.assertEqual("owner data\n", declaration.read_text(encoding="utf-8"))
 
     def test_the_sweep_says_nothing_the_second_time(self):
         grants.refreshed()

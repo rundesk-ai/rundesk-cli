@@ -57,7 +57,7 @@ import shutil
 from pathlib import Path
 from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
-from rundesk.agents import directory
+from rundesk.agents import delegating, directory, records
 from rundesk.core import paths
 from rundesk.skills import library
 from rundesk.utils import files, locking, terminal
@@ -451,7 +451,7 @@ def stale(grant: Grant) -> bool:
 
 
 def _everybody_holds_what_they_must(said: Callable[[str], None]) -> None:
-    """Give the skill every agent holds to any agent standing without it. **Caller holds the lock.**
+    """Align required grants for every agent. **Caller holds the lock.**
 
     **Silent when the library does not hold it, and that is not a hole.** A release whose own catalog
     no longer ships `managing-rundesk` has moved the floor, and there is nothing here to grant:
@@ -460,9 +460,10 @@ def _everybody_holds_what_they_must(said: Callable[[str], None]) -> None:
     in `tests/test_skills_bundled.py`, which goes red before the release is cut rather than on every
     machine after it.
 
-    **A name already standing is left exactly as it is.** Somebody may have put their own directory
-    there, or a copy granted `--as`; this fills an absence and never replaces an answer, which is the
-    same narrowness the pruning keeps.
+    **A name already standing is left exactly as it is unless it is the bundled delegation grant.**
+    Somebody may have put their own directory there, or a copy granted `--as`; enabling fills an
+    absence and never replaces an answer. An empty delegation scope removes only the exact bundled
+    grant, because a matching name is not proof that Rundesk owns somebody else's skill.
 
     Written directly rather than through `granted`, which presents as its last act — the presenting
     loop below is where every agent is presented once, and doing it per grant here would take a
@@ -471,15 +472,34 @@ def _everybody_holds_what_they_must(said: Callable[[str], None]) -> None:
     try:
         skill = library.look_up(library.REQUIRED)
     except (library.Refused, OSError):
-        return
+        skill = None
+    try:
+        delegation_skill = library.look_up(library.DELEGATING)
+    except (library.Refused, OSError):
+        delegation_skill = None
     for agent in directory.known():
         at = where(agent)
         standing = at / library.REQUIRED_SKILL
-        if standing.is_symlink() or standing.exists():
+        if skill is not None and not (standing.is_symlink() or standing.exists()):
+            at.mkdir(parents=True, exist_ok=True)
+            standing.symlink_to(os.path.relpath(skill.at, at))
+            said(f"gave {agent} {library.REQUIRED}, which every agent holds")
+
+        delegation_standing = at / library.DELEGATING_SKILL
+        delegation_grant = holding(agent, library.DELEGATING_SKILL)
+        try:
+            may_delegate = delegating.scope_of(agent) != ()
+        except (delegating.Refused, records.NotThere, records.Unreadable, OSError, KeyError):
             continue
-        at.mkdir(parents=True, exist_ok=True)
-        standing.symlink_to(os.path.relpath(skill.at, at))
-        said(f"gave {agent} {library.REQUIRED}, which every agent holds")
+        if may_delegate:
+            if (delegation_skill is not None
+                    and not (delegation_standing.is_symlink() or delegation_standing.exists())):
+                at.mkdir(parents=True, exist_ok=True)
+                delegation_standing.symlink_to(os.path.relpath(delegation_skill.at, at))
+                said(f"gave {agent} {library.DELEGATING}, because it may delegate by name")
+        elif delegation_grant is not None and delegation_grant.address == library.DELEGATING:
+            files.remove_one(delegation_grant.at)
+            said(f"took {library.DELEGATING} from {agent}, because it is inbound-only")
 
 
 def refreshed(saying: Optional[Callable[[str], None]] = None) -> List[str]:
@@ -497,8 +517,8 @@ def refreshed(saying: Optional[Callable[[str], None]] = None) -> List[str]:
     that already runs on every update — put at each caller instead, `rundesk update` would repair it
     and `rundesk skills update` would not, while `doctor` named only the first.
 
-    **Giving out the skill every agent holds is here for exactly that reason too.** An agent made by
-    a release before the rule existed, and an agent whose grant somebody removed by hand, are both
+    **Reconciling required grants is here for exactly that reason too.** An agent made by a release
+    before either rule existed, and an agent whose grant drifted from its outbound scope, are both
     repaired by the thing that already runs on every update rather than by a step somebody has to
     remember to run.
     """

@@ -28,7 +28,7 @@ from unittest import mock
 
 import support
 from rundesk import __version__
-from rundesk.agents import directory
+from rundesk.agents import directory, records
 from rundesk.agents import migration as agent_migration
 from rundesk.commands import update as the_update
 from rundesk.core import config, paths
@@ -505,6 +505,17 @@ class CarryingTheAgentsForward(Updating):
         self.assertEqual(OK, code, err)
         self.assertIsNotNone(grants.holding("alpha", library.REQUIRED_SKILL),
                              "the update did not give alpha the skill every agent holds")
+
+    def test_an_older_agents_delegation_grant_is_reconciled_from_its_scope(self):
+        self.an_agent("domain")
+        self.an_agent("specialist")
+        records.stated(directory.records("specialist"), {"delegates_to": "[]"})
+
+        code, _out, err = self.update(archive=self.an_archive())
+
+        self.assertEqual(OK, code, err)
+        self.assertIsNotNone(grants.holding("domain", library.DELEGATING_SKILL))
+        self.assertIsNone(grants.holding("specialist", library.DELEGATING_SKILL))
 
     def test_an_agent_made_before_the_task_area_is_given_it_by_an_update(self):
         self.an_agent("alpha")

@@ -1,7 +1,7 @@
 ---
 id: INS
 name: Rundesk operating and agent instructions
-last_verified: 2026-08-20
+last_verified: 2026-08-22
 ---
 
 ## What this is
@@ -175,14 +175,19 @@ observation established.
 
 This section briefly identifies the team members available for named Rundesk delegation, lists the
 agents available to a person-facing turn, then places its operating guidance under a `Delegation`
-subsection. That subsection explains how to choose an agent, hand over one bounded outcome with
-`"$RUNDESK_COMMAND" ask <agent> "<task>"`, state whether changes are authorized, and avoid waiting
-for or duplicating active work. The result returns in a review turn. The agent reviews and verifies
-that result before relying on it or completing the larger outcome. Simple documentation and copy
-work stays direct with the smallest safe change. Small coding work uses at most one focused
-implementation delegation when useful, with direct review by the owning agent. Multiple bounded
-implementation, review, or QA delegations are reserved for distinct outcomes in large, complex, or
-high-risk work, and agents scale up only for observed scope, risk, or failed evidence.
+subsection. That subsection is a routing boundary rather than a second delegation procedure. It
+names the positive signals for considering delegation: a teammate's stated responsibility is a
+materially better fit for one bounded outcome, coordination is proportionate, or independent
+expertise, parallel work, or required review would improve the result. It names the corresponding
+direct-work signals: small or mechanical work, continuing ownership, or coordination whose cost
+exceeds its value. Ordinary conversation and simple documentation, formatting, or copy-only changes
+stay direct. Availability and skill names alone never justify delegation.
+
+The agent applies those routing signals before loading delegation guidance. It does not load
+`delegating-work` merely because a teammate is available. Only when named delegation is a genuine
+option is that skill classified as applicable, and its body must load before the agent chooses a
+target or acts. The skill owns target selection, briefing, asynchronous lifecycle, steering,
+resuming, and return review; the always-loaded operating layer does not repeat those procedures.
 
 It is omitted for schedules because their asynchronous result cannot return to the same turn for
 review. It is omitted for agent-to-agent delegations because named Rundesk delegation stops at one
@@ -212,7 +217,10 @@ The template contains only `Agent Instructions`, `Role and Responsibilities`, `R
 its durable responsibilities, role-specific capabilities and limits, how it answers, its supporting
 use of provider-local subagents, and how it maintains separate memory. It contains no
 instruction-authoring or self-editing guidance and does not repeat the operating outcome lifecycle.
-Provider-local subagents do not replace eligible named Rundesk team delegation. The bundled
+Provider-local subagents serve bounded same-turn review, research, exploration, and validation that
+the parent supervises and integrates. Named Rundesk agents serve asynchronous handoffs when durable
+responsibility and specialized granted skills make one materially better suited; their answers can
+wake review turns, while provider-local work is not a durable continuation path. The bundled
 `managing-rundesk` guidance owns the review and writing process for changing agent instructions.
 Its specialist design step carries a coding and code-investigation subsection: one reusable
 implementation-specialist contract, preceded by the ownership rationale and followed by the
@@ -287,7 +295,7 @@ changes that section. The situation and delegation-depth exclusions defined abov
 | ✅ | R-INS-21 | For project work the applicable project rules are the turn's first project access, read in full before any other project file, directory listing, metadata access, skill load, plan, inspection, change, or verification, while the agent's own home context stays available beforehand | `test_the_projects_own_rules_are_the_first_project_access` |
 | ✅ | R-INS-22 | Every turn is told to leave an unrelated granted skill unloaded, that non-project work has no project rules, and that file access alone does not trigger a development skill | `test_file_access_alone_does_not_trigger_a_development_skill` |
 | ✅ | R-INS-23 | The one agent template classifies a durable preference for how work is done or answered as learned context for `MEMORY.md` rather than part of the agent's role | `test_a_durable_reply_preference_is_learned_context_not_a_role_rule` |
-| ✅ | R-INS-24 | Every person-facing agent with named delegation keeps simple documentation and copy work direct, uses at most one focused implementation delegation for small coding work when useful, reviews that return within its own role, and reserves multiple bounded implementation, review, or QA delegations for distinct outcomes in large, complex, or high-risk work | `test_simple_documentation_and_copy_work_stays_direct`, `test_small_coding_work_has_one_focused_implementation_handoff`, `test_multiple_delegations_are_reserved_for_distinct_complex_work`, `test_scaling_never_weakens_project_or_safety_gates` |
+| ✅ | R-INS-24 | Every person-facing agent with named delegation gets concise, balanced routing signals for when to consider delegation and when to work directly; ordinary conversation and simple documentation, formatting, or copy-only changes stay direct, availability and skill names do not trigger the skill, and a genuine delegation option requires loading `delegating-work` before choosing or acting because it owns the procedure | `test_it_names_positive_signals_for_considering_delegation`, `test_it_names_when_direct_work_is_better`, `test_it_routes_delegation_procedure_to_the_skill` |
 | ✅ | R-INS-25 | Every turn defines the smallest safe and effective change sufficient for the requested result and required proof, makes and verifies only that change without unrequested refactoring, cleanup, redesign, or expansion, stops when the result and proof are complete, and requests explicit approval with the reason, proposed expansion, and impact before taking materially broader scope | `test_every_turn_defines_the_smallest_sufficient_change_before_editing`, `test_every_turn_forbids_unrequested_refactoring_and_scope_expansion`, `test_every_turn_stops_when_the_requested_result_and_proof_are_complete`, `test_broader_scope_requires_approval_with_impact` |
 
 ## Acceptance
