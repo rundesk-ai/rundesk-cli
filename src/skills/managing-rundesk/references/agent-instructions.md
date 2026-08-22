@@ -145,8 +145,10 @@ the state it inspected, the verification it ran, the external-state limits, and 
 
 Most specialist agents should be inbound-only. Configure them with
 `"$RUNDESK_COMMAND" agents configure <agent> --delegate-to-none` unless the owner explicitly wants
-that specialist to coordinate other named agents. This delegation setting reinforces the intended
-behavior but does not replace the behavior contract in its instructions.
+that specialist to coordinate other named agents. The setting removes `delegating-work`
+automatically; do not grant delegation procedure to an agent with no named delegation authority.
+This delegation setting reinforces the intended behavior but does not replace the behavior contract
+in its instructions.
 
 Describe those behaviors directly rather than assigning a Rundesk agent type. The instructions,
 description, skills, delegation scope, and current assignment together provide enough routing and
@@ -172,10 +174,9 @@ After reviewing the agent and drafting the focused behavior contract:
    irrelevant granted skill stayed unloaded, and that a body already loaded earlier in the session
    was not loaded again. A skill named in a listing is not evidence that its body was read, and a
    body loaded after the work began did not govern it.
-6. When validation uses named delegation, follow the [delegation
-   lifecycle](delegations.md#follow-the-lifecycle). Establish a real return path before handing off
-   and run one validation case per reviewed return. Without a return path, leave the exact validation
-   pending for an owner-attended fresh turn.
+6. When validation uses named delegation, follow the `delegating-work` skill's handoff lifecycle.
+   Establish a real return path before handing off and run one validation case per reviewed return.
+   Without a return path, leave the exact validation pending for an owner-attended fresh turn.
 
 Do not restart a healthy gateway merely to load a rules edit. Fresh turns rebuild their instruction
 context; an already-running turn keeps the context it started with.

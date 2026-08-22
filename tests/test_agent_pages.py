@@ -141,6 +141,19 @@ class ANewAgent(support.Isolated):
             with self.subTest(term=term):
                 self.assertIn(term, responses)
 
+    def test_provider_subagents_and_named_agents_have_distinct_lifecycles(self):
+        rules = (self.home / "AGENTS.md").read_text(encoding="utf-8")
+        section = " ".join(
+            rules.split("## Provider Subagents", 1)[1].split("\n## ", 1)[0].split()).lower()
+        for term in ("bounded review, research, exploration, or validation",
+                     "same-turn work", "keep ownership in this turn",
+                     "exact scope, inputs, limits, evidence, and completion criteria",
+                     "durable responsibility and specialized granted skills",
+                     "asynchronous handoff", "wake a review turn",
+                     "not a durable continuation path", "availability alone requires neither route"):
+            with self.subTest(term=term):
+                self.assertIn(term, section)
+
     def test_a_durable_reply_preference_is_learned_context_not_a_role_rule(self):
         """A person asking for shorter, blunter answers reads as a Responses rule.
 

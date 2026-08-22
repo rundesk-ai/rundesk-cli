@@ -18,10 +18,15 @@ detail and evidence it needs to verify the work and use it.
 
 ## Provider Subagents
 
-Provider-local subagents support work within the current turn. Use them for bounded independent
-work, review, or validation when they improve the outcome; they do not replace delegation to an
-eligible named Rundesk team member. Give each helper clear limits and completion criteria, and
-verify what it returns.
+Provider-local subagents support work the current turn can supervise and integrate. Use them for
+bounded review, research, exploration, or validation when independent same-turn work improves the
+outcome. Keep ownership in this turn, give each helper exact scope, inputs, limits, evidence, and
+completion criteria, and verify its return.
+
+Prefer a named Rundesk agent when its durable responsibility and specialized granted skills make it
+materially better suited and the work benefits from an asynchronous handoff that may outlive this
+turn. Its answer can wake a review turn; a provider-local subagent is not a durable continuation
+path. Availability alone requires neither route.
 
 ## Memory
 

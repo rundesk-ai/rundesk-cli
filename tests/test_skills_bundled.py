@@ -107,7 +107,7 @@ class WhatIsShipped(Bundled):
         # The reason this catalog exists at all. A skill about writing pull requests does not change
         # when rundesk does, so shipping it here would tie a correction to it to a rundesk release —
         # it belongs in the catalog that is fetched. Everything here is about *this* rundesk.
-        self.assertEqual(["managing-rundesk", "writing-skills"], self.named())
+        self.assertEqual(["delegating-work", "managing-rundesk", "writing-skills"], self.named())
 
     def test_it_holds_the_skill_every_agent_is_required_to_have(self):
         # **This release must not ship a floor it does not satisfy.** Every agent is given
@@ -345,18 +345,88 @@ class WhatAShippedSkillMayClaim(Bundled):
                 self.assertIn(preview, skills)
                 self.assertIn(f"{preview} --confirm", skills)
 
-    def test_agent_descriptions_are_taught_as_delegation_routing_contracts(self):
-        skill = self.skills / "managing-rundesk" / "references"
-        agents = " ".join((skill / "agents.md").read_text(encoding="utf-8").split())
-        delegations = " ".join(
-            (skill / "delegations.md").read_text(encoding="utf-8").split())
+    def test_delegation_work_is_separate_from_install_management(self):
+        managing = self.skills / "managing-rundesk"
+        references = managing / "references"
+        main = " ".join((managing / library.DECLARED).read_text(encoding="utf-8").split())
+        agents = " ".join((references / "agents.md").read_text(encoding="utf-8").split())
+        instructions = " ".join(
+            (references / "agent-instructions.md").read_text(encoding="utf-8").split())
+        delegation_root = self.skills / "delegating-work"
+        delegating = " ".join(
+            (delegation_root / library.DECLARED).read_text(encoding="utf-8").split())
+        operations = " ".join(
+            (delegation_root / "references" / "operations.md").read_text(encoding="utf-8").split())
+        examples = " ".join(
+            (delegation_root / "references" / "brief-examples.md").read_text(
+                encoding="utf-8").split())
         for phrase in ("routing contract, not a biography", "durable responsibility it owns",
-                       "Do not use transient assignments", "Update the description when"):
-            with self.subTest(reference="agents", phrase=phrase):
+                       "Do not use transient assignments", "Update the description when",
+                       "automatically removes `delegating-work`",
+                       "do not grant the skill back to an inbound-only specialist",
+                       "New agents start unrestricted and receive the skill by default"):
+            with self.subTest(reference="managing-rundesk/agents", phrase=phrase):
                 self.assertIn(phrase, agents)
         for phrase in ("Choose the target from its description", "Do not infer ownership"):
-            with self.subTest(reference="delegations", phrase=phrase):
-                self.assertIn(phrase, delegations)
+            with self.subTest(reference="delegating-work", phrase=phrase):
+                self.assertIn(phrase, delegating)
+        for phrase in ("Recover context before acting", "Check your own skills before delegating",
+                       "inspect your available skill descriptions", "handle the task directly",
+                       "use what you learned to make the scope, constraints, evidence",
+                       "Count the full coordination cost", "copy-only, or mechanical changes",
+                       "not clearly outweighed", "Availability alone is not a reason to delegate",
+                       "provider-local subagent", "bounded review, research, exploration, or validation",
+                       "asynchronous handoff", "specialized granted skills", "wake a new review turn",
+                       "Task:", "Why:", "Context:", "original request", "acceptance criteria",
+                       "Never make a brief look complete", "turning an inference into a fact",
+                       "design intent", "uncertainty or blocker",
+                       "do not add a gateway preflight", "let `ask` report",
+                       "Evidence required:", "Definition of done:", "Complete", "Continue",
+                       "Blocked", "not a continuation path"):
+            with self.subTest(reference="delegating-work", phrase=phrase):
+                self.assertIn(phrase, delegating)
+        self.assertNotIn("## Load only applicable skills", delegating)
+        self.assertIn("named delegation is a genuine option for current work", delegating)
+        self.assertIn("preparing or reviewing a handoff", delegating)
+        self.assertIn("continuing delegated work to a verified outcome", delegating)
+        self.assertIn("conversation with no genuine delegation option", delegating)
+        self.assertIn("Do not use for ordinary Rundesk operations", delegating)
+        self.assertIn("[Delegation operations](references/operations.md)", delegating)
+        self.assertIn("[Brief examples](references/brief-examples.md)", delegating)
+        self.assertNotIn('"$RUNDESK_COMMAND" gateways', delegating)
+        for phrase in ("List or `show`", "`say` to steer", "`stop` to request",
+                       "`resume` to continue", "`working`", "`stopping`", "`stopped`",
+                       "`answered`"):
+            with self.subTest(reference="delegating-work", phrase=phrase):
+                self.assertIn(phrase, delegating)
+        for phrase in ("--provider <provider>", "asked --agent <delegator>",
+                       "Do not inspect gateways as an extra preflight", "returns a refusal",
+                       "guidance was stored", "same delegation, conversation, provider selection",
+                       "steered turn may answer the new guidance", "original brief",
+                       "resume the same delegation", "native `turn/steer`", "stop-and-continue",
+                       "**Codex**", "**Claude**", "**Grok**",
+                       "interrupts the active provider request", "cancels the active prompt",
+                       "same session", "status checks, optional commentary",
+                       "not the delegation `stop` or `resume`", "Do not poll"):
+            with self.subTest(reference="delegating-work/operations", phrase=phrase):
+                self.assertIn(phrase, operations)
+        for phrase in ("## Coding implementation", "## Code or design review",
+                       "## Simplification review",
+                       "## Research or comparison", "Return format:"):
+            with self.subTest(reference="delegating-work/brief-examples", phrase=phrase):
+                self.assertIn(phrase, examples)
+        self.assertNotIn("### Coding implementation", delegating)
+        self.assertIn("Do not use for ordinary project work or for deciding, performing, or reviewing delegation", main)
+        for phrase in ("managing this agent", "any other agent in its Rundesk install",
+                       "or the install itself", "verified operational workflows"):
+            with self.subTest(reference="managing-rundesk/description", phrase=phrase):
+                self.assertIn(phrase, main)
+        self.assertNotIn("whether and how to delegate", main)
+        self.assertNotIn("delegation decisions", main)
+        self.assertNotIn("Ask an agent from this terminal", main)
+        self.assertIn("`delegating-work` skill's handoff lifecycle", instructions)
+        self.assertNotIn("delegations.md", instructions)
+        self.assertFalse((references / "delegations.md").exists())
 
     def test_agent_instruction_guidance_is_routed_and_has_each_required_section(self):
         skill = self.skills / "managing-rundesk"

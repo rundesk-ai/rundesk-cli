@@ -337,35 +337,44 @@ class TheAgreedSections(support.Isolated):
                         self.assertIn(clause, doing)
 
 
-class ProportionateExecution(support.Isolated):
+class DelegationRouting(support.Isolated):
     def built(self):
         return instructions.build(
             variables=EVERYTHING,
             team="- forge — implements code\n- trace — reviews risky changes\n- vera — runs QA",
         ).text
 
-    def test_simple_documentation_and_copy_work_stays_direct(self):
+    def test_it_names_positive_signals_for_considering_delegation(self):
         text = self.built()
-        self.assertIn("Simple documentation or copy work: work directly without delegation", text)
-        self.assertIn("a separate plan or review cycle", text)
-        self.assertIn("smallest change surface", text)
+        self.assertIn("stated responsibility makes them materially better suited", text)
+        self.assertIn("one bounded outcome", text)
+        self.assertIn("coordination is proportionate", text)
+        for signal in ("Independent expertise", "parallel work", "required review"):
+            with self.subTest(signal=signal):
+                self.assertIn(signal, text)
 
-    def test_small_coding_work_has_one_focused_implementation_handoff(self):
+    def test_it_names_when_direct_work_is_better(self):
         text = self.built()
-        self.assertIn("Small coding work: use at most one focused implementation delegation", text)
-        self.assertIn("Review the return directly within your role", text)
-        self.assertIn("Add review or QA only for observed risk or a required repository gate", text)
+        self.assertIn("Work directly for ordinary conversation", text)
+        self.assertIn("simple documentation, formatting, or copy-only changes", text)
+        self.assertIn("task is small or mechanical", text)
+        self.assertIn("needs your continuing ownership", text)
+        self.assertIn("coordination would add more cost than value", text)
+        self.assertIn("Availability or skill names alone do not justify delegation", text)
 
-    def test_multiple_delegations_are_reserved_for_distinct_complex_work(self):
+    def test_it_routes_delegation_procedure_to_the_skill(self):
         text = self.built()
-        self.assertIn("Large, complex, or high-risk work", text)
-        self.assertIn("multiple bounded implementation, review, or QA delegations", text)
-        self.assertIn("distinct necessary outcome", text)
-
-    def test_scaling_never_weakens_project_or_safety_gates(self):
-        text = self.built()
-        self.assertIn("Scale up only for observed scope, risk, or failed evidence", text)
-        self.assertIn("Repository gates and safety boundaries still apply", text)
+        self.assertIn("Apply these signals before loading delegation guidance", text)
+        self.assertIn("Do not load `delegating-work` merely because a team member is available", text)
+        self.assertIn("When named delegation is a genuine option, that skill is applicable", text)
+        self.assertIn("load its body before choosing a target or acting", text)
+        self.assertIn("It owns target selection, briefing, the asynchronous lifecycle, steering, "
+                      "resuming, and return review", text)
+        self.assertNotIn('`"$RUNDESK_COMMAND" ask <agent>', text)
+        for repeated in ("Simple documentation or copy work", "Small coding work",
+                         "Large, complex, or high-risk work", "include scope, authority"):
+            with self.subTest(repeated=repeated):
+                self.assertNotIn(repeated, text)
 
 
 class SmallestSufficientChange(support.Isolated):

@@ -1,0 +1,243 @@
+# Delegating-work live-agent verification
+
+**Date:** 2026-08-22
+
+**Candidate:** PR #438 lifecycle implementation commit `c0ac509`; skill-selection revision `8f06bcb`;
+core-routing revision `8870bdc`; coordination and steering revision `8c854f9`; grant-lifecycle
+revision `43d00f1`; brief-mechanism revision at the current PR head
+
+**Providers:** Claude CLI 2.1.236, reported model `claude-opus-5[1m]`; Codex CLI 0.148.0,
+reported model `gpt-5.6-sol`
+
+**Fixture:** A fresh scratch Rundesk install and a four-file, read-only session-contract project
+
+## Purpose
+
+Test whether a separate `delegating-work` skill improves an agent's decision to delegate, the
+quality of its brief, and its handling of asynchronous returns. The runs also exercise steering,
+resuming, state inspection, evidence review, provider provenance, and the boundary with ordinary
+Rundesk management. No candidate skill was installed into the live Rundesk home.
+
+The fixture declares three requirements: a 900-second session lifetime, immediate token revocation
+on logout, and case-insensitive email comparison. Its observations violate the first two. Its only
+permitted command, `python3 verify.py`, prints both finding identifiers but exits zero. That gives a
+small, reproducible contract audit plus a separate integration defect.
+
+## Method and matrix
+
+The candidate source was installed into a fresh temporary `RUNDESK_HOME`. Source and installed
+SHA-256 hashes matched for `SKILL.md`, `references/operations.md`, and
+`references/brief-examples.md`. All agents, gateways, conversations, messages, and fixture files
+used for counted evidence lived under that scratch root.
+
+| Run | Skills available to lead | Prompt shape | Result |
+|---|---|---|---|
+| A — baseline | `managing-rundesk`, no `delegating-work` | Small release-readiness decision; specialist merely available | Correct findings, but the lead first duplicated the complete audit and then delegated the same audit for confirmation |
+| B — candidate control | Revised `delegating-work` and `managing-rundesk` | Same small task and availability | Correctly worked directly: three tiny files and one deterministic command did not justify coordination |
+| C — candidate delegation | Revised `delegating-work` and `managing-rundesk` | Independent contract audit plus separate integration review | Delegated the bounded audit to Codex, retained integration ownership, reviewed the return, and issued the final decision |
+| D — steering and recovery | Same delegation as C | Terminal steering asked how to classify exit code zero | The steer-only answer omitted the original evidence contract; Claude rejected it and resumed the same delegation for the missing evidence |
+| E — unavailable provider | Revised skill on a Grok lead | Scratch-isolation probe | Not counted: Grok refused to open a conversation with `Authentication required` |
+| F — exact skill-selection control | `8f06bcb` `delegating-work` and `managing-rundesk` | Decide whether the scratch install is ready for an available specialist | Claude loaded its own applicable skills, used its Rundesk expertise to find the stopped route, and declined an unnecessary handoff |
+| G — exact skill-selection delegation | Same as F | Independent contract audit plus separate scratch-install reliability assessment | Claude loaded both applicable skills, delegated only the audit to Codex with a complete contract, retained the operational assessment, retraced the return, and issued the final no-go |
+| H — exact core-routing near-miss | `8870bdc`; Claude and Codex leads each had `delegating-work` and an eligible live teammate | Friendly one-sentence response to ordinary conversation | Both replied directly; Claude loaded no skill and Codex performed only its standing memory read, with no `delegating-work` load |
+| I — exact core-routing positive control | Same as H | Decide whether an independent specialist should audit a high-risk release contract; do not start the handoff | Both classified delegation as appropriate and observably loaded `delegating-work` before deciding; neither started a handoff |
+| J — exact copy-only near-miss | `8c854f9`; same two leads and live routes | Change one British spelling to US spelling | Both returned only the corrected sentence; Claude loaded nothing and Codex performed only its standing memory read |
+| K — exact steering policy | Same as J | Judge material Codex clarification, optional Claude wording, and wrong-scope Grok work without sending guidance | Both loaded the delegation guidance, chose steer / do not steer / steer once respectively, and accurately explained native versus stop-and-continue delivery |
+| L — provider-local versus named brief quality | Current candidate in a new scratch install; Codex and Claude leads | Draft two same-turn provider review briefs and one asynchronous named-specialist brief, then audit every contract field | Both chose provider-local Senior and DRY reviewers for same-turn independent checks and the named Policy agent for durable skill-backed research that may outlive the turn; all three briefs carried the required contract |
+
+## Delegation decision and brief quality
+
+Run B is the matched behavioral improvement. The baseline's redundant handoff added coordination
+after the lead had already completed the specialist's work. With the candidate, the lead explicitly
+applied the necessary-only rule and declined to delegate merely because a matching target existed.
+
+Run F directly exercises the later skill-selection wording. Claude loaded `managing-rundesk` before
+making the delegation decision, used that workflow to inspect the scratch install, and found that
+the proposed specialist gateway was stopped. It kept the bounded operational inspection because its
+own loaded skill supplied the needed expertise; it did not treat the target's availability or skill
+list as ownership. This is the intended meaning of “check your own skills”: improve the current
+agent's delegate-versus-direct judgment, not add generic skill-loading ceremony.
+
+Run C supplied a task where delegation was proportionate. Before handing it off, Claude loaded
+`delegating-work`, read the project rules and matching brief example, and checked gateway state. The
+stored brief named all of the following rather than relying on conversational implication:
+
+- the bounded contract-audit outcome and the larger release decision;
+- the exact three files and the separation from the lead-owned integration review;
+- read-only authority and the single permitted command;
+- quoted requirement and observation evidence, line locations, full stdout and stderr, and numeric
+  exit status;
+- observable done conditions and a structured return format.
+
+The lead then reviewed integration independently without duplicating the delegated file audit. The
+initial handoff was `del-3-c2e538`; supported `asked show` output recorded Codex as the effective and
+terminal provider and `gpt-5.6-sol` as the terminal model.
+
+Run G repeated that boundary on `8f06bcb` after the Codex reviewer gateway was started. Claude loaded
+both `delegating-work` and `managing-rundesk`, confirmed target description, gateway, provider, and
+skill readiness, then created `del-10-176c11`. Its stored brief contained the exact task, why, three
+files, read-only authority, single permitted command, constraints, evidence requirements, observable
+done conditions, and return format. Codex returned all three requirement verdicts, exact observed
+values, locations, verifier stdout and exit code, coverage assessment, uncertainties, and a blocker
+line. Claude independently retraced the material claims and verifier output, distinguished the
+contract verdict from the separate zero-exit integration defect, and retained the final no-go.
+
+Run L tested the revised mechanism boundary and the task-brief prose against the actual configured
+Senior Review and DRY/simplicity role contracts. Both providers kept the parent active for the two
+bounded, independent reviews and chose the named Policy agent only for work aligned to its durable
+responsibility, specialized official-source skills, and asynchronous return. Their review briefs
+named `main...feat/auth`, the original request, all acceptance criteria, clean working-tree state,
+read-only authority, exact inspection boundary, per-finding evidence, no-finding coverage,
+observable done conditions, and a structured return. Neither copied the configured roles' generic
+review checklists. The named brief preserved the missing vendor names as a blocker rather than
+selecting plausible vendors.
+
+The first Claude draft also exposed a prose defect: it invented that the implementation deliberately
+preserved a particular logout path, even though the scenario supplied no such design intent. The
+skill was tightened to forbid making a brief look complete by converting inference into fact or
+inventing intent, constraints, inputs, or acceptance criteria. A fresh scratch install reran the
+DRY-review case while explicitly withholding intent, compatibility constraints, test command,
+repository path, and the definition of activity. Claude then kept every missing fact explicit,
+classified whether it blocked the review, and produced a usable brief without turning any of them
+into implementation truth.
+
+The final routing pass removed a separate `gateways` preflight from the skill. The named team offered
+to a turn is already the eligible routing surface, and `ask` owns the authoritative admission check
+and refusal if that route changes. A controlled mutation that made the preflight optional instead of
+forbidden failed the bundled-skill regression before restoration.
+
+## Core routing and skill-loading precision
+
+Runs H and I test the reduced always-loaded delegation instructions as a matched pair on both
+providers. Each lead had the skill granted and an eligible reviewer gateway running, so the
+near-miss could not pass merely because no delegation route existed. For ordinary conversation,
+Claude used no tools or skills; Codex performed its standing memory read only. Both returned one
+friendly sentence and did not load `delegating-work`.
+
+For the independent high-risk audit decision, both providers classified named delegation as a
+genuine option without being told the skill name. Claude used its native Skill tool to launch
+`delegating-work`. Codex read the skill body before deciding, then identified the bounded,
+independent responsibility fit and retained the final decision. Neither provider started a
+handoff, as requested.
+
+The first candidate wording at `919f5d4` exposed a real provider difference: Codex said it was using
+the guidance but had no observable body load. The core was tightened to say that a genuine
+delegation option makes the skill applicable and its body must load before target choice or action.
+The exact `8870bdc` rerun then produced the observable Codex read while preserving the near-miss.
+
+Run J narrows the near-miss from conversation to actual copy work. With a granted skill and eligible
+reviewer online, both providers changed `colour` to `color` and stopped. Neither loaded
+`delegating-work` or created a handoff, showing that a teammate's presence does not turn a one-line
+copy edit into coordination work.
+
+Run K tested the provider-specific steering rule without initiating any operation. Both leads chose
+native Codex steering for a material clarification, declined to interrupt Claude for an optional
+wording preference, and chose one consolidated Grok course correction because its current scope was
+wrong. They distinguished Codex `turn/steer` from Claude interrupt-and-replace and Grok
+cancel-and-reprompt, kept the latter two sparse, and did not confuse those provider mechanics with
+delegation `stop` or `resume`.
+
+## Steering, resuming, and review
+
+While the delegation was `working`, an attended `asked say` asked the reviewer to distinguish a
+contract mismatch from a verifier-integration limitation. The guidance was stored and reached the
+active target, but the next answer addressed only that clarification. The delegation became
+`answered` without the evidence required by the original brief.
+
+Claude did not confuse an answered state with a satisfactory result. Its review listed the missing
+quotes, locations, streams, and exit code; inspected provider provenance; and resumed
+`del-3-c2e538` with a bounded correction. Codex returned the full three-requirement audit from the
+same delegation and provider session. Claude retraced every material claim, reproduced the command,
+rejected one overbroad uncertainty claim, and issued a no-go covering both contract failures and the
+zero-exit integration defect. Final state was `answered`.
+
+This exposed a useful edge: steering can shape the target's next terminal answer without satisfying
+the original contract. The final skill now tells the delegator to review against both the steer and
+the original brief, then resume the same answered delegation when evidence is missing.
+
+All counted Claude and Codex turns ended `done`; their turn records reported zero unknown, lost, or
+unsent events. Rundesk's return messages labeled delegated results as unchecked, and the lead treated
+them that way.
+
+## Scope boundaries and limitations
+
+- Grok CLI 1.0.5 passed the adapter capability probe but could not authenticate, so no Grok agent
+  behavior is claimed.
+- An earlier Codex-as-lead operational probe inherited the operator's live command path instead of the scratch
+  command path. It made only read-only `status` and `agents` calls, changed no live state, and was
+  excluded. The probe was repeated after `8f06bcb` with the same substitution and the same read-only
+  commands, so no Codex-as-lead Rundesk-operation behavior is claimed. Runs H and I count Codex as a
+  lead only for read-only routing decisions that required no Rundesk command. Codex is also counted
+  as the scratch delegated reviewer, where it received the complete stored brief and returned
+  reproducible evidence.
+- Live stop delivery was not forced because the bounded reviewer turns completed too quickly to make
+  a natural stop reliable. The command, valid-state, `stopping`, and terminal `stopped` contract is
+  covered by the skill's deterministic bundled tests; live runs covered `working` and `answered`.
+- This is one synthetic audit workflow on macOS. It proves the handoff lifecycle and writing behavior,
+  not every domain-specific delegation judgment.
+
+## Exact-head confirmation and cleanup
+
+Commit `8c854f9` was installed into the restored scratch home for runs J and K. The source and
+installed hashes were identical:
+
+| File | SHA-256 |
+|---|---|
+| `providers/instructions.py` | `ad67e1b0823c90ced4d97fe079152d3751710ccac12624efdbfebd93a939dbe7` |
+| `SKILL.md` | `0d6ce05e6ec58fdbcfe955aacb0dff03ac00a9b396b75906376e44d41e10956b` |
+| `references/operations.md` | `827a0061ab39d65071cf7e313c999014b1cb238a30163618f47b432a30b08227` |
+| `references/brief-examples.md` | `a00e2ff6788cb0d67e91ed59b89512076865c1af6a0a6ef4f9bbca14efb41eae` |
+
+The focused bundled-skill suite passed 38 tests, and the provider-instruction suite passed 46.
+Removing the copy-only direct-work guard made the provider-instruction suite fail; removing the
+native Codex `turn/steer` rule made the bundled-skill suite fail. Restoring each rule returned its
+suite to green. Both configured Python paths ran the full aggregate suite: 80 suites, zero failures
+each. One earlier `/usr/bin/python3` aggregate run hit the repository's timing-sensitive
+asked-command test; its immediate focused rerun and the later full rerun passed. The focused Claude,
+Codex, and Grok adapter suites also passed 53, 74, and 58 tests respectively. Ruff and
+`git diff --check` passed.
+
+The original runs preceded the final steering correction that their observed edge produced. Runs F
+and G provide exact-skill-body confirmation after the later skill-selection rewrite. Together they
+cover both outcomes that wording must preserve: applicable local expertise can make delegation
+unnecessary, while genuinely independent specialist work still receives a precise scope, authority,
+evidence contract, and definition of done. Runs H and I additionally prove that the reduced core
+does not load the skill for ordinary conversation but still routes genuine delegation decisions
+through it on both tested providers.
+Runs J and K extend that proof to copy-only work and provider-aware steering frequency.
+
+All manually hosted scratch gateways were stopped after evidence capture. The temporary scratch
+home was then moved to Trash, so cleanup remains recoverable. No skill, agent, provider, gateway, or
+configuration was installed into or changed in the live Rundesk home.
+
+## Delegation grant lifecycle
+
+Commit `43d00f1` was installed into a second fresh scratch home to verify the owner-facing lifecycle,
+not only its unit seams. Two new agents each listed `delegating-work` and `managing-rundesk` with
+unrestricted outbound scope. Configuring the specialist with `--delegate-to-none` removed
+`delegating-work`, left `managing-rundesk`, and listed `DELEGATES TO` as `none`. Configuring the same
+agent with `--delegate-to domain` restored `delegating-work` and listed only `domain` as its scope.
+Neither gateway was started or placed.
+
+The installed and source SHA-256 values matched for the three principal boundaries:
+
+| File | SHA-256 |
+|---|---|
+| `commands/agents.py` | `2b46d7373c0ef38438b156faee98af57d14305a0db60feb1d2ce3d83177f3f74` |
+| `skills/grants.py` | `0238866aeabe1d28028537e1c30b0f0ad798bbfd06e963355499e37e055ec01e` |
+| `managing-rundesk/references/agents.md` | `845ce5c9cda2b6e4b0f7b454643e5a28a1c132e6cb9ba7de5c30d7e59a656f1f` |
+
+The focused agent-command, grant, update, bundled-skill, layer, and requirement suites passed 78,
+80, 80, 38, 23, and 1 tests. Removing command-time grant reconciliation made three command tests
+fail; treating every agent as delegation-enabled made the inbound-only update test fail. After both
+rules were restored, both configured Python paths ran all 80 suites with zero failures. The exact
+scratch home was moved to Trash after its gateways were confirmed not running and not placed.
+
+## Verdict
+
+The separate skill is materially better than bundling delegation into `managing-rundesk`. Delegation
+has its own routing trigger, proportionality judgment, brief contract, asynchronous state machine,
+provider provenance, steering and resumption behavior, and evidence-review obligation. Ordinary
+Rundesk management needs none of that reasoning. Keeping the workflows separate made the matched
+candidate avoid a redundant handoff while still producing and managing a strong handoff when the
+task genuinely required independent work.
