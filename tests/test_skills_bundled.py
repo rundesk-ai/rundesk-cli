@@ -367,8 +367,13 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "Blocked", "not a continuation path"):
             with self.subTest(reference="delegating-work", phrase=phrase):
                 self.assertIn(phrase, delegating)
-        self.assertIn("deciding whether and how to delegate work through Rundesk", main)
-        self.assertIn("does not start or manage delegated work", main)
+        self.assertIn("deciding whether to delegate work to another Rundesk agent", delegating)
+        self.assertIn("preparing or reviewing a handoff", delegating)
+        self.assertIn("continuing delegated work to a verified outcome", delegating)
+        self.assertIn("Do not use for ordinary Rundesk operations", delegating)
+        self.assertIn("Do not use for ordinary project work or for deciding, performing, or reviewing delegation", main)
+        self.assertNotIn("whether and how to delegate", main)
+        self.assertNotIn("delegation decisions", main)
         self.assertNotIn("Ask an agent from this terminal", main)
         self.assertIn("`delegating-work` skill's handoff lifecycle", instructions)
         self.assertNotIn("delegations.md", instructions)

@@ -1,14 +1,11 @@
 ---
 name: managing-rundesk
-description: Use this skill when managing Rundesk state or deciding whether and how to delegate work through Rundesk. It supplies verified commands, workflows, and safety rules for agents, gateways, conversations, channels, schedules, providers, skills, backups, configuration, credentials, and the Rundesk lifecycle. Do not use it for ordinary project or workspace work unless the task requires a Rundesk operation.
+description: Use when inspecting, configuring, operating, troubleshooting, or recovering the Rundesk install that owns this agent. It supplies verified commands, workflows, and safety rules for agents, gateways, conversations, channels, schedules, providers, skills, backups, configuration, credentials, and the Rundesk lifecycle. Do not use for ordinary project work or for deciding, performing, or reviewing delegation.
 ---
 
 # Manage Rundesk
 
 Use Rundesk's commands to answer questions about this install. Do not guess at its state or paths.
-Use this skill to inform delegation decisions with verified Rundesk state; follow the active agent
-instructions for whether to delegate, choosing a target, and reviewing returned work. This skill
-does not start or manage delegated work.
 
 ## Use the right install
 
