@@ -51,6 +51,23 @@ Do not infer success from the management command alone. `say` proves guidance wa
 the active provider accepted it. `stop` proves a request was recorded, not that the process has
 ended. `resume` proves answered work was reopened, not that the additional result is complete.
 
+### Match steering to the provider
+
+`say` has one Rundesk meaning, but providers deliver it differently:
+
+- **Codex** uses native `turn/steer` against the active turn. Use it naturally for relevant course
+  corrections or timely clarification while work is still `working`.
+- **Claude** has no native turn-steer request. Its adapter interrupts the active provider request,
+  waits for the interrupted result to drain, then sends the replacement in the same session.
+- **Grok** has no native turn-steer request. Its adapter cancels the active prompt, waits for that
+  cancellation to settle, then sends the replacement in the same session.
+
+Claude and Grok therefore use stop-and-continue delivery. Consolidate guidance and steer them only
+when their current work needs to change or letting it continue would waste or worsen the result. Do
+not use steering for status checks, optional commentary, or a stream of small preferences. These
+provider mechanics are not the delegation `stop` or `resume` operations and do not change the
+delegation's provider or session.
+
 A steered turn may answer the new guidance while omitting work required by the original brief.
 Review the return against both. If the delegation is now `answered` and required evidence is still
 missing, resume the same delegation with a bounded correction instead of accepting the partial

@@ -370,7 +370,9 @@ class WhatAShippedSkillMayClaim(Bundled):
         for phrase in ("Recover context before acting", "Check your own skills before delegating",
                        "inspect your available skill descriptions", "handle the task directly",
                        "use what you learned to make the scope, constraints, evidence",
-                       "Availability alone is not a reason to delegate", "Task:", "Why:",
+                       "Count the full coordination cost", "copy-only, or mechanical changes",
+                       "not clearly outweighed", "Availability alone is not a reason to delegate",
+                       "Task:", "Why:",
                        "Evidence required:", "Definition of done:", "Complete", "Continue",
                        "Blocked", "not a continuation path"):
             with self.subTest(reference="delegating-work", phrase=phrase):
@@ -391,7 +393,11 @@ class WhatAShippedSkillMayClaim(Bundled):
         for phrase in ("--provider <provider>", "asked --agent <delegator>",
                        "guidance was stored", "same delegation, conversation, provider selection",
                        "steered turn may answer the new guidance", "original brief",
-                       "resume the same delegation", "Do not poll"):
+                       "resume the same delegation", "native `turn/steer`", "stop-and-continue",
+                       "**Codex**", "**Claude**", "**Grok**",
+                       "interrupts the active provider request", "cancels the active prompt",
+                       "same session", "status checks, optional commentary",
+                       "not the delegation `stop` or `resume`", "Do not poll"):
             with self.subTest(reference="delegating-work/operations", phrase=phrase):
                 self.assertIn(phrase, operations)
         for phrase in ("## Coding implementation", "## Code or design review",

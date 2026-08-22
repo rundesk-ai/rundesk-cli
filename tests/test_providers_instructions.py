@@ -356,6 +356,7 @@ class DelegationRouting(support.Isolated):
     def test_it_names_when_direct_work_is_better(self):
         text = self.built()
         self.assertIn("Work directly for ordinary conversation", text)
+        self.assertIn("simple documentation, formatting, or copy-only changes", text)
         self.assertIn("task is small or mechanical", text)
         self.assertIn("needs your continuing ownership", text)
         self.assertIn("coordination would add more cost than value", text)

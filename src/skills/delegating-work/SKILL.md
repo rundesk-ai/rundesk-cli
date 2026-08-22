@@ -32,10 +32,14 @@ skills, and do not infer a target's responsibility from its skill list.
 
 ## Decide whether to delegate
 
-Work directly when the task is small or mechanical, when it needs the current agent's continuing
-ownership, or when delegation would add more coordination than value. Delegate only when another
-available agent is materially better suited to one bounded outcome and can return evidence the current
-agent can review. Availability alone is not a reason to delegate.
+Count the full coordination cost: selecting and briefing a target, waiting for the return, reviewing
+its evidence, and integrating it. Work directly when that cost is not clearly outweighed by better
+speed, expertise, independence, or risk reduction. Ordinary conversation and simple documentation,
+formatting, copy-only, or mechanical changes normally stay direct unless a real specialist judgment
+or required independent review changes the balance.
+
+Delegate only when another available agent is materially better suited to one bounded outcome and
+can return evidence the current agent can review. Availability alone is not a reason to delegate.
 
 Choose the target from its description and the delegation scope offered to the current turn. Use its
 durable responsibility, not a temporary assignment.
@@ -97,8 +101,9 @@ return behavior.
 Use each operation for its one meaning:
 
 - List or `show` to inspect ownership, state, and provider provenance.
-- `say` to steer work that is still running. Guidance is durable if the live turn misses it, but it
-  does not replace the original brief or prove the next answer satisfies it.
+- `say` to steer work that is still running when its current course must change or a timely
+  clarification materially improves it. Avoid status prompts and piecemeal optional guidance;
+  provider delivery differs as described in the operations reference.
 - `stop` to request an early terminal end. A stop request is not proof that work has stopped.
 - `resume` to continue answered work in the same provider session. Stopped work cannot resume.
 
