@@ -28,10 +28,10 @@ retires three grants the answer is yes.
 import argparse
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from rundesk.agents import directory
-from rundesk.commands import Subcommands, env, failed
+from rundesk.commands import Subcommands, env, failed, print_json
 from rundesk.core import paths, secrets
 from rundesk.exits import FAILED, OK
 from rundesk.skills import catalogs, doctor, grants, library, needs
@@ -54,11 +54,15 @@ def register(sub: Subcommands) -> None:
     not make a usage error — they asked to be told what would happen, which is what they get.
     """
     said = sub.add_parser("skills", help="the skills this install has, and who holds which")
+    said.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                      help="write one machine-readable JSON response")
     what = said.add_subparsers(dest="what", metavar="<what>")
 
     shown = what.add_parser("list", help="every skill, or the ones one agent holds")
     shown.add_argument("agent", metavar="<agent>", nargs="?", default=None,
                        help="whose skills to show; without one, every skill there is")
+    shown.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                       help="write one machine-readable JSON response")
 
     what.add_parser("catalogs", help="every catalog, its version and where it came from")
 
@@ -121,7 +125,7 @@ def cmd_skills(args: argparse.Namespace, fetching: Optional[catalogs.Fetching] =
 
     what = getattr(args, "what", None)
     if what in (None, "list"):
-        return _listed(getattr(args, "agent", None))
+        return _listed(getattr(args, "agent", None), getattr(args, "json", False))
     if what == "catalogs":
         return _catalogs()
     if what == "install":
@@ -205,14 +209,22 @@ def _retired_and_remade(outcomes: List[catalogs.Refreshed], said: List[str]) -> 
     return said
 
 
-def _listed(agent: Optional[str]) -> int:
+def _listed(agent: Optional[str], as_json: bool = False) -> int:
     """Every skill this install has, or the ones one agent holds."""
     if agent is not None:
-        return _held_by(agent)
+        return _held_by(agent, as_json)
     try:
         every = library.every()
     except TROUBLE as why:
         return _failed(str(why))
+
+    if as_json:
+        print_json({"skills": [{
+            "catalog": one.catalog,
+            "name": one.name,
+            "agents": sorted(_agents_holding(one.catalog, one.name)),
+        } for one in every]})
+        return OK
 
     print(f"skills in {library.where()}")
     if not every:
@@ -224,7 +236,7 @@ def _listed(agent: Optional[str]) -> int:
     return OK
 
 
-def _held_by(agent: str) -> int:
+def _held_by(agent: str, as_json: bool = False) -> int:
     """What one agent holds, and what each of those needs."""
     if agent not in directory.known():
         return _failed(f"there is no agent called {agent}",
@@ -234,6 +246,10 @@ def _held_by(agent: str) -> int:
     except TROUBLE as why:
         return _failed(str(why))
 
+    if as_json:
+        print_json({"agent": agent, "skills": [_json_grant(one) for one in held]})
+        return OK
+
     print(f"skills granted to {agent} in {grants.where(agent)}")
     if not held:
         print("        none yet — give it one with: "
@@ -242,6 +258,23 @@ def _held_by(agent: str) -> int:
     as_table(("SKILL", "FROM", "NEEDS", "STANDING"),
              [(one.name, _from(one), _counted(one), _how(one)) for one in held])
     return OK
+
+
+def _json_grant(grant: grants.Grant) -> Dict[str, Any]:
+    """One grant with the same standing the human listing reads from doctor."""
+    finding = doctor.of(grant)
+    try:
+        required_values: Optional[int] = len(needs.declared(grant.at))
+    except needs.Refused:
+        required_values = None
+    return {
+        "name": grant.name,
+        "catalog": grant.catalog or None,
+        "skill": grant.skill or None,
+        "aliased": grant.copied,
+        "required_values": required_values,
+        "standing": {"verdict": finding.verdict, "description": finding.said},
+    }
 
 
 def _catalogs() -> int:

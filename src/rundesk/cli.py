@@ -138,7 +138,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _register_status(sub: Subcommands) -> None:
-    sub.add_parser("status", help="how rundesk itself is on this machine")
+    status = sub.add_parser("status", help="how rundesk itself is on this machine")
+    status.add_argument("--json", action="store_true",
+                        help="write one machine-readable JSON response")
 
 
 def _register_version(sub: Subcommands) -> None:

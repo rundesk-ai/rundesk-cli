@@ -12,6 +12,7 @@ take it for done; and `doctor` exits non-zero when anything is wrong, so it can 
 Run directly: `python3 tests/test_skills_command.py`
 """
 
+import json
 import os
 import shutil
 import unittest
@@ -75,6 +76,13 @@ class WhatAnEmptyInstallSays(Skills):
 
     def test_the_bare_verb_and_list_are_the_same_thing(self):
         self.assertEqual(self.rundesk("skills"), self.rundesk("skills", "list"))
+
+    def test_json_is_one_versioned_document_when_there_are_no_skills(self):
+        code, out, err = self.rundesk("skills", "--json")
+
+        self.assertEqual(0, code, err)
+        self.assertEqual({"schema_version": 1, "skills": []}, json.loads(out))
+        self.assertEqual(1, len(out.splitlines()))
 
     def test_catalogs_says_where_it_looked(self):
         code, out, _err = self.rundesk("skills", "catalogs")
@@ -440,6 +448,33 @@ class ListingWhatAnAgentHolds(Skills):
         self.assertIn("writing-plans", out)
         self.assertIn("needs nothing", out)
         self.assertIn("BLOCKED", out)
+
+    def test_json_lists_the_library_and_its_grants_without_table_parsing(self):
+        self.rundesk("skills", "grant", "alan", "acme/writing-plans")
+
+        code, out, err = self.rundesk("skills", "list", "--json")
+
+        self.assertEqual(0, code, err)
+        said = json.loads(out)
+        self.assertEqual(1, said["schema_version"])
+        writing = next(one for one in said["skills"] if one["name"] == "writing-plans")
+        self.assertEqual("acme", writing["catalog"])
+        self.assertEqual(["alan"], writing["agents"])
+
+    def test_json_lists_one_agents_grant_and_standing(self):
+        self.rundesk("skills", "grant", "alan", "acme/writing-plans")
+
+        code, out, err = self.rundesk("skills", "list", "alan", "--json")
+
+        self.assertEqual(0, code, err)
+        said = json.loads(out)
+        self.assertEqual("alan", said["agent"])
+        self.assertEqual(1, len(said["skills"]))
+        skill = said["skills"][0]
+        self.assertEqual("writing-plans", skill["name"])
+        self.assertEqual("acme", skill["catalog"])
+        self.assertEqual(0, skill["required_values"])
+        self.assertEqual("READY", skill["standing"]["verdict"])
 
     def test_the_whole_library_says_which_agents_hold_what(self):
         self.rundesk("skills", "grant", "alan", "acme/writing-plans")

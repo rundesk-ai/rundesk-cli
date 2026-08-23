@@ -36,7 +36,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from rundesk.agents import delegating, directory, migration, pages, records
 from rundesk.channels import hosting
-from rundesk.commands import Subcommands, as_written, failed
+from rundesk.commands import Subcommands, as_written, failed, print_json
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job, standing
@@ -119,9 +119,13 @@ def register(sub: Subcommands) -> None:
     # imports. The shadow would be local to this function and harmless today, and the day somebody
     # adds a line here that wants the store it would be a `NoneType has no attribute` from a parser.
     kept_here = sub.add_parser("agents", help="the agents this install keeps")
+    kept_here.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                           help="write one machine-readable JSON response")
     what = kept_here.add_subparsers(dest="what", metavar="<what>")
 
-    what.add_parser("list", help="every agent this install keeps, and what is behind it")
+    listed = what.add_parser("list", help="every agent this install keeps, and what is behind it")
+    listed.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                        help="write one machine-readable JSON response")
 
     new = what.add_parser("add", help="make an agent")
     new.add_argument("agent", metavar="<agent>", help="what to call it")
@@ -163,7 +167,7 @@ def cmd_agents(args: argparse.Namespace) -> int:
 
     what = getattr(args, "what", None)
     if what in (None, "list"):
-        return _listed()
+        return _listed(getattr(args, "json", False))
     if what == "add":
         return _made(args.agent, args.provider, args.describes, args.alias)
     if what == "configure":
@@ -177,7 +181,7 @@ def cmd_agents(args: argparse.Namespace) -> int:
     raise AssertionError(f"agents {what} is registered on the parser and answered by nothing")
 
 
-def _listed() -> int:
+def _listed(as_json: bool = False) -> int:
     """Every agent there is, in name order, with what is recorded behind it.
 
     Where they stand is printed even when there are none, for the reason `backups` prints it: "no
@@ -194,6 +198,10 @@ def _listed() -> int:
     except OSError as why:
         return _failed(str(why), "nothing was listed")
 
+    if as_json:
+        print_json({"agents": [_json_agent(name) for name in there]})
+        return OK
+
     print(f"agents in {at}")
     if not there:
         print("        no agents yet — add one with: "
@@ -205,6 +213,60 @@ def _listed() -> int:
         rows.append((name, provider, description, _skills_of(name), delegates_to, self_improve))
     as_table(("AGENT", "PROVIDER", "DESCRIPTION", "SKILLS", "DELEGATES TO", "SELF-IMPROVE"), rows)
     return OK
+
+
+def _json_agent(name: str) -> Dict[str, Any]:
+    """One agent's listed configuration without translating it into table text."""
+    listed: Dict[str, Any] = {
+        "name": name,
+        "record_status": "readable",
+        "provider": None,
+        "description": {"status": "unavailable", "value": None},
+        "skills": _json_skills(name),
+        "delegation": None,
+        "self_improve": None,
+    }
+    try:
+        settled = records.read(directory.records(name))
+        provider = str(settled["provider_name"])
+        alias = str(settled["provider_alias"]) if settled.get("provider_alias") else None
+        scope = delegating.decoded(settled.get("delegates_to"))
+        listed.update({
+            "provider": {"name": provider, "alias": alias},
+            "description": _json_description(settled),
+            "delegation": {
+                "scope": "any" if scope is None else ("none" if not scope else "allowlist"),
+                "agents": [] if scope is None else list(scope),
+            },
+            "self_improve": bool(settled["self_improve"]),
+        })
+    except records.NotThere:
+        listed["record_status"] = "not_found"
+    except (delegating.Refused, directory.Refused, records.Unreadable, OSError, sqlite3.Error,
+            KeyError):
+        listed["record_status"] = "unreadable"
+    return listed
+
+
+def _json_description(settled: Dict[str, Any]) -> Dict[str, Any]:
+    """A description value with legacy missing, unset, and empty states preserved."""
+    if "describes" not in settled:
+        return {"status": "unavailable", "value": None}
+    value = settled["describes"]
+    if value is None:
+        return {"status": "not_described", "value": None}
+    flattened = " ".join(str(value).split())
+    if not flattened:
+        return {"status": "empty", "value": ""}
+    return {"status": "available", "value": flattened}
+
+
+def _json_skills(name: str) -> Dict[str, Any]:
+    """Current granted skill names, keeping an unreadable directory distinct from none."""
+    try:
+        return {"status": "readable", "names": [one.name for one in grants.held(name)]}
+    except OSError:
+        return {"status": "unreadable", "names": []}
 
 
 def _skills_of(name: str) -> str:

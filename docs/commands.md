@@ -67,6 +67,10 @@ rundesk install [--source <dir>] [--bin-dir <dir>]   # what install.sh runs
 Ask `rundesk --help` rather than this page when the two disagree — the command is generated from
 nothing and describes itself.
 
+`status`, `agents [list]`, and `skills [list [<agent>]]` accept `--json` for scripts and local user
+interfaces. A successful response is one JSON document with `schema_version`; without the flag,
+their existing human-readable output is unchanged.
+
 ## OAuth login and the private token bridge
 
 `rundesk login <provider>` is one verb for every provider, and rundesk knows none of them. The name
