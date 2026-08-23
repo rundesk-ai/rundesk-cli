@@ -53,6 +53,8 @@ class Teams(support.Isolated):
     def test_confirm_creates_reconciles_and_activates_every_member(self):
         gateways = Gateways()
         self.assertEqual(OK, self.command("install", gateways=gateways))
+        self.assertTrue(library.is_team("test-team"))
+        self.assertTrue((library.stands("test-team") / library.TEAM_MARKER).is_file())
         self.assertEqual(["forge", "piper"], directory.known())
         self.assertEqual(["forge", "piper"], gateways.asked)
         for name, skill in (("forge", "implementing"), ("piper", "reviewing")):
@@ -76,6 +78,24 @@ class Teams(support.Isolated):
         self.assertEqual("claude", records.read(directory.records("forge"))["provider_name"])
         self.assertNotEqual("owner rules", (home / "AGENTS.md").read_text())
         self.assertFalse((home / "MEMORY.md").exists())
+
+    def test_confirm_does_not_repair_or_change_an_unmanaged_agent(self):
+        directory.made("spectator", "claude", "An unrelated agent.")
+        other = a_published_catalog(self.home / "spectator-skills", name="spectator-skills",
+                                    skills=("extra",))
+        with skill_catalogs.brought(str(other)) as coming:
+            skill_catalogs.installed(coming)
+        grants.granted("spectator", library.look_up("spectator-skills/extra"))
+        missing_link = directory.home("spectator") / ".codex/skills/extra"
+        missing_link.unlink()
+        before = records.read(directory.records("spectator"))
+
+        self.assertEqual(OK, self.command("install"))
+
+        self.assertFalse(missing_link.exists())
+        self.assertEqual(before, records.read(directory.records("spectator")))
+        self.assertEqual("spectator-skills/extra",
+                         grants.holding("spectator", "extra").address)
 
     def test_update_repairs_drift_even_when_the_catalog_tree_is_unchanged(self):
         self.assertEqual(OK, self.command("install"))
@@ -103,6 +123,10 @@ class Teams(support.Isolated):
         with skill_catalogs.brought(str(other)) as coming:
             skill_catalogs.installed(coming)
         grants.granted("forge", library.look_up("turn-extra/extra"))
+        directory.made("spectator", "claude", "An unrelated agent.")
+        grants.granted("spectator", library.look_up("turn-extra/extra"))
+        missing_link = directory.home("spectator") / ".codex/skills/extra"
+        missing_link.unlink()
         (home / "AGENTS.md").write_text("drift")
         (home / "MEMORY.md").write_text("drift")
         grants.revoked("forge", "implementing")
@@ -113,6 +137,8 @@ class Teams(support.Isolated):
         self.assertEqual("test-team/implementing",
                          grants.holding("forge", "implementing").address)
         self.assertIsNone(grants.holding("forge", "extra"))
+        self.assertFalse(missing_link.exists())
+        self.assertEqual("turn-extra/extra", grants.holding("spectator", "extra").address)
 
     def test_changed_catalog_moves_instructions_skills_and_scope_together(self):
         self.assertEqual(OK, self.command("install"))
@@ -128,6 +154,7 @@ class Teams(support.Isolated):
         self.assertEqual(OK, self.command("update", provider=None))
         self.assertEqual("# forge\n\nVersion two.\n",
                          (directory.home("forge") / "AGENTS.md").read_text())
+        self.assertTrue(library.is_team("test-team"))
         self.assertIsNone(grants.holding("forge", "implementing"))
         self.assertEqual("test-team/reviewing", grants.holding("forge", "reviewing").address)
         self.assertEqual((), delegating.scope_of("forge"))
@@ -189,6 +216,21 @@ class Teams(support.Isolated):
         code, _out, err = support.run_with(["skills", "update", "test-team", "--confirm"])
         self.assertEqual(FAILED, code)
         self.assertIn("teams update", err)
+
+    def test_an_ordinary_catalog_may_carry_an_unrelated_team_json(self):
+        ordinary = a_published_catalog(self.home / "ordinary", name="ordinary")
+        written(ordinary / library.TEAM, {"metadata": "belongs to this skill catalog"})
+        code, _out, err = support.run_with(
+            ["skills", "install", str(ordinary), "--confirm"])
+        self.assertEqual(OK, code, err)
+        self.assertIn("ordinary", library.known())
+        self.assertFalse(library.is_team("ordinary"))
+        written(ordinary / library.TEAM, {
+            "schema": 1, "name": "ordinary", "members": [],
+        })
+        code, _out, err = support.run_with(["skills", "update", "ordinary", "--confirm"])
+        self.assertEqual(OK, code, err)
+        self.assertFalse(library.is_team("ordinary"))
 
     def test_an_agent_turn_cannot_apply_its_own_team_catalog(self):
         with mock.patch.dict("os.environ", {environment.AGENT: "forge"}):

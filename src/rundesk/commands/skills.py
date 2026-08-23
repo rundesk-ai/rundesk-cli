@@ -35,6 +35,7 @@ from rundesk.commands import Subcommands, env, failed
 from rundesk.core import paths, secrets
 from rundesk.exits import FAILED, OK
 from rundesk.skills import catalogs, doctor, grants, library, needs
+from rundesk.teams import catalogs as team_catalogs
 from rundesk.utils import archives, locking
 from rundesk.utils.terminal import NOTHING, as_table
 
@@ -277,7 +278,7 @@ def _installed(source: str, confirm: bool, fetching: Optional[catalogs.Fetching]
                 # asking somebody to confirm something that will then be refused is a worse answer
                 # than refusing now.
                 return _failed(taken)
-            if (coming.at / library.TEAM).is_file():
+            if team_catalogs.declared(coming.at):
                 return _failed("this catalog declares a team — install it with: "
                                f"rundesk teams install {source}")
             if not confirm:

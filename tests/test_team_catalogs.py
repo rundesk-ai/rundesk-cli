@@ -3,7 +3,7 @@
 import json
 import unittest
 
-from fixtures_skills import a_team_catalog, written
+from fixtures_skills import a_published_catalog, a_team_catalog, written
 
 import support
 from rundesk.skills import catalogs as skill_catalogs
@@ -26,6 +26,12 @@ class TeamCatalogs(support.Isolated):
         self.assertEqual("test-team", team.name)
         self.assertEqual(["forge", "piper"], [one.name for one in team.members])
         self.assertEqual(["piper"], team.members[0].delegates_to)
+
+    def test_only_the_team_envelope_is_recognized_as_a_declaration(self):
+        self.assertTrue(catalogs.declared(self.source))
+        ordinary = a_published_catalog(self.home / "ordinary")
+        written(ordinary / library.TEAM, {"metadata": "belongs to the ordinary catalog"})
+        self.assertFalse(catalogs.declared(ordinary))
 
     def test_unknown_fields_and_unsafe_instruction_paths_are_refused(self):
         manifest = json.loads((self.source / library.TEAM).read_text())

@@ -34,6 +34,21 @@ class Team(NamedTuple):
     members: List[Member]
 
 
+def declared(at: Path) -> bool:
+    """Whether a fetched tree carries a structurally recognizable team declaration.
+
+    This is deliberately narrower than file presence. An ordinary skill catalog may already use a
+    file called ``team.json`` for its own data; only the exact team envelope routes installation to
+    the guarded team lifecycle. Full validation remains ``read``'s job.
+    """
+    how, held = files.read_json(at / library.TEAM)
+    return (how == files.READ
+            and isinstance(held, dict)
+            and set(held) == {"schema", "name", "members"}
+            and held.get("schema") == SCHEMA
+            and isinstance(held.get("members"), list))
+
+
 def read(at: Path, manifest: library.Manifest) -> Team:
     """Read a team from a fetched catalog tree, refusing the complete declaration at once."""
     declared = at / library.TEAM

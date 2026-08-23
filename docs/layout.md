@@ -248,10 +248,11 @@ data/skills/
     my-thing/SKILL.md       flat — no app/, because nothing ever swaps this one
 ```
 
-A fetched catalog whose `app/team.json` exists is also a team catalog. Its canonical agent files
-stand under `app/agents/<member>/AGENTS.md`; both move in the same catalog-tree swap as its skills.
-There is no executable install hook or second mutable copy of the team declaration. Team ownership
-is discovered from installed declarations, and duplicate ownership of an agent is refused.
+A team catalog carries `app/team.json`, and Rundesk records its guarded installation with a `team`
+marker beside `app/`. Its canonical agent files stand under `app/agents/<member>/AGENTS.md`; both
+move in the same catalog-tree swap as its skills. There is no executable install hook or second
+mutable copy of the team declaration. Repository content alone cannot claim team ownership, and
+duplicate ownership of an agent is refused.
 
 **`app/manifest.json` is what makes the directory a catalog**, the same way `state.db` makes a
 directory an agent. `catalog.json` deliberately is not: it records where a catalog was *fetched* from,

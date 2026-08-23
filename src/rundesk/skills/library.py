@@ -116,9 +116,13 @@ PROVENANCE = "catalog.json"
 #: Where a catalog keeps its skills, inside its tree.
 INSIDE = "skills"
 
-#: What makes an ordinary skill catalog a team catalog. It remains inside the fetched tree so a
-#: catalog update replaces the team declaration and its canonical instructions together.
+#: The team declaration a repository may carry. It remains inside the fetched tree so a catalog
+#: update replaces the declaration and its canonical instructions together.
 TEAM = "team.json"
+
+#: What records that Rundesk installed a catalog through the guarded team lifecycle. Repository
+#: content cannot claim this name: it stands beside the fetched tree and Rundesk alone writes it.
+TEAM_MARKER = "team"
 
 #: What makes the directory a skill. Every provider CLI already reads this name.
 DECLARED = "SKILL.md"
@@ -300,8 +304,8 @@ def manifest_at(name: str) -> Path:
 
 
 def is_team(name: str) -> bool:
-    """Whether the installed catalog declares a managed team."""
-    return name != MINE and (tree(name) / TEAM).is_file()
+    """Whether Rundesk installed this catalog through the managed-team lifecycle."""
+    return name != MINE and (stands(name) / TEAM_MARKER).is_file()
 
 
 def name_trouble(said: str) -> str:

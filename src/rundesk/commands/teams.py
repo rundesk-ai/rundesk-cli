@@ -94,7 +94,7 @@ def _installed(source: str, provider: Optional[str], confirm: bool, gateways: Ga
             reconcile.preflight(team, provider)
             if not confirm:
                 return _would_install(team, source, provider)
-            skill_catalogs.installed(coming)
+            skill_catalogs.installed(coming, as_team=True)
     except TROUBLE as why:
         return _failed(str(why), "nothing was installed or changed")
     try:

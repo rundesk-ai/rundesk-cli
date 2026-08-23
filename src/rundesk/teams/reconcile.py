@@ -62,8 +62,7 @@ def apply(team: catalogs.Team, provider: Optional[str] = None) -> List[str]:
 
     for one in team.members:
         changed.extend(_member(team, one))
-
-    grants.refreshed()
+        changed.extend(grants.required_reconciled(one.name))
     return changed
 
 
@@ -77,7 +76,7 @@ def current(agent: str) -> List[str]:
         one = next(member for member in team.members if member.name == agent)
         preflight(team)
         changed = _member(team, one)
-        grants.refreshed()
+        changed.extend(grants.required_reconciled(one.name))
         return changed
     except Refused:
         raise

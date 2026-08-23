@@ -303,7 +303,8 @@ def brought(source: str, etag: str = "", fetching: Optional[Fetching] = None) ->
         shutil.rmtree(working, ignore_errors=True)
 
 
-def installed(coming: Coming, saying: Optional[Callable[[str], None]] = None) -> Installed:
+def installed(coming: Coming, saying: Optional[Callable[[str], None]] = None,
+              as_team: bool = False) -> Installed:
     """Put a fetched catalog in place for the first time. Refused when one of that name is there.
 
     Held under the install's own lock and built under a staged name, the same way an agent is: an
@@ -329,6 +330,8 @@ def installed(coming: Coming, saying: Optional[Callable[[str], None]] = None) ->
             library.stated_provenance(
                 building, library.Provenance(coming.source, coming.etag,
                                              coming.manifest.version, library.stamped()))
+            if as_team:
+                (building / library.TEAM_MARKER).touch()
             os.replace(building, at)
         except BaseException:
             files.discard(building)
