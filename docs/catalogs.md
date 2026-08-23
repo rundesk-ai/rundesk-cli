@@ -62,6 +62,9 @@ catalog-repository/
 A team catalog adds `team.json` and one canonical `agents/<member>/AGENTS.md` per declared member.
 It remains data-only: do not publish an install hook or migration script and do not place provider
 credentials, channel configuration, projects, or installation-local model choices in it.
+Every declared member name must be absent from the target installation; the owner removes a
+same-named agent before installing the team so catalog members always start from canonical state.
+Each member also declares whether Rundesk's protected weekly upkeep is enabled.
 
 Do not add an empty optional skill directory. `ENVIRONMENTS.md` belongs only in a catalog whose
 skills ship runtime code, select accounts or require configuration across environments; omit it from

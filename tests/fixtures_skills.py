@@ -94,12 +94,12 @@ def a_team_catalog(at: Path, name: str = "test-team", version: str = "1.0.0",
         {
             "name": "forge", "description": "Implements bounded software changes.",
             "instructions": "agents/forge/AGENTS.md", "skills": ["implementing"],
-            "delegates_to": ["piper"],
+            "delegates_to": ["piper"], "self_improve": True,
         },
         {
             "name": "piper", "description": "Reviews code and judges release quality.",
             "instructions": "agents/piper/AGENTS.md", "skills": ["reviewing"],
-            "delegates_to": [],
+            "delegates_to": [], "self_improve": False,
         },
     ])
     written(at / library.TEAM, {"schema": 1, "name": name, "members": settled})

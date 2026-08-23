@@ -26,6 +26,7 @@ class Member(NamedTuple):
     instructions: Path
     skills: List[str]
     delegates_to: List[str]
+    self_improve: bool
 
 
 class Team(NamedTuple):
@@ -107,7 +108,7 @@ def owners() -> dict:
 def _member(at: Path, declared: Path, raw) -> Member:
     if not isinstance(raw, dict):
         raise Refused(f"a member in {declared} is not an object")
-    wanted = {"name", "description", "instructions", "skills", "delegates_to"}
+    wanted = {"name", "description", "instructions", "skills", "delegates_to", "self_improve"}
     if set(raw) != wanted:
         raise Refused(f"a member in {declared} must contain exactly " + ", ".join(sorted(wanted)))
     name = raw.get("name")
@@ -135,6 +136,9 @@ def _member(at: Path, declared: Path, raw) -> Member:
             or any(not isinstance(agent, str) for agent in delegates)
             or len(delegates) != len(set(delegates))):
         raise Refused(f"{declared} needs a duplicate-free delegates_to array for {name}")
+    self_improve = raw.get("self_improve")
+    if not isinstance(self_improve, bool):
+        raise Refused(f"{declared} needs a true or false self_improve setting for {name}")
     instructions = raw.get("instructions")
     if not isinstance(instructions, str) or not instructions.strip():
         raise Refused(f"{declared} needs an instructions path for {name}")
@@ -155,4 +159,4 @@ def _member(at: Path, declared: Path, raw) -> Member:
         raise Refused(f"{page} is not readable UTF-8 ({why})") from why
     if not instructions_text.strip():
         raise Refused(f"{page} cannot be an empty agent workflow")
-    return Member(name, description.strip(), relative, list(skills), list(delegates))
+    return Member(name, description.strip(), relative, list(skills), list(delegates), self_improve)

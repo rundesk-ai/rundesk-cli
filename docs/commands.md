@@ -2068,15 +2068,16 @@ confirmation are separate:
 $ rundesk teams install ./development-team --provider codex
 install: this would install team development-team from ./development-team
         member   forge — create with provider codex
-                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; allow only implementing plus Rundesk-required skills; activate gateway
+                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; allow only implementing plus Rundesk-required skills; weekly upkeep on; activate gateway
         nothing was installed or changed. To go ahead:
         rundesk teams install ./development-team --provider codex --confirm
 ```
 
-`--provider` is used only for declared members that do not exist. Existing members keep their local
-provider and account selection. A confirmed install explicitly adopts same-named unmanaged agents;
-the preview names the instruction replacement, memory removal, delegation change, skill allowlist,
-and gateway activation before that happens.
+`--provider` is used for the new agents created by installation. Installation refuses any declared
+member name that already exists and prints the exact `rundesk agents remove <agent> --confirm`
+command required before retrying. This clean-start boundary ensures every member begins with the
+catalog-owned instructions, memory policy, delegation scope, skill allowlist, and weekly upkeep
+setting.
 
 `rundesk teams update <team>` fetches the recorded source and performs the same reconciliation. It
 repairs local instruction, memory, delegation, and skill-allowlist drift even when the fetched tree is
@@ -2092,8 +2093,10 @@ The member's `skills` array is a positive allowed list, not a deny list, and may
 Reconciliation removes any unlisted grant, regardless of catalog, while preserving Rundesk's
 required operating skill and its
 conditional delegation skill. Editing the positive list is how a team version adds or removes a
-stack-specific or task-specific capability. A member removed from a later team version is no longer
-managed and is not deleted. Team catalogs execute no installation hook.
+stack-specific or task-specific capability. The member's required `self_improve` boolean enables or
+disables Rundesk's protected weekly upkeep and is repaired from the catalog on later turns. A member
+removed from a later team version is no longer managed and is not deleted. Team catalogs execute no
+installation hook.
 Ordinary `skills install`, `skills update`, automatic catalog refresh, and `skills remove` cannot
 move a team catalog independently of its agents.
 A confirmed team install or update is also refused from inside an agent turn. An agent may propose a

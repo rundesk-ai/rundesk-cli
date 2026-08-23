@@ -39,6 +39,18 @@ def preflight(team: catalogs.Team, provider: Optional[str] = None) -> None:
                       " — add --provider <provider>")
 
 
+def preflight_install(team: catalogs.Team, provider: Optional[str] = None) -> None:
+    """Require every member to begin as a new agent owned by this team."""
+    known = set(directory.known())
+    existing = [one.name for one in team.members if one.name in known]
+    if existing:
+        removals = ", ".join(
+            f"{name} (rundesk agents remove {name} --confirm)" for name in existing)
+        raise Refused("existing team members must be removed before installing this team: " +
+                      removals)
+    preflight(team, provider)
+
+
 def retiring(team: catalogs.Team, one: catalogs.Member) -> List[grants.Grant]:
     """Every current grant outside this member's positive allowlist, excluding product grants."""
     desired = {f"{team.name}/{skill_name}" for skill_name in one.skills}
@@ -49,9 +61,13 @@ def retiring(team: catalogs.Team, one: catalogs.Member) -> List[grants.Grant]:
                      and held.address == library.DELEGATING)]
 
 
-def apply(team: catalogs.Team, provider: Optional[str] = None) -> List[str]:
+def apply(team: catalogs.Team, provider: Optional[str] = None,
+          installing: bool = False) -> List[str]:
     """Reconcile every member and return concise evidence lines. Safe to run repeatedly."""
-    preflight(team, provider)
+    if installing:
+        preflight_install(team, provider)
+    else:
+        preflight(team, provider)
     known = set(directory.known())
     changed: List[str] = []
     for one in team.members:
@@ -100,9 +116,11 @@ def _member(team: catalogs.Team, one: catalogs.Member) -> List[str]:
         moving["describes"] = one.description
     if settled.get("delegates_to") != wanted_scope:
         moving["delegates_to"] = wanted_scope
+    if bool(settled.get("self_improve")) != one.self_improve:
+        moving["self_improve"] = int(one.self_improve)
     if moving:
         records.stated(directory.records(one.name), moving)
-        changed.append(f"{one.name}: description and delegation reconciled")
+        changed.append(f"{one.name}: description, delegation and upkeep reconciled")
 
     for held in retiring(team, one):
         grants.revoked(one.name, held.name)

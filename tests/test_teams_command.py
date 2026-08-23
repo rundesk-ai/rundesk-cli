@@ -41,13 +41,14 @@ class Teams(support.Isolated):
                                   provider=provider, confirm=confirm)
         return cmd_teams(args, gateways or Gateways())
 
-    def test_preview_changes_nothing_and_names_adoption_cost(self):
+    def test_preview_changes_nothing_and_names_member_effects(self):
         code, out, err = support.run_with(
             ["teams", "install", str(self.source), "--provider", "codex"])
         self.assertEqual(FAILED, code)
         self.assertEqual([], directory.known())
         self.assertEqual([], library.known())
         self.assertIn("replace AGENTS.md and CLAUDE.md; remove MEMORY.md", err)
+        self.assertIn("weekly upkeep off", err)
         self.assertEqual("", out)
 
     def test_confirm_creates_reconciles_and_activates_every_member(self):
@@ -64,20 +65,26 @@ class Teams(support.Isolated):
             self.assertEqual(expected, (home / "CLAUDE.md").read_text())
             self.assertFalse((home / "MEMORY.md").exists())
             self.assertEqual(f"test-team/{skill}", grants.holding(name, skill).address)
+        self.assertEqual(1, records.read(directory.records("forge"))["self_improve"])
+        self.assertEqual(0, records.read(directory.records("piper"))["self_improve"])
         self.assertEqual(("piper",), delegating.scope_of("forge"))
         self.assertEqual((), delegating.scope_of("piper"))
         self.assertEqual("Implements bounded software changes.",
                          records.read(directory.records("forge"))["describes"])
 
-    def test_confirm_explicitly_adopts_an_existing_agent_without_changing_its_provider(self):
+    def test_install_refuses_an_existing_agent_and_names_its_removal_command(self):
         directory.made("forge", "claude", "An owner description.")
         home = directory.home("forge")
         (home / "AGENTS.md").write_text("owner rules")
         (home / "MEMORY.md").write_text("owner memory")
-        self.assertEqual(OK, self.command("install"))
+        code, _out, err = support.run_with(
+            ["teams", "install", str(self.source), "--provider", "codex", "--confirm"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("forge (rundesk agents remove forge --confirm)", err)
         self.assertEqual("claude", records.read(directory.records("forge"))["provider_name"])
-        self.assertNotEqual("owner rules", (home / "AGENTS.md").read_text())
-        self.assertFalse((home / "MEMORY.md").exists())
+        self.assertEqual("owner rules", (home / "AGENTS.md").read_text())
+        self.assertEqual("owner memory", (home / "MEMORY.md").read_text())
+        self.assertNotIn("test-team", library.known())
 
     def test_confirm_does_not_repair_or_change_an_unmanaged_agent(self):
         directory.made("spectator", "claude", "An unrelated agent.")
@@ -105,7 +112,7 @@ class Teams(support.Isolated):
         (forge / "MEMORY.md").write_text("should not persist")
         grants.revoked("forge", "implementing")
         records.stated(directory.records("forge"), {
-            "describes": "drift", "delegates_to": delegating.encoded(())})
+            "describes": "drift", "delegates_to": delegating.encoded(()), "self_improve": 0})
 
         self.assertEqual(OK, self.command("update", provider=None))
         expected = (self.source / "agents/forge/AGENTS.md").read_text()
@@ -114,6 +121,7 @@ class Teams(support.Isolated):
         self.assertFalse((forge / "MEMORY.md").exists())
         self.assertEqual("test-team/implementing", grants.holding("forge", "implementing").address)
         self.assertEqual(("piper",), delegating.scope_of("forge"))
+        self.assertEqual(1, records.read(directory.records("forge"))["self_improve"])
 
     def test_turn_admission_reconciliation_repairs_installed_state_without_fetching(self):
         self.assertEqual(OK, self.command("install"))
@@ -129,6 +137,7 @@ class Teams(support.Isolated):
         missing_link.unlink()
         (home / "AGENTS.md").write_text("drift")
         (home / "MEMORY.md").write_text("drift")
+        records.stated(directory.records("forge"), {"self_improve": 0})
         grants.revoked("forge", "implementing")
         reconcile.current("forge")
         self.assertEqual((self.source / "agents/forge/AGENTS.md").read_text(),
@@ -136,6 +145,7 @@ class Teams(support.Isolated):
         self.assertFalse((home / "MEMORY.md").exists())
         self.assertEqual("test-team/implementing",
                          grants.holding("forge", "implementing").address)
+        self.assertEqual(1, records.read(directory.records("forge"))["self_improve"])
         self.assertIsNone(grants.holding("forge", "extra"))
         self.assertFalse(missing_link.exists())
         self.assertEqual("turn-extra/extra", grants.holding("spectator", "extra").address)
@@ -158,6 +168,15 @@ class Teams(support.Isolated):
         self.assertIsNone(grants.holding("forge", "implementing"))
         self.assertEqual("test-team/reviewing", grants.holding("forge", "reviewing").address)
         self.assertEqual((), delegating.scope_of("forge"))
+
+    def test_update_applies_a_changed_weekly_upkeep_setting(self):
+        self.assertEqual(OK, self.command("install"))
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        manifest["members"][1]["self_improve"] = True
+        written(self.source / library.TEAM, manifest)
+
+        self.assertEqual(OK, self.command("update", provider=None))
+        self.assertEqual(1, records.read(directory.records("piper"))["self_improve"])
 
     def test_the_positive_allowed_list_removes_an_unlisted_catalog_grant(self):
         self.assertEqual(OK, self.command("install"))
@@ -197,7 +216,7 @@ class Teams(support.Isolated):
         second = a_team_catalog(self.home / "second", name="second-team", members=[{
             "name": "forge", "description": "A conflicting owner.",
             "instructions": "agents/forge/AGENTS.md", "skills": ["implementing"],
-            "delegates_to": [],
+            "delegates_to": [], "self_improve": True,
         }], skills=("implementing",))
         self.assertEqual(FAILED, self.command("install", source=second, team="second-team"))
         self.assertNotIn("second-team", library.known())

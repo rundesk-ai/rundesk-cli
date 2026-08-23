@@ -27,9 +27,9 @@ agents/
 - `description`: the sentence other agents use when routing work;
 - `instructions`: a relative path below `agents/` to its canonical `AGENTS.md`;
 - `skills`: the exact positive allowlist this member receives from this catalog, which may be empty;
-  and
 - `delegates_to`: the exact named-agent scope, as an array. An empty array makes the member
-  inbound-only.
+  inbound-only; and
+- `self_improve`: `true` or `false`, controlling Rundesk's protected weekly upkeep for this member.
 
 All fields are required. Unknown fields, duplicate members or skills, paths that escape the catalog,
 missing instructions, undeclared skills, invalid agent names, and cross-team member collisions are
@@ -39,8 +39,9 @@ refused before a confirmed operation mutates the install.
 
 `rundesk teams install <repository>` fetches and validates the complete catalog, previews every
 effect, and changes nothing. `--confirm` installs the catalog and reconciles its members. A provider
-is installation-local: `--provider` supplies the provider only for members that do not already
-exist, while existing members keep their provider and account selection.
+is installation-local: `--provider` supplies the provider for every new member. Installation refuses
+any declared name that already exists; remove each colliding agent before installing the team so
+every member begins from its catalog-owned workflow.
 
 `rundesk teams update <team>` fetches the configured source, validates the replacement, previews
 catalog and member changes, and changes nothing. `--confirm` replaces changed catalog content and
@@ -57,9 +58,10 @@ For each member, reconciliation:
 2. writes the catalog's instruction bytes atomically to both `AGENTS.md` and `CLAUDE.md`;
 3. removes `MEMORY.md`, making the team member explicitly memoryless;
 4. writes the declared description and delegation scope;
-5. grants every declared skill and revokes every grant outside that positive allowlist;
-6. preserves Rundesk's required operating skill and conditional delegation skill; and
-7. starts or repairs the member's supervised gateway and proves it is running.
+5. enables or disables the member's protected weekly upkeep from `self_improve`;
+6. grants every declared skill and revokes every grant outside that positive allowlist;
+7. preserves Rundesk's required operating skill and conditional delegation skill; and
+8. starts or repairs the member's supervised gateway and proves it is running.
 
 A member removed by a later catalog version is released from team management rather than deleted.
 Removing agents, channels, schedules, credentials, or projects is outside this lifecycle. Removing
@@ -71,11 +73,10 @@ reported as full success. Re-running the confirmed team update is the recovery p
 
 ## Ownership and safety
 
-A named agent may be managed by at most one installed team catalog. Installing a team over an
-existing unmanaged agent is an explicit adoption shown in the preview; the required `--confirm`
-authorizes the named instruction replacement, memory removal, delegation change, and skill-allowlist
-reconciliation. A team never changes provider credentials or grants itself external
-authority.
+A named agent may be managed by at most one installed team catalog. Initial installation refuses
+every existing same-named agent and reports the exact `rundesk agents remove <agent> --confirm`
+command required before retrying. A team never changes provider credentials or grants itself
+external authority.
 
 Team catalogs are data-only. Rundesk executes no repository hook, migration script, or agent-authored
 code during installation or update. Ordinary `rundesk skills install`, `skills update`, automatic
@@ -91,12 +92,14 @@ boundary against a process deliberately bypassing its environment.
 - A synthetic local team catalog previews without mutation, then installs into a disposable root.
 - Missing members exist with their configured descriptions and delegation scopes.
 - Their `AGENTS.md` and `CLAUDE.md` match the catalog byte-for-byte and no `MEMORY.md` remains.
+- Each member's protected weekly upkeep state matches its `self_improve` setting.
 - Each member holds exactly its positive allowed list, plus product-required grants; an unlisted
   grant from any catalog is removed on reconciliation.
 - Every member's gateway activation is requested through the injected supervisor boundary.
 - A second confirmed update is idempotent.
 - Local drift is repaired even when the source tree is unchanged.
 - A changed catalog version updates instructions, grants, and delegation scope together.
-- Invalid manifests, missing providers for new members, cross-team collisions, ordinary skill
-  lifecycle attempts, and gateway failures are refused or reported without false success.
+- Invalid manifests, existing same-named agents, missing providers for new members, cross-team
+  collisions, ordinary skill lifecycle attempts, and gateway failures are refused or reported
+  without false success.
 - The complete suite, Python 3.9 floor, lint, syntax, privacy, and disposable-install gates pass.

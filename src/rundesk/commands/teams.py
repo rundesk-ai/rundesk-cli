@@ -10,6 +10,7 @@ import sys
 from typing import Optional, Protocol
 
 from rundesk.commands import Subcommands, failed
+from rundesk.core import paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job
 from rundesk.providers import environment
@@ -38,7 +39,7 @@ def register(sub: Subcommands) -> None:
     new.add_argument("repository", metavar="<repository>",
                      help="a GitHub repository URL, or a directory on this machine")
     new.add_argument("--provider", metavar="<provider>", default=None,
-                     help="provider for members that do not exist on this install")
+                     help="provider for the new team members")
     new.add_argument("--confirm", action="store_true",
                      help="required — without it, nothing is installed or changed")
 
@@ -91,18 +92,24 @@ def _installed(source: str, provider: Optional[str], confirm: bool, gateways: Ga
             reserved = skill_catalogs.reserved(team.name)
             if reserved:
                 return _failed(reserved)
-            reconcile.preflight(team, provider)
+            reconcile.preflight_install(team, provider)
             if not confirm:
                 return _would_install(team, source, provider)
-            skill_catalogs.installed(coming, as_team=True)
+            # One decision from the final clean-name check through member creation. Every nested
+            # catalog, agent, record and grant write takes this same re-entrant install lock, so a
+            # same-named agent cannot appear in the gap and be mistaken for a team-created member.
+            with locking.only_one(paths.lock(), "this install",
+                                  locking.WHILE_A_DIRECTORY_MOVES):
+                reconcile.preflight_install(team, provider)
+                skill_catalogs.installed(coming, as_team=True)
+                try:
+                    installed = catalogs.installed(team.name)
+                    changed = reconcile.apply(installed, provider, installing=True)
+                except TROUBLE as why:
+                    return _failed(str(why), "the team was not fully installed",
+                                   f"retry with: {_update_command(team.name, provider)}")
     except TROUBLE as why:
         return _failed(str(why), "nothing was installed or changed")
-    try:
-        installed = catalogs.installed(team.name)
-        changed = reconcile.apply(installed, provider)
-    except TROUBLE as why:
-        return _failed(str(why), "the team was not fully installed",
-                       f"retry with: {_update_command(team.name, provider)}")
     return _activated(installed, changed, gateways, "installed")
 
 
@@ -152,7 +159,7 @@ def _activated(team: catalogs.Team, changed, gateways: Gateways, verb: str) -> i
 
 def _would_install(team: catalogs.Team, source: str, provider: Optional[str]) -> int:
     print(f"install: this would install team {team.name} from {source}", file=sys.stderr)
-    _preview_members(team, provider)
+    _preview_members(team, provider, installing=True)
     print("        nothing was installed or changed. To go ahead:", file=sys.stderr)
     command = f"rundesk teams install {source}"
     if provider:
@@ -164,7 +171,7 @@ def _would_install(team: catalogs.Team, source: str, provider: Optional[str]) ->
 def _would_update(team: catalogs.Team, source: str, provider: Optional[str]) -> int:
     print(f"update: this would reconcile team {team.name} from {source}", file=sys.stderr)
     _preview_members(team, provider)
-    print("        repair   canonical instructions, memory absence, delegation and skill allowlist",
+    print("        repair   instructions, memory absence, delegation, upkeep and skill allowlist",
           file=sys.stderr)
     print("        nothing was changed. To go ahead:", file=sys.stderr)
     command = f"rundesk teams update {team.name}"
@@ -174,15 +181,19 @@ def _would_update(team: catalogs.Team, source: str, provider: Optional[str]) -> 
     return FAILED
 
 
-def _preview_members(team: catalogs.Team, provider: Optional[str]) -> None:
+def _preview_members(team: catalogs.Team, provider: Optional[str], installing: bool = False) -> None:
     absent = set(reconcile.missing(team))
     for member in team.members:
-        action = f"create with provider {provider}" if member.name in absent else "adopt/reconcile"
+        if installing or member.name in absent:
+            action = f"create with provider {provider}"
+        else:
+            action = "reconcile"
         print(f"        member   {member.name} — {action}", file=sys.stderr)
         allowed = ", ".join(member.skills) or "no optional skills"
         print(f"                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; "
               f"allow only {allowed} plus Rundesk-required skills; "
-              "activate gateway", file=sys.stderr)
+              f"weekly upkeep {'on' if member.self_improve else 'off'}; activate gateway",
+              file=sys.stderr)
         if member.name not in absent:
             for held in reconcile.retiring(team, member):
                 print(f"        revoke   {member.name}: {held.address or held.name} — not allowed",

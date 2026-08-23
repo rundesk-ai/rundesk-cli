@@ -62,6 +62,14 @@ class TeamCatalogs(support.Isolated):
         written(self.source / library.TEAM, manifest)
         self.assertEqual([], self.read().members[1].skills)
 
+    def test_weekly_upkeep_must_be_explicitly_on_or_off(self):
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        manifest["members"][0]["self_improve"] = "sometimes"
+        written(self.source / library.TEAM, manifest)
+        with self.assertRaises(catalogs.Refused) as refused:
+            self.read()
+        self.assertIn("true or false self_improve", str(refused.exception))
+
     def test_an_empty_canonical_agent_workflow_is_refused(self):
         (self.source / "agents/forge/AGENTS.md").write_text("\n")
         with self.assertRaises(catalogs.Refused) as refused:
