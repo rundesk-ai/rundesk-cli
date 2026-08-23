@@ -23,12 +23,14 @@ kept in step by anybody remembering is two files that disagree, and the disagree
 each brain reads only the one it looks for, so the two would drift into two different agents wearing
 one name. `tests/test_agent_pages.py` compares the bytes rather than trusting this sentence.
 
-## Absence is filled; an answer is never replaced
+## Rules and work areas are repaired; memory absence is an answer
 
 **A page that is already there is left exactly as it is, whatever it says.** These are the files an
 agent and its owner edit — the rules say so in as many words — so a release that rewrote them would
 be a release that silently changed how somebody's agent works, and the owner would find out by its
-behaviour rather than by being told.
+behaviour rather than by being told. New agents receive the memory scaffold, but an update does not
+recreate an absent `MEMORY.md`: removing it is how an owner expresses that this agent keeps no
+cross-run memory. Missing rules and work-area notes are still restored.
 
 That is `skills.grants` behaviour and deliberately not `lifecycle.home`'s: an install's `README.md`
 is rewritten every update because it holds nothing anybody typed, and these hold nothing else.
@@ -157,7 +159,8 @@ def _stands(page: Path) -> bool:
     return page.exists() or page.is_symlink()
 
 
-def place(home: Path, agent: str, text: Optional[Dict[str, str]] = None) -> List[str]:
+def place(home: Path, agent: str, text: Optional[Dict[str, str]] = None,
+          include_memory: bool = True) -> List[str]:
     """Put every page this home is missing into it. Hands back what was written, in order.
 
     **Fills an absence and never replaces an answer** — see the module docstring. A page already
@@ -166,10 +169,14 @@ def place(home: Path, agent: str, text: Optional[Dict[str, str]] = None) -> List
     `text` is what `read_shipped` gave, passed in when a caller is placing for many agents so the
     release's own files are read once rather than once per agent. Resolved in the body when it is
     not — never in the signature, where it would be bound at import and unreachable by a test.
+    `include_memory` is true for agent creation and false for the update sweep: a new agent needs a
+    complete scaffold, while absence in an existing home may be the owner's memory policy.
     """
     said = read_shipped() if text is None else text
     written = []
     for name in sorted(PAGES):
+        if name == "MEMORY.md" and not include_memory:
+            continue
         page = home / name
         if not _safe_parent(home, page) or _stands(page):
             continue
@@ -224,7 +231,7 @@ def everybody_has_theirs(names, home_of, saying=None) -> List[Tuple[str, str]]:
     left = []
     for name in names:
         try:
-            written = place(home_of(name), name, text)
+            written = place(home_of(name), name, text, include_memory=False)
         except OSError as why:
             left.append((name, str(why)))
             told(f"{name} is missing pages that could not be written ({why})")
