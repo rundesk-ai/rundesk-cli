@@ -418,6 +418,21 @@ def updated(name: str, coming: Coming, saying: Optional[Callable[[str], None]] =
                      True)
 
 
+def promoted(name: str, coming: Coming, saying: Optional[Callable[[str], None]] = None,
+             validating: Optional[Validating] = None) -> Installed:
+    """Adopt an installed skill catalog as a team catalog, updating its fetched tree first.
+
+    The catalog and marker move under one install lock. This lets somebody install a catalog's
+    skills first and add its declared team later without removing or duplicating those skills.
+    """
+    if library.is_team(name):
+        raise Refused(f"{name} is already installed as a team")
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        moved = updated(name, coming, saying, validating)
+        (library.stands(name) / library.TEAM_MARKER).touch()
+    return moved
+
+
 def remove(name: str) -> List[str]:
     """Take a catalog away whole. Returns the skills that went with it.
 

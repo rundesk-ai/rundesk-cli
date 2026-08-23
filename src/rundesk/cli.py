@@ -278,7 +278,7 @@ def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshin
     if args.command == "skills":
         return cmd_skills(args, refreshing)
     if args.command == "teams":
-        return cmd_teams(args, _gateways(supervising), refreshing)
+        return cmd_teams(args, refreshing)
     if args.command == "_oauth":
         return cmd_oauth(args, oauth_authorizing, oauth_posting)
     if args.command == "version":

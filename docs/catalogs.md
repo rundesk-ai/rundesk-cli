@@ -400,6 +400,12 @@ rundesk skills install ./acme-skills --confirm
 rundesk skills update acme-skills --confirm
 ```
 
+A repository may also declare a Rundesk team. Installing it through `skills install` installs only
+the skills: no agent is created or reconciled, and the catalog follows ordinary skill update and
+removal behavior. Installing it through `teams install` installs the same skills plus the guarded
+team lifecycle. A later `teams install` promotes the skills-only catalog in place, so users can
+start with the skills and add the declared team without removing or duplicating the catalog.
+
 If your catalog is not on GitHub, clone it yourself and point rundesk at the clone. Every source shape
 accepted here is one rundesk has to keep fetching correctly for ever, so there are two.
 

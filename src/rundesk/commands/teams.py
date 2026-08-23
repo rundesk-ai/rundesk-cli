@@ -1,29 +1,18 @@
-"""Install, update, list, and reconcile version-controlled teams.
-
-Fetching and gateway supervision arrive as collaborators so the complete lifecycle is testable
-without network access or touching the owner's login session.
-"""
+"""Install, update, list, and reconcile version-controlled teams."""
 
 import argparse
 import os
 import sys
-from typing import Optional, Protocol
+from typing import Optional
 
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK
-from rundesk.gateways import job
 from rundesk.providers import environment
 from rundesk.skills import catalogs as skill_catalogs
 from rundesk.skills import grants, library
 from rundesk.teams import catalogs, reconcile
 from rundesk.utils import archives, locking
-
-
-class Gateways(Protocol):
-    def up(self, name: str) -> str:
-        ...
-
 
 TROUBLE = (catalogs.Refused, reconcile.Refused, skill_catalogs.Refused,
            skill_catalogs.HalfInstalled, library.Refused, grants.Refused, grants.NotPresented,
@@ -35,7 +24,7 @@ def register(sub: Subcommands) -> None:
     what = said.add_subparsers(dest="what", metavar="<what>")
     what.add_parser("list", help="every installed team and its members")
 
-    new = what.add_parser("install", help="install and activate a team catalog")
+    new = what.add_parser("install", help="install a team catalog and its stopped agents")
     new.add_argument("repository", metavar="<repository>",
                      help="a GitHub repository URL, or a directory on this machine")
     new.add_argument("--provider", metavar="<provider>", default=None,
@@ -51,7 +40,7 @@ def register(sub: Subcommands) -> None:
                        help="required — without it, nothing is changed")
 
 
-def cmd_teams(args: argparse.Namespace, gateways: Gateways,
+def cmd_teams(args: argparse.Namespace,
               fetching: Optional[skill_catalogs.Fetching] = None) -> int:
     what = getattr(args, "what", None)
     if what in ("install", "update") and args.confirm and os.environ.get(environment.AGENT):
@@ -61,9 +50,9 @@ def cmd_teams(args: argparse.Namespace, gateways: Gateways,
     if what in (None, "list"):
         return _listed()
     if what == "install":
-        return _installed(args.repository, args.provider, args.confirm, gateways, fetching)
+        return _installed(args.repository, args.provider, args.confirm, fetching)
     if what == "update":
-        return _updated(args.team, args.provider, args.confirm, gateways, fetching)
+        return _updated(args.team, args.provider, args.confirm, fetching)
     raise AssertionError(f"teams {what} is registered on the parser and answered by nothing")
 
 
@@ -81,17 +70,20 @@ def _listed() -> int:
     return OK
 
 
-def _installed(source: str, provider: Optional[str], confirm: bool, gateways: Gateways,
+def _installed(source: str, provider: Optional[str], confirm: bool,
                fetching: Optional[skill_catalogs.Fetching]) -> int:
     try:
         with skill_catalogs.brought(source, "", fetching) as coming:
             if coming.at is None or coming.manifest is None:
                 return _failed(f"nothing was fetched from {source}")
             team = catalogs.read(coming.at, coming.manifest)
-            _gateway_names_are_usable(team)
             reserved = skill_catalogs.reserved(team.name)
             if reserved:
                 return _failed(reserved)
+            if library.manifest_at(team.name).is_file():
+                if library.is_team(team.name):
+                    return _failed(f"{team.name} is already installed as a team — update it with: "
+                                   f"rundesk teams update {team.name}")
             reconcile.preflight_install(team, provider)
             if not confirm:
                 return _would_install(team, source, provider)
@@ -101,8 +93,12 @@ def _installed(source: str, provider: Optional[str], confirm: bool, gateways: Ga
             with locking.only_one(paths.lock(), "this install",
                                   locking.WHILE_A_DIRECTORY_MOVES):
                 reconcile.preflight_install(team, provider)
-                skill_catalogs.installed(coming, as_team=True)
+                if library.manifest_at(team.name).is_file():
+                    moved = skill_catalogs.promoted(team.name, coming, validating=catalogs.read)
+                else:
+                    moved = skill_catalogs.installed(coming, as_team=True)
                 try:
+                    grants.retired(team.name, moved.retired)
                     installed = catalogs.installed(team.name)
                     changed = reconcile.apply(installed, provider, installing=True)
                 except TROUBLE as why:
@@ -110,10 +106,10 @@ def _installed(source: str, provider: Optional[str], confirm: bool, gateways: Ga
                                    f"retry with: {_update_command(team.name, provider)}")
     except TROUBLE as why:
         return _failed(str(why), "nothing was installed or changed")
-    return _activated(installed, changed, gateways, "installed")
+    return _completed(installed, changed, "installed")
 
 
-def _updated(name: str, provider: Optional[str], confirm: bool, gateways: Gateways,
+def _updated(name: str, provider: Optional[str], confirm: bool,
              fetching: Optional[skill_catalogs.Fetching]) -> int:
     try:
         settled = library.read(name)
@@ -125,7 +121,6 @@ def _updated(name: str, provider: Optional[str], confirm: bool, gateways: Gatewa
                                     fetching) as coming:
             incoming = (catalogs.installed(name) if coming.at is None or coming.manifest is None
                         else catalogs.read(coming.at, coming.manifest))
-            _gateway_names_are_usable(incoming)
             reconcile.preflight(incoming, provider)
             if not confirm:
                 return _would_update(incoming, settled.provenance.source, provider)
@@ -136,24 +131,15 @@ def _updated(name: str, provider: Optional[str], confirm: bool, gateways: Gatewa
     except TROUBLE as why:
         return _failed(str(why), f"{name} was not fully reconciled",
                        f"retry with: {_update_command(name, provider)}")
-    return _activated(installed, changed, gateways, "updated")
+    return _completed(installed, changed, "updated")
 
 
-def _activated(team: catalogs.Team, changed, gateways: Gateways, verb: str) -> int:
-    failed_gateways = []
+def _completed(team: catalogs.Team, changed, verb: str) -> int:
     print(f"team {team.name} {verb}")
     for line in changed:
         print(f"        {line}")
-    for member in team.members:
-        trouble = gateways.up(member.name)
-        if trouble:
-            failed_gateways.append(f"{member.name}: {trouble}")
-    if failed_gateways:
-        for why in failed_gateways:
-            print(f"        gateway not active — {why}", file=sys.stderr)
-        print(f"        retry with: rundesk teams update {team.name} --confirm", file=sys.stderr)
-        return FAILED
-    print(f"        active   {', '.join(one.name for one in team.members)}")
+    print(f"        agents   {', '.join(one.name for one in team.members)}")
+    print("        gateways stopped — start one with: rundesk gateways start <agent>")
     return OK
 
 
@@ -192,20 +178,12 @@ def _preview_members(team: catalogs.Team, provider: Optional[str], installing: b
         allowed = ", ".join(member.skills) or "no optional skills"
         print(f"                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; "
               f"allow only {allowed} plus Rundesk-required skills; "
-              f"weekly upkeep {'on' if member.self_improve else 'off'}; activate gateway",
+              f"weekly upkeep {'on' if member.self_improve else 'off'}; leave gateway stopped",
               file=sys.stderr)
         if member.name not in absent:
             for held in reconcile.retiring(team, member):
                 print(f"        revoke   {member.name}: {held.address or held.name} — not allowed",
                       file=sys.stderr)
-
-
-def _gateway_names_are_usable(team: catalogs.Team) -> None:
-    """Refuse a member whose name cannot have the supervised gateway a team promises."""
-    for member in team.members:
-        trouble = job.name_trouble(member.name)
-        if trouble:
-            raise catalogs.Refused(f"{member.name} cannot be a supervised team member: {trouble}")
 
 
 def _update_command(name: str, provider: Optional[str]) -> str:

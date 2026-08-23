@@ -61,15 +61,14 @@ For each member, reconciliation:
 5. enables or disables the member's protected weekly upkeep from `self_improve`;
 6. grants every declared skill and revokes every grant outside that positive allowlist;
 7. preserves Rundesk's required operating skill and conditional delegation skill; and
-8. starts or repairs the member's supervised gateway and proves it is running.
+8. leaves the member's gateway stopped for the owner to start when wanted.
 
 A member removed by a later catalog version is released from team management rather than deleted.
 Removing agents, channels, schedules, credentials, or projects is outside this lifecycle. Removing
 an unlisted optional skill grant is part of the positive allowlist contract.
 
-The catalog update and persisted reconciliation complete before gateway activation. A gateway
-failure is reported as an incomplete team activation with the exact retry command; it is never
-reported as full success. Re-running the confirmed team update is the recovery path.
+Installation and update do not start gateways. The successful command names
+`rundesk gateways start <agent>` so the owner can start only the agents they want to use.
 
 ## Ownership and safety
 
@@ -79,13 +78,19 @@ command required before retrying. A team never changes provider credentials or g
 external authority.
 
 Team catalogs are data-only. Rundesk executes no repository hook, migration script, or agent-authored
-code during installation or update. Ordinary `rundesk skills install`, `skills update`, automatic
-catalog refresh, and `skills remove` refuse or skip team catalogs so team content cannot move without
-its member reconciliation. A confirmed team install or update is refused from inside an agent turn;
-an owner reviews and applies it from a terminal. Agents may propose source changes but cannot apply
-the team state they are governed by through the supported in-turn command path. This is a correctness
-guard, not an operating-system sandbox; repository protection and owner review remain the authority
-boundary against a process deliberately bypassing its environment.
+code during installation or update. `rundesk skills install` may install the same repository as an
+ordinary skill catalog: it writes no team marker, creates no agent, and leaves `team.json` inert.
+That skills-only installation follows ordinary skill update, refresh, and removal behavior. A
+catalog installed through `rundesk teams install` carries the team marker, and ordinary skill
+update, refresh, and removal refuse or skip it so team content cannot move without member
+reconciliation. Installing the team after the skills promotes the existing catalog in place,
+preserving its skills while adding team ownership and reconciling the declared agents.
+
+A confirmed team install or update is refused from inside an agent turn; an owner reviews and
+applies it from a terminal. Agents may propose source changes but cannot apply the team state they
+are governed by through the supported in-turn command path. This is a correctness guard, not an
+operating-system sandbox; repository protection and owner review remain the authority boundary
+against a process deliberately bypassing its environment.
 
 ## Acceptance
 
@@ -100,6 +105,8 @@ boundary against a process deliberately bypassing its environment.
 - Local drift is repaired even when the source tree is unchanged.
 - A changed catalog version updates instructions, grants, and delegation scope together.
 - Invalid manifests, existing same-named agents, missing providers for new members, cross-team
-  collisions, ordinary skill lifecycle attempts, and gateway failures are refused or reported
-  without false success.
+  collisions are refused without false success.
+- The same repository installs, updates, and removes as skills only without creating agents or team
+  ownership; it can then be promoted in place to a team, which remains protected from ordinary skill
+  lifecycle changes and leaves every gateway stopped.
 - The complete suite, Python 3.9 floor, lint, syntax, privacy, and disposable-install gates pass.

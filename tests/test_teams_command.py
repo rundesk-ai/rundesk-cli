@@ -19,16 +19,6 @@ from rundesk.skills import grants, library
 from rundesk.teams import reconcile
 
 
-class Gateways:
-    def __init__(self, failing: str = "") -> None:
-        self.asked = []
-        self.failing = failing
-
-    def up(self, name: str) -> str:
-        self.asked.append(name)
-        return "the stand-in refused it" if name == self.failing else ""
-
-
 class Teams(support.Isolated):
     def setUp(self) -> None:
         super().setUp()
@@ -36,10 +26,10 @@ class Teams(support.Isolated):
         self.source = a_team_catalog(self.home / "published")
 
     def command(self, what: str, *, source: Optional[Path] = None, team: str = "test-team",
-                provider: str = "codex", confirm: bool = True, gateways=None) -> int:
+                provider: str = "codex", confirm: bool = True) -> int:
         args = argparse.Namespace(what=what, repository=str(source or self.source), team=team,
                                   provider=provider, confirm=confirm)
-        return cmd_teams(args, gateways or Gateways())
+        return cmd_teams(args)
 
     def test_preview_changes_nothing_and_names_member_effects(self):
         code, out, err = support.run_with(
@@ -49,15 +39,18 @@ class Teams(support.Isolated):
         self.assertEqual([], library.known())
         self.assertIn("replace AGENTS.md and CLAUDE.md; remove MEMORY.md", err)
         self.assertIn("weekly upkeep off", err)
+        self.assertIn("leave gateway stopped", err)
         self.assertEqual("", out)
 
-    def test_confirm_creates_reconciles_and_activates_every_member(self):
-        gateways = Gateways()
-        self.assertEqual(OK, self.command("install", gateways=gateways))
+    def test_confirm_creates_and_reconciles_every_member_with_gateways_stopped(self):
+        code, out, err = support.run_with(
+            ["teams", "install", str(self.source), "--provider", "codex", "--confirm"])
+        self.assertEqual(OK, code, err)
         self.assertTrue(library.is_team("test-team"))
         self.assertTrue((library.stands("test-team") / library.TEAM_MARKER).is_file())
         self.assertEqual(["forge", "piper"], directory.known())
-        self.assertEqual(["forge", "piper"], gateways.asked)
+        self.assertIn("gateways stopped", out)
+        self.assertIn("rundesk gateways start <agent>", out)
         for name, skill in (("forge", "implementing"), ("piper", "reviewing")):
             home = directory.home(name)
             expected = (self.source / "agents" / name / "AGENTS.md").read_text()
@@ -221,20 +214,39 @@ class Teams(support.Isolated):
         self.assertEqual(FAILED, self.command("install", source=second, team="second-team"))
         self.assertNotIn("second-team", library.known())
 
-    def test_gateway_failure_reports_incomplete_activation_without_losing_reconciliation(self):
-        self.assertEqual(FAILED, self.command("install", gateways=Gateways("piper")))
-        self.assertEqual(["forge", "piper"], directory.known())
-        self.assertTrue(library.is_team("test-team"))
-
-    def test_skill_commands_cannot_install_or_update_a_team_catalog(self):
+    def test_skill_commands_install_a_team_catalog_without_installing_the_team(self):
         code, _out, err = support.run_with(
             ["skills", "install", str(self.source), "--confirm"])
-        self.assertEqual(FAILED, code)
-        self.assertIn("teams install", err)
+        self.assertEqual(OK, code, err)
+        self.assertIn("test-team", library.known())
+        self.assertFalse(library.is_team("test-team"))
+        self.assertEqual([], directory.known())
+
+        skill = self.source / "skills/implementing/SKILL.md"
+        skill.write_text(skill.read_text() + "\nPromoted version.\n")
+        manifest = json.loads((self.source / library.MANIFEST).read_text())
+        manifest["version"] = "2.0.0"
+        written(self.source / library.MANIFEST, manifest)
+
+        code, _out, err = support.run_with(
+            ["teams", "install", str(self.source), "--provider", "codex", "--confirm"])
+        self.assertEqual(OK, code, err)
+        self.assertTrue(library.is_team("test-team"))
+        self.assertEqual(["forge", "piper"], directory.known())
+        self.assertEqual(["implementing", "reviewing"],
+                         library.found(library.inside("test-team")))
+        self.assertIn("Promoted version.",
+                      (library.look_up("test-team/implementing").at /
+                       library.DECLARED).read_text())
+
+    def test_skill_commands_cannot_move_a_catalog_installed_as_a_team(self):
         self.assertEqual(OK, self.command("install"))
         code, _out, err = support.run_with(["skills", "update", "test-team", "--confirm"])
         self.assertEqual(FAILED, code)
         self.assertIn("teams update", err)
+        code, _out, err = support.run_with(["skills", "remove", "test-team", "--confirm"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("cannot be removed through skills", err)
 
     def test_an_ordinary_catalog_may_carry_an_unrelated_team_json(self):
         ordinary = a_published_catalog(self.home / "ordinary", name="ordinary")

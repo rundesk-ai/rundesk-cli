@@ -2068,7 +2068,7 @@ confirmation are separate:
 $ rundesk teams install ./development-team --provider codex
 install: this would install team development-team from ./development-team
         member   forge — create with provider codex
-                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; allow only implementing plus Rundesk-required skills; weekly upkeep on; activate gateway
+                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; allow only implementing plus Rundesk-required skills; weekly upkeep on; leave gateway stopped
         nothing was installed or changed. To go ahead:
         rundesk teams install ./development-team --provider codex --confirm
 ```
@@ -2081,9 +2081,8 @@ setting.
 
 `rundesk teams update <team>` fetches the recorded source and performs the same reconciliation. It
 repairs local instruction, memory, delegation, and skill-allowlist drift even when the fetched tree is
-unchanged. It starts each declared gateway through the ordinary proven gateway lifecycle. A gateway
-that does not come up makes the command fail and names the same update command as the retry; the
-already reconciled team state is kept.
+unchanged. Install and update leave every member gateway stopped. Start only the agents you want to
+use with `rundesk gateways start <agent>`.
 
 Before any later provider turn is admitted, Rundesk performs the same reconciliation for that one
 member from the installed catalog. This is a local drift repair, not an update: it performs no fetch
@@ -2097,8 +2096,13 @@ stack-specific or task-specific capability. The member's required `self_improve`
 disables Rundesk's protected weekly upkeep and is repaired from the catalog on later turns. A member
 removed from a later team version is no longer managed and is not deleted. Team catalogs execute no
 installation hook.
-Ordinary `skills install`, `skills update`, automatic catalog refresh, and `skills remove` cannot
-move a team catalog independently of its agents.
+Installing the same repository with `skills install` intentionally installs only its skill
+catalog: it creates no agents and writes no team marker. That installation updates and removes like
+any ordinary skill catalog. Installing the team later promotes that catalog in place and creates
+the declared agents; the already installed skills remain available.
+
+Once a catalog was installed through `teams install`, ordinary `skills update`, automatic catalog
+refresh, and `skills remove` cannot move it independently of its agents.
 A confirmed team install or update is also refused from inside an agent turn. An agent may propose a
 catalog change, but an owner reviews and applies it from a terminal.
 
