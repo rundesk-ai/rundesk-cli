@@ -85,6 +85,31 @@ def a_published_catalog(at: Path, name: str = "acme", version: str = "1.0.0",
     return at
 
 
+def a_team_catalog(at: Path, name: str = "test-team", version: str = "1.0.0",
+                   members: Optional[Iterable[dict]] = None,
+                   skills: Iterable[str] = ("implementing", "reviewing")) -> Path:
+    """A published team catalog with canonical instruction files, written independently."""
+    a_published_catalog(at, name=name, version=version, skills=skills)
+    settled = list(members or [
+        {
+            "name": "forge", "description": "Implements bounded software changes.",
+            "instructions": "agents/forge/AGENTS.md", "skills": ["implementing"],
+            "delegates_to": ["piper"],
+        },
+        {
+            "name": "piper", "description": "Reviews code and judges release quality.",
+            "instructions": "agents/piper/AGENTS.md", "skills": ["reviewing"],
+            "delegates_to": [],
+        },
+    ])
+    written(at / library.TEAM, {"schema": 1, "name": name, "members": settled})
+    for member in settled:
+        page = at / member["instructions"]
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text(f"# {member['name']}\n\nCanonical team instructions.\n", encoding="utf-8")
+    return at
+
+
 def a_tarball(tree: Path, to: Path, wrapper: str = "") -> Path:
     """`tree` as a gzipped tar, optionally under one wrapper directory the way GitHub sends it."""
     with tarfile.open(to, "w:gz") as writing:

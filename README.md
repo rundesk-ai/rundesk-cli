@@ -243,6 +243,7 @@ state, history, and delivery.
 ### Agents and gateways
 
 - Named agents with isolated homes, workspaces, rules, memory, and skills
+- Version-controlled team catalogs that create and reconcile named agents, rules, grants, and gateways
 - Private provider homes when supported; native-keyring and machine-login providers
   keep their state under the provider's own rules
 - Diagnostics before a broken agent becomes an unattended failure

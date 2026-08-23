@@ -170,6 +170,7 @@ class Refreshed(NamedTuple):
 #: because this is the only thing in this package that leaves the machine. Every suite drives the
 #: whole of it offline.
 Fetching = Callable[[str, str, Path], Optional["Brought"]]
+Validating = Callable[[Path, library.Manifest], None]
 
 
 class Brought(NamedTuple):
@@ -355,7 +356,8 @@ def brings_a_change(at: Path, coming: Coming) -> bool:
 
 
 def update(name: str, fetching: Optional[Fetching] = None,
-           saying: Optional[Callable[[str], None]] = None) -> Installed:
+           saying: Optional[Callable[[str], None]] = None,
+           validating: Optional[Validating] = None) -> Installed:
     """Check a catalog against where it came from, and replace its tree when it has changed.
 
     Returns what happened. `fresh` false is the ordinary answer and means nothing changed: either the
@@ -369,31 +371,38 @@ def update(name: str, fetching: Optional[Fetching] = None,
         raise Refused(f"nothing is written down about where {name} came from, so it cannot be "
                       f"checked — rundesk skills remove {name} --confirm and install it again")
 
+    with brought(settled.provenance.source, settled.provenance.etag, fetching) as coming:
+        return updated(name, coming, saying, validating)
+
+
+def updated(name: str, coming: Coming, saying: Optional[Callable[[str], None]] = None,
+            validating: Optional[Validating] = None) -> Installed:
+    """Apply one already-fetched update, so preview and confirmation can share the validated tree."""
+    settled = library.read(name)
+    if not may_be_fetched(name):
+        raise Refused(f"{name} is not fetched from anywhere")
+    if settled.provenance is None:
+        raise Refused(f"nothing is written down about where {name} came from")
     was = library.read_manifest(settled.at / library.TREE)
     holding = library.found(library.inside(name))
     said = saying or (lambda _line: None)
-    # Both ways of finding nothing to do end in the same sentence and the same answer, so each is
-    # written once here rather than spelled out at both of them.
     up_to_date = f"{name} {was.version}: up to date"
     unmoved = Installed(name, was.version, was.version, holding, [], False)
-
-    with brought(settled.provenance.source, settled.provenance.etag, fetching) as coming:
-        if not coming.fresh or coming.at is None or coming.manifest is None:
-            said(up_to_date)
-            return unmoved
-        if coming.manifest.name != name:
-            raise Refused(f"{settled.provenance.source} now calls itself {coming.manifest.name} "
-                          f"and this install has it as {name} — install it under its new name and "
-                          f"remove {name}")
-        if not brings_a_change(settled.at, coming):
-            # A tree identical to the one standing is not a change, whatever the far end said.
-            # Swapping it in replaces a tree with a copy of itself and reports a change nobody made.
-            # The `ETag` is still written down, which is what `_noted` is for.
-            _noted(settled.at, coming)
-            said(up_to_date)
-            return unmoved
-        retired = [one for one in holding if one not in coming.skills]
-        _swapped(settled.at, coming)
+    if not coming.fresh or coming.at is None or coming.manifest is None:
+        said(up_to_date)
+        return unmoved
+    if coming.manifest.name != name:
+        source = settled.provenance.source if settled.provenance is not None else coming.source
+        raise Refused(f"{source} now calls itself {coming.manifest.name} and this install has it as "
+                      f"{name} — install it under its new name and remove {name}")
+    if validating is not None:
+        validating(coming.at, coming.manifest)
+    if not brings_a_change(settled.at, coming):
+        _noted(settled.at, coming)
+        said(up_to_date)
+        return unmoved
+    retired = [one for one in holding if one not in coming.skills]
+    _swapped(settled.at, coming)
     # Names a version movement only when there is one, the way the preview does. A tree that was
     # genuinely replaced at an unbumped version is a true thing to say and `1.0.0 -> 1.0.0` is not.
     if was.version != coming.manifest.version:
@@ -597,6 +606,10 @@ def refresh(fetching: Optional[Fetching] = None,
 
     for name in library.known():
         if not may_be_fetched(name):
+            continue
+        # Team catalogs own agent state as well as skills. Moving only their fetched tree would
+        # split the source from the agents it governs, so only `rundesk teams update` checks them.
+        if library.is_team(name):
             continue
         try:
             did = update(name, fetching, said)

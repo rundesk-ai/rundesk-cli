@@ -22,6 +22,12 @@ repository tooling and provider infrastructure, but every installed package must
 repository checkout. Copy or package required runtime support inside the owning catalog; never create
 a cross-repository runtime dependency.
 
+A catalog that owns a tested set of named Rundesk agents is a **team catalog**. Use that boundary
+only when the catalog is responsible for keeping those agents' instructions, delegation scope, and
+positive skill allowlists in step across installations. Its schema and guarded lifecycle are specified in
+[`requirements/team-catalog.md`](requirements/team-catalog.md); ordinary topical skill catalogs do
+not need team files.
+
 ## Building a catalog repository
 
 Use this root layout for a shared catalog:
@@ -52,6 +58,10 @@ catalog-repository/
 ├── THIRD_PARTY_NOTICES.md         only when adapted work requires attribution
 └── manifest.json                  catalog identity and version
 ```
+
+A team catalog adds `team.json` and one canonical `agents/<member>/AGENTS.md` per declared member.
+It remains data-only: do not publish an install hook or migration script and do not place provider
+credentials, channel configuration, projects, or installation-local model choices in it.
 
 Do not add an empty optional skill directory. `ENVIRONMENTS.md` belongs only in a catalog whose
 skills ship runtime code, select accounts or require configuration across environments; omit it from

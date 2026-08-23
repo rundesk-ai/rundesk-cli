@@ -53,6 +53,18 @@ class WithAnAgent(support.Isolated):
 
 
 class ATurnThatAnswers(WithAnAgent):
+    def test_team_state_is_reconciled_before_turn_admission(self):
+        with mock.patch.object(turns.team_reconcile, "current",
+                               wraps=turns.team_reconcile.current) as current:
+            self.run_turn()
+        current.assert_called_once_with("ava")
+
+    def test_a_team_reconciliation_refusal_stops_turn_admission(self):
+        with mock.patch.object(turns.team_reconcile, "current",
+                               side_effect=turns.team_reconcile.Refused("team state drift")):
+            with self.assertRaisesRegex(turns.NotRunnable, "team state drift"):
+                self.run_turn()
+
     def test_it_is_recorded_as_done_and_says_what_the_brain_said(self):
         got = self.run_turn()
         self.assertEqual(got.turn_status, kept.DONE)

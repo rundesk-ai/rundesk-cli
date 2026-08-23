@@ -16,6 +16,7 @@ current promises unless a current PRD links to them.
 | [machine-permissions.md](./machine-permissions.md) | current draft | what macOS lets a rundesk process do, and whose grants an answer is about |
 | [provider-account-alias.md](./provider-account-alias.md) | implemented | optional additional provider accounts and immutable delegation selection |
 | [rundesk-instructions.md](./rundesk-instructions.md) | current draft | ownership, composition, and acceptance of Rundesk operating and agent instructions |
+| [team-catalog.md](./team-catalog.md) | approved | version-controlled agent teams, their managed instructions, grants, and activation lifecycle |
 
 ## Status and evidence
 

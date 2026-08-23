@@ -277,6 +277,9 @@ def _installed(source: str, confirm: bool, fetching: Optional[catalogs.Fetching]
                 # asking somebody to confirm something that will then be refused is a worse answer
                 # than refusing now.
                 return _failed(taken)
+            if (coming.at / library.TEAM).is_file():
+                return _failed("this catalog declares a team — install it with: "
+                               f"rundesk teams install {source}")
             if not confirm:
                 return _would_install(coming)
             did = catalogs.installed(coming, _out_loud)
@@ -307,6 +310,8 @@ def _would_install(coming: catalogs.Coming) -> int:
 
 def _updated(name: str, confirm: bool, fetching: Optional[catalogs.Fetching]) -> int:
     """Check a catalog against where it came from, or say what checking it would change."""
+    if library.is_team(name):
+        return _failed(f"{name} declares a team — update it with: rundesk teams update {name}")
     if not confirm:
         return _would_update(name, fetching)
     try:
@@ -418,6 +423,9 @@ def _removed(name: str, confirm: bool) -> int:
         settled = library.read(name)
     except TROUBLE as why:
         return _failed(str(why))
+
+    if library.is_team(name):
+        return _failed(f"{name} declares a team and cannot be removed through skills")
 
     stays = catalogs.what_stays(name)
     if stays:

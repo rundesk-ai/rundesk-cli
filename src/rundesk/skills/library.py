@@ -116,6 +116,10 @@ PROVENANCE = "catalog.json"
 #: Where a catalog keeps its skills, inside its tree.
 INSIDE = "skills"
 
+#: What makes an ordinary skill catalog a team catalog. It remains inside the fetched tree so a
+#: catalog update replaces the team declaration and its canonical instructions together.
+TEAM = "team.json"
+
 #: What makes the directory a skill. Every provider CLI already reads this name.
 DECLARED = "SKILL.md"
 
@@ -293,6 +297,11 @@ def manifest_at(name: str) -> Path:
     """
     at = stands(name)
     return (at if name == MINE else at / TREE) / MANIFEST
+
+
+def is_team(name: str) -> bool:
+    """Whether the installed catalog declares a managed team."""
+    return name != MINE and (tree(name) / TEAM).is_file()
 
 
 def name_trouble(said: str) -> str:

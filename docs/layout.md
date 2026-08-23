@@ -177,6 +177,11 @@ the evidence interval and entry date, and a rerun updates that one entry. The bu
 reference bounds each entry but keeps the history. Rundesk never sweeps these areas, and an older or
 unfamiliar file is never treated as disposable.
 
+A confirmed team-catalog install is the named exception to the ordinary owner-managed home rule.
+For a member declared by that catalog, Rundesk atomically replaces `AGENTS.md` and `CLAUDE.md` from
+one canonical catalog file and removes `MEMORY.md`. `rundesk teams update` repeats that exact
+reconciliation to repair drift. It does not sweep any other home entry.
+
 **The names inside are fixed and they are the same for every agent**, which is the whole reason they
 are inside. The build this replaces put them beside the name instead — `<name>.lock`, `<name>.log`,
 `<name>.json`, all flat in one directory — so an agent called `foo.log` and an agent called `foo`
@@ -242,6 +247,11 @@ data/skills/
     manifest.json
     my-thing/SKILL.md       flat — no app/, because nothing ever swaps this one
 ```
+
+A fetched catalog whose `app/team.json` exists is also a team catalog. Its canonical agent files
+stand under `app/agents/<member>/AGENTS.md`; both move in the same catalog-tree swap as its skills.
+There is no executable install hook or second mutable copy of the team declaration. Team ownership
+is discovered from installed declarations, and duplicate ownership of an agent is refused.
 
 **`app/manifest.json` is what makes the directory a catalog**, the same way `state.db` makes a
 directory an agent. `catalog.json` deliberately is not: it records where a catalog was *fetched* from,
