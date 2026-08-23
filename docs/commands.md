@@ -407,12 +407,12 @@ agent cole added
         note      the provider is recorded and not proven — check it with: rundesk providers check
 ```
 
-**Every agent is given the files it lives by**, in its own `home/`: `AGENTS.md` is how it works and
-`MEMORY.md` is what it has learned that is still true, and `CLAUDE.md` is the first of those under
-the name some brains look for first — the same bytes, placed twice. They are the agent's and the
-owner's to edit from that moment: **an update fills in one that is missing and never replaces one
-that is there**, whatever it has been changed to. A release that shipped none says so on this line
-instead, and the next `rundesk update` gives them.
+**Every new agent is given the files it lives by**, in its own `home/`: `AGENTS.md` is how it works
+and `MEMORY.md` is what it has learned that is still true, and `CLAUDE.md` is the first of those
+under the name some brains look for first — the same bytes, placed twice. They are the agent's and
+the owner's to edit from that moment. An update restores an absent rule or work-area note and never
+replaces one that is there, whatever it has been changed to. It does not recreate an absent
+`MEMORY.md`, because removing that file is how an owner says this agent keeps no cross-run memory.
 
 The home also starts with `plans/`, `research/`, `scripts/`, `retros/`, and `tasks/`. Each carries a
 short README describing what belongs there, how to keep it current, and its safety boundary. The

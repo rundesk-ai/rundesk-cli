@@ -308,6 +308,20 @@ class TheSweepEveryUpdateRuns(support.Isolated):
         self.assertTrue((directory.home("ava") / "tasks" / "README.md").is_file())
         self.assertTrue([one for one in said if "ava" in one and "tasks/README.md" in one], said)
 
+    def test_an_absent_memory_page_is_left_absent_while_missing_rules_are_restored(self):
+        home = directory.home("ava")
+        (home / "MEMORY.md").unlink()
+        (home / "AGENTS.md").unlink()
+        said = []
+
+        self.assertEqual([], pages.everybody_has_theirs(
+            directory.known(), directory.home, said.append))
+
+        self.assertFalse((home / "MEMORY.md").exists())
+        self.assertTrue((home / "AGENTS.md").is_file())
+        self.assertTrue([one for one in said if "ava" in one and "AGENTS.md" in one], said)
+        self.assertFalse([one for one in said if "MEMORY.md" in one], said)
+
     def test_a_legacy_role_value_does_not_select_a_different_template(self):
         records.stated(directory.records("ava"), {"role": "specialist"})
         for name in ("AGENTS.md", "CLAUDE.md"):
@@ -327,8 +341,8 @@ class TheSweepEveryUpdateRuns(support.Isolated):
     def test_one_home_that_cannot_be_written_never_stops_the_others(self):
         """This runs inside an update that has already carried the install forward. Taking the whole
         sweep down for one agent would leave every other one short for the sake of the first."""
-        (directory.home("ava") / "MEMORY.md").unlink()
-        (directory.home("cole") / "MEMORY.md").unlink()
+        (directory.home("ava") / "AGENTS.md").unlink()
+        (directory.home("cole") / "AGENTS.md").unlink()
         directory.home("ava").chmod(0o500)
         self.addCleanup(directory.home("ava").chmod, 0o755)
         left = pages.everybody_has_theirs(directory.known(), directory.home, lambda _line: None)

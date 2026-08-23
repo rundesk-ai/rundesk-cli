@@ -146,16 +146,17 @@ return—including for a database preserved through the byte-copy fallback—so 
 replay transient work.
 
 **Rundesk never sweeps an agent's `home/`.** New agents start from one canonical agent rule
-template, with identical bytes in `AGENTS.md` and `CLAUDE.md`. After creation those files belong to
-the agent and owner and are never rewritten by configuration changes. The agent keeps
-compact cross-run continuity in
-`MEMORY.md`: preferences, recurring traps and gotchas, stable facts and references, and hard-won
-lessons. It does not repeat agent instructions; changing project detail stays in its project or an
-earned shared index. Ordinary work removes only temporary files and directories it created. A
-focused maintenance task may compact linked indexes and remove confirmed obsolete
-agent-created clutter, but an old-looking or unfamiliar
-file is somebody's data, not permission to tidy it away. A purpose-named index such as `PROJECTS.md`
-is ordinary home content: Rundesk does not create, read, or sweep it.
+template, with identical bytes in `AGENTS.md` and `CLAUDE.md`, plus a `MEMORY.md` scaffold. After
+creation those files belong to the agent and owner and are never rewritten by configuration
+changes. Updates restore absent rules and work-area notes, but do not recreate an absent
+`MEMORY.md`; absence is how an owner records that this agent keeps no cross-run memory. Where memory
+is kept, it holds compact cross-run continuity: preferences, recurring traps and gotchas, stable
+facts and references, and hard-won lessons. It does not repeat agent instructions; changing project
+detail stays in its project or an earned shared index. Ordinary work removes only temporary files
+and directories it created. A focused maintenance task may compact linked indexes and remove
+confirmed obsolete agent-created clutter, but an old-looking or unfamiliar file is somebody's data,
+not permission to tidy it away. A purpose-named index such as `PROJECTS.md` is ordinary home
+content: Rundesk does not create, read, or sweep it.
 
 Every agent starts with five purpose-named areas and a compact README in each:
 
