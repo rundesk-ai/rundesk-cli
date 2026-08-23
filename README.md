@@ -64,7 +64,15 @@ rundesk schedules add ava daily --when "0 4 * * *" --ask "review today's changes
 ## 👥 Teams and skills
 
 A team catalog packages named specialists, canonical instructions, and the skills they use. Install
-the complete [Rundesk development team](https://github.com/rundesk-ai/rundesk-team-development):
+the whole team or use its skills on their own.
+
+### Available teams
+
+<a href="https://github.com/rundesk-ai/rundesk-team-development">
+  <img src="assets/readme/rundesk-team-development-banner.png" alt="Rundesk Development Team — Forge, Piper, Vera, and Trace." width="100%">
+</a>
+
+Install the [Rundesk development team](https://github.com/rundesk-ai/rundesk-team-development):
 
 ```sh
 rundesk teams install https://github.com/rundesk-ai/rundesk-team-development --provider codex
@@ -86,7 +94,8 @@ rundesk skills grant ava rundesk-team-development/managing-development-work
 ```
 
 Installing the team later keeps the existing catalog and adds the managed agents. See
-[Skills and catalogs](docs/catalogs.md) for the package contract and publication workflow.
+[Install or build a team](docs/catalogs.md#building-a-team-catalog) for the complete `team.json`
+example, local preview workflow, and publication contract.
 
 #### Supported first-party catalogs
 
@@ -105,7 +114,7 @@ Installing the team later keeps the existing catalog and adds the managed agents
   workflows for Desk.
 
 The skills under this repository's `src/skills/` ship with Rundesk as the reserved `rundesk`
-catalog. They stay version-coupled to the CLI instead of being installed from an external catalog.
+catalog. They are first-party operating skills replaced from the CLI on every install and update.
 
 ## 🧠 Provider adapters
 

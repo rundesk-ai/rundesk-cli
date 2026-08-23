@@ -273,15 +273,14 @@ one name, because a brain finds a skill by its directory name.
 
 ### Two of them cannot be removed, for two different reasons
 
-`rundesk` ships **inside the release** and is replaced out of it on every install and update. What is
-in it is how to operate *this* rundesk and how to write a skill for it, so it is coupled to the
-version — a machine on an older release must not be handed a newer release's instructions, which is
-exactly what would happen if a repository on its own schedule governed it. It is never fetched from
-anywhere, and it is the reason a machine with no network finishes installing with working skills.
+`rundesk` ships **inside the release** and is replaced out of it on every install and update. It is
+the product-owned operating catalog: how to operate Rundesk, write its skills, delegate work, and
+deliver work through GitHub. Version-coupled guidance and first-party operating workflows therefore
+have one canonical source in the CLI. It is never fetched from anywhere, and it is the reason a
+machine with no network finishes installing with working skills.
 
-`rundesk-skills` is **fetched**, like anybody else's catalog. Nothing in it is coupled to a version —
-how to write a pull request does not change when rundesk does — so it lives on its own release
-schedule, where a correction reaches every install without cutting a rundesk release.
+`rundesk-skills` is **fetched**, like anybody else's catalog. It holds general-purpose guidance
+whose ownership and release cadence are independent of the Rundesk product.
 
 `local` is where your own skills go. Nothing fetches into it, and nothing rundesk does removes it.
 

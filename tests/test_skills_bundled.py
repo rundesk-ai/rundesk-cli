@@ -103,11 +103,15 @@ class WhatIsShipped(Bundled):
         self.assertEqual(library.BUNDLED, manifest.name)
         self.assertEqual(library.SCHEMA, manifest.schema)
 
-    def test_it_holds_only_what_is_coupled_to_this_version(self):
-        # The reason this catalog exists at all. A skill about writing pull requests does not change
-        # when rundesk does, so shipping it here would tie a correction to it to a rundesk release —
-        # it belongs in the catalog that is fetched. Everything here is about *this* rundesk.
-        self.assertEqual(["delegating-work", "managing-rundesk", "writing-skills"], self.named())
+    def test_it_holds_only_first_party_operating_skills(self):
+        # This is the product-owned operating floor: guidance Rundesk maintains with its own
+        # lifecycle rather than borrowing from a general-purpose catalog. Some packages are tightly
+        # version-coupled; managing-github is here so guarded external delivery remains a first-party
+        # capability with one canonical owner.
+        self.assertEqual(
+            ["delegating-work", "managing-github", "managing-rundesk", "writing-skills"],
+            self.named(),
+        )
 
     def test_it_holds_the_skill_every_agent_is_required_to_have(self):
         # **This release must not ship a floor it does not satisfy.** Every agent is given
@@ -448,6 +452,21 @@ class WhatAShippedSkillMayClaim(Bundled):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, delegating)
         self.assertIn("no push, issue, pull request, merge, tag, or release", examples)
+
+    def test_github_delivery_cleans_only_disposable_merged_heads(self):
+        reference = (self.skills / "managing-github" / "references" /
+                     "pull-requests.md").read_text(encoding="utf-8")
+        for phrase in (
+                "## Clean up after merge",
+                "require `state: MERGED`",
+                "recorded `headRefOid`",
+                "a production or deployment branch",
+                "shared development or integration branch",
+                "never\nforce-remove an unclean or locked worktree",
+                "git push <push-remote> --delete <head>",
+                "verify the local listing and remote query return no matching ref"):
+            with self.subTest(cleanup_contract=phrase):
+                self.assertIn(phrase, reference)
 
     def test_agent_instruction_guidance_is_routed_and_has_each_required_section(self):
         skill = self.skills / "managing-rundesk"

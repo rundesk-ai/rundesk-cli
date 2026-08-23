@@ -561,6 +561,14 @@ class AgentGuideContract(unittest.TestCase):
                               and path.parent == support.CHECKOUT else "catalogs.md",
                               path.read_text(encoding="utf-8"))
 
+    def test_readme_presents_the_development_team_with_its_linked_banner(self):
+        readme = (support.CHECKOUT / "README.md").read_text(encoding="utf-8")
+        banner = support.CHECKOUT / "assets" / "readme" / "rundesk-team-development-banner.png"
+        self.assertTrue(banner.is_file())
+        self.assertIn('href="https://github.com/rundesk-ai/rundesk-team-development"', readme)
+        self.assertIn('src="assets/readme/rundesk-team-development-banner.png"', readme)
+        self.assertIn("docs/catalogs.md#building-a-team-catalog", readme)
+
     def test_catalog_guide_preserves_the_license_contract(self):
         guide = (support.CHECKOUT / "docs" / "catalogs.md").read_text(encoding="utf-8")
         for required in (

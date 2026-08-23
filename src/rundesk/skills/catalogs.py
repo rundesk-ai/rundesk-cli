@@ -59,8 +59,8 @@ from rundesk.utils import archives, files, locking
 #: installed still goes through the same reader as a catalog fetched from GitHub.
 SHIPPED_IN = "skills"
 
-#: Where the general catalog rundesk depends on is fetched from. Not the version-coupled one, which
-#: ships inside the release and is never fetched from anywhere.
+#: Where the general catalog rundesk depends on is fetched from. Not the product-owned operating
+#: catalog, which ships inside the release and is never fetched from anywhere.
 DEPENDED_SOURCE = "https://github.com/rundesk-ai/rundesk-skills"
 
 #: What `local` says it is. Written by the install, because a catalog is a directory holding a
@@ -201,9 +201,8 @@ def may_be_fetched(name: str) -> bool:
     """Whether this catalog is one rundesk brings down from somewhere.
 
     Two are not. `local` is the owner's own directory and there is nothing on the far end of it. The
-    catalog that ships in the release is version-coupled — what is in it is how to operate *this*
-    rundesk — so it comes out of the release rather than off a repository that moves on its own
-    schedule, and a machine on an older release is never handed a newer release's instructions.
+    product-owned operating catalog ships in the release, so it comes from the same reviewed source
+    as the product rather than a repository that moves on its own schedule.
 
     Asked here rather than at each verb that fetches, so the knowledge lives in one place. The build
     this replaces spread it across four functions and they came apart.
@@ -526,12 +525,10 @@ def place_bundled(saying: Optional[Callable[[str], None]] = None) -> bool:
     and nothing saying why. Here the skills rundesk ships are part of the release, they are reviewed
     with the code that ships them, and a fresh install has them before it has a network.
 
-    **Replaced out of the release every time, rather than only when it is absent.** What is in it is
-    how to operate *this* rundesk and how to write a skill for it, so it is version-coupled: an
-    install that moved forward and kept the previous release's copy would be handing every agent
-    instructions for a rundesk it is no longer running. Making the release the source of truth
-    unconditionally means there is no comparison here to get wrong, and the cost is a copy of four
-    small files per update.
+    **Replaced out of the release every time, rather than only when it is absent.** This is the
+    product-owned operating catalog: version-coupled Rundesk guidance and first-party delivery
+    workflows have one canonical source in the CLI. Making the release the source of truth
+    unconditionally means there is no comparison here to get wrong.
 
     **Takes no `fetching`, and that is the guarantee rather than an omission.** The tree is a
     directory inside this release, so there is no seam to replace and nothing here can reach the
@@ -575,9 +572,8 @@ def depended(fetching: Optional[Fetching] = None,
               saying: Optional[Callable[[str], None]] = None) -> bool:
     """Install the general catalog rundesk depends on if it is not there. `True` when it was.
 
-    Fetched rather than shipped, and that is the difference from `place_bundled`. Nothing in it is
-    coupled to a version — how to write a pull request does not change when rundesk does — so it
-    lives on its own release schedule where it can be corrected without cutting a rundesk release.
+    Fetched rather than shipped, and that is the difference from `place_bundled`. It holds
+    general-purpose guidance whose ownership and release cadence are independent of the product.
 
     It follows that a machine with no network finishes an install without it, and says so. That is
     the honest answer and it is survivable: the version-coupled catalog is already in place, so the
