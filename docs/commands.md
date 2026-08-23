@@ -59,6 +59,9 @@ rundesk skills profiles <catalog>/<skill>         # every account one skill is c
 rundesk skills configure <catalog>/<skill> [--profile <name>]  # set what it needs, guided
 rundesk skills forget <catalog>/<skill> [--profile <name>] --confirm   # empty one account
 rundesk skills doctor [<agent>]           # what cannot be used, and exactly why
+rundesk teams                            # every installed team and its members
+rundesk teams install <repository> [--provider <provider>] [--confirm]
+rundesk teams update <team> [--provider <provider>] [--confirm]
 rundesk update [--continue]               # move to the newest release, or say it is up to date
 rundesk uninstall --confirm [--purge]     # remove rundesk; --purge also takes the data
 rundesk install [--source <dir>] [--bin-dir <dir>]   # what install.sh runs
@@ -2055,6 +2058,53 @@ in the way and offers no command, because there is not one: move that entry, or 
 another name with `rundesk skills grant … --as <name>`.
 
 Writing a skill or publishing a catalog is [`catalogs.md`](catalogs.md).
+
+## teams
+
+A team catalog adds version-controlled named agents to an ordinary skill catalog. Preview and
+confirmation are separate:
+
+```console
+$ rundesk teams install ./development-team --provider codex
+install: this would install team development-team from ./development-team
+        member   forge — create with provider codex
+                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; allow only implementing plus Rundesk-required skills; weekly upkeep on; leave gateway stopped
+        nothing was installed or changed. To go ahead:
+        rundesk teams install ./development-team --provider codex --confirm
+```
+
+`--provider` is used for the new agents created by installation. Installation refuses any declared
+member name that already exists and prints the exact `rundesk agents remove <agent> --confirm`
+command required before retrying. This clean-start boundary ensures every member begins with the
+catalog-owned instructions, memory policy, delegation scope, skill allowlist, and weekly upkeep
+setting.
+
+`rundesk teams update <team>` fetches the recorded source and performs the same reconciliation. It
+repairs local instruction, memory, delegation, and skill-allowlist drift even when the fetched tree is
+unchanged. Install and update leave every member gateway stopped. Start only the agents you want to
+use with `rundesk gateways start <agent>`.
+
+Before any later provider turn is admitted, Rundesk performs the same reconciliation for that one
+member from the installed catalog. This is a local drift repair, not an update: it performs no fetch
+and cannot adopt a new catalog version without the owner-confirmed command above.
+
+The member's `skills` array is a positive allowed list, not a deny list, and may be empty.
+Reconciliation removes any unlisted grant, regardless of catalog, while preserving Rundesk's
+required operating skill and its
+conditional delegation skill. Editing the positive list is how a team version adds or removes a
+stack-specific or task-specific capability. The member's required `self_improve` boolean enables or
+disables Rundesk's protected weekly upkeep and is repaired from the catalog on later turns. A member
+removed from a later team version is no longer managed and is not deleted. Team catalogs execute no
+installation hook.
+Installing the same repository with `skills install` intentionally installs only its skill
+catalog: it creates no agents and writes no team marker. That installation updates and removes like
+any ordinary skill catalog. Installing the team later promotes that catalog in place and creates
+the declared agents; the already installed skills remain available.
+
+Once a catalog was installed through `teams install`, ordinary `skills update`, automatic catalog
+refresh, and `skills remove` cannot move it independently of its agents.
+A confirmed team install or update is also refused from inside an agent turn. An agent may propose a
+catalog change, but an owner reviews and applies it from a terminal.
 
 ## update
 

@@ -48,6 +48,8 @@ from rundesk.commands.schedules import register as register_schedules
 from rundesk.commands.skills import cmd_skills
 from rundesk.commands.skills import register as register_skills
 from rundesk.commands.status import cmd_status
+from rundesk.commands.teams import cmd_teams
+from rundesk.commands.teams import register as register_teams
 from rundesk.commands.turns import cmd_turns
 from rundesk.commands.turns import register as register_turns
 from rundesk.commands.uninstall import cmd_uninstall
@@ -88,6 +90,7 @@ examples:
   rundesk login <provider>      connect a verified account in the browser
   rundesk skills                the skills this install has, and who holds which
   rundesk skills doctor         what an agent cannot use, and exactly why
+  rundesk teams                 the version-controlled teams on this install
   rundesk permissions           what this Mac lets rundesk do, as last checked
   rundesk permissions check     prove it now, and say what is still not allowed
   rundesk version               what version this is, and whether it is out of date
@@ -130,6 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_schedules(sub)
     register_channels(sub)
     register_skills(sub)
+    register_teams(sub)
     register_oauth(sub)
     _register_install(sub)
     _register_update(sub)
@@ -273,6 +277,8 @@ def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshin
         return cmd_channels(args, reaching)
     if args.command == "skills":
         return cmd_skills(args, refreshing)
+    if args.command == "teams":
+        return cmd_teams(args, refreshing)
     if args.command == "_oauth":
         return cmd_oauth(args, oauth_authorizing, oauth_posting)
     if args.command == "version":

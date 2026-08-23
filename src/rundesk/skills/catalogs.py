@@ -59,8 +59,8 @@ from rundesk.utils import archives, files, locking
 #: installed still goes through the same reader as a catalog fetched from GitHub.
 SHIPPED_IN = "skills"
 
-#: Where the general catalog rundesk depends on is fetched from. Not the version-coupled one, which
-#: ships inside the release and is never fetched from anywhere.
+#: Where the general catalog rundesk depends on is fetched from. Not the product-owned operating
+#: catalog, which ships inside the release and is never fetched from anywhere.
 DEPENDED_SOURCE = "https://github.com/rundesk-ai/rundesk-skills"
 
 #: What `local` says it is. Written by the install, because a catalog is a directory holding a
@@ -170,6 +170,7 @@ class Refreshed(NamedTuple):
 #: because this is the only thing in this package that leaves the machine. Every suite drives the
 #: whole of it offline.
 Fetching = Callable[[str, str, Path], Optional["Brought"]]
+Validating = Callable[[Path, library.Manifest], None]
 
 
 class Brought(NamedTuple):
@@ -200,9 +201,8 @@ def may_be_fetched(name: str) -> bool:
     """Whether this catalog is one rundesk brings down from somewhere.
 
     Two are not. `local` is the owner's own directory and there is nothing on the far end of it. The
-    catalog that ships in the release is version-coupled — what is in it is how to operate *this*
-    rundesk — so it comes out of the release rather than off a repository that moves on its own
-    schedule, and a machine on an older release is never handed a newer release's instructions.
+    product-owned operating catalog ships in the release, so it comes from the same reviewed source
+    as the product rather than a repository that moves on its own schedule.
 
     Asked here rather than at each verb that fetches, so the knowledge lives in one place. The build
     this replaces spread it across four functions and they came apart.
@@ -302,7 +302,8 @@ def brought(source: str, etag: str = "", fetching: Optional[Fetching] = None) ->
         shutil.rmtree(working, ignore_errors=True)
 
 
-def installed(coming: Coming, saying: Optional[Callable[[str], None]] = None) -> Installed:
+def installed(coming: Coming, saying: Optional[Callable[[str], None]] = None,
+              as_team: bool = False) -> Installed:
     """Put a fetched catalog in place for the first time. Refused when one of that name is there.
 
     Held under the install's own lock and built under a staged name, the same way an agent is: an
@@ -328,6 +329,8 @@ def installed(coming: Coming, saying: Optional[Callable[[str], None]] = None) ->
             library.stated_provenance(
                 building, library.Provenance(coming.source, coming.etag,
                                              coming.manifest.version, library.stamped()))
+            if as_team:
+                (building / library.TEAM_MARKER).touch()
             os.replace(building, at)
         except BaseException:
             files.discard(building)
@@ -355,7 +358,8 @@ def brings_a_change(at: Path, coming: Coming) -> bool:
 
 
 def update(name: str, fetching: Optional[Fetching] = None,
-           saying: Optional[Callable[[str], None]] = None) -> Installed:
+           saying: Optional[Callable[[str], None]] = None,
+           validating: Optional[Validating] = None) -> Installed:
     """Check a catalog against where it came from, and replace its tree when it has changed.
 
     Returns what happened. `fresh` false is the ordinary answer and means nothing changed: either the
@@ -369,31 +373,38 @@ def update(name: str, fetching: Optional[Fetching] = None,
         raise Refused(f"nothing is written down about where {name} came from, so it cannot be "
                       f"checked — rundesk skills remove {name} --confirm and install it again")
 
+    with brought(settled.provenance.source, settled.provenance.etag, fetching) as coming:
+        return updated(name, coming, saying, validating)
+
+
+def updated(name: str, coming: Coming, saying: Optional[Callable[[str], None]] = None,
+            validating: Optional[Validating] = None) -> Installed:
+    """Apply one already-fetched update, so preview and confirmation can share the validated tree."""
+    settled = library.read(name)
+    if not may_be_fetched(name):
+        raise Refused(f"{name} is not fetched from anywhere")
+    if settled.provenance is None:
+        raise Refused(f"nothing is written down about where {name} came from")
     was = library.read_manifest(settled.at / library.TREE)
     holding = library.found(library.inside(name))
     said = saying or (lambda _line: None)
-    # Both ways of finding nothing to do end in the same sentence and the same answer, so each is
-    # written once here rather than spelled out at both of them.
     up_to_date = f"{name} {was.version}: up to date"
     unmoved = Installed(name, was.version, was.version, holding, [], False)
-
-    with brought(settled.provenance.source, settled.provenance.etag, fetching) as coming:
-        if not coming.fresh or coming.at is None or coming.manifest is None:
-            said(up_to_date)
-            return unmoved
-        if coming.manifest.name != name:
-            raise Refused(f"{settled.provenance.source} now calls itself {coming.manifest.name} "
-                          f"and this install has it as {name} — install it under its new name and "
-                          f"remove {name}")
-        if not brings_a_change(settled.at, coming):
-            # A tree identical to the one standing is not a change, whatever the far end said.
-            # Swapping it in replaces a tree with a copy of itself and reports a change nobody made.
-            # The `ETag` is still written down, which is what `_noted` is for.
-            _noted(settled.at, coming)
-            said(up_to_date)
-            return unmoved
-        retired = [one for one in holding if one not in coming.skills]
-        _swapped(settled.at, coming)
+    if not coming.fresh or coming.at is None or coming.manifest is None:
+        said(up_to_date)
+        return unmoved
+    if coming.manifest.name != name:
+        source = settled.provenance.source if settled.provenance is not None else coming.source
+        raise Refused(f"{source} now calls itself {coming.manifest.name} and this install has it as "
+                      f"{name} — install it under its new name and remove {name}")
+    if validating is not None:
+        validating(coming.at, coming.manifest)
+    if not brings_a_change(settled.at, coming):
+        _noted(settled.at, coming)
+        said(up_to_date)
+        return unmoved
+    retired = [one for one in holding if one not in coming.skills]
+    _swapped(settled.at, coming)
     # Names a version movement only when there is one, the way the preview does. A tree that was
     # genuinely replaced at an unbumped version is a true thing to say and `1.0.0 -> 1.0.0` is not.
     if was.version != coming.manifest.version:
@@ -404,6 +415,21 @@ def update(name: str, fetching: Optional[Fetching] = None,
         said(f"{one} is no longer in {name}")
     return Installed(name, was.version, coming.manifest.version, coming.skills, retired,
                      True)
+
+
+def promoted(name: str, coming: Coming, saying: Optional[Callable[[str], None]] = None,
+             validating: Optional[Validating] = None) -> Installed:
+    """Adopt an installed skill catalog as a team catalog, updating its fetched tree first.
+
+    The catalog and marker move under one install lock. This lets somebody install a catalog's
+    skills first and add its declared team later without removing or duplicating those skills.
+    """
+    if library.is_team(name):
+        raise Refused(f"{name} is already installed as a team")
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        moved = updated(name, coming, saying, validating)
+        (library.stands(name) / library.TEAM_MARKER).touch()
+    return moved
 
 
 def remove(name: str) -> List[str]:
@@ -499,12 +525,10 @@ def place_bundled(saying: Optional[Callable[[str], None]] = None) -> bool:
     and nothing saying why. Here the skills rundesk ships are part of the release, they are reviewed
     with the code that ships them, and a fresh install has them before it has a network.
 
-    **Replaced out of the release every time, rather than only when it is absent.** What is in it is
-    how to operate *this* rundesk and how to write a skill for it, so it is version-coupled: an
-    install that moved forward and kept the previous release's copy would be handing every agent
-    instructions for a rundesk it is no longer running. Making the release the source of truth
-    unconditionally means there is no comparison here to get wrong, and the cost is a copy of four
-    small files per update.
+    **Replaced out of the release every time, rather than only when it is absent.** This is the
+    product-owned operating catalog: version-coupled Rundesk guidance and first-party delivery
+    workflows have one canonical source in the CLI. Making the release the source of truth
+    unconditionally means there is no comparison here to get wrong.
 
     **Takes no `fetching`, and that is the guarantee rather than an omission.** The tree is a
     directory inside this release, so there is no seam to replace and nothing here can reach the
@@ -548,9 +572,8 @@ def depended(fetching: Optional[Fetching] = None,
               saying: Optional[Callable[[str], None]] = None) -> bool:
     """Install the general catalog rundesk depends on if it is not there. `True` when it was.
 
-    Fetched rather than shipped, and that is the difference from `place_bundled`. Nothing in it is
-    coupled to a version — how to write a pull request does not change when rundesk does — so it
-    lives on its own release schedule where it can be corrected without cutting a rundesk release.
+    Fetched rather than shipped, and that is the difference from `place_bundled`. It holds
+    general-purpose guidance whose ownership and release cadence are independent of the product.
 
     It follows that a machine with no network finishes an install without it, and says so. That is
     the honest answer and it is survivable: the version-coupled catalog is already in place, so the
@@ -597,6 +620,10 @@ def refresh(fetching: Optional[Fetching] = None,
 
     for name in library.known():
         if not may_be_fetched(name):
+            continue
+        # Team catalogs own agent state as well as skills. Moving only their fetched tree would
+        # split the source from the agents it governs, so only `rundesk teams update` checks them.
+        if library.is_team(name):
             continue
         try:
             did = update(name, fetching, said)

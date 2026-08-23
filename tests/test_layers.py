@@ -77,7 +77,7 @@ MAY_IMPORT = {
     # its schedule asked, and `firing` publishes a `Starting` and takes an object of it exactly as
     # `hosting` publishes an `Answering`. Neither may reach here, which is what keeps "when is this
     # due" and "what does a brain cost" two questions with two answers.
-    "providers": ("skills", "channels", "schedules", "agents", "core", "utils"),
+    "providers": ("teams", "skills", "channels", "schedules", "agents", "core", "utils"),
     # And `gateways` reaches `schedules` rather than the other way round, because the gateway is
     # what turns "this is due" into work that has started. It is the only long-lived process this
     # product has, so it is the only thing that can hold a child and reap it.
@@ -99,11 +99,12 @@ MAY_IMPORT = {
     # reach here, so an agent is still something that can be made, carried and removed by code that
     # has never heard of a skill, and presenting a new agent's skills is done in `commands`.
     "skills": ("agents", "core", "utils"),
+    "teams": ("skills", "agents", "core", "utils"),
     # `commands` reaches `capabilities` and is the **only** package that does. That is what makes
     # the restriction below it enforceable: `capabilities` may not import `gateways` or `agents`, so
     # the shim prefix a lineage is recognised by and the agent a process was started for are
     # resolved here, where both are legal, and handed down as arguments.
-    "commands": ("skills", "providers", "channels", "schedules", "delegations", "gateways",
+    "commands": ("teams", "skills", "providers", "channels", "schedules", "delegations", "gateways",
                  "capabilities", "lifecycle", "agents", "core", "utils"),
 }
 
@@ -559,6 +560,14 @@ class AgentGuideContract(unittest.TestCase):
                 self.assertIn("docs/catalogs.md" if path.name == "README.md"
                               and path.parent == support.CHECKOUT else "catalogs.md",
                               path.read_text(encoding="utf-8"))
+
+    def test_readme_presents_the_development_team_with_its_linked_banner(self):
+        readme = (support.CHECKOUT / "README.md").read_text(encoding="utf-8")
+        banner = support.CHECKOUT / "assets" / "readme" / "rundesk-team-development-banner.png"
+        self.assertTrue(banner.is_file())
+        self.assertIn('href="https://github.com/rundesk-ai/rundesk-team-development"', readme)
+        self.assertIn('src="assets/readme/rundesk-team-development-banner.png"', readme)
+        self.assertIn("docs/catalogs.md#building-a-team-catalog", readme)
 
     def test_catalog_guide_preserves_the_license_contract(self):
         guide = (support.CHECKOUT / "docs" / "catalogs.md").read_text(encoding="utf-8")

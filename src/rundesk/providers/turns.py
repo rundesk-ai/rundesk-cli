@@ -72,6 +72,7 @@ from rundesk.providers import (
     team,
 )
 from rundesk.skills import grants
+from rundesk.teams import reconcile as team_reconcile
 from rundesk.utils import lines, locking, logs
 
 #: The one way finding a provider fails, named here so a caller has one thing to be ready for.
@@ -827,6 +828,12 @@ def _admit(request: Request) -> _TurnAdmission:
     """Resolve and record a turn without an account change crossing its admission boundary."""
     agent = request.agent
     with locking.only_one(paths.lock(), "this install"):
+        # A team-managed identity is made canonical at the last local boundary before its
+        # instructions and grants are read. This fetches nothing and executes no catalog code.
+        try:
+            team_reconcile.current(agent)
+        except team_reconcile.Refused as why:
+            raise NotRunnable(str(why)) from why
         # **Resolved before anything is written down.** A provider nothing stands behind is a turn
         # that cannot start, and a row claiming admission would record something that never was.
         settled = records.read(directory.records(agent))

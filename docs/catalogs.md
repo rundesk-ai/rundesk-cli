@@ -22,6 +22,12 @@ repository tooling and provider infrastructure, but every installed package must
 repository checkout. Copy or package required runtime support inside the owning catalog; never create
 a cross-repository runtime dependency.
 
+A catalog that owns a tested set of named Rundesk agents is a **team catalog**. Use that boundary
+only when the catalog is responsible for keeping those agents' instructions, delegation scope, and
+positive skill allowlists in step across installations. Its schema and guarded lifecycle are specified in
+[`requirements/team-catalog.md`](requirements/team-catalog.md); ordinary topical skill catalogs do
+not need team files.
+
 ## Building a catalog repository
 
 Use this root layout for a shared catalog:
@@ -52,6 +58,63 @@ catalog-repository/
 ├── THIRD_PARTY_NOTICES.md         only when adapted work requires attribution
 └── manifest.json                  catalog identity and version
 ```
+
+A team catalog adds `team.json` and one canonical `agents/<member>/AGENTS.md` per declared member.
+It remains data-only: do not publish an install hook or migration script and do not place provider
+credentials, channel configuration, projects, or installation-local model choices in it.
+Every declared member name must be absent from the target installation; the owner removes a
+same-named agent before installing the team so catalog members always start from canonical state.
+Each member also declares whether Rundesk's protected weekly upkeep is enabled.
+
+### Building a team catalog
+
+Start with the catalog layout above, then add `team.json` and one instruction file for each member.
+This is a complete two-member declaration:
+
+```json
+{
+  "schema": 1,
+  "name": "acme-development",
+  "members": [
+    {
+      "name": "forge",
+      "description": "Implements approved product changes and returns verification evidence.",
+      "instructions": "agents/forge/AGENTS.md",
+      "skills": ["implementing-code", "testing-code"],
+      "delegates_to": ["vera"],
+      "self_improve": true
+    },
+    {
+      "name": "vera",
+      "description": "Reviews changes for correctness, safety, and maintainability.",
+      "instructions": "agents/vera/AGENTS.md",
+      "skills": ["reviewing-code"],
+      "delegates_to": [],
+      "self_improve": true
+    }
+  ]
+}
+```
+
+The `name` must match `manifest.json`. Every skill name must exist under `skills/`, every
+`instructions` path must stay inside `agents/`, and each member needs a unique Rundesk-safe name.
+Keep provider accounts, models, credentials, channels, schedules, and projects out of the catalog;
+those choices belong to each installation.
+
+Test the catalog from its local checkout before publishing it:
+
+```sh
+rundesk teams install ./acme-development --provider codex
+rundesk teams install ./acme-development --provider codex --confirm
+```
+
+The first command is a dry-run preview. Use a disposable Rundesk installation for the confirmed
+acceptance test so it cannot replace or collide with live agents. After publishing the repository,
+users install it with the same commands and its GitHub URL. Team members are created with their
+gateways stopped; the owner starts only the agents they want.
+
+The full validation, reconciliation, ownership, and safety contract is in
+[`requirements/team-catalog.md`](requirements/team-catalog.md).
 
 Do not add an empty optional skill directory. `ENVIRONMENTS.md` belongs only in a catalog whose
 skills ship runtime code, select accounts or require configuration across environments; omit it from
@@ -307,6 +370,7 @@ beside the provider and channel adapters, and pre-installed on every machine:
 ```text
 src/skills/                       in the release — what a checkout holds
 ├── manifest.json
+├── managing-github/SKILL.md
 ├── managing-rundesk/SKILL.md
 └── writing-skills/SKILL.md
 ```
@@ -324,9 +388,9 @@ swap a catalog fetched from GitHub gets, because it is not worth having one cata
 reads a special way.
 
 **It is replaced out of the release on every install and every update**, whether or not the release
-moved — so a skill edited in place, or deleted, is put back. It is version-coupled: what is in it is
-how to operate *this* rundesk, and a machine that kept the previous release's copy would be handing
-every agent instructions for a rundesk it is no longer running.
+moved — so a skill edited in place, or deleted, is put back. It is the product-owned operating
+catalog: version-coupled Rundesk guidance and first-party delivery workflows have one canonical
+source in the CLI instead of being borrowed from a general catalog.
 
 ## Publishing a catalog
 
@@ -386,6 +450,12 @@ test suite runs with no network:
 rundesk skills install ./acme-skills --confirm
 rundesk skills update acme-skills --confirm
 ```
+
+A repository may also declare a Rundesk team. Installing it through `skills install` installs only
+the skills: no agent is created or reconciled, and the catalog follows ordinary skill update and
+removal behavior. Installing it through `teams install` installs the same skills plus the guarded
+team lifecycle. A later `teams install` promotes the skills-only catalog in place, so users can
+start with the skills and add the declared team without removing or duplicating the catalog.
 
 If your catalog is not on GitHub, clone it yourself and point rundesk at the clone. Every source shape
 accepted here is one rundesk has to keep fetching correctly for ever, so there are two.

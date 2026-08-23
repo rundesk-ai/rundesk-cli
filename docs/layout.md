@@ -177,6 +177,11 @@ the evidence interval and entry date, and a rerun updates that one entry. The bu
 reference bounds each entry but keeps the history. Rundesk never sweeps these areas, and an older or
 unfamiliar file is never treated as disposable.
 
+A confirmed team-catalog install is the named exception to the ordinary owner-managed home rule.
+For a member declared by that catalog, Rundesk atomically replaces `AGENTS.md` and `CLAUDE.md` from
+one canonical catalog file and removes `MEMORY.md`. `rundesk teams update` repeats that exact
+reconciliation to repair drift. It does not sweep any other home entry.
+
 **The names inside are fixed and they are the same for every agent**, which is the whole reason they
 are inside. The build this replaces put them beside the name instead — `<name>.lock`, `<name>.log`,
 `<name>.json`, all flat in one directory — so an agent called `foo.log` and an agent called `foo`
@@ -243,6 +248,12 @@ data/skills/
     my-thing/SKILL.md       flat — no app/, because nothing ever swaps this one
 ```
 
+A team catalog carries `app/team.json`, and Rundesk records its guarded installation with a `team`
+marker beside `app/`. Its canonical agent files stand under `app/agents/<member>/AGENTS.md`; both
+move in the same catalog-tree swap as its skills. There is no executable install hook or second
+mutable copy of the team declaration. Repository content alone cannot claim team ownership, and
+duplicate ownership of an agent is refused.
+
 **`app/manifest.json` is what makes the directory a catalog**, the same way `state.db` makes a
 directory an agent. `catalog.json` deliberately is not: it records where a catalog was *fetched* from,
 and `local` was never fetched from anywhere.
@@ -262,15 +273,14 @@ one name, because a brain finds a skill by its directory name.
 
 ### Two of them cannot be removed, for two different reasons
 
-`rundesk` ships **inside the release** and is replaced out of it on every install and update. What is
-in it is how to operate *this* rundesk and how to write a skill for it, so it is coupled to the
-version — a machine on an older release must not be handed a newer release's instructions, which is
-exactly what would happen if a repository on its own schedule governed it. It is never fetched from
-anywhere, and it is the reason a machine with no network finishes installing with working skills.
+`rundesk` ships **inside the release** and is replaced out of it on every install and update. It is
+the product-owned operating catalog: how to operate Rundesk, write its skills, delegate work, and
+deliver work through GitHub. Version-coupled guidance and first-party operating workflows therefore
+have one canonical source in the CLI. It is never fetched from anywhere, and it is the reason a
+machine with no network finishes installing with working skills.
 
-`rundesk-skills` is **fetched**, like anybody else's catalog. Nothing in it is coupled to a version —
-how to write a pull request does not change when rundesk does — so it lives on its own release
-schedule, where a correction reaches every install without cutting a rundesk release.
+`rundesk-skills` is **fetched**, like anybody else's catalog. It holds general-purpose guidance
+whose ownership and release cadence are independent of the Rundesk product.
 
 `local` is where your own skills go. Nothing fetches into it, and nothing rundesk does removes it.
 

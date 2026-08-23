@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from rundesk.core import paths
+from rundesk.utils import files
 
 #: Where this release keeps them. **Answered on every call and never bound at import**: on a machine
 #: with a real install `~/.rundesk/app/src` exists, and a constant resolved at import time would
@@ -206,6 +207,32 @@ def _laid_down(page: Path, text: str) -> None:
         except OSError:
             pass
         raise
+
+
+def replace_team(home: Path, text: str) -> List[str]:
+    """Replace a team-managed agent's two instruction pages and remove its memory page.
+
+    Team adoption is the explicit exception to this module's ordinary fill-only rule. The confirmed
+    team command has already named the overwrite and the removal; each replacement is still staged
+    and renamed so a provider sees old complete rules or new complete rules, never half a file.
+    """
+    written = []
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        page = home / name
+        if not _safe_parent(home, page):
+            raise OSError(f"{page.parent} is not a safe directory inside the agent home")
+        if not page.is_symlink() and page.is_file():
+            try:
+                if page.read_text(encoding="utf-8") == text:
+                    continue
+            except (OSError, UnicodeError):
+                pass
+        _laid_down(page, text)
+        written.append(name)
+    memory = home / "MEMORY.md"
+    if files.remove_one(memory):
+        written.append("MEMORY.md removed")
+    return written
 
 
 def everybody_has_theirs(names, home_of, saying=None) -> List[Tuple[str, str]]:

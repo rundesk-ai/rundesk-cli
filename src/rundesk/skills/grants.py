@@ -55,7 +55,7 @@ makes it again whenever the source has moved.
 import os
 import shutil
 from pathlib import Path
-from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import Callable, Dict, Iterable, List, NamedTuple, Optional, Set, Tuple
 
 from rundesk.agents import delegating, directory, records
 from rundesk.core import paths
@@ -450,8 +450,8 @@ def stale(grant: Grant) -> bool:
     return kept != library.digest(source)
 
 
-def _everybody_holds_what_they_must(said: Callable[[str], None]) -> None:
-    """Align required grants for every agent. **Caller holds the lock.**
+def _agents_hold_what_they_must(agents: Iterable[str], said: Callable[[str], None]) -> None:
+    """Align required grants for the named agents. **Caller holds the lock.**
 
     **Silent when the library does not hold it, and that is not a hole.** A release whose own catalog
     no longer ships `managing-rundesk` has moved the floor, and there is nothing here to grant:
@@ -477,7 +477,7 @@ def _everybody_holds_what_they_must(said: Callable[[str], None]) -> None:
         delegation_skill = library.look_up(library.DELEGATING)
     except (library.Refused, OSError):
         delegation_skill = None
-    for agent in directory.known():
+    for agent in agents:
         at = where(agent)
         standing = at / library.REQUIRED_SKILL
         if skill is not None and not (standing.is_symlink() or standing.exists()):
@@ -500,6 +500,29 @@ def _everybody_holds_what_they_must(said: Callable[[str], None]) -> None:
         elif delegation_grant is not None and delegation_grant.address == library.DELEGATING:
             files.remove_one(delegation_grant.at)
             said(f"took {library.DELEGATING} from {agent}, because it is inbound-only")
+
+
+def required_reconciled(agent: str, saying: Optional[Callable[[str], None]] = None) -> List[str]:
+    """Align product-required grants and provider links for one agent, and nobody else.
+
+    Team reconciliation uses this narrow form because a team owns only its declared members. The
+    full update sweep below deliberately repairs every agent; reaching for it from a team operation
+    would let installing one team mutate unrelated agents whose provider links happened to drift.
+    """
+    _agent_must_exist(agent)
+    said = saying or (lambda _line: None)
+    changed = []
+
+    def record(line: str) -> None:
+        changed.append(line)
+        said(line)
+
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        _agents_hold_what_they_must((agent,), record)
+    brought = presented(agent)
+    if brought:
+        record(f"brought {len(brought)} provider link(s) into line for {agent}")
+    return changed
 
 
 def refreshed(saying: Optional[Callable[[str], None]] = None) -> List[str]:
@@ -527,8 +550,9 @@ def refreshed(saying: Optional[Callable[[str], None]] = None) -> List[str]:
     # One lock across the whole sweep rather than one per copy. This runs on every update, over every
     # agent, and a caller holding it for the duration is a caller nothing can interleave with.
     with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
-        _everybody_holds_what_they_must(said)
-        for agent in directory.known():
+        agents = directory.known()
+        _agents_hold_what_they_must(agents, said)
+        for agent in agents:
             for one in held(agent):
                 if not stale(one):
                     continue
