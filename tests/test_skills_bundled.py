@@ -472,6 +472,23 @@ class WhatAShippedSkillMayClaim(Bundled):
                 places.append(agent_instructions.index(heading))
         self.assertEqual(sorted(places), places)
 
+    def test_inbound_specialists_do_not_keep_cross_project_memory(self):
+        guidance = self.guidance()
+        for phrase in (
+                "An inbound specialist does not keep `MEMORY.md`",
+                "current work to the handback",
+                "project facts to that project's instructions or documentation",
+                "reusable methods to the owning skill",
+                "durable role behavior to agent instructions",
+                "universal behavior to Rundesk operating instructions",
+                "For a domain agent, `MEMORY.md` may hold durable learned context",
+                "remove the scaffold's `MEMORY.md`",
+                "move only still-valid material to the canonical project, skill, or instruction "
+                "owner",
+                "verify that `MEMORY.md` and every instruction to read or maintain it are absent"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guidance)
+
     def guidance(self):
         """The whole agent-instruction reference, whitespace-normalized."""
         return " ".join(
