@@ -111,9 +111,21 @@ Do not add provider, model, tool, session, vendor link, generated-by footer, or 
 co-author attribution. Follow the repository title convention; use an imperative title only when no
 convention exists.
 
-Use one full closing reference per issue the pull request completes. GitHub applies closing keywords
-automatically only when the pull request targets the repository's default branch. Use `Refs` or
-`Related` for partial work or a staging base.
+Reconcile every issue named by the assignment or pull request before opening, updating, or merging
+the pull request:
+
+- If the exact head satisfies the issue's acceptance criteria and targets the default branch, put
+  one full closing reference such as `Closes #123` in the body. A bare issue URL, `#123`, `Refs`, or
+  `Related` does not close the issue.
+- If the pull request is partial, targets a staging base, or leaves any acceptance criterion unmet,
+  use `Refs #123` or `Related to #123`. State the unmet outcome in the body and explicitly report
+  that the issue will remain open; do not present the issue as completed.
+- If the relationship is unclear, read the issue and compare every acceptance criterion with the
+  exact head. Do not omit the link or choose a closing keyword from the title alone.
+
+Before an authorized merge, inspect `closingIssuesReferences` and confirm it matches that issue
+disposition. After a default-branch merge, read each completed issue back and require `state: CLOSED`;
+if GitHub did not close it, report the mismatch and correct it only when issue closure is authorized.
 
 ## Open, update, and verify
 
