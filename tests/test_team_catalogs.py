@@ -26,6 +26,42 @@ class TeamCatalogs(support.Isolated):
         self.assertEqual("test-team", team.name)
         self.assertEqual(["forge", "piper"], [one.name for one in team.members])
         self.assertEqual(["piper"], team.members[0].delegates_to)
+        self.assertEqual(["test-team/implementing"], team.members[0].skills)
+
+    def test_schema_two_accepts_fully_qualified_skills_from_declared_catalogs(self):
+        dependency = a_published_catalog(self.home / "shared", name="shared",
+                                         skills=("researching",))
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        manifest["schema"] = 2
+        manifest["catalogs"] = [{"name": "shared", "source": str(dependency)}]
+        manifest["members"][0]["skills"] = ["shared/researching"]
+        manifest["members"][1]["skills"] = ["test-team/reviewing"]
+        written(self.source / library.TEAM, manifest)
+        team = self.read()
+        self.assertEqual([catalogs.Dependency("shared", str(dependency))], team.dependencies)
+        self.assertEqual(["shared/researching"], team.members[0].skills)
+
+    def test_schema_two_refuses_a_skill_from_an_undeclared_catalog(self):
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        manifest["schema"] = 2
+        manifest["catalogs"] = []
+        manifest["members"][0]["skills"] = ["somewhere/researching"]
+        manifest["members"][1]["skills"] = ["test-team/reviewing"]
+        written(self.source / library.TEAM, manifest)
+        with self.assertRaises(catalogs.Refused) as refused:
+            self.read()
+        self.assertIn("undeclared catalog somewhere", str(refused.exception))
+
+    def test_schema_two_cannot_replace_a_product_skill_from_a_dependency(self):
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        manifest["schema"] = 2
+        manifest["catalogs"] = [{"name": "shared", "source": "/shared"}]
+        manifest["members"][0]["skills"] = [f"shared/{library.REQUIRED_SKILL}"]
+        manifest["members"][1]["skills"] = ["test-team/reviewing"]
+        written(self.source / library.TEAM, manifest)
+        with self.assertRaises(catalogs.Refused) as refused:
+            self.read()
+        self.assertIn("product-owned", str(refused.exception))
 
     def test_only_the_team_envelope_is_recognized_as_a_declaration(self):
         self.assertTrue(catalogs.declared(self.source))

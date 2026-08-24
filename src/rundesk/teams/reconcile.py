@@ -53,7 +53,7 @@ def preflight_install(team: catalogs.Team, provider: Optional[str] = None) -> No
 
 def retiring(team: catalogs.Team, one: catalogs.Member) -> List[grants.Grant]:
     """Every current grant outside this member's positive allowlist, excluding product grants."""
-    desired = {f"{team.name}/{skill_name}" for skill_name in one.skills}
+    desired = set(one.skills)
     return [held for held in grants.held(one.name)
             if held.address not in desired
             and held.name != library.REQUIRED_SKILL
@@ -125,8 +125,8 @@ def _member(team: catalogs.Team, one: catalogs.Member) -> List[str]:
     for held in retiring(team, one):
         grants.revoked(one.name, held.name)
         changed.append(f"{one.name}: revoked {held.address or held.name}")
-    for skill_name in one.skills:
-        address = f"{team.name}/{skill_name}"
+    for address in one.skills:
+        skill_name = address.split("/", 1)[1]
         holding = grants.holding(one.name, skill_name)
         if holding is not None and holding.address != address:
             grants.revoked(one.name, skill_name)

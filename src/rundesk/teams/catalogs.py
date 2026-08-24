@@ -5,13 +5,14 @@ instruction path beneath the fetched tree before a command may install or update
 """
 
 from pathlib import Path
-from typing import List, NamedTuple
+from typing import Dict, List, NamedTuple
 
 from rundesk.agents import directory
 from rundesk.skills import library
 from rundesk.utils import files
 
-SCHEMA = 1
+SCHEMA = 2
+LEGACY_SCHEMA = 1
 AGENTS = "agents"
 INSTRUCTIONS = "AGENTS.md"
 
@@ -29,9 +30,17 @@ class Member(NamedTuple):
     self_improve: bool
 
 
+class Dependency(NamedTuple):
+    """A shared skill catalog a team requires, without copying it into the team."""
+
+    name: str
+    source: str
+
+
 class Team(NamedTuple):
     name: str
     at: Path
+    dependencies: List[Dependency]
     members: List[Member]
 
 
@@ -45,8 +54,9 @@ def declared(at: Path) -> bool:
     how, held = files.read_json(at / library.TEAM)
     return (how == files.READ
             and isinstance(held, dict)
-            and set(held) == {"schema", "name", "members"}
-            and held.get("schema") == SCHEMA
+            and held.get("schema") in (LEGACY_SCHEMA, SCHEMA)
+            and set(held) == ({"schema", "name", "members"} if held.get("schema") == LEGACY_SCHEMA
+                              else {"schema", "name", "catalogs", "members"})
             and isinstance(held.get("members"), list))
 
 
@@ -58,19 +68,26 @@ def read(at: Path, manifest: library.Manifest) -> Team:
         raise Refused(f"there is no {library.TEAM} in {at} — this is a skill catalog, not a team")
     if how == files.UNREADABLE or not isinstance(held, dict):
         raise Refused(f"{declared} is not a readable JSON object")
-    if set(held) != {"schema", "name", "members"}:
-        raise Refused(f"{declared} must contain exactly schema, name and members")
-    if held.get("schema") != SCHEMA:
+    schema = held.get("schema")
+    wanted = ({"schema", "name", "members"} if schema == LEGACY_SCHEMA
+              else {"schema", "name", "catalogs", "members"})
+    if schema not in (LEGACY_SCHEMA, SCHEMA):
         raise Refused(f"{declared} declares schema {held.get('schema')!r} and this release "
-                      f"understands {SCHEMA}")
+                      f"understands {LEGACY_SCHEMA} and {SCHEMA}")
+    if set(held) != wanted:
+        raise Refused(f"{declared} must contain exactly " + ", ".join(sorted(wanted)))
     if held.get("name") != manifest.name:
         raise Refused(f"{declared} calls this team {held.get('name')!r} and {library.MANIFEST} "
                       f"calls the catalog {manifest.name!r}")
+    dependencies = [] if schema == LEGACY_SCHEMA else _dependencies(declared, held.get("catalogs"))
+    if any(one.name == manifest.name for one in dependencies):
+        raise Refused(f"{declared} declares its own catalog as a dependency")
     raw_members = held.get("members")
     if not isinstance(raw_members, list) or not raw_members:
         raise Refused(f"{declared} needs at least one member")
 
-    members = [_member(at, declared, raw) for raw in raw_members]
+    members = [_member(at, declared, raw, manifest.name, schema, dependencies)
+               for raw in raw_members]
     names = [one.name for one in members]
     if len(names) != len(set(names)):
         raise Refused(f"{declared} names a member more than once")
@@ -82,7 +99,7 @@ def read(at: Path, manifest: library.Manifest) -> Team:
                           f"{', '.join(unknown)}")
         if one.name in one.delegates_to:
             raise Refused(f"{declared} lets {one.name} delegate to itself")
-    return Team(manifest.name, at, members)
+    return Team(manifest.name, at, dependencies, members)
 
 
 def installed(name: str) -> Team:
@@ -105,7 +122,50 @@ def owners() -> dict:
     return answer
 
 
-def _member(at: Path, declared: Path, raw) -> Member:
+def dependents(catalog: str) -> Dict[str, List[str]]:
+    """Installed teams and the skills for which they rely on one shared catalog."""
+    answer = {}
+    for name in library.known():
+        if not library.is_team(name):
+            continue
+        team = installed(name)
+        needed = required(team).get(catalog)
+        if needed is not None:
+            answer[name] = needed
+    return answer
+
+
+def _dependencies(declared: Path, raw) -> List[Dependency]:
+    if (not isinstance(raw, list)
+            or any(not isinstance(one, dict) or set(one) != {"name", "source"} for one in raw)):
+        raise Refused(f"{declared} needs catalogs containing exactly name and source")
+    dependencies = []
+    for one in raw:
+        name, source = one.get("name"), one.get("source")
+        if not isinstance(name, str) or library.name_trouble(name):
+            raise Refused(f"{declared} has an invalid dependency catalog name {name!r}")
+        if not isinstance(source, str) or not source.strip():
+            raise Refused(f"{declared} needs a source for dependency catalog {name}")
+        dependencies.append(Dependency(name, source.strip()))
+    names = [one.name for one in dependencies]
+    if len(names) != len(set(names)):
+        raise Refused(f"{declared} names a dependency catalog more than once")
+    return dependencies
+
+
+def required(team: Team) -> Dict[str, List[str]]:
+    """Required external skills, grouped by declared dependency catalog."""
+    answer = {one.name: [] for one in team.dependencies}
+    for member in team.members:
+        for address in member.skills:
+            catalog, skill = address.split("/", 1)
+            if catalog in answer and skill not in answer[catalog]:
+                answer[catalog].append(skill)
+    return answer
+
+
+def _member(at: Path, declared: Path, raw, team_name: str, schema: int,
+            dependencies: List[Dependency]) -> Member:
     if not isinstance(raw, dict):
         raise Refused(f"a member in {declared} is not an object")
     wanted = {"name", "description", "instructions", "skills", "delegates_to", "self_improve"}
@@ -122,12 +182,26 @@ def _member(at: Path, declared: Path, raw) -> Member:
             or any(not isinstance(skill, str) for skill in skills)
             or len(skills) != len(set(skills))):
         raise Refused(f"{declared} needs a duplicate-free skills array for {name}")
+    if schema == LEGACY_SCHEMA:
+        skills = [f"{team_name}/{skill}" for skill in skills]
+    addresses = []
+    permitted = {team_name} | {one.name for one in dependencies}
+    for skill in skills:
+        parts = skill.split("/")
+        if len(parts) != 2 or any(library.name_trouble(part) for part in parts):
+            raise Refused(f"{declared} gives {name} an invalid skill address {skill!r}")
+        if parts[0] not in permitted:
+            raise Refused(f"{declared} gives {name} a skill from undeclared catalog {parts[0]}")
+        addresses.append((parts[0], parts[1]))
+    bare = [skill for _catalog, skill in addresses]
+    if len(bare) != len(set(bare)):
+        raise Refused(f"{declared} gives {name} two skills with the same installed name")
     available = set(library.found(at / library.INSIDE))
-    missing = [skill for skill in skills if skill not in available]
+    missing = [skill for catalog, skill in addresses if catalog == team_name and skill not in available]
     if missing:
         raise Refused(f"{declared} gives {name} skills this catalog does not hold: "
                       f"{', '.join(missing)}")
-    protected = [skill for skill in skills
+    protected = [skill for _catalog, skill in addresses
                  if skill in (library.REQUIRED_SKILL, library.DELEGATING_SKILL)]
     if protected:
         raise Refused(f"{declared} gives {name} product-owned skills: {', '.join(protected)}")

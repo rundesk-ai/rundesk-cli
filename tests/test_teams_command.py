@@ -31,6 +31,106 @@ class Teams(support.Isolated):
                                   provider=provider, confirm=confirm)
         return cmd_teams(args)
 
+    def dependent_team(self, dependency: Path, dependency_name: str = "shared",
+                       skill: str = "researching") -> Path:
+        source = a_team_catalog(self.home / "dependent-team", members=[{
+            "name": "forge", "description": "Implements bounded software changes.",
+            "instructions": "agents/forge/AGENTS.md",
+            "skills": [f"{dependency_name}/{skill}"], "delegates_to": [],
+            "self_improve": False,
+        }], skills=("implementing",))
+        manifest = json.loads((source / library.TEAM).read_text())
+        manifest["schema"] = 2
+        manifest["catalogs"] = [{"name": dependency_name, "source": str(dependency)}]
+        written(source / library.TEAM, manifest)
+        return source
+
+    def test_schema_two_installs_a_missing_shared_catalog_and_grants_its_skill(self):
+        dependency = a_published_catalog(self.home / "shared", name="shared",
+                                         skills=("researching",))
+        source = self.dependent_team(dependency)
+        code, _out, err = support.run_with(
+            ["teams", "install", str(source), "--provider", "codex"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("shared — install from", err)
+        self.assertEqual([], library.known())
+
+        self.assertEqual(OK, self.command("install", source=source))
+        self.assertEqual(["shared", "test-team"], library.known())
+        self.assertEqual("shared/researching", grants.holding("forge", "researching").address)
+
+    def test_schema_two_reuses_a_matching_installed_catalog(self):
+        dependency = a_published_catalog(self.home / "shared", name="shared",
+                                         skills=("researching",))
+        with skill_catalogs.brought(str(dependency)) as coming:
+            skill_catalogs.installed(coming)
+        source = self.dependent_team(dependency)
+        code, _out, err = support.run_with(
+            ["teams", "install", str(source), "--provider", "codex"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("shared — reuse installed", err)
+        self.assertEqual(OK, self.command("install", source=source))
+
+    def test_schema_two_refuses_a_same_named_catalog_from_another_source(self):
+        installed_source = a_published_catalog(self.home / "first", name="shared",
+                                               skills=("researching",))
+        declared_source = a_published_catalog(self.home / "second", name="shared",
+                                              skills=("researching",))
+        with skill_catalogs.brought(str(installed_source)) as coming:
+            skill_catalogs.installed(coming)
+        source = self.dependent_team(declared_source)
+        code, _out, err = support.run_with(
+            ["teams", "install", str(source), "--provider", "codex", "--confirm"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("not " + str(declared_source), err)
+        self.assertNotIn("test-team", library.known())
+
+    def test_schema_two_refuses_a_dependency_missing_a_required_skill(self):
+        dependency = a_published_catalog(self.home / "shared", name="shared",
+                                         skills=("something-else",))
+        source = self.dependent_team(dependency)
+        code, _out, err = support.run_with(
+            ["teams", "install", str(source), "--provider", "codex", "--confirm"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("does not hold required skills: researching", err)
+        self.assertEqual([], library.known())
+
+    def test_a_failure_after_dependency_install_reports_the_partial_safe_result(self):
+        dependency = a_published_catalog(self.home / "shared", name="shared",
+                                         skills=("researching",))
+        source = self.dependent_team(dependency)
+        installing = skill_catalogs.installed
+
+        def fail_team(coming, *args, **kwargs):
+            if coming.manifest.name == "test-team":
+                raise OSError("synthetic team write failure")
+            return installing(coming, *args, **kwargs)
+
+        with mock.patch("rundesk.commands.teams.skill_catalogs.installed",
+                        side_effect=fail_team):
+            code, _out, err = support.run_with(
+                ["teams", "install", str(source), "--provider", "codex", "--confirm"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("dependency catalogs installed: shared", err)
+        self.assertIn("retry the same confirmed team install", err)
+        self.assertEqual(["shared"], library.known())
+
+    def test_an_installed_team_protects_its_dependency_from_removal_and_retirement(self):
+        dependency = a_published_catalog(self.home / "shared", name="shared",
+                                         skills=("researching", "other"))
+        source = self.dependent_team(dependency)
+        self.assertEqual(OK, self.command("install", source=source))
+
+        code, _out, err = support.run_with(["skills", "remove", "shared", "--confirm"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("required by installed teams: test-team", err)
+
+        a_published_catalog(dependency, name="shared", version="2.0.0", skills=("other",))
+        code, _out, err = support.run_with(["skills", "update", "shared", "--confirm"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("test-team: researching", err)
+        self.assertIn("researching", library.found(library.inside("shared")))
+
     def test_preview_changes_nothing_and_names_member_effects(self):
         code, out, err = support.run_with(
             ["teams", "install", str(self.source), "--provider", "codex"])
