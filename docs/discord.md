@@ -20,6 +20,10 @@ Rundesk prompts for it without echoing it and keeps it under that agent's own na
 3. Open **Bot** in the sidebar.
 4. Add the agent's username and profile image. These are the name and avatar people see in Discord.
 
+![Discord Developer Portal Bot page with the username and profile image controls highlighted](assets/discord/bot-profile.png)
+
+*Give the bot the same name and profile image you want people to recognize as the agent.*
+
 Use one Discord application per Rundesk agent. One bot is one identity; sharing a token between two
 agents lets both receive and answer the same messages.
 
@@ -31,6 +35,10 @@ On the **Bot** page:
 2. Complete Discord's confirmation or two-factor prompt.
 3. Copy the token and keep it in a password manager until Rundesk asks for it.
 
+![Discord Developer Portal Bot page with Reset Token highlighted](assets/discord/bot-token.png)
+
+*Reset the token, copy it once, and keep it private until Rundesk prompts for it.*
+
 Discord shows the token once. If it is lost or exposed, reset it before connecting the bot.
 
 ## 3. Enable Message Content Intent
@@ -40,6 +48,10 @@ Still on the **Bot** page, find **Privileged Gateway Intents** and enable:
 - **Message Content Intent**
 
 Leave **Presence Intent** and **Server Members Intent** off. Rundesk does not request them.
+
+![Discord privileged gateway intents with Message Content enabled and Server Members disabled](assets/discord/privileged-intents.png)
+
+*Enable Message Content Intent only. Leave Presence Intent and Server Members Intent off.*
 
 Without Message Content Intent, Discord hides ordinary server and thread messages from the bot.
 Rundesk checks this setting and refuses the connection instead of saving a channel that cannot read
@@ -63,6 +75,10 @@ Open **Installation** in the Developer Portal.
    - **Create Public Threads**
    - **Send Messages in Threads**
 
+![Discord Guild Install scopes and least-privilege permissions required by Rundesk](assets/discord/install-settings.png)
+
+*Guild Install needs the `bot` and `applications.commands` scopes plus the seven permissions shown.*
+
 These permissions match what the shipped Discord adapter does. Rundesk does not need **Change
 Nickname**, **Connect**, **Embed Links**, **Manage Channels**, **Manage Messages**, or **Manage
 Threads**.
@@ -70,6 +86,10 @@ Threads**.
 The install link is generated above the default settings. You can use it now, but Rundesk also
 prints a verified invite after it connects in the next steps. A bot already installed in a server
 must be authorized again if its scopes or permissions change.
+
+![Discord Installation page with the generated install link highlighted](assets/discord/install-link.png)
+
+*Copy the Discord-provided install link after saving the scopes and permissions.*
 
 ## 5. Copy your Discord user ID
 
