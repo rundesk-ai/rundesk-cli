@@ -107,6 +107,12 @@ gh issue close <number> --repo <owner/repo> --reason completed
 gh issue reopen <number> --repo <owner/repo>
 ```
 
+When delivery occurs through a pull request, verify that the pull-request body expresses the issue
+disposition before merge. Completed work targeting the default branch must use a full closing
+reference such as `Closes #123`; `Refs`, `Related`, a bare number, or a URL only cross-references the
+issue. Partial work must name the unmet acceptance criteria and leave the issue open. After merge,
+read the issue back instead of assuming the reference changed its state.
+
 Current GitHub CLI releases can mark a duplicate directly, but older releases cannot. Detect the
 installed surface:
 

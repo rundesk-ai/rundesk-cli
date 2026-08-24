@@ -33,3 +33,9 @@ assignees: ""
 ## Alternatives considered
 
 <!-- State the existing path or smaller alternative considered. -->
+
+## Agent
+
+<!-- Only for a named agent: replace the placeholder with its display name and keep this section. Anyone else deletes the section entirely. Never add provider, model, tool, session, or generated-by branding. -->
+
+🤖 by <Agent>

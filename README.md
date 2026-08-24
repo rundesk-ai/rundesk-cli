@@ -55,7 +55,8 @@ The next `ask` continues the same conversation. Keep the agent available after t
 rundesk gateways start ava
 ```
 
-Add Discord when you want to reach it away from your terminal, or schedule work for later:
+Add Discord with the [step-by-step setup guide](docs/discord.md) when you want to reach the agent
+away from your terminal, or schedule work for later:
 
 ```sh
 rundesk schedules add ava daily --when "0 4 * * *" --ask "review today's changes"
@@ -183,6 +184,9 @@ rundesk gateways start ava
 Rundesk prompts for the token without echoing it and verifies the connection before saving the
 channel. Use one Discord application per agent so each has its own identity. `--notify` makes this
 the channel for gateway notices, scheduled results, and other unprompted messages.
+
+The [full Discord setup guide](docs/discord.md) walks through the Developer Portal, least-privilege
+permissions, installation, and troubleshooting step by step.
 
 If the bot does not answer, check the channel and gateway directly:
 
