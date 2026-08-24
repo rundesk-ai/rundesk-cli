@@ -468,6 +468,26 @@ class WhatAShippedSkillMayClaim(Bundled):
             with self.subTest(cleanup_contract=phrase):
                 self.assertIn(phrase, reference)
 
+    def test_github_delivery_reconciles_issue_disposition_before_merge(self):
+        references = self.skills / "managing-github" / "references"
+        pull_requests = (references / "pull-requests.md").read_text(encoding="utf-8")
+        issues = (references / "issues.md").read_text(encoding="utf-8")
+
+        for phrase in (
+                "Reconcile every issue named by the assignment or pull request",
+                "A bare issue URL, `#123`, `Refs`, or",
+                "explicitly report\n  that the issue will remain open",
+                "inspect `closingIssuesReferences`",
+                "require `state: CLOSED`"):
+            with self.subTest(pull_request_contract=phrase):
+                self.assertIn(phrase, pull_requests)
+        for phrase in (
+                "Completed work targeting the default branch must use a full closing",
+                "Partial work must name the unmet acceptance criteria and leave the issue open",
+                "read the issue back instead of assuming the reference changed its state"):
+            with self.subTest(issue_contract=phrase):
+                self.assertIn(phrase, issues)
+
     def test_agent_instruction_guidance_is_routed_and_has_each_required_section(self):
         skill = self.skills / "managing-rundesk"
         main = (skill / library.DECLARED).read_text(encoding="utf-8")
