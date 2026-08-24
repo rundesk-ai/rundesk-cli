@@ -61,6 +61,19 @@ one `RUNDESK_HOME` it belongs to; no label or state is shared between installs. 
 the configured hour and minute in local time. A completed local calendar day is recorded so a
 repeated firing, including a repeated wall-clock hour, does not perform a second attempt.
 
+Reconciliation also retires an orphaned automatic update job after its recorded install root has
+been absent for at least a day. Cleanup requires the plist filename, label, root fingerprint,
+program path, working directory, and `RUNDESK_HOME` to describe the same Rundesk coordinator, and
+the missing root's parent must still be accessible. A functioning second install, a recent or
+temporarily unavailable root, and any malformed or identity-mismatched definition are preserved.
+Failure to take back the launchd job or remove its definition makes reconciliation fail visibly.
+All installs sharing that login directory serialize these decisions through
+`~/Library/LaunchAgents/.rundesk-automatic-updates.lock`, so one root cannot retire a coordinator
+while another root is reinstalling it. Cleanup atomically moves the exact stale plist to a private
+claim before asking launchd to take it back. A supported older installer that does not know the lock
+therefore keeps its newly written canonical plist; reconciliation restores its job if necessary.
+An interrupted private claim is conservatively restored and reconsidered on the next reconciliation.
+
 **Nothing sweeps it, and a stale file is not a held lock.** The lock is the `flock`, not the file:
 the kernel drops it when the process ends, however it ended — cleanly, on a crash, on `SIGKILL`, on
 the power going. Demonstrated rather than assumed: a process holding it was `SIGKILL`ed and the next
@@ -331,13 +344,16 @@ because a brain that found the two disagreeing would index it under a name nothi
 go stale, so it carries `.rundesk-grant.json` naming where it came from, and every update makes it
 again.
 
-## The one thing that is not below the root
+## The login jobs and their reconciliation lock are not below the root
 
 ```
 ~/Library/LaunchAgents/ai.rundesk.<fingerprint>.gateway.<agent>.plist
+~/Library/LaunchAgents/ai.rundesk.<fingerprint>.update.plist
+~/Library/LaunchAgents/.rundesk-automatic-updates.lock
 ```
 
-That is a real exception to this page's whole thesis, so here is why it is one rather than a leak.
+These are real exceptions to this page's whole thesis, so here is why they are bounded rather than
+leaks.
 
 It is where macOS requires a login job's definition to be. Every job a person has is registered in
 one place belonging to *the person*, and there is no directory below `RUNDESK_HOME` that `launchd`
@@ -355,8 +371,9 @@ That fingerprint is not decoration. A job's name lives in the person's login ses
 name — so a second install's uninstall booted out the live install's gateway.
 [`gateways.md`](gateways.md) has the rest of it.
 
-`rundesk gateways stop` takes the plist away with the job, and `rundesk uninstall` takes back every
-job this root placed before it removes anything else. Nothing else in this product writes into that
+`rundesk gateways stop` takes its plist away with the job, and `rundesk uninstall` takes back every
+job this root placed before it removes anything else. Automatic-update reconciliation owns the
+root-specific update plist and the shared lock; nothing else in this product writes into that
 directory.
 
 ## The copies may live elsewhere, and that is still one variable

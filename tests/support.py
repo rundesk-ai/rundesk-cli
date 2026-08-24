@@ -427,8 +427,19 @@ class Isolated(unittest.TestCase):
         self.addCleanup(self.assert_their_login_items_are_untouched, login_items_as_they_stand())
         self.home = Path(tempfile.mkdtemp(prefix="rundesk-home-")).resolve()
         self.addCleanup(shutil.rmtree, str(self.home), ignore_errors=True)
+        self.addCleanup(self.remove_isolated_external_locks)
         self.addCleanup(scrub_and_point(self.home))
         self.assert_isolated()
+
+    def remove_isolated_external_locks(self) -> None:
+        """Remove only this finished case's stable embedded lock, never a live shared lock."""
+        from rundesk.commands import automatic_updates
+
+        one = automatic_updates.coordinator(self.home, self.home / "LaunchAgents")
+        try:
+            automatic_updates.reconciliation_lock_at(one).unlink()
+        except FileNotFoundError:
+            pass
 
     def assert_their_login_items_are_untouched(self, as_found) -> None:
         """Fail the case if anything in it changed what the owner's machine starts at login.
