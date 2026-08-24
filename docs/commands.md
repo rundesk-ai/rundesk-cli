@@ -2067,8 +2067,9 @@ confirmation are separate:
 ```console
 $ rundesk teams install ./development-team --provider codex
 install: this would install team development-team from ./development-team
+        catalog  rundesk-skills — reuse installed from https://github.com/rundesk-ai/rundesk-skills; require writing-plans
         member   forge — create with provider codex
-                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; allow only implementing plus Rundesk-required skills; weekly upkeep on; leave gateway stopped
+                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; allow only development-team/implementing, rundesk-skills/writing-plans plus Rundesk-required skills; weekly upkeep on; leave gateway stopped
         nothing was installed or changed. To go ahead:
         rundesk teams install ./development-team --provider codex --confirm
 ```
@@ -2078,6 +2079,14 @@ member name that already exists and prints the exact `rundesk agents remove <age
 command required before retrying. This clean-start boundary ensures every member begins with the
 catalog-owned instructions, memory policy, delegation scope, skill allowlist, and weekly upkeep
 setting.
+
+Schema 2 teams may declare shared skill catalogs by exact name and source. The preview says whether
+each one will be installed or reused. A missing catalog is fetched and validated before confirmation
+changes anything; an installed catalog is reused without reinstalling only when its recorded source
+matches and every referenced skill exists. Member skill allowlists use fully qualified
+`<catalog>/<skill>` addresses. Existing schema 1 teams remain self-contained and compatible.
+Removing a dependency, or updating it past a referenced skill, is refused until the installed team
+declaration no longer requires it.
 
 `rundesk teams update <team>` fetches the recorded source and performs the same reconciliation. It
 repairs local instruction, memory, delegation, and skill-allowlist drift even when the fetched tree is

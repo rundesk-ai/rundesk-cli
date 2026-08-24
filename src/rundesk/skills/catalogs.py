@@ -590,7 +590,8 @@ def depended(fetching: Optional[Fetching] = None,
 
 
 def refresh(fetching: Optional[Fetching] = None,
-            saying: Optional[Callable[[str], None]] = None) -> List[Refreshed]:
+            saying: Optional[Callable[[str], None]] = None,
+            validating: Optional[Validating] = None) -> List[Refreshed]:
     """Bring every catalog up to date, one at a time, and never let one stop the others.
 
     Run after an install or an update has already succeeded, and deliberately not part of it: a
@@ -626,7 +627,7 @@ def refresh(fetching: Optional[Fetching] = None,
         if library.is_team(name):
             continue
         try:
-            did = update(name, fetching, said)
+            did = update(name, fetching, said, validating)
             outcomes.append(Refreshed(name, did.before, did.after, did.retired, ""))
         except (Refused, library.Refused, archives.Refused, OSError,
                 urllib.error.URLError) as why:

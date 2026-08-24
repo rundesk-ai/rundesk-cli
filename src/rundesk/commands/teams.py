@@ -1,8 +1,10 @@
 """Install, update, list, and reconcile version-controlled teams."""
 
 import argparse
+import contextlib
 import sys
-from typing import Optional
+from contextlib import ExitStack
+from typing import Iterator, List, NamedTuple, Optional
 
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
@@ -15,6 +17,11 @@ from rundesk.utils import archives, locking
 TROUBLE = (catalogs.Refused, reconcile.Refused, skill_catalogs.Refused,
            skill_catalogs.HalfInstalled, library.Refused, grants.Refused, grants.NotPresented,
            grants.HalfCopied, archives.Refused, locking.Stuck, OSError)
+
+
+class DependencyPlan(NamedTuple):
+    dependency: catalogs.Dependency
+    coming: Optional[skill_catalogs.Coming]
 
 
 def register(sub: Subcommands) -> None:
@@ -66,6 +73,7 @@ def _listed() -> int:
 
 def _installed(source: str, provider: Optional[str], confirm: bool,
                fetching: Optional[skill_catalogs.Fetching]) -> int:
+    dependencies_installed: List[str] = []
     try:
         with skill_catalogs.brought(source, "", fetching) as coming:
             if coming.at is None or coming.manifest is None:
@@ -79,26 +87,35 @@ def _installed(source: str, provider: Optional[str], confirm: bool,
                     return _failed(f"{team.name} is already installed as a team — update it with: "
                                    f"rundesk teams update {team.name}")
             reconcile.preflight_install(team, provider)
-            if not confirm:
-                return _would_install(team, source, provider)
-            # One decision from the final clean-name check through member creation. Every nested
-            # catalog, agent, record and grant write takes this same re-entrant install lock, so a
-            # same-named agent cannot appear in the gap and be mistaken for a team-created member.
-            with locking.only_one(paths.lock(), "this install",
-                                  locking.WHILE_A_DIRECTORY_MOVES):
-                reconcile.preflight_install(team, provider)
-                if library.manifest_at(team.name).is_file():
-                    moved = skill_catalogs.promoted(team.name, coming, validating=catalogs.read)
-                else:
-                    moved = skill_catalogs.installed(coming, as_team=True)
-                try:
-                    grants.retired(team.name, moved.retired)
-                    installed = catalogs.installed(team.name)
-                    changed = reconcile.apply(installed, provider, installing=True)
-                except TROUBLE as why:
-                    return _failed(str(why), "the team was not fully installed",
-                                   f"retry with: {_update_command(team.name, provider)}")
+            with _prepared_dependencies(team, fetching) as dependencies:
+                if not confirm:
+                    return _would_install(team, source, provider, dependencies)
+                # One decision from the final clean-name check through dependency, team, and member
+                # creation. The dependency fetches remain alive until their trees have landed.
+                with locking.only_one(paths.lock(), "this install",
+                                      locking.WHILE_A_DIRECTORY_MOVES):
+                    reconcile.preflight_install(team, provider)
+                    for dependency in dependencies:
+                        if dependency.coming is not None:
+                            skill_catalogs.installed(dependency.coming)
+                            dependencies_installed.append(dependency.dependency.name)
+                    if library.manifest_at(team.name).is_file():
+                        moved = skill_catalogs.promoted(team.name, coming, validating=catalogs.read)
+                    else:
+                        moved = skill_catalogs.installed(coming, as_team=True)
+                    try:
+                        grants.retired(team.name, moved.retired)
+                        installed = catalogs.installed(team.name)
+                        changed = reconcile.apply(installed, provider, installing=True)
+                    except TROUBLE as why:
+                        return _failed(str(why), "the team was not fully installed",
+                                       f"retry with: {_update_command(team.name, provider)}")
     except TROUBLE as why:
+        if dependencies_installed:
+            return _failed(str(why), "the team was not fully installed",
+                           "dependency catalogs installed: " +
+                           ", ".join(dependencies_installed),
+                           "retry the same confirmed team install")
         return _failed(str(why), "nothing was installed or changed")
     return _completed(installed, changed, "installed")
 
@@ -116,10 +133,17 @@ def _updated(name: str, provider: Optional[str], confirm: bool,
             incoming = (catalogs.installed(name) if coming.at is None or coming.manifest is None
                         else catalogs.read(coming.at, coming.manifest))
             reconcile.preflight(incoming, provider)
-            if not confirm:
-                return _would_update(incoming, settled.provenance.source, provider)
-            moved = skill_catalogs.updated(name, coming, validating=catalogs.read)
-            grants.retired(name, moved.retired)
+            with _prepared_dependencies(incoming, fetching) as dependencies:
+                if not confirm:
+                    return _would_update(incoming, settled.provenance.source, provider,
+                                         dependencies)
+                with locking.only_one(paths.lock(), "this install",
+                                      locking.WHILE_A_DIRECTORY_MOVES):
+                    for dependency in dependencies:
+                        if dependency.coming is not None:
+                            skill_catalogs.installed(dependency.coming)
+                    moved = skill_catalogs.updated(name, coming, validating=catalogs.read)
+                    grants.retired(name, moved.retired)
         installed = catalogs.installed(name)
         changed = reconcile.apply(installed, provider)
     except TROUBLE as why:
@@ -137,8 +161,10 @@ def _completed(team: catalogs.Team, changed, verb: str) -> int:
     return OK
 
 
-def _would_install(team: catalogs.Team, source: str, provider: Optional[str]) -> int:
+def _would_install(team: catalogs.Team, source: str, provider: Optional[str],
+                   dependencies: List[DependencyPlan]) -> int:
     print(f"install: this would install team {team.name} from {source}", file=sys.stderr)
+    _preview_dependencies(team, dependencies)
     _preview_members(team, provider, installing=True)
     print("        nothing was installed or changed. To go ahead:", file=sys.stderr)
     command = f"rundesk teams install {source}"
@@ -148,8 +174,10 @@ def _would_install(team: catalogs.Team, source: str, provider: Optional[str]) ->
     return FAILED
 
 
-def _would_update(team: catalogs.Team, source: str, provider: Optional[str]) -> int:
+def _would_update(team: catalogs.Team, source: str, provider: Optional[str],
+                  dependencies: List[DependencyPlan]) -> int:
     print(f"update: this would reconcile team {team.name} from {source}", file=sys.stderr)
+    _preview_dependencies(team, dependencies)
     _preview_members(team, provider)
     print("        repair   instructions, memory absence, delegation, upkeep and skill allowlist",
           file=sys.stderr)
@@ -178,6 +206,61 @@ def _preview_members(team: catalogs.Team, provider: Optional[str], installing: b
             for held in reconcile.retiring(team, member):
                 print(f"        revoke   {member.name}: {held.address or held.name} — not allowed",
                       file=sys.stderr)
+
+
+def _preview_dependencies(team: catalogs.Team, dependencies: List[DependencyPlan]) -> None:
+    required = catalogs.required(team)
+    for plan in dependencies:
+        action = "install" if plan.coming is not None else "reuse installed"
+        skills = ", ".join(required[plan.dependency.name]) or "catalog only"
+        print(f"        catalog  {plan.dependency.name} — {action} from "
+              f"{plan.dependency.source}; require {skills}", file=sys.stderr)
+
+
+@contextlib.contextmanager
+def _prepared_dependencies(team: catalogs.Team,
+                           fetching: Optional[skill_catalogs.Fetching]) \
+        -> Iterator[List[DependencyPlan]]:
+    """Validate every shared catalog before any team or dependency is changed."""
+    plans: List[DependencyPlan] = []
+    required = catalogs.required(team)
+    with ExitStack() as stack:
+        for dependency in team.dependencies:
+            if library.manifest_at(dependency.name).is_file():
+                settled = library.read(dependency.name)
+                if library.is_team(dependency.name):
+                    raise catalogs.Refused(
+                        f"dependency {dependency.name} is installed as a team, not a shared catalog")
+                if settled.provenance is None:
+                    raise catalogs.Refused(
+                        f"dependency {dependency.name} has no recorded source and cannot be reused")
+                if settled.provenance.source != dependency.source:
+                    raise catalogs.Refused(
+                        f"dependency {dependency.name} is installed from "
+                        f"{settled.provenance.source}, not {dependency.source}")
+                available = set(library.found(library.inside(dependency.name)))
+                missing = [skill for skill in required[dependency.name] if skill not in available]
+                if missing:
+                    raise catalogs.Refused(
+                        f"dependency {dependency.name} is missing required skills: "
+                        f"{', '.join(missing)} — update that catalog before retrying")
+                plans.append(DependencyPlan(dependency, None))
+                continue
+            coming = stack.enter_context(
+                skill_catalogs.brought(dependency.source, "", fetching))
+            if coming.at is None or coming.manifest is None:
+                raise catalogs.Refused(f"nothing was fetched for dependency {dependency.name}")
+            if coming.manifest.name != dependency.name:
+                raise catalogs.Refused(
+                    f"dependency source {dependency.source} calls itself {coming.manifest.name}, "
+                    f"not {dependency.name}")
+            missing = [skill for skill in required[dependency.name] if skill not in coming.skills]
+            if missing:
+                raise catalogs.Refused(
+                    f"dependency {dependency.name} does not hold required skills: "
+                    f"{', '.join(missing)}")
+            plans.append(DependencyPlan(dependency, coming))
+        yield plans
 
 
 def _update_command(name: str, provider: Optional[str]) -> str:
