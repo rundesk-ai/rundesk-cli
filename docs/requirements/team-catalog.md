@@ -86,15 +86,18 @@ update, refresh, and removal refuse or skip it so team content cannot move witho
 reconciliation. Installing the team after the skills promotes the existing catalog in place,
 preserving its skills while adding team ownership and reconciling the declared agents.
 
-A confirmed team install or update is refused from inside an agent turn; an owner reviews and
-applies it from a terminal. Agents may propose source changes but cannot apply the team state they
-are governed by through the supported in-turn command path. This is a correctness guard, not an
-operating-system sandbox; repository protection and owner review remain the authority boundary
-against a process deliberately bypassing its environment.
+An agent turn may run a confirmed team install or update when the owner authorized that effect and
+the turn's configured tool access can invoke Rundesk. Rundesk does not infer owner authorization
+from agent-turn environment variables. Preview, `--confirm`, validation, collision, locking,
+reconciliation, positive allowlist, and stopped-gateway guarantees are identical for terminal and
+in-turn callers. Repository protection, task authorization, and configured tool access remain the
+authority boundaries.
 
 ## Acceptance
 
 - A synthetic local team catalog previews without mutation, then installs into a disposable root.
+- An agent-turn environment with command access can apply the same confirmed skill and team catalog
+  operations as a terminal caller.
 - Missing members exist with their configured descriptions and delegation scopes.
 - Their `AGENTS.md` and `CLAUDE.md` match the catalog byte-for-byte and no `MEMORY.md` remains.
 - Each member's protected weekly upkeep state matches its `self_improve` setting.
