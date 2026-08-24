@@ -1,7 +1,7 @@
 ---
 id: TEAM
 name: Versioned team catalogs
-last_verified: 2026-08-23
+last_verified: 2026-08-24
 ---
 
 ## What this is
@@ -48,9 +48,16 @@ catalog and member changes, and changes nothing. `--confirm` replaces changed ca
 reconciles every declared member even when the fetched tree is unchanged, so the operation repairs
 instruction, memory, grant, and delegation drift.
 
+`rundesk update` and the daily automatic updater also check every installed team catalog, after the
+application and independently of ordinary catalogs. They require no separate confirmation, validate
+each fetched declaration before mutation, reconcile every declared member even when the tree is
+unchanged, and report application, ordinary-catalog, and team-catalog outcomes separately. Failure
+to fetch or validate one team preserves its last working release and does not stop another catalog.
+
 Turn admission also performs a network-free reconciliation of that one member from the installed
 catalog before instructions or grants are read. Thus local drift cannot cross into a later turn;
-catalog source changes still require the explicit guarded update above.
+catalog source changes arrive only through the explicit guarded team command or the guarded
+manual/daily update lifecycle.
 
 For each member, reconciliation:
 
@@ -67,8 +74,10 @@ A member removed by a later catalog version is released from team management rat
 Removing agents, channels, schedules, credentials, or projects is outside this lifecycle. Removing
 an unlisted optional skill grant is part of the positive allowlist contract.
 
-Installation and update do not start gateways. The successful command names
-`rundesk gateways start <agent>` so the owner can start only the agents they want to use.
+Installation and the explicit team update do not start gateways. The successful command names
+`rundesk gateways start <agent>` so the owner can start only the agents they want to use. The
+combined manual/daily lifecycle instead stands down only online members and restores exactly that
+set after reconciliation; members that began offline remain offline.
 
 ## Ownership and safety
 

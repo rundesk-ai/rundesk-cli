@@ -563,7 +563,19 @@ def _run(one: Coordinator, today: str, **updating: object) -> Daily:
                 return Daily(FAILED)
             if continuation is not None:
                 continuations.running(continuation[0], continuation[2])
+            surface_notes = []
+            external_reporting = updating.get("reporting")
+
+            def report_surface(said: str, failed: bool) -> None:
+                surface_notes.append((said, failed))
+                if callable(external_reporting):
+                    external_reporting(said, failed)
+
+            updating["reporting"] = report_surface
             attempt = update.attempt_update(argparse.Namespace(), **updating)
+            for surface_note, failed_surface in surface_notes:
+                level = logs.WARNING if failed_surface else logs.INFO
+                _note(one, surface_note, level)
             if attempt.queued:
                 return Daily(OK, "work began before update admission closed", True)
             if attempt.code == OK:

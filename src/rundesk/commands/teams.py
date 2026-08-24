@@ -2,11 +2,13 @@
 
 import argparse
 import sys
-from typing import Optional
+from typing import Callable, List, Optional, Protocol, Tuple
 
+from rundesk.agents import directory
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK
+from rundesk.gateways import job, standing
 from rundesk.skills import catalogs as skill_catalogs
 from rundesk.skills import grants, library
 from rundesk.teams import catalogs, reconcile
@@ -15,6 +17,16 @@ from rundesk.utils import archives, locking
 TROUBLE = (catalogs.Refused, reconcile.Refused, skill_catalogs.Refused,
            skill_catalogs.HalfInstalled, library.Refused, grants.Refused, grants.NotPresented,
            grants.HalfCopied, archives.Refused, locking.Stuck, OSError)
+
+
+class Gateways(Protocol):
+    """Stand one member gateway down and restore it after team reconciliation."""
+
+    def down(self, name: str) -> str:
+        """Return why the gateway could not be stopped, or an empty string."""
+
+    def up(self, name: str) -> str:
+        """Return why the gateway could not be restored, or an empty string."""
 
 
 def register(sub: Subcommands) -> None:
@@ -48,6 +60,121 @@ def cmd_teams(args: argparse.Namespace,
     if what == "update":
         return _updated(args.team, args.provider, args.confirm, fetching)
     raise AssertionError(f"teams {what} is registered on the parser and answered by nothing")
+
+
+def refreshed(fetching: Optional[skill_catalogs.Fetching] = None,
+              gateways: Optional[Gateways] = None,
+              saying: Optional[Callable[[str], None]] = None) -> List[str]:
+    """Refresh and reconcile every installed team independently.
+
+    The caller owns the work-admission barrier. Each fetched declaration is validated before a
+    gateway moves, then the catalog swap and all member writes share the install lock with turn
+    admission. A failed team does not prevent the remaining teams from settling.
+    """
+    said = saying or (lambda _line: None)
+    failures: List[str] = []
+    try:
+        names = [name for name in library.known() if library.is_team(name)]
+    except TROUBLE as why:
+        return [f"the installed teams could not be listed: {why}"]
+    for name in names:
+        try:
+            _refreshed(name, fetching, gateways, said)
+        except TROUBLE as why:
+            failures.append(f"{name} could not be checked or reconciled: {why}")
+    return failures
+
+
+def _refreshed(name: str, fetching: Optional[skill_catalogs.Fetching],
+               gateways: Optional[Gateways], saying: Callable[[str], None]) -> None:
+    """Refresh one installed team without exposing a partial member to turn admission."""
+    settled = library.read(name)
+    if settled.provenance is None:
+        raise reconcile.Refused(f"nothing is written down about where {name} came from")
+    with skill_catalogs.brought(
+            settled.provenance.source, settled.provenance.etag, fetching) as coming:
+        incoming = (catalogs.installed(name) if coming.at is None or coming.manifest is None
+                    else catalogs.read(coming.at, coming.manifest))
+        reconcile.preflight(incoming)
+        stopped: List[str] = []
+        failure: Optional[BaseException] = None
+        changed: List[str] = []
+        cycle = _the_gateways(gateways)
+        restart_trouble = ""
+        try:
+            with locking.only_one(paths.gateway_transition_lock(),
+                                  "team member gateways during this update",
+                                  locking.WHILE_A_DIRECTORY_MOVES):
+                stopped, stop_trouble = _gateways_stood_down(incoming, cycle)
+                if stop_trouble:
+                    failure = reconcile.Refused(stop_trouble)
+                else:
+                    try:
+                        with locking.only_one(paths.lock(), "this install",
+                                              locking.WHILE_A_DIRECTORY_MOVES):
+                            reconcile.preflight(incoming)
+                            moved = skill_catalogs.updated(
+                                name, coming, saying, validating=catalogs.read)
+                            grants.retired(name, moved.retired)
+                            changed = reconcile.apply(catalogs.installed(name))
+                    except TROUBLE as why:
+                        failure = why
+        finally:
+            # A newly started gateway takes the transition lock before claiming its name. Release
+            # this side first while the caller's work-admission barrier still excludes turns.
+            restart_trouble = _gateways_started(stopped, cycle)
+        if failure is not None:
+            if restart_trouble:
+                raise reconcile.Refused(f"{failure}; {restart_trouble}") from failure
+            raise failure
+        if restart_trouble:
+            raise reconcile.Refused(restart_trouble)
+    for line in changed:
+        saying(line)
+
+
+def _gateways_stood_down(team: catalogs.Team, gateways: Gateways) -> Tuple[List[str], str]:
+    """Stand down exactly the online declared members after proving all can be restored."""
+    online: List[str] = []
+    for member in team.members:
+        how = standing.standing(directory.where(member.name))
+        if how.how == standing.CANNOT_TELL:
+            raise reconcile.Refused(
+                f"nobody can tell whether the gateway for {member.name} is running — {how.why}")
+        if how.how == standing.ONLINE:
+            try:
+                job.job(member.name, directory.where(member.name), paths.home())
+            except (directory.Refused, job.Refused, paths.Refused) as why:
+                raise reconcile.Refused(
+                    f"the gateway for {member.name} is running but cannot be restored ({why})") \
+                    from why
+            online.append(member.name)
+
+    stopped: List[str] = []
+    for name in online:
+        trouble = gateways.down(name)
+        if trouble:
+            return stopped, f"the gateway for {name} would not stand down ({trouble})"
+        stopped.append(name)
+    return stopped, ""
+
+
+def _gateways_started(stopped: List[str], gateways: Gateways) -> str:
+    """Restore every gateway this team refresh stood down and report all failures."""
+    failures = []
+    for name in stopped:
+        trouble = gateways.up(name)
+        if trouble:
+            failures.append(f"the gateway for {name} could not be restored ({trouble})")
+    return "; ".join(failures)
+
+
+def _the_gateways(gateways: Optional[Gateways]) -> Gateways:
+    """Resolve the real supervisor only for a production caller that supplied no seam."""
+    if gateways is not None:
+        return gateways
+    from rundesk.commands.gateways import Cycled
+    return Cycled(job.Launchd())
 
 
 def _listed() -> int:

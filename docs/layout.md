@@ -180,7 +180,8 @@ unfamiliar file is never treated as disposable.
 A confirmed team-catalog install is the named exception to the ordinary owner-managed home rule.
 For a member declared by that catalog, Rundesk atomically replaces `AGENTS.md` and `CLAUDE.md` from
 one canonical catalog file and removes `MEMORY.md`. `rundesk teams update` repeats that exact
-reconciliation to repair drift. It does not sweep any other home entry.
+reconciliation to repair drift; manual and daily application updates do the same for every installed
+team after checking its source. They do not sweep any other home entry.
 
 **The names inside are fixed and they are the same for every agent**, which is the whole reason they
 are inside. The build this replaces put them beside the name instead — `<name>.lock`, `<name>.log`,
@@ -253,6 +254,11 @@ marker beside `app/`. Its canonical agent files stand under `app/agents/<member>
 move in the same catalog-tree swap as its skills. There is no executable install hook or second
 mutable copy of the team declaration. Repository content alone cannot claim team ownership, and
 duplicate ownership of an agent is refused.
+
+During the manual or daily update lifecycle, the fetched team tree is validated before member
+gateways move. The catalog swap and member reconciliation share the install lock with turn admission,
+and the lifecycle restores only gateways that were online before it began. An unavailable or invalid
+catalog remains on its last working tree and does not prevent other catalogs from settling.
 
 **`app/manifest.json` is what makes the directory a catalog**, the same way `state.db` makes a
 directory an agent. `catalog.json` deliberately is not: it records where a catalog was *fetched* from,
