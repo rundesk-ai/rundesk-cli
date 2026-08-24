@@ -2105,8 +2105,8 @@ dependency before a gateway moves or any catalog, team, or member is written, in
 dependency and reusing a matching installed one. They keep catalog swap and member reconciliation
 behind work admission, and restore exactly the member gateways they stood down; members already
 offline stay offline. They refuse an unmanaged name on the same terms as the explicit command. A
-team that cannot be fetched,
-validated, or reconciled does not stop the other catalog surfaces, and its outcome is named. Fetch
+team that cannot be fetched, validated, or reconciled does not stop the other catalog surfaces, and
+its outcome is named. Fetch
 or validation failure leaves its last working catalog untouched; turn admission refuses any member
 whose managed state cannot be repaired completely.
 
