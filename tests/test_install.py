@@ -8,17 +8,22 @@ an install, so every case that touches settling would pass without the handoff e
 Run directly: `python3 tests/test_install.py`
 """
 
+import io
 import os
 import shutil
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import support
+from rundesk.agents import directory
 from rundesk.commands import automatic_updates
+from rundesk.commands import install as installing
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
+from rundesk.gateways import standing
 from rundesk.lifecycle import tree
 from rundesk.skills import catalogs, library
 
@@ -195,6 +200,34 @@ class AFreshInstall(Installing):
         config.stated("last_updated_at", "1999-12-31T23:59:59Z", paths.data())
         self.install()
         self.assertNotEqual("1999-12-31T23:59:59Z", config.read(paths.data())["last_updated_at"])
+
+    def test_installing_over_a_running_gateway_hands_off_before_replacing_the_program(self):
+        self.install()
+        agent = directory.made("cole", "codex")
+        installed = (paths.app() / "README.md").read_text()
+        self.given_a_tree(self.source, marker="a different release")
+
+        with standing.holding(agent), \
+                mock.patch.object(installing, "_guarded_update", return_value=OK) as guarded:
+            code, out, err = self.install()
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual("", out)
+        guarded.assert_called_once_with()
+        self.assertEqual(installed, (paths.app() / "README.md").read_text())
+
+    def test_the_live_install_handoff_runs_its_installed_guarded_updater(self):
+        self.install()
+        answer = support.ran(OK, out="update queued until current work finishes\n")
+        said = io.StringIO()
+
+        with mock.patch.object(installing.programs, "run", return_value=answer) as ran, \
+                mock.patch.object(sys, "stdout", said):
+            self.assertEqual(OK, installing._guarded_update())
+
+        ran.assert_called_once_with(
+            [str(paths.app() / "rundesk"), "update"], installing.GUARDED_UPDATE_SECONDS)
+        self.assertEqual(answer.out, said.getvalue())
 
     def test_a_program_that_will_not_run_is_never_reported_as_installed(self):
         # An installer that reports success without checking has told somebody their machine is

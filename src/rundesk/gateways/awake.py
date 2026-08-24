@@ -132,6 +132,7 @@ def _published(guard: subprocess.Popen) -> bool:
     try:
         read = subprocess.run([PMSET, "-g", "assertions"], stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                              errors="replace",
                               timeout=ASK_WITHIN, check=False)
     except subprocess.TimeoutExpired:
         return False
