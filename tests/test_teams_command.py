@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import unittest
 from pathlib import Path
 from typing import Optional
@@ -12,11 +13,13 @@ from fixtures_skills import a_published_catalog, a_team_catalog, written
 import support
 from rundesk.agents import delegating, directory, records
 from rundesk.commands.teams import cmd_teams
+from rundesk.core import paths
 from rundesk.exits import FAILED, OK
 from rundesk.providers import environment
 from rundesk.skills import catalogs as skill_catalogs
 from rundesk.skills import grants, library
-from rundesk.teams import reconcile
+from rundesk.teams import reconcile, restoring
+from rundesk.utils import files, locking
 
 
 class Teams(support.Isolated):
@@ -197,6 +200,112 @@ class Teams(support.Isolated):
         self.assertEqual("spectator-skills/extra",
                          grants.holding("spectator", "extra").address)
 
+    def test_a_failed_install_leaves_no_catalog_and_no_agents_but_keeps_its_dependency(self):
+        """A confirmed install is all-or-nothing about the team, and deliberately not about a
+        dependency catalog it installed to get there."""
+        dependency = a_published_catalog(self.home / "shared", name="shared",
+                                         skills=("researching",))
+        source = self.dependent_team(dependency)
+        declaration = json.loads((source / library.TEAM).read_text())
+        declaration["members"].append({
+            "name": "piper", "description": "Reviews code and judges release quality.",
+            "instructions": "agents/piper/AGENTS.md", "skills": ["test-team/implementing"],
+            "delegates_to": [], "self_improve": False,
+        })
+        written(source / library.TEAM, declaration)
+        page = source / "agents/piper/AGENTS.md"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text("# piper\n\nTeam instructions.\n", encoding="utf-8")
+        granting = grants.granted
+
+        def fail_the_second_member(agent, skill, alias=""):
+            # forge is granted shared/researching first, so this lands after a member reconciled.
+            if agent == "piper":
+                raise OSError("synthetic failure reconciling the second member")
+            return granting(agent, skill, alias)
+
+        with mock.patch.object(grants, "granted", side_effect=fail_the_second_member):
+            code, _out, err = support.run_with(
+                ["teams", "install", str(source), "--provider", "codex", "--confirm"])
+
+        self.assertEqual([], directory.known())
+        self.assertFalse(directory.where("forge").exists())
+        self.assertEqual(["shared"], library.known())
+        self.assertEqual([], [one.name for one in library.where().iterdir()
+                              if files.staged(one.name)])
+        self.assertEqual(FAILED, code)
+        self.assertIn("no team was installed", err)
+        self.assertIn("dependency catalogs installed: shared", err)
+
+    def test_a_failed_promotion_leaves_the_catalog_it_promoted_as_it_was(self):
+        """Promotion is a swap of an installed catalog, so undoing it is putting that one back."""
+        with skill_catalogs.brought(str(self.source)) as coming:
+            skill_catalogs.installed(coming)
+        directory.made("scribe", "codex", "Keeps the owner's own notes.")
+        grants.granted("scribe", library.look_up("test-team/reviewing"))
+        catalog = json.loads((self.source / library.MANIFEST).read_text())
+        catalog["version"] = "2.0.0"
+        written(self.source / library.MANIFEST, catalog)
+        granting = grants.granted
+
+        def fail_the_second_member(agent, skill, alias=""):
+            if agent == "piper":
+                raise OSError("synthetic failure reconciling the second member")
+            return granting(agent, skill, alias)
+
+        with mock.patch.object(grants, "granted", side_effect=fail_the_second_member):
+            code, _out, err = support.run_with(
+                ["teams", "install", str(self.source), "--provider", "codex", "--confirm"])
+
+        self.assertEqual(["test-team"], library.known())
+        self.assertFalse(library.is_team("test-team"))
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertEqual("test-team/reviewing", grants.holding("scribe", "reviewing").address)
+        self.assertEqual(["scribe"], directory.known())
+        self.assertFalse(directory.where("forge").exists())
+        self.assertEqual(FAILED, code)
+        self.assertIn("nothing was installed or changed", err)
+
+    def test_a_failed_install_restore_names_the_state_that_remains_and_a_valid_retry(self):
+        dependency = a_published_catalog(self.home / "shared", name="shared",
+                                         skills=("researching",))
+        source = self.dependent_team(dependency)
+        declaration = json.loads((source / library.TEAM).read_text())
+        declaration["members"].append({
+            "name": "piper", "description": "Reviews code and judges release quality.",
+            "instructions": "agents/piper/AGENTS.md", "skills": ["test-team/implementing"],
+            "delegates_to": [], "self_improve": False,
+        })
+        written(source / library.TEAM, declaration)
+        page = source / "agents/piper/AGENTS.md"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text("# piper\n\nTeam instructions.\n", encoding="utf-8")
+        granting = grants.granted
+        forgetting = directory.forgotten
+
+        def fail_the_second_member(agent, skill, alias=""):
+            if agent == "piper":
+                raise OSError("synthetic failure reconciling the second member")
+            return granting(agent, skill, alias)
+
+        def leave_forge(name):
+            if name == "forge":
+                raise OSError("synthetic failure removing the first member")
+            return forgetting(name)
+
+        with mock.patch.object(grants, "granted", side_effect=fail_the_second_member), \
+                mock.patch.object(directory, "forgotten", side_effect=leave_forge):
+            code, _out, err = support.run_with(
+                ["teams", "install", str(source), "--provider", "codex", "--confirm"])
+
+        self.assertFalse(library.is_team("test-team"))
+        self.assertEqual(["forge"], directory.known())
+        self.assertEqual(FAILED, code)
+        self.assertIn("rundesk agents remove forge --confirm", err)
+        self.assertIn(f"rundesk teams install {source} --provider codex --confirm", err)
+        self.assertIn("dependency catalogs installed: shared", err)
+        self.assertNotIn("rundesk teams update", err)
+
     def test_update_repairs_drift_even_when_the_catalog_tree_is_unchanged(self):
         self.assertEqual(OK, self.command("install"))
         forge = directory.home("forge")
@@ -215,6 +324,74 @@ class Teams(support.Isolated):
         self.assertEqual("test-team/implementing", grants.holding("forge", "implementing").address)
         self.assertEqual(("piper",), delegating.scope_of("forge"))
         self.assertEqual(1, records.read(directory.records("forge"))["self_improve"])
+
+    def test_update_refuses_to_take_over_an_agent_no_team_manages(self):
+        self.assertEqual(OK, self.command("install"))
+        directory.made("scribe", "claude", "Keeps the owner's own notes.")
+        scribe = directory.home("scribe")
+        (scribe / "AGENTS.md").write_text("owner rules")
+        (scribe / "CLAUDE.md").write_text("owner rules as well")
+        (scribe / "MEMORY.md").write_text("owner memory")
+        other = a_published_catalog(self.home / "scribe-skills", name="scribe-skills",
+                                    skills=("extra",))
+        with skill_catalogs.brought(str(other)) as coming:
+            skill_catalogs.installed(coming)
+        grants.granted("scribe", library.look_up("scribe-skills/extra"))
+        before = records.read(directory.records("scribe"))
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        manifest["members"].append({
+            "name": "scribe", "description": "Would be governed by this team.",
+            "instructions": "agents/scribe/AGENTS.md", "skills": [],
+            "delegates_to": [], "self_improve": True,
+        })
+        written(self.source / library.TEAM, manifest)
+        page = self.source / "agents/scribe/AGENTS.md"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text("# scribe\n\nTeam instructions.\n", encoding="utf-8")
+        catalog = json.loads((self.source / library.MANIFEST).read_text())
+        catalog["version"] = "2.0.0"
+        written(self.source / library.MANIFEST, catalog)
+
+        previewed, _preview_out, preview_err = support.run_with(
+            ["teams", "update", "test-team"])
+        code, _out, err = support.run_with(["teams", "update", "test-team", "--confirm"])
+
+        self.assertEqual("owner rules", (scribe / "AGENTS.md").read_text())
+        self.assertEqual("owner rules as well", (scribe / "CLAUDE.md").read_text())
+        self.assertEqual("owner memory", (scribe / "MEMORY.md").read_text())
+        self.assertEqual(before, records.read(directory.records("scribe")))
+        self.assertEqual("scribe-skills/extra", grants.holding("scribe", "extra").address)
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertEqual(["forge", "piper", "scribe"], directory.known())
+        self.assertEqual(FAILED, code)
+        self.assertIn("scribe (rundesk agents remove scribe --confirm)", err)
+        self.assertEqual(FAILED, previewed)
+        self.assertIn("rundesk agents remove scribe --confirm", preview_err)
+        self.assertNotIn("this would reconcile team", preview_err)
+
+    def test_update_reconciles_members_with_the_install_lock_still_held(self):
+        """The window between the catalog swap and `apply` must not exist.
+
+        Once the new declaration is installed, `catalogs.owners()` claims every name in it, so the
+        ownership re-check can no longer tell a member this team managed from an agent created a
+        moment ago. Only the install lock never being released in between keeps the two apart, so
+        this asks the last boundary inside it whether it is still there.
+        """
+        self.assertEqual(OK, self.command("install"))
+        catalog = json.loads((self.source / library.MANIFEST).read_text())
+        catalog["version"] = "2.0.0"
+        written(self.source / library.MANIFEST, catalog)
+        reconciling = reconcile.apply
+        held = []
+
+        def watched(*args, **kwargs):
+            held.append(locking.is_held(paths.lock()))
+            return reconciling(*args, **kwargs)
+
+        with mock.patch.object(reconcile, "apply", watched):
+            self.assertEqual(OK, self.command("update", provider=None))
+
+        self.assertEqual([True], held)
 
     def test_turn_admission_reconciliation_repairs_installed_state_without_fetching(self):
         self.assertEqual(OK, self.command("install"))
@@ -261,6 +438,178 @@ class Teams(support.Isolated):
         self.assertIsNone(grants.holding("forge", "implementing"))
         self.assertEqual("test-team/reviewing", grants.holding("forge", "reviewing").address)
         self.assertEqual((), delegating.scope_of("forge"))
+
+    def test_a_failure_part_way_through_an_update_puts_the_team_and_its_members_back(self):
+        self.assertEqual(OK, self.command("install"))
+        forge, piper = directory.home("forge"), directory.home("piper")
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        manifest["members"][0].update({"skills": ["reviewing"],
+                                       "description": "Implements the second workflow."})
+        written(self.source / library.TEAM, manifest)
+        (self.source / "agents/forge/AGENTS.md").write_text(
+            "# forge\n\nSecond canonical workflow.\n", encoding="utf-8")
+        catalog = json.loads((self.source / library.MANIFEST).read_text())
+        catalog["version"] = "2.0.0"
+        written(self.source / library.MANIFEST, catalog)
+        (forge / "MEMORY.md").write_text("forge remembers this", encoding="utf-8")
+        before = {
+            "forge_agents": (forge / "AGENTS.md").read_bytes(),
+            "forge_claude": (forge / "CLAUDE.md").read_bytes(),
+            "piper_agents": (piper / "AGENTS.md").read_bytes(),
+            "forge_records": records.read(directory.records("forge")),
+        }
+        granting = grants.granted
+
+        def fail_the_new_grant(agent, skill, alias=""):
+            # The second version moves forge from `implementing` to `reviewing`. Failing that one
+            # grant lands the failure after its pages, records and old grant have already moved,
+            # and leaves every other grant — including the ones putting it back — working.
+            if (agent, skill.name) == ("forge", "reviewing"):
+                raise OSError("synthetic mid-reconciliation failure")
+            return granting(agent, skill, alias)
+
+        with mock.patch.object(grants, "granted", side_effect=fail_the_new_grant):
+            code, _out, err = support.run_with(["teams", "update", "test-team", "--confirm"])
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("test-team was not fully reconciled", err)
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertEqual(before["forge_agents"], (forge / "AGENTS.md").read_bytes())
+        self.assertEqual(before["forge_claude"], (forge / "CLAUDE.md").read_bytes())
+        self.assertEqual(before["piper_agents"], (piper / "AGENTS.md").read_bytes())
+        self.assertEqual("forge remembers this", (forge / "MEMORY.md").read_text())
+        self.assertEqual(before["forge_records"], records.read(directory.records("forge")))
+        self.assertEqual(("piper",), delegating.scope_of("forge"))
+        self.assertEqual("test-team/implementing", grants.holding("forge", "implementing").address)
+        self.assertIsNone(grants.holding("forge", "reviewing"))
+
+    def test_a_member_created_before_the_failure_is_not_an_agent_afterwards(self):
+        self.assertEqual(OK, self.command("install"))
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        # First in the declaration, so it is created and reconciled before the member that fails.
+        manifest["members"].insert(0, {
+            "name": "scribe", "description": "Joined by the second version.",
+            "instructions": "agents/scribe/AGENTS.md", "skills": ["implementing"],
+            "delegates_to": [], "self_improve": False,
+        })
+        # piper moves to a skill it does not hold, so the member after scribe asks for a grant.
+        manifest["members"][2]["skills"] = ["implementing"]
+        written(self.source / library.TEAM, manifest)
+        page = self.source / "agents/scribe/AGENTS.md"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text("# scribe\n\nTeam instructions.\n", encoding="utf-8")
+        catalog = json.loads((self.source / library.MANIFEST).read_text())
+        catalog["version"] = "2.0.0"
+        written(self.source / library.MANIFEST, catalog)
+        piper = directory.home("piper")
+        before_piper = (piper / "AGENTS.md").read_bytes()
+        granting = grants.granted
+
+        def fail_after_scribe_is_made(agent, skill, alias=""):
+            # Only the grant the new version makes, so the ones putting piper back still work.
+            if (agent, skill.name) == ("piper", "implementing"):
+                raise OSError("synthetic failure after a member was created")
+            return granting(agent, skill, alias)
+
+        with mock.patch.object(grants, "granted", side_effect=fail_after_scribe_is_made):
+            code, _out, err = support.run_with(
+                ["teams", "update", "test-team", "--provider", "codex", "--confirm"])
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("test-team was not fully reconciled", err)
+        self.assertEqual(["forge", "piper"], directory.known())
+        self.assertFalse(directory.where("scribe").exists())
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertEqual(before_piper, (piper / "AGENTS.md").read_bytes())
+        self.assertEqual("test-team/reviewing", grants.holding("piper", "reviewing").address)
+        self.assertEqual("test-team/implementing", grants.holding("forge", "implementing").address)
+
+    def test_a_members_symlinked_page_goes_back_as_that_symlink(self):
+        self.assertEqual(OK, self.command("install"))
+        forge = directory.home("forge")
+        elsewhere = self.home / "forge-notes.md"
+        elsewhere.write_text("what the owner keeps here", encoding="utf-8")
+        (forge / "MEMORY.md").symlink_to(elsewhere)
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        manifest["members"][0]["skills"] = ["reviewing"]
+        written(self.source / library.TEAM, manifest)
+        catalog = json.loads((self.source / library.MANIFEST).read_text())
+        catalog["version"] = "2.0.0"
+        written(self.source / library.MANIFEST, catalog)
+        granting = grants.granted
+
+        def fail_the_new_grant(agent, skill, alias=""):
+            if (agent, skill.name) == ("forge", "reviewing"):
+                raise OSError("synthetic mid-reconciliation failure")
+            return granting(agent, skill, alias)
+
+        with mock.patch.object(grants, "granted", side_effect=fail_the_new_grant):
+            self.assertEqual(FAILED, support.run_with(
+                ["teams", "update", "test-team", "--confirm"])[0])
+
+        memory = forge / "MEMORY.md"
+        self.assertTrue(memory.is_symlink())
+        self.assertEqual(str(elsewhere), os.readlink(memory))
+        self.assertEqual("what the owner keeps here", elsewhere.read_text())
+
+    def test_a_directory_where_a_managed_page_belongs_refuses_before_anything_moves(self):
+        """A page path this could not put back is refused, not held as absent and then removed.
+
+        Without the refusal the update gets as far as `pages.replace_team`, whose rename onto a
+        directory fails, and the restore then puts the page back by removing what is there — which
+        for a directory is everything inside it.
+        """
+        self.assertEqual(OK, self.command("install"))
+        forge = directory.home("forge")
+        notes = forge / "AGENTS.md"
+        files.remove_one(notes)
+        notes.mkdir()
+        (notes / "kept.md").write_text("what the owner keeps here", encoding="utf-8")
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        manifest["members"][0]["skills"] = ["reviewing"]
+        written(self.source / library.TEAM, manifest)
+        catalog = json.loads((self.source / library.MANIFEST).read_text())
+        catalog["version"] = "2.0.0"
+        written(self.source / library.MANIFEST, catalog)
+        piper_page = (directory.home("piper") / "AGENTS.md").read_bytes()
+
+        code, _out, err = support.run_with(["teams", "update", "test-team", "--confirm"])
+
+        # State first: what this guard exists to protect is the directory, not the wording.
+        self.assertTrue(notes.is_dir())
+        self.assertEqual(["kept.md"], [one.name for one in notes.iterdir()])
+        self.assertEqual("what the owner keeps here", (notes / "kept.md").read_text())
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertEqual(piper_page, (directory.home("piper") / "AGENTS.md").read_bytes())
+        self.assertEqual("test-team/implementing", grants.holding("forge", "implementing").address)
+        self.assertIsNone(grants.holding("forge", "reviewing"))
+        self.assertEqual(["forge", "piper"], directory.known())
+        # The explicit command moves no gateway, and a refusal leaves nothing for one to have left.
+        self.assertFalse(directory.gateway_record("forge").exists())
+        self.assertEqual(FAILED, code)
+        self.assertIn("neither a file nor a link", err)
+
+    def test_the_hold_itself_refuses_a_page_it_could_not_put_back(self):
+        """`preflight_update` asks the page rule first; `kept` asks it again under the install lock.
+
+        No lifecycle case can make the two answers differ, because the lock is exactly what holds
+        these paths still between them — so the second one is asked of `kept` directly. It is the
+        boundary the restore depends on: whatever `kept` accepted is what it will try to put back.
+        """
+        self.assertEqual(OK, self.command("install"))
+        notes = directory.home("forge") / "AGENTS.md"
+        files.remove_one(notes)
+        notes.mkdir()
+
+        with self.assertRaises(restoring.Refused) as refused:
+            with restoring.kept("test-team", ["forge"]):
+                self.fail("the hold should have refused before the block ran")
+
+        self.assertIn("neither a file nor a link", str(refused.exception))
+        self.assertTrue(notes.is_dir())
+        # The held copy goes even when the hold refuses while taking it.
+        self.assertEqual([], [one.name for one in library.where().iterdir()
+                              if files.staged(one.name)])
 
     def test_update_applies_a_changed_weekly_upkeep_setting(self):
         self.assertEqual(OK, self.command("install"))

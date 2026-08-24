@@ -43,7 +43,7 @@ from typing import Callable, Dict, List, NamedTuple, Optional, Protocol, Tuple
 from rundesk import __version__
 from rundesk.agents import directory, pages, records
 from rundesk.agents import migration as agent_migration
-from rundesk.commands import failed, skills, the_reason
+from rundesk.commands import failed, skills, teams, the_reason
 from rundesk.commands.gateways import Cycled
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
@@ -57,6 +57,7 @@ from rundesk.utils import archives, locking, programs
 #: The second of the two things in this product that leave the machine, and like the first it is a
 #: value a caller hands in rather than an import a test cannot reach past.
 Fetching = Callable[[str, Path], None]
+Reporting = Callable[[str, bool], None]
 
 FETCH_SECONDS = 60
 
@@ -115,7 +116,8 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
                fetching: Optional[Fetching] = None,
                refreshing: Optional[Refreshing] = None,
                building: Optional[Callable[..., programs.Ran]] = None,
-               gateways: Optional[Gateways] = None) -> int:
+               gateways: Optional[Gateways] = None,
+               reporting: Optional[Reporting] = None) -> int:
     """Move to the newest published release, or say it is already up to date.
 
     With no flag it preserves the ordinary update contract. `--continue` is accepted only from one
@@ -124,10 +126,11 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
     brings down a catalog of skills, and `gateways` cycles live agents; all are resolved here rather
     than bound in the signature, so the whole command is driven with no network or launchd nearby.
 
-    **The skill catalogs are checked on every run of this, including one that found nothing newer.**
+    **Ordinary and team catalogs are checked on every run, including one that found nothing newer.**
     That is what makes them current daily rather than only when rundesk itself moves: a catalog is
-    somebody else's repository and it changes on its own schedule. It happens last, it cannot change
-    this command's exit code, and `commands.skills.refreshed` says why.
+    somebody else's repository and it changes on its own schedule. They run independently after the
+    application settles, cannot change this command's compatibility exit code, and report their own
+    outcomes. Team reconciliation shares the admission boundary this transaction already owns.
     """
     continuation = None
     if getattr(_args, "continuation", False) is True:
@@ -143,7 +146,8 @@ def cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = Non
             return _failed(f"the update continuation could not be recorded ({why})")
     attempted = attempt_update(
         _args, asking=asking, fetching=fetching, refreshing=refreshing,
-        building=building, gateways=gateways, continuation=continuation)
+        building=building, gateways=gateways, continuation=continuation,
+        reporting=reporting)
     if continuation is not None and not attempted.queued:
         continuations.finished(
             continuation[0], continuation[2], succeeded=attempted.code == OK,
@@ -158,7 +162,8 @@ def attempt_update(_args: argparse.Namespace, asking: Optional[release.Asking] =
                    refreshing: Optional[Refreshing] = None,
                    building: Optional[Callable[..., programs.Ran]] = None,
                    gateways: Optional[Gateways] = None,
-                   continuation: Optional[Tuple[str, int, int]] = None) -> Attempt:
+                   continuation: Optional[Tuple[str, int, int]] = None,
+                   reporting: Optional[Reporting] = None) -> Attempt:
     """Run or durably queue one update, preserving that distinction for coordinators."""
     installed_before_waiting = paths.app().is_dir()
     try:
@@ -181,7 +186,8 @@ def attempt_update(_args: argparse.Namespace, asking: Optional[release.Asking] =
                     failed_to_queue = said.startswith("the update could not")
                     return Attempt(FAILED if failed_to_queue else OK, not failed_to_queue)
                 return Attempt(
-                    _cmd_update(_args, asking, fetching, refreshing, building, gateways), False)
+                    _cmd_update(_args, asking, fetching, refreshing, building, gateways,
+                                reporting), False)
     except locking.Stuck as why:
         return Attempt(_failed(str(why)), False)
 
@@ -190,11 +196,13 @@ def _cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = No
                 fetching: Optional[Fetching] = None,
                 refreshing: Optional[Refreshing] = None,
                 building: Optional[Callable[..., programs.Ran]] = None,
-                gateways: Optional[Gateways] = None) -> int:
+                gateways: Optional[Gateways] = None,
+                reporting: Optional[Reporting] = None) -> int:
     """The update transaction, with its per-install claim already held."""
     line, published, could_ask = release.standing(__version__, asking)
     if not could_ask:
         print(line, file=sys.stderr)
+        _surface("application: could not be checked", reporting, failed=True)
         return FAILED
     print(line)
 
@@ -222,13 +230,16 @@ def _cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = No
         except paths.Refused as why:
             gone_wrong = str(why)
         if gone_wrong:
+            _surface(f"application: failed to settle at {__version__}", reporting, failed=True)
             return _failed(f"this install is on {__version__} and is not settled — {gone_wrong}")
-        _catalogs_checked(refreshing)
+        _surface(f"application: current at {__version__}", reporting)
+        _catalogs_checked(refreshing, gateways, reporting)
         return OK
 
     try:
         root = paths.home()
     except paths.Refused as why:
+        _surface("application: could not resolve this install", reporting, failed=True)
         return _failed(str(why))
 
     holding = tempfile.mkdtemp(prefix="rundesk-update-")
@@ -244,6 +255,7 @@ def _cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = No
         try:
             landed = _brought_down(published, Path(holding), fetching)
         except (OSError, urllib.error.URLError, tarfile.TarError, ValueError) as why:
+            _surface(f"application: {published} could not be fetched", reporting, failed=True)
             return _failed(f"{published} could not be fetched: {why}")
 
         print(f"        installing {published}")
@@ -258,6 +270,7 @@ def _cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = No
                 gone_wrong, were_up = _gateways_stood_down_for_update(
                     root, normalized, cycled, _out_loud)
                 if gone_wrong:
+                    _surface("application: gateway preflight failed", reporting, failed=True)
                     return _failed(gone_wrong)
 
                 # From here on whichever coherent tree remains must restart the gateways. Set
@@ -290,6 +303,7 @@ def _cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = No
                             print(f"update: {published} is installed and when it arrived was not "
                                   f"recorded — {why}", file=sys.stderr)
         except locking.Stuck as why:
+            _surface("application: gateway transition failed", reporting, failed=True)
             return _failed(f"the gateways could not be held offline — {why}")
     finally:
         shutil.rmtree(holding, ignore_errors=True)
@@ -307,6 +321,7 @@ def _cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = No
                     were_up, cycled, normalized, notes, False, _out_loud))
 
     if update_failure:
+        _surface(f"application: failed while installing {published}", reporting, failed=True)
         if installed:
             print(f"update: {update_failure}", file=sys.stderr)
             print("        running it again will carry on from where this stopped", file=sys.stderr)
@@ -316,12 +331,15 @@ def _cmd_update(_args: argparse.Namespace, asking: Optional[release.Asking] = No
             print(f"        {restart_trouble}", file=sys.stderr)
         return FAILED
     if restart_trouble:
+        _surface(f"application: {published} installed but gateway restoration failed",
+                 reporting, failed=True)
         return _failed(restart_trouble)
 
     print(f"rundesk updated to {published}")
     if notes:
         print(f"        what changed: {notes}")
-    _catalogs_checked(refreshing)
+    _surface(f"application: updated to {published}", reporting)
+    _catalogs_checked(refreshing, gateways, reporting)
     return OK
 
 
@@ -423,16 +441,33 @@ def _gateways_restarted_best_effort(names: List[str], gateways: Gateways) -> Non
             gateways.up(name)
 
 
-def _catalogs_checked(refreshing: Optional[Refreshing]) -> None:
-    """Bring the skill catalogs up to date and say what could not be, changing no exit code.
+def _catalogs_checked(refreshing: Optional[Refreshing], gateways: Optional[Gateways],
+                      reporting: Optional[Reporting]) -> None:
+    """Reconcile ordinary and team catalogs and report each surface independently.
 
-    Deliberately returns nothing. What this command reports is whether *it* worked, and by the time
-    this runs it has: the release landed, the data was carried, and the command answers. A catalog
-    repository that has been deleted is a true thing to say and a false reason to tell a script the
-    update failed.
+    Deliberately returns nothing. The application result owns this command's compatibility exit
+    code, while every catalog failure remains explicit and cannot be collapsed into a blanket
+    current result. One catalog surface never prevents the other from settling.
     """
-    for line in skills.refreshed(refreshing):
+    ordinary_failures = skills.refreshed(refreshing)
+    _surface("ordinary catalogs: checked" if not ordinary_failures else
+             "ordinary catalogs: completed with failures", reporting,
+             failed=bool(ordinary_failures))
+    for line in ordinary_failures:
         print(f"        {line}", file=sys.stderr)
+    team_failures = teams.refreshed(refreshing, gateways, _out_loud)
+    _surface("team catalogs: checked" if not team_failures else
+             "team catalogs: completed with failures", reporting,
+             failed=bool(team_failures))
+    for line in team_failures:
+        print(f"        {line}", file=sys.stderr)
+
+
+def _surface(said: str, reporting: Optional[Reporting], *, failed: bool = False) -> None:
+    """Print and optionally record one update surface outcome."""
+    print(f"        {said}", file=sys.stderr if failed else sys.stdout)
+    if reporting is not None:
+        reporting(said, failed)
 
 
 def settle(gateways: Optional[Gateways] = None) -> int:

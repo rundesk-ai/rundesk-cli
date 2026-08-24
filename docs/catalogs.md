@@ -460,6 +460,12 @@ removal behavior. Installing it through `teams install` installs the same skills
 team lifecycle. A later `teams install` promotes the skills-only catalog in place, so users can
 start with the skills and add the declared team without removing or duplicating the catalog.
 
+After installation, `rundesk update` and the daily updater fetch ordinary and team catalogs through
+separate surfaces. An ordinary catalog swaps independently. A team catalog is validated first, then
+its tree and every declared member's managed state are reconciled behind work admission; its exact
+pre-update online/offline member-gateway set is restored. One unavailable or invalid catalog keeps
+its installed tree and does not stop another catalog from settling.
+
 An agent turn may run these confirmed catalog operations when the owner authorized the effect and
 the turn's configured tool access can invoke Rundesk. Rundesk does not treat an agent-turn
 environment as a separate authority source. Preview the exact source and effects first; the same

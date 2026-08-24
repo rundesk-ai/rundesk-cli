@@ -1964,10 +1964,12 @@ back to an agent standing without one. `rundesk-skills` is the general
 catalog rundesk depends on, fetched like any other and equally undeletable. `local` is yours and
 rundesk never touches it. [`layout.md`](layout.md) says why the first two are separate.
 
-Catalogs are also checked on **every** `rundesk install` and `rundesk update`, including an update
-that found no newer release — a catalog is somebody else's repository and moves on its own schedule.
-That happens after the release has already landed and **cannot change the exit code**: a repository
-somebody deleted last week is a true thing to say and a false reason to report that an update failed.
+Ordinary catalogs are also checked on **every** `rundesk install` and `rundesk update`. An update
+additionally checks every installed team catalog and reconciles its members, including when no newer
+application release exists — each repository moves on its own schedule. Those catalog checks happen
+after the application has settled and **cannot change the compatibility exit code**: an unavailable
+repository is a true surface-specific failure to report, and a false reason to report that an
+application update failed. The ordinary- and team-catalog surfaces are attempted independently.
 
 ### More than one account of the same thing
 
@@ -2080,6 +2082,15 @@ command required before retrying. This clean-start boundary ensures every member
 catalog-owned instructions, memory policy, delegation scope, skill allowlist, and weekly upkeep
 setting.
 
+A confirmed installation that fails part-way through leaves no team. A catalog it installed is taken
+away again and every agent it created is removed, so a name that was free before the attempt is free
+after it; a catalog that was already installed as a skills-only catalog and was promoted to a team
+goes back to being that catalog, at the version and tree it had, with the grants anyone held from it
+intact. A dependency catalog installed to reach that point deliberately stays installed, granted to
+nobody, and the failure names it — installing it again is wasted work, and removing a catalog
+other teams may share is not this command's to do. A restore that cannot itself finish says what it
+could not put back instead of reporting either outcome.
+
 Schema 2 teams may declare shared skill catalogs by exact name and source. The preview says whether
 each one will be installed or reused. A missing catalog is fetched and validated before confirmation
 changes anything; an installed catalog is reused without reinstalling only when its recorded source
@@ -2088,14 +2099,39 @@ matches and every referenced skill exists. Member skill allowlists use fully qua
 Removing a dependency, or updating it past a referenced skill, is refused until the installed team
 declaration no longer requires it.
 
-`rundesk teams update <team>` fetches the recorded source and performs the same reconciliation. It
-repairs local instruction, memory, delegation, and skill-allowlist drift even when the fetched tree is
-unchanged. Install and update leave every member gateway stopped. Start only the agents you want to
-use with `rundesk gateways start <agent>`.
+`rundesk teams update <team>` remains the explicit preview-and-confirm command for one team. It
+fetches the recorded source and performs the same reconciliation, repairing local instruction,
+memory, delegation, and skill-allowlist drift even when the fetched tree is unchanged. A newly
+declared member name already held by an agent no team manages is refused, by the preview as well as
+the confirmation, and that agent keeps its files, records, and grants; remove it first with the
+`rundesk agents remove <agent> --confirm` the refusal names. A member whose records cannot be read
+is refused before anything moves, as is anything that is neither a file nor a symlink standing
+where a managed instruction or memory page belongs.
+
+A reconciliation that fails part-way through puts the catalog version back, with every member's
+pages, records, upkeep, and delegation scope, and the grants of every agent that catalog reaches;
+an agent it reaches only through a grant keeps its own pages and records. It takes away a member it
+had just created, and removes nothing that was already there; a restore that cannot itself finish
+says what it could not put back rather than reporting the update as done. The explicit install and
+update commands leave every member gateway stopped. Start only the agents you want to use with
+`rundesk gateways start <agent>`.
+
+Manual `rundesk update` and the daily updater check every installed team without a separate
+confirmation step. They fetch and validate the declaration and every catalog it declares as a
+dependency before a gateway moves or any catalog, team, or member is written, installing a missing
+dependency and reusing a matching installed one. They keep catalog swap and member reconciliation
+behind work admission, and restore exactly the member gateways they stood down; members already
+offline stay offline. They refuse an unmanaged name, an unreadable member's records, and a page
+nothing could put back — each before a member gateway moves — and put back what a part-way
+failure had already changed, on the same terms as the explicit command. A
+team that cannot be fetched, validated, or reconciled does not stop the other catalog surfaces, and
+its outcome is named. Fetch
+or validation failure leaves its last working catalog untouched; turn admission refuses any member
+whose managed state cannot be repaired completely.
 
 Before any later provider turn is admitted, Rundesk performs the same reconciliation for that one
-member from the installed catalog. This is a local drift repair, not an update: it performs no fetch
-and cannot adopt a new catalog version without the owner-confirmed command above.
+member from the installed catalog. This is a local drift repair and performs no fetch; a new catalog
+version arrives through the explicit confirmed team command or the manual/daily update lifecycle.
 
 The member's `skills` array is a positive allowed list, not a deny list, and may be empty.
 Reconciliation removes any unlisted grant, regardless of catalog, while preserving Rundesk's
@@ -2110,8 +2146,9 @@ catalog: it creates no agents and writes no team marker. That installation updat
 any ordinary skill catalog. Installing the team later promotes that catalog in place and creates
 the declared agents; the already installed skills remain available.
 
-Once a catalog was installed through `teams install`, ordinary `skills update`, automatic catalog
-refresh, and `skills remove` cannot move it independently of its agents.
+Once a catalog was installed through `teams install`, ordinary `skills update`, ordinary catalog
+refresh, and `skills remove` cannot move it independently of its agents. Only the team command or
+the combined manual/daily update lifecycle moves it together with member reconciliation.
 An agent turn may run confirmed skill- and team-catalog operations when the owner authorized that
 effect and the turn's configured tool access can invoke Rundesk. Rundesk does not infer owner
 authorization from the environment. The same preview, `--confirm`, validation, collision, locking,
@@ -2127,7 +2164,15 @@ $ rundesk update
         installing v0.41.0
 rundesk updated to v0.41.0
         what changed: https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.41.0
+        application: updated to v0.41.0
+        ordinary catalogs: checked
+        team catalogs: checked
 ```
+
+A run whose application settles reports three distinct outcomes: application, ordinary catalogs,
+and team catalogs. The daily coordinator records the same three outcomes in its automatic-update
+log. A catalog failure is printed and logged against its own surface without hiding successful
+independent work.
 
 With no flag, the command keeps the existing lifecycle below and never creates continuation work.
 `--continue` is an explicit opt-in available only to one unambiguous active channel provider turn.
@@ -2199,7 +2244,8 @@ idempotent, and running it again is how you finish an update that stopped halfwa
 
 When `update_enabled` is on, launchd makes one attempt per local calendar day at `update_time`.
 The coordinator is outside every gateway process tree and uses the same update transaction as this
-command. Before asking for a release it closes work admission and inspects kernel-held provider and
+command, including ordinary- and team-catalog reconciliation. Before asking for a release it closes
+work admission and inspects kernel-held provider and
 schedule claims. Active work, or activity that cannot be inspected safely, produces a logged
 `DEFERRED` outcome and a private durable request; one detached install-level worker waits until all
 turns and schedules finish, then uses the same update transaction without forcing work down. A
