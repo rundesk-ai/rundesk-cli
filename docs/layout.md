@@ -255,10 +255,22 @@ move in the same catalog-tree swap as its skills. There is no executable install
 mutable copy of the team declaration. Repository content alone cannot claim team ownership, and
 duplicate ownership of an agent is refused.
 
-During the manual or daily update lifecycle, the fetched team tree is validated before member
-gateways move. The catalog swap and member reconciliation share the install lock with turn admission,
-and the lifecycle restores only gateways that were online before it began. An unavailable or invalid
-catalog remains on its last working tree and does not prevent other catalogs from settling.
+During the manual or daily update lifecycle, the fetched team tree, every existing member's
+records, and whether that member's managed pages could be put back are all validated before member
+gateways move. The catalog swap and member reconciliation share
+the install lock with turn admission, and the lifecycle restores only gateways that were online
+before it began. An unavailable or invalid catalog remains on its last working tree and does not
+prevent other catalogs from settling.
+
+While a team is being reconciled, its catalog directory is held beside itself as
+`data/skills/.<catalog>.outgoing`, the same staged name every other swap in this tree uses. A
+reconciliation that does not finish puts that copy back and, with it, each declared member's two
+instruction pages, its memory page, and the three record columns a team owns, together with the
+grants of every agent this catalog reaches. An agent it reaches only through a grant has nothing
+else of it held: reconciliation never writes that agent's pages or records, so a restore has no
+business putting them back. A page that was a symlink goes back as that symlink, and a member
+directory the same reconciliation created is taken away by `directory.forgotten`. The staged copy
+is discarded either way, and a walk over `data/skills/` skips it while it is there.
 
 **`app/manifest.json` is what makes the directory a catalog**, the same way `state.db` makes a
 directory an agent. `catalog.json` deliberately is not: it records where a catalog was *fetched* from,

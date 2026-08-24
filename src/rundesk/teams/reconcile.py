@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from rundesk.agents import delegating, directory, pages, records
 from rundesk.skills import grants, library
-from rundesk.teams import catalogs
+from rundesk.teams import catalogs, restoring
 from rundesk.utils import locking
 
 
@@ -62,6 +62,16 @@ def preflight_update(team: catalogs.Team, provider: Optional[str] = None) -> Non
 
     Read against ownership as it stands *before* the catalog swap, which is the only moment the
     distinction exists — afterwards the newly declared name is this team's own member.
+
+    Every existing member's records are read here as well, and its pages are asked whether they
+    could be put back, because reconciliation cannot finish without the one and cannot undo itself
+    without the other. Left to `apply`, an unreadable set of records answered part-way through the
+    member loop, with the catalog already replaced and some members moved to it — so both
+    deterministic prerequisites are asked while nothing has moved yet, ahead of the gateways.
+
+    `restoring` owns the page rule and is asked for it rather than repeating it, and asks it again
+    itself under the install lock; between the two answers, the lock is what holds the shape of
+    those paths still.
     """
     preflight(team, provider)
     managed = catalogs.owners()
@@ -72,6 +82,17 @@ def preflight_update(team: catalogs.Team, provider: Optional[str] = None) -> Non
             f"{name} (rundesk agents remove {name} --confirm)" for name in taken)
         raise Refused(f"{team.name} declares agents no team manages and this update will not take "
                       "them over: " + removals)
+    for one in team.members:
+        if one.name not in known:
+            continue
+        try:
+            records.read(directory.records(one.name))
+        except TROUBLE as why:
+            raise Refused(f"{one.name}'s records cannot be read, so {team.name} cannot be "
+                          f"reconciled ({why})") from why
+        trouble = restoring.page_trouble(one.name)
+        if trouble:
+            raise Refused(f"{team.name} cannot be reconciled: {trouble}")
 
 
 def retiring(team: catalogs.Team, one: catalogs.Member) -> List[grants.Grant]:

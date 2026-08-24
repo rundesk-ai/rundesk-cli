@@ -23,7 +23,7 @@ from rundesk.gateways import standing
 from rundesk.lifecycle import migration
 from rundesk.providers import turns
 from rundesk.skills import catalogs, grants, library
-from rundesk.utils import locking
+from rundesk.utils import files, locking
 
 
 class CatalogFetcher:
@@ -135,6 +135,23 @@ class UpdateSurfaces(support.Isolated):
         (at / "MEMORY.md").write_text("what it remembers", encoding="utf-8")
         grants.granted(name, library.look_up("ordinary/ordinary-skill"))
         return at
+
+    def a_later_team(self) -> Path:
+        """A second installed team whose name sorts after test-team, so it refreshes afterwards."""
+        members = [{
+            "name": "amber", "description": "Triages the first workflow.",
+            "instructions": "agents/amber/AGENTS.md", "skills": ["triaging"],
+            "delegates_to": [], "self_improve": False,
+        }]
+        source = a_team_catalog(self.sources / "zeta-team", name="zeta-team", members=members,
+                               skills=("triaging",))
+        self.assertEqual(OK, teams.cmd_teams(argparse.Namespace(
+            what="install", repository=str(source), team="zeta-team",
+            provider="codex", confirm=True)))
+        members[0]["description"] = "Triages the second workflow."
+        a_team_catalog(source, name="zeta-team", version="2.0.0", members=members,
+                       skills=("triaging",))
+        return source
 
     def test_manual_current_application_reconciles_both_catalog_surfaces_and_gateway_state(self):
         self.publish_second_versions()
@@ -357,6 +374,170 @@ class UpdateSurfaces(support.Isolated):
         # Nothing stood down, so the dependency was proved before the members were touched.
         self.assertEqual(([], []), (gateways.went_down, gateways.came_up))
         self.assertEqual("2.0.0", library.read("ordinary").manifest.version)
+
+    def test_unreadable_member_records_fail_one_team_and_leave_it_and_the_next_alone(self):
+        self.a_later_team()
+        self.publish_second_versions()
+        forge_home = directory.home("forge")
+        before_page = (forge_home / "AGENTS.md").read_bytes()
+        directory.records("forge").write_bytes(b"this is not a database")
+        gateways = GatewayCycle()
+
+        with standing.holding(directory.where("forge")):
+            code, _out, err = self.run_manual(gateways)
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual(before_page, (forge_home / "AGENTS.md").read_bytes())
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertEqual("2.0.0", library.read("zeta-team").manifest.version)
+        self.assertEqual("Triages the second workflow.",
+                         records.read(directory.records("amber"))["describes"])
+        self.assertIn("team catalogs: completed with failures", err)
+        self.assertIn("test-team could not be checked or reconciled", err)
+        # Refused before the gateway moved, not repaired after it did.
+        self.assertEqual(([], []), (gateways.went_down, gateways.came_up))
+
+    def test_a_failure_part_way_through_reconciliation_puts_every_member_back(self):
+        self.a_later_team()
+        self.publish_second_versions()
+        forge_home, piper_home = directory.home("forge"), directory.home("piper")
+        before = {
+            "forge_agents": (forge_home / "AGENTS.md").read_bytes(),
+            "forge_claude": (forge_home / "CLAUDE.md").read_bytes(),
+            "piper_agents": (piper_home / "AGENTS.md").read_bytes(),
+            "forge_records": records.read(directory.records("forge")),
+            "forge_scope": delegating.scope_of("forge"),
+        }
+        (forge_home / "MEMORY.md").write_text("forge remembers this", encoding="utf-8")
+        granting = grants.granted
+
+        def fail_the_new_grant(agent, skill, alias=""):
+            # The second version moves forge from `implementing` to `reviewing`. Failing on that one
+            # grant lands the failure after its pages, records and old grant have already moved, and
+            # leaves every other grant this operation makes — including the ones putting it
+            # back — working normally.
+            if (agent, skill.name) == ("forge", "reviewing"):
+                raise OSError("synthetic mid-reconciliation failure")
+            return granting(agent, skill, alias)
+
+        gateways = GatewayCycle()
+        with mock.patch.object(grants, "granted", side_effect=fail_the_new_grant), \
+                standing.holding(directory.where("forge")):
+            code, _out, err = self.run_manual(gateways)
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertEqual(before["forge_agents"], (forge_home / "AGENTS.md").read_bytes())
+        self.assertEqual(before["forge_claude"], (forge_home / "CLAUDE.md").read_bytes())
+        self.assertEqual(before["piper_agents"], (piper_home / "AGENTS.md").read_bytes())
+        self.assertEqual("forge remembers this", (forge_home / "MEMORY.md").read_text())
+        self.assertEqual(before["forge_records"], records.read(directory.records("forge")))
+        self.assertEqual(before["forge_scope"], delegating.scope_of("forge"))
+        self.assertEqual("test-team/implementing",
+                         grants.holding("forge", "implementing").address)
+        self.assertIsNone(grants.holding("forge", "reviewing"))
+        self.assertEqual(["forge"], gateways.went_down)
+        self.assertEqual(["forge"], gateways.came_up)
+        self.assertIn("team catalogs: completed with failures", err)
+        self.assertEqual("2.0.0", library.read("zeta-team").manifest.version)
+
+    def test_a_restore_that_cannot_finish_is_named_instead_of_reported_as_settled(self):
+        """Putting state back can fail too, and that is a third outcome rather than a success.
+
+        `restoring.kept` says what it could not put back. A lifecycle that could not name that would
+        leave a half-reconciled team indistinguishable from one that settled.
+        """
+        self.a_later_team()
+        self.publish_second_versions()
+        granting = grants.granted
+
+        def fail_both_ways(agent, skill, alias=""):
+            # `reviewing` is the grant the second version makes, so failing it fails the
+            # reconciliation; `implementing` is the one putting it back, so failing that too is a
+            # restore that cannot finish.
+            if agent == "forge" and skill.name in ("reviewing", "implementing"):
+                raise OSError(f"synthetic failure granting {skill.name}")
+            return granting(agent, skill, alias)
+
+        with mock.patch.object(grants, "granted", side_effect=fail_both_ways):
+            code, _out, err = self.run_manual(GatewayCycle())
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("test-team could not be checked or reconciled", err)
+        self.assertIn("could not be put back", err)
+        # Everything the restore could reach still went back, and what it could not is what it said.
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertIsNone(grants.holding("forge", "implementing"))
+        self.assertEqual("2.0.0", library.read("zeta-team").manifest.version)
+
+    def test_a_directory_where_a_managed_page_belongs_refuses_before_a_gateway_moves(self):
+        """The page rule is asked by the preflight, so it lands ahead of the gateway transition.
+
+        `kept` asks it again under the install lock, but by then the member gateways are already
+        down. Refusing here is what keeps a running member from being stood down and put back for
+        a team that was never going to reconcile.
+        """
+        self.a_later_team()
+        self.publish_second_versions()
+        forge_home = directory.home("forge")
+        notes = forge_home / "AGENTS.md"
+        files.remove_one(notes)
+        notes.mkdir()
+        (notes / "kept.md").write_text("what the owner keeps here", encoding="utf-8")
+        gateways = GatewayCycle()
+
+        with standing.holding(directory.where("forge")):
+            code, _out, err = self.run_manual(gateways)
+
+        self.assertEqual(OK, code, err)
+        self.assertTrue(notes.is_dir())
+        self.assertEqual(["kept.md"], [one.name for one in notes.iterdir()])
+        self.assertEqual("what the owner keeps here", (notes / "kept.md").read_text())
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertEqual("test-team/implementing", grants.holding("forge", "implementing").address)
+        self.assertIsNone(grants.holding("forge", "reviewing"))
+        # Refused before the gateway moved, not stood down and put back for nothing.
+        self.assertEqual(([], []), (gateways.went_down, gateways.came_up))
+        self.assertIn("test-team could not be checked or reconciled", err)
+        self.assertIn("neither a file nor a link", err)
+        self.assertEqual("2.0.0", library.read("zeta-team").manifest.version)
+
+    def test_a_grant_holder_no_team_declares_is_held_for_its_grants_and_nothing_else(self):
+        """Retiring a skill reaches it, so its grants are held. Its own pages and records are not.
+
+        Held like a member, the directory below would refuse the whole team over a page nothing in
+        this lifecycle reads, and a rollback would write back pages and records it never touched.
+        """
+        outsider = self.an_unmanaged_agent("scribe")
+        grants.granted("scribe", library.look_up("test-team/implementing"))
+        memory = outsider / "MEMORY.md"
+        files.remove_one(memory)
+        memory.mkdir()
+        (memory / "kept.md").write_text("the owner's own", encoding="utf-8")
+        before = records.read(directory.records("scribe"))
+        self.publish_second_versions()
+        granting = grants.granted
+
+        def fail_the_new_grant(agent, skill, alias=""):
+            if (agent, skill.name) == ("forge", "reviewing"):
+                raise OSError("synthetic mid-reconciliation failure")
+            return granting(agent, skill, alias)
+
+        with mock.patch.object(grants, "granted", side_effect=fail_the_new_grant):
+            code, _out, err = self.run_manual(GatewayCycle())
+
+        self.assertEqual(OK, code, err)
+        # The team failed on the injected grant, not on a page belonging to somebody it does not
+        # declare — which is what it would have failed on if scribe were held like a member.
+        self.assertIn("synthetic mid-reconciliation failure", err)
+        self.assertNotIn("neither a file nor a link", err)
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertEqual("test-team/implementing", grants.holding("scribe", "implementing").address)
+        self.assertTrue(memory.is_dir())
+        self.assertEqual("the owner's own", (memory / "kept.md").read_text())
+        self.assertEqual(before, records.read(directory.records("scribe")))
+        self.assertEqual("# scribe\n\nThe owner wrote this.\n",
+                         (outsider / "AGENTS.md").read_text())
 
 
 if __name__ == "__main__":

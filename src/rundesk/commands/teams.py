@@ -13,12 +13,17 @@ from rundesk.exits import FAILED, OK
 from rundesk.gateways import job, standing
 from rundesk.skills import catalogs as skill_catalogs
 from rundesk.skills import grants, library
-from rundesk.teams import catalogs, reconcile
+from rundesk.teams import catalogs, reconcile, restoring
 from rundesk.utils import archives, locking
 
-TROUBLE = (catalogs.Refused, reconcile.Refused, skill_catalogs.Refused,
+#: Everything a team operation may meet and report rather than raise through. `reconcile.TROUBLE`
+#: is folded in whole rather than restated: reconciliation is called from here, so anything it
+#: answers with is something a caller of this module has to be able to name. Listed by hand, the
+#: two drifted — `records.Unreadable` from one corrupt member escaped a per-team guard, took the
+#: whole daily update down with it, and left the teams after it unchecked.
+TROUBLE = (catalogs.Refused, reconcile.Refused, restoring.Refused, skill_catalogs.Refused,
            skill_catalogs.HalfInstalled, library.Refused, grants.Refused, grants.NotPresented,
-           grants.HalfCopied, archives.Refused, locking.Stuck, OSError)
+           grants.HalfCopied, archives.Refused, locking.Stuck, OSError, *reconcile.TROUBLE)
 
 
 class Gateways(Protocol):
@@ -130,10 +135,11 @@ def _refreshed(name: str, fetching: Optional[skill_catalogs.Fetching],
                                 for dependency in dependencies:
                                     if dependency.coming is not None:
                                         skill_catalogs.installed(dependency.coming, saying)
-                                moved = skill_catalogs.updated(
-                                    name, coming, saying, validating=catalogs.read)
-                                grants.retired(name, moved.retired)
-                                changed = reconcile.apply(catalogs.installed(name))
+                                with restoring.kept(name, _declared(incoming)):
+                                    moved = skill_catalogs.updated(
+                                        name, coming, saying, validating=catalogs.read)
+                                    grants.retired(name, moved.retired)
+                                    changed = reconcile.apply(catalogs.installed(name))
                         except TROUBLE as why:
                             failure = why
             finally:
@@ -187,6 +193,11 @@ def _gateways_started(stopped: List[str], gateways: Gateways) -> str:
     return "; ".join(failures)
 
 
+def _declared(team: catalogs.Team) -> List[str]:
+    """The member names an incoming declaration governs, for the state a failure must put back."""
+    return [one.name for one in team.members]
+
+
 def _the_gateways(gateways: Optional[Gateways]) -> Gateways:
     """Resolve the real supervisor only for a production caller that supplied no seam."""
     if gateways is not None:
@@ -237,20 +248,38 @@ def _installed(source: str, provider: Optional[str], confirm: bool,
                         if dependency.coming is not None:
                             skill_catalogs.installed(dependency.coming)
                             dependencies_installed.append(dependency.dependency.name)
-                    if library.manifest_at(team.name).is_file():
-                        moved = skill_catalogs.promoted(team.name, coming, validating=catalogs.read)
-                    else:
-                        moved = skill_catalogs.installed(coming, as_team=True)
-                    try:
+                    # Entered before the catalog arrives, so what it holds is the absence a
+                    # failure has to put back: a wholly new catalog is taken away again, and a
+                    # skills-only catalog this promotes goes back to being one.
+                    with restoring.kept(team.name, _declared(team)):
+                        if library.manifest_at(team.name).is_file():
+                            moved = skill_catalogs.promoted(team.name, coming,
+                                                            validating=catalogs.read)
+                        else:
+                            moved = skill_catalogs.installed(coming, as_team=True)
                         grants.retired(team.name, moved.retired)
                         installed = catalogs.installed(team.name)
                         changed = reconcile.apply(installed, provider, installing=True)
-                    except TROUBLE as why:
-                        return _failed(str(why), "the team was not fully installed",
-                                       f"retry with: {_update_command(team.name, provider)}")
+    except restoring.Refused as why:
+        # The one outcome that is neither installed nor undone: recover from what actually remains.
+        # `teams update` exists only when the failed restore left a team catalog standing.
+        if library.is_team(team.name):
+            return _failed(str(why), "the team was not fully installed",
+                           f"retry with: {_update_command(team.name, provider)}")
+        left = [name for name in _declared(team) if directory.where(name).is_dir()]
+        recovery = ["the team was not installed"]
+        if left:
+            commands = ", ".join(
+                f"rundesk agents remove {name} --confirm" for name in left)
+            recovery.append(f"remove agents left by the failed install: {commands}")
+        if dependencies_installed:
+            recovery.append("dependency catalogs installed: " +
+                            ", ".join(dependencies_installed))
+        recovery.append(f"retry with: {_install_command(source, provider)}")
+        return _failed(str(why), *recovery)
     except TROUBLE as why:
         if dependencies_installed:
-            return _failed(str(why), "the team was not fully installed",
+            return _failed(str(why), "no team was installed",
                            "dependency catalogs installed: " +
                            ", ".join(dependencies_installed),
                            "retry the same confirmed team install")
@@ -288,10 +317,11 @@ def _updated(name: str, provider: Optional[str], confirm: bool,
                     for dependency in dependencies:
                         if dependency.coming is not None:
                             skill_catalogs.installed(dependency.coming)
-                    moved = skill_catalogs.updated(name, coming, validating=catalogs.read)
-                    grants.retired(name, moved.retired)
-                    installed = catalogs.installed(name)
-                    changed = reconcile.apply(installed, provider)
+                    with restoring.kept(name, _declared(incoming)):
+                        moved = skill_catalogs.updated(name, coming, validating=catalogs.read)
+                        grants.retired(name, moved.retired)
+                        installed = catalogs.installed(name)
+                        changed = reconcile.apply(installed, provider)
     except TROUBLE as why:
         return _failed(str(why), f"{name} was not fully reconciled",
                        f"retry with: {_update_command(name, provider)}")
@@ -313,10 +343,7 @@ def _would_install(team: catalogs.Team, source: str, provider: Optional[str],
     _preview_dependencies(team, dependencies)
     _preview_members(team, provider, installing=True)
     print("        nothing was installed or changed. To go ahead:", file=sys.stderr)
-    command = f"rundesk teams install {source}"
-    if provider:
-        command += f" --provider {provider}"
-    print(f"        {command} --confirm", file=sys.stderr)
+    print(f"        {_install_command(source, provider)}", file=sys.stderr)
     return FAILED
 
 
@@ -411,6 +438,13 @@ def _prepared_dependencies(team: catalogs.Team,
 
 def _update_command(name: str, provider: Optional[str]) -> str:
     command = f"rundesk teams update {name}"
+    if provider:
+        command += f" --provider {provider}"
+    return command + " --confirm"
+
+
+def _install_command(source: str, provider: Optional[str]) -> str:
+    command = f"rundesk teams install {source}"
     if provider:
         command += f" --provider {provider}"
     return command + " --confirm"

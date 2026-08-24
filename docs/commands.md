@@ -2082,6 +2082,15 @@ command required before retrying. This clean-start boundary ensures every member
 catalog-owned instructions, memory policy, delegation scope, skill allowlist, and weekly upkeep
 setting.
 
+A confirmed installation that fails part-way through leaves no team. A catalog it installed is taken
+away again and every agent it created is removed, so a name that was free before the attempt is free
+after it; a catalog that was already installed as a skills-only catalog and was promoted to a team
+goes back to being that catalog, at the version and tree it had, with the grants anyone held from it
+intact. A dependency catalog installed to reach that point deliberately stays installed, granted to
+nobody, and the failure names it — installing it again is wasted work, and removing a catalog
+other teams may share is not this command's to do. A restore that cannot itself finish says what it
+could not put back instead of reporting either outcome.
+
 Schema 2 teams may declare shared skill catalogs by exact name and source. The preview says whether
 each one will be installed or reused. A missing catalog is fetched and validated before confirmation
 changes anything; an installed catalog is reused without reinstalling only when its recorded source
@@ -2095,8 +2104,16 @@ fetches the recorded source and performs the same reconciliation, repairing loca
 memory, delegation, and skill-allowlist drift even when the fetched tree is unchanged. A newly
 declared member name already held by an agent no team manages is refused, by the preview as well as
 the confirmation, and that agent keeps its files, records, and grants; remove it first with the
-`rundesk agents remove <agent> --confirm` the refusal names. The explicit install and update
-commands leave every member gateway stopped. Start only the agents you want to use with
+`rundesk agents remove <agent> --confirm` the refusal names. A member whose records cannot be read
+is refused before anything moves, as is anything that is neither a file nor a symlink standing
+where a managed instruction or memory page belongs.
+
+A reconciliation that fails part-way through puts the catalog version back, with every member's
+pages, records, upkeep, and delegation scope, and the grants of every agent that catalog reaches;
+an agent it reaches only through a grant keeps its own pages and records. It takes away a member it
+had just created, and removes nothing that was already there; a restore that cannot itself finish
+says what it could not put back rather than reporting the update as done. The explicit install and
+update commands leave every member gateway stopped. Start only the agents you want to use with
 `rundesk gateways start <agent>`.
 
 Manual `rundesk update` and the daily updater check every installed team without a separate
@@ -2104,7 +2121,9 @@ confirmation step. They fetch and validate the declaration and every catalog it 
 dependency before a gateway moves or any catalog, team, or member is written, installing a missing
 dependency and reusing a matching installed one. They keep catalog swap and member reconciliation
 behind work admission, and restore exactly the member gateways they stood down; members already
-offline stay offline. They refuse an unmanaged name on the same terms as the explicit command. A
+offline stay offline. They refuse an unmanaged name, an unreadable member's records, and a page
+nothing could put back — each before a member gateway moves — and put back what a part-way
+failure had already changed, on the same terms as the explicit command. A
 team that cannot be fetched, validated, or reconciled does not stop the other catalog surfaces, and
 its outcome is named. Fetch
 or validation failure leaves its last working catalog untouched; turn admission refuses any member

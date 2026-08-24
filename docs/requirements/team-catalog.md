@@ -72,6 +72,27 @@ application, ordinary-catalog, and team-catalog outcomes separately. Failure to 
 one team or one of its dependencies preserves its last working release, members, and member
 gateways, and does not stop another catalog.
 
+Reconciliation prerequisites that cannot be recovered from are proved before a gateway moves and
+before any dependency, catalog, or member is written: every existing member's records must be
+readable, and nothing that is neither a file nor a symlink may stand where one of that member's
+managed instruction or memory pages belongs. Beyond that, a failure met part-way through
+reconciliation puts back the catalog tree, each declared member's instruction and memory pages and
+the description, delegation scope and upkeep this lifecycle owns, and the grants of every agent
+this catalog reaches. An agent it reaches only through a grant keeps its own pages and records: the
+lifecycle never writes them, so it never puts them back and never refuses a team over their shape.
+
+A confirmed initial installation is held on the same terms, from before its catalog arrives: a
+wholly new team catalog and every agent it created are removed, and a promoted skills-only catalog
+returns to its prior tree, version, and grants. The dependency catalogs it installed first stay
+installed and granted to nobody, which is the one deliberate exception and is named in the failure.
+
+This is a compensating restore rather than a transaction: an agent this reconciliation created is
+taken away again, nothing that existed before it began is ever removed, a dependency catalog
+installed for this team stays installed with nothing granted from it, and a failure while putting
+state back is reported as its own named outcome instead of being reported as success. Every
+expected reconciliation failure is named against its own team, so the teams after it are still
+checked.
+
 No update adopts an agent it does not already manage. A declared member name already held by an
 agent no installed team manages fails the explicit team update and the manual or daily refresh
 alike, names the `rundesk agents remove <agent> --confirm` needed, and leaves that agent's files,
@@ -153,6 +174,20 @@ authority boundaries.
 - An automatic global refresh of a schema 2 team installs a missing declared dependency, reuses a
   matching installed one, and preserves the last working team and member state when a dependency
   cannot be fetched or validated.
+- An unreadable member's records refuse that team before any dependency, gateway, catalog, or
+  member changes, and the teams after it still refresh.
+- A failure injected part-way through reconciliation leaves the prior catalog version, every
+  member's pages, records, upkeep, delegation scope, and grants, and the prior gateway state, for
+  the explicit command and the automatic refresh alike. A member the same reconciliation created
+  before failing is not an agent afterwards.
+- A member's instruction or memory page that was a symlink is put back as that symlink, and a
+  directory standing where one belongs fails that team before its gateway moves, with the directory
+  and its contents intact and the teams after it still refreshing.
+- An agent holding a grant from the team's catalog but declared by no team has that grant put back
+  and its own pages and records left alone.
+- A confirmed install failing after one member reconciles leaves no team catalog and no agent it
+  created, keeps a promoted catalog as the skills-only catalog it was, and keeps its dependencies.
+- A restore that cannot itself finish names what it could not put back and fails only its own team.
 - Schema 1 self-contained teams remain compatible.
 - A schema 2 team installs missing dependency catalogs, reuses matching installed dependencies, and
   refuses mismatched sources or missing referenced skills before changing the team.
