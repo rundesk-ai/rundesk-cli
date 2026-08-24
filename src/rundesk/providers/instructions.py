@@ -10,10 +10,10 @@ whole thing renders in a command, and a change to it is visible before it ships.
 ```
 CORE                 Rundesk, Agent Context
 + one of:
-    USER_TO_AGENT        Current Situation: a person is waiting
-    SCHEDULE_TO_AGENT    Current Situation: the clock started it, nobody is present
-    AGENT_TO_AGENT       Current Situation: another agent handed it over
-OPERATING_RULES      Establish the Outcome through Execute the Work
+    USER_TO_AGENT        person situation, message recovery and attachments
+    SCHEDULE_TO_AGENT    schedule situation and attachments
+    AGENT_TO_AGENT       delegated situation, with no channel mechanics
+OPERATING_RULES      Establish the Outcome, Boundaries and Execute the Work
 + TEAM_MEMBERS       Team Members, only where a person can review the later result
 OUTCOME_AND_CONTINUITY the completion gate and continuation path
 + ADDITIONS          whatever the caller appended, each named and bounded
@@ -33,8 +33,10 @@ way round, and it is the kind of default that is easy to get backwards.
 **Everything this release runs is a named agent standing in its own directory**, so the core is
 written for one. It identifies Rundesk, the agent, its home and what that home is not, the
 separately loaded agent instructions, and the universal process for working and owning an outcome.
-That process includes the two product mechanics every agent routinely gets wrong: finding prior
-messages and declaring attachments.
+The product layer also owns two mechanics turns routinely get wrong: finding prior messages and
+declaring attachments. Those mechanics stand only in the situations that can use
+them: person-facing turns receive both, schedules receive attachment syntax for their delivered
+report, and delegated turns return evidence through their caller contract without either.
 
 It contains no memory policy, role behavior, project method, or access posture. Those belong to the
 agent's own instructions or the provider boundary, not to Rundesk's product-owned operating text.
@@ -160,7 +162,15 @@ A person is speaking with you through {source_kind} and is available if clarific
 - A change the person states as required is your instruction to make it within the current scope; do not merely agree, propose it, or wait to be asked again.
 - Treat an unstated or unclear referent as missing context. Silently recover message history before asking what it refers to; clarify only if missing context, scope, authority, or an unresolved decision still blocks progress.
 - Routine internal context recovery — memory, task state, instructions, and prior messages — is silent work; do not narrate it or report it as progress. Send a concise update when the person asks for status, when material progress or a result affects them, or when a blocker, risk, or decision needs attention. This never withholds an announcement a higher-priority applicable instruction requires.
-- If progress is blocked, state the blocker and what information or decision is needed."""
+- If progress is blocked, state the blocker and what information or decision is needed.
+
+## Messages and Attachments
+
+Use Rundesk to recover missing context and deliver files.
+
+- Missing context: search messages with `messages {agent_name} --search "<relevant words>" --full`. If none, list recent with `messages {agent_name} --full`. Still unresolved: clarify or report it.
+- Use only supported `{source_kind}:{audience_id}` results; never inspect conversation files/records or infer from another agent/audience.
+- Attach a file or image with an absolute local Markdown link, such as `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain file path is not an attachment."""
 
 #: The clock started this and **nobody is present**. What this withholds is every rule that assumes
 #: somebody is waiting: there is nothing to ask, nothing to clarify, and no later turn to report in.
@@ -170,7 +180,11 @@ The schedule "{schedule_name}" started this turn. No person is currently present
 
 - Perform only the work the schedule asks of you.
 - Do not ask questions or wait for clarification.
-- Make your final response a complete, standalone report of what happened, including any failure or blocker."""
+- Make your final response a complete, standalone report of what happened, including any failure or blocker.
+
+## Attachments
+
+Attach a file or image to the delivered report with an absolute local Markdown link, such as `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain file path is not an attachment."""
 
 #: Another agent handed this turn its task. **Still this agent, as itself** — its own home, memory,
 #: skills and brain — so this composes on `CORE` like any other. What it adds is that the requester
@@ -237,14 +251,6 @@ Stay within the current request, schedule, or delegation's scope and authority; 
 - If the outcome needs materially broader scope, authority, or access, stop and ask for explicit approval where possible, explaining why, the proposed expansion, and its impact; otherwise report the blocker.
 - Never invent facts, capabilities, actions, or outcomes.
 - Never expose secrets or sensitive information.
-
-## Messages and Attachments
-
-Use Rundesk to recover missing context and deliver files.
-
-- Missing context: search messages with `messages {agent_name} --search "<relevant words>" --full`. If none, list recent with `messages {agent_name} --full`. Still unresolved: clarify or report it.
-- Use only supported `{source_kind}:{audience_id}` results; never inspect conversation files/records or infer from another agent/audience.
-- Attach a file or image with an absolute local Markdown link, such as `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain file path is not an attachment.
 
 ## Execute the Work
 

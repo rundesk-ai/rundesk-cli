@@ -49,8 +49,8 @@ class TheSituationsUnderTest(support.Isolated):
 
 class TheAgreedSections(support.Isolated):
     ALWAYS = ("# Rundesk", "## Agent Context", "## Current Situation",
-              "## Establish the Outcome", "## Boundaries", "## Messages and Attachments",
-              "## Execute the Work", "## Outcome and Continuity")
+              "## Establish the Outcome", "## Boundaries", "## Execute the Work",
+              "## Outcome and Continuity")
 
     def built(self, situation=instructions.USER_TO_AGENT, team_text=""):
         return instructions.build(situation=situation, variables=EVERYTHING, team=team_text)
@@ -80,6 +80,25 @@ class TheAgreedSections(support.Isolated):
                 self.assertEqual(1, built.text.count("## Current Situation"))
                 self.assertEqual(["core", "situation", "rules", "completion"],
                                  [one.name for one in built.layers])
+
+    def test_communication_mechanics_follow_the_turn_situation(self):
+        person = self.built(instructions.USER_TO_AGENT).text
+        schedule = self.built(instructions.SCHEDULE_TO_AGENT).text
+        delegated = self.built(instructions.AGENT_TO_AGENT).text
+
+        self.assertIn("## Messages and Attachments", person)
+        self.assertIn('messages ava --search "<relevant words>" --full', person)
+        self.assertIn("[report](/absolute/path/report.pdf)", person)
+
+        self.assertNotIn("## Messages and Attachments", schedule)
+        self.assertNotIn("messages ava", schedule)
+        self.assertIn("## Attachments", schedule)
+        self.assertIn("[report](/absolute/path/report.pdf)", schedule)
+
+        self.assertNotIn("## Messages and Attachments", delegated)
+        self.assertNotIn("## Attachments", delegated)
+        self.assertNotIn("messages ava", delegated)
+        self.assertNotIn("[report](/absolute/path/report.pdf)", delegated)
 
     def test_the_default_situation_is_person_to_agent(self):
         default = instructions.build(variables=EVERYTHING)
@@ -572,8 +591,8 @@ class TheBuilderBoundary(support.Isolated):
     def test_static_layers_and_the_largest_required_stack_stay_bounded(self):
         ceilings = {
             "core": (instructions.CORE, 650),
-            "rules": (instructions.OPERATING_RULES, 4000),
-            "person": (instructions.USER_TO_AGENT, 1050),
+            "rules": (instructions.OPERATING_RULES, 2300),
+            "person": (instructions.USER_TO_AGENT, 1700),
             "schedule": (instructions.SCHEDULE_TO_AGENT, 700),
             "agent": (instructions.AGENT_TO_AGENT, 800),
             "team": (instructions.TEAM_MEMBERS, 1000),

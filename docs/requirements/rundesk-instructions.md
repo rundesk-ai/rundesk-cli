@@ -1,7 +1,7 @@
 ---
 id: INS
 name: Rundesk operating and agent instructions
-last_verified: 2026-08-22
+last_verified: 2026-08-24
 ---
 
 ## What this is
@@ -14,8 +14,8 @@ agent receives the context it needs without reading the same rules twice.
 
 - Rundesk operating instructions are product-owned, apply to every agent, and are not user
   controlled. They define Rundesk, agent context, the universal process for working and owning an
-  outcome, message and attachment mechanics, the current situation, and available named-agent
-  delegation.
+  outcome, the current situation, the communication mechanics that situation can use, and available
+  named-agent delegation.
 - Agent instructions are controlled per agent. They define that agent's durable role,
   responsibilities, role-specific capabilities and limits, and memory policy, but cannot override
   Rundesk operating instructions.
@@ -31,16 +31,21 @@ Providers may load those layers through their native instruction mechanisms.
 
 ## Operating instruction structure
 
-Every rendered operating prompt contains these sections once and in this order:
+Every rendered operating prompt contains these universal sections once and in this order:
 
 1. `Rundesk`
 2. `Agent Context`
 3. `Current Situation`
 4. `Establish the Outcome`
 5. `Boundaries`
-6. `Messages and Attachments`
-7. `Execute the Work`
-8. `Outcome and Continuity`
+6. `Execute the Work`
+7. `Outcome and Continuity`
+
+The situation layer carries only communication mechanics that turn can use. A person-facing turn
+adds `Messages and Attachments` after `Current Situation`; a scheduled turn adds `Attachments`
+there; an agent-delegation turn adds neither. This boundary follows the known turn situation rather
+than an agent-type flag: the same durable agent may correctly receive different mechanics when a
+person asks it directly, a schedule runs it, or another agent delegates to it.
 
 `Team Members`, with its `Delegation` subsection, appears between `Execute the Work` and `Outcome
 and Continuity` only when named Rundesk delegation is available and the turn can review the
@@ -83,14 +88,18 @@ Exactly one situation is rendered:
   requested status, material progress or a result that affects the person, and a blocker, risk, or
   decision needing attention. Skills are not on that silent list, and the default never withholds
   an announcement that a higher-priority applicable instruction requires. A blocked agent names the
-  blocker and the information or decision needed.
+  blocker and the information or decision needed. The same situation layer carries the message
+  recovery and attachment mechanics below.
 - Schedule: names the schedule, states that nobody is present, limits work to what the schedule
   requested, forbids waiting for clarification, and says the final standalone response is delivered
-  automatically to the intended recipient or destination.
+  automatically to the intended recipient or destination. It carries attachment declaration syntax
+  for that delivered report, but no message-history recovery it cannot use.
 - Agent delegation: names the calling agent, requires the delegated work to be completed and
   verified within its outcome, scope, and authority, and treats the work as read-only unless the
   delegation explicitly authorizes changes. It returns results and evidence to that agent and
-  forbids contacting the original requester or delegating to another named Rundesk agent.
+  forbids contacting the original requester or delegating to another named Rundesk agent. It carries
+  no person-history or channel-attachment mechanics; its result and artifact evidence return through
+  the caller contract already present in the situation.
 
 Unknown or omitted situations use the person-facing situation rather than silently adopting the
 restrictions of a schedule or delegation.
@@ -113,7 +122,7 @@ The section also prohibits invented outcomes and exposure of sensitive data.
 
 ### Messages and Attachments
 
-This section makes two high-failure mechanics explicit:
+This person-facing section makes two high-failure mechanics explicit:
 
 - For missing context, search all of the agent's message history across conversations with
   `"$RUNDESK_COMMAND" messages {agent_name} --search "<relevant words>" --full`. With no match, list
@@ -124,6 +133,12 @@ This section makes two high-failure mechanics explicit:
 - Attach a file or image with an absolute local Markdown link, such as
   `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain path is
   not represented as an attachment.
+
+### Attachments
+
+This scheduled-turn section keeps the same absolute local Markdown-link declaration for a file or
+image in the automatically delivered report. It omits message-history recovery because nobody is
+present to clarify with and the schedule already supplies the complete assignment.
 
 ### Execute the Work
 
@@ -248,10 +263,11 @@ carries real risk, or when the person asks for more. A result returned to a call
 excluded from that default and carries whatever detail and evidence that agent needs to verify and
 use the work.
 
-Agent creation, configuration, listings, and team context do not expose or depend on an agent-type
-flag. Existing customized instruction files remain untouched. A legacy stored role column remains
-in agent records for compatibility with immutable migration history, but current behavior does not
-read or change it.
+Agent creation, configuration, listings, team context, and communication mechanics do not expose or
+depend on an agent-type flag. Existing customized instruction files remain untouched. A legacy
+stored role column remains in agent records for compatibility with immutable migration history, but
+current behavior does not read or change it. Situation-specific composition avoids making one
+durable label predict every way an agent may be invoked.
 
 Every person-facing agent receives Team Members and Delegation whenever at least one eligible
 teammate is available under its outbound delegation scope. A legacy role value never suppresses or
@@ -262,7 +278,7 @@ changes that section. The situation and delegation-depth exclusions defined abov
 |  | ID | Requirement | Evidence |
 |:--:|---|---|---|
 | ✅ | R-INS-1 | Operating and agent instructions have the separate ownership and precedence defined above | `src/rundesk/providers/instructions.py`, `src/skills/managing-rundesk/references/agent-instructions.md` |
-| ✅ | R-INS-2 | Every prompt has the required operating sections once and in order | `test_the_always_on_sections_are_present_once_and_in_order` |
+| ✅ | R-INS-2 | Every prompt has the required universal operating sections once and in order | `test_the_always_on_sections_are_present_once_and_in_order` |
 | ✅ | R-INS-3 | Every prompt has exactly one current situation, with person-facing behavior as the default | `test_every_turn_gets_exactly_one_current_situation`, `test_the_default_situation_is_person_to_agent` |
 | ✅ | R-INS-4 | Team Members is present only for a person-facing turn with an available team | `test_team_members_are_only_composed_for_a_person_facing_turn`, `test_an_empty_team_has_no_heading_or_layer`, `test_a_schedule_is_not_shown_or_used_to_find_a_named_team` |
 | ✅ | R-INS-5 | Operating prompts remain deterministic, inspectable, and bounded | `test_the_same_inputs_build_the_same_bytes`, `test_the_byte_breakdown_and_fingerprint_match_the_rendered_text`, `test_static_layers_and_the_largest_required_stack_stay_bounded` |
@@ -287,6 +303,7 @@ changes that section. The situation and delegation-depth exclusions defined abov
 | ✅ | R-INS-24 | Every person-facing agent with named delegation gets concise, balanced routing signals for when to consider delegation and when to work directly; ordinary conversation and simple documentation, formatting, or copy-only changes stay direct, availability and skill names do not trigger the skill, and a genuine delegation option requires loading `delegating-work` before choosing or acting because it owns the procedure | `test_it_names_positive_signals_for_considering_delegation`, `test_it_names_when_direct_work_is_better`, `test_it_routes_delegation_procedure_to_the_skill` |
 | ✅ | R-INS-25 | Every turn defines the smallest safe and effective change sufficient for the requested result and required proof, makes and verifies only that change without unrequested refactoring, cleanup, redesign, or expansion, stops when the result and proof are complete, and requests explicit approval with the reason, proposed expansion, and impact before taking materially broader scope | `test_every_turn_defines_the_smallest_sufficient_change_before_editing`, `test_every_turn_forbids_unrequested_refactoring_and_scope_expansion`, `test_every_turn_stops_when_the_requested_result_and_proof_are_complete`, `test_broader_scope_requires_approval_with_impact` |
 | ✅ | R-INS-26 | Every turn distinguishes person-facing `rundesk ...` commands from its own root-bound command prefix, and renders the resolved install root as one shell-safe assignment | `test_the_prompt_names_the_install_root_for_provider_tool_shells`, `test_the_prompt_shell_quotes_every_install_root_as_one_assignment` |
+| ✅ | R-INS-27 | Communication mechanics follow turn capabilities without an agent-type flag: person-facing turns receive supported same-audience message recovery and attachment syntax, schedules receive attachment syntax only, and agent-delegation turns receive neither | `test_communication_mechanics_follow_the_turn_situation` |
 
 ## Acceptance
 
