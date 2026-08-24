@@ -24,6 +24,7 @@ from fixtures_skills import a_published_catalog, a_skill
 import support
 from rundesk.agents import directory
 from rundesk.core import secrets
+from rundesk.providers import environment
 from rundesk.skills import catalogs, grants, library, needs
 from rundesk.utils import locking
 
@@ -106,6 +107,14 @@ class InstallingACatalog(Skills):
         self.assertEqual(0, code)
         self.assertIn("acme 1.0.0 installed", out)
         self.assertIn("granted  none", out)
+        self.assertEqual(["acme"], library.known())
+
+    def test_an_agent_turn_with_command_access_can_install_a_confirmed_catalog(self):
+        with mock.patch.dict("os.environ", {environment.AGENT: "alan", environment.RUN: "1"}):
+            code, out, err = self.rundesk(
+                "skills", "install", str(self.a_source()), "--confirm")
+        self.assertEqual(0, code, err)
+        self.assertIn("acme 1.0.0 installed", out)
         self.assertEqual(["acme"], library.known())
 
     def test_a_source_that_is_neither_a_directory_nor_a_repository_is_refused(self):

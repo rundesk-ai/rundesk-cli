@@ -2103,8 +2103,10 @@ the declared agents; the already installed skills remain available.
 
 Once a catalog was installed through `teams install`, ordinary `skills update`, automatic catalog
 refresh, and `skills remove` cannot move it independently of its agents.
-A confirmed team install or update is also refused from inside an agent turn. An agent may propose a
-catalog change, but an owner reviews and applies it from a terminal.
+An agent turn may run confirmed skill- and team-catalog operations when the owner authorized that
+effect and the turn's configured tool access can invoke Rundesk. Rundesk does not infer owner
+authorization from the environment. The same preview, `--confirm`, validation, collision, locking,
+reconciliation, and stopped-gateway guards apply whether the command came from a terminal or a turn.
 
 ## update
 

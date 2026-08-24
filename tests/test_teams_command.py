@@ -263,11 +263,11 @@ class Teams(support.Isolated):
         self.assertEqual(OK, code, err)
         self.assertFalse(library.is_team("ordinary"))
 
-    def test_an_agent_turn_cannot_apply_its_own_team_catalog(self):
-        with mock.patch.dict("os.environ", {environment.AGENT: "forge"}):
-            self.assertEqual(FAILED, self.command("install"))
-        self.assertEqual([], directory.known())
-        self.assertEqual([], library.known())
+    def test_an_agent_turn_with_command_access_can_apply_a_confirmed_team_catalog(self):
+        with mock.patch.dict("os.environ", {environment.AGENT: "forge", environment.RUN: "1"}):
+            self.assertEqual(OK, self.command("install"))
+        self.assertEqual(["forge", "piper"], directory.known())
+        self.assertTrue(library.is_team("test-team"))
 
 
 if __name__ == "__main__":

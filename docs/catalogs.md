@@ -457,6 +457,12 @@ removal behavior. Installing it through `teams install` installs the same skills
 team lifecycle. A later `teams install` promotes the skills-only catalog in place, so users can
 start with the skills and add the declared team without removing or duplicating the catalog.
 
+An agent turn may run these confirmed catalog operations when the owner authorized the effect and
+the turn's configured tool access can invoke Rundesk. Rundesk does not treat an agent-turn
+environment as a separate authority source. Preview the exact source and effects first; the same
+`--confirm`, validation, locking, collision, reconciliation, and stopped-gateway guards apply to a
+command run from a turn.
+
 If your catalog is not on GitHub, clone it yourself and point rundesk at the clone. Every source shape
 accepted here is one rundesk has to keep fetching correctly for ever, so there are two.
 

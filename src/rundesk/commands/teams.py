@@ -1,14 +1,12 @@
 """Install, update, list, and reconcile version-controlled teams."""
 
 import argparse
-import os
 import sys
 from typing import Optional
 
 from rundesk.commands import Subcommands, failed
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK
-from rundesk.providers import environment
 from rundesk.skills import catalogs as skill_catalogs
 from rundesk.skills import grants, library
 from rundesk.teams import catalogs, reconcile
@@ -43,10 +41,6 @@ def register(sub: Subcommands) -> None:
 def cmd_teams(args: argparse.Namespace,
               fetching: Optional[skill_catalogs.Fetching] = None) -> int:
     what = getattr(args, "what", None)
-    if what in ("install", "update") and args.confirm and os.environ.get(environment.AGENT):
-        return _failed("a team catalog cannot install or update itself from inside an agent turn — "
-                       "an owner must review and apply it from a terminal",
-                       "nothing was installed or changed")
     if what in (None, "list"):
         return _listed()
     if what == "install":
