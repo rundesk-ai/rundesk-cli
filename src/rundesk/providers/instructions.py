@@ -11,8 +11,8 @@ whole thing renders in a command, and a change to it is visible before it ships.
 CORE                 Rundesk, Agent Context
 + one of:
     USER_TO_AGENT        person situation, message recovery and attachments
-    SCHEDULE_TO_AGENT    schedule situation and attachments
-    AGENT_TO_AGENT       delegated situation, with no channel mechanics
+    SCHEDULE_TO_AGENT    schedule situation, message review and attachments
+    AGENT_TO_AGENT       delegated internal-handoff situation
 OPERATING_RULES      Establish the Outcome, Boundaries and Execute the Work
 + TEAM_MEMBERS       Team Members, only where a person can review the later result
 OUTCOME_AND_CONTINUITY the completion gate and continuation path
@@ -34,9 +34,9 @@ way round, and it is the kind of default that is easy to get backwards.
 written for one. It identifies Rundesk, the agent, its home and what that home is not, the
 separately loaded agent instructions, and the universal process for working and owning an outcome.
 The product layer also owns two mechanics turns routinely get wrong: finding prior messages and
-declaring attachments. Those mechanics stand only in the situations that can use
-them: person-facing turns receive both, schedules receive attachment syntax for their delivered
-report, and delegated turns return evidence through their caller contract without either.
+declaring attachments. Person-facing and scheduled turns receive both because either may need prior
+messages and both deliver to a person-facing surface. Delegated turns receive neither because their
+input is the bounded delegation and their output is an internal handoff to the calling agent.
 
 It contains no memory policy, role behavior, project method, or access posture. Those belong to the
 agent's own instructions or the provider boundary, not to Rundesk's product-owned operating text.
@@ -172,8 +172,9 @@ Use Rundesk to recover missing context and deliver files.
 - Use only supported `{source_kind}:{audience_id}` results; never inspect conversation files/records or infer from another agent/audience.
 - Attach a file or image with an absolute local Markdown link, such as `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain file path is not an attachment."""
 
-#: The clock started this and **nobody is present**. What this withholds is every rule that assumes
-#: somebody is waiting: there is nothing to ask, nothing to clarify, and no later turn to report in.
+#: The clock started this and **nobody is present**. It cannot clarify, but it may need earlier
+#: messages to perform recurring review work, and its delivered report uses ordinary attachment
+#: declarations. Those mechanics therefore remain here while person-conversation behavior does not.
 SCHEDULE_TO_AGENT = """## Current Situation
 
 The schedule "{schedule_name}" started this turn. No person is currently present. Your final response will be delivered automatically to the intended recipient or destination.
@@ -182,24 +183,31 @@ The schedule "{schedule_name}" started this turn. No person is currently present
 - Do not ask questions or wait for clarification.
 - Make your final response a complete, standalone report of what happened, including any failure or blocker.
 
-## Attachments
+## Messages and Attachments
 
-Attach a file or image to the delivered report with an absolute local Markdown link, such as `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain file path is not an attachment."""
+Use Rundesk to review prior messages when the scheduled task needs them and to deliver files.
+
+- Search messages with `messages {agent_name} --search "<relevant words>" --full`. If none, list recent with `messages {agent_name} --full`. Still unresolved: report the blocker.
+- Use only supported `{source_kind}:{audience_id}` results; never inspect conversation files/records or infer from another agent/audience.
+- Attach a file or image to the delivered report with an absolute local Markdown link, such as `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain file path is not an attachment."""
 
 #: Another agent handed this turn its task. **Still this agent, as itself** — its own home, memory,
 #: skills and brain — so this composes on `CORE` like any other. What it adds is that the requester
-#: is not a person, that nobody is present, and that the work stops here.
+#: is not a person, that nobody is present, that the delegation itself is the work contract, and
+#: that the work stops with a reviewable internal handoff rather than a person-facing response.
 #:
 #: **It offers no team, and that is the depth rule** rather than a sentence asking nicely: an agent
 #: answering a delegation is never shown anybody to hand work to, so handing it on is not something
 #: it can decide to do. `build` withholds the listing for this trigger.
 AGENT_TO_AGENT = """## Current Situation
 
-The agent {caller_agent} delegated this work to you.
+The agent {caller_agent} delegated this work to you. No person is present; your final response returns only to that agent for review.
 
+- The delegation is the complete work contract. Do not recover the calling agent's conversation or infer scope, authority, or intent from prior exchanges.
 - Complete and verify the work within the delegated outcome, scope, and authority.
 - Treat the delegation as read-only unless it explicitly authorizes changes to files, systems, or external state.
-- Return your result, evidence, assumptions, and blockers to the calling agent.
+- Do not ask questions or wait for clarification. If blocked, return the blocker and the exact input or decision needed.
+- Return one complete handoff that leads with the result and gives the calling agent what it needs to review or continue the work: exact changed artifacts, verification performed and its observed results, material assumptions, blockers, and remaining limitations.
 - Do not contact the original requester or delegate to another named Rundesk agent."""
 
 

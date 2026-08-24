@@ -90,15 +90,46 @@ class TheAgreedSections(support.Isolated):
         self.assertIn('messages ava --search "<relevant words>" --full', person)
         self.assertIn("[report](/absolute/path/report.pdf)", person)
 
-        self.assertNotIn("## Messages and Attachments", schedule)
-        self.assertNotIn("messages ava", schedule)
-        self.assertIn("## Attachments", schedule)
+        self.assertIn("## Messages and Attachments", schedule)
+        self.assertIn('messages ava --search "<relevant words>" --full', schedule)
         self.assertIn("[report](/absolute/path/report.pdf)", schedule)
 
         self.assertNotIn("## Messages and Attachments", delegated)
         self.assertNotIn("## Attachments", delegated)
         self.assertNotIn("messages ava", delegated)
         self.assertNotIn("[report](/absolute/path/report.pdf)", delegated)
+
+    def test_a_schedule_may_review_supported_messages_without_waiting_for_clarification(self):
+        built = instructions.build(
+            situation=instructions.SCHEDULE_TO_AGENT,
+            variables={**EVERYTHING, "source_kind": "schedule", "audience_id": "nightly"},
+        ).text
+        messages = self.part(built, "## Messages and Attachments")
+        situation = self.part(built, "## Current Situation")
+
+        self.assertIn('messages ava --search "<relevant words>" --full', messages)
+        self.assertIn("supported `schedule:nightly` results", messages)
+        self.assertIn("still unresolved: report the blocker", messages)
+        self.assertIn("do not ask questions or wait for clarification", situation)
+
+    def test_a_delegated_turn_is_an_internal_handoff_with_no_person_to_ask(self):
+        situation = self.part(
+            self.built(instructions.AGENT_TO_AGENT).text,
+            "## Current Situation",
+        )
+
+        for clause in (
+            "no person is present",
+            "the delegation is the complete work contract",
+            "do not recover the calling agent's conversation",
+            "do not ask questions or wait for clarification",
+            "return one complete handoff",
+            "exact changed artifacts",
+            "verification performed and its observed results",
+            "blocker and the exact input or decision needed",
+        ):
+            with self.subTest(clause=clause):
+                self.assertIn(clause, situation)
 
     def test_the_default_situation_is_person_to_agent(self):
         default = instructions.build(variables=EVERYTHING)
@@ -593,8 +624,8 @@ class TheBuilderBoundary(support.Isolated):
             "core": (instructions.CORE, 650),
             "rules": (instructions.OPERATING_RULES, 2300),
             "person": (instructions.USER_TO_AGENT, 1700),
-            "schedule": (instructions.SCHEDULE_TO_AGENT, 700),
-            "agent": (instructions.AGENT_TO_AGENT, 800),
+            "schedule": (instructions.SCHEDULE_TO_AGENT, 1100),
+            "agent": (instructions.AGENT_TO_AGENT, 1000),
             "team": (instructions.TEAM_MEMBERS, 1000),
             "completion": (instructions.OUTCOME_AND_CONTINUITY, 1400),
         }

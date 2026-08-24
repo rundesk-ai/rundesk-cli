@@ -41,11 +41,11 @@ Every rendered operating prompt contains these universal sections once and in th
 6. `Execute the Work`
 7. `Outcome and Continuity`
 
-The situation layer carries only communication mechanics that turn can use. A person-facing turn
-adds `Messages and Attachments` after `Current Situation`; a scheduled turn adds `Attachments`
-there; an agent-delegation turn adds neither. This boundary follows the known turn situation rather
-than an agent-type flag: the same durable agent may correctly receive different mechanics when a
-person asks it directly, a schedule runs it, or another agent delegates to it.
+The situation layer carries only communication mechanics that turn can use. Person-facing and
+scheduled turns add `Messages and Attachments` after `Current Situation`; an agent-delegation turn
+adds neither. This boundary follows the known turn situation rather than an agent-type flag: the
+same durable agent may correctly receive different mechanics when a person asks it directly, a
+schedule runs it, or another agent delegates to it.
 
 `Team Members`, with its `Delegation` subsection, appears between `Execute the Work` and `Outcome
 and Continuity` only when named Rundesk delegation is available and the turn can review the
@@ -92,14 +92,17 @@ Exactly one situation is rendered:
   recovery and attachment mechanics below.
 - Schedule: names the schedule, states that nobody is present, limits work to what the schedule
   requested, forbids waiting for clarification, and says the final standalone response is delivered
-  automatically to the intended recipient or destination. It carries attachment declaration syntax
-  for that delivered report, but no message-history recovery it cannot use.
-- Agent delegation: names the calling agent, requires the delegated work to be completed and
-  verified within its outcome, scope, and authority, and treats the work as read-only unless the
-  delegation explicitly authorizes changes. It returns results and evidence to that agent and
-  forbids contacting the original requester or delegating to another named Rundesk agent. It carries
-  no person-history or channel-attachment mechanics; its result and artifact evidence return through
-  the caller contract already present in the situation.
+  automatically to the intended recipient or destination. It may review supported prior messages
+  when its recurring task requires them and may declare attachments in the delivered report, but it
+  reports unresolved context as a blocker because nobody is present to clarify it.
+- Agent delegation: names the calling agent and states that nobody is present. The bounded
+  delegation is its complete work contract; it does not recover the calling agent's conversation or
+  infer authority from earlier exchanges. It completes and verifies the delegated outcome, treats
+  the work as read-only unless changes were explicitly authorized, and does not ask questions or
+  wait for clarification. Its final response is one internal handoff to the calling agent, leading
+  with the result and including exact changed artifacts, observed verification, material
+  assumptions, blockers, and remaining limitations. It does not contact the original requester or
+  delegate to another named Rundesk agent, and receives no message-history or attachment mechanics.
 
 Unknown or omitted situations use the person-facing situation rather than silently adopting the
 restrictions of a schedule or delegation.
@@ -122,23 +125,17 @@ The section also prohibits invented outcomes and exposure of sensitive data.
 
 ### Messages and Attachments
 
-This person-facing section makes two high-failure mechanics explicit:
+This section makes two high-failure mechanics explicit for person-facing and scheduled turns:
 
 - For missing context, search all of the agent's message history across conversations with
   `"$RUNDESK_COMMAND" messages {agent_name} --search "<relevant words>" --full`. With no match, list
-  recent messages using the supported unfiltered command. If still unresolved, clarify or report
-  the blocker as the situation permits. Use only supported results for
+  recent messages using the supported unfiltered command. If still unresolved, clarify on a
+  person-facing turn or report the blocker on a scheduled turn. Use only supported results for
   the current audience; never inspect conversation files or records directly or infer context from
   another agent or audience.
 - Attach a file or image with an absolute local Markdown link, such as
   `[report](/absolute/path/report.pdf)` or `![preview](/absolute/path/preview.png)`. A plain path is
   not represented as an attachment.
-
-### Attachments
-
-This scheduled-turn section keeps the same absolute local Markdown-link declaration for a file or
-image in the automatically delivered report. It omits message-history recovery because nobody is
-present to clarify with and the schedule already supplies the complete assignment.
 
 ### Execute the Work
 
@@ -303,7 +300,8 @@ changes that section. The situation and delegation-depth exclusions defined abov
 | ✅ | R-INS-24 | Every person-facing agent with named delegation gets concise, balanced routing signals for when to consider delegation and when to work directly; ordinary conversation and simple documentation, formatting, or copy-only changes stay direct, availability and skill names do not trigger the skill, and a genuine delegation option requires loading `delegating-work` before choosing or acting because it owns the procedure | `test_it_names_positive_signals_for_considering_delegation`, `test_it_names_when_direct_work_is_better`, `test_it_routes_delegation_procedure_to_the_skill` |
 | ✅ | R-INS-25 | Every turn defines the smallest safe and effective change sufficient for the requested result and required proof, makes and verifies only that change without unrequested refactoring, cleanup, redesign, or expansion, stops when the result and proof are complete, and requests explicit approval with the reason, proposed expansion, and impact before taking materially broader scope | `test_every_turn_defines_the_smallest_sufficient_change_before_editing`, `test_every_turn_forbids_unrequested_refactoring_and_scope_expansion`, `test_every_turn_stops_when_the_requested_result_and_proof_are_complete`, `test_broader_scope_requires_approval_with_impact` |
 | ✅ | R-INS-26 | Every turn distinguishes person-facing `rundesk ...` commands from its own root-bound command prefix, and renders the resolved install root as one shell-safe assignment | `test_the_prompt_names_the_install_root_for_provider_tool_shells`, `test_the_prompt_shell_quotes_every_install_root_as_one_assignment` |
-| ✅ | R-INS-27 | Communication mechanics follow turn capabilities without an agent-type flag: person-facing turns receive supported same-audience message recovery and attachment syntax, schedules receive attachment syntax only, and agent-delegation turns receive neither | `test_communication_mechanics_follow_the_turn_situation` |
+| ✅ | R-INS-27 | Communication mechanics follow turn capabilities without an agent-type flag: person-facing and scheduled turns receive supported same-audience message review and attachment syntax, with unresolved scheduled context reported as a blocker instead of a clarification request, while agent-delegation turns receive neither | `test_communication_mechanics_follow_the_turn_situation`, `test_a_schedule_may_review_supported_messages_without_waiting_for_clarification` |
+| ✅ | R-INS-28 | An agent-delegation turn is told nobody is present, the delegation is its complete work contract, the calling agent's conversation supplies no additional scope or authority, questions and clarification waits are unavailable, and its final response is one reviewable internal handoff carrying exact artifacts, observed verification, material assumptions, blockers, and remaining limitations | `test_a_delegated_turn_is_an_internal_handoff_with_no_person_to_ask` |
 
 ## Acceptance
 
