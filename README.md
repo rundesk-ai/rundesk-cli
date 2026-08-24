@@ -66,13 +66,29 @@ rundesk schedules add ava daily --when "0 4 * * *" --ask "review today's changes
 A team catalog packages named specialists, canonical instructions, and the skills they use. Install
 the whole team or use its skills on their own.
 
-### Available teams
+### Development Team
 
 <a href="https://github.com/rundesk-ai/rundesk-team-development">
   <img src="assets/readme/rundesk-team-development-banner.png" alt="Rundesk Development Team — Forge, Piper, Vera, and Trace." width="100%">
 </a>
 
-Install the [Rundesk development team](https://github.com/rundesk-ai/rundesk-team-development):
+[View the Development Team repository](https://github.com/rundesk-ai/rundesk-team-development).
+
+### Marketing Team
+
+<a href="https://github.com/rundesk-ai/rundesk-team-marketing">
+  <img src="assets/readme/rundesk-team-marketing-banner.png" alt="Rundesk Marketing Team — Beacon, Scout, Signal, and Quill." width="100%">
+</a>
+
+[View the Marketing Team repository](https://github.com/rundesk-ai/rundesk-team-marketing).
+
+Beacon maps external growth opportunities, Scout researches markets and competitors, Signal
+analyzes first-party growth data, and Quill produces messaging and content from an approved brief.
+
+### Install a team
+
+Choose a repository above, then preview and confirm the installation. For example, to install the
+Development Team:
 
 ```sh
 rundesk teams install https://github.com/rundesk-ai/rundesk-team-development --provider codex
