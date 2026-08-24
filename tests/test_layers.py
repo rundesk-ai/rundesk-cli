@@ -156,12 +156,12 @@ PR_TEMPLATE_ANCHORS = [
 ISSUE_TEMPLATE_HEADINGS = {
     "bug-report.md": [
         "## Problem", "## Reproduction", "## Expected behavior", "## Evidence",
-        "## Acceptance criteria", "## Environment", "## Scope and privacy",
+        "## Acceptance criteria", "## Environment", "## Scope and privacy", "## Agent",
     ],
     "change-proposal.md": [
         "## Problem", "## Proposed solution", "## Evidence",
         "## Scope and compatibility", "## Acceptance criteria", "## Verification",
-        "## Alternatives considered",
+        "## Alternatives considered", "## Agent",
     ],
 }
 
@@ -178,8 +178,8 @@ ISSUE_TEMPLATE_FRONTMATTER = {
 }
 
 ISSUE_TEMPLATE_DIGESTS = {
-    "bug-report.md": "9b8bb222a68b4c2a592512ee368c17bc8edc8e0750c5f76ba3e4dd65837e5187",
-    "change-proposal.md": "71f68d702f29e1cedd6b5a839b8a10df899240f68bd215d734ee77f5286cd379",
+    "bug-report.md": "6e8eadbdaf3198c29ed33edf6b3abaf7374cfca5adb05d46c85daedeb1281276",
+    "change-proposal.md": "82c13fe89d21778e23de6c9a7ae7e918960cf78d4b2cccd69041e9160e97fdbd",
 }
 
 SUPPORTED_CATALOG_URLS = [
@@ -550,6 +550,7 @@ class AgentGuideContract(unittest.TestCase):
                     ISSUE_TEMPLATE_DIGESTS[name],
                     hashlib.sha256(issue_bytes).hexdigest())
                 self.assertEqual(ISSUE_TEMPLATE_FRONTMATTER[name], issue.splitlines()[:7])
+                self.assertIn("🤖 by <Agent>", issue)
                 self.assertEqual(
                     expected,
                     [line for line in issue.splitlines() if line.startswith("## ")])
