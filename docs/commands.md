@@ -2302,6 +2302,13 @@ What `install.sh` runs after it has fetched a copy. Usable by hand from a checko
 ./rundesk install --bin-dir ~/.local/bin
 ```
 
+When the selected root already has an installed program and any gateway is online or cannot be
+proved offline, installation does not replace `app/` itself. It runs that installed program's
+guarded `update` command instead. Active turns or schedules therefore queue the work; once the
+install is quiet, the updater gracefully stands down every online gateway, replaces and settles
+the program, and restores exactly those gateways. This also means an unpublished checkout is not
+installed over live gateways: stop them first when that local replacement is genuinely intended.
+
 The bootstrap installer takes no install arguments. Its only options are `-h` and `--help`; either
 prints its usage and exits successfully before finding Python, fetching, or changing anything. This
 is the safe way to inspect it:
