@@ -1142,7 +1142,7 @@ bot (same page, under Privileged Gateway Intents — without it Discord blanks e
 and in a thread unless it names the bot, and the gateway is closed with `4014` rather than
 connecting), and your **numeric user id** for `--allow` (Discord → Settings → Advanced → Developer
 Mode, then right-click your profile → Copy User ID; a username is not an id and can be changed). The
-README's [Setting up a Discord bot](../README.md#setting-up-a-discord-bot) walks it through.
+[Discord setup guide](discord.md) walks it through step by step.
 
 ```console
 $ rundesk channels add alan discord --allow 341709...
