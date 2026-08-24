@@ -20,7 +20,10 @@ catalog only when at least one of these differs materially:
 Do not create a catalog merely for a topic label or one skill. Skills in one catalog may share
 repository tooling and provider infrastructure, but every installed package must work without another
 repository checkout. Copy or package required runtime support inside the owning catalog; never create
-a cross-repository runtime dependency.
+an implicit cross-repository runtime dependency. Team catalogs are the explicit exception: schema 2
+may declare shared catalog dependencies by name and source, and its members address their skills as
+`<catalog>/<skill>`. Rundesk installs only missing dependencies and reuses an installed one only
+after its source and required skills match the declaration.
 
 A catalog that owns a tested set of named Rundesk agents is a **team catalog**. Use that boundary
 only when the catalog is responsible for keeping those agents' instructions, delegation scope, and

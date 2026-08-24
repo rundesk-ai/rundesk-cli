@@ -12,11 +12,13 @@ from fixtures_skills import a_published_catalog, a_team_catalog, written
 import support
 from rundesk.agents import delegating, directory, records
 from rundesk.commands.teams import cmd_teams
+from rundesk.core import paths
 from rundesk.exits import FAILED, OK
 from rundesk.providers import environment
 from rundesk.skills import catalogs as skill_catalogs
 from rundesk.skills import grants, library
 from rundesk.teams import reconcile
+from rundesk.utils import locking
 
 
 class Teams(support.Isolated):
@@ -30,6 +32,106 @@ class Teams(support.Isolated):
         args = argparse.Namespace(what=what, repository=str(source or self.source), team=team,
                                   provider=provider, confirm=confirm)
         return cmd_teams(args)
+
+    def dependent_team(self, dependency: Path, dependency_name: str = "shared",
+                       skill: str = "researching") -> Path:
+        source = a_team_catalog(self.home / "dependent-team", members=[{
+            "name": "forge", "description": "Implements bounded software changes.",
+            "instructions": "agents/forge/AGENTS.md",
+            "skills": [f"{dependency_name}/{skill}"], "delegates_to": [],
+            "self_improve": False,
+        }], skills=("implementing",))
+        manifest = json.loads((source / library.TEAM).read_text())
+        manifest["schema"] = 2
+        manifest["catalogs"] = [{"name": dependency_name, "source": str(dependency)}]
+        written(source / library.TEAM, manifest)
+        return source
+
+    def test_schema_two_installs_a_missing_shared_catalog_and_grants_its_skill(self):
+        dependency = a_published_catalog(self.home / "shared", name="shared",
+                                         skills=("researching",))
+        source = self.dependent_team(dependency)
+        code, _out, err = support.run_with(
+            ["teams", "install", str(source), "--provider", "codex"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("shared — install from", err)
+        self.assertEqual([], library.known())
+
+        self.assertEqual(OK, self.command("install", source=source))
+        self.assertEqual(["shared", "test-team"], library.known())
+        self.assertEqual("shared/researching", grants.holding("forge", "researching").address)
+
+    def test_schema_two_reuses_a_matching_installed_catalog(self):
+        dependency = a_published_catalog(self.home / "shared", name="shared",
+                                         skills=("researching",))
+        with skill_catalogs.brought(str(dependency)) as coming:
+            skill_catalogs.installed(coming)
+        source = self.dependent_team(dependency)
+        code, _out, err = support.run_with(
+            ["teams", "install", str(source), "--provider", "codex"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("shared — reuse installed", err)
+        self.assertEqual(OK, self.command("install", source=source))
+
+    def test_schema_two_refuses_a_same_named_catalog_from_another_source(self):
+        installed_source = a_published_catalog(self.home / "first", name="shared",
+                                               skills=("researching",))
+        declared_source = a_published_catalog(self.home / "second", name="shared",
+                                              skills=("researching",))
+        with skill_catalogs.brought(str(installed_source)) as coming:
+            skill_catalogs.installed(coming)
+        source = self.dependent_team(declared_source)
+        code, _out, err = support.run_with(
+            ["teams", "install", str(source), "--provider", "codex", "--confirm"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("not " + str(declared_source), err)
+        self.assertNotIn("test-team", library.known())
+
+    def test_schema_two_refuses_a_dependency_missing_a_required_skill(self):
+        dependency = a_published_catalog(self.home / "shared", name="shared",
+                                         skills=("something-else",))
+        source = self.dependent_team(dependency)
+        code, _out, err = support.run_with(
+            ["teams", "install", str(source), "--provider", "codex", "--confirm"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("does not hold required skills: researching", err)
+        self.assertEqual([], library.known())
+
+    def test_a_failure_after_dependency_install_reports_the_partial_safe_result(self):
+        dependency = a_published_catalog(self.home / "shared", name="shared",
+                                         skills=("researching",))
+        source = self.dependent_team(dependency)
+        installing = skill_catalogs.installed
+
+        def fail_team(coming, *args, **kwargs):
+            if coming.manifest.name == "test-team":
+                raise OSError("synthetic team write failure")
+            return installing(coming, *args, **kwargs)
+
+        with mock.patch("rundesk.commands.teams.skill_catalogs.installed",
+                        side_effect=fail_team):
+            code, _out, err = support.run_with(
+                ["teams", "install", str(source), "--provider", "codex", "--confirm"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("dependency catalogs installed: shared", err)
+        self.assertIn("retry the same confirmed team install", err)
+        self.assertEqual(["shared"], library.known())
+
+    def test_an_installed_team_protects_its_dependency_from_removal_and_retirement(self):
+        dependency = a_published_catalog(self.home / "shared", name="shared",
+                                         skills=("researching", "other"))
+        source = self.dependent_team(dependency)
+        self.assertEqual(OK, self.command("install", source=source))
+
+        code, _out, err = support.run_with(["skills", "remove", "shared", "--confirm"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("required by installed teams: test-team", err)
+
+        a_published_catalog(dependency, name="shared", version="2.0.0", skills=("other",))
+        code, _out, err = support.run_with(["skills", "update", "shared", "--confirm"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("test-team: researching", err)
+        self.assertIn("researching", library.found(library.inside("shared")))
 
     def test_preview_changes_nothing_and_names_member_effects(self):
         code, out, err = support.run_with(
@@ -115,6 +217,74 @@ class Teams(support.Isolated):
         self.assertEqual("test-team/implementing", grants.holding("forge", "implementing").address)
         self.assertEqual(("piper",), delegating.scope_of("forge"))
         self.assertEqual(1, records.read(directory.records("forge"))["self_improve"])
+
+    def test_update_refuses_to_take_over_an_agent_no_team_manages(self):
+        self.assertEqual(OK, self.command("install"))
+        directory.made("scribe", "claude", "Keeps the owner's own notes.")
+        scribe = directory.home("scribe")
+        (scribe / "AGENTS.md").write_text("owner rules")
+        (scribe / "CLAUDE.md").write_text("owner rules as well")
+        (scribe / "MEMORY.md").write_text("owner memory")
+        other = a_published_catalog(self.home / "scribe-skills", name="scribe-skills",
+                                    skills=("extra",))
+        with skill_catalogs.brought(str(other)) as coming:
+            skill_catalogs.installed(coming)
+        grants.granted("scribe", library.look_up("scribe-skills/extra"))
+        before = records.read(directory.records("scribe"))
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        manifest["members"].append({
+            "name": "scribe", "description": "Would be governed by this team.",
+            "instructions": "agents/scribe/AGENTS.md", "skills": [],
+            "delegates_to": [], "self_improve": True,
+        })
+        written(self.source / library.TEAM, manifest)
+        page = self.source / "agents/scribe/AGENTS.md"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text("# scribe\n\nTeam instructions.\n", encoding="utf-8")
+        catalog = json.loads((self.source / library.MANIFEST).read_text())
+        catalog["version"] = "2.0.0"
+        written(self.source / library.MANIFEST, catalog)
+
+        previewed, _preview_out, preview_err = support.run_with(
+            ["teams", "update", "test-team"])
+        code, _out, err = support.run_with(["teams", "update", "test-team", "--confirm"])
+
+        self.assertEqual("owner rules", (scribe / "AGENTS.md").read_text())
+        self.assertEqual("owner rules as well", (scribe / "CLAUDE.md").read_text())
+        self.assertEqual("owner memory", (scribe / "MEMORY.md").read_text())
+        self.assertEqual(before, records.read(directory.records("scribe")))
+        self.assertEqual("scribe-skills/extra", grants.holding("scribe", "extra").address)
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertEqual(["forge", "piper", "scribe"], directory.known())
+        self.assertEqual(FAILED, code)
+        self.assertIn("scribe (rundesk agents remove scribe --confirm)", err)
+        self.assertEqual(FAILED, previewed)
+        self.assertIn("rundesk agents remove scribe --confirm", preview_err)
+        self.assertNotIn("this would reconcile team", preview_err)
+
+    def test_update_reconciles_members_with_the_install_lock_still_held(self):
+        """The window between the catalog swap and `apply` must not exist.
+
+        Once the new declaration is installed, `catalogs.owners()` claims every name in it, so the
+        ownership re-check can no longer tell a member this team managed from an agent created a
+        moment ago. Only the install lock never being released in between keeps the two apart, so
+        this asks the last boundary inside it whether it is still there.
+        """
+        self.assertEqual(OK, self.command("install"))
+        catalog = json.loads((self.source / library.MANIFEST).read_text())
+        catalog["version"] = "2.0.0"
+        written(self.source / library.MANIFEST, catalog)
+        reconciling = reconcile.apply
+        held = []
+
+        def watched(*args, **kwargs):
+            held.append(locking.is_held(paths.lock()))
+            return reconciling(*args, **kwargs)
+
+        with mock.patch.object(reconcile, "apply", watched):
+            self.assertEqual(OK, self.command("update", provider=None))
+
+        self.assertEqual([True], held)
 
     def test_turn_admission_reconciliation_repairs_installed_state_without_fetching(self):
         self.assertEqual(OK, self.command("install"))

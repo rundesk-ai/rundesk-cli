@@ -20,39 +20,63 @@ agents/
   piper/AGENTS.md
 ```
 
-`team.json` schema 1 contains `schema`, `name`, and `members`. Its name must equal
-`manifest.json`'s name. Each member contains:
+`team.json` schema 2 contains `schema`, `name`, `catalogs`, and `members`. Its name must equal
+`manifest.json`'s name. `catalogs` is a duplicate-free array of shared catalog dependencies, each
+with its exact `name` and GitHub repository or local-directory `source`. Schema 1 remains accepted
+for existing self-contained teams and has no `catalogs` field. Each member contains:
 
 - `name`: the Rundesk agent name;
 - `description`: the sentence other agents use when routing work;
 - `instructions`: a relative path below `agents/` to its canonical `AGENTS.md`;
-- `skills`: the exact positive allowlist this member receives from this catalog, which may be empty;
+- `skills`: the exact positive allowlist this member receives, which may be empty. Schema 2 uses
+  fully qualified `<catalog>/<skill>` addresses from the team or a declared dependency. Schema 1
+  keeps local skill names, interpreted as skills from the team catalog;
 - `delegates_to`: the exact named-agent scope, as an array. An empty array makes the member
   inbound-only; and
 - `self_improve`: `true` or `false`, controlling Rundesk's protected weekly upkeep for this member.
 
-All fields are required. Unknown fields, duplicate members or skills, paths that escape the catalog,
-missing instructions, undeclared skills, invalid agent names, and cross-team member collisions are
-refused before a confirmed operation mutates the install.
+All fields are required. Unknown fields, duplicate members, dependencies, or skills, paths that
+escape the catalog, missing instructions, undeclared catalogs, invalid names, and cross-team member
+collisions are refused before a confirmed operation mutates the install. Two addresses with the
+same skill name are refused for one member because installed grants stand under that name.
 
 ## Lifecycle
 
-`rundesk teams install <repository>` fetches and validates the complete catalog, previews every
-effect, and changes nothing. `--confirm` installs the catalog and reconciles its members. A provider
+`rundesk teams install <repository>` fetches and validates the complete team and every missing
+dependency, previews whether each dependency will be installed or reused, and changes nothing.
+An installed dependency is reused only when its recorded source matches the declaration and it
+holds every referenced skill; a same-named catalog from another source is refused. `--confirm`
+installs missing dependencies, installs the team catalog, and reconciles its members. Shared
+catalogs remain independently installed catalogs and can be reused by any number of teams. A provider
 is installation-local: `--provider` supplies the provider for every new member. Installation refuses
 any declared name that already exists; remove each colliding agent before installing the team so
 every member begins from its catalog-owned workflow.
 
+An installed team protects its dependencies from being removed through `rundesk skills remove`.
+Ordinary catalog update and refresh also refuse a replacement that retires a skill referenced by an
+installed team. Change the team declaration first; unreferenced dependency catalogs keep their
+ordinary independent lifecycle.
+
 `rundesk teams update <team>` fetches the configured source, validates the replacement, previews
 catalog and member changes, and changes nothing. `--confirm` replaces changed catalog content and
 reconciles every declared member even when the fetched tree is unchanged, so the operation repairs
-instruction, memory, grant, and delegation drift.
+instruction, memory, grant, and delegation drift. It refuses a newly declared member name already
+held by an agent no team manages, at preview and at confirmation, and names the removal required.
 
 `rundesk update` and the daily automatic updater also check every installed team catalog, after the
 application and independently of ordinary catalogs. They require no separate confirmation, validate
-each fetched declaration before mutation, reconcile every declared member even when the tree is
-unchanged, and report application, ordinary-catalog, and team-catalog outcomes separately. Failure
-to fetch or validate one team preserves its last working release and does not stop another catalog.
+each fetched declaration and every catalog it declares as a dependency before any gateway,
+dependency catalog, team catalog, or member is changed, install a missing dependency and reuse a
+matching installed one, reconcile every declared member even when the tree is unchanged, and report
+application, ordinary-catalog, and team-catalog outcomes separately. Failure to fetch or validate
+one team or one of its dependencies preserves its last working release, members, and member
+gateways, and does not stop another catalog.
+
+No update adopts an agent it does not already manage. A declared member name already held by an
+agent no installed team manages fails the explicit team update and the manual or daily refresh
+alike, names the `rundesk agents remove <agent> --confirm` needed, and leaves that agent's files,
+records, and grants exactly as they were, together with the installed team's last working version.
+A name may only be taken over after the owner has removed the colliding agent.
 
 Turn admission also performs a network-free reconciliation of that one member from the installed
 catalog before instructions or grants are read. Thus local drift cannot cross into a later turn;
@@ -66,7 +90,8 @@ For each member, reconciliation:
 3. removes `MEMORY.md`, making the team member explicitly memoryless;
 4. writes the declared description and delegation scope;
 5. enables or disables the member's protected weekly upkeep from `self_improve`;
-6. grants every declared skill and revokes every grant outside that positive allowlist;
+6. grants every declared fully qualified skill and revokes every grant outside that positive
+   allowlist;
 7. preserves Rundesk's required operating skill and conditional delegation skill; and
 8. leaves the member's gateway stopped for the owner to start when wanted.
 
@@ -122,3 +147,13 @@ authority boundaries.
   ownership; it can then be promoted in place to a team, which remains protected from ordinary skill
   lifecycle changes and leaves every gateway stopped.
 - The complete suite, Python 3.9 floor, lint, syntax, privacy, and disposable-install gates pass.
+- The explicit team update and the automatic or manual global refresh both refuse a declared member
+  name held by an unmanaged agent, preserve that agent and the last working team catalog, and
+  report the failure.
+- An automatic global refresh of a schema 2 team installs a missing declared dependency, reuses a
+  matching installed one, and preserves the last working team and member state when a dependency
+  cannot be fetched or validated.
+- Schema 1 self-contained teams remain compatible.
+- A schema 2 team installs missing dependency catalogs, reuses matching installed dependencies, and
+  refuses mismatched sources or missing referenced skills before changing the team.
+- An installed dependency cannot be removed or updated without every referenced team skill.

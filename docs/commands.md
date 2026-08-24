@@ -2069,8 +2069,9 @@ confirmation are separate:
 ```console
 $ rundesk teams install ./development-team --provider codex
 install: this would install team development-team from ./development-team
+        catalog  rundesk-skills — reuse installed from https://github.com/rundesk-ai/rundesk-skills; require writing-plans
         member   forge — create with provider codex
-                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; allow only implementing plus Rundesk-required skills; weekly upkeep on; leave gateway stopped
+                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; allow only development-team/implementing, rundesk-skills/writing-plans plus Rundesk-required skills; weekly upkeep on; leave gateway stopped
         nothing was installed or changed. To go ahead:
         rundesk teams install ./development-team --provider codex --confirm
 ```
@@ -2081,19 +2082,33 @@ command required before retrying. This clean-start boundary ensures every member
 catalog-owned instructions, memory policy, delegation scope, skill allowlist, and weekly upkeep
 setting.
 
+Schema 2 teams may declare shared skill catalogs by exact name and source. The preview says whether
+each one will be installed or reused. A missing catalog is fetched and validated before confirmation
+changes anything; an installed catalog is reused without reinstalling only when its recorded source
+matches and every referenced skill exists. Member skill allowlists use fully qualified
+`<catalog>/<skill>` addresses. Existing schema 1 teams remain self-contained and compatible.
+Removing a dependency, or updating it past a referenced skill, is refused until the installed team
+declaration no longer requires it.
+
 `rundesk teams update <team>` remains the explicit preview-and-confirm command for one team. It
 fetches the recorded source and performs the same reconciliation, repairing local instruction,
-memory, delegation, and skill-allowlist drift even when the fetched tree is unchanged. This explicit
-command leaves every member gateway stopped. Start only the agents you want to use with
+memory, delegation, and skill-allowlist drift even when the fetched tree is unchanged. A newly
+declared member name already held by an agent no team manages is refused, by the preview as well as
+the confirmation, and that agent keeps its files, records, and grants; remove it first with the
+`rundesk agents remove <agent> --confirm` the refusal names. The explicit install and update
+commands leave every member gateway stopped. Start only the agents you want to use with
 `rundesk gateways start <agent>`.
 
 Manual `rundesk update` and the daily updater check every installed team without a separate
-confirmation step. They validate a fetched declaration before changing anything, keep catalog swap
-and member reconciliation behind work admission, and restore exactly the member gateways they stood
-down; members already offline stay offline. A team that cannot be fetched, validated, or reconciled
-does not stop the other catalog surfaces, and its outcome is named. Fetch or validation failure
-leaves its last working catalog untouched; turn admission refuses any member whose managed state
-cannot be repaired completely.
+confirmation step. They fetch and validate the declaration and every catalog it declares as a
+dependency before a gateway moves or any catalog, team, or member is written, installing a missing
+dependency and reusing a matching installed one. They keep catalog swap and member reconciliation
+behind work admission, and restore exactly the member gateways they stood down; members already
+offline stay offline. They refuse an unmanaged name on the same terms as the explicit command. A
+team that cannot be fetched,
+validated, or reconciled does not stop the other catalog surfaces, and its outcome is named. Fetch
+or validation failure leaves its last working catalog untouched; turn admission refuses any member
+whose managed state cannot be repaired completely.
 
 Before any later provider turn is admitted, Rundesk performs the same reconciliation for that one
 member from the installed catalog. This is a local drift repair and performs no fetch; a new catalog

@@ -51,9 +51,32 @@ def preflight_install(team: catalogs.Team, provider: Optional[str] = None) -> No
     preflight(team, provider)
 
 
+def preflight_update(team: catalogs.Team, provider: Optional[str] = None) -> None:
+    """Prove an update may govern every declared member before anything moves.
+
+    `preflight_install` refuses every existing name so each member starts from catalog-owned
+    content. An update has to make the same promise about the names it does not already own: a
+    later catalog version naming an agent no team manages would otherwise be reconciled like a
+    member, replacing its instructions, removing its memory, and rewriting its description,
+    delegation scope and grants that nobody asked it to hand over.
+
+    Read against ownership as it stands *before* the catalog swap, which is the only moment the
+    distinction exists — afterwards the newly declared name is this team's own member.
+    """
+    preflight(team, provider)
+    managed = catalogs.owners()
+    known = set(directory.known())
+    taken = [one.name for one in team.members if one.name in known and one.name not in managed]
+    if taken:
+        removals = ", ".join(
+            f"{name} (rundesk agents remove {name} --confirm)" for name in taken)
+        raise Refused(f"{team.name} declares agents no team manages and this update will not take "
+                      "them over: " + removals)
+
+
 def retiring(team: catalogs.Team, one: catalogs.Member) -> List[grants.Grant]:
     """Every current grant outside this member's positive allowlist, excluding product grants."""
-    desired = {f"{team.name}/{skill_name}" for skill_name in one.skills}
+    desired = set(one.skills)
     return [held for held in grants.held(one.name)
             if held.address not in desired
             and held.name != library.REQUIRED_SKILL
@@ -125,8 +148,8 @@ def _member(team: catalogs.Team, one: catalogs.Member) -> List[str]:
     for held in retiring(team, one):
         grants.revoked(one.name, held.name)
         changed.append(f"{one.name}: revoked {held.address or held.name}")
-    for skill_name in one.skills:
-        address = f"{team.name}/{skill_name}"
+    for address in one.skills:
+        skill_name = address.split("/", 1)[1]
         holding = grants.holding(one.name, skill_name)
         if holding is not None and holding.address != address:
             grants.revoked(one.name, skill_name)

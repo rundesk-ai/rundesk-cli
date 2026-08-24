@@ -116,6 +116,26 @@ class UpdateSurfaces(support.Isolated):
         (self.team / "agents/forge/AGENTS.md").write_text(
             "# forge\n\nSecond canonical workflow.\n", encoding="utf-8")
 
+    def declare_shared_dependency(self, shared: Path) -> None:
+        """Republish the team as schema 2, taking one member skill from a shared catalog."""
+        declaration = json.loads((self.team / library.TEAM).read_text())
+        declaration["schema"] = 2
+        declaration["catalogs"] = [{"name": "shared", "source": str(shared)}]
+        declaration["members"][0]["skills"] = ["shared/researching"]
+        declaration["members"][1]["skills"] = ["test-team/reviewing"]
+        written(self.team / library.TEAM, declaration)
+
+    def an_unmanaged_agent(self, name: str) -> Path:
+        """An agent the owner made, which no installed team declares."""
+        directory.made(name, "codex", "Keeps the owner's own notes.")
+        at = directory.home(name)
+        at.mkdir(parents=True, exist_ok=True)
+        (at / "AGENTS.md").write_text(f"# {name}\n\nThe owner wrote this.\n", encoding="utf-8")
+        (at / "CLAUDE.md").write_text(f"# {name}\n\nAnd this.\n", encoding="utf-8")
+        (at / "MEMORY.md").write_text("what it remembers", encoding="utf-8")
+        grants.granted(name, library.look_up("ordinary/ordinary-skill"))
+        return at
+
     def test_manual_current_application_reconciles_both_catalog_surfaces_and_gateway_state(self):
         self.publish_second_versions()
         forge_home = directory.home("forge")
@@ -259,6 +279,84 @@ class UpdateSurfaces(support.Isolated):
         self.assertEqual(OK, second)
         self.assertEqual("# forge\n\nSecond canonical workflow.\n",
                          (forge_home / "AGENTS.md").read_text())
+
+    def test_a_declared_name_held_by_an_unmanaged_agent_is_refused_and_left_untouched(self):
+        scribe = self.an_unmanaged_agent("scribe")
+        self.publish_second_versions()
+        declaration = json.loads((self.team / library.TEAM).read_text())
+        declaration["members"].append({
+            "name": "scribe", "description": "Would be governed by this team.",
+            "instructions": "agents/scribe/AGENTS.md", "skills": [],
+            "delegates_to": [], "self_improve": True,
+        })
+        written(self.team / library.TEAM, declaration)
+        page = self.team / "agents/scribe/AGENTS.md"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text("# scribe\n\nTeam instructions.\n", encoding="utf-8")
+        gateways = GatewayCycle()
+
+        with standing.holding(directory.where("forge")):
+            code, _out, err = self.run_manual(gateways)
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual("# scribe\n\nThe owner wrote this.\n", (scribe / "AGENTS.md").read_text())
+        self.assertEqual("# scribe\n\nAnd this.\n", (scribe / "CLAUDE.md").read_text())
+        self.assertEqual("what it remembers", (scribe / "MEMORY.md").read_text())
+        self.assertEqual("Keeps the owner's own notes.",
+                         records.read(directory.records("scribe"))["describes"])
+        self.assertEqual("ordinary/ordinary-skill",
+                         grants.holding("scribe", "ordinary-skill").address)
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertIn("team catalogs: completed with failures", err)
+        self.assertIn("rundesk agents remove scribe --confirm", err)
+        self.assertEqual("test-team/implementing",
+                         grants.holding("forge", "implementing").address)
+        self.assertEqual(([], []), (gateways.went_down, gateways.came_up))
+        self.assertEqual("2.0.0", library.read("ordinary").manifest.version)
+
+    def test_a_team_update_installs_a_missing_shared_catalog_before_granting_its_skill(self):
+        shared = a_published_catalog(
+            self.sources / "shared", name="shared", skills=("researching",))
+        self.publish_second_versions()
+        self.declare_shared_dependency(shared)
+        gateways = GatewayCycle()
+
+        with standing.holding(directory.where("forge")):
+            code, out, err = self.run_manual(gateways)
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("team catalogs: checked", out)
+        self.assertEqual("2.0.0", library.read("test-team").manifest.version)
+        self.assertIn("shared", library.known())
+        self.assertEqual(str(shared), library.read("shared").provenance.source)
+        self.assertEqual("shared/researching", grants.holding("forge", "researching").address)
+        self.assertIsNone(grants.holding("forge", "implementing"))
+        self.assertEqual("test-team/reviewing", grants.holding("piper", "reviewing").address)
+        self.assertEqual(["forge"], gateways.went_down)
+        self.assertEqual(["forge"], gateways.came_up)
+
+    def test_a_dependency_missing_a_required_skill_preserves_the_team_and_its_members(self):
+        shared = a_published_catalog(
+            self.sources / "shared", name="shared", skills=("something-else",))
+        self.publish_second_versions()
+        self.declare_shared_dependency(shared)
+        before_page = (directory.home("forge") / "AGENTS.md").read_bytes()
+        gateways = GatewayCycle()
+
+        with standing.holding(directory.where("forge")):
+            code, _out, err = self.run_manual(gateways)
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("team catalogs: completed with failures", err)
+        self.assertIn("does not hold required skills: researching", err)
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertNotIn("shared", library.known())
+        self.assertEqual(before_page, (directory.home("forge") / "AGENTS.md").read_bytes())
+        self.assertEqual("test-team/implementing",
+                         grants.holding("forge", "implementing").address)
+        # Nothing stood down, so the dependency was proved before the members were touched.
+        self.assertEqual(([], []), (gateways.went_down, gateways.came_up))
+        self.assertEqual("2.0.0", library.read("ordinary").manifest.version)
 
 
 if __name__ == "__main__":
