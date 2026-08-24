@@ -39,8 +39,9 @@ then brings the gateway back online.
 
 Use `--continue` only inside the active channel provider turn that must verify and finish its own
 work afterward. It is explicit opt-in: ordinary and automatic updates never wake a conversation.
-Rundesk refuses terminal or ambiguous callers and suppresses a duplicate when newer owner input or
-a newer turn already moved the conversation on. It resumes the exact provider session when safe;
+Rundesk accepts owner guidance already incorporated into that same active turn and binds the handoff
+to its latest message. It refuses terminal or ambiguous callers and suppresses a duplicate when
+newer owner input or a newer turn already moved the conversation on. It resumes the exact provider session when safe;
 otherwise it wakes the same conversation in a fresh session and directs context recovery through
 `messages`.
 

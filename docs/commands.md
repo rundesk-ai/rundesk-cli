@@ -2122,7 +2122,9 @@ rundesk updated to v0.41.0
 
 With no flag, the command keeps the existing lifecycle below and never creates continuation work.
 `--continue` is an explicit opt-in available only to one unambiguous active channel provider turn.
-It records a compact durable handoff before the existing queued worker starts. Once the update
+If owner guidance has joined that still-active turn, its latest message is the exact origin; the
+turn does not become ambiguous merely because it was steered. The command records a compact durable
+handoff before the existing queued worker starts. Once the update
 reaches a truthful terminal result and that same agent's gateway and exact channel are healthy, one
 new turn wakes the exact conversation. An already-current update does not needlessly require a new
 gateway pid; a real restart does. A newer owner message, a newer turn, duplicate/crash claim, or

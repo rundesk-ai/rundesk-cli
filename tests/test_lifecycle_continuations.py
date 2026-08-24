@@ -57,7 +57,7 @@ class LifecycleContinuations(support.Isolated):
             ).fetchone()
         return dict(found)
 
-    def test_only_an_active_channel_turn_with_one_exact_owner_origin_is_accepted(self):
+    def test_only_an_active_channel_turn_with_an_exact_owner_origin_is_accepted(self):
         with turns.claiming(self.agent, self.conversation), \
                 mock.patch.dict(os.environ, self.origin):
             got = continuations.origin()
@@ -67,6 +67,19 @@ class LifecycleContinuations(support.Isolated):
         with mock.patch.dict(os.environ, self.origin):
             with self.assertRaisesRegex(continuations.NoOrigin, "active channel"):
                 continuations.origin()
+
+    def test_mid_turn_owner_guidance_becomes_the_exact_continuation_origin(self):
+        guidance = arriving.recorded(
+            self.agent, "discord", "1180", "2207", "finish the update and continue")
+        arriving.handled_by_turn(
+            self.agent, self.conversation, (guidance.message,), self.turn)
+
+        with turns.claiming(self.agent, self.conversation), \
+                mock.patch.dict(os.environ, self.origin):
+            got = continuations.origin()
+
+        self.assertEqual(
+            (self.agent, self.turn, self.conversation, guidance.message), got)
 
     def test_terminal_and_ambiguous_callers_write_nothing(self):
         kept.finish_turn(self.agent, self.turn, kept.DONE, {})
