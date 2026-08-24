@@ -2255,6 +2255,15 @@ the durable worker retries through the same rerunnable settlement path as a manu
 The job carries a fixed minimal system `PATH`, so reconciliation and status do not change according
 to the shell or development environment that happened to invoke them.
 
+Reconciliation also retires an orphaned automatic update job after its recorded install root has
+been absent for at least a day. It removes only a definition whose root fingerprint, filename,
+label, program path, working directory, and `RUNDESK_HOME` all agree, and only while the missing
+root's parent remains accessible. Working secondary installs, recently absent or unavailable roots,
+and malformed or identity-mismatched definitions are preserved. Coordinator changes are serialized
+across every install sharing the login directory, including reinstalls and removals. Cleanup claims
+the exact stale definition atomically, so a supported older installer that does not use the shared
+lock keeps its replacement definition and has its job restored when necessary.
+
 ## uninstall
 
 `--confirm` is required. Without it, the command says exactly what it would take and what it would
