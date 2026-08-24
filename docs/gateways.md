@@ -240,6 +240,8 @@ the gateway is already under a placed supervisor job. The gateway waits for admi
 schedules to settle under the ordinary work-admission barrier, marks the handoff running, and exits
 nonzero so launchd creates a fresh process. The restored gateway requires a changed pid, its running
 version, and the exact originating adapter connected before it atomically claims one continuation.
+Owner guidance already incorporated into the active turn becomes that exact origin rather than
+making an otherwise valid self-restart ambiguous.
 `--all`, `--force`, another agent, terminal/schedule/delegation callers, or a newer owner message are
 refused or suppressed without a wake. A missing or unsafe original provider session still wakes the
 same conversation in a fresh session under current rules.
