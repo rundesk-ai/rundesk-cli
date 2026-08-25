@@ -87,4 +87,4 @@ remote adapter registry; per-place channel configuration.
 |---|---|---|---|
 | Adapter contract | [adapters.md](../adapters.md), `src/rundesk/channels/adapters.py`, `tests/test_channels_command.py` | Current mechanics inspected; acceptance not executed in this PRD pass. | 2026-08-08 |
 | Gateway hosting and recovery | `src/rundesk/channels/hosting.py`, `src/rundesk/gateways/host.py`, `tests/test_channels_hosting.py` | Offline suite passed on current Python and macOS Python 3.9, including transient disconnect state, native reconnect, and stuck-adapter replacement; real-platform recovery remains unvalidated. | 2026-08-21 |
-| Channel management | [commands.md](../commands.md#channels), `src/rundesk/commands/channels.py`, `tests/test_channels_command.py` | Current mechanics inspected; acceptance not executed in this PRD pass. | 2026-08-08 |
+| Channel management | [commands.md](../api/commands.md#channels), `src/rundesk/commands/channels.py`, `tests/test_channels_command.py` | Current mechanics inspected; acceptance not executed in this PRD pass. | 2026-08-08 |

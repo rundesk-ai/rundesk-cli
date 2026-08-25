@@ -68,7 +68,7 @@ schedule succeeded — a message per successful nightly job is how somebody lear
 channel. An agent with no notified channel says nothing at all, which is what configuring none asks
 for.
 
-The commands are in [`commands.md`](commands.md). This is what is underneath them.
+The commands are in [`commands.md`](api/commands.md). This is what is underneath them.
 
 ## A live gateway keeps a Mac from idle-sleeping
 

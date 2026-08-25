@@ -16,7 +16,7 @@ constraints—mentions, threads, message limits, interaction deadlines, reaction
 permissions—that must preserve the shared channel contract rather than redefine it.
 
 The predecessor Discord requirements established the intended experience. Current behavior is
-described in [adapters.md](../adapters.md), [commands.md](../commands.md#channels), the shipped
+described in [adapters.md](../adapters.md), [commands.md](../api/commands.md#channels), the shipped
 `src/channels/discord` adapter, and focused tests. The product owner added `/agents` on 2026-08-08 as
 an install-wide, private, read-only Discord query.
 

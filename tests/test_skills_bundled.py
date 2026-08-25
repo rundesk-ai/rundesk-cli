@@ -842,7 +842,7 @@ class WhatAShippedSkillMayClaim(Bundled):
 
 
 class WhatTheDocumentationClaims(support.Isolated):
-    """`docs/commands.md` says it is the complete list of what rundesk can do.
+    """`docs/api/commands.md` says it is the complete list of what rundesk can do.
 
     That page is checked by people, and people are exactly who a stale verb misleads: `AGENTS.md`
     forbids offering an operation that is not built, and a documented verb that does not exist is the
@@ -851,7 +851,7 @@ class WhatTheDocumentationClaims(support.Isolated):
     """
 
     def test_every_skills_sub_verb_the_docs_name_is_one_that_exists(self):
-        said = (support.CHECKOUT / "docs" / "commands.md").read_text(encoding="utf-8")
+        said = (support.CHECKOUT / "docs" / "api" / "commands.md").read_text(encoding="utf-8")
         there = _sub_verbs_of("skills")
         self.assertTrue(there, "the parser answered no sub-verbs for skills")
         named = set(re.findall(r"rundesk skills ([a-z][a-z-]*)", said))
@@ -859,20 +859,20 @@ class WhatTheDocumentationClaims(support.Isolated):
         for verb in sorted(named - {"list"}):
             with self.subTest(verb=verb):
                 self.assertIn(verb, there,
-                              f"docs/commands.md tells somebody to type `rundesk skills {verb}`, "
+                              f"docs/api/commands.md tells somebody to type `rundesk skills {verb}`, "
                               "and this build has no such sub-verb")
 
     def test_every_sub_verb_that_exists_is_named_by_the_docs(self):
         # The other direction, because the page claims to be *complete*. A verb that shipped without
         # reaching the page is the shape that goes unnoticed for a release.
-        said = (support.CHECKOUT / "docs" / "commands.md").read_text(encoding="utf-8")
+        said = (support.CHECKOUT / "docs" / "api" / "commands.md").read_text(encoding="utf-8")
         for verb in sorted(_sub_verbs_of("skills")):
             with self.subTest(verb=verb):
                 self.assertIn(f"rundesk skills {verb}", said,
-                              f"`rundesk skills {verb}` exists and docs/commands.md never names it")
+                              f"`rundesk skills {verb}` exists and docs/api/commands.md never names it")
 
     def test_upkeep_overview_matches_the_evidence_based_contract(self):
-        said = " ".join((support.CHECKOUT / "docs" / "commands.md").read_text(
+        said = " ".join((support.CHECKOUT / "docs" / "api" / "commands.md").read_text(
             encoding="utf-8").split())
         self.assertIn("honest no-change", said)
         self.assertIn("only when selected friction indicates a capability gap", said)

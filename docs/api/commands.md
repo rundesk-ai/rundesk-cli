@@ -1,6 +1,6 @@
 # The command surface
 
-Twenty commands, and every one of them works. There is no "coming soon" list: a verb rundesk
+Twenty-one commands, and every one of them works. There is no "coming soon" list: a verb rundesk
 cannot perform is a verb rundesk does not have. `rundesk --help` is the count that cannot go stale;
 this one is checked against it.
 
@@ -357,7 +357,7 @@ it by hand would make rundesk skip or repeat a migration step.
 ## agents
 
 The agents this install keeps — one directory each, under `data/agents/`, and what stands inside one
-is [`layout.md`](layout.md). With no sub-verb it lists them, because listing is what somebody wants
+is [`layout.md`](../layout.md). With no sub-verb it lists them, because listing is what somebody wants
 nine times in ten.
 
 ```console
@@ -637,7 +637,7 @@ One agent has one gateway: a supervised process that holds that agent's name and
 when it dies. With no sub-verb it lists them, the way `agents` and `backups` do. The other five are
 `start`, `stop`, `restart`, `logs` and `run`.
 
-What a gateway is, and every state one can get stuck in, is [`gateways.md`](gateways.md). This is
+What a gateway is, and every state one can get stuck in, is [`gateways.md`](../gateways.md). This is
 what each verb guarantees and what each refuses.
 
 ```console
@@ -777,7 +777,7 @@ gateway stopped for my agent as pid 8851
 
 The pid comes from the lock, so one is only ever signalled while the kernel says a gateway is holding
 that name, and whether it really went is decided by the lock rather than by what the signal answered.
-See [gateways.md](./gateways.md) for why that distinction is load-bearing on macOS.
+See [gateways.md](../gateways.md) for why that distinction is load-bearing on macOS.
 
 ### gateways restart
 
@@ -902,7 +902,7 @@ it — and the gateway hosting that agent is what fires it. With no sub-verb it 
 that can still run on the install; with an agent it lists that agent's. Expired schedules stay out of
 the ordinary operational view; `rundesk schedules list [<agent>] --expired` lists only those.
 
-What a schedule is, and every state one can get stuck in, is [`schedules.md`](schedules.md). This is
+What a schedule is, and every state one can get stuck in, is [`schedules.md`](../schedules.md). This is
 what each verb guarantees and what each refuses.
 
 Every agent also has one protected policy named `weekly-self-improve-upkeep`. It starts on and is
@@ -1002,7 +1002,7 @@ the morning never lands in the exchange somebody types into. It reports where th
 things — one message when it starts and its answer when it ends, and nothing in between. If it
 delegates, the returned result resumes that invocation for review and only the final reviewed answer
 is reported.
-[`schedules.md`](schedules.md#what-a-run-says-on-a-surface-and-the-two-messages-it-is-allowed) is what
+[`schedules.md`](../schedules.md#what-a-run-says-on-a-surface-and-the-two-messages-it-is-allowed) is what
 that looks like and what happens when there is nowhere to say it.
 
 ### schedules update
@@ -1053,7 +1053,7 @@ $ rundesk gateways logs cole
 
 It ran, it finished, or it failed and why — and the last of those carries a bounded tail of what the
 program wrote, so the file is worth opening on its own. Every way a firing does not get that far is
-named rather than left silent, and [`schedules.md`](schedules.md#when-a-schedule-is-not-doing-what-you-expected)
+named rather than left silent, and [`schedules.md`](../schedules.md#when-a-schedule-is-not-doing-what-you-expected)
 lists what each of those lines means and what to do about it.
 
 ## channels
@@ -1142,7 +1142,7 @@ bot (same page, under Privileged Gateway Intents — without it Discord blanks e
 and in a thread unless it names the bot, and the gateway is closed with `4014` rather than
 connecting), and your **numeric user id** for `--allow` (Discord → Settings → Advanced → Developer
 Mode, then right-click your profile → Copy User ID; a username is not an id and can be changed). The
-[Discord setup guide](discord.md) walks it through step by step.
+[Discord setup guide](../discord.md) walks it through step by step.
 
 ```console
 $ rundesk channels add alan discord --allow 341709...
@@ -1561,8 +1561,8 @@ non-prompting way to ask exists, the probe answers `unproven` rather than guessi
 eight pixels of one corner and is deleted on every path — and it is not attempted at all without the
 grant, because asking for one without it was measured making macOS *write* the grant.
 
-[`permissions.md`](permissions.md) has the whole of it, and
-[`research/2026-08-08-what-this-mac-lets-a-process-do.md`](research/2026-08-08-what-this-mac-lets-a-process-do.md)
+[`permissions.md`](../permissions.md) has the whole of it, and
+[`research/2026-08-08-what-this-mac-lets-a-process-do.md`](../research/2026-08-08-what-this-mac-lets-a-process-do.md)
 has the measurements.
 
 ## messages
@@ -1921,7 +1921,7 @@ the width between is fixed so the shape says nothing about the length.
 right thing in a shell. `unset` empties a name and **leaves the name**, so a listing shows an
 integration that was configured here and is now switched off, rather than one that was never set up.
 
-Where these are kept and what protects them is [`layout.md`](layout.md) — the short version is that
+Where these are kept and what protects them is [`layout.md`](../layout.md) — the short version is that
 the files are yours alone, each value is sealed on disk with a key kept beside it, and a backup
 carries both. Protect backup storage as credential-bearing data.
 
@@ -1962,7 +1962,7 @@ operates *this* version, so it is never fetched and never removable. One skill i
 `managing-rundesk`, is a floor every agent holds: `revoke` refuses it, and `rundesk update` gives it
 back to an agent standing without one. `rundesk-skills` is the general
 catalog rundesk depends on, fetched like any other and equally undeletable. `local` is yours and
-rundesk never touches it. [`layout.md`](layout.md) says why the first two are separate.
+rundesk never touches it. [`layout.md`](../layout.md) says why the first two are separate.
 
 Ordinary catalogs are also checked on **every** `rundesk install` and `rundesk update`. An update
 additionally checks every installed team catalog and reconciles its members, including when no newer
@@ -2059,7 +2059,7 @@ directory of *your own* stands under that name is one rundesk will never replace
 in the way and offers no command, because there is not one: move that entry, or hold the skill under
 another name with `rundesk skills grant … --as <name>`.
 
-Writing a skill or publishing a catalog is [`catalogs.md`](catalogs.md).
+Writing a skill or publishing a catalog is [`catalogs.md`](../catalogs.md).
 
 ## teams
 
@@ -2388,4 +2388,4 @@ exited `0` would tell a script the removal was done.
 **The gateway process itself is the one exception on this page, and it is not an exception to the
 table.** `rundesk gateways run` exits `0` on every refusal. That code is not a report to a person;
 it is a sentence in a conversation with launchd, where `0` means *do not bring me back*. See
-[`gateways.md`](gateways.md).
+[`gateways.md`](../gateways.md).

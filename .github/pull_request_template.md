@@ -57,7 +57,7 @@
 - [ ] Commands report only earned outcomes and expose no operation that is not implemented.
 - [ ] Layer direction remains `commands` → `lifecycle` → `core` → `utils`; `utils` remains product-agnostic.
 - [ ] Network behavior remains injected and every test remains offline.
-- [ ] `docs/` remains true, including the complete operation list in `docs/commands.md`.
+- [ ] `docs/` remains true, including the complete operation list in `docs/api/commands.md`.
 - [ ] Persisted-state, shipped-migration, deletion, and `AGENTS.md` approval gates were honored.
 - [ ] The live `~/.rundesk` install is exactly as it was before validation.
 

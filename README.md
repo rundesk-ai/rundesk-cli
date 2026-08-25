@@ -242,13 +242,14 @@ needed.
 
 ## 📖 Documentation
 
-- **[Commands](docs/commands.md)** — operations, guarantees, and exit codes
+- **[Commands](docs/api/commands.md)** — operations, guarantees, and exit codes
 - **[Channel adapters](docs/adapters.md)** — the executable contract behind a channel
 - **[Provider adapters](docs/providers.md)** — turns and the executable contract behind a provider
 - **[Skills and catalogs](docs/catalogs.md)** — packages, repositories, validation, and releases
 - **[Gateways](docs/gateways.md)** and **[Schedules](docs/schedules.md)** — lifecycle and recovery
 - **[Install layout](docs/layout.md)** — one root and everything derived from it
 - **[Development](docs/development.md)** — safe checkout and test workflows
+- **[All documentation](docs/README.md)** — the index, including requirements and research
 
 ## 🤝 Contributing
 

@@ -16,7 +16,7 @@ are deliberately the same shape and are not the same contract: a channel adapter
 `say:`/`do:` and a provider adapter's by `type:`, and the two kinds of adapter do not share a
 namespace on disk.
 
-[`gateways.md`](gateways.md) is what hosts an adapter, [`commands.md`](commands.md#channels) is how a
+[`gateways.md`](gateways.md) is what hosts an adapter, [`commands.md`](api/commands.md#channels) is how a
 person connects one, and [`layout.md`](layout.md) is where an install keeps things.
 
 ## An adapter is a program, never a plugin

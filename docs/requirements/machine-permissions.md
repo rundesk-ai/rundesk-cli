@@ -72,7 +72,7 @@ missing, which is the more useful half.
   brain's tool call inside a live turn, answered `unknown (…/codex)` and `ready` — the tool starts
   what it runs in a way that leaves the gateway shim out of the parent chain, so the probe measured
   the brain's own program and the stored verdict is not about the launchd interpreter a gateway
-  runs as. `permissions.md` and `commands.md` said to ask this way and no longer do; the command now
+  runs as. `permissions.md` and `api/commands.md` said to ask this way and no longer do; the command now
   says unprompted that a stored answer proved outside a gateway is not about one. What is still
   missing is a way to *cause* a probe inside the gateway's own process — the honest surface would be
   a probe the gateway runs itself, which is the open question above.

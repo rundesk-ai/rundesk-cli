@@ -40,7 +40,7 @@ adapter** is the program rundesk runs to reach one. Nothing under `src/rundesk/`
 `tests/test_providers_protocol.py` refuses the file if one appears there.
 
 [`adapters.md`](adapters.md) is the other seam, for channels. [`gateways.md`](gateways.md) is what
-hosts both, [`commands.md`](commands.md) is what a person types, and [`layout.md`](layout.md) is
+hosts both, [`commands.md`](api/commands.md) is what a person types, and [`layout.md`](layout.md) is
 where an install keeps things.
 
 ---

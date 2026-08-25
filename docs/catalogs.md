@@ -362,7 +362,7 @@ four things a person has to get right and which are easy to confuse: the **APIs*
 on the resources, and the **account and resource** a command selects at run time.
 
 Skills consume a declared provider through rundesk's private bridge rather than by handling tokens.
-See `docs/commands.md` for the socket protocol, and the bundled `writing-skills` skill's
+See `docs/api/commands.md` for the socket protocol, and the bundled `writing-skills` skill's
 integrations reference for the caller's side of it.
 
 ## The catalog rundesk ships
