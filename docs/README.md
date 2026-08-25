@@ -35,6 +35,8 @@ One page each, and each is the source of truth for its subsystem.
 | [discord.md](./discord.md) | Creating and connecting a Discord bot, step by step |
 | [schedules.md](./schedules.md) | What a schedule is, and every state one can get stuck in |
 | [catalogs.md](./catalogs.md) | Writing a skill, and publishing a catalog of them |
+| [teams.md](./teams.md) | What a team is once it is installed, and what reconciliation puts back |
+| [instructions.md](./instructions.md) | What every turn is told, and who owns each layer of it |
 | [permissions.md](./permissions.md) | What macOS lets Rundesk do, and why the answer depends on which process asks |
 | [time.md](./time.md) | The three clocks, and which one answers what |
 | [development.md](./development.md) | Running and testing a checkout without installing it |
