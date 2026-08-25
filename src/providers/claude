@@ -214,7 +214,7 @@ def opening(session: str, resume) -> list:
 
     **`RUNDESK_ACCESS_MODE` is read by nothing here, and that is the owner's decision.** Every turn
     runs with the whole machine available to it. The seam still carries the word, and
-    `docs/providers.md` still says plainly that it is a request rather than containment and that an
+    `docs/extending/providers.md` still says plainly that it is a request rather than containment and that an
     adapter may ignore it — so what is written down and what happens agree.
     """
     argv = [*STREAMING, "--dangerously-skip-permissions"]

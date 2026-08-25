@@ -36,7 +36,7 @@ in order. Detailed evidence remains in the turn; the surfaced final is one short
 sentence. The protected row is inert to ordinary cron evaluation and exists only to carry the
 frozen prompt, lock, process record, output, and last attempt through this ordinary lifecycle.
 
-[`commands.md`](./commands.md#schedules) is what each verb guarantees and what each refuses. This is
+[`commands.md`](../api/schedules.md) is what each verb guarantees and what each refuses. This is
 what a schedule *is*, and what to do when one is not doing what you expected.
 
 ## Two halves that know nothing about each other

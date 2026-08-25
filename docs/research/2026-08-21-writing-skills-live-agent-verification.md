@@ -67,7 +67,7 @@ did not cover many-input header growth.
 The artifact is a test fixture, not a shipped skill. Run D corrected a copy but nothing was installed
 or published. The two Run C misses caused its exact-head result to remain `partial` and drove two
 durable changes: the evergreen
-[live-agent verification guide](../live-agent-verification.md) now grades writing separately and
+[live-agent verification guide](../guides/live-agent-verification.md) now grades writing separately and
 requires large-output checks across the complete interface, and `writing-skills` now states that
 green script tests do not prove writing quality.
 

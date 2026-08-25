@@ -262,7 +262,7 @@ def owners_own() -> Dict[str, str]:
     because it is a program reaching one platform on the owner's behalf; a brain under `work` access
     already reads the owner's files and runs their shell, so an allowlist here would be a boundary
     that is not one — the same values are on disk a moment later. Decided by the owner, recorded
-    here and in `docs/providers.md`, and said plainly rather than implied: an agent's brain can see
+    here and in `docs/extending/providers.md`, and said plainly rather than implied: an agent's brain can see
     every credential this install holds, including another provider's and a channel's.
 
     Produced once per turn by whoever admits it, and passed in — asking twice is two prompts in front

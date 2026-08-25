@@ -47,6 +47,10 @@ Two rules for a page here:
 | [`2026-08-08-what-this-mac-lets-a-process-do.md`](2026-08-08-what-this-mac-lets-a-process-do.md) | what macOS permits a gateway, measured against an ungranted launchd job — the lineage that decides an answer, and the screenshot reading that was wrong twice |
 | [`2026-08-19-agent-rule-stress-test.md`](2026-08-19-agent-rule-stress-test.md) | the reusable live-provider checklist for operating rules, agent behavior, memory and delegation, with the first Codex run |
 | [`2026-08-22-delegating-work-live-agent-verification.md`](2026-08-22-delegating-work-live-agent-verification.md) | matched Claude behavior and a Claude-to-Codex handoff across briefing, steering, review and resume in a scratch install |
+| [`2026-08-07-provider-instruction-probe.md`](2026-08-07-provider-instruction-probe.md) | what Claude, Codex and Grok did with the operating instructions, steering and artifact delivery — and the probe that touched the live install and how it was put back |
+| [`2026-08-15-antigravity-restored.md`](2026-08-15-antigravity-restored.md) | which of the carried-over 1.1.8 findings the restored adapter was written against, which were re-checked at the version on the machine, and which are still unproven |
+| [`2026-08-20-operational-rule-edge-cases.md`](2026-08-20-operational-rule-edge-cases.md) | the edge cases the operating rules were graded against, scored on the stored turn record rather than on what the provider said |
+| [`2026-08-21-writing-skills-live-agent-verification.md`](2026-08-21-writing-skills-live-agent-verification.md) | the writing-skills package driven live against a fresh provider conversation, with the substituted grant restored afterwards |
 
 ## Carried over intact
 

@@ -1,194 +1,71 @@
 ---
 id: TEAM
-name: Versioned team catalogs
-last_verified: 2026-08-24
+name: Versioned agent teams, and what an install owes their declaration
+last_verified: 2026-08-25
 ---
 
 ## What this is
 
-A team catalog is a version-controlled skill catalog that also declares a set of named agents. It
-owns those agents' durable instructions, memory policy, delegation scope, and positive skill
-allowlists. Provider accounts, channels, schedules, projects, credentials, and models remain local to
-each Rundesk installation.
+A team catalog is a version-controlled skill catalog that also declares named agents. Installing one
+creates those agents and gives the catalog ownership of their durable instructions, memory policy,
+delegation scope, and skill allowlists. Provider accounts, channels, schedules, projects,
+credentials, and models stay local to each install. What a team is and how it reconciles is
+[../teams.md](../concepts/teams.md); this page holds what that must guarantee.
 
-The catalog contains ordinary `manifest.json` and `skills/` entries, plus:
+## Why it exists
 
-```text
-team.json
-agents/
-  forge/AGENTS.md
-  piper/AGENTS.md
-```
+- A team is worth version-controlling only if every install of it is the same team. An agent that
+  drifts from its declaration is a different agent wearing the name.
+- Reconciliation touches real agents with real memory, so a failure part-way through must leave the
+  install exactly as it was rather than half-converted.
+- An install holds agents no team declares. A team must never take one over, and must never leave
+  one damaged.
 
-`team.json` schema 2 contains `schema`, `name`, `catalogs`, and `members`. Its name must equal
-`manifest.json`'s name. `catalogs` is a duplicate-free array of shared catalog dependencies, each
-with its exact `name` and GitHub repository or local-directory `source`. Schema 1 remains accepted
-for existing self-contained teams and has no `catalogs` field. Each member contains:
+## Requirements
 
-- `name`: the Rundesk agent name;
-- `description`: the sentence other agents use when routing work;
-- `instructions`: a relative path below `agents/` to its canonical `AGENTS.md`;
-- `skills`: the exact positive allowlist this member receives, which may be empty. Schema 2 uses
-  fully qualified `<catalog>/<skill>` addresses from the team or a declared dependency. Schema 1
-  keeps local skill names, interpreted as skills from the team catalog;
-- `delegates_to`: the exact named-agent scope, as an array. An empty array makes the member
-  inbound-only; and
-- `self_improve`: `true` or `false`, controlling Rundesk's protected weekly upkeep for this member.
+**These rows were authored on 2026-08-25 from the acceptance list this document previously carried,
+and have not been reviewed by the product owner.** They restate conditions that were already
+written down; the wording is new. A ✅ names test methods observed to pass on 2026-08-25 in
+`test_team_catalogs.py` (11 tests) and `test_teams_command.py` (32 tests). A ❌ is not a claim the
+behavior is absent, only that nothing here proves it.
 
-All fields are required. Unknown fields, duplicate members, dependencies, or skills, paths that
-escape the catalog, missing instructions, undeclared catalogs, invalid names, and cross-team member
-collisions are refused before a confirmed operation mutates the install. Two addresses with the
-same skill name are refused for one member because installed grants stand under that name.
+|  | ID | Requirement | Evidence |
+|:--:|---|---|---|
+| ✅ | R-TEAM-1 | A preview changes nothing and names the effect on every member before a confirmation is possible | `test_preview_changes_nothing_and_names_member_effects` |
+| ✅ | R-TEAM-2 | A confirmed install creates every declared member, reconciles it, and leaves every gateway stopped | `test_confirm_creates_and_reconciles_every_member_with_gateways_stopped` |
+| ✅ | R-TEAM-3 | Installation refuses a declared name already held by an existing agent, and names the command that would remove it | `test_install_refuses_an_existing_agent_and_names_its_removal_command` |
+| ✅ | R-TEAM-4 | An agent no team manages is never taken over, repaired, or changed by an install, update, or refresh | `test_confirm_does_not_repair_or_change_an_unmanaged_agent`, `test_update_refuses_to_take_over_an_agent_no_team_manages` |
+| ✅ | R-TEAM-5 | Each member holds exactly its declared allowlist; an unlisted grant is removed on reconciliation whichever catalog gave it, and an empty list removes every optional skill | `test_the_positive_allowed_list_removes_an_unlisted_catalog_grant`, `test_an_empty_allowed_list_removes_every_optional_skill` |
+| ✅ | R-TEAM-6 | A team may not replace a product-owned operating skill, and only Rundesk's exact conditional delegation skill is protected | `test_a_team_cannot_replace_product_owned_operating_skills`, `test_only_rundesks_exact_conditional_delegation_skill_is_product_protected` |
+| ✅ | R-TEAM-7 | Weekly upkeep is explicitly on or off per member, and a changed setting is applied on update | `test_weekly_upkeep_must_be_explicitly_on_or_off`, `test_update_applies_a_changed_weekly_upkeep_setting` |
+| ✅ | R-TEAM-8 | A member may delegate only inside its declared team, and may hold no optional skills at all | `test_members_may_delegate_only_inside_the_declared_team`, `test_a_member_may_have_no_optional_skills` |
+| ✅ | R-TEAM-9 | Unknown fields, unsafe instruction paths, an empty canonical workflow, a missing provider, and a second team owner are refused before anything is written | `test_unknown_fields_and_unsafe_instruction_paths_are_refused`, `test_an_empty_canonical_agent_workflow_is_refused`, `test_a_missing_provider_and_a_second_team_owner_are_refused` |
+| ✅ | R-TEAM-10 | A changed catalog version moves instructions, grants, and delegation scope together | `test_changed_catalog_moves_instructions_skills_and_scope_together` |
+| ✅ | R-TEAM-11 | Local drift is repaired even when the catalog tree is unchanged | `test_update_repairs_drift_even_when_the_catalog_tree_is_unchanged` |
+| ✅ | R-TEAM-12 | Member reconciliation holds the install lock, and turn-admission reconciliation repairs installed state without fetching | `test_update_reconciles_members_with_the_install_lock_still_held`, `test_turn_admission_reconciliation_repairs_installed_state_without_fetching` |
+| ✅ | R-TEAM-13 | A failure part-way through an update puts the team and every member back, and a member created before the failure is not an agent afterwards | `test_a_failure_part_way_through_an_update_puts_the_team_and_its_members_back`, `test_a_member_created_before_the_failure_is_not_an_agent_afterwards` |
+| ✅ | R-TEAM-14 | A failed install leaves no catalog and no agent it created while keeping its dependencies, and a failed promotion leaves the promoted catalog as it was | `test_a_failed_install_leaves_no_catalog_and_no_agents_but_keeps_its_dependency`, `test_a_failed_promotion_leaves_the_catalog_it_promoted_as_it_was` |
+| ✅ | R-TEAM-15 | A restore that cannot finish names the state that remains and a retry that would be valid, rather than reporting success | `test_a_failed_install_restore_names_the_state_that_remains_and_a_valid_retry`, `test_the_hold_itself_refuses_a_page_it_could_not_put_back` |
+| ✅ | R-TEAM-16 | A member's page that was a symlink is put back as that symlink, and a directory standing where a managed page belongs refuses before anything moves | `test_a_members_symlinked_page_goes_back_as_that_symlink`, `test_a_directory_where_a_managed_page_belongs_refuses_before_anything_moves` |
+| ✅ | R-TEAM-17 | A schema 2 team installs a missing declared dependency and reuses a matching installed one | `test_schema_two_installs_a_missing_shared_catalog_and_grants_its_skill`, `test_schema_two_reuses_a_matching_installed_catalog` |
+| ✅ | R-TEAM-18 | A same-named dependency from another source, a dependency missing a referenced skill, and a skill from an undeclared catalog are each refused before the team changes | `test_schema_two_refuses_a_same_named_catalog_from_another_source`, `test_schema_two_refuses_a_dependency_missing_a_required_skill`, `test_schema_two_refuses_a_skill_from_an_undeclared_catalog` |
+| ✅ | R-TEAM-19 | A dependency cannot replace a product skill, and an installed team protects its dependencies from removal and from a replacement that retires a referenced skill | `test_schema_two_cannot_replace_a_product_skill_from_a_dependency`, `test_an_installed_team_protects_its_dependency_from_removal_and_retirement` |
+| ✅ | R-TEAM-20 | A failure after a dependency installs reports the partial result honestly rather than as success | `test_a_failure_after_dependency_install_reports_the_partial_safe_result` |
+| ✅ | R-TEAM-21 | The same repository installs as skills only without creating agents or team ownership, is promoted in place later, and cannot then be moved by skill commands | `test_skill_commands_install_a_team_catalog_without_installing_the_team`, `test_skill_commands_cannot_move_a_catalog_installed_as_a_team`, `test_an_ordinary_catalog_may_carry_an_unrelated_team_json` |
+| ✅ | R-TEAM-22 | A turn with command access can apply a confirmed team catalog operation exactly as a terminal caller can | `test_an_agent_turn_with_command_access_can_apply_a_confirmed_team_catalog` |
+| ✅ | R-TEAM-23 | Only the team envelope is recognized as a declaration, and a complete team is read from catalog data | `test_only_the_team_envelope_is_recognized_as_a_declaration`, `test_a_complete_team_is_read_from_catalog_data` |
+| ❌ | R-TEAM-24 | Each member's `AGENTS.md` and `CLAUDE.md` match the catalog byte for byte and no `MEMORY.md` remains | not proven — reconciliation is covered, but no test names the byte-for-byte page comparison or the absent memory page |
+| ❌ | R-TEAM-25 | An unreadable member's records refuse that team before any dependency, gateway, catalog, or member changes, and the teams after it still refresh | not proven — no test names this ordering |
+| ❌ | R-TEAM-26 | An agent holding a grant from the team's catalog but declared by no team has that grant put back, and its own pages and records left alone | not proven — no test names this case |
 
-## Lifecycle
+## Open questions
 
-`rundesk teams install <repository>` fetches and validates the complete team and every missing
-dependency, previews whether each dependency will be installed or reused, and changes nothing.
-An installed dependency is reused only when its recorded source matches the declaration and it
-holds every referenced skill; a same-named catalog from another source is refused. `--confirm`
-installs missing dependencies, installs the team catalog, and reconciles its members. Shared
-catalogs remain independently installed catalogs and can be reused by any number of teams. A provider
-is installation-local: `--provider` supplies the provider for every new member. Installation refuses
-any declared name that already exists; remove each colliding agent before installing the team so
-every member begins from its catalog-owned workflow.
-
-An installed team protects its dependencies from being removed through `rundesk skills remove`.
-Ordinary catalog update and refresh also refuse a replacement that retires a skill referenced by an
-installed team. Change the team declaration first; unreferenced dependency catalogs keep their
-ordinary independent lifecycle.
-
-`rundesk teams update <team>` fetches the configured source, validates the replacement, previews
-catalog and member changes, and changes nothing. `--confirm` replaces changed catalog content and
-reconciles every declared member even when the fetched tree is unchanged, so the operation repairs
-instruction, memory, grant, and delegation drift. It refuses a newly declared member name already
-held by an agent no team manages, at preview and at confirmation, and names the removal required.
-
-`rundesk update` and the daily automatic updater also check every installed team catalog, after the
-application and independently of ordinary catalogs. They require no separate confirmation, validate
-each fetched declaration and every catalog it declares as a dependency before any gateway,
-dependency catalog, team catalog, or member is changed, install a missing dependency and reuse a
-matching installed one, reconcile every declared member even when the tree is unchanged, and report
-application, ordinary-catalog, and team-catalog outcomes separately. Failure to fetch or validate
-one team or one of its dependencies preserves its last working release, members, and member
-gateways, and does not stop another catalog.
-
-Reconciliation prerequisites that cannot be recovered from are proved before a gateway moves and
-before any dependency, catalog, or member is written: every existing member's records must be
-readable, and nothing that is neither a file nor a symlink may stand where one of that member's
-managed instruction or memory pages belongs. Beyond that, a failure met part-way through
-reconciliation puts back the catalog tree, each declared member's instruction and memory pages and
-the description, delegation scope and upkeep this lifecycle owns, and the grants of every agent
-this catalog reaches. An agent it reaches only through a grant keeps its own pages and records: the
-lifecycle never writes them, so it never puts them back and never refuses a team over their shape.
-
-A confirmed initial installation is held on the same terms, from before its catalog arrives: a
-wholly new team catalog and every agent it created are removed, and a promoted skills-only catalog
-returns to its prior tree, version, and grants. The dependency catalogs it installed first stay
-installed and granted to nobody, which is the one deliberate exception and is named in the failure.
-
-This is a compensating restore rather than a transaction: an agent this reconciliation created is
-taken away again, nothing that existed before it began is ever removed, a dependency catalog
-installed for this team stays installed with nothing granted from it, and a failure while putting
-state back is reported as its own named outcome instead of being reported as success. Every
-expected reconciliation failure is named against its own team, so the teams after it are still
-checked.
-
-No update adopts an agent it does not already manage. A declared member name already held by an
-agent no installed team manages fails the explicit team update and the manual or daily refresh
-alike, names the `rundesk agents remove <agent> --confirm` needed, and leaves that agent's files,
-records, and grants exactly as they were, together with the installed team's last working version.
-A name may only be taken over after the owner has removed the colliding agent.
-
-Turn admission also performs a network-free reconciliation of that one member from the installed
-catalog before instructions or grants are read. Thus local drift cannot cross into a later turn;
-catalog source changes arrive only through the explicit guarded team command or the guarded
-manual/daily update lifecycle.
-
-For each member, reconciliation:
-
-1. creates the agent when absent;
-2. writes the catalog's instruction bytes atomically to both `AGENTS.md` and `CLAUDE.md`;
-3. removes `MEMORY.md`, making the team member explicitly memoryless;
-4. writes the declared description and delegation scope;
-5. enables or disables the member's protected weekly upkeep from `self_improve`;
-6. grants every declared fully qualified skill and revokes every grant outside that positive
-   allowlist;
-7. preserves Rundesk's required operating skill and conditional delegation skill; and
-8. leaves the member's gateway stopped for the owner to start when wanted.
-
-A member removed by a later catalog version is released from team management rather than deleted.
-Removing agents, channels, schedules, credentials, or projects is outside this lifecycle. Removing
-an unlisted optional skill grant is part of the positive allowlist contract.
-
-Installation and the explicit team update do not start gateways. The successful command names
-`rundesk gateways start <agent>` so the owner can start only the agents they want to use. The
-combined manual/daily lifecycle instead stands down only online members and restores exactly that
-set after reconciliation; members that began offline remain offline.
-
-## Ownership and safety
-
-A named agent may be managed by at most one installed team catalog. Initial installation refuses
-every existing same-named agent and reports the exact `rundesk agents remove <agent> --confirm`
-command required before retrying. A team never changes provider credentials or grants itself
-external authority.
-
-Team catalogs are data-only. Rundesk executes no repository hook, migration script, or agent-authored
-code during installation or update. `rundesk skills install` may install the same repository as an
-ordinary skill catalog: it writes no team marker, creates no agent, and leaves `team.json` inert.
-That skills-only installation follows ordinary skill update, refresh, and removal behavior. A
-catalog installed through `rundesk teams install` carries the team marker, and ordinary skill
-update, refresh, and removal refuse or skip it so team content cannot move without member
-reconciliation. Installing the team after the skills promotes the existing catalog in place,
-preserving its skills while adding team ownership and reconciling the declared agents.
-
-An agent turn may run a confirmed team install or update when the owner authorized that effect and
-the turn's configured tool access can invoke Rundesk. Rundesk does not infer owner authorization
-from agent-turn environment variables. Preview, `--confirm`, validation, collision, locking,
-reconciliation, positive allowlist, and stopped-gateway guarantees are identical for terminal and
-in-turn callers. Repository protection, task authorization, and configured tool access remain the
-authority boundaries.
-
-## Acceptance
-
-- A synthetic local team catalog previews without mutation, then installs into a disposable root.
-- An agent-turn environment with command access can apply the same confirmed skill and team catalog
-  operations as a terminal caller.
-- Missing members exist with their configured descriptions and delegation scopes.
-- Their `AGENTS.md` and `CLAUDE.md` match the catalog byte-for-byte and no `MEMORY.md` remains.
-- Each member's protected weekly upkeep state matches its `self_improve` setting.
-- Each member holds exactly its positive allowed list, plus product-required grants; an unlisted
-  grant from any catalog is removed on reconciliation.
-- Every member's gateway activation is requested through the injected supervisor boundary.
-- A second confirmed update is idempotent.
-- Local drift is repaired even when the source tree is unchanged.
-- A changed catalog version updates instructions, grants, and delegation scope together.
-- Invalid manifests, existing same-named agents, missing providers for new members, cross-team
-  collisions are refused without false success.
-- The same repository installs, updates, and removes as skills only without creating agents or team
-  ownership; it can then be promoted in place to a team, which remains protected from ordinary skill
-  lifecycle changes and leaves every gateway stopped.
-- The complete suite, Python 3.9 floor, lint, syntax, privacy, and disposable-install gates pass.
-- The explicit team update and the automatic or manual global refresh both refuse a declared member
-  name held by an unmanaged agent, preserve that agent and the last working team catalog, and
-  report the failure.
-- An automatic global refresh of a schema 2 team installs a missing declared dependency, reuses a
-  matching installed one, and preserves the last working team and member state when a dependency
-  cannot be fetched or validated.
-- An unreadable member's records refuse that team before any dependency, gateway, catalog, or
-  member changes, and the teams after it still refresh.
-- A failure injected part-way through reconciliation leaves the prior catalog version, every
-  member's pages, records, upkeep, delegation scope, and grants, and the prior gateway state, for
-  the explicit command and the automatic refresh alike. A member the same reconciliation created
-  before failing is not an agent afterwards.
-- A member's instruction or memory page that was a symlink is put back as that symlink, and a
-  directory standing where one belongs fails that team before its gateway moves, with the directory
-  and its contents intact and the teams after it still refreshing.
-- An agent holding a grant from the team's catalog but declared by no team has that grant put back
-  and its own pages and records left alone.
-- A confirmed install failing after one member reconciles leaves no team catalog and no agent it
-  created, keeps a promoted catalog as the skills-only catalog it was, and keeps its dependencies.
-- A restore that cannot itself finish names what it could not put back and fails only its own team.
-- Schema 1 self-contained teams remain compatible.
-- A schema 2 team installs missing dependency catalogs, reuses matching installed dependencies, and
-  refuses mismatched sources or missing referenced skills before changing the team.
-- An installed dependency cannot be removed or updated without every referenced team skill.
+- Whether these rows say what the owner means. They were written from an acceptance list rather than
+  from a product decision, and the three unproven ones may be requirements, may be implementation
+  detail, or may already be covered by a test that does not name them.
+- Whether schema 1 self-contained teams have an expiry. They remain accepted, and nothing here
+  states for how long.
+- Team reconciliation creates declared members and never retires an undeclared one, so renaming a
+  member in a catalog leaves an orphaned agent on every existing install with its memory and grants
+  intact and no removal step. Whether that orphan should be reported, adopted, or removed is
+  undecided, and no requirement above covers it.

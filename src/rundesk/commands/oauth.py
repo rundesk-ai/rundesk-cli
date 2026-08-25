@@ -6,7 +6,7 @@ answer comes back down a socket the caller made rather than through anything a `
 shell history, or a log file can see.
 
 Hidden from `rundesk --help` on purpose: this is a protocol between two programs, not a verb
-somebody types. It is documented for the people writing the other end, in `docs/commands.md` and in
+somebody types. It is documented for the people writing the other end, in `docs/api/README.md` and in
 the `writing-skills` integration reference.
 """
 

@@ -642,7 +642,7 @@ def _found_on_the_machine(program: str) -> str:
 def _as_local(said: Any) -> str:
     """A moment the records keep in UTC, shown in the machine's own time with its offset.
 
-    The rule `docs/time.md` states: a record takes UTC because it is compared and may be restored on
+    The rule `docs/concepts/time.md` states: a record takes UTC because it is compared and may be restored on
     another machine, and a line somebody reads takes their own clock because they are placing it
     against their own day. A moment that will not parse is shown exactly as it is written rather
     than blanked — a record nobody can read is a thing to see, not a thing to hide.

@@ -68,7 +68,7 @@ schedule succeeded — a message per successful nightly job is how somebody lear
 channel. An agent with no notified channel says nothing at all, which is what configuring none asks
 for.
 
-The commands are in [`commands.md`](commands.md). This is what is underneath them.
+The commands are in [`commands.md`](../api/README.md). This is what is underneath them.
 
 ## A live gateway keeps a Mac from idle-sleeping
 
@@ -328,7 +328,7 @@ and nothing rundesk could add would; the only honest thing to do is detect it an
 what the `LOGIN ITEM` column is for.
 
 One further state is recorded in
-[`research/launchd-on-macos.md`](research/launchd-on-macos.md) and is **not settled**: launchd has a
+[`research/launchd-on-macos.md`](../research/launchd-on-macos.md) and is **not settled**: launchd has a
 "penalty box" it can put a job in, and what puts a job there and what gets it out was never
 established. It is named here rather than left out, because a page about never being stuck that
 quietly omitted a state would be the wrong kind of complete.

@@ -18,7 +18,7 @@ says what one had to do.
 **One warning before anything else.** The `RUNDESK_*` names below are **not** the retired directory
 variables. That build read a dozen independent `RUNDESK_*_DIR` variables to decide where an install
 kept things, and this build replaced all of them with one root — see
-[`docs/layout.md`](../layout.md). The variables on this page are a different thing entirely: they
+[`docs/layout.md`](../concepts/layout.md). The variables on this page are a different thing entirely: they
 are how a *turn* is described to a program rundesk starts, and every one of them is per-run rather
 than per-install.
 

@@ -235,7 +235,7 @@ def opening(model, settings=None) -> list:
     """Everything after the program's name, and why each part of it is there.
 
     **`RUNDESK_ACCESS_MODE` is read by nothing here, and that is the owner's decision.** Every turn
-    runs with this brain's whole tool set. The seam still carries the word — `docs/providers.md`
+    runs with this brain's whole tool set. The seam still carries the word — `docs/extending/providers.md`
     says plainly that it is a request rather than containment and that an adapter may ignore it —
     so what is written down and what happens agree, which is the part that matters. Nothing here
     implies a boundary it does not keep.

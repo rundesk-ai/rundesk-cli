@@ -1,51 +1,53 @@
-# Product requirements
+# requirements/
 
-This directory holds the product contracts that explain what Rundesk must do and how that behavior
-is accepted. The current channel requirements were reconciled with the `refactor-2` product on
-2026-08-08. The remaining files are preserved requirements from the previous build and are not
-current promises unless a current PRD links to them.
+What Rundesk must do, and whether anything proves it.
 
-| Document | Status | What it owns |
-|---|---|---|
-| [channel-adapter.md](./channel-adapter.md) | current draft | the provider-neutral channel-adapter product boundary and lifecycle |
-| [channel-messaging.md](./channel-messaging.md) | current draft | behavior shared by every channel conversation |
-| [channel-discord.md](./channel-discord.md) | current draft | Discord-specific setup, triggering, rendering, and commands |
-| [channel-slack.md](./channel-slack.md) | predecessor reference | the previous build's Slack behavior; Slack is outside the current channel increment |
-| [agent-delegation.md](./agent-delegation.md) | predecessor draft | the previous build's delegation design |
-| [agent-role.md](./agent-role.md) | predecessor draft | the previous build's role-worker design |
-| [machine-permissions.md](./machine-permissions.md) | current draft | what macOS lets a rundesk process do, and whose grants an answer is about |
-| [provider-account-alias.md](./provider-account-alias.md) | implemented | optional additional provider accounts and immutable delegation selection |
-| [rundesk-instructions.md](./rundesk-instructions.md) | current draft | ownership, composition, and acceptance of Rundesk operating and agent instructions |
-| [team-catalog.md](./team-catalog.md) | approved | version-controlled agent teams, their managed instructions, grants, and activation lifecycle |
+A file here asserts and cites. It does not explain how something is built — that is the subsystem's
+topic page — and it does not argue for the design. Every file takes the same closed shape:
+`id`/`name`/`last_verified` frontmatter, then `What this is`, `Why it exists`, `Requirements`, and
+`Open questions`, in that order and with nothing else.
 
-## Status and evidence
+| Contract | What it owns |
+|---|---|
+| [agent-delegation.md](./agent-delegation.md) | One agent's ask of another, and the answer it returns |
+| [channel-adapter.md](./channel-adapter.md) | The seam a channel adapter is reached through |
+| [channel-messaging.md](./channel-messaging.md) | A channel conversation, and the work that arrives on it |
+| [channel-discord.md](./channel-discord.md) | Discord, as an agent is reached on it |
+| [provider-account-alias.md](./provider-account-alias.md) | Additional provider accounts, and the alias that selects one |
+| [rundesk-instructions.md](./rundesk-instructions.md) | What every turn is told, and who owns each layer of it |
+| [team-catalog.md](./team-catalog.md) | Versioned agent teams, and what an install owes their declaration |
 
-- **Draft** means the direction is written and reviewable but unresolved product choices remain.
-- **Approved** means the product owner accepted the requirements and scope.
-- **Implemented** means the named acceptance evidence was executed successfully against the stated
-  build. A source path or test name alone does not earn this status.
-- **Validated** means real-user or real-platform evidence also supports the intended outcome.
-- **Superseded** means a later approved decision replaced the requirement; repository history keeps
-  the former wording.
+## The glyph is the whole point
 
-The validation tables distinguish current implementation evidence from executed acceptance. A test
-that exists has not necessarily been run in the documentation task, and an offline adapter test does
-not prove what Discord displayed on its service.
+The first column has no header and takes one of two values.
 
-## Authority and change control
+- **✅** — a named check was observed to pass, and the evidence cell names it.
+- **❌** — everything else: unbuilt, built and untested, or covered by something nobody has run.
 
-The Rundesk product owner decides product behavior and approves these PRDs. Code, tests, current
-documentation, predecessor requirements, and research establish facts and constraints; they do not
-silently redefine the desired product. When those sources conflict, the PRD records the conflict and
-the owner decides whether the product or implementation changes.
+**A source path is not evidence, and neither is a test that merely exists.** The claim a ✅ makes is
+that somebody watched it pass. Where that cannot be done the row stays ❌ with the reason, because a
+visible gap is safe and a ✅ that quietly stopped being true is not. There is no third glyph;
+"partly" is two rows.
 
-Requirement IDs remain stable when the same product condition survives revision. New behavior gets a
-new ID. Detailed wire formats and implementation choices belong in [adapters.md](../adapters.md), and
-executed delivery evidence belongs in each PRD's validation table.
+## Identifiers
 
-## Historical source
+`R-<NS>-<n>`, with the namespace declared once in the frontmatter. One namespace per file, one file
+per namespace, and an ID is never reused.
 
-These documents began as requirements imported from the previous build in commit `217006b`. That
-history remains available in Git. The current PRDs keep requirements that still express product
-intent, revise requirements deliberately changed by this build, and expose unresolved carry-forward
-choices instead of presenting predecessor checkmarks as current proof.
+**Four numbers are missing** — `R-CAD-16`, `R-DIS-18`, `R-CH-22`, and `R-CH-27` — from requirements
+withdrawn before this pass. They are deliberately not closed up. `R-CH-*` and `R-DIS-*` are cited in
+shipped source and in test docstrings, so renumbering to close a gap would silently repoint every one
+of those citations at a different requirement, and nothing would fail. A gap costs a reader one
+question; a renumbering costs them a confident wrong answer.
+
+## Authority
+
+The product owner decides what Rundesk must do. Code, tests, documentation, and research establish
+what is true and what is possible; they do not silently redefine what is wanted. Where they conflict
+with a requirement, the conflict is recorded in `Open questions` and the owner decides which side
+moves.
+
+Three predecessor contracts were removed on 2026-08-25 — the previous build's role-worker design, its
+Slack behavior, and its machine-permissions draft. Their requirement namespaces were cited nowhere
+else, and [../permissions.md](../concepts/permissions.md) remains the source of truth for what macOS lets
+Rundesk do. Git history holds them.

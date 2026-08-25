@@ -556,11 +556,14 @@ class AgentGuideContract(unittest.TestCase):
                     [line for line in issue.splitlines() if line.startswith("## ")])
 
     def test_readme_and_docs_index_link_the_catalog_guide(self):
-        for path in (support.CHECKOUT / "README.md", support.CHECKOUT / "docs" / "README.md"):
-            with self.subTest(path=path.name):
-                self.assertIn("docs/catalogs.md" if path.name == "README.md"
-                              and path.parent == support.CHECKOUT else "catalogs.md",
-                              path.read_text(encoding="utf-8"))
+        # The docs index lists homes rather than pages, so the guide is reached through the index of
+        # the home that owns it. Both paths still have to lead somebody there.
+        for path, expected in (
+                (support.CHECKOUT / "README.md", "docs/extending/catalogs.md"),
+                (support.CHECKOUT / "docs" / "README.md", "extending/"),
+                (support.CHECKOUT / "docs" / "extending" / "README.md", "catalogs.md")):
+            with self.subTest(path=str(path.relative_to(support.CHECKOUT))):
+                self.assertIn(expected, path.read_text(encoding="utf-8"))
 
     def test_readme_presents_the_development_team_with_its_linked_banner(self):
         readme = (support.CHECKOUT / "README.md").read_text(encoding="utf-8")
@@ -568,10 +571,10 @@ class AgentGuideContract(unittest.TestCase):
         self.assertTrue(banner.is_file())
         self.assertIn('href="https://github.com/rundesk-ai/rundesk-team-development"', readme)
         self.assertIn('src="assets/readme/rundesk-team-development-banner.png"', readme)
-        self.assertIn("docs/catalogs.md#building-a-team-catalog", readme)
+        self.assertIn("docs/extending/catalogs.md#building-a-team-catalog", readme)
 
     def test_catalog_guide_preserves_the_license_contract(self):
-        guide = (support.CHECKOUT / "docs" / "catalogs.md").read_text(encoding="utf-8")
+        guide = (support.CHECKOUT / "docs" / "extending" / "catalogs.md").read_text(encoding="utf-8")
         for required in (
             "├── LICENSE                        required repository license",
             "├── THIRD_PARTY_NOTICES.md         only when adapted work requires attribution",

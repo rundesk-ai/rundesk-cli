@@ -28,7 +28,7 @@ after its source and required skills match the declaration.
 A catalog that owns a tested set of named Rundesk agents is a **team catalog**. Use that boundary
 only when the catalog is responsible for keeping those agents' instructions, delegation scope, and
 positive skill allowlists in step across installations. Its schema and guarded lifecycle are specified in
-[`requirements/team-catalog.md`](requirements/team-catalog.md); ordinary topical skill catalogs do
+[`requirements/team-catalog.md`](../requirements/team-catalog.md); ordinary topical skill catalogs do
 not need team files.
 
 ## Building a catalog repository
@@ -117,7 +117,7 @@ users install it with the same commands and its GitHub URL. Team members are cre
 gateways stopped; the owner starts only the agents they want.
 
 The full validation, reconciliation, ownership, and safety contract is in
-[`requirements/team-catalog.md`](requirements/team-catalog.md).
+[`requirements/team-catalog.md`](../requirements/team-catalog.md).
 
 Do not add an empty optional skill directory. `ENVIRONMENTS.md` belongs only in a catalog whose
 skills ship runtime code, select accounts or require configuration across environments; omit it from
@@ -362,7 +362,7 @@ four things a person has to get right and which are easy to confuse: the **APIs*
 on the resources, and the **account and resource** a command selects at run time.
 
 Skills consume a declared provider through rundesk's private bridge rather than by handling tokens.
-See `docs/commands.md` for the socket protocol, and the bundled `writing-skills` skill's
+See `docs/api/README.md` for the socket protocol, and the bundled `writing-skills` skill's
 integrations reference for the caller's side of it.
 
 ## The catalog rundesk ships
