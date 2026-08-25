@@ -39,9 +39,10 @@ from rundesk.channels import kept as channels_kept
 from rundesk.core import paths
 from rundesk.delegations import hosting as delegations
 from rundesk.delegations import kept as delegations_kept
-from rundesk.providers import accounts, adapters, answering, kept, turns
+from rundesk.providers import accounts, adapters, answering, instructions, kept, turns
+from rundesk.schedules import delivering, firing
 from rundesk.schedules import kept as schedules_kept
-from rundesk.utils import programs
+from rundesk.utils import files, programs
 
 #: How long a case waits for a real turn to finish on its own thread. A ceiling rather than a sleep,
 #: so an ordinary run is through in tenths.
@@ -1356,6 +1357,62 @@ class AScheduleThatAsksTheAgent(Answering):
         second_row = kept.get_turn(self.agent, second.turn)
         self.assertNotEqual(first_row["conversation_id"], second_row["conversation_id"])
         self.assertEqual((0, 0), (first_row["session_resumed"], second_row["session_resumed"]))
+
+    def test_a_clock_fired_turn_uses_the_invocation_frozen_before_spawn(self):
+        name = self.a_schedule()
+        directory.schedules(self.agent).mkdir(parents=True, exist_ok=True)
+        files.write_json(firing.record_of(self.agent, name), {
+            "schedule": name, "invocation": "frozen-run-key",
+        })
+        got = answering.for_a_schedule(self.agent, name, invocation="frozen-run-key")
+        turn = kept.get_turn(self.agent, got.turn)
+        stands = arriving.where_it_stands(self.agent, int(turn["conversation_id"]))
+        self.assertEqual((arriving.FROM_SCHEDULE, "nightly/frozen-run-key"), stands)
+
+    def test_a_manual_turn_never_uses_an_invocation_left_by_the_clock(self):
+        name = self.a_schedule()
+        directory.schedules(self.agent).mkdir(parents=True, exist_ok=True)
+        files.write_json(firing.record_of(self.agent, name), {
+            "schedule": name, "invocation": "clock-run-still-on-disk",
+            "settled_outcome": schedules_kept.DONE,
+        })
+
+        got = answering.for_a_schedule(self.agent, name)
+
+        turn = kept.get_turn(self.agent, got.turn)
+        stands = arriving.where_it_stands(self.agent, int(turn["conversation_id"]))
+        self.assertNotEqual((arriving.FROM_SCHEDULE,
+                             "nightly/clock-run-still-on-disk"), stands)
+
+    def test_a_review_that_crashes_after_admission_releases_the_delivery_obligation(self):
+        directory.made("abigail", "claude")
+        name = self.a_schedule(
+            deliver_to_agent="abigail",
+            deliver_to_identity=delivering.identity_of("abigail"))
+        run_key = "nightly/review-crashed"
+        delivering.started(
+            self.agent, name, run_key, "2026-08-24T06:00:00Z",
+            "abigail", delivering.identity_of("abigail"))
+        delivering.finished(self.agent, run_key, schedules_kept.DONE)
+        landed = arriving.recorded_for_a_schedule(
+            self.agent, name, "review this", invocation="review-crashed")
+        receipt = turns.Admission()
+
+        def crashed(_request, watching=None, admitted=None):
+            admitted()
+            raise OSError("provider disappeared after admission")
+
+        with mock.patch.object(turns, "run", side_effect=crashed):
+            self.a_delegation_tenant()._take(
+                self.agent, landed.conversation, "review the delegated result",
+                situation=instructions.SCHEDULE_TO_AGENT, answering=None,
+                caller_agent=None, about="the delegated result", admitted=receipt,
+                schedule_name=name)
+
+        self.assertTrue(receipt.wait(0))
+        with records.reading(directory.records(self.agent)) as conn:
+            left = conn.execute("SELECT count(*) FROM schedule_delivery_obligations").fetchone()[0]
+        self.assertEqual(0, left)
 
     def test_a_schedule_is_not_shown_or_used_to_find_a_named_team(self):
         with mock.patch.object(

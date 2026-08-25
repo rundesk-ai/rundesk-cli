@@ -20,8 +20,8 @@ rundesk gateways logs <agent> [-n <lines>]  # what one gateway has been saying
 rundesk gateways run <agent>              # be the gateway, in this terminal
 rundesk schedules                         # everything every agent starts because the time came
 rundesk schedules list <agent>            # one agent's
-rundesk schedules add <agent> <schedule> --run '<program>' | --ask '<prompt>'  --when '<cron>' | --at <moment>
-rundesk schedules update <agent> <schedule> [--when|--at|--until|--run|--ask|--enable|--disable]
+rundesk schedules add <agent> <schedule> --run '<program>' | --ask '<prompt>' [--deliver-to <agent>]  --when '<cron>' | --at <moment>
+rundesk schedules update <agent> <schedule> [--when|--at|--until|--run|--ask|--deliver-to|--no-deliver-to|--enable|--disable]
 rundesk schedules show <agent> <schedule> # everything one was given
 rundesk schedules run <agent> <schedule>  # run one now, in this terminal
 rundesk schedules remove <agent> <schedule>       # take one away
@@ -621,6 +621,12 @@ agent in. A claim nobody can *ask* about is refused in the same breath as one th
 reason the gateway's own third answer is: reporting an agent nobody can ask about as free is how a
 live program comes to be orphaned by a removal.
 
+Removal is also refused across a scheduled-delivery handoff: a source stays until the recipient has
+admitted every outbox report, and a target stays while a source outbox or an unclaimed delivered
+message still addresses it. Run the recipient gateway so it can admit the report and let the source
+gateway durably acknowledge that admission, then remove the agent. This keeps an explicitly
+destructive command from deleting the handoff's only durable copy.
+
 Before the target is taken away, its name is removed from every other agent's explicit delegation
 allowlist under the same install state-change lock. Recreating an agent with that name therefore
 does not restore old allowlist authority. An unrestricted (`any`) scope remains unrestricted, as
@@ -998,18 +1004,52 @@ schedule weekday-client-update added for cole
 ```
 
 A schedule that asks the agent gets **a fresh conversation for every invocation**, so a run at three in
-the morning never lands in the exchange somebody types into. It reports where the agent is told
-things — one message when it starts and its answer when it ends, and nothing in between. If it
-delegates, the returned result resumes that invocation for review and only the final reviewed answer
-is reported.
+the morning never lands in the exchange somebody types into. Without `--deliver-to`, it reports
+where the source agent is told things — one message when it starts and its answer when it ends, and
+nothing in between. If it delegates, the returned result resumes that invocation for review and only
+the final reviewed answer is reported.
 [`schedules.md`](schedules.md#what-a-run-says-on-a-surface-and-the-two-messages-it-is-allowed) is what
 that looks like and what happens when there is nowhere to say it.
+
+An asking schedule may instead hand its completed report to another agent:
+
+```console
+$ rundesk schedules add beacon weekly-seo --when '0 9 * * 1' \
+    --ask "Review this week's organic search changes and recommend the next actions." \
+    --deliver-to abigail
+schedule weekly-seo added for beacon
+        when      0 9 * * 1
+        ask       Review this week's organic search changes and recommend the next actions.
+        deliver   abigail
+```
+
+**`--deliver-to` is scheduled delivery, not delegation.** When Beacon finishes successfully,
+Rundesk durably admits one ordinary turn for Abigail containing Beacon's report and the schedule/run
+provenance. Abigail handles it under Abigail's own instructions; Abigail's final answer goes to
+Abigail's notified channel when one is configured. Nothing is sent back to Beacon, no delegation row
+or callback is made, and Abigail's answer is not automatically forwarded to another agent. This is
+the one-way path `Beacon schedule -> Abigail -> Abigail's notified channel`.
+
+Only `--ask` schedules can deliver. A program has no agent report to hand off. The source and target
+must be different existing agent identities; a removed target does not silently become a later agent
+created under the same name. If that identity is gone when the report completes, the report uses the
+source's ordinary notified channel instead. A busy or stopped target gateway does not lose an
+admitted report: its gateway takes the pending turn when it can run again. Repeating delivery of the
+same schedule run is idempotent. Each clock-fired invocation freezes its target before starting, so
+an update affects the next run rather than redirecting one already in flight. Delivery carries at
+most 60 KiB; an oversized report keeps its opening and conclusion with an explicit omitted-middle
+marker. Agent removal is refused while it would destroy an unread or unclaimed delivery.
 
 ### schedules update
 
 Changes one in place, keeping every record of what it has already done. **Only what is named moves**,
 and `--when` and `--at` replace each other — a schedule states a repeating time or one moment, never
 both. Naming nothing to change is refused rather than reported as a success.
+
+`--deliver-to <agent>` adds or changes scheduled delivery on an asking schedule.
+`--no-deliver-to` returns it to the source agent's ordinary notified-channel report. A delivered
+asking schedule can become a program schedule in one atomic update by naming `--run` and
+`--no-deliver-to` together.
 
 ```console
 $ rundesk schedules update cole nightly
@@ -1036,7 +1076,8 @@ schedule nightly completed
 **Running by hand never uses up the one moment a schedule states and never moves when it next falls
 due.** Testing a schedule must not be how you stop it happening. It does write down what became of it,
 because it did run — and it takes the same lock the clock takes, so it cannot start a second copy of
-work a gateway is already doing.
+work a gateway is already doing. For an asking schedule, this manual test reports to the terminal and
+does not dispatch `--deliver-to`; scheduled delivery belongs to a clock-fired run.
 
 ### What a firing leaves behind
 

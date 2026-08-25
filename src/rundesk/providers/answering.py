@@ -44,7 +44,7 @@ from rundesk.channels import arriving, delivery, hosting
 from rundesk.channels import kept as channels_kept
 from rundesk.core import config, paths
 from rundesk.providers import accounts, adapters, continuations, instructions, kept, protocol, turns
-from rundesk.schedules import due, firing
+from rundesk.schedules import delivering, due, firing
 from rundesk.schedules import kept as schedules_kept
 from rundesk.skills import grants
 from rundesk.utils import locking, logs, programs
@@ -125,6 +125,26 @@ REVIEW = """{agent} returned this unchecked delegated result; nobody has receive
 
 Verify material claims before using or reporting them."""
 
+#: What a finished report delivered from another agent's schedule looks like in front of the agent
+#: it was handed to. **Its words, verbatim**, under the four facts that say whose run this was.
+#:
+#: The run's key and the moment it finished are here rather than only in the row behind it, because
+#: an agent reading its own history back has to be able to tell tonight's report from last night's —
+#: and because two reports from one schedule are otherwise the same four lines twice.
+#:
+#: **What is *not* here is a request.** Nothing is collected from this turn and nothing goes back to
+#: the agent that sent it, so a line asking for a reply would be asking for something rundesk would
+#: then drop. The one sentence saying so is what stops an agent inventing a way to answer.
+DELIVERED_REPORT = """{from_agent} delivered the finished report from its schedule "{schedule}".
+
+- run: {run_key}
+- completed: {ran_at} UTC
+
+This is a report to act on. Nothing is collected from this turn for {from_agent}, and no reply
+reaches it.
+
+{report}"""
+
 
 def _delegation_provenance(answer: str) -> str:
     """Requested, effective-admission and actual terminal provider/model evidence."""
@@ -192,6 +212,13 @@ class IntoAChannel:
     exactly: cut the reply to what the platform takes, attach whatever the brain made, put the cost on
     it, and hand it to the adapter. Written twice, it was written once — and the half that was never
     written is why a delegated answer reached a person's records and never their room.
+
+    **`_take`, `_destination` and `_out_loud` are here for that same reason.** Starting a turn on a
+    conversation this process did not have a platform event for — an answer coming back, a lifecycle
+    resume, another agent's schedule handing over its finished report — is one piece of work with
+    three tenants, and the tenant it was first written inside is not the one that owns it. Nothing
+    about them knows what a delegation is: what decides whether anything is sent out loud is the
+    conversation, never the caller.
 
     Holds nothing but what it needs to find the gateway's own log and to reach the adapter again.
     """
@@ -350,6 +377,183 @@ class IntoAChannel:
             if isinstance(at_most, int) and at_most > 0:
                 return at_most
         return delivery.WHEN_UNSAID
+
+    def _take(self, agent: str, conversation: int, body: str, situation: str,
+              answering: Optional[str], caller_agent: Optional[str], about: str,
+              message_ids: Tuple[int, ...] = (),
+              admitted: Optional[turns.Admission] = None,
+              schedule_id: Optional[int] = None, schedule_name: str = "",
+              provider_name: Optional[str] = None,
+              provider_alias: Optional[str] = None,
+              model_name: Optional[str] = None) -> bool:
+        """Start a turn, or say this into the one already running, or ask again in a moment.
+
+        The same three answers `OnAChannel._answered` gives a person's message, and deliberately the
+        same: an agent busy on a channel when an answer comes back should read it now rather than
+        after whatever it is doing, which is the whole of what steering is for.
+
+        **Only the turn this starts sends anything.** A word said into a turn already running is
+        answered by *that* turn, which posts its own final answer with this read into it — so a
+        delivery here as well would post the same exchange twice.
+        """
+        # **Where this conversation actually stands, asked rather than assumed.** `turns` writes the
+        # answer back through `said_by_agent`, which finds the conversation from `(source, place)` —
+        # so a pair that merely looks right makes a second conversation and an answer nobody reads.
+        stands = arriving.where_it_stands(agent, conversation)
+        if stands is None:
+            _note(self._where, f"{about} names a conversation that is not there", logs.ERROR)
+            if admitted is not None:
+                admitted.refused()
+            return False
+        source, place = stands
+        # The adapter that speaks to wherever this conversation stands, or `None` where it stands on
+        # no platform — a delegation being answered, a schedule, a terminal. Read once here rather
+        # than inside the retry, because it cannot change between attempts.
+        destination = self._destination(agent, conversation)
+        kind, delivery_place = destination if destination is not None else (None, place)
+        try:
+            for again in range(TRIES):
+                try:
+                    watching = (_Streaming(self, agent, kind, delivery_place) if kind else None)
+                    typing_started = False
+                    got = None
+
+                    def started() -> None:
+                        nonlocal typing_started
+                        # Delegation and review turns have no new platform message to trigger the
+                        # ordinary channel path. Admission is the exact moment they become real
+                        # work, so a channel-backed conversation must start typing here as well.
+                        if kind:
+                            typing_started = hosting.marked(
+                                agent, self._where, self._hosted(), kind, delivery_place, WORKING)
+                        if admitted is not None:
+                            admitted.accepted()
+
+                    try:
+                        got = turns.run(turns.Request(
+                            agent=agent, prompt=body, conversation=conversation,
+                            situation=situation,
+                            source=source, place=place, answering=answering,
+                            schedule_id=schedule_id, schedule_name=schedule_name,
+                            caller_agent=caller_agent, inbound_messages=message_ids,
+                            provider_name=provider_name, provider_alias=provider_alias,
+                            model_name=model_name),
+                            # A schedule still owes one final report, not its review activity.
+                            watching=(watching.heard
+                                      if watching and source == arriving.FROM_CHANNEL else None),
+                            admitted=started)
+                    finally:
+                        if kind and typing_started:
+                            became = (AS_A_STATE.get(got.turn_status, FAILED)
+                                      if got is not None else FAILED)
+                            # No external id: this terminal state ends the place-wide typing
+                            # indicator but puts no reaction on a message nobody sent.
+                            hosting.marked(
+                                agent, self._where, self._hosted(), kind, delivery_place, became)
+                    # Before anything is posted, because what a run owes onward is a record and a
+                    # platform that refuses the message must not cost it.
+                    handed_on = self._owed_onward(agent, source, place, got)
+                    if kind and watching and not handed_on:
+                        self._out_loud(agent, kind, delivery_place, got, watching, about)
+                    return True
+                except turns.Busy:
+                    said_into = turns.Admission()
+                    if turns.also_say(
+                            agent, conversation, body, message_ids, said_into):
+                        if said_into.wait() is not True:
+                            continue
+                        if admitted is not None:
+                            admitted.accepted()
+                        _note(self._where, f"{about} reached the turn already running")
+                        return True
+                    if again + 1 < TRIES:
+                        time.sleep(BEFORE_ASKING_AGAIN)
+            _note(self._where, f"{about} stayed busy, so it was recorded and not answered",
+                  logs.ERROR)
+            if admitted is not None:
+                admitted.refused()
+            return False
+        except Exception as why:  # noqa: BLE001 — a thread, and nobody is above it
+            # A delegated result can be durably admitted and then lose its review provider before
+            # `turns.run` returns an Outcome. The turn ledger settles that review as stopped; mirror
+            # that terminal fact into the schedule obligation so recovery does not wait forever for
+            # a DONE review that can no longer happen. Pre-admission failures stay retryable.
+            if (admitted is not None and admitted.wait(0) is True
+                    and source == arriving.FROM_SCHEDULE
+                    and not place.startswith(f"{arriving.DELIVERED}/")):
+                with contextlib.suppress(Exception):
+                    delivering.finished(agent, place, kept.STOPPED)
+            _note(self._where, f"{about} went wrong ({why})", logs.ERROR)
+            if admitted is not None:
+                admitted.refused()
+            return False
+
+    def _owed_onward(self, agent: str, source: str, place: str,
+                     got: Optional[turns.Outcome]) -> bool:
+        """Write down that this finished scheduled report owes itself to another agent.
+
+        **The other completion point, and the reason it is not only in `gateways.host`.** A schedule
+        that hands work to a named agent has no final report when its first turn ends — the review
+        turn that reads the answer back is what produces one, and that turn runs through here. The
+        run's key is the same either way, so whichever of the two completes the run writes the row
+        and the other one finds it already written.
+
+        **Never a delivered report's own turn.** What arrived here from somebody else's schedule
+        stands in a conversation of its own kind, and passing it on again would be a chain nobody
+        asked for.
+        """
+        if source != arriving.FROM_SCHEDULE or got is None:
+            return False
+        if place.startswith(f"{arriving.DELIVERED}/"):
+            return False
+        if got.turn_status != kept.DONE:
+            try:
+                delivering.finished(agent, place, got.turn_status)
+            except Exception as why:               # noqa: BLE001 — a thread, nobody is above it
+                _note(self._where,
+                      f"failed scheduled report could not be settled ({why})", logs.ERROR)
+            return False
+        try:
+            return delivering.owed(agent, arriving.schedule_name(place), run_key=place,
+                                    ran_at=config.moment_of(), report=got.reply)
+        except Exception as why:                   # noqa: BLE001 — a thread, nobody is above it
+            _note(self._where, f"scheduled report could not be handed on ({why})", logs.ERROR)
+            return False
+
+    @staticmethod
+    def _destination(agent: str, conversation: int) -> Optional[Tuple[str, str]]:
+        """Where this conversation is heard, including a schedule's configured notice DM."""
+        stands = arriving.where_it_stands(agent, conversation)
+        if stands is None:
+            return None
+        if stands[0] == arriving.FROM_CHANNEL:
+            kind = arriving.on_which_channel(agent, conversation)
+            return (kind, stands[1]) if kind else None
+        if stands[0] == arriving.FROM_SCHEDULE:
+            telling = delivery.notice(agent, "")
+            return (telling.kind, telling.place) if telling is not None else None
+        return None
+
+    def _out_loud(self, agent: str, kind: str, place: str, got: turns.Outcome,
+                  watching: "_Streaming", about: str) -> None:
+        """Send what the turn settled with to the room it was asked in. **Never raises.**
+
+        Guarded rather than left to the caller's `except`: a platform that would not take the answer
+        must not read as the turn having gone wrong, because it did not — the words are in the
+        agent's records either way, and what failed is one delivery.
+
+        No mark goes with it. The four marks belong to *a message somebody sent*, and nobody sent
+        this one: it is the agent picking its own conversation back up, so there is nothing on the
+        platform for a reaction to land on.
+        """
+        try:
+            refused = self._delivered(
+                agent, kind, place, got, None, tuple(watching.linked))
+        except Exception as why:  # noqa: BLE001 — a thread, and nobody is above it
+            _note(self._where, f"{about} could not be sent to {kind} ({why})", logs.ERROR)
+            return
+        if refused:
+            _note(self._where, f"channel {kind}: {about} was not delivered — {refused}", logs.ERROR)
 
 
 class OnAChannel(IntoAChannel):
@@ -1038,138 +1242,112 @@ class OnADelegation(IntoAChannel):
                    message_ids=(landed.message,), admitted=admitted,
                    schedule_id=schedule_id, schedule_name=schedule)
 
-    def _take(self, agent: str, conversation: int, body: str, situation: str,
-              answering: Optional[str], caller_agent: Optional[str], about: str,
-              message_ids: Tuple[int, ...] = (),
-              admitted: Optional[turns.Admission] = None,
-              schedule_id: Optional[int] = None, schedule_name: str = "",
-              provider_name: Optional[str] = None,
-              provider_alias: Optional[str] = None,
-              model_name: Optional[str] = None) -> bool:
-        """Start a turn, or say this into the one already running, or ask again in a moment.
 
-        The same three answers `OnAChannel._answered` gives a person's message, and deliberately the
-        same: an agent busy on a channel when an answer comes back should read it now rather than
-        after whatever it is doing, which is the whole of what steering is for.
+class OnADelivery(IntoAChannel):
+    """Puts a finished report another agent's schedule handed here in front of this agent.
 
-        **Only the turn this starts sends anything.** A word said into a turn already running is
-        answered by *that* turn, which posts its own final answer with this read into it — so a
-        delivery here as well would post the same exchange twice.
+    Handed to `schedules.delivering.looked` as `handing`. Two things, and neither of them is a
+    delegation: **write the report down**, and **take an ordinary turn on it**.
+
+    ## Why the turn is ordinary
+
+    Nothing is collected from it and nothing goes back. The agent that scheduled the report has
+    already finished, and there is no row anywhere waiting for an answer — so what happens here is
+    the agent reading something addressed to it and doing whatever it does. Its final goes where its
+    finals go, which for a conversation the clock started is the one channel marked `notified`, at
+    its `notify_place`. That is `_destination`'s existing answer for a schedule and not a rule
+    written twice.
+
+    ## Why writing it down comes first
+
+    The report is history before it is a turn, for the reason `review_this` gives about an answer
+    coming back: a turn that never starts — a gateway going down this second, an agent busy every
+    time the sweep comes round — must not take the report with it. The row is what the next pass
+    finds, and `arriving.pending_deliveries` is what finds it.
+
+    ## The one thing held in memory, and what it is not
+
+    A conversation this process has just started a thread for. A turn claims its message at
+    admission, which is the durable guard — but the beat may come round again inside the moment
+    between the thread starting and the claim landing, and two threads on one report would put the
+    same words into one turn twice. Nothing is *decided* from it: an entry lost to a restart costs a
+    report nothing, because the message is still unclaimed and the next pass picks it up.
+    """
+
+    def __init__(self, where: Path, hosted: Callable[[], hosting.Watching]):
+        super().__init__(where, hosted)
+        self._starting_lock = threading.Lock()
+        self._starting: set = set()
+
+    def recorded(self, agent: str, from_agent: str, from_identity: str, schedule: str,
+                 run_key: str, ran_at: str, report: str) -> bool:
+        """Write one delivered report into this agent's own records. Idempotent, and never partial.
+
+        `True` only once the message is durably there, because that answer is what moves the mark
+        the sweep reads from. A store that would not take it raises, which is the sweep's to catch
+        and to leave the row unread for the next pass.
         """
-        # **Where this conversation actually stands, asked rather than assumed.** `turns` writes the
-        # answer back through `said_by_agent`, which finds the conversation from `(source, place)` —
-        # so a pair that merely looks right makes a second conversation and an answer nobody reads.
-        stands = arriving.where_it_stands(agent, conversation)
-        if stands is None:
-            _note(self._where, f"{about} names a conversation that is not there", logs.ERROR)
-            if admitted is not None:
-                admitted.refused()
-            return False
-        source, place = stands
-        # The adapter that speaks to wherever this conversation stands, or `None` where it stands on
-        # no platform — a delegation being answered, a schedule, a terminal. Read once here rather
-        # than inside the retry, because it cannot change between attempts.
-        destination = self._destination(agent, conversation)
-        kind, delivery_place = destination if destination is not None else (None, place)
-        try:
-            for again in range(TRIES):
-                try:
-                    watching = (_Streaming(self, agent, kind, delivery_place) if kind else None)
-                    typing_started = False
-                    got = None
+        landed = arriving.recorded_for_a_delivery(
+            agent, from_agent, from_identity, run_key,
+            DELIVERED_REPORT.format(from_agent=from_agent, schedule=schedule, run_key=run_key,
+                                    ran_at=ran_at, report=report))
+        return landed.message > 0
 
-                    def started() -> None:
-                        nonlocal typing_started
-                        # Delegation and review turns have no new platform message to trigger the
-                        # ordinary channel path. Admission is the exact moment they become real
-                        # work, so a channel-backed conversation must start typing here as well.
-                        if kind:
-                            typing_started = hosting.marked(
-                                agent, self._where, self._hosted(), kind, delivery_place, WORKING)
-                        if admitted is not None:
-                            admitted.accepted()
+    def answer_waiting(self, agent: str) -> None:
+        """Start an ordinary turn for each delivered report nothing has picked up yet.
 
-                    try:
-                        got = turns.run(turns.Request(
-                            agent=agent, prompt=body, conversation=conversation,
-                            situation=situation,
-                            source=source, place=place, answering=answering,
-                            schedule_id=schedule_id, schedule_name=schedule_name,
-                            caller_agent=caller_agent, inbound_messages=message_ids,
-                            provider_name=provider_name, provider_alias=provider_alias,
-                            model_name=model_name),
-                            # A schedule still owes one final report, not its review activity.
-                            watching=(watching.heard
-                                      if watching and source == arriving.FROM_CHANNEL else None),
-                            admitted=started)
-                    finally:
-                        if kind and typing_started:
-                            became = (AS_A_STATE.get(got.turn_status, FAILED)
-                                      if got is not None else FAILED)
-                            # No external id: this terminal state ends the place-wide typing
-                            # indicator but puts no reaction on a message nobody sent.
-                            hosting.marked(
-                                agent, self._where, self._hosted(), kind, delivery_place, became)
-                    if kind and watching:
-                        self._out_loud(agent, kind, delivery_place, got, watching, about)
-                    return True
-                except turns.Busy:
-                    said_into = turns.Admission()
-                    if turns.also_say(
-                            agent, conversation, body, message_ids, said_into):
-                        if said_into.wait() is not True:
-                            continue
-                        if admitted is not None:
-                            admitted.accepted()
-                        _note(self._where, f"{about} reached the turn already running")
-                        return True
-                    if again + 1 < TRIES:
-                        time.sleep(BEFORE_ASKING_AGAIN)
-            _note(self._where, f"{about} stayed busy, so it was recorded and not answered",
-                  logs.ERROR)
-            if admitted is not None:
-                admitted.refused()
-            return False
-        except Exception as why:  # noqa: BLE001 — a thread, and nobody is above it
-            _note(self._where, f"{about} went wrong ({why})", logs.ERROR)
-            if admitted is not None:
-                admitted.refused()
-            return False
+        Asked of the records rather than of what this process remembers, so a report recorded by a
+        gateway that is gone is answered by the one that replaced it.
+        """
+        waiting = arriving.pending_deliveries(agent, delivering.ANSWERED_AT_MOST)
+        if not waiting:
+            return
+        working = self._working_on(agent)
+        for conversation, message, source_id, body in waiting:
+            stood = arriving.delivery_stood_at(source_id)
+            if stood is None or conversation in working:
+                continue
+            with self._starting_lock:
+                if conversation in self._starting:
+                    continue
+                self._starting.add(conversation)
+            threading.Thread(target=self._answered, name=f"delivery-{conversation}",
+                             args=(agent, conversation, message, body, stood[0], stood[2]),
+                             daemon=True).start()
 
     @staticmethod
-    def _destination(agent: str, conversation: int) -> Optional[Tuple[str, str]]:
-        """Where this conversation is heard, including a schedule's configured notice DM."""
-        stands = arriving.where_it_stands(agent, conversation)
-        if stands is None:
-            return None
-        if stands[0] == arriving.FROM_CHANNEL:
-            kind = arriving.on_which_channel(agent, conversation)
-            return (kind, stands[1]) if kind else None
-        if stands[0] == arriving.FROM_SCHEDULE:
-            telling = delivery.notice(agent, "")
-            return (telling.kind, telling.place) if telling is not None else None
-        return None
+    def _working_on(agent: str) -> set:
+        """Which conversations already have a turn going. Empty where that cannot be read.
 
-    def _out_loud(self, agent: str, kind: str, place: str, got: turns.Outcome,
-                  watching: "_Streaming", about: str) -> None:
-        """Send what the turn settled with to the room it was asked in. **Never raises.**
+        The same guard `delegations.hosting._is_waiting_on_us` makes and for the same measured
+        reason: a conversation whose newest message is still the other party's, with a turn already
+        answering it, is one a second pass would start a second turn for.
+        """
+        with contextlib.suppress(Exception):
+            return {int(one["conversation_id"]) for one in kept.list_unfinished_turns(agent)
+                    if one.get("conversation_id") is not None}
+        return set()
 
-        Guarded rather than left to the caller's `except`: a platform that would not take the answer
-        must not read as the turn having gone wrong, because it did not — the words are in the
-        agent's records either way, and what failed is one delivery.
+    def _answered(self, agent: str, conversation: int, message: int, body: str,
+                  from_agent: str, run_key: str) -> None:
+        """One turn on one delivered report. **Never raises** — this is a thread, nobody is above it.
 
-        No mark goes with it. The four marks belong to *a message somebody sent*, and nobody sent
-        this one: it is the agent picking its own conversation back up, so there is nothing on the
-        platform for a reaction to land on.
+        The schedule is named to the brain as its **owner's** schedule — `alice/nightly` and never
+        `nightly` — because this agent may well have a schedule of its own by that name, and a turn
+        row saying it ran for one is a row every surface reading that column would then believe.
         """
         try:
-            refused = self._delivered(
-                agent, kind, place, got, None, tuple(watching.linked))
+            self._take(agent, conversation, body,
+                       situation=instructions.SCHEDULE_TO_AGENT,
+                       answering=None, caller_agent=None,
+                       about=f"the report {from_agent} delivered",
+                       message_ids=(message,),
+                       schedule_name=f"{from_agent}/{arriving.schedule_name(run_key)}")
         except Exception as why:  # noqa: BLE001 — a thread, and nobody is above it
-            _note(self._where, f"{about} could not be sent to {kind} ({why})", logs.ERROR)
-            return
-        if refused:
-            _note(self._where, f"channel {kind}: {about} was not delivered — {refused}", logs.ERROR)
+            _note(self._where, f"the report {from_agent} delivered went wrong ({why})", logs.ERROR)
+        finally:
+            with self._starting_lock:
+                self._starting.discard(conversation)
 
 
 class OnAContinuation(IntoAChannel):
@@ -1270,17 +1448,20 @@ class OnASchedule:
     however that happens. A turn run on this process's own thread could not offer that.
     """
 
-    def start(self, one: due.Schedule, agent: str, holding: int) -> int:
+    def start(self, one: due.Schedule, agent: str, holding: int,
+              invocation: str = "") -> int:
         """Start `rundesk providers run` for this schedule and hand back its pid."""
         return programs.start(
-            argv=[the_command(), *THE_RUNNER, agent, "--schedule", one.name],
+            argv=[the_command(), *THE_RUNNER, agent, "--schedule", one.name,
+                  "--invocation", invocation],
             log=firing.output_of(agent, one.name),
             where=directory.home(agent),
             env=firing.the_environment(),
             holding=(holding,))
 
 
-def for_a_schedule(agent: str, schedule: str, when=None) -> turns.Outcome:
+def for_a_schedule(agent: str, schedule: str, when=None,
+                   invocation: Optional[str] = None) -> turns.Outcome:
     """Take one scheduled turn, here, in this process. What `rundesk providers run` calls.
 
     A fresh conversation for every invocation, so **a run at three in the morning never lands in
@@ -1292,7 +1473,8 @@ def for_a_schedule(agent: str, schedule: str, when=None) -> turns.Outcome:
     if not (said.prompt or "").strip():
         raise Refused(f"{schedule} does not ask {agent} anything — it names a program to start, "
                       f"which is `rundesk schedules run {agent} {schedule}`")
-    landed = arriving.recorded_for_a_schedule(agent, schedule, said.prompt)
+    landed = arriving.recorded_for_a_schedule(
+        agent, schedule, said.prompt, invocation=invocation)
     return turns.run(turns.Request(
         agent=agent, prompt=said.prompt, conversation=landed.conversation,
         situation=instructions.SCHEDULE_TO_AGENT, schedule_id=row.get("id"),

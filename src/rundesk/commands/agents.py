@@ -35,13 +35,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from rundesk.agents import delegating, directory, migration, pages, records
-from rundesk.channels import hosting
+from rundesk.channels import arriving, hosting
 from rundesk.commands import Subcommands, as_written, failed
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job, standing
 from rundesk.providers import accounts, adapters
-from rundesk.schedules import firing, kept
+from rundesk.schedules import delivering, firing, kept
 from rundesk.skills import grants, library
 from rundesk.utils import locking
 from rundesk.utils.terminal import as_table
@@ -560,6 +560,11 @@ def _forgotten(name: str, confirming: bool) -> int:
         return _failed(connected, f"see what is connected with: rundesk channels list {name}",
                        "nothing was removed")
 
+    delivery_trouble = _delivery_removal_trouble(name)
+    if delivery_trouble:
+        return _failed(delivery_trouble, "let its gateway admit the report first",
+                       "nothing was removed")
+
     at = paths.agents() / name
     try:
         with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
@@ -569,6 +574,10 @@ def _forgotten(name: str, confirming: bool) -> int:
             gone_wrong = directory.not_an_agent(name)
             if gone_wrong:
                 return _failed(gone_wrong, "nothing was removed")
+            delivery_trouble = _delivery_removal_trouble(name)
+            if delivery_trouble:
+                return _failed(delivery_trouble, "let its gateway admit the report first",
+                               "nothing was removed")
             _revoked_from_explicit_scopes(name)
             gone = directory.forgotten(name)
     except TROUBLE as why:
@@ -583,6 +592,20 @@ def _forgotten(name: str, confirming: bool) -> int:
         # removal is still a removal, because everything that made this an agent is gone.
         print(f"        kept   {at} — something you put in there is still there")
     return OK
+
+
+def _delivery_removal_trouble(name: str) -> str:
+    """Why removing this agent now would destroy or strand a scheduled report."""
+    try:
+        if delivering.has_unread_from(name):
+            return f"{name} still holds a scheduled report another agent has not admitted"
+        if delivering.has_unread_for(name):
+            return f"{name} still has a scheduled report waiting in another agent's outbox"
+        if arriving.pending_deliveries(name, 1):
+            return f"{name} has a delivered scheduled report no turn has admitted"
+    except (records.NotThere, records.Unreadable, OSError):
+        return f"{name}'s scheduled deliveries could not be read safely"
+    return ""
 
 
 def _revoked_from_explicit_scopes(target: str) -> None:

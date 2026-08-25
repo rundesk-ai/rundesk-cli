@@ -67,7 +67,15 @@ OUTCOMES = (DONE, FAILED, STOPPED)
 #: records' own account of what has happened — a caller that could set those could rewrite history
 #: and then read it back as fact.
 SETTABLE = ("enabled", "cron", "run_at", "expire_at", "provider_name", "model_name",
-            "prompt", "command", "channel", "channel_place_id")
+            "prompt", "command", "channel", "channel_place_id",
+            "deliver_to_agent", "deliver_to_identity")
+
+#: Where a finished report goes, and who that was when somebody said so. **Both or neither**, which
+#: the records hold as a `CHECK` on the pair — a target kept as a name alone is a reference that
+#: follows the name to whoever holds it next, and an identity with no name is nothing anybody reads.
+#: Only a schedule that asks an agent may carry them: a schedule that starts a program has no report,
+#: and the records refuse that pairing too. Step `0014` is where both refusals live.
+DELIVER_TO = ("deliver_to_agent", "deliver_to_identity")
 
 #: Rundesk's per-agent upkeep is represented by a real row so it inherits the schedule lock,
 #: adoption, output and settlement guarantees. It is never a person's cron schedule: the gateway
@@ -342,6 +350,12 @@ def _why_the_records_refused(agent: str, name: str, why: sqlite3.IntegrityError)
     if "unique" in said:
         return (f"{agent} already has a schedule called {name} — change that one, or take it away "
                 "first")
+    if "deliver_to_identity" in said:
+        return (f"{name} is given the agent its report goes to and who that agent is, or neither "
+                f"of them ({why})")
+    if "deliver_to_agent" in said:
+        return (f"{name} starts a program, and a program has no report to deliver — only a schedule "
+                f"that asks an agent may name where its report goes ({why})")
     return (f"a schedule says when it runs over and over or the one moment it runs, and starts a "
             f"program or asks an agent — never both of a pair and never neither ({why})")
 

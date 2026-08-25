@@ -433,6 +433,10 @@ def _built(name: str, provider: str, describes: str, agents: Path,
             said["provider_alias"] = provider_alias
         if describes.strip():
             said["describes"] = describes.strip()
+        # The write that brings the configuration row into being is also what gives this agent
+        # the identity it keeps for life — see `records.stated`. The step that adds the column runs
+        # while this agent is still only tables, so there is no row for it to fill and this is the
+        # moment there is one.
         stated(building / RECORDS, said)
         at = agents / name
         os.replace(building, at)

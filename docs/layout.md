@@ -117,7 +117,8 @@ hand. So a stray directory is not listed as an agent and cannot be operated on a
 interrupted `agents add` leaves litter rather than something wearing an agent's name and not being
 one.
 
-The configuration row in `state.db` also keeps this agent's outbound delegation scope as a nullable
+The configuration row in `state.db` keeps an immutable agent identity as well as this agent's
+outbound delegation scope as a nullable
 JSON array. `NULL` means the default, any other available agent; `[]` means none, making this agent
 inbound-only for named-agent work; and a non-empty array is the exact allowlist. The setting changes
 only where this agent may delegate. It never prevents another agent from delegating work here.
@@ -125,6 +126,19 @@ Existing agents carried into the release receive `NULL`, so adding the setting d
 narrow a team that already delegates. Removing an agent prunes its name from every explicit array
 before removal, so recreating that name does not inherit prior allowlist authority; `NULL` remains
 unrestricted and inbound delegation remains unchanged.
+
+An asking schedule may keep a delivery target as both its current agent name and that immutable
+identity. The pair prevents a removed agent's schedules from silently addressing a different agent
+later created under the same name. Each clock-fired invocation first keeps a source-side obligation
+with that frozen pair; a successful unresolved obligation is retried across gateway replacement and
+resolved into the source outbox before the firing recovery record is removed. A completed delivery
+is admitted to the target's ordinary conversation ledger with a stable source-agent/schedule/run key
+before it is considered handed off.
+The source copies the target's admission mark into its own outbox as a durable acknowledgement.
+That unique key makes retries idempotent, while an unclaimed message remains durable when the target
+gateway is stopped or busy. Scheduled delivery writes no delegation row and no callback edge.
+Agent removal refuses a source whose outbox is unread and a target with an unread or unclaimed
+delivery, so the explicit destructive verb cannot cross the handoff's durable boundary.
 
 Each delegation row keeps the requested provider/alias/model separately from the effective
 provider/alias/model

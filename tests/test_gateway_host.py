@@ -42,7 +42,7 @@ from rundesk.exits import OK
 from rundesk.gateways import delegation_query, host, job, maintenance, standing
 from rundesk.providers import kept as turns_kept
 from rundesk.providers import protocol
-from rundesk.schedules import firing, kept
+from rundesk.schedules import delivering, firing, kept
 from rundesk.skills import catalogs, grants, library
 from rundesk.utils import locking, logs, programs
 
@@ -1997,6 +1997,139 @@ class WhatAScheduledRunSaysOnASurface(TheChannelsItHosts):
 
         told.assert_called_once()
         self.assertEqual("Reviewed final report.", told.call_args.args[3])
+
+    def test_a_delivered_schedule_records_the_report_without_posting_it_for_the_source(self):
+        directory.made("abigail", support.A_STAND_IN)
+        began = datetime.datetime(2026, 8, 4, 9, 0, tzinfo=datetime.timezone.utc)
+        landed = arriving.recorded_for_a_schedule(
+            self.name, "nightly", "review overnight work", when=began, invocation="run-1")
+        turn = turns_kept.add_turn(self.name, {
+            "conversation_id": landed.conversation, "schedule_name": "nightly",
+            "provider_name": support.A_STAND_IN, "access_mode": protocol.ACCESS_WORK,
+        }, when=began)
+        arriving.said_by_agent_into(
+            self.name, landed.conversation, "The finished SEO report.", turn=turn, when=began)
+        kept.added(self.name, "nightly", {
+            "cron": "0 9 * * *", "prompt": "review overnight work",
+            "deliver_to_agent": "abigail",
+            "deliver_to_identity": records.identity(directory.records("abigail")),
+        })
+        delivering.started(
+            self.name, "nightly", "nightly/run-1", config.moment_of(began), "abigail",
+            records.identity(directory.records("abigail")))
+        delivering.finished(self.name, "nightly/run-1", kept.DONE)
+
+        with mock.patch.object(host, "_told") as told:
+            host._Notices(
+                self.name, standing.logs_at(self.at),
+                lambda: hosting.Watching({}, {}, {})).reported(
+                    "nightly", None, "done", config.moment_of(began))
+
+        told.assert_not_called()
+        owing = delivering.owing(self.name)
+        self.assertEqual(1, len(owing))
+        self.assertEqual("abigail", owing[0].to_agent)
+        self.assertEqual("The finished SEO report.", owing[0].report)
+
+    def test_a_removed_delivery_target_leaves_the_report_for_the_source(self):
+        directory.made("abigail", support.A_STAND_IN)
+        target_identity = records.identity(directory.records("abigail"))
+        began = datetime.datetime(2026, 8, 4, 9, 0, tzinfo=datetime.timezone.utc)
+        landed = arriving.recorded_for_a_schedule(
+            self.name, "nightly", "review overnight work", when=began, invocation="run-1")
+        turn = turns_kept.add_turn(self.name, {
+            "conversation_id": landed.conversation, "schedule_name": "nightly",
+            "provider_name": support.A_STAND_IN, "access_mode": protocol.ACCESS_WORK,
+        }, when=began)
+        arriving.said_by_agent_into(
+            self.name, landed.conversation, "The finished SEO report.", turn=turn, when=began)
+        kept.added(self.name, "nightly", {
+            "cron": "0 9 * * *", "prompt": "review overnight work",
+            "deliver_to_agent": "abigail", "deliver_to_identity": target_identity,
+        })
+        delivering.started(
+            self.name, "nightly", "nightly/run-1", config.moment_of(began),
+            "abigail", target_identity)
+        delivering.finished(self.name, "nightly/run-1", kept.DONE)
+        directory.forgotten("abigail")
+
+        with mock.patch.object(host, "_told") as told:
+            host._Notices(
+                self.name, standing.logs_at(self.at),
+                lambda: hosting.Watching({}, {}, {})).reported(
+                    "nightly", None, "done", config.moment_of(began))
+
+        told.assert_called_once()
+        self.assertEqual("The finished SEO report.", told.call_args.args[3])
+        self.assertEqual([], delivering.owing(self.name))
+
+    def test_a_gateway_recovers_a_completed_delivery_obligation(self):
+        directory.made("abigail", support.A_STAND_IN)
+        target_identity = records.identity(directory.records("abigail"))
+        began = datetime.datetime(2026, 8, 4, 9, 0, tzinfo=datetime.timezone.utc)
+        landed = arriving.recorded_for_a_schedule(
+            self.name, "nightly", "review overnight work", when=began, invocation="run-1")
+        turn = turns_kept.add_turn(self.name, {
+            "conversation_id": landed.conversation, "schedule_name": "nightly",
+            "provider_name": support.A_STAND_IN, "access_mode": protocol.ACCESS_WORK,
+        }, when=began)
+        arriving.said_by_agent_into(
+            self.name, landed.conversation, "Recovered final report.", turn=turn, when=began)
+        delivering.started(
+            self.name, "nightly", "nightly/run-1", config.moment_of(began),
+            "abigail", target_identity)
+        delivering.finished(self.name, "nightly/run-1", kept.DONE)
+
+        with mock.patch.object(host, "_told") as told:
+            host._Notices(
+                self.name, standing.logs_at(self.at),
+                lambda: hosting.Watching({}, {}, {})).recover_deliveries()
+
+        told.assert_not_called()
+        self.assertEqual("Recovered final report.", delivering.owing(self.name)[0].report)
+
+    def test_a_reviewed_delegation_is_recovered_into_one_delivery(self):
+        directory.made("abigail", support.A_STAND_IN)
+        target_identity = records.identity(directory.records("abigail"))
+        began = datetime.datetime(2026, 8, 4, 9, 0, tzinfo=datetime.timezone.utc)
+        landed = arriving.recorded_for_a_schedule(
+            self.name, "nightly", "review overnight work", when=began, invocation="run-1")
+        initial = turns_kept.add_turn(self.name, {
+            "conversation_id": landed.conversation, "schedule_name": "nightly",
+            "provider_name": support.A_STAND_IN, "access_mode": protocol.ACCESS_WORK,
+        }, when=began)
+        delegations_kept.made(
+            self.name, "del-nightly-aabbcc", "trace", landed.conversation, initial, now=began)
+        delivering.started(
+            self.name, "nightly", "nightly/run-1", config.moment_of(began),
+            "abigail", target_identity)
+        delivering.finished(self.name, "nightly/run-1", kept.DONE)
+        notices = host._Notices(
+            self.name, standing.logs_at(self.at),
+            lambda: hosting.Watching({}, {}, {}))
+
+        notices.recover_deliveries()
+        self.assertEqual([], delivering.owing(self.name))
+
+        result = arriving.said_by_rundesk_into(
+            self.name, landed.conversation, "trace returned", when=began,
+            external_id="delegation-result:del-nightly-aabbcc:answer-1")
+        review = turns_kept.add_turn(self.name, {
+            "conversation_id": landed.conversation, "schedule_name": "nightly",
+            "provider_name": support.A_STAND_IN, "access_mode": protocol.ACCESS_WORK,
+        }, when=began)
+        arriving.handled_by_turn(self.name, landed.conversation, (result.message,), review)
+        arriving.said_by_agent_into(
+            self.name, landed.conversation, "Reviewed final report.", turn=review, when=began)
+        turns_kept.finish_turn(self.name, review, turns_kept.DONE)
+
+        with mock.patch.object(host, "_told") as told:
+            notices.recover_deliveries()
+            notices.recover_deliveries()
+
+        told.assert_not_called()
+        self.assertEqual(1, len(delivering.owing(self.name)))
+        self.assertEqual("Reviewed final report.", delivering.owing(self.name)[0].report)
 
     def test_a_run_posts_only_a_notice_and_a_report_and_never_its_activity(self):
         """A scheduled turn runs in a process of its own that holds no channel, so there is nothing

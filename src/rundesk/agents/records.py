@@ -72,6 +72,7 @@ which is a diagnosis nobody makes quickly. `contextlib.closing`, every open, eve
 
 import contextlib
 import random
+import secrets
 import sqlite3
 import time
 from pathlib import Path
@@ -92,6 +93,17 @@ BUSY_SECONDS = 5.0
 TRIES = 5
 WAIT_LEAST = 0.02
 WAIT_MOST = 0.15
+
+#: The one configuration column nothing may state. `agent_identity` is who this agent is rather than
+#: something about it: step `0014` mints one per agent and every durable reference to an agent that
+#: has to survive a rename or a re-make stands on it. A caller that could set it could point one
+#: agent's stored references at another, which is the exact silent redirection the column prevents.
+NEVER_STATED = ("agent_identity",)
+
+#: How long a minted identity is, in bytes of randomness. The same figure step `0014` mints with —
+#: spelled in both because a step may import nothing of rundesk's — and far past anything a machine
+#: full of agents collides on by accident.
+IDENTITY_BYTES = 16
 
 #: What SQLite writes beside a database in WAL mode: the write-ahead log, and the shared-memory
 #: index into it. Named rather than globbed — see `beside`.
@@ -398,6 +410,9 @@ def stated(at: Path, values: Dict[str, Any]) -> None:
         return
     named = sorted(values)
     said = [values[one] for one in named]
+    kept_for_life = [one for one in named if one in NEVER_STATED]
+    if kept_for_life:
+        raise Refused(f"{kept_for_life[0]} is what this agent is and is not something to set")
     with writing(at) as conn:
         columns = columns_of(conn, at, "config")
         unknown = [one for one in named if one not in columns]
@@ -407,9 +422,36 @@ def stated(at: Path, values: Dict[str, Any]) -> None:
             "UPDATE config SET " + ", ".join(f"{one} = ?" for one in named) + " WHERE id = 1",
             said).rowcount
         if changed == 0:
+            # **The row coming into being is where an agent's identity is minted**, because those
+            # are the same moment: the step that adds the column runs against an agent that is still
+            # only tables, and finds nothing to write into. Minted here and never again — no later
+            # write reaches this branch, and `NEVER_STATED` keeps every caller off the column.
+            if "agent_identity" in columns and "agent_identity" not in named:
+                named = [*named, "agent_identity"]
+                said = [*said, secrets.token_hex(IDENTITY_BYTES)]
             conn.execute(
                 "INSERT INTO config (id, " + ", ".join(named) + ") "
                 "VALUES (1, " + ", ".join("?" for _ in named) + ")", said)
+
+
+def identity(at: Path) -> str:
+    """Who this agent is, whatever it is called now. `""` when its records do not say.
+
+    **A read that never writes.** Empty is a real answer and a distinct one: records carried only as
+    far as `0013` have no such column, and an agent whose row was written between the step and the
+    mint has the column and nothing in it. Either way the honest answer is *this agent cannot be
+    referred to durably yet*, and a caller that needs one refuses the operation and asks the owner
+    to carry the install forward.
+    """
+    with reading(at) as conn:
+        try:
+            row = conn.execute("SELECT * FROM config WHERE id = 1").fetchone()
+        except sqlite3.DatabaseError as why:
+            raise Unreadable(f"{at} does not hold an agent's configuration: {why}") from why
+    if row is None:
+        return ""
+    got = dict(row).get("agent_identity")
+    return str(got) if got else ""
 
 
 def columns_of(conn: sqlite3.Connection, at: Path, table: str) -> List[str]:

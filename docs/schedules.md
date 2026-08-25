@@ -147,8 +147,8 @@ its own is outside the supervisor's reach, so if the gateway does not stop it, n
 
 ## What a run says on a surface, and the two messages it is allowed
 
-A schedule that **asks the agent** reports where the agent is told things — the one channel marked
-`notified`, at its `notify_place`. Two messages, and never a third:
+An asking schedule without `--deliver-to` reports where its source agent is told things — the one
+channel marked `notified`, at its `notify_place`. Two messages, and never a third:
 
 | When | What goes out |
 |---|---|
@@ -179,7 +179,7 @@ configured no channel asked for.
 needs — that this run owes one, and the notice it goes under — are written beside the firing before
 the work starts, so they outlive the process that announced.
 
-## What is not built
+## Agent-asking schedules and scheduled delivery
 
 A schedule asks the agent with `--ask` or starts a program with `--run`, and exactly one of the two —
 the records hold that as a `CHECK` and the command says it in words. Every invocation of an
@@ -189,11 +189,46 @@ into. It may delegate to a named agent; that result returns to the same invocati
 and the reviewed final report goes to the agent's notified channel.
 
 `rundesk schedules run` takes either kind by hand, and neither uses up the minute it next falls due —
-testing a schedule must not be how you stop it happening.
+testing a schedule must not be how you stop it happening. A manual test of an asking schedule does
+not dispatch scheduled delivery; it reports to the terminal that explicitly started it.
+
+### Scheduled delivery to another agent
+
+An asking schedule may name `--deliver-to <agent>`. On a successful run, Rundesk durably admits the
+report to that agent as a normal inbound turn. The admitted message identifies the source agent,
+schedule, and run, so the recipient can use the result instead of leaving it in a schedule-only
+conversation. The recipient runs under its own instructions and sends its final answer through its
+own notified channel, when it has one.
+
+This is **scheduled delivery, not delegation**. The source schedule is not waiting for an answer; no
+delegation row, reply-to edge, or callback is created. The recipient's answer is not delivered back
+to the source and is not automatically forwarded to another agent. Thus a Beacon schedule delivered
+to Abigail can reach the owner through Abigail's notified channel, but Rundesk does not invent a
+second agent handoff.
+
+The invocation freezes the target name and identity before its child starts; editing or removing the
+schedule while it runs affects later runs, not this one. Its successful obligation is durable before
+the source firing's recovery record is removed, and a replacement gateway retries an unresolved
+direct or reviewed report. A target whose gateway is busy
+or stopped keeps the pending turn until its gateway can take it, and the stable run identity makes a
+retry or gateway replacement idempotent. The target must exist when delivery is configured, cannot
+be the source agent, and is stored with its immutable identity: removing it and later creating an
+agent under the same name does not redirect the old schedule. If the configured identity is no
+longer there when a report completes, the report falls back to the source agent's notified channel
+instead of entering an outbox nobody can claim.
+
+Delivery carries at most 60 KiB of report text so one agent cannot fill another agent's records with
+an unbounded response. If a report exceeds that bound, the delivered copy keeps its opening and
+conclusion and marks the omitted middle explicitly. Removing a source with an unread outbox row, or
+a target with an unread or unclaimed delivery, is refused until the recipient gateway admits it and
+the source gateway durably acknowledges that admission on its next pass.
+
+Program schedules cannot use scheduled delivery because they produce no agent report. Unsuccessful
+asking runs retain the ordinary source-agent failure reporting path rather than handing an absent or
+unproven report to the recipient.
 
 What is still not built: a schedule carries `provider_name` and `model_name` columns that nothing
 writes. A schedule runs on the agent's own brain, and a way to override that per schedule is a verb
-nobody has asked for. The `channel` and `channel_place_id` columns are the same — **where a run
-reports is the agent's notified channel and is not stated per schedule**, so those two are still
-written by nothing. A schedule that reports somewhere of its own is a verb nobody has asked for
-either, and the columns are what it would be built on.
+nobody has asked for. The legacy `channel` and `channel_place_id` schedule columns also remain
+unused: a schedule either uses the owning agent's notified channel or delivers to another agent,
+whose final uses that recipient's notified channel. A channel is not an agent delivery target.

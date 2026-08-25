@@ -224,7 +224,8 @@ from rundesk.delegations import kept as delegations_kept
 from rundesk.exits import OK
 from rundesk.gateways import awake, delegation_query, maintenance, standing
 from rundesk.providers import answering, continuations, kept, turns
-from rundesk.schedules import firing, upkeep
+from rundesk.schedules import delivering, firing, upkeep
+from rundesk.schedules import kept as schedules_kept
 from rundesk.skills import grants
 from rundesk.utils import locking, logs
 
@@ -629,6 +630,10 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
         # that reaches nobody is the whole of what a delegation looked like from a room.
         on_a_delegation = answering.OnADelegation(where, lambda: channels_up)
         on_a_continuation = answering.OnAContinuation(where, lambda: channels_up)
+        # The fourth tenant's seam, built beside the other three. A report another agent's schedule
+        # delivered here reaches this agent's own notified channel when its turn settles, so it
+        # needs the same `channels_up` the rest are handed.
+        on_a_delivery = answering.OnADelivery(where, lambda: channels_up)
         watching = firing.settled(name, where)
         channels_up = hosting.settled(name, where, answering=on_a_channel)
         handed = delegations.settled(name, where)
@@ -668,6 +673,7 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
                 turns.settle_abandoned(name)
             watching = firing.looked(name, where, watching, telling=notices,
                                      asking=on_a_schedule)
+            notices.recover_deliveries()
             watching = upkeep.looked(name, where, watching, telling=notices,
                                      asking=on_a_schedule)
             channels_up = hosting.looked(name, where, channels_up,
@@ -675,6 +681,11 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
             # The third tenant, and a sibling of the two above rather than something they contain:
             # the same three seams, and a gateway hosting a list rather than a hierarchy.
             handed = delegations.looked(name, where, handed, answering=on_a_delegation)
+            # **The fourth tenant, and it carries nothing between passes.** What it has already read
+            # of every other agent's outbox is a durable mark in this agent's own records rather
+            # than a value the loop hands back — a report is lost by a process forgetting, and this
+            # one is written down where a restart finds it.
+            delivering.looked(name, where, handing=on_a_delivery)
             _finished_lifecycle_restart(name, channels_up)
             _resumed_lifecycle(name, channels_up, on_a_continuation)
             _requested_lifecycle_restart(name, asked_for)
@@ -901,7 +912,7 @@ class _Notices:
             return None
 
     def reported(self, schedule: str, answering: Optional[str], became: str,
-                 began: str) -> None:
+                 began: str, run_key: str = "") -> None:
         """Put what a scheduled run came to underneath the notice that said it had begun.
 
         **The answer, and the outcome only where there is no answer.** What an owner wants at six in
@@ -919,7 +930,12 @@ class _Notices:
         the only thing that reaches a person. That is a property of where the work runs rather than a
         filter somebody has to maintain. When it delegates, the initial provisional report is
         suppressed; the review turn sends the final report after the result returns.
+
+        **What a completed run owes onward is written down before any of it is posted.** A schedule
+        may name a second agent to hand its finished report to, and a platform that refuses the
+        message must not be what decides whether that agent ever sees it — see `_handed_on`.
         """
+        initial = None
         try:
             initial = kept.schedule_turn_after(self.name, schedule, began)
             if initial is not None:
@@ -927,7 +943,9 @@ class _Notices:
                 handed_off = bool(delegations_kept.from_turn(self.name, initial_turn))
                 reviewed_inline = arriving.delegation_result_reached_turn(
                     self.name, initial_turn)
-                if handed_off and not reviewed_inline:
+                reviewed_later = arriving.delegation_result_reached_later_done_turn(
+                    self.name, initial_turn)
+                if handed_off and not reviewed_inline and not reviewed_later:
                     # A later review turn owns the final DM. A fast result admitted into this same
                     # turn is already reflected in its report and must not be suppressed.
                     return
@@ -944,7 +962,10 @@ class _Notices:
             # not a reason to lose the report: the run happened and its outcome is still worth
             # saying. See `_told`, which guards the delivery itself the same way.
             said = ""
-        prepared = delivery.prepared(said.strip() or f"schedule {schedule} {became}")
+        report = said.strip() or f"schedule {schedule} {became}"
+        if self._handed_on(schedule, became, began, initial, report, run_key):
+            return
+        prepared = delivery.prepared(report)
         for why in prepared.refused:
             logs.note(self.where, f"schedule {schedule}: {why}", logs.WARNING)
         adapter_refused: List[str] = []
@@ -961,6 +982,72 @@ class _Notices:
             fallback = "\n\n".join(
                 one for one in (last.strip(), f"Could not attach: {names}.") if one)
             _told(self.name, self.where, self.hosted(), fallback, answering=fallback_answering)
+
+    def _handed_on(self, schedule: str, became: str, began: str,
+                   initial: Optional[dict], report: str, run_key: str = "") -> bool:
+        """Write down that a completed run owes its report to the agent the schedule names.
+
+        **Only a run that completed.** `failed` is a run that said it was not happy and `stopped` is
+        one nobody can say anything about — neither is a report, and handing either to a second
+        agent as though it were would start a turn on an account of a run that may not have
+        happened. Both are still said out loud where somebody is waiting for them, which is the
+        line above this one.
+
+        **Written here rather than in `schedules.firing`**, because a firing cannot read what the
+        agent answered: the answer is in the agent's records, reaching them is `providers`' business,
+        and this is the one layer that may see both. It is the same reason `reported` takes a
+        schedule's name rather than its words.
+
+        Never raises, and never costs the report standing in the room: a store that would not take
+        the row is a line in this agent's log, and the message about to go out is unaffected.
+        """
+        if became != schedules_kept.DONE:
+            return False
+        try:
+            if delivering.owed(self.name, schedule, run_key=(run_key or _a_run_key(
+                    self.name, schedule, began, initial)),
+                               ran_at=config.moment_of(), report=report):
+                logs.note(self.where, f"schedule {schedule}: its report is owed to another agent")
+                return True
+        except Exception as why:                   # noqa: BLE001 — see the docstring
+            logs.note(self.where,
+                      f"schedule {schedule}: its report could not be handed on ({why})", logs.ERROR)
+        return False
+
+    def recover_deliveries(self) -> None:
+        """Retry successful invocation obligations a prior gateway did not resolve. Never raises."""
+        with contextlib.suppress(Exception):
+            delivering.acknowledged(self.name)
+        try:
+            waiting = delivering.unresolved(self.name)
+        except Exception:                          # noqa: BLE001 — the agent may have been removed
+            return
+        for one in waiting:
+            with contextlib.suppress(Exception):
+                self.reported(one.schedule_name, None, schedules_kept.DONE,
+                              one.began_at, one.run_key)
+
+
+def _a_run_key(agent: str, schedule: str, began: str, initial: Optional[dict]) -> str:
+    """One completed run's own durable identity, for the row that says what it owes.
+
+    **The invocation's conversation, because that is what one run *is*.** Every firing of a schedule
+    that asks an agent gets a conversation of its own — `channels.arriving.recorded_for_a_schedule`
+    says why — so its `source_id` names this run and no other, is written before the work starts,
+    and reads the same to the gateway that started the run and to the one that adopted it. That is
+    what makes handing the report on exactly-once rather than once per gateway that noticed.
+
+    The moment the firing began stands in where the turn cannot be found. It is written to the
+    firing's own record before the work starts and is carried through adoption, so it is still one
+    answer for one run — which is the whole requirement — and it is only ever reached when the
+    records could not say which turn this was.
+    """
+    if initial is not None:
+        with contextlib.suppress(Exception):
+            stands = arriving.where_it_stands(agent, int(initial["conversation_id"]))
+            if stands is not None and stands[0] == arriving.FROM_SCHEDULE:
+                return stands[1]
+    return f"{schedule}/{began}"
 
 
 def _told_what_changed(name: str, where: Path, channels_up: hosting.Watching,

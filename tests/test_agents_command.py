@@ -20,12 +20,12 @@ from unittest import mock
 
 import support
 from rundesk.agents import directory, records
-from rundesk.channels import hosting
+from rundesk.channels import arriving, hosting
 from rundesk.channels import kept as channels
 from rundesk.commands import agents as agents_command
 from rundesk.core import paths
 from rundesk.exits import FAILED, OK, USAGE
-from rundesk.schedules import firing, kept
+from rundesk.schedules import delivering, firing, kept
 from rundesk.skills import catalogs, grants, library
 
 
@@ -541,6 +541,64 @@ class Removing(support.Isolated):
         self.rundesk("agents", "remove", "cole", "--confirm")
         self.assertFalse((paths.agents() / "cole").exists())
         self.assertEqual([], directory.known())
+
+    def an_unread_delivery_to_dana(self):
+        self.rundesk("agents", "add", "dana", "--provider", "claude")
+        kept.added("cole", "nightly", {
+            "cron": "0 6 * * *", "prompt": "write the report",
+            "deliver_to_agent": "dana",
+            "deliver_to_identity": delivering.identity_of("dana"),
+        })
+        delivering.started(
+            "cole", "nightly", "nightly/run-1", "2026-08-24T06:00:00Z",
+            "dana", delivering.identity_of("dana"))
+        delivering.finished("cole", "nightly/run-1", kept.DONE)
+        delivering.owed(
+            "cole", "nightly", "nightly/run-1", "2026-08-24T06:05:00Z", "the report")
+
+    def test_it_refuses_to_remove_a_source_while_its_report_is_unread(self):
+        self.an_unread_delivery_to_dana()
+        code, _out, err = self.rundesk("agents", "remove", "cole", "--confirm")
+        self.assertEqual(FAILED, code)
+        self.assertIn("still holds a scheduled report", err)
+        self.assertIn("nothing was removed", err)
+
+    def test_it_refuses_to_remove_a_target_while_a_report_waits_in_an_outbox(self):
+        self.an_unread_delivery_to_dana()
+        code, _out, err = self.rundesk("agents", "remove", "dana", "--confirm")
+        self.assertEqual(FAILED, code)
+        self.assertIn("waiting in another agent's outbox", err)
+        self.assertIn("nothing was removed", err)
+
+    def test_after_admission_and_source_acknowledgement_both_agents_can_be_removed(self):
+        self.an_unread_delivery_to_dana()
+        delivery = delivering.owing("cole")[0]
+        delivering._mark_moved(
+            "dana", delivering.identity_of("cole"), "cole", delivery.id)
+        delivering.acknowledged("cole")
+
+        self.assertEqual(OK, self.rundesk(
+            "agents", "remove", "dana", "--confirm")[0])
+        self.assertEqual(OK, self.rundesk(
+            "agents", "remove", "cole", "--confirm")[0])
+
+    def test_an_unreadable_source_refuses_target_removal(self):
+        self.an_unread_delivery_to_dana()
+        directory.records("cole").write_bytes(b"not a sqlite store")
+
+        code, _out, err = self.rundesk("agents", "remove", "dana", "--confirm")
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("nothing was removed", err)
+
+    def test_it_refuses_to_remove_a_target_with_an_unclaimed_delivered_message(self):
+        self.rundesk("agents", "add", "dana", "--provider", "claude")
+        arriving.recorded_for_a_delivery(
+            "cole", "dana", delivering.identity_of("dana"), "nightly/run-1", "the report")
+        code, _out, err = self.rundesk("agents", "remove", "cole", "--confirm")
+        self.assertEqual(FAILED, code)
+        self.assertIn("no turn has admitted", err)
+        self.assertIn("nothing was removed", err)
 
     def test_removing_a_target_revokes_it_from_explicit_allowlists_before_recreation(self):
         self.rundesk("agents", "add", "ava", "--provider", "claude")

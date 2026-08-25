@@ -69,6 +69,7 @@ import contextlib
 import datetime
 import fcntl
 import os
+import secrets
 import shlex
 import signal
 import time
@@ -77,7 +78,7 @@ from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Protocol
 
 from rundesk.agents import directory
 from rundesk.core import config, paths
-from rundesk.schedules import due, kept
+from rundesk.schedules import delivering, due, kept
 from rundesk.utils import files, locking, logs, programs
 
 #: What a firing keeps beside itself, inside the agent's own `schedules/` directory.
@@ -200,6 +201,11 @@ class Running(NamedTuple):
     row can be edited, or taken away entirely, while the work is still going — and what a firing
     promised when it began is a fact about *that* firing.
 
+    `delivers` and `run_key` are the matching frozen decision: whether this invocation wrote a
+    delivery obligation before spawn, and the exact conversation/outbox identity that obligation
+    keeps. `became` is an outcome a prior gateway observed and wrote before it could finish
+    reporting; a replacement replays it instead of downgrading proven success to `stopped`.
+
     `began` is the moment this firing started, in the shape the agent's records keep moments in. It
     is what tells **this** run's answer from the one before it: every firing of a schedule shares one
     conversation, and a run that failed without saying anything would otherwise report the last run's
@@ -214,6 +220,9 @@ class Running(NamedTuple):
     from_byte: int
     since: float
     asks: bool = False
+    delivers: bool = False
+    run_key: str = ""
+    became: str = ""
     began: str = ""
     announced: Optional[str] = None
 
@@ -244,7 +253,8 @@ class Starting(Protocol):
     descriptor to keep hold of, start something and hand back its pid.
     """
 
-    def start(self, one: due.Schedule, agent: str, holding: int) -> int:
+    def start(self, one: due.Schedule, agent: str, holding: int,
+              invocation: str = "") -> int:
         ...
 
 
@@ -284,14 +294,15 @@ class Telling(Protocol):
         ...
 
     def reported(self, schedule: str, answering: Optional[str], became: str,
-                 began: str) -> None:
+                 began: str, run_key: str) -> None:
         ...
 
 
 class AProgram:
     """Start the program a schedule names, in a session of its own, holding the firing's lock."""
 
-    def start(self, one: due.Schedule, agent: str, holding: int) -> int:
+    def start(self, one: due.Schedule, agent: str, holding: int,
+              invocation: str = "") -> int:
         return programs.start(
             argv=argv_of(one.command or ""),
             log=output_of(agent, one.name),
@@ -529,12 +540,30 @@ def _reckoned(agent: str, where: Path, name: str, watching: Watching) -> None:
             # person is looking at — the gateway that announced this run is gone, and the notice is
             # not. `asks` too: what a firing promised when it began is a fact about that firing, and
             # the row it was read from can have been edited or removed since.
-            asks=bool(said.get("asks")), began=str(said.get("began") or ""),
+            asks=bool(said.get("asks")), delivers=bool(said.get("delivers")),
+            run_key=str(said.get("run_key") or ""),
+            became=str(said.get("settled_outcome") or ""),
+            began=str(said.get("began") or ""),
+            announced=str(said.get("announced") or "") or None)
+        return
+    said = {}
+    with contextlib.suppress(Exception):
+        said = _read_record(agent, name)
+    if str(said.get("settled_outcome") or "") in kept.OUTCOMES:
+        watching.running[name] = Running(
+            name=name, pid=None, fired_for=str(said.get("fired_for") or ""), mine=False,
+            from_byte=_a_size(said.get("from_byte")), since=time.monotonic(),
+            asks=bool(said.get("asks")), delivers=bool(said.get("delivers")),
+            run_key=str(said.get("run_key") or ""),
+            became=str(said.get("settled_outcome") or ""),
+            began=str(said.get("began") or ""),
             announced=str(said.get("announced") or "") or None)
         return
     _note(where, f"schedule {name} was interrupted: the gateway that started it is gone, so "
                      "what it came to cannot be read", logs.WARNING)
     _became(agent, where, name, kept.STOPPED)
+    if said.get("delivers") and said.get("run_key"):
+        delivering.finished(agent, str(said["run_key"]), kept.STOPPED)
     files.remove_one(record_of(agent, name))
 
 
@@ -671,6 +700,10 @@ def _spawned(agent: str, where: Path, watching: Watching, one: due.Schedule, min
     # keep in step the day the rule grows a case.
     asks = not one.command
     began = config.moment_of()
+    invocation = secrets.token_hex(16)
+    run_key = f"{one.name}/{invocation}"
+    delivers = delivering.started(
+        agent, one.name, run_key, began, one.deliver_to_agent, one.deliver_to_identity)
     output = output_of(agent, one.name)
     output.parent.mkdir(parents=True, exist_ok=True)
     with contextlib.suppress(OSError):
@@ -678,7 +711,8 @@ def _spawned(agent: str, where: Path, watching: Watching, one: due.Schedule, min
     from_byte = output.stat().st_size if output.is_file() else 0
 
     said = {"schedule": one.name, "fired_for": minute, "from_byte": from_byte,
-            "started_at": logs.stamp(), "pid": None, "asks": asks, "began": began}
+            "started_at": logs.stamp(), "pid": None, "asks": asks,
+            "delivers": delivers, "run_key": run_key, "invocation": invocation, "began": began}
     # Before the spawn, without the pid, which does not exist yet — see the module docstring on the
     # one `os.replace` of window this leaves, and why the other order is worse.
     files.write_json(record_of(agent, one.name), said)
@@ -696,20 +730,23 @@ def _spawned(agent: str, where: Path, watching: Watching, one: due.Schedule, min
     pid, trouble = None, None
     with _uninterrupted():
         try:
-            pid = run_by.start(one, agent, held)
+            pid = run_by.start(one, agent, held, invocation)
         except programs.CouldNotStart as why:
             trouble = why
         finally:
             if pid is not None:
                 watching.running[one.name] = Running(
                     name=one.name, pid=pid, fired_for=minute, mine=True, from_byte=from_byte,
-                    since=time.monotonic(), asks=asks, began=began)
+                    since=time.monotonic(), asks=asks, delivers=delivers,
+                    run_key=run_key, began=began)
 
     if trouble is not None:
         # A program that was never on the machine has no exit code, and reporting one would say it
         # ran and disagreed — a different fact about the machine, leading somewhere else.
         _note(where, f"schedule {one.name} did not start: {trouble}", logs.ERROR)
         _became(agent, where, one.name, kept.FAILED)
+        if delivers:
+            delivering.finished(agent, run_key, kept.FAILED)
         files.remove_one(record_of(agent, one.name))
         return watching
 
@@ -727,7 +764,7 @@ def _spawned(agent: str, where: Path, watching: Watching, one: due.Schedule, min
     #
     # **Only a schedule that asks an agent.** A program has no answer to report, so `💻 Working on…`
     # for one is a promise rundesk does not keep.
-    if telling is not None and asks:
+    if telling is not None and asks and not delivers:
         with contextlib.suppress(Exception):                    # a channel that is down
             # is not a reason to lose a firing, and this module may never end a gateway.
             # What is left of this pass's budget, never more than one notice's share of it. At
@@ -779,8 +816,8 @@ def _reaped(agent: str, where: Path, watching: Watching,
                     continue
                 code = None
             del watching.running[name]
-            files.remove_one(record_of(agent, name))
             _finished(agent, where, one, code, telling)
+            files.remove_one(record_of(agent, name))
     return watching
 
 
@@ -815,7 +852,12 @@ def _finished(agent: str, where: Path, one: Running, code: Optional[int],
     work happened.
     """
     took = _how_long(time.monotonic() - one.since)
-    if code is None:
+    if one.became:
+        outcome = one.became
+        level = {kept.DONE: logs.INFO, kept.FAILED: logs.ERROR,
+                 kept.STOPPED: logs.WARNING}[outcome]
+        said = f"settled as {outcome} before the prior gateway stopped"
+    elif code is None:
         outcome, level = kept.STOPPED, logs.WARNING
         said = f"stopped within {took} — nobody can say what it came to"
     elif code == 0:
@@ -824,6 +866,14 @@ def _finished(agent: str, where: Path, one: Running, code: Optional[int],
     else:
         outcome, level = kept.FAILED, logs.ERROR
         said = f"failed with exit {code} in under {took}"
+    # Persist the observed outcome before removing the firing record or reporting anywhere. A
+    # replacement gateway can replay this exact settlement if this process stops after `waitpid`
+    # but before the delivery outbox is written.
+    if one.delivers and one.run_key:
+        recorded = _read_record(agent, one.name)
+        recorded["settled_outcome"] = outcome
+        files.write_json(record_of(agent, one.name), recorded)
+        delivering.finished(agent, one.run_key, outcome)
     _note(where, f"schedule {one.name} {said}", level)
     for line in _what_it_wrote(output_of(agent, one.name), one.from_byte):
         _note(where, f"  {line}", level)
@@ -839,7 +889,7 @@ def _finished(agent: str, where: Path, one: Running, code: Optional[int],
             # that reported only what it had announced would swallow that run's answer entirely.
             # Anchored where there is a notice to anchor to, and standing on its own where there is
             # not, which is worse than anchored and far better than silent.
-            telling.reported(one.name, one.announced, outcome, one.began)
+            telling.reported(one.name, one.announced, outcome, one.began, one.run_key)
         elif outcome != kept.DONE:
             telling.say(f"schedule {one.name} {said}")
 
@@ -914,6 +964,8 @@ def stopping(agent: str, where: Path, watching: Watching, within: float) -> Watc
             said = f"would not stop: {stuck}" if stuck else "was stopped with this gateway"
             _note(where, f"schedule {one.name} {said}", logs.WARNING)
             _became(agent, where, one.name, kept.STOPPED)
+            if one.delivers and one.run_key:
+                delivering.finished(agent, one.run_key, kept.STOPPED)
             files.remove_one(record_of(agent, one.name))
             del watching.running[one.name]
     return watching

@@ -116,6 +116,8 @@ class Schedule(NamedTuple):
     model: Optional[str] = None
     channel: Optional[str] = None
     place: Optional[str] = None
+    deliver_to_agent: Optional[str] = None
+    deliver_to_identity: Optional[str] = None
     fired_for: Optional[str] = None
     #: The five fields, each as the set of values it allows. Empty where this states one moment.
     fields: Tuple[frozenset, ...] = ()
@@ -183,6 +185,8 @@ def understood(row: Dict[str, Any]) -> Schedule:
         model=_said(row.get("model_name")) or None,
         channel=_said(row.get("channel")) or None,
         place=_said(row.get("channel_place_id")) or None,
+        deliver_to_agent=_said(row.get("deliver_to_agent")) or None,
+        deliver_to_identity=_said(row.get("deliver_to_identity")) or None,
         fired_for=_said(row.get("last_fired_for")) or None,
         fields=fields,
         anything=anything,

@@ -28,6 +28,7 @@ import support
 from rundesk.agents import directory, migration, records
 from rundesk.core import config, paths
 from rundesk.providers import kept
+from rundesk.schedules import kept as schedules_kept
 from rundesk.utils import files
 
 #: How long a case waits for the threads it started. Generous, because it is there to end a wedged
@@ -1104,6 +1105,40 @@ class WhatThisReleaseReallyShips(support.Isolated):
                      conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         self.assertIn("schedules", there)
         self.assertEqual([], migration.outstanding(migration.recorded(directory.records("cole"))))
+
+    def test_step_0014_backfills_a_populated_existing_agent_without_changing_its_schedule(self):
+        before_delivery = self.home / "before-scheduled-delivery"
+        before_delivery.mkdir()
+        delivery_step = next(step for step in migration.found()
+                             if step.id == "0014_where_a_scheduled_report_is_delivered")
+        for step in migration.found():
+            if step.order < delivery_step.order:
+                shutil.copy2(step.at, before_delivery / step.at.name)
+
+        at = directory.where("cole")
+        (at / directory.HOME).mkdir(parents=True)
+        (at / directory.LOGS).mkdir()
+        self.assertIsNone(migration.carry_one("cole", before_delivery))
+        records.stated(directory.records("cole"), {
+            "agent_name": "cole", "provider_name": "claude"})
+        schedules_kept.added("cole", "nightly", {
+            "cron": "0 6 * * *", "prompt": "write the report"})
+
+        self.assertIsNone(migration.carry_one("cole"))
+        identity = records.identity(directory.records("cole"))
+        self.assertTrue(identity)
+        schedule = schedules_kept.one("cole", "nightly")
+        self.assertEqual("0 6 * * *", schedule["cron"])
+        self.assertEqual("write the report", schedule["prompt"])
+        self.assertIsNone(schedule["deliver_to_agent"])
+        with records.reading(directory.records("cole")) as conn:
+            tables = {row[0] for row in
+                      conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        self.assertLessEqual({"schedule_deliveries", "schedule_delivery_obligations",
+                              "schedule_delivery_marks"}, tables)
+
+        self.assertIsNone(migration.carry_one("cole"))
+        self.assertEqual(identity, records.identity(directory.records("cole")))
 
     def test_carrying_an_agent_that_already_has_every_step_changes_nothing(self):
         # Rule 5: a step is safe against an agent that does not need it. Proved by running the whole

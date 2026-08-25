@@ -26,8 +26,8 @@ from unittest import mock
 
 import support
 from rundesk.agents import directory, records
-from rundesk.schedules import due, firing, kept
-from rundesk.utils import logs, programs
+from rundesk.schedules import delivering, due, firing, kept
+from rundesk.utils import files, logs, programs
 
 #: How long a case will wait for a child to do something before calling it a failure. Generous,
 #: because it is a real fork and exec on a machine that may be loaded, and a ceiling rather than a
@@ -564,7 +564,7 @@ class AScheduleThatAsksTheAgent(Firing):
         started = []
 
         class Starts:
-            def start(self, one, agent, holding):
+            def start(self, one, agent, holding, invocation=""):
                 started.append(one.name)
                 return programs.start([SAYS_SOMETHING, "ok"], log=self.log_at, where=None,
                                       env={}, holding=(holding,))
@@ -590,7 +590,7 @@ class AScheduleThatAsksTheAgent(Firing):
             def __init__(self):
                 self.asked = []
 
-            def start(self, one, agent, holding):
+            def start(self, one, agent, holding, invocation=""):
                 self.asked.append((one.name, one.prompt, agent))
                 return programs.start(["/bin/echo", "a turn"],
                                       log=firing.output_of(agent, one.name),
@@ -606,7 +606,7 @@ class AScheduleThatAsksTheAgent(Firing):
             def __init__(self):
                 self.asked = []
 
-            def start(self, one, agent, holding):
+            def start(self, one, agent, holding, invocation=""):
                 self.asked.append((one.name, one.prompt, agent))
                 return programs.start(["/bin/echo", "upkeep"],
                                       log=firing.output_of(agent, one.name),
@@ -790,7 +790,7 @@ class ATelling:
         self.waited.append(within)
         return self.handle
 
-    def reported(self, schedule, answering, became, began):
+    def reported(self, schedule, answering, became, began, run_key):
         self.reports.append((schedule, answering, became))
 
 
@@ -808,7 +808,7 @@ class SayingAScheduleHasBegun(Firing):
 
     def a_runner(self, argv=(SAYS_SOMETHING, "ok")):
         class ATurn:
-            def start(self, one, agent, holding):
+            def start(self, one, agent, holding, invocation=""):
                 return programs.start(list(argv), log=firing.output_of(agent, one.name),
                                       holding=(holding,))
         return ATurn()
@@ -819,6 +819,58 @@ class SayingAScheduleHasBegun(Firing):
         self.look(asking=self.a_runner(), telling=telling)
         self.assertEqual(["💻 Working on 'review' — I will report back when it is done."],
                          telling.announced_saying)
+
+    def test_a_schedule_delivered_to_an_agent_does_not_announce_in_the_owner_channel(self):
+        directory.made("abigail", "claude")
+        self.an_asking_schedule(
+            deliver_to_agent="abigail",
+            deliver_to_identity=records.identity(directory.records("abigail")))
+        telling = ATelling()
+        after = self.look(asking=self.a_runner(NEVER_ENDING), telling=telling)
+        self.assertEqual([], telling.announced_saying)
+        self.assertTrue(after.running["review"].delivers)
+        self.assertTrue(records_of_the_firing(self, "review")["delivers"])
+
+    def test_a_stale_target_uses_the_owner_notice_for_the_same_invocation(self):
+        directory.made("abigail", "claude")
+        identity = records.identity(directory.records("abigail"))
+        self.an_asking_schedule(
+            deliver_to_agent="abigail", deliver_to_identity=identity)
+        directory.forgotten("abigail")
+        directory.made("abigail", "claude")
+        telling = ATelling()
+        after = self.look(asking=self.a_runner(NEVER_ENDING), telling=telling)
+        self.assertEqual(1, len(telling.announced_saying))
+        self.assertFalse(after.running["review"].delivers)
+
+    def test_a_delivery_obligation_is_removed_when_its_child_cannot_start(self):
+        directory.made("abigail", "claude")
+        self.an_asking_schedule(
+            deliver_to_agent="abigail",
+            deliver_to_identity=records.identity(directory.records("abigail")))
+
+        class Refuses:
+            def start(self, one, agent, holding, invocation=""):
+                raise programs.CouldNotStart("no provider process")
+
+        self.look(asking=Refuses(), telling=ATelling())
+
+        with records.reading(directory.records(self.agent)) as conn:
+            left = conn.execute("SELECT count(*) FROM schedule_delivery_obligations").fetchone()[0]
+        self.assertEqual(0, left)
+
+    def test_stopping_a_delivering_firing_removes_its_obligation(self):
+        directory.made("abigail", "claude")
+        self.an_asking_schedule(
+            deliver_to_agent="abigail",
+            deliver_to_identity=records.identity(directory.records("abigail")))
+        watching = self.look(asking=self.a_runner(NEVER_ENDING), telling=ATelling())
+
+        firing.stopping(self.agent, self.where, watching, within=5.0)
+
+        with records.reading(directory.records(self.agent)) as conn:
+            left = conn.execute("SELECT count(*) FROM schedule_delivery_obligations").fetchone()[0]
+        self.assertEqual(0, left)
 
     def test_a_schedule_that_starts_a_program_says_nothing(self):
         """A program has no report to anchor, so promising to report back is a promise rundesk does
@@ -982,11 +1034,34 @@ class ReportingWhatAScheduleCameTo(Firing):
                              from_byte=0, since=0.0, announced="9002")
 
         class Refuses(ATelling):
-            def reported(self, schedule, answering, became, began):
+            def reported(self, schedule, answering, became, began, run_key):
                 raise OSError("the platform is down")
 
         firing._finished(self.agent, self.where, one, 0, Refuses())
         self.assertEqual(kept.DONE, self.outcome_of("review"))
+
+    def test_a_settled_delivery_record_left_by_a_crash_is_reported_by_the_next_gateway(self):
+        directory.made("abigail", "claude")
+        kept.added(self.agent, "review", {"cron": "* * * * *", "prompt": "review the queue"})
+        run_key = "review/run-1"
+        delivering.started(
+            self.agent, "review", run_key, "2026-08-05T09:00:00Z",
+            "abigail", delivering.identity_of("abigail"))
+        directory.schedules(self.agent).mkdir(parents=True, exist_ok=True)
+        files.write_json(firing.record_of(self.agent, "review"), {
+            "schedule": "review", "fired_for": "2026-08-05T09:00", "from_byte": 0,
+            "started_at": "2026-08-05T09:00:00Z", "pid": 123, "asks": True,
+            "delivers": True, "run_key": run_key, "invocation": "run-1",
+            "began": "2026-08-05T09:00:00Z", "settled_outcome": kept.DONE,
+        })
+
+        watching = firing.settled(self.agent, self.where)
+        self.assertEqual(kept.DONE, watching.running["review"].became)
+        telling = ATelling()
+        firing._reaped(self.agent, self.where, watching, telling)
+
+        self.assertEqual([("review", None, kept.DONE)], telling.reports)
+        self.assertFalse(firing.record_of(self.agent, "review").exists())
 
 
 def records_of_the_firing(case, name):

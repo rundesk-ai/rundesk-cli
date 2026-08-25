@@ -38,6 +38,17 @@ FROM_SCHEDULE = "schedule"
 #: person is typing into — `recorded_for_a_delegation` says why.
 FROM_AGENT = "agent"
 
+#: The first segment of the `source_id` a delivered scheduled report stands under, and what tells
+#: one from an invocation of this agent's own schedules. Both are `FROM_SCHEDULE` conversations
+#: because both are the clock's work with nobody present, and both therefore report where this agent
+#: is told things — see `providers.answering._destination`. A schedule's name cannot contain a
+#: separator, so no invocation of a local schedule can ever be spelled like one of these.
+DELIVERED = "delivery"
+
+#: What a delivered report's message is keyed by, so the same finished run recorded twice is one
+#: message. The run's own key follows it — see `schedules.delivering`.
+DELIVERY_MARK = "schedule-delivery:{run_key}"
+
 #: Somebody typing. One conversation per agent — asking again is carrying the same exchange on.
 FROM_TERMINAL = "terminal"
 
@@ -163,6 +174,82 @@ def recorded_for_a_schedule(agent: str, schedule: str, body: str,
         message, fresh = _message(conn, agent, conversation, BY_RUNDESK, FROM_SCHEDULE,
                                   _bounded(body), None, now)
     return Landed(conversation, message, fresh)
+
+
+def delivery_stands_at(from_agent: str, from_identity: str, run_key: str) -> str:
+    """The `source_id` one delivered scheduled report stands under, spelled in one place.
+
+    Four parts, and each is load-bearing. `DELIVERED` keeps it out of the space this agent's own
+    schedule invocations use. The source's **name** is what a reader sees; its **identity** is what
+    makes a report from a re-made `bob` a different conversation from one the old `bob` sent, so an
+    old exchange can never be carried on by a stranger of the same name. The run's own key is what
+    makes redelivery of one finished run land on the row already there.
+    """
+    return f"{DELIVERED}/{from_agent}/{from_identity}/{run_key}"
+
+
+def delivery_stood_at(source_id: str) -> Optional[Tuple[str, str, str]]:
+    """`(from_agent, from_identity, run_key)` for a delivered report, or `None` for anything else.
+
+    The other half of `delivery_stands_at`, and here beside it so the format is spelled once. A
+    reader takes the source's name and identity from the front and leaves the rest whole: a run key
+    carries a separator of its own, and a parser that split on every one of them would hand back
+    three parts of a key that has four.
+    """
+    parts = source_id.split("/", 3)
+    if len(parts) != 4 or parts[0] != DELIVERED or not all(parts[1:]):
+        return None
+    return parts[1], parts[2], parts[3]
+
+
+def recorded_for_a_delivery(agent: str, from_agent: str, from_identity: str, run_key: str,
+                            body: str, when: Optional[datetime] = None) -> Landed:
+    """Write down a finished report another agent's schedule handed here, in a conversation of its
+    own.
+
+    **The same act as a delegated brief arriving, and not the same thing.** Nothing is owed back:
+    this is a report to act on, so no delegation is written anywhere and nothing collects an answer.
+    What the recipient does with it is an ordinary turn of its own, and its final goes wherever this
+    agent's own finals go.
+
+    **Idempotent, and that is the whole reason `run_key` reaches this far in.** The conversation is
+    unique by `(source, source_id)` and the message by its `external_id` inside it, so the same
+    finished run recorded again — by a retry, by a gateway that came up and read the outbox from a
+    mark it had not managed to move, by an adoption — answers `fresh=False` and writes nothing.
+
+    Written `BY_AGENT` under the **source** agent's name, as a delegated brief is: reading the
+    history back has to tell a colleague's report from this agent's own words by a column rather
+    than by a prefix somebody has to parse.
+    """
+    now = _now(when)
+    source_id = delivery_stands_at(from_agent, from_identity, run_key)
+    with records.writing(directory.records(agent)) as conn:
+        conversation = _conversation(conn, agent, FROM_SCHEDULE, source_id, None, now)
+        message, fresh = _message(conn, agent, conversation, BY_AGENT, from_agent,
+                                  _bounded(body), DELIVERY_MARK.format(run_key=run_key), now)
+    return Landed(conversation, message, fresh)
+
+
+def pending_deliveries(agent: str, most: int) -> List[Tuple[int, int, str, str]]:
+    """Delivered reports no turn has picked up yet, oldest first and bounded.
+
+    `(conversation, message, source_id, body)` for each. **This is the restart boundary for a
+    delivery**, and it is asked of the records rather than remembered: a gateway that recorded a
+    report and went down before a turn claimed it, an agent that was busy every time the sweep came
+    round, and one whose gateway was not running when the report was written all leave exactly the
+    same durable row — a delivery conversation whose message nothing has admitted.
+    """
+    with records.reading(directory.records(agent)) as conn:
+        found = _rows(
+            conn, agent,
+            "SELECT m.id, m.conversation_id, m.body, c.source_id"
+            " FROM conversation_messages AS m"
+            " JOIN conversations AS c ON c.id = m.conversation_id"
+            " WHERE c.source = ? AND c.source_id LIKE ? AND m.author = ? AND m.turn_id IS NULL"
+            " ORDER BY m.id LIMIT ?",
+            (FROM_SCHEDULE, f"{DELIVERED}/%", BY_AGENT, most)).fetchall()
+    return [(int(one["conversation_id"]), int(one["id"]), str(one["source_id"]),
+             str(one["body"] or "")) for one in found]
 
 
 def said_by_rundesk_into(agent: str, conversation: int, body: str,
@@ -559,6 +646,21 @@ def delegation_result_reached_turn(agent: str, turn: int) -> bool:
             conn, agent,
             "SELECT 1 FROM conversation_messages"
             " WHERE turn_id = ? AND external_id LIKE 'delegation-result:%' LIMIT 1",
+            (turn,)).fetchone()
+    return found is not None
+
+
+def delegation_result_reached_later_done_turn(agent: str, turn: int) -> bool:
+    """Whether a returned delegation reached a later review turn that finished successfully."""
+    with records.reading(directory.records(agent)) as conn:
+        found = _rows(
+            conn, agent,
+            "SELECT 1 FROM conversation_messages AS m"
+            " JOIN turns AS original ON original.id = ?"
+            " JOIN turns AS review ON review.id = m.turn_id"
+            " WHERE review.conversation_id = original.conversation_id"
+            " AND review.id != original.id AND review.turn_status = 'done'"
+            " AND m.external_id LIKE 'delegation-result:%' LIMIT 1",
             (turn,)).fetchone()
     return found is not None
 

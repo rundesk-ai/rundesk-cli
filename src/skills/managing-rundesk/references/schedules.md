@@ -9,8 +9,8 @@ due. The gateway is the clock that fires it.
 |---|---|
 | `schedules` or `schedules list [<agent>]` | List schedules that can still run, for every agent or one. |
 | `schedules list [<agent>] --expired` | List only schedules that can never run again. |
-| `schedules add <agent> <schedule> (--when <cron> | --at <moment>) (--run <program> | --ask <prompt>) [--until <moment>] [--disabled]` | Create repeating or one-time work. |
-| `schedules update <agent> <schedule> [--when <cron> | --at <moment>] [--run <program> | --ask <prompt>] [--until <moment>] [--enable | --disable]` | Change stated fields and keep execution history. |
+| `schedules add <agent> <schedule> (--when <cron> | --at <moment>) (--run <program> | --ask <prompt>) [--deliver-to <agent>] [--until <moment>] [--disabled]` | Create repeating or one-time work; delivery applies only to `--ask`. |
+| `schedules update <agent> <schedule> [--when <cron> | --at <moment>] [--run <program> | --ask <prompt>] [--deliver-to <agent> | --no-deliver-to] [--until <moment>] [--enable | --disable]` | Change stated fields and keep execution history. |
 | `schedules show <agent> <schedule>` | Show the complete definition and state. |
 | `schedules run <agent> <schedule> [--wait <seconds>]` | Run now in this terminal; default wait is 3600 seconds. |
 | `schedules remove <agent> <schedule>` | Remove the schedule. This has no confirmation preview. |
@@ -36,11 +36,23 @@ not merely remind the owner that a check was planned. Keep the check within the 
 a schedule changes when work runs, not what changes it is allowed to make. Confirm the gateway will
 be running, and configure a notified channel when the result must reach the owner proactively.
 
+Use `--deliver-to <agent>` when a successful report should become another agent's ordinary work.
+This is a one-way scheduled delivery, not delegation: no answer returns to the source, no delegation
+row is made, and the recipient's final follows its own notified channel. Confirm the target is the
+right existing agent and has a gateway arranged; a stopped or busy gateway retains the pending
+delivery, but cannot act on it until it runs. Never construct a callback or a second schedule to
+send the recipient's answer back to the source. A target update applies to the next invocation; the
+one already running keeps the identity it froze before starting. Delivery carries at most 60 KiB,
+preserving an oversized report's opening and conclusion around an explicit omission marker. Admit
+pending deliveries and let the source gateway acknowledge them before removing either agent;
+removal refuses while a report would be lost.
+
 ## Time and execution rules
 
 - `--when` is five-field cron: `minute hour day month weekday`. `--at` is
   `YYYY-MM-DDTHH:MM`. Both use the machine's local clock; timezone suffixes and `Z` are refused.
 - Use exactly one of `--when` or `--at`, and exactly one of `--run` or `--ask`.
+- `--deliver-to` is valid only with `--ask`; the source and recipient must be different agents.
 - `--until` is the local moment after which the schedule never runs again.
 - `--run` takes one quoted string, splits it into program arguments, and never invokes a shell. It
   does not expand variables, globs, pipes, redirects, `&&`, or `;`. Name an executable program.
@@ -64,7 +76,7 @@ agent's gateway is running; without both, no future work is arranged.
 
 1. Add disabled when rollout needs inspection, then `show` and `run` it manually.
 2. Manual `run` takes the same durable claim as the gateway and refuses a duplicate. It records the
-   result but does not consume or shift the next due time.
+   result but does not consume or shift the next due time, and does not dispatch `--deliver-to`.
 3. Enable only after the manual result is correct and the gateway is running.
 4. Inspect `show`, `gateways logs <agent>`, and `turns <agent>` for failures.
 

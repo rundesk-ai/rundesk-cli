@@ -55,7 +55,7 @@ from rundesk.commands import Subcommands, as_written, failed
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK, USAGE
 from rundesk.providers import answering, turns
-from rundesk.schedules import due, firing, kept, upkeep
+from rundesk.schedules import delivering, due, firing, kept, upkeep
 from rundesk.utils import locking, programs
 from rundesk.utils.terminal import as_table
 
@@ -106,6 +106,8 @@ def register(sub: Subcommands) -> None:
     _stated(changed, "")
     changed.add_argument("--enable", action="store_true", help="let it run again")
     changed.add_argument("--disable", action="store_true", help="keep it and stop running it")
+    changed.add_argument("--no-deliver-to", action="store_true",
+                         help="stop handing its report to another agent; use the owner notice again")
 
     shown = what.add_parser("show", help="everything one schedule was given")
     _named(shown)
@@ -147,6 +149,9 @@ def _stated(one: argparse.ArgumentParser, required: str) -> None:
     one.add_argument("--ask", metavar="<prompt>", dest="prompt", default=None,
                      help=f"{required}what to ask the agent, instead of --run — its own "
                           "conversation, so it never lands in the one somebody types into")
+    one.add_argument("--deliver-to", metavar="<agent>", dest="deliver_to", default=None,
+                     help="hand the finished report to this agent as a turn of its own instead of "
+                          "the owner notice — only with --ask")
 
 
 def cmd_schedules(args: argparse.Namespace) -> int:
@@ -282,6 +287,12 @@ def _added(args: argparse.Namespace) -> int:
     values = {"cron": args.when, "run_at": args.at, "expire_at": args.until,
               "command": args.program, "prompt": args.prompt,
               "enabled": 0 if args.disabled else 1}
+    if args.deliver_to is not None:
+        trouble = _delivering_trouble(args.agent, args.deliver_to,
+                                      prompt=args.prompt, program=args.program)
+        if trouble:
+            return _failed(trouble, "nothing was added")
+        values.update(_delivering(args.deliver_to))
     try:
         # Understood before it is written, so a cron nobody can parse is refused where it was typed
         # rather than found by a gateway at the moment it was meant to run. The records refuse the
@@ -306,6 +317,9 @@ def _changed(args: argparse.Namespace) -> int:
     if args.enable and args.disable:
         return _mistyped(f"{args.schedule} cannot be enabled and disabled at once",
                          "say one of them, not both", "nothing was changed")
+    if args.deliver_to is not None and args.no_deliver_to:
+        return _mistyped(f"{args.schedule} cannot name and clear a delivery target at once",
+                         "say --deliver-to or --no-deliver-to, not both", "nothing was changed")
 
     values = {}
     if args.program is not None and args.prompt is not None:
@@ -325,10 +339,23 @@ def _changed(args: argparse.Namespace) -> int:
         values["expire_at"] = args.until
     if args.program is not None:
         values["command"] = args.program
+        values["prompt"] = None
     if args.enable:
         values["enabled"] = 1
     if args.disable:
         values["enabled"] = 0
+    if args.deliver_to is not None:
+        # **Against what this schedule will be**, not against what it is: an owner turning a program
+        # into a question and naming where its report goes types both in one command, and asking
+        # about the row as it stands would refuse the pair for the kind it is about to stop being.
+        trouble = _delivering_trouble(args.agent, args.deliver_to,
+                                      prompt=args.prompt, program=args.program,
+                                      already_asking=_asks_the_agent(args.agent, args.schedule))
+        if trouble:
+            return _failed(trouble, "nothing was changed")
+        values.update(_delivering(args.deliver_to))
+    if args.no_deliver_to:
+        values.update({"deliver_to_agent": None, "deliver_to_identity": None})
 
     if not values:
         return _failed(f"nothing was named to change about {args.schedule}",
@@ -398,6 +425,9 @@ def _described(agent: str, name: str) -> int:
     print(f"        when      {as_written(row.get('cron') or row.get('run_at'))}")
     for line in _what_it_does(row):
         print(line)
+    delivered = _delivered_to(row)
+    if delivered:
+        print(f"        deliver   {delivered}")
     print(f"        until     {as_written(row.get('expire_at'))}")
     print(f"        enabled   {as_written(bool(row.get('enabled')))}")
     try:
@@ -443,6 +473,29 @@ def _what_it_does(row: Dict[str, Any]) -> List[str]:
     if asked:
         return [f"        ask       {asked}"]
     return [f"        run       {as_written(row.get('command'))}"]
+
+
+def _delivered_to(row: Dict[str, Any]) -> str:
+    """Which agent this schedule's finished report is handed to, and whether that agent is still it.
+
+    **The stored identity is checked against the agent standing under that name now**, because those
+    are two different facts and only one of them is the schedule's. An agent removed and re-made is
+    a stranger holding the name: nothing is delivered to it, deliberately, and a readout that showed
+    only the name would say the schedule is doing something it stopped doing.
+
+    Empty for a schedule that delivers nowhere, which is every schedule until somebody says so.
+    """
+    named = str(row.get("deliver_to_agent") or "")
+    if not named:
+        return ""
+    stored = str(row.get("deliver_to_identity") or "")
+    standing = ""
+    with contextlib.suppress(Exception):
+        standing = delivering.identity_of(named)
+    if standing and standing == stored:
+        return named
+    return (f"{named} — not the agent this was pointed at any more, so nothing is delivered "
+            "until it is said again")
 
 
 def _asks_the_agent(agent: str, name: str) -> bool:
@@ -627,6 +680,37 @@ def firing_trouble(said: Optional[str]) -> str:
         return (f"{argv[0]} is not a program on this machine — a schedule naming one that is not "
                 "there can never run, so say where it really is")
     return ""
+
+
+def _delivering_trouble(owner: str, to_agent: Optional[str], prompt: Optional[str],
+                        program: Optional[str] = None, already_asking: bool = False) -> str:
+    """Why this schedule may not hand its finished report to that agent, or `""` when it may.
+
+    **Only a schedule that asks an agent has a report at all.** One that starts a program says
+    neither that it began nor what it came to — `docs/schedules.md` says why — so naming somewhere to
+    deliver a report it will never have is a promise rundesk would not be keeping. The records refuse
+    the same pairing; this is what says it in words, where somebody typed it.
+
+    The rest is `schedules.delivering`'s to answer, because *who that agent is* is a durable question
+    and not a command-line one: an agent that is not on this machine, this agent itself, and one
+    whose records cannot say who it is are three different sentences.
+    """
+    asking = bool((prompt or "").strip()) or (program is None and already_asking)
+    if not asking:
+        return ("a schedule that starts a program has no report to deliver — say --ask '<prompt>' "
+                "as well, or leave --deliver-to off")
+    return delivering.target_trouble(owner, to_agent)
+
+
+def _delivering(to_agent: str) -> Dict[str, Any]:
+    """The pair a schedule keeps about where its report goes: the name, and who that is.
+
+    **Both, and resolved once here.** The identity is read at the moment somebody says so and never
+    again: an agent removed and re-made under the same name is a different agent, and a schedule that
+    stored only the name would follow that name to whoever holds it next.
+    """
+    named = to_agent.strip()
+    return {"deliver_to_agent": named, "deliver_to_identity": delivering.identity_of(named)}
 
 
 def _found_on_the_machine(program: str) -> str:

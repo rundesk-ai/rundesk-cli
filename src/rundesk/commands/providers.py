@@ -118,6 +118,8 @@ def register(sub: Subcommands) -> None:
     taking.add_argument("agent", metavar="<agent>")
     taking.add_argument("--schedule", metavar="<schedule>", required=True,
                         help="which schedule this turn is for")
+    taking.add_argument("--invocation", metavar="<invocation>",
+                        help=argparse.SUPPRESS)
 
 
 def cmd_providers(args: argparse.Namespace) -> int:
@@ -140,7 +142,7 @@ def cmd_providers(args: argparse.Namespace) -> int:
             return _instructions(getattr(args, "agent", None), args.situation, args.layers,
                                  args.turn)
         if what == "run":
-            return _took_a_turn(args.agent, args.schedule)
+            return _took_a_turn(args.agent, args.schedule, args.invocation)
     except TROUBLE as why:
         return _failed(str(why))
     raise AssertionError(f"providers {what} is registered on the parser and answered by nothing")
@@ -421,7 +423,7 @@ def _shown(built: instructions.Prompt, only_layers: bool) -> int:
     return OK
 
 
-def _took_a_turn(agent: str, schedule: str) -> int:
+def _took_a_turn(agent: str, schedule: str, invocation: Optional[str] = None) -> int:
     """One scheduled turn, in this process. **What a firing starts, and rarely typed by a person.**
 
     Documented the way `gateways run` is: it exists because something has to be the program a
@@ -432,7 +434,7 @@ def _took_a_turn(agent: str, schedule: str) -> int:
     whether the firing completed or failed, so a turn that did not answer must not look like one that
     did — that is the whole of what a schedule's owner reads the next morning.
     """
-    got = answering.for_a_schedule(agent, schedule)
+    got = answering.for_a_schedule(agent, schedule, invocation=invocation)
     turns.note(agent, f"schedule {schedule}: turn {got.turn} {got.turn_status}"
                       + (f" — {got.failure_message}" if got.failure_message else ""))
     if got.worked:
