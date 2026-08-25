@@ -454,7 +454,7 @@ def _added(args: argparse.Namespace, reaching: Optional[Reaching]) -> int:
         # answer was written into the record, which is a mechanism that does not exist: `values`
         # below has no such key, the `channels` table has no column, and `kept.SETTABLE` names none.
         # The one capability anything reads is `max_text`, and it is read out of `settings`, where a
-        # `--check` may put it. `docs/adapters.md` says so under *what is not built yet*; a docstring
+        # `--check` may put it. `docs/extending/adapters.md` says so under *what is not built yet*; a docstring
         # asserting the opposite is worse than the gap, because nobody re-checks it.
         able = adapters.capabilities(args.adapter, reaching)
     except TROUBLE as why:

@@ -9,18 +9,16 @@ agent-home templates, provider and channel adapters, and the bundled `rundesk` s
 distributed onto machines with durable agent state, so command outcomes, stored formats, migrations,
 install/update behavior, and the Python 3.9 floor are contracts.
 
-Read [`docs/BRIEF.md`](docs/BRIEF.md) for what this is and what it refuses, and
-[`docs/CODEMAP.md`](docs/CODEMAP.md) for where each layer lives. Then read
-[`docs/api/commands.md`](docs/api/commands.md) for the complete operation contract,
-[`docs/layout.md`](docs/layout.md) for installed state, and [`docs/development.md`](docs/development.md)
-before running a checkout. Topic documentation in `docs/` is the source of truth for its subsystem.
-Use [`docs/catalogs.md`](docs/catalogs.md) as the canonical operating contract for a
-published skill-catalog repository.
+Read [`docs/BRIEF.md`](docs/BRIEF.md) and [`docs/CODEMAP.md`](docs/CODEMAP.md) first. Then
+[`docs/api/`](docs/api/) for the operation contract, [`docs/concepts/layout.md`](docs/concepts/layout.md)
+for installed state, and [`docs/guides/development.md`](docs/guides/development.md) before running a
+checkout. A `docs/concepts/` page is the source of truth for its subsystem;
+[`docs/extending/catalogs.md`](docs/extending/catalogs.md) is the contract for a published catalog.
 
 ## Before you work
 
-1. Read `docs/BRIEF.md` and `docs/CODEMAP.md`, then `docs/api/commands.md`, `docs/layout.md`, and
-   `docs/development.md`; then read the relevant topic docs and every file you will edit.
+1. Read `docs/BRIEF.md` and `docs/CODEMAP.md`, then `docs/api/`, `docs/concepts/layout.md`, and
+   `docs/guides/development.md`; then the pages for what you are changing, and every file you edit.
 2. Load the smallest complete set of applicable runtime skills. Use `writing-skills` for bundled
    skills, `naming-grammar-conventions` before choosing or changing recurring or cross-layer terms,
    and `managing-github` for pull requests or releases.
@@ -52,8 +50,11 @@ src/templates/                  agent home rules and purpose-named area template
 tests/test_*.py                 directly runnable isolated suites
 tests/support.py                scrubbed environment, closed network, and scratch-root harness
 scripts/suites                  discovers every suite and fails on empty discovery
-docs/                           BRIEF and CODEMAP first, then one page per subsystem
-  api/                          the published surface and what each operation guarantees
+docs/                           README, BRIEF and CODEMAP; every other page is in a home
+  api/                          every operation, one page per group, and what each guarantees
+  concepts/                     how a subsystem works, and how it fails
+  guides/                       one task each, start to finish
+  extending/                    writing an adapter or catalog against a published contract
   requirements/                 what must be true, and whether anything proves it
   research/                     dated findings about the world outside this repository
 requirements.txt                exact adapter-only runtime pins; core rundesk remains stdlib
@@ -149,22 +150,25 @@ mechanical proof together rather than bypassing it.
 
 Keep documentation true in the same change as behavior.
 
-- Keep `docs/` in its documented layout: `README.md`, `BRIEF.md`, `CODEMAP.md`, `api/`,
-  `requirements/`, `research/`, `assets/`, and one topic page per subsystem. Use the
-  `structuring-project-docs` skill before adding a home, moving a page, or writing a requirement.
-  Never create a second documentation source of truth, and never create an empty home.
+- Keep `docs/` in its layout. Only `README.md`, `BRIEF.md`, and `CODEMAP.md` sit at its root;
+  every other page is in `api/`, `concepts/`, `guides/`, `extending/`, `requirements/`, or
+  `research/`. Use the `structuring-project-docs` skill before adding a home, moving a page, or
+  writing a requirement. Never create a second source of truth, and never create an empty home.
+- Keep pages thin. Lead with the fact, use a table wherever the content is tabular, and split a page
+  that has grown past a screen per section rather than trimming it evenly.
 - Add a page's row to its home's `README.md` in the same change that adds the page. An index behind
   its directory is worse than no index.
 - Keep every file in `docs/requirements/` on the closed schema: `id`/`name`/`last_verified`
   frontmatter, then `What this is`, `Why it exists`, `Requirements`, `Open questions`. A ✅ names a
   check that was observed to pass; a source path is not evidence, and neither is an unrun test.
-  Requirement IDs are `R-<NS>-<n>`, one namespace per file, numbered unbroken from 1.
-- Update `docs/api/commands.md` whenever the public operation list or a command guarantee changes.
-- Update `docs/layout.md` for every installed path, stored item, ownership, migration, copy, lock, or
+  Requirement IDs are `R-<NS>-<n>`, one namespace per file, never reused and never renumbered.
+- Update `docs/api/` whenever the public operation list or a command guarantee changes, including
+  the complete verb list in its `README.md`.
+- Update `docs/concepts/layout.md` for every installed path, stored item, ownership, migration, copy, lock, or
   lifecycle-layout change.
-- Update `docs/development.md` when the supported run, isolation, lint, or test process changes.
-- Update the owning topic document for providers, channels, skills/catalogs, gateways, schedules,
-  permissions, adapters, time, or another documented subsystem.
+- Update `docs/guides/development.md` when the supported run, isolation, lint, or test process changes.
+- Update the owning page for providers, channels, catalogs, gateways, schedules, permissions,
+  adapters, teams, instructions, time, or another documented subsystem.
 - Update bundled skill instructions and references when the behavior they teach changes. Never let
   a skill promise an unavailable verb or stale workflow.
 - Keep `AGENTS.md` and `CLAUDE.md` byte-identical. Edit one complete source and copy it to the other;

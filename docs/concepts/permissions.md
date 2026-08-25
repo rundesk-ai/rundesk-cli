@@ -2,7 +2,7 @@
 
 **This is not about a brain's tool permissions.** Every provider adapter already runs its CLI with
 that system switched off — `--dangerously-skip-permissions`, `danger-full-access`,
-`bypassPermissions` — and [`providers.md`](providers.md) says so outright. Nothing here changes that
+`bypassPermissions` — and [`providers.md`](../extending/providers.md) says so outright. Nothing here changes that
 or reports on it.
 
 What this page is about is **macOS TCC**: whether the machine will let a rundesk process drive the
@@ -153,6 +153,6 @@ reads as a clean machine.
 
 ## Where the measurements are
 
-[`research/2026-08-08-what-this-mac-lets-a-process-do.md`](research/2026-08-08-what-this-mac-lets-a-process-do.md)
+[`research/2026-08-08-what-this-mac-lets-a-process-do.md`](../research/2026-08-08-what-this-mac-lets-a-process-do.md)
 holds what was established and how, including the eleven questions still open and the section that
 was written three times before it was right.

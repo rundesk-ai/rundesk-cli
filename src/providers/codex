@@ -120,7 +120,7 @@ A_SUMMARY_AT_MOST = 400
 #: `dangerFullAccess` where a policy object is.
 #:
 #: `RUNDESK_ACCESS_MODE` is read by nothing here, and that is the owner's decision: every turn runs
-#: with the whole machine available to it. The seam still carries the word, and `docs/providers.md`
+#: with the whole machine available to it. The seam still carries the word, and `docs/extending/providers.md`
 #: still says plainly that it is a request rather than containment and that an adapter may ignore
 #: it — so what is written down and what happens agree, which is the part that matters. Nothing
 #: here implies a boundary it does not keep.

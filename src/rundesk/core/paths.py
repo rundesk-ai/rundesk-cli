@@ -248,7 +248,7 @@ def allowed(where: Path, called: str) -> Path:
     typed compares a string that is not the directory anything will actually use. This guard read
     `~/Library/..` as "not the home directory" and `/tmp/../..` as "not the root", which is both
     refusals defeated by one segment — and `uninstall --purge` removes `data/` below whatever root
-    got through. That is precisely the incident `docs/layout.md` records: an install pointed at a
+    got through. That is precisely the incident `docs/concepts/layout.md` records: an install pointed at a
     home directory emptied it, and reported success.
 
     Handing back the resolved path rather than the typed one is the other half. A value that passed

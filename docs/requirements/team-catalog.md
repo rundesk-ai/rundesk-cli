@@ -10,7 +10,7 @@ A team catalog is a version-controlled skill catalog that also declares named ag
 creates those agents and gives the catalog ownership of their durable instructions, memory policy,
 delegation scope, and skill allowlists. Provider accounts, channels, schedules, projects,
 credentials, and models stay local to each install. What a team is and how it reconciles is
-[../teams.md](../teams.md); this page holds what that must guarantee.
+[../teams.md](../concepts/teams.md); this page holds what that must guarantee.
 
 ## Why it exists
 

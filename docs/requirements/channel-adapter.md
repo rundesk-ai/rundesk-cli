@@ -23,7 +23,7 @@ and how shared state is shown there.
 
 No row here is proven. `R-CAD-*` is cited in `src/rundesk/providers/answering.py` but no test names
 one, so every row carries the acceptance that has not been executed rather than a citation. The
-mechanics were inspected against [adapters.md](../adapters.md), `src/rundesk/channels/adapters.py`,
+mechanics were inspected against [adapters.md](../extending/adapters.md), `src/rundesk/channels/adapters.py`,
 `src/rundesk/channels/hosting.py`, and `src/rundesk/commands/channels.py`; inspection is not proof.
 
 |  | ID | Requirement | Evidence |

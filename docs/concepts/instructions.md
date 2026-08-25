@@ -6,7 +6,7 @@ convention; the runtime supplies skills. Nothing is written twice, because an ag
 same rule from two owners cannot tell which one moved when they disagree.
 
 This page is the source of truth for that composition. What it must guarantee, and what proves each
-guarantee, is [requirements/rundesk-instructions.md](requirements/rundesk-instructions.md).
+guarantee, is [requirements/rundesk-instructions.md](../requirements/rundesk-instructions.md).
 
 ## Instruction ownership
 

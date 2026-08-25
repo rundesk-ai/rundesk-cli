@@ -164,7 +164,7 @@ checkout has no such directory and needs none, because nothing you run here impo
 
 ## How the code is written
 
-The conventions are ordinary and the code already keeps them; [`ruff.toml`](../ruff.toml) is where a
+The conventions are ordinary and the code already keeps them; [`ruff.toml`](../../ruff.toml) is where a
 machine can check that, and CI does on every pull request. It is **not** a dependency of the product
 — it is fetched in CI and nothing a person installs ever sees it, which is why it is absent from
 `requirements.txt` even though that file is no longer empty.

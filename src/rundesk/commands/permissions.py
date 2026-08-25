@@ -1,7 +1,7 @@
 """`rundesk permissions` — what this Mac lets rundesk do, and what is still not allowed.
 
 **This is not about a brain's tool permissions.** Every provider adapter already runs its CLI with
-that switched off, and `docs/providers.md` says so. What stops an agent taking a screenshot, clicking
+that switched off, and `docs/extending/providers.md` says so. What stops an agent taking a screenshot, clicking
 a button or driving a browser is macOS TCC, and that is what this asks about.
 
 ## The bare verb reports, the named one checks

@@ -5,7 +5,7 @@ states a field, a bound or an exit code, it is because `src/rundesk/providers/`,
 in `src/providers/`, and the suites in `tests/` say so.
 
 **Four brains ship**, and the stream each one is read against is the version named in
-[`cli-versions.lock`](../cli-versions.lock) rather than notes about an older one:
+[`cli-versions.lock`](../../cli-versions.lock) rather than notes about an older one:
 
 | Adapter | Reaches it by | Can be steered |
 |---|---|---|
@@ -39,8 +39,8 @@ A **provider** is a brain — a vendor's own command-line tool, driven headlessl
 adapter** is the program rundesk runs to reach one. Nothing under `src/rundesk/` names a vendor, and
 `tests/test_providers_protocol.py` refuses the file if one appears there.
 
-[`adapters.md`](adapters.md) is the other seam, for channels. [`gateways.md`](gateways.md) is what
-hosts both, [`commands.md`](api/commands.md) is what a person types, and [`layout.md`](layout.md) is
+[`adapters.md`](adapters.md) is the other seam, for channels. [`gateways.md`](../concepts/gateways.md) is what
+hosts both, [`commands.md`](../api/README.md) is what a person types, and [`layout.md`](../concepts/layout.md) is
 where an install keeps things.
 
 ---

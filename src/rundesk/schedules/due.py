@@ -19,7 +19,7 @@ anywhere to replay.
 ## The machine's own clock, deliberately
 
 A schedule is stated in local time and matched against a local clock, and what it last fired for is
-written down the same way. `docs/time.md` says a record takes UTC, and this is not an exception to
+written down the same way. `docs/concepts/time.md` says a record takes UTC, and this is not an exception to
 it: `cron`, `run_at` and `expire_at` are a *statement about the future* rather than a record of
 something that happened, and a person who writes `0 9 * * *` means nine o'clock where they are.
 What *happened* — `last_run_at`, `created_at` — is UTC in `core.config.MOMENT` like every other

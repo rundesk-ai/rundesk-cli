@@ -51,7 +51,7 @@ TABLE = "schedules"
 #: failure is a claim nothing here can back.
 #:
 #: **`done` rather than `completed`, and the word is not this module's to pick.** `seen`, `working`,
-#: `done`, `stopped` and `failed` are the states an adapter renders, written down in `docs/adapters.md`
+#: `done`, `stopped` and `failed` are the states an adapter renders, written down in `docs/extending/adapters.md`
 #: with the note that they are *not* `taken`, `running`, `finished` — a published vocabulary somebody
 #: else's program is built against. `turns.turn_status` already speaks it. A firing's outcome never
 #: leaves this machine, so nothing forced the two apart except that they were written months apart,

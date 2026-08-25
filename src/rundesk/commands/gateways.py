@@ -30,7 +30,7 @@ a bootstrap of a gateway that was confirmed **not** online and did not come up o
 build this replaces let a bare `restart` mean every agent, and it took down every gateway somebody
 had. A bare verb here is a refusal that shows both spellings and changes nothing — and it exits
 `2`, because a command line that named neither is the command line itself being wrong, which is
-what `docs/api/commands.md` promises `2` for and what argparse already exits for a mistyped sub-verb.
+what `docs/api/README.md` promises `2` for and what argparse already exits for a mistyped sub-verb.
 
 ## Active work is protected by default, and `--force` is the exception
 
@@ -1206,7 +1206,7 @@ def _failed(why: str, *and_so: str) -> int:
 def _mistyped(why: str, *and_so: str) -> int:
     """The same, for a command line that was itself wrong — which exits `2` and not `1`.
 
-    `docs/api/commands.md`'s table promises `2` for *the command line itself was wrong*, and argparse
+    `docs/api/README.md`'s table promises `2` for *the command line itself was wrong*, and argparse
     already exits `2` here for a sub-verb spelled wrongly, a flag this verb does not have, and an
     `-n` that is not a number. **A guard written by hand rather than left to argparse must not
     answer a different number for the same kind of mistake**, and two of them did: naming neither a

@@ -9,7 +9,7 @@ last_verified: 2026-08-25
 Rundesk gives every turn a small product-owned operating layer, then lets the agent's own
 instructions define who that agent is. The layers have separate owners so an agent receives the
 context it needs without reading the same rule twice. How they compose, section by section, is
-[../instructions.md](../instructions.md); this page holds what that composition must guarantee.
+[../instructions.md](../concepts/instructions.md); this page holds what that composition must guarantee.
 
 ## Why it exists
 

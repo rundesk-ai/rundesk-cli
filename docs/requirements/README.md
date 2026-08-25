@@ -49,5 +49,5 @@ moves.
 
 Three predecessor contracts were removed on 2026-08-25 — the previous build's role-worker design, its
 Slack behavior, and its machine-permissions draft. Their requirement namespaces were cited nowhere
-else, and [../permissions.md](../permissions.md) remains the source of truth for what macOS lets
+else, and [../permissions.md](../concepts/permissions.md) remains the source of truth for what macOS lets
 Rundesk do. Git history holds them.

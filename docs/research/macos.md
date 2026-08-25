@@ -25,7 +25,7 @@ the failure it prevents reads as an absent feature rather than as a wrong path.
 every small file under a name beside its target and renamed it into place, and why the tree a
 restore unpacked was built *inside* the destination directory rather than in a temporary one. Read
 in the manual, and relied on throughout — this build does the same thing, and
-[`docs/layout.md`](../layout.md) states the lock half of it.
+[`docs/layout.md`](../concepts/layout.md) states the lock half of it.
 
 **A swap made of two renames has a gap in it, and no `except` can see that gap.** Measured as a
 design consequence rather than as an incident: the old restore moved `data/` aside and moved the new
@@ -187,7 +187,7 @@ somewhere disposable.
 ## Two numbers worth keeping
 
 **A whole-directory copy legitimately holds a lock for a long time.** 120 MB across sixty thousand
-files measured 9.2 seconds. That number is already carried in [`docs/layout.md`](../layout.md),
+files measured 9.2 seconds. That number is already carried in [`docs/layout.md`](../concepts/layout.md),
 which is where it belongs, because it is the reason the wait for the install lock is the caller's to
 choose rather than a constant.
 

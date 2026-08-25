@@ -5,7 +5,7 @@ states a field, a bound or an exit code, it is because `src/rundesk/channels/`, 
 adapter in `src/channels/discord`, and the suites in `tests/` say so. Where the code and its own
 docstrings disagree, the code is what is written here and the disagreement is named.
 
-[`research/the-adapter-contracts.md`](research/the-adapter-contracts.md) reproduces the contract the
+[`research/the-adapter-contracts.md`](../research/the-adapter-contracts.md) reproduces the contract the
 *previous* build published, and is a correct record of that. It is not a description of this one: the
 record kinds are different, the turn states are different, the key is `say:`/`do:` and not `type:`,
 and half of what it describes does not exist here. Write against that page and you produce something
@@ -16,8 +16,8 @@ are deliberately the same shape and are not the same contract: a channel adapter
 `say:`/`do:` and a provider adapter's by `type:`, and the two kinds of adapter do not share a
 namespace on disk.
 
-[`gateways.md`](gateways.md) is what hosts an adapter, [`commands.md`](api/commands.md#channels) is how a
-person connects one, and [`layout.md`](layout.md) is where an install keeps things.
+[`gateways.md`](../concepts/gateways.md) is what hosts an adapter, [`commands.md`](../api/channels.md) is how a
+person connects one, and [`layout.md`](../concepts/layout.md) is where an install keeps things.
 
 ## An adapter is a program, never a plugin
 

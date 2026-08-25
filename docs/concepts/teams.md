@@ -4,7 +4,7 @@ A team catalog is a skill catalog that also declares named agents. Installing on
 agents, owns their durable instructions, and keeps them from drifting: the catalog is the source of
 truth, and reconciliation is what makes that true on a machine that has moved on.
 
-[catalogs.md](catalogs.md) is how a catalog is written and published. This page is what happens on
+[catalogs.md](../extending/catalogs.md) is how a catalog is written and published. This page is what happens on
 the install that takes one.
 
 ## What a team catalog declares

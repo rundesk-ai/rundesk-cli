@@ -254,7 +254,7 @@ SAID_LINE_AT_MOST = 500
 #: the quote keeps its shape, because a quoted code block that lost its newlines would be unreadable,
 #: and is clipped instead.
 #:
-#: **Bounded here and not only in the adapter.** `docs/adapters.md` asks an adapter to narrow a
+#: **Bounded here and not only in the adapter.** `docs/extending/adapters.md` asks an adapter to narrow a
 #: display name before it sends one, and the shipped one does — but a bound that lives only on the
 #: far side of a seam is a bound a third-party adapter can be wrong about, and being wrong about it
 #: reaches a prompt. The numbers are the previous build's, which settled on them for this exact pair.

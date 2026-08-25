@@ -55,7 +55,7 @@ The next `ask` continues the same conversation. Keep the agent available after t
 rundesk gateways start ava
 ```
 
-Add Discord with the [step-by-step setup guide](docs/discord.md) when you want to reach the agent
+Add Discord with the [step-by-step setup guide](docs/guides/discord.md) when you want to reach the agent
 away from your terminal, or schedule work for later:
 
 ```sh
@@ -111,7 +111,7 @@ rundesk skills grant ava rundesk-team-development/managing-development-work
 ```
 
 Installing the team later keeps the existing catalog and adds the managed agents. See
-[Install or build a team](docs/catalogs.md#building-a-team-catalog) for the complete `team.json`
+[Install or build a team](docs/extending/catalogs.md#building-a-team-catalog) for the complete `team.json`
 example, local preview workflow, and publication contract.
 
 #### Supported first-party catalogs
@@ -163,7 +163,7 @@ rundesk ask ava --read-only "what changed today?"
 ```
 
 Custom providers are executable adapters that exchange newline-delimited JSON records with
-Rundesk. See the [provider adapter contract](docs/providers.md).
+Rundesk. See the [provider adapter contract](docs/extending/providers.md).
 
 ## 💬 Discord
 
@@ -185,7 +185,7 @@ Rundesk prompts for the token without echoing it and verifies the connection bef
 channel. Use one Discord application per agent so each has its own identity. `--notify` makes this
 the channel for gateway notices, scheduled results, and other unprompted messages.
 
-The [full Discord setup guide](docs/discord.md) walks through the Developer Portal, least-privilege
+The [full Discord setup guide](docs/guides/discord.md) walks through the Developer Portal, least-privilege
 permissions, installation, and troubleshooting step by step.
 
 If the bot does not answer, check the channel and gateway directly:
@@ -196,7 +196,7 @@ rundesk gateways logs ava
 ```
 
 Custom channel adapters are executables too. Rundesk owns access control, turn state, history, and
-delivery while the adapter owns its platform. See the [channel adapter contract](docs/adapters.md).
+delivery while the adapter owns its platform. See the [channel adapter contract](docs/extending/adapters.md).
 
 ## ❓ FAQ
 
@@ -242,13 +242,10 @@ needed.
 
 ## 📖 Documentation
 
-- **[Commands](docs/api/commands.md)** — operations, guarantees, and exit codes
-- **[Channel adapters](docs/adapters.md)** — the executable contract behind a channel
-- **[Provider adapters](docs/providers.md)** — turns and the executable contract behind a provider
-- **[Skills and catalogs](docs/catalogs.md)** — packages, repositories, validation, and releases
-- **[Gateways](docs/gateways.md)** and **[Schedules](docs/schedules.md)** — lifecycle and recovery
-- **[Install layout](docs/layout.md)** — one root and everything derived from it
-- **[Development](docs/development.md)** — safe checkout and test workflows
+- **[Commands](docs/api/)** — every operation, what each guarantees, and the exit codes
+- **[How it works](docs/concepts/)** — gateways, schedules, install layout, permissions, teams
+- **[Extending it](docs/extending/)** — the channel, provider, and catalog contracts
+- **[Guides](docs/guides/)** — Discord setup, and working on a checkout
 - **[All documentation](docs/README.md)** — the index, including requirements and research
 
 ## 🤝 Contributing
