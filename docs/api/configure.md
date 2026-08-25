@@ -39,7 +39,7 @@ shell a gateway will never see.
 
 ```console
 $ rundesk env set DISCORD_TOKEN
-DISCORD_TOKEN: 
+DISCORD_TOKEN:
 DISCORD_TOKEN is set — MTIxxxxxxxxken
 
 $ rundesk env list

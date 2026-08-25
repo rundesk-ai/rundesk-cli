@@ -56,7 +56,7 @@ is a URL, an address and a token that only mean anything together.
 $ rundesk skills configure rundesk-skills/jira --profile acme
 jira needs 3 values for acme
         JIRA_BASE_URL__ACME   your Jira site, e.g. https://acme.atlassian.net
-        > 
+        >
         ...
 profile acme is complete
 

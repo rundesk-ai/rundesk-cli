@@ -92,7 +92,7 @@ Mode, then right-click your profile → Copy User ID; a username is not an id an
 $ rundesk channels add alan discord --allow 341709...
 the discord adapter needs 1 value before alan can use it
         DISCORD_BOT_TOKEN__ALAN   the discord adapter reads DISCORD_BOT_TOKEN, and this is alan's own
-        > 
+        >
 alan is connected to discord
         reaches   rundesk#4471, reaching you#0
         allowed   341709...
