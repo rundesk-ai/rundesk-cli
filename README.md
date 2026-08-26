@@ -78,7 +78,7 @@ the whole team or use its skills on their own.
 ### Marketing Team
 
 <a href="https://github.com/rundesk-ai/rundesk-team-marketing">
-  <img src="assets/readme/rundesk-team-marketing-banner.png" alt="Rundesk Marketing Team — Beacon, Scout, Signal, and Quill." width="100%">
+  <img src="assets/readme/rundesk-team-marketing-banner.png" alt="Rundesk Marketing Team — Beacon, Scout, and Quill." width="100%">
 </a>
 
 [View the Marketing Team repository](https://github.com/rundesk-ai/rundesk-team-marketing).
