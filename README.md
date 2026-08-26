@@ -86,17 +86,6 @@ the whole team or use its skills on their own.
 Beacon maps external growth opportunities, Scout researches markets and competitors, Signal
 analyzes first-party growth data, and Quill produces messaging and content from an approved brief.
 
-### Operations Team
-
-<a href="https://github.com/rundesk-ai/rundesk-team-operations">
-  <img src="assets/readme/rundesk-team-operations-banner.png" alt="Rundesk Operations Team — Relay, Steward, and Sentinel." width="100%">
-</a>
-
-[View the Operations Team repository](https://github.com/rundesk-ai/rundesk-team-operations).
-
-Relay operates platforms and releases, Steward manages production data systems, and Sentinel
-handles live security controls.
-
 ### Install a team
 
 Choose a repository above, then preview and confirm the installation. For example, to install the
