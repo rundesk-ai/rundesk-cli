@@ -80,14 +80,15 @@ rundesk teams                            # every installed team and its members
 rundesk teams install <repository> [--provider <provider>] [--confirm]
 rundesk teams update <team> [--provider <provider>] [--confirm]
 rundesk update [--continue]               # move to the newest release, or say it is up to date
-rundesk uninstall --confirm [--purge]     # remove rundesk; --purge also takes the data
+rundesk uninstall --confirm [--purge --root <dir>]  # purge needs the matching explicit root
 rundesk install [--source <dir>] [--bin-dir <dir>]   # what install.sh runs
 ```
 
 ## Some flags are required by the verb rather than by argparse
 
-`--provider`, `--allow`, `--confirm`, and naming either a gateway or `--all` are all required, and
-none of them is registered as `required=True`. That is deliberate and it is the same decision every time:
+`--provider`, `--allow`, `--confirm`, `--root` for a confirmed purge, and naming either a gateway or
+`--all` are all required by their applicable verbs, and none is registered as `required=True`. That
+is deliberate and it is the same decision every time:
 argparse's own refusal names a flag and does not say what to type. *"the following arguments are
 required: --provider"* is true and is not an answer, and the person reading it still has to work out
 what a provider is and where the agent's name goes.
