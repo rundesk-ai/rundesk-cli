@@ -42,7 +42,8 @@ RUNDESK_HOME="$scratch_root" ./rundesk install --source "$PWD" --bin-dir "$scrat
 RUNDESK_HOME="$scratch_root" "$scratch_root/bin/rundesk" status
 
 # run the installed-agent tests here
-RUNDESK_HOME="$scratch_root" "$scratch_root/bin/rundesk" uninstall --confirm --purge
+RUNDESK_HOME="$scratch_root" "$scratch_root/bin/rundesk" uninstall --confirm --purge \
+  --root "$scratch_root"
 ```
 
 Do not replace the explicit `RUNDESK_HOME` with a bare checkout command. A checkout has no

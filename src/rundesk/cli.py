@@ -171,6 +171,8 @@ def _register_uninstall(sub: Subcommands) -> None:
                       help="required — removal does nothing without it")
     gone.add_argument("--purge", action="store_true",
                       help="also take the data rundesk kept — never the backups")
+    gone.add_argument("--root", metavar="<dir>", default=None,
+                      help="required with a confirmed purge; must match RUNDESK_HOME")
 
 
 def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = None,
