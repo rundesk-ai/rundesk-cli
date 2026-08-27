@@ -484,7 +484,14 @@ class WhatAShippedSkillMayClaim(Bundled):
                 "It does not repeat the target's configured role"):
             with self.subTest(example=phrase):
                 self.assertIn(phrase, examples)
-        self.assertNotIn("Use the configured senior review role", examples)
+        generic_role = r"(?i)configured [^.]{0,80}(?:review role|reviewer)"
+        self.assertNotRegex(examples, generic_role)
+        for bad_brief in (
+                "Use the configured senior review role to inspect the diff.",
+                "Have the configured DRY/simplicity review role inspect the diff.",
+                "Send this to the configured security reviewer."):
+            with self.subTest(bad_brief=bad_brief):
+                self.assertRegex(bad_brief, generic_role)
 
     def test_github_delivery_cleans_only_disposable_merged_heads(self):
         reference = (self.skills / "managing-github" / "references" /

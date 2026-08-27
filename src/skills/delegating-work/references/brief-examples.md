@@ -45,7 +45,7 @@ It does not repeat the target's configured role or generic review checklist.
 ## Simplification review
 
 ```text
-Task: Use the configured DRY/simplicity review role to inspect <base>...<head> for material duplication, redundancy, over-abstraction, or avoidable complexity; do not edit.
+Task: Review <base>...<head> for material duplication, redundancy, over-abstraction, or avoidable complexity; do not edit.
 Why: Decide whether the change is clear and maintainable enough to merge without expanding its design surface.
 Scope: Review the exact diff and only the nearby existing code needed to prove a duplication or simpler established pattern.
 Authority: Inspect only; do not modify files, create a PR, or change repository state.
