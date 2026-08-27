@@ -228,5 +228,3 @@ class WithAChannel(WithAnAgent):
         passes of a loop the case has already made fast.
         """
         time.sleep(self.A_SHORT_BEAT * 3)
-
-
