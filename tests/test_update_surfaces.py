@@ -160,6 +160,7 @@ class UpdateSurfaces(support.Isolated):
         (forge_home / "CLAUDE.md").write_text("other drift", encoding="utf-8")
         (forge_home / "MEMORY.md").write_text("drift", encoding="utf-8")
         (forge_home / "owner-notes.md").write_text("keep me", encoding="utf-8")
+        grants.granted("forge", library.look_up("ordinary/ordinary-skill"))
         records.stated(directory.records("forge"), {
             "describes": "drift", "delegates_to": delegating.encoded(("piper",)),
             "self_improve": 1,
@@ -187,6 +188,8 @@ class UpdateSurfaces(support.Isolated):
         self.assertEqual(0, settled["self_improve"])
         self.assertIsNone(grants.holding("forge", "implementing"))
         self.assertEqual("test-team/reviewing", grants.holding("forge", "reviewing").address)
+        self.assertEqual("ordinary/ordinary-skill",
+                         grants.holding("forge", "ordinary-skill").address)
         self.assertEqual(["forge"], gateways.went_down)
         self.assertEqual(["forge"], gateways.came_up)
         self.assertEqual([False], gateways.transition_lock_during_up)
@@ -268,10 +271,12 @@ class UpdateSurfaces(support.Isolated):
 
     def test_daily_coordinator_uses_the_same_surfaces_and_logs_each_outcome(self):
         self.publish_second_versions()
+        grants.granted("forge", library.look_up("ordinary/ordinary-skill"))
         gateways = GatewayCycle()
         out, err = io.StringIO(), io.StringIO()
         now = datetime.datetime(2026, 8, 24, 3, 0).astimezone()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+        with standing.holding(directory.where("forge")), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
                 mock.patch.object(automatic_updates, "_busy_reason", return_value=""), \
                 mock.patch.object(update, "settled_by_the_new_release", return_value=""):
             code = automatic_updates.run(
@@ -281,6 +286,10 @@ class UpdateSurfaces(support.Isolated):
         self.assertEqual(OK, code, err.getvalue())
         self.assertEqual("2.0.0", library.read("ordinary").manifest.version)
         self.assertEqual("2.0.0", library.read("test-team").manifest.version)
+        self.assertEqual("test-team/reviewing", grants.holding("forge", "reviewing").address)
+        self.assertEqual("ordinary/ordinary-skill",
+                         grants.holding("forge", "ordinary-skill").address)
+        self.assertEqual((["forge"], ["forge"]), (gateways.went_down, gateways.came_up))
         log_text = "\n".join(
             one.read_text(encoding="utf-8")
             for one in automatic_updates.logs_at(
@@ -296,6 +305,35 @@ class UpdateSurfaces(support.Isolated):
         self.assertEqual(OK, second)
         self.assertEqual("# forge\n\nSecond canonical workflow.\n",
                          (forge_home / "AGENTS.md").read_text())
+
+    def test_an_occupied_grant_name_refuses_one_team_before_a_gateway_moves(self):
+        """A member stood down for an update that was never going to finish is an outage nobody
+        asked for, so the collision is answered while every gateway is still where it was."""
+        collided = a_published_catalog(self.sources / "collided", name="collided",
+                                       skills=("implementing",))
+        with catalogs.brought(str(collided)) as coming:
+            catalogs.installed(coming)
+        grants.revoked("forge", "implementing")
+        grants.granted("forge", library.look_up("collided/implementing"))
+        a_published_catalog(self.ordinary, name="ordinary", version="2.0.0",
+                            skills=("ordinary-skill", "second-skill"))
+        written(self.team / library.MANIFEST, {
+            "schema": library.SCHEMA, "name": "test-team", "version": "2.0.0",
+            "description": "Skills for test-team.",
+        })
+        gateways = GatewayCycle()
+
+        with standing.holding(directory.where("forge")):
+            code, _out, err = self.run_manual(gateways)
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("team catalogs: completed with failures", err)
+        self.assertIn("test-team declares test-team/implementing for forge", err)
+        self.assertIn("rundesk skills revoke forge implementing", err)
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertEqual("collided/implementing", grants.holding("forge", "implementing").address)
+        self.assertEqual(([], []), (gateways.went_down, gateways.came_up))
+        self.assertEqual("2.0.0", library.read("ordinary").manifest.version)
 
     def test_a_declared_name_held_by_an_unmanaged_agent_is_refused_and_left_untouched(self):
         scribe = self.an_unmanaged_agent("scribe")

@@ -10,7 +10,7 @@ $ rundesk teams install ./development-team --provider codex
 install: this would install team development-team from ./development-team
         catalog  rundesk-skills — reuse installed from https://github.com/rundesk-ai/rundesk-skills; require writing-plans
         member   forge — create with provider codex
-                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; allow only development-team/implementing, rundesk-skills/writing-plans plus Rundesk-required skills; weekly upkeep on; leave gateway stopped
+                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; team-managed skills development-team/implementing, rundesk-skills/writing-plans plus Rundesk-required skills; every other grant preserved; weekly upkeep on; leave gateway stopped
         nothing was installed or changed. To go ahead:
         rundesk teams install ./development-team --provider codex --confirm
 ```
@@ -18,8 +18,8 @@ install: this would install team development-team from ./development-team
 `--provider` is used for the new agents created by installation. Installation refuses any declared
 member name that already exists and prints the exact `rundesk agents remove <agent> --confirm`
 command required before retrying. This clean-start boundary ensures every member begins with the
-catalog-owned instructions, memory policy, delegation scope, skill allowlist, and weekly upkeep
-setting.
+catalog-owned instructions, memory policy, delegation scope, team-managed skills, and weekly
+upkeep setting.
 
 A confirmed installation that fails part-way through leaves no team. A catalog it installed is taken
 away again and every agent it created is removed, so a name that was free before the attempt is free
@@ -33,14 +33,14 @@ could not put back instead of reporting either outcome.
 Schema 2 teams may declare shared skill catalogs by exact name and source. The preview says whether
 each one will be installed or reused. A missing catalog is fetched and validated before confirmation
 changes anything; an installed catalog is reused without reinstalling only when its recorded source
-matches and every referenced skill exists. Member skill allowlists use fully qualified
+matches and every referenced skill exists. Member skill declarations use fully qualified
 `<catalog>/<skill>` addresses. Existing schema 1 teams remain self-contained and compatible.
 Removing a dependency, or updating it past a referenced skill, is refused until the installed team
 declaration no longer requires it.
 
 `rundesk teams update <team>` remains the explicit preview-and-confirm command for one team. It
 fetches the recorded source and performs the same reconciliation, repairing local instruction,
-memory, delegation, and skill-allowlist drift even when the fetched tree is unchanged.
+memory, delegation, and team-managed skill drift even when the fetched tree is unchanged.
 `--source <repository>` replaces the recorded GitHub repository or local directory in that same
 guarded update. A source change never reuses the old source's ETag, validates that the new catalog
 has the installed team's exact name, and is named in both the preview and completed result. The new
@@ -77,11 +77,31 @@ Before any later provider turn is admitted, Rundesk performs the same reconcilia
 member from the installed catalog. This is a local drift repair and performs no fetch; a new catalog
 version arrives through the explicit confirmed team command or the manual/daily update lifecycle.
 
-The member's `skills` array is a positive allowed list, not a deny list, and may be empty.
-Reconciliation removes any unlisted grant, regardless of catalog, while preserving Rundesk's
-required operating skill and its
-conditional delegation skill. Editing the positive list is how a team version adds or removes a
-stack-specific or task-specific capability. The member's required `self_improve` boolean enables or
+The member's `skills` array names the **team-managed grants** and may be empty. Every other grant
+the member holds is **user-managed**: reconciliation compares the previously installed declaration
+with the incoming one, revokes only the exact grants this team declared and no longer declares —
+matched on both the installed name and the full `<catalog>/<skill>` address, so a copy made with
+`--as` is never taken — grants every declared skill that is absent, and leaves everything else
+standing. An empty array means the team manages no optional grant; it does not strip the member.
+Editing the array is how a team version adds or removes a stack-specific or task-specific
+capability, and `rundesk skills grant` is how an owner adds one the team does not manage. Rundesk's
+required operating skill and its conditional delegation skill are preserved as before. An initial
+installation is unchanged: every member name must be absent, so each one begins with its declared
+grants and nothing else.
+
+A declaration is refused before any dependency, gateway, catalog, page, record, or grant moves when
+a user-managed grant occupies a name it needs. The refusal names the member, the grant standing
+there, the declared address, and the two commands that clear it — `rundesk skills revoke <agent>
+<skill>`, or `rundesk skills grant <agent> <catalog>/<skill> --as <name>` to keep it under another
+name. The same refusal answers a declaration that turns an inbound-only member outbound while a
+`delegating-work` grant other than Rundesk's own occupies that name; while a member stays
+inbound-only Rundesk needs no grant there and that custom grant is left alone. Nothing here invents
+an alias or revokes a grant this team never declared.
+
+One grant nothing can preserve is a grant to a skill its catalog stopped supplying: a catalog
+version that retires a skill takes every grant to it, whoever made them.
+
+The member's required `self_improve` boolean enables or
 disables Rundesk's protected weekly upkeep and is repaired from the catalog on later turns. A member
 removed from a later team version is no longer managed and is not deleted. Team catalogs execute no
 installation hook.

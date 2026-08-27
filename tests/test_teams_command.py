@@ -36,6 +36,19 @@ class Teams(support.Isolated):
                                   source=str(update_source) if update_source else None)
         return cmd_teams(args)
 
+    def an_owner_catalog(self, name: str = "other", skills=("extra",)) -> Path:
+        """An installed catalog no team declares, so every grant from it is the owner's own."""
+        source = a_published_catalog(self.home / name, name=name, skills=skills)
+        with skill_catalogs.brought(str(source)) as coming:
+            skill_catalogs.installed(coming)
+        return source
+
+    def a_second_version(self) -> None:
+        """Publish the team catalog again, so an update has a tree to move to."""
+        catalog = json.loads((self.source / library.MANIFEST).read_text())
+        catalog["version"] = "2.0.0"
+        written(self.source / library.MANIFEST, catalog)
+
     def dependent_team(self, dependency: Path, dependency_name: str = "shared",
                        skill: str = "researching") -> Path:
         source = a_team_catalog(self.home / "dependent-team", members=[{
@@ -143,6 +156,10 @@ class Teams(support.Isolated):
         self.assertEqual([], directory.known())
         self.assertEqual([], library.known())
         self.assertIn("replace AGENTS.md and CLAUDE.md; remove MEMORY.md", err)
+        self.assertIn("team-managed skills test-team/implementing plus Rundesk-required skills",
+                      err)
+        self.assertIn("every other grant preserved", err)
+        self.assertNotIn("allow only", err)
         self.assertIn("weekly upkeep off", err)
         self.assertIn("leave gateway stopped", err)
         self.assertEqual("", out)
@@ -515,7 +532,10 @@ class Teams(support.Isolated):
         self.assertEqual("test-team/implementing",
                          grants.holding("forge", "implementing").address)
         self.assertEqual(1, records.read(directory.records("forge"))["self_improve"])
-        self.assertIsNone(grants.holding("forge", "extra"))
+        self.assertEqual("turn-extra/extra", grants.holding("forge", "extra").address)
+        for root in grants.VENDOR_ROOTS:
+            self.assertTrue((home / root / "implementing").is_symlink())
+            self.assertTrue((home / root / "extra").is_symlink())
         self.assertFalse(missing_link.exists())
         self.assertEqual("turn-extra/extra", grants.holding("spectator", "extra").address)
 
@@ -551,6 +571,8 @@ class Teams(support.Isolated):
         catalog["version"] = "2.0.0"
         written(self.source / library.MANIFEST, catalog)
         (forge / "MEMORY.md").write_text("forge remembers this", encoding="utf-8")
+        self.an_owner_catalog()
+        grants.granted("forge", library.look_up("other/extra"))
         before = {
             "forge_agents": (forge / "AGENTS.md").read_bytes(),
             "forge_claude": (forge / "CLAUDE.md").read_bytes(),
@@ -580,6 +602,7 @@ class Teams(support.Isolated):
         self.assertEqual(before["forge_records"], records.read(directory.records("forge")))
         self.assertEqual(("piper",), delegating.scope_of("forge"))
         self.assertEqual("test-team/implementing", grants.holding("forge", "implementing").address)
+        self.assertEqual("other/extra", grants.holding("forge", "extra").address)
         self.assertIsNone(grants.holding("forge", "reviewing"))
 
     def test_a_member_created_before_the_failure_is_not_an_agent_afterwards(self):
@@ -719,36 +742,132 @@ class Teams(support.Isolated):
         self.assertEqual(OK, self.command("update", provider=None))
         self.assertEqual(1, records.read(directory.records("piper"))["self_improve"])
 
-    def test_the_positive_allowed_list_removes_an_unlisted_catalog_grant(self):
+    def test_an_unchanged_update_preserves_a_grant_the_team_never_declared(self):
         self.assertEqual(OK, self.command("install"))
-        other = a_published_catalog(self.home / "other", name="other", skills=("extra",))
-        with skill_catalogs.brought(str(other)) as coming:
-            skill_catalogs.installed(coming)
+        self.an_owner_catalog()
         grants.granted("forge", library.look_up("other/extra"))
-        self.assertEqual(OK, self.command("update", provider=None))
-        self.assertIsNone(grants.holding("forge", "extra"))
 
-    def test_an_empty_allowed_list_removes_every_optional_skill(self):
+        self.assertEqual(OK, self.command("update", provider=None))
+
+        self.assertEqual("other/extra", grants.holding("forge", "extra").address)
+        self.assertEqual("test-team/implementing", grants.holding("forge", "implementing").address)
+
+    def test_a_changed_declaration_moves_its_own_grants_and_keeps_the_owners(self):
+        """The alias is the case that decides this. `spare-workflow` is a copy of the very skill
+        the team is retiring, so a rule matching the address alone would take it as well."""
         self.assertEqual(OK, self.command("install"))
+        self.an_owner_catalog()
+        grants.granted("forge", library.look_up("other/extra"))
+        grants.granted("forge", library.look_up("test-team/implementing"), "spare-workflow")
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        manifest["members"][0]["skills"] = ["reviewing"]
+        written(self.source / library.TEAM, manifest)
+        self.a_second_version()
+
+        self.assertEqual(OK, self.command("update", provider=None))
+
+        self.assertIsNone(grants.holding("forge", "implementing"))
+        self.assertEqual("test-team/reviewing", grants.holding("forge", "reviewing").address)
+        self.assertEqual("other/extra", grants.holding("forge", "extra").address)
+        kept = grants.holding("forge", "spare-workflow")
+        self.assertEqual("test-team/implementing", kept.address)
+        self.assertTrue(kept.copied)
+
+    def test_an_empty_declaration_removes_its_own_former_grants_and_no_others(self):
+        self.assertEqual(OK, self.command("install"))
+        self.an_owner_catalog()
+        grants.granted("piper", library.look_up("other/extra"))
         manifest = json.loads((self.source / library.TEAM).read_text())
         manifest["members"][1]["skills"] = []
         written(self.source / library.TEAM, manifest)
-        catalog = json.loads((self.source / library.MANIFEST).read_text())
-        catalog["version"] = "2.0.0"
-        written(self.source / library.MANIFEST, catalog)
-        self.assertEqual(OK, self.command("update", provider=None))
-        self.assertIsNone(grants.holding("piper", "reviewing"))
+        self.a_second_version()
 
-    def test_only_rundesks_exact_conditional_delegation_skill_is_product_protected(self):
+        self.assertEqual(OK, self.command("update", provider=None))
+
+        self.assertIsNone(grants.holding("piper", "reviewing"))
+        self.assertEqual("other/extra", grants.holding("piper", "extra").address)
+
+    def test_a_delegating_work_grant_rundesk_did_not_make_survives_for_an_inbound_member(self):
+        """Only Rundesk's exact bundled grant is product-owned. An inbound-only member needs no
+        conditional delegation grant, so a same-named grant from anywhere else is simply the
+        owner's and stays."""
         self.assertEqual(OK, self.command("install"))
-        other = a_published_catalog(self.home / "other-delegating", name="other-delegating",
-                                    skills=(library.DELEGATING_SKILL,))
-        with skill_catalogs.brought(str(other)) as coming:
-            skill_catalogs.installed(coming)
+        self.an_owner_catalog("other-delegating", skills=(library.DELEGATING_SKILL,))
         grants.granted("piper", library.look_up(
             f"other-delegating/{library.DELEGATING_SKILL}"))
+
         self.assertEqual(OK, self.command("update", provider=None))
-        self.assertIsNone(grants.holding("piper", library.DELEGATING_SKILL))
+
+        self.assertEqual(f"other-delegating/{library.DELEGATING_SKILL}",
+                         grants.holding("piper", library.DELEGATING_SKILL).address)
+        self.assertEqual((), delegating.scope_of("piper"))
+
+    def test_a_member_turned_outbound_refuses_an_occupied_delegation_name(self):
+        self.assertEqual(OK, self.command("install"))
+        self.an_owner_catalog("other-delegating", skills=(library.DELEGATING_SKILL,))
+        grants.granted("piper", library.look_up(
+            f"other-delegating/{library.DELEGATING_SKILL}"))
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        manifest["members"][1]["delegates_to"] = ["forge"]
+        written(self.source / library.TEAM, manifest)
+        self.a_second_version()
+
+        code, _out, err = support.run_with(["teams", "update", "test-team", "--confirm"])
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("test-team lets piper delegate by name", err)
+        self.assertIn(f"rundesk skills revoke piper {library.DELEGATING_SKILL}", err)
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertEqual((), delegating.scope_of("piper"))
+        self.assertEqual(f"other-delegating/{library.DELEGATING_SKILL}",
+                         grants.holding("piper", library.DELEGATING_SKILL).address)
+
+    def test_a_name_the_owner_took_refuses_the_update_before_anything_moves(self):
+        self.assertEqual(OK, self.command("install"))
+        self.an_owner_catalog("other", skills=("implementing",))
+        grants.revoked("forge", "implementing")
+        grants.granted("forge", library.look_up("other/implementing"))
+        forge = directory.home("forge")
+        before = {
+            "page": (forge / "AGENTS.md").read_bytes(),
+            "records": records.read(directory.records("forge")),
+        }
+        (self.source / "agents/forge/AGENTS.md").write_text("# forge\n\nVersion two.\n")
+        self.a_second_version()
+
+        preview_code, _out, preview_err = support.run_with(["teams", "update", "test-team"])
+        code, _out, err = support.run_with(["teams", "update", "test-team", "--confirm"])
+
+        self.assertEqual(FAILED, preview_code)
+        self.assertIn("already holds other/implementing", preview_err)
+        self.assertNotIn("this would reconcile team", preview_err)
+        self.assertEqual(FAILED, code)
+        self.assertIn("test-team declares test-team/implementing for forge", err)
+        self.assertIn("rundesk skills revoke forge implementing", err)
+        self.assertIn("rundesk skills grant forge other/implementing --as <name>", err)
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertEqual(before["page"], (forge / "AGENTS.md").read_bytes())
+        self.assertEqual(before["records"], records.read(directory.records("forge")))
+        self.assertEqual("other/implementing", grants.holding("forge", "implementing").address)
+
+    def test_an_update_preview_names_the_grants_it_manages_and_the_ones_it_retires(self):
+        self.assertEqual(OK, self.command("install"))
+        self.an_owner_catalog()
+        grants.granted("forge", library.look_up("other/extra"))
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        manifest["members"][0]["skills"] = ["reviewing"]
+        written(self.source / library.TEAM, manifest)
+
+        code, out, err = support.run_with(["teams", "update", "test-team"])
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("team-managed skills test-team/reviewing plus Rundesk-required skills", err)
+        self.assertIn("every other grant preserved", err)
+        self.assertIn("revoke   forge: test-team/implementing — no longer team-managed", err)
+        self.assertNotIn("other/extra", err)
+        self.assertNotIn("allow only", err)
+        self.assertEqual("test-team/implementing", grants.holding("forge", "implementing").address)
+        self.assertEqual("", out)
 
     def test_a_missing_provider_and_a_second_team_owner_are_refused(self):
         self.assertEqual(FAILED, self.command("install", provider=None))
