@@ -501,6 +501,45 @@ class WhatAShippedSkillMayClaim(Bundled):
                 self.assertIn(phrase, delegating)
         self.assertIn("no push, issue, pull request, merge, tag, or release", examples)
 
+    def test_delegation_routes_implementation_and_review_before_briefing(self):
+        delegation_root = self.skills / "delegating-work"
+        delegating = " ".join(
+            (delegation_root / library.DECLARED).read_text(encoding="utf-8").split())
+        examples = " ".join(
+            (delegation_root / "references" / "brief-examples.md").read_text(
+                encoding="utf-8").split())
+
+        for phrase in (
+                "Choose role fit before writing the brief",
+                "A complete brief cannot repair a role mismatch",
+                "finished, inspectable change",
+                "more than one repository",
+                "more than one material risk boundary",
+                "separate dependency-ordered phases",
+                "one atomic outcome",
+                "Similar changes in two repositories are not atomic",
+                "exact base and head or precise dirty diff",
+                "few highest-risk invariants specific to the change",
+                "Omit the review target's generic checklist"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, delegating)
+
+        for phrase in (
+                "separate dependency-ordered handoffs",
+                "Task: Review <base>...<head>",
+                "Highest-risk invariants are session expiry",
+                "It does not repeat the target's configured role"):
+            with self.subTest(example=phrase):
+                self.assertIn(phrase, examples)
+        generic_role = r"(?i)configured [^.]{0,80}(?:review role|reviewer)"
+        self.assertNotRegex(examples, generic_role)
+        for bad_brief in (
+                "Use the configured senior review role to inspect the diff.",
+                "Have the configured DRY/simplicity review role inspect the diff.",
+                "Send this to the configured security reviewer."):
+            with self.subTest(bad_brief=bad_brief):
+                self.assertRegex(bad_brief, generic_role)
+
     def test_github_delivery_cleans_only_disposable_merged_heads(self):
         reference = (self.skills / "managing-github" / "references" /
                      "pull-requests.md").read_text(encoding="utf-8")

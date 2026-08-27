@@ -667,7 +667,8 @@ class CommandWiring(Isolated):
         self.assertFalse(automatic_updates.shim_of(one).exists())
 
         code, out, err = support.run_with(
-            ["uninstall", "--confirm", "--purge"], supervising=supervisor)
+            ["uninstall", "--confirm", "--purge", "--root", str(paths.home())],
+            supervising=supervisor)
 
         self.assertEqual(OK, code, err)
         self.assertIn("rundesk removed", out)

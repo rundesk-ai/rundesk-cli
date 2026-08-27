@@ -1405,7 +1405,7 @@ class UninstallTakesTheJobsBack(WithAnAgent):
 
     def test_a_purge_takes_the_agents_with_the_data(self):
         code, out, err = self.rundesk_with(support.ASupervisor(), "uninstall", "--confirm",
-                                           "--purge")
+                                           "--purge", "--root", str(paths.home()))
         self.assertEqual(OK, code, err)
         self.assertIn(self.label, out)
         self.assertFalse((self.home / "data" / "agents" / "cole").exists())

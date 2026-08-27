@@ -47,6 +47,18 @@ instructions, memory policy, delegation scope, skill allowlist and upkeep settin
 failure puts back what it had already changed and names what it could not; the terms are in
 [`concepts/teams.md`](../concepts/teams.md#lifecycle).
 
+### Updating one team, and changing where it comes from
+
+`rundesk teams update <team>` fetches the recorded source and reconciles against it, repairing local
+instruction, memory, delegation and skill-allowlist drift **even when the fetched tree is
+unchanged** — drift is local, so there is nothing upstream for it to show up in.
+
+`--source <repository>` replaces the recorded GitHub repository or local directory in that same
+guarded update. It never reuses the old source's ETag, it validates that the new catalog carries the
+installed team's exact name, and it is named in both the preview and the completed result. The new
+source is recorded even when its tree is byte-identical to the old one. A reconciliation that fails
+part-way restores the old catalog tree, the recorded source and member state together.
+
 ### Members start stopped
 
 Both verbs leave every member gateway stopped, and the successful command names what to run:

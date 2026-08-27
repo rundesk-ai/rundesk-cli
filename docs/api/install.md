@@ -92,7 +92,8 @@ is the safe way to inspect it:
 
 Every other argument is refused with usage and exit code `2` before any install work begins.
 `RUNDESK_HOME` selects the install root and `RUNDESK_BIN_DIR` selects where the command is linked.
-Removal remains a command of the installed program: `rundesk uninstall --confirm [--purge]`.
+Removal remains a command of the installed program:
+`rundesk uninstall --confirm [--purge --root <dir>]`.
 
 It places the program, lays down the directories and their notes, writes or fills in the
 configuration, carries the migrations, reconciles the daily update job, links the command, and then **proves the installed command
@@ -235,12 +236,19 @@ uninstall: this would remove rundesk from /Users/you/.rundesk
         keep   /Users/you/.rundesk/data
         keep   /Users/you/.rundesk/backups
         nothing was removed. To go ahead:
-        rundesk uninstall --confirm
+        RUNDESK_HOME=/Users/you/.rundesk rundesk uninstall --confirm
 ```
 
 Confirmation is a flag rather than a typed answer at a prompt, because this has to behave the same
 when nobody is watching: a prompt in a script is a command that hangs, and one that assumes "yes"
 with no terminal is worse than no prompt at all.
+
+A confirmed purge also requires `--root <dir>` to match the root resolved from `RUNDESK_HOME`.
+The environment alone is not accepted as an explicit destructive target because it may already be
+ambient or may have been replaced by the provider-turn launcher. A missing or mismatched `--root`
+is refused before any removal begins. The preview remains available and prints the exact root-bound
+confirmation command, including both values. Every confirmed uninstall prints `uninstall:
+confirmed target is <root>` before it starts changing anything.
 
 What it takes, one named thing at a time, never a sweep:
 

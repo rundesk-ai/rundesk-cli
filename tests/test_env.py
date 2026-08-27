@@ -455,7 +455,8 @@ class WhenRundeskIsRemoved(Values):
     def test_a_purge_takes_them(self):
         # A purge takes what the owner accumulated, and a credential left lying on a machine
         # rundesk is no longer on is the worst thing here to leave behind.
-        code, out, _ = self.rundesk("uninstall", "--confirm", "--purge")
+        code, out, _ = self.rundesk(
+            "uninstall", "--confirm", "--purge", "--root", str(paths.home()))
         self.assertEqual(OK, code)
         self.assertFalse(paths.secrets().exists())
         self.assertIn(str(paths.data()), out)
@@ -463,7 +464,7 @@ class WhenRundeskIsRemoved(Values):
     def test_a_purge_takes_the_key_with_them(self):
         # A key left behind is not harmless: it is half of what somebody needs if they also have
         # an old copy of the sealed file from somewhere else.
-        self.rundesk("uninstall", "--confirm", "--purge")
+        self.rundesk("uninstall", "--confirm", "--purge", "--root", str(paths.home()))
         self.assertFalse(secrets.key_at().exists())
 
     def test_what_it_would_do_matches_what_it_does(self):
@@ -476,7 +477,8 @@ class WhenRundeskIsRemoved(Values):
         self.assertIn("keep", would_keep)
 
     def test_no_removal_ever_prints_a_value(self):
-        for argv in (("uninstall",), ("uninstall", "--confirm", "--purge")):
+        for argv in (("uninstall",),
+                     ("uninstall", "--confirm", "--purge", "--root", str(paths.home()))):
             with self.subTest(argv=argv):
                 _, out, err = self.rundesk(*argv)
                 self.assertNotIn(A_TOKEN, out + err)

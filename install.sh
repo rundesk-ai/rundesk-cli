@@ -37,7 +37,7 @@ Environment:
   RUNDESK_BIN_DIR   where the rundesk command is linked
 
 Uninstall with:
-  rundesk uninstall --confirm [--purge]
+  rundesk uninstall --confirm [--purge --root <dir>]
 USAGE
 }
 
