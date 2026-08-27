@@ -22,7 +22,7 @@ from your home. So do this instead:
 $ ./dev status
 dev: RUNDESK_HOME=/path/to/checkout/.scratch/rundesk-home
 WHAT        IS
-version     0.51.0
+version     <version>
 home        /path/to/checkout/.scratch/rundesk-home
 program     /path/to/checkout
 app         /path/to/checkout/.scratch/rundesk-home/app — not there yet
@@ -95,6 +95,39 @@ going red.
 
 Read the `Ran N tests` line rather than the word `OK`. `OK` and `OK (skipped=65)` are the same word
 to whoever reads a summary, and a suite that skipped everything is not a suite that passed.
+
+### The longest suite is the run
+
+Suites run eight at a time, each in an interpreter of its own, and **a whole file is the unit of
+parallelism** — so no run finishes before its slowest suite does, however much idle machine is
+sitting beside it. When one suite grows to several times its neighbours, the answer is to split it
+rather than to add workers; `tests/test_gateway_host.py` and `tests/test_gateway_channels.py` are
+one such split, sharing their harness through `tests/fixtures_gateways.py`.
+
+The runner starts the slowest suites first, which it can only do because it writes down how long
+each one took, in `.scratch/suite-seconds.json`:
+
+- it is **learned, never written by hand** — a list of durations kept by hand disagrees with the
+  suites within a month;
+- it decides only what *starts* first. The report stays in the order suites were found in;
+- a suite it has never heard of starts before every suite it has, on the grounds that an unmeasured
+  suite may be the new slowest one; and
+- missing, corrupt, or from an older set of suites, it is simply ignored. A cold checkout — CI, or
+  your first run here — has none, and goes in the order the suites were found in.
+
+So nothing about a run's *result* depends on that file, and there is never a reason to edit it.
+
+`python3 scripts/suites -1` runs them one at a time, for a suite that only fails under load. It
+deliberately records nothing: a suite timed with the machine to itself is a different measurement
+from the one the ordering wants.
+
+### A concrete `TestCase` is not a helper base
+
+`unittest` inherits test methods, so subclassing a class that holds cases in order to reach its
+`setUp` or its helpers **re-runs every one of those cases**. Put the helpers in a base that holds no
+`test_` method of its own — `WithAChannel` and `RemovingAnInstall` are there for exactly this — and
+let the cases live in a leaf. Three classes here had borrowed a concrete one, which ran sixty-eight
+cases a second and third time and cost a hundred and five seconds of every run.
 
 ### The network is closed off, not merely avoided
 
