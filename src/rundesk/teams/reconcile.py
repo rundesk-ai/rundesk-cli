@@ -35,14 +35,12 @@ def missing(team: catalogs.Team) -> List[str]:
     return [one.name for one in team.members if one.name not in known]
 
 
-def preflight(team: catalogs.Team, provider: Optional[str] = None,
-              previous: Optional[catalogs.Team] = None) -> None:
-    """Prove ownership, provider availability, and grant-name collisions before changing agents.
+def preflight(team: catalogs.Team, provider: Optional[str] = None) -> None:
+    """Prove ownership and provider availability before changing agents.
 
-    `previous` is the declaration installed before this one, and is what tells a grant this team
-    is about to stop managing from a grant that was never this team's. Absent, every held grant
-    outside the incoming declaration reads as somebody else's — which is the right answer for an
-    install, where no member may exist yet.
+    Grant-name collisions are `preflight_grants`, deliberately not folded in here: they may only be
+    asked about a member this team is allowed to govern, and whether it is allowed is what the
+    callers below establish first.
     """
     owners = catalogs.owners()
     for one in team.members:
@@ -53,7 +51,27 @@ def preflight(team: catalogs.Team, provider: Optional[str] = None,
     if absent and (provider is None or not provider.strip()):
         raise Refused("a provider is required for new team members " + ", ".join(absent) +
                       " — add --provider <provider>")
-    occupied = occupying(team, previous)
+
+
+def preflight_grants(team: catalogs.Team, previous: Optional[catalogs.Team],
+                     only: Optional[str] = None) -> None:
+    """Refuse before anything moves when a user-managed grant occupies a name this team needs.
+
+    **Asked only about members this team may govern, and only after that has been established.** An
+    agent no team manages holds grants that are none of this team's business until its owner has
+    handed the name over, and answering that agent with a collision it cannot act on hid the one
+    refusal that could be acted on — `rundesk agents remove <agent> --confirm`.
+
+    `only` narrows it to a single member. Turn admission passes the member being admitted, because
+    a collision belonging to a teammate is that teammate's turn to refuse: read across the whole
+    team it stopped agents that had nothing to do with it from working at all.
+
+    `previous` is the declaration installed before this one, and is what tells a grant this team is
+    about to stop managing from a grant that was never this team's. Absent, every held grant outside
+    the incoming declaration reads as somebody else's — the right answer for an install, where no
+    member may exist yet.
+    """
+    occupied = occupying(team, previous, only)
     if occupied:
         raise Refused("; ".join(occupied))
 
@@ -96,8 +114,13 @@ def preflight_update(team: catalogs.Team, provider: Optional[str] = None,
     `previous` is read here too, before the catalog swap, because afterwards it is gone: once the
     incoming declaration is installed there is nothing left to say which grants this team used to
     manage, and a name collision would be met with the member's pages and records already moved.
+
+    **The name check comes before the grant check**, and the order is the whole point of them being
+    two statements rather than one: a newly declared name held by an agent no team manages is
+    answered with the removal command that clears it, rather than with a complaint about a grant
+    that agent's owner never gave this team any say over.
     """
-    preflight(team, provider, previous)
+    preflight(team, provider)
     owners = catalogs.owners()
     known = set(directory.known())
     taken = [one.name for one in team.members if one.name in known and one.name not in owners]
@@ -106,6 +129,9 @@ def preflight_update(team: catalogs.Team, provider: Optional[str] = None,
             f"{name} (rundesk agents remove {name} --confirm)" for name in taken)
         raise Refused(f"{team.name} declares agents no team manages and this update will not take "
                       "them over: " + removals)
+    # Every existing declared member is now this team's own, so every name a collision could be
+    # about is one it may govern.
+    preflight_grants(team, previous)
     for one in team.members:
         if one.name not in known:
             continue
@@ -140,7 +166,8 @@ def retiring(previous: Optional[catalogs.Team], one: catalogs.Member) -> List[gr
             if held.address in obsolete and held.name == held.skill]
 
 
-def occupying(team: catalogs.Team, previous: Optional[catalogs.Team]) -> List[str]:
+def occupying(team: catalogs.Team, previous: Optional[catalogs.Team],
+              only: Optional[str] = None) -> List[str]:
     """Every user-managed grant standing where this declaration needs a name, and the way out.
 
     Read before anything moves, because the answer is a refusal rather than a revocation: a grant
@@ -158,7 +185,7 @@ def occupying(team: catalogs.Team, previous: Optional[catalogs.Team]) -> List[st
     known = set(directory.known())
     trouble: List[str] = []
     for one in team.members:
-        if one.name not in known:
+        if one.name not in known or (only is not None and one.name != only):
             continue
         leaving = {held.at for held in retiring(previous, one)}
         for address in one.skills:
@@ -197,7 +224,8 @@ def apply(team: catalogs.Team, provider: Optional[str] = None,
     if installing:
         preflight_install(team, provider)
     else:
-        preflight(team, provider, previous)
+        preflight(team, provider)
+        preflight_grants(team, previous)
     known = set(directory.known())
     changed: List[str] = []
     for one in team.members:
@@ -223,7 +251,11 @@ def current(agent: str) -> List[str]:
         # The installed declaration is both what is wanted and what was last applied, so nothing
         # is obsolete and nothing is taken away: this repairs the grants it manages and leaves
         # every other grant the member holds exactly as it is.
-        preflight(team, previous=team)
+        preflight(team)
+        # This agent's own collisions only. A grant occupying a name on a *teammate* is that
+        # teammate's turn to refuse, and reading the whole team here made one member's occupied
+        # name stop every other member of that team from being admitted at all.
+        preflight_grants(team, team, only=agent)
         changed = _member(team, one, team)
         changed.extend(grants.required_reconciled(one.name))
         return changed

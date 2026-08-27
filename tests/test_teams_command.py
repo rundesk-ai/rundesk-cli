@@ -485,6 +485,42 @@ class Teams(support.Isolated):
         self.assertIn("rundesk agents remove scribe --confirm", preview_err)
         self.assertNotIn("this would reconcile team", preview_err)
 
+    def test_an_unmanaged_name_is_refused_before_its_occupied_grant_name(self):
+        """Both refusals are true of scribe, and only one can be acted on. Asked in the other
+        order the owner is told about a grant they never gave this team any say over, while the
+        `agents remove` that would actually let the update proceed is never printed."""
+        self.assertEqual(OK, self.command("install"))
+        self.an_owner_catalog("other", skills=("implementing",))
+        directory.made("scribe", "claude", "Keeps the owner's own notes.")
+        scribe = directory.home("scribe")
+        (scribe / "AGENTS.md").write_text("owner rules", encoding="utf-8")
+        grants.granted("scribe", library.look_up("other/implementing"))
+        manifest = json.loads((self.source / library.TEAM).read_text())
+        manifest["members"].append({
+            "name": "scribe", "description": "Would be governed by this team.",
+            "instructions": "agents/scribe/AGENTS.md", "skills": ["implementing"],
+            "delegates_to": [], "self_improve": False,
+        })
+        written(self.source / library.TEAM, manifest)
+        page = self.source / "agents/scribe/AGENTS.md"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text("# scribe\n\nTeam instructions.\n", encoding="utf-8")
+        self.a_second_version()
+
+        preview_code, _out, preview_err = support.run_with(["teams", "update", "test-team"])
+        code, _out, err = support.run_with(["teams", "update", "test-team", "--confirm"])
+
+        self.assertEqual(FAILED, preview_code)
+        self.assertEqual(FAILED, code)
+        for said in (preview_err, err):
+            self.assertIn("scribe (rundesk agents remove scribe --confirm)", said)
+            self.assertNotIn("already holds other/implementing", said)
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+        self.assertEqual("other/implementing", grants.holding("scribe", "implementing").address)
+        self.assertEqual("owner rules", (scribe / "AGENTS.md").read_text())
+        self.assertEqual("Keeps the owner's own notes.",
+                         records.read(directory.records("scribe"))["describes"])
+
     def test_update_reconciles_members_with_the_install_lock_still_held(self):
         """The window between the catalog swap and `apply` must not exist.
 
@@ -538,6 +574,25 @@ class Teams(support.Isolated):
             self.assertTrue((home / root / "extra").is_symlink())
         self.assertFalse(missing_link.exists())
         self.assertEqual("turn-extra/extra", grants.holding("spectator", "extra").address)
+
+    def test_turn_admission_refuses_only_the_member_whose_name_is_occupied(self):
+        """A collision belongs to the member holding it. Read across the whole team, piper's
+        occupied name stopped forge — which shares only a catalog with it — from working."""
+        self.assertEqual(OK, self.command("install"))
+        self.an_owner_catalog("other", skills=("reviewing",))
+        grants.revoked("piper", "reviewing")
+        grants.granted("piper", library.look_up("other/reviewing"))
+        grants.revoked("forge", "implementing")
+
+        self.assertEqual(["forge: granted test-team/implementing"], reconcile.current("forge"))
+        self.assertEqual("test-team/implementing", grants.holding("forge", "implementing").address)
+
+        with self.assertRaises(reconcile.Refused) as refused:
+            reconcile.current("piper")
+
+        self.assertIn("test-team declares test-team/reviewing for piper", str(refused.exception))
+        self.assertIn("rundesk skills revoke piper reviewing", str(refused.exception))
+        self.assertEqual("other/reviewing", grants.holding("piper", "reviewing").address)
 
     def test_changed_catalog_moves_instructions_skills_and_scope_together(self):
         self.assertEqual(OK, self.command("install"))

@@ -105,7 +105,9 @@ No update adopts an agent it does not already manage. A declared member name alr
 agent no installed team manages fails the explicit team update and the manual or daily refresh
 alike, names the `rundesk agents remove <agent> --confirm` needed, and leaves that agent's files,
 records, and grants exactly as they were, together with the installed team's last working version.
-A name may only be taken over after the owner has removed the colliding agent.
+A name may only be taken over after the owner has removed the colliding agent. That refusal is
+asked before the grant-name check below, because it is the one the owner can act on: an agent no
+team manages holds grants this team has no say over until the name is handed across.
 
 Turn admission also performs a network-free reconciliation of that one member from the installed
 catalog before instructions or grants are read. Thus local drift cannot cross into a later turn;
@@ -155,8 +157,10 @@ An initial installation is unaffected by any of this. Every member name must be 
 each member starts holding its declared grants and the product's, and nothing else.
 
 **A name a user-managed grant occupies is refused, never taken.** When an incoming declaration needs
-an installed name that a grant this team never declared is standing under, the whole team is refused
-before any dependency, gateway, catalog, page, record, or grant moves. The refusal names the member,
+an installed name that a grant this team never declared is standing under, the update is refused
+before any dependency, gateway, catalog, page, record, or grant moves. An update or refresh is
+refused for the whole team; turn admission refuses only the member being admitted, so a collision
+belonging to one member never stops its teammates from working. The refusal names the member,
 the occupying grant, the declared address, and both ways out: revoke the grant with `rundesk skills
 revoke <agent> <skill>`, or keep it under another name with `rundesk skills grant <agent>
 <catalog>/<skill> --as <name>`. The same rule covers Rundesk's conditional delegation grant: while

@@ -90,13 +90,17 @@ installation is unchanged: every member name must be absent, so each one begins 
 grants and nothing else.
 
 A declaration is refused before any dependency, gateway, catalog, page, record, or grant moves when
-a user-managed grant occupies a name it needs. The refusal names the member, the grant standing
-there, the declared address, and the two commands that clear it — `rundesk skills revoke <agent>
-<skill>`, or `rundesk skills grant <agent> <catalog>/<skill> --as <name>` to keep it under another
-name. The same refusal answers a declaration that turns an inbound-only member outbound while a
-`delegating-work` grant other than Rundesk's own occupies that name; while a member stays
-inbound-only Rundesk needs no grant there and that custom grant is left alone. Nothing here invents
-an alias or revokes a grant this team never declared.
+a user-managed grant occupies a name it needs. An update or refresh is refused for the whole team,
+and turn admission refuses only the member being admitted. A newly declared name held by an agent no
+team manages is answered first, with the `rundesk agents remove <agent> --confirm` that clears it,
+rather than with a collision over grants that agent's owner never gave this team a say over.
+
+The collision refusal names the member, the grant standing there, the declared address, and the two
+commands that clear it — `rundesk skills revoke <agent> <skill>`, or `rundesk skills grant <agent>
+<catalog>/<skill> --as <name>` to keep it under another name. The same refusal answers a declaration
+that turns an inbound-only member outbound while a `delegating-work` grant other than Rundesk's own
+occupies that name; while a member stays inbound-only Rundesk needs no grant there and that custom
+grant is left alone. Nothing here invents an alias or revokes a grant this team never declared.
 
 One grant nothing can preserve is a grant to a skill its catalog stopped supplying: a catalog
 version that retires a skill takes every grant to it, whoever made them.
