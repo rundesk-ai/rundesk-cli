@@ -1,6 +1,7 @@
 ---
 id: CAD
 name: The seam a channel adapter is reached through
+last_verified: 2026-08-26
 ---
 
 ## What this is

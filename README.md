@@ -49,6 +49,8 @@ rundesk agents add ava --provider codex
 rundesk ask ava "summarize what changed in this repository today"
 ```
 
+Step by step, with what to check after each: [Set up your first agent](docs/guides/getting-started.md).
+
 The next `ask` continues the same conversation. Keep the agent available after the terminal closes:
 
 ```sh
@@ -242,10 +244,11 @@ needed.
 
 ## 📖 Documentation
 
+- **[Get started](docs/guides/getting-started.md)** — install, add an agent, keep it reachable
 - **[Commands](docs/api/)** — every operation, what each guarantees, and the exit codes
-- **[How it works](docs/concepts/)** — gateways, schedules, install layout, permissions, teams
+- **[How it works](docs/concepts/)** — gateways, providers, channels, delegation, skills, lifecycle
 - **[Extending it](docs/extending/)** — the channel, provider, and catalog contracts
-- **[Guides](docs/guides/)** — Discord setup, and working on a checkout
+- **[Guides](docs/guides/)** — first agent, running an install, teams, delegation, Discord
 - **[All documentation](docs/README.md)** — the index, including requirements and research
 
 ## 🤝 Contributing

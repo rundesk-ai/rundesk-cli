@@ -626,7 +626,14 @@ class PuttingTheCommandOnAPath(Installing):
         self.assertEqual(OK, code, err)
 
 
-class Uninstalling(Installing):
+class RemovingAnInstall(Installing):
+    """How a removal is driven, and nothing about what one does.
+
+    **No case of its own, and that is the whole point of it standing here.** `unittest` inherits
+    test methods, so a class that carries both the helpers and the cases hands every case to every
+    subclass that wanted only the helpers — and `WhenAPurgeCannotFinish` below wanted only the
+    helpers. It ran all twenty-one of `Uninstalling`'s cases a second time to add one of its own.
+    """
 
     def uninstall(self, *argv, **collaborators):
         """Removal driven exactly as a person runs it — **nothing is redirected**.
@@ -649,6 +656,9 @@ class Uninstalling(Installing):
 
     def unconfirmed(self, *argv):
         return support.run(["uninstall", *argv])
+
+
+class Uninstalling(RemovingAnInstall):
 
     def test_without_confirming_nothing_is_removed(self):
         self.install()
@@ -911,7 +921,7 @@ class WhatLooksLikeARundeskTree(support.Isolated):
         self.assertFalse(tree.is_rundesk(self.home / "never-made"))
 
 
-class WhenAPurgeCannotFinish(Uninstalling):
+class WhenAPurgeCannotFinish(RemovingAnInstall):
     """A removal that did not happen must never report success — the rule this command exists for.
 
     Every purge case here succeeds, so the branch that turns a `data/` it could not remove into a

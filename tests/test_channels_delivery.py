@@ -64,8 +64,12 @@ class Splitting(support.Isolated):
             self.assertIn(f"line {nth}", rejoined)
 
 
-class SplittingAroundCode(Splitting):
-    """A block split across two messages renders as one broken block and a page of plain text."""
+class SplittingAroundCode(support.Isolated):
+    """A block split across two messages renders as one broken block and a page of plain text.
+
+    `support.Isolated` rather than `Splitting`, which holds only cases and no helper worth
+    inheriting: subclassing it re-ran all seven of them for the three added here.
+    """
 
     def test_a_fence_left_open_is_closed_and_opened_again(self):
         said = "```\n" + "\n".join("x" * 30 for _ in range(20)) + "\n```"

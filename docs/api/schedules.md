@@ -11,6 +11,17 @@ the ordinary operational view; `rundesk schedules list [<agent>] --expired` list
 What a schedule is, and every state one can get stuck in, is [`schedules.md`](../concepts/schedules.md). This is
 what each verb guarantees and what each refuses.
 
+| Command | Does |
+|---|---|
+| `schedules [list [<agent>] [--expired]]` | what one agent has scheduled, or every agent's |
+| `schedules add <agent> <schedule> --when '<cron>' \| --at <moment> --run '<program>' \| --ask '<prompt>' [--until <moment>] [--disabled]` | schedule something |
+| `schedules update <agent> <schedule> [--when \| --at \| --until \| --run \| --ask \| --enable \| --disable]` | change one, keeping what it has already done |
+| `schedules show <agent> <schedule>` | everything one was given |
+| `schedules run <agent> <schedule> [--wait <seconds>]` | run one now, in this terminal (default 3600) |
+| `schedules remove <agent> <schedule>` | take one away |
+
+`--when` and `--at` are alternatives, never both. So are `--run` and `--ask`.
+
 Every agent also has one protected policy named `weekly-self-improve-upkeep`. It starts on and is
 shown even before it has a stored firing. Seven distinct local calendar dates on which that agent
 finishes work make one upkeep due; several turns on one date count once, and the dates may span
@@ -122,6 +133,49 @@ $ rundesk schedules update cole nightly
 schedules: FAILED — nothing was named to change about nightly
         change one with: rundesk schedules update cole nightly --when '<cron>'
         nothing was changed
+```
+
+### schedules show
+
+Everything one schedule was given, and what has become of it. Changes nothing.
+
+```console
+$ rundesk schedules show cole nightly
+schedule nightly for cole
+        when      0 2 * * *
+        run       /usr/local/bin/backup.sh --full
+        until     not yet
+        enabled   yes
+        next      2026-08-27 02:00
+        last      never ran
+        logs      /Users/you/.rundesk/data/agents/cole/logs
+        output    /Users/you/.rundesk/data/agents/cole/schedules/nightly.out
+```
+
+`when`, `run`, `until` and `enabled` are what `add` and `update` wrote. `next` and `last` are worked
+out when you ask. **A schedule nobody can understand is still shown**, with the line that cannot be
+worked out saying so — it is on the disk and is something to be done about, so replacing the whole
+readout with a refusal would hide it.
+
+### schedules remove
+
+Takes a schedule away. It takes no `--confirm`: what is lost is a stated intention, and somebody who
+removed the wrong one adds it again.
+
+```console
+$ rundesk schedules remove cole nightly
+schedule nightly removed from cole
+```
+
+The protected `weekly-self-improve-upkeep` policy is refused here, and the refusal names the verb
+that does own it:
+
+```console
+$ rundesk schedules remove cole weekly-self-improve-upkeep
+schedules: FAILED — weekly-self-improve-upkeep is managed by Rundesk and cannot be changed here
+        set this agent's automatic upkeep with:
+        rundesk agents configure cole --self-improve <true|false>
+        nothing was removed
 ```
 
 ### schedules run

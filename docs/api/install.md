@@ -1,5 +1,16 @@
 # The install itself
 
+| Command | Does |
+|---|---|
+| `status` | the version, where the install is, and every configured value |
+| `version` | the version, and whether it is out of date |
+| `install [--source <dir>] [--bin-dir <dir>]` | what `install.sh` runs |
+| `update [--continue]` | move to the newest release, or say it is up to date |
+| `uninstall --confirm [--purge]` | remove rundesk; `--purge` also takes the data |
+
+`status` and `version` take no flags. `--continue` is for a channel conversation waiting on the
+result, not for a person at a terminal.
+
 ## status
 
 Answers *how rundesk is*. Takes no flags.
@@ -7,7 +18,7 @@ Answers *how rundesk is*. Takes no flags.
 ```console
 $ rundesk status
 WHAT              IS
-version           0.51.0
+version           <version>
 home              /Users/you/.rundesk
 program           /Users/you/.rundesk/app (installed)
 data              /Users/you/.rundesk/data
@@ -48,8 +59,8 @@ running.
 
 ```console
 $ rundesk version
-rundesk 0.51.0
-        0.51.0: UP TO DATE
+rundesk <version>
+        <version>: UP TO DATE
 ```
 
 **Being unable to ask is never reported as being up to date.** If GitHub cannot be reached the line
@@ -101,11 +112,11 @@ Moves this install to the newest published release, or says it is already on it.
 
 ```console
 $ rundesk update
-0.40.0: OUT OF DATE — v0.41.0 is available, run: rundesk update
-        installing v0.41.0
-rundesk updated to v0.41.0
-        what changed: https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.41.0
-        application: updated to v0.41.0
+<version>: OUT OF DATE — v<newer> is available, run: rundesk update
+        installing v<newer>
+rundesk updated to v<newer>
+        what changed: https://github.com/rundesk-ai/rundesk-cli/releases/tag/v<newer>
+        application: updated to v<newer>
         ordinary catalogs: checked
         team catalogs: checked
 ```
@@ -114,6 +125,8 @@ A run whose application settles reports three distinct outcomes: application, or
 and team catalogs. The daily coordinator records the same three outcomes in its automatic-update
 log. A catalog failure is printed and logged against its own surface without hiding successful
 independent work.
+
+### `--continue`, and who it is for
 
 With no flag, the command keeps the existing lifecycle below and never creates continuation work.
 `--continue` is an explicit opt-in available only to one unambiguous active channel provider turn.
@@ -139,6 +152,8 @@ objective. It is admitted directly rather than through `rundesk ask` or delegati
 database ids, bounded lifecycle outcomes, and observed version/pid only—not owner text, provider
 session handles, channel/person ids, credentials, agent names, or paths.
 
+### The order, and what a busy install does instead
+
 The update order is chosen so the failure that cannot damage anything happens first: ask,
 then fetch to a temporary directory, stand down every online gateway, then swap and settle. The swap
 stages every entry and renames them into place, putting back what was there if any part fails — so an
@@ -162,14 +177,18 @@ update for the full removal transaction before it touches the coordinator or pro
 Malformed, cross-turn, or non-update continuation provenance is refused before update work begins;
 it is never silently downgraded to an ordinary queued update.
 
+### What the notified channel is told
+
 The notified channel receives these maintenance notices around a successful update:
 
 - `🛠️ Installing an update — I'm installing the new rundesk update, be back shortly.`
-- `👋 I'm back — new rundesk update installed, release notes for v0.41.0`, with the release notes
-  linked to that version.
+- `👋 I'm back — new rundesk update installed, release notes for v<newer>`, with the release
+  notes linked to that version.
 
 The return notice is written only after the new release settles and is consumed only by a gateway
 running that exact version. An ordinary stop/start keeps the ordinary gateway notices.
+
+### Settling, which is not the same as arriving
 
 The program-tree swap never replaces `data/`; migration steps may deliberately carry its layout.
 When migration work is waiting and `backup_enabled` is on, settlement first makes and verifies the
