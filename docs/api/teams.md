@@ -40,7 +40,12 @@ declaration no longer requires it.
 
 `rundesk teams update <team>` remains the explicit preview-and-confirm command for one team. It
 fetches the recorded source and performs the same reconciliation, repairing local instruction,
-memory, delegation, and skill-allowlist drift even when the fetched tree is unchanged. A newly
+memory, delegation, and skill-allowlist drift even when the fetched tree is unchanged.
+`--source <repository>` replaces the recorded GitHub repository or local directory in that same
+guarded update. A source change never reuses the old source's ETag, validates that the new catalog
+has the installed team's exact name, and is named in both the preview and completed result. The new
+source is recorded even when its tree is byte-identical. A reconciliation failure restores the old
+catalog tree, recorded source, and member state together. A newly
 declared member name already held by an agent no team manages is refused, by the preview as well as
 the confirmation, and that agent keeps its files, records, and grants; remove it first with the
 `rundesk agents remove <agent> --confirm` the refusal names. A member whose records cannot be read

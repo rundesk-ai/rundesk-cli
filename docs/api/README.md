@@ -78,7 +78,7 @@ rundesk skills forget <catalog>/<skill> [--profile <name>] --confirm   # empty o
 rundesk skills doctor [<agent>]           # what cannot be used, and exactly why
 rundesk teams                            # every installed team and its members
 rundesk teams install <repository> [--provider <provider>] [--confirm]
-rundesk teams update <team> [--provider <provider>] [--confirm]
+rundesk teams update <team> [--source <repository>] [--provider <provider>] [--confirm]
 rundesk update [--continue]               # move to the newest release, or say it is up to date
 rundesk uninstall --confirm [--purge --root <dir>]  # purge needs the matching explicit root
 rundesk install [--source <dir>] [--bin-dir <dir>]   # what install.sh runs

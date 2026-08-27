@@ -29,9 +29,11 @@ class Teams(support.Isolated):
         self.source = a_team_catalog(self.home / "published")
 
     def command(self, what: str, *, source: Optional[Path] = None, team: str = "test-team",
-                provider: str = "codex", confirm: bool = True) -> int:
+                provider: str = "codex", confirm: bool = True,
+                update_source: Optional[Path] = None) -> int:
         args = argparse.Namespace(what=what, repository=str(source or self.source), team=team,
-                                  provider=provider, confirm=confirm)
+                                  provider=provider, confirm=confirm,
+                                  source=str(update_source) if update_source else None)
         return cmd_teams(args)
 
     def dependent_team(self, dependency: Path, dependency_name: str = "shared",
@@ -324,6 +326,103 @@ class Teams(support.Isolated):
         self.assertEqual("test-team/implementing", grants.holding("forge", "implementing").address)
         self.assertEqual(("piper",), delegating.scope_of("forge"))
         self.assertEqual(1, records.read(directory.records("forge"))["self_improve"])
+
+    def test_update_may_change_the_recorded_source_without_deleting_the_team(self):
+        self.assertEqual(OK, self.command("install"))
+        replacement = a_team_catalog(self.home / "replacement")
+        forge = directory.home("forge")
+        (forge / "AGENTS.md").write_text("drift", encoding="utf-8")
+
+        code, _out, err = support.run_with([
+            "teams", "update", "test-team", "--source", str(replacement),
+        ])
+
+        self.assertEqual(FAILED, code)
+        self.assertIn(f"source    {self.source} -> {replacement}", err)
+        self.assertIn(f"--source {replacement} --confirm", err)
+        self.assertEqual(str(self.source), library.read("test-team").provenance.source)
+        self.assertEqual("drift", (forge / "AGENTS.md").read_text())
+
+        self.assertEqual(OK, self.command("update", provider=None,
+                                          update_source=replacement))
+
+        self.assertTrue(library.is_team("test-team"))
+        self.assertEqual(str(replacement), library.read("test-team").provenance.source)
+        self.assertEqual((replacement / "agents/forge/AGENTS.md").read_text(),
+                         (forge / "AGENTS.md").read_text())
+        self.assertEqual(["forge", "piper"], directory.known())
+
+    def test_source_change_fetches_and_reconciles_the_new_catalog(self):
+        self.assertEqual(OK, self.command("install"))
+        replacement = a_team_catalog(self.home / "replacement", version="2.0.0")
+        (replacement / "agents/forge/AGENTS.md").write_text(
+            "# forge\n\nReplacement workflow.\n", encoding="utf-8")
+
+        self.assertEqual(OK, self.command("update", provider=None,
+                                          update_source=replacement))
+
+        settled = library.read("test-team")
+        self.assertEqual("2.0.0", settled.manifest.version)
+        self.assertEqual(str(replacement), settled.provenance.source)
+        self.assertEqual("# forge\n\nReplacement workflow.\n",
+                         (directory.home("forge") / "AGENTS.md").read_text())
+
+    def test_source_change_to_github_does_not_send_the_previous_sources_etag(self):
+        self.assertEqual(OK, self.command("install"))
+        settled = library.read("test-team")
+        library.stated_provenance(settled.at, settled.provenance._replace(etag='W/"old"'))
+        replacement = a_team_catalog(self.home / "replacement")
+        github = "https://github.com/example/test-team"
+        asked = []
+
+        def fetched(source, etag, _working):
+            asked.append((source, etag))
+            return skill_catalogs.Brought(replacement, 'W/"new"')
+
+        args = argparse.Namespace(what="update", team="test-team", source=github,
+                                  provider=None, confirm=True)
+        self.assertEqual(OK, cmd_teams(args, fetching=fetched))
+
+        self.assertEqual([(github, "")], asked)
+        provenance = library.read("test-team").provenance
+        self.assertEqual(github, provenance.source)
+        self.assertEqual('W/"new"', provenance.etag)
+
+    def test_source_change_refuses_a_repository_with_another_catalog_name(self):
+        self.assertEqual(OK, self.command("install"))
+        wrong = a_team_catalog(self.home / "wrong", name="another-team")
+
+        code = self.command("update", provider=None, update_source=wrong)
+
+        self.assertEqual(FAILED, code)
+        self.assertEqual(str(self.source), library.read("test-team").provenance.source)
+        self.assertEqual("1.0.0", library.read("test-team").manifest.version)
+
+    def test_failed_source_change_restores_the_original_source_and_members(self):
+        self.assertEqual(OK, self.command("install"))
+        replacement = a_team_catalog(self.home / "replacement", version="2.0.0")
+        declaration = json.loads((replacement / library.TEAM).read_text())
+        declaration["members"][0]["skills"] = ["reviewing"]
+        written(replacement / library.TEAM, declaration)
+        forge = directory.home("forge")
+        before = (forge / "AGENTS.md").read_bytes()
+        granting = grants.granted
+
+        def fail_the_new_grant(agent, skill, alias=""):
+            if (agent, skill.name) == ("forge", "reviewing"):
+                raise OSError("synthetic failure after the source changed")
+            return granting(agent, skill, alias)
+
+        with mock.patch.object(grants, "granted", side_effect=fail_the_new_grant):
+            code = self.command("update", provider=None, update_source=replacement)
+
+        settled = library.read("test-team")
+        self.assertEqual(FAILED, code)
+        self.assertEqual(str(self.source), settled.provenance.source)
+        self.assertEqual("1.0.0", settled.manifest.version)
+        self.assertEqual(before, (forge / "AGENTS.md").read_bytes())
+        self.assertEqual("test-team/implementing",
+                         grants.holding("forge", "implementing").address)
 
     def test_update_refuses_to_take_over_an_agent_no_team_manages(self):
         self.assertEqual(OK, self.command("install"))

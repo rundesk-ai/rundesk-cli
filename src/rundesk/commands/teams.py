@@ -56,6 +56,8 @@ def register(sub: Subcommands) -> None:
 
     moved = what.add_parser("update", help="update and reconcile an installed team")
     moved.add_argument("team", metavar="<team>", help="which installed team to update")
+    moved.add_argument("--source", metavar="<repository>", default=None,
+                       help="replace the recorded GitHub repository or local directory")
     moved.add_argument("--provider", metavar="<provider>", default=None,
                        help="provider for newly declared members")
     moved.add_argument("--confirm", action="store_true",
@@ -70,7 +72,8 @@ def cmd_teams(args: argparse.Namespace,
     if what == "install":
         return _installed(args.repository, args.provider, args.confirm, fetching)
     if what == "update":
-        return _updated(args.team, args.provider, args.confirm, fetching)
+        return _updated(args.team, args.provider, getattr(args, "source", None), args.confirm,
+                        fetching)
     raise AssertionError(f"teams {what} is registered on the parser and answered by nothing")
 
 
@@ -287,7 +290,7 @@ def _installed(source: str, provider: Optional[str], confirm: bool,
     return _completed(installed, changed, "installed")
 
 
-def _updated(name: str, provider: Optional[str], confirm: bool,
+def _updated(name: str, provider: Optional[str], source: Optional[str], confirm: bool,
              fetching: Optional[skill_catalogs.Fetching]) -> int:
     try:
         settled = library.read(name)
@@ -295,14 +298,22 @@ def _updated(name: str, provider: Optional[str], confirm: bool,
             return _failed(f"{name} is a skill catalog, not a team")
         if settled.provenance is None:
             return _failed(f"nothing is written down about where {name} came from")
-        with skill_catalogs.brought(settled.provenance.source, settled.provenance.etag,
-                                    fetching) as coming:
+        previous_source = settled.provenance.source
+        selected_source = source.strip() if source is not None else previous_source
+        source_changed = selected_source != previous_source
+        etag = "" if source_changed else settled.provenance.etag
+        with skill_catalogs.brought(selected_source, etag, fetching) as coming:
+            if source_changed and (coming.at is None or coming.manifest is None):
+                return _failed(f"nothing was fetched from {selected_source}, so the source for "
+                               f"{name} was not changed")
+            if coming.manifest is not None and coming.manifest.name != name:
+                return _failed(f"{selected_source} calls itself {coming.manifest.name}, not {name}")
             incoming = (catalogs.installed(name) if coming.at is None or coming.manifest is None
                         else catalogs.read(coming.at, coming.manifest))
             reconcile.preflight_update(incoming, provider)
             with _prepared_dependencies(incoming, fetching) as dependencies:
                 if not confirm:
-                    return _would_update(incoming, settled.provenance.source, provider,
+                    return _would_update(incoming, previous_source, selected_source, provider,
                                          dependencies)
                 # One decision from the ownership re-check through dependency, catalog and member
                 # writes. **The lock may not be released at the swap.** Once the new declaration is
@@ -324,12 +335,16 @@ def _updated(name: str, provider: Optional[str], confirm: bool,
                         changed = reconcile.apply(installed, provider)
     except TROUBLE as why:
         return _failed(str(why), f"{name} was not fully reconciled",
-                       f"retry with: {_update_command(name, provider)}")
-    return _completed(installed, changed, "updated")
+                       f"retry with: {_update_command(name, provider, source)}")
+    source_change = (f"{previous_source} -> {selected_source}" if source_changed else None)
+    return _completed(installed, changed, "updated", source_change)
 
 
-def _completed(team: catalogs.Team, changed, verb: str) -> int:
+def _completed(team: catalogs.Team, changed, verb: str,
+               source_change: Optional[str] = None) -> int:
     print(f"team {team.name} {verb}")
+    if source_change:
+        print(f"        source   {source_change}")
     for line in changed:
         print(f"        {line}")
     print(f"        agents   {', '.join(one.name for one in team.members)}")
@@ -347,18 +362,19 @@ def _would_install(team: catalogs.Team, source: str, provider: Optional[str],
     return FAILED
 
 
-def _would_update(team: catalogs.Team, source: str, provider: Optional[str],
+def _would_update(team: catalogs.Team, previous_source: str, source: str,
+                  provider: Optional[str],
                   dependencies: List[DependencyPlan]) -> int:
     print(f"update: this would reconcile team {team.name} from {source}", file=sys.stderr)
+    if source != previous_source:
+        print(f"        source    {previous_source} -> {source}", file=sys.stderr)
     _preview_dependencies(team, dependencies)
     _preview_members(team, provider)
     print("        repair   instructions, memory absence, delegation, upkeep and skill allowlist",
           file=sys.stderr)
     print("        nothing was changed. To go ahead:", file=sys.stderr)
-    command = f"rundesk teams update {team.name}"
-    if provider:
-        command += f" --provider {provider}"
-    print(f"        {command} --confirm", file=sys.stderr)
+    print(f"        {_update_command(team.name, provider, source if source != previous_source else None)}",
+          file=sys.stderr)
     return FAILED
 
 
@@ -436,8 +452,10 @@ def _prepared_dependencies(team: catalogs.Team,
         yield plans
 
 
-def _update_command(name: str, provider: Optional[str]) -> str:
+def _update_command(name: str, provider: Optional[str], source: Optional[str] = None) -> str:
     command = f"rundesk teams update {name}"
+    if source:
+        command += f" --source {source}"
     if provider:
         command += f" --provider {provider}"
     return command + " --confirm"
