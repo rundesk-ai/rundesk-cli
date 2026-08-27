@@ -53,6 +53,53 @@ def verbs_named(said: str):
     return found
 
 
+#: What a typed rundesk command may begin with. A reference table writes the bare verb and says
+#: "prefix every command with `\"$RUNDESK_COMMAND\"`" once at the foot, so a pattern that demanded
+#: the prefix read almost none of them — which is how `providers instructions --trigger` was taught
+#: for several releases with this file already checking the verbs beside it.
+_A_PREFIX = re.compile(r'^(?:rundesk|"\$RUNDESK_COMMAND") ')
+_A_FLAG = re.compile(r"(--[a-z][a-z-]+)")
+
+
+def flags_named(said: str, verbs):
+    """Every `--flag` a text tells somebody to type after a rundesk verb.
+
+    A fragment counts when its first word is a verb this build has, with or without the invocation
+    in front of it. That is what keeps `curl -fsSL` and `git --version` out while reading the tables
+    every reference is actually written as.
+    """
+    found = []
+
+    def read(fragment: str) -> None:
+        bare = _A_PREFIX.sub("", fragment.strip())
+        head = bare.split(" ", 1)
+        if len(head) == 2 and head[0] in verbs:
+            found.extend(_A_FLAG.findall(head[1]))
+
+    for block in _FENCED.findall(said):
+        for line in block.splitlines():
+            read(line.lstrip("$ ").strip())
+    for span in _INLINE.findall(_FENCED.sub("", said)):
+        read(span)
+    return found
+
+
+def flags_of(parser: argparse.ArgumentParser):
+    """Every flag this build really has, at any depth, read off the parser.
+
+    **`_oauth` is walked too, unlike the verb check.** The question here is whether a flag exists,
+    not whether a person should type it — and `writing-skills` documents the private token bridge
+    for whoever is writing an integration, so `--response-fd` is a flag a skill may correctly name.
+    """
+    found = set()
+    for action in parser._actions:
+        found.update(one for one in action.option_strings if one.startswith("--"))
+        if isinstance(action, argparse._SubParsersAction):
+            for under in action.choices.values():
+                found |= flags_of(under)
+    return found
+
+
 def verbs_of(parser: argparse.ArgumentParser):
     """Every verb this build really has, read off the parser rather than listed here.
 
@@ -797,6 +844,38 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "within the original authority", "notified channel"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, schedules)
+
+    def test_no_shipped_skill_names_a_flag_this_build_does_not_have(self):
+        # The verb check above reads `SKILL.md` alone, and a skill is mostly its references — which
+        # is how `providers instructions --trigger` came to be taught for several releases while
+        # the flag was called `--situation`. An agent following that types a command that fails,
+        # and nothing went red. Flags are checked across every page a skill ships.
+        there = flags_of(cli.build_parser())
+        self.assertTrue(there, "the parser answered no flags at all")
+        for name in self.named():
+            for page in sorted((self.skills / name).rglob("*.md")):
+                said = page.read_text(encoding="utf-8")
+                for flag in sorted(set(flags_named(said, verbs_of(cli.build_parser())))):
+                    with self.subTest(skill=name, page=page.name, flag=flag):
+                        self.assertIn(flag, there,
+                                      f"{name}/{page.name} tells an agent to type `{flag}`, and "
+                                      "this build has no such flag")
+
+    def test_the_flag_check_would_notice_one_that_is_not_there(self):
+        # The guard on the guard: the pattern has to actually find flags, and reject one that is
+        # spelled almost right. `--situation` is real; `--trigger` was what the skill said instead.
+        there = flags_of(cli.build_parser())
+        self.assertIn("--situation", there)
+        self.assertNotIn("--trigger", there)
+        verbs = verbs_of(cli.build_parser())
+        # Both spellings a reference really uses: the reachable form, and the bare table form.
+        self.assertEqual(
+            ["--trigger"],
+            flags_named('`"$RUNDESK_COMMAND" providers instructions ava --trigger person`', verbs))
+        self.assertEqual(
+            ["--trigger"],
+            flags_named("`providers instructions [<agent>] [--trigger <situation>]`", verbs))
+        self.assertEqual([], flags_named("`curl -fsSL https://example.test --silent`", verbs))
 
     def test_no_shipped_skill_names_a_verb_this_build_does_not_have(self):
         # `AGENTS.md`: a verb rundesk cannot perform is a verb rundesk does not have. A skill is the

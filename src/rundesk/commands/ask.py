@@ -47,7 +47,7 @@ A_SUMMARY_AT_MOST = 100
 def register(sub: Subcommands) -> None:
     """One verb, and the only one that can be steered."""
     asking = sub.add_parser("ask", help="ask an agent something, here, and watch it work")
-    asking.add_argument("agent", metavar="<agent>")
+    asking.add_argument("agent", metavar="<agent>", help="which agent to ask")
     asking.add_argument("prompt", metavar="<prompt>", nargs="+", help="what to ask")
     asking.add_argument("--fresh", action="store_true",
                         help="start a new conversation on the brain rather than carrying one on")

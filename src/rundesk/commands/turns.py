@@ -46,7 +46,7 @@ FROM_ONE_COLUMN = "asked for or reported — an older release kept one column"
 def register(sub: Subcommands) -> None:
     """One verb: list them, or show one."""
     said = sub.add_parser("turns", help="every turn an agent has taken, and what each cost")
-    said.add_argument("agent", metavar="<agent>")
+    said.add_argument("agent", metavar="<agent>", help="whose turns to read")
     said.add_argument("turn", metavar="<turn>", nargs="?", type=int,
                       help="show this one whole, with everything it did")
     said.add_argument("--limit", metavar="<n>", type=int, default=kept.FOUND_AT_MOST,

@@ -6,12 +6,19 @@ The agents this install keeps — one directory each, under `data/agents/`, and 
 is [`layout.md`](../concepts/layout.md). With no sub-verb it lists them, because listing is what somebody wants
 nine times in ten.
 
+| Command | Does |
+|---|---|
+| `agents [list]` | every agent this install keeps, and what is behind it |
+| `agents add <agent> --provider <provider> [--alias <alias>] [--describes <text>]` | make one |
+| `agents configure <agent> [--provider <provider>] [--alias <alias>] [--describes <text>] [--self-improve <true\|false>] [--delegate-to <agent> … \| --delegate-to-any \| --delegate-to-none]` | change what one is configured with |
+| `agents remove <agent> --confirm` | take one away, and everything it remembers |
+
 ```console
 $ rundesk agents
 agents in /Users/you/.rundesk/data/agents
 AGENT  PROVIDER  DESCRIPTION                  SKILLS                                DELEGATES TO  SELF-IMPROVE
 ada    claude    Owns research and synthesis. managing-rundesk, researching-topics  any           yes
-cole   openai    Owns bounded implementation. managing-rundesk, reviewing-code      forge         yes
+cole   codex     Owns bounded implementation. managing-rundesk, reviewing-code      forge         yes
 ```
 
 The description is the stored routing sentence supplied with `--describes`; whitespace is flattened
@@ -56,6 +63,8 @@ agent cole added
         note      the provider is recorded and not proven — check it with: rundesk providers check
 ```
 
+#### What a new agent is given
+
 **Every new agent is given the files it lives by**, in its own `home/`: `AGENTS.md` is how it works
 and `MEMORY.md` is what it has learned that is still true, and `CLAUDE.md` is the first of those
 under the name some brains look for first — the same bytes, placed twice. They are the agent's and
@@ -68,6 +77,8 @@ short README describing what belongs there, how to keep it current, and its safe
 first four hold durable agent-owned work. `tasks/` holds active resumable briefs that the agent
 removes after completion; neither kind moves canonical project state out of its project or preserves
 disposable scratch. Updates fill an absent folder note but never replace one already there.
+
+#### What `MEMORY.md` is for
 
 `MEMORY.md` is compact durable learned context for the next run, not another instruction file, a
 transcript, or a project notebook. It keeps owner preferences, recurring traps and gotchas, stable
@@ -83,6 +94,8 @@ detail; it may include a stable entrypoint when that prevents repeated discovery
 when relevant and applies the same correction, compaction, and stale-entry removal rules. The link
 keeps `MEMORY.md` as the small first-read map and prevents detached notes the next session would
 never discover.
+
+#### The weekly upkeep pass
 
 Periodic compaction and workspace upkeep are a focused Rundesk-management task, not daily prompt
 weight. The bundled `managing-rundesk` skill has conservative maintenance, retrospective, and
@@ -108,11 +121,15 @@ no grants or standing rules without explicit authority. Its
 scheduled response is deliberately short and attention-first: owner actions only, or one line saying
 upkeep completed and no action is needed.
 
+#### Every agent holds `managing-rundesk`
+
 **Every agent is given `rundesk/managing-rundesk`**, which is how it operates the install running
 it — where things are, what its own gateway is doing, which values are set. It is a floor of the
 product rather than a choice: `rundesk skills revoke` will not take it away, and `rundesk update`
 gives it back to any agent standing without one. An install whose catalogs have not been placed yet
 says so on this line instead, and the next `rundesk update` grants it.
+
+#### The provider is recorded, never proven
 
 **The provider is recorded and it is not proven**, and the command says so every time —
 adding an agent runs no adapter, asks nothing what it can do and finds out about no
@@ -120,6 +137,8 @@ sign-in. `rundesk providers check` is what answers that. Nothing in
 this release runs one: no credential is checked, no request is made, and there is no gateway to
 start. An agent added with a provider nobody has ever spelled correctly looks exactly like one that
 works, and a line implying otherwise would be a success this release did not earn.
+
+#### `--describes` is what the other agents read
 
 **`--describes` is what an agent is for, in one sentence, and it is what the *other* agents read.**
 Every agent's preface lists its colleagues and what each is for, so this is how one agent decides
@@ -171,6 +190,8 @@ A name already taken is refused, and the refusal names the agent that is there. 
 differing only by case: the volume macOS ships with cannot tell `Cole` from `cole`, so allowing both
 would give two agents one `state.db` to write over each other in.
 
+#### A name launchd cannot label
+
 **A name no launchd label can carry is allowed, and warned about here.** An agent may be called
 anything a directory may be called; a label is narrower. Such an agent works in every respect but
 one — no job can ever be placed for it, so nothing starts its gateway at login and nothing brings it
@@ -192,8 +213,8 @@ being read.
 Changes what an agent is configured with.
 
 ```console
-$ rundesk agents configure cole --provider openai
-cole: provider is now openai
+$ rundesk agents configure cole --provider claude
+cole: provider is now claude
         the provider is recorded and not proven — check it with: rundesk providers check
 ```
 

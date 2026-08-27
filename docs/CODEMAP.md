@@ -1,7 +1,8 @@
 # Codemap — Rundesk
 
 Where each layer lives, and what is in it. Counts are of artifacts, so they survive a refactor and
-go wrong visibly when the tree moves on without this page.
+go wrong visibly when the tree moves on without this page. A module count excludes `__init__.py`; a
+documentation-home count excludes that home's own `README.md`.
 
 The dependency spine points one way: `commands` → `lifecycle` → `core` → `utils`. The complete
 domain-package graph is declared and enforced in `tests/test_layers.py`; a lower layer never imports
@@ -29,17 +30,17 @@ Twenty-one public groups — `status`, `version`, `configure`, `agents`, `gatewa
 
 | Package | Modules | What it owns |
 |---|---|---|
-| `core/` | 6 | locations, configuration, durable values, sealed secrets, OAuth |
-| `lifecycle/` | 7 | this program copy on a machine: releases, install, update, removal, backups, migrations |
-| `agents/` | 6 | agent identity, home, records, and the per-agent store |
-| `gateways/` | 7 | the hosting process and its `launchd` job |
-| `providers/` | 12 | turns, continuations, and the provider-adapter boundary |
-| `channels/` | 8 | conversations, authorization, and the channel-adapter boundary |
-| `schedules/` | 5 | recurring and one-time work, and the claim that runs it once |
-| `delegations/` | 4 | one agent's ask of another, and the answer it returns |
-| `skills/` | 7 | the catalog index and per-agent grants |
-| `teams/` | 4 | team declarations and member reconciliation |
-| `capabilities/` | 3 | what macOS lets this process do, and whose grants an answer is about |
+| `core/` | 5 | locations, configuration, durable values, sealed secrets, OAuth |
+| `lifecycle/` | 6 | this program copy on a machine: releases, install, update, removal, backups, migrations |
+| `agents/` | 5 | agent identity, home, records, and the per-agent store |
+| `gateways/` | 6 | the hosting process and its `launchd` job |
+| `providers/` | 11 | turns, continuations, and the provider-adapter boundary |
+| `channels/` | 7 | conversations, authorization, and the channel-adapter boundary |
+| `schedules/` | 4 | recurring and one-time work, and the claim that runs it once |
+| `delegations/` | 3 | one agent's ask of another, and the answer it returns |
+| `skills/` | 6 | the catalog index and per-agent grants |
+| `teams/` | 3 | team declarations and member reconciliation |
+| `capabilities/` | 2 | what macOS lets this process do, and whose grants an answer is about |
 
 ## Shared utilities (src/rundesk/utils/ — 8 modules)
 
@@ -68,13 +69,14 @@ Being extensionless is why a directory-scanning lint does not see them.
 | `src/skills/` | the bundled `rundesk` catalog: `manifest.json` and 4 packages — `delegating-work`, `managing-github`, `managing-rundesk`, `writing-skills` |
 | `src/templates/` | the agent home: an `AGENTS.md`/`CLAUDE.md` pair placed from one source, `MEMORY.md`, and purpose-named area templates for plans, research, retros, scripts, and tasks |
 
-## Tests (tests/ — 83 suites, 2 support modules)
+## Tests (tests/ — 84 suites, 3 support modules)
 
 Directly runnable `unittest` suites. `tests/support.py` gives every case a temporary root, asserts
 that Rundesk resolved that root before the case runs, and points the proxy variables at a closed port
-so nothing a suite starts can leave the machine. `tests/fixtures_skills.py` holds skill fixtures.
-`scripts/suites` discovers every suite, runs each in its own interpreter, and fails on empty
-discovery.
+so nothing a suite starts can leave the machine. `tests/fixtures_skills.py` holds skill fixtures, and
+`tests/fixtures_gateways.py` the gateway and channel harness the two gateway suites share.
+`scripts/suites` discovers every suite, runs each in its own interpreter, starts the slowest first
+from durations it recorded last run, and fails on empty discovery.
 
 `tests/test_layers.py` is the architectural proof: it holds the package dependency graph, the
 agent-guide heading contract, and the repository template digests.
@@ -82,7 +84,7 @@ agent-guide heading contract, and the repository template digests.
 ## Documentation (docs/)
 
 Three files at the root — `README.md`, `BRIEF.md`, `CODEMAP.md` — and every other page in a home:
-`api/` (11 pages), `concepts/` (7), `guides/` (3), `extending/` (3), `requirements/` (7),
+`api/` (10 pages), `concepts/` (12), `guides/` (7), `extending/` (3), `requirements/` (7),
 `research/` (33), plus `assets/`. Each home carries its own index.
 
 ## Repository configuration (root)

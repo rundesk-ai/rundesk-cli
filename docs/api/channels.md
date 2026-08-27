@@ -12,6 +12,21 @@ down, and nothing to name. The channel **is** its adapter, so `rundesk channels 
 gives alan a channel called `discord`, and one list of ids says who may reach that agent wherever
 they say it.
 
+| Command | Does |
+|---|---|
+| `channels [list [<agent>]]` | every agent's channels, or one agent's |
+| `channels add <agent> <adapter> --allow <id> [--notify] [--with '<adapter opts>']` | connect an agent to a platform |
+| `channels show <agent> <adapter>` | everything one channel was given |
+| `channels configure <agent> <adapter> [--allow <id>] [--deny <id>] [--notify]` | change who may reach it, or what is notified |
+| `channels test <agent> <adapter>` | connect again, and say what it reached |
+| `channels remove <agent> <adapter> --confirm` | take one away |
+| `channels doctor [<agent>]` | what cannot be used, and exactly why |
+
+`--allow` and `--deny` repeat, once per person. `--with` is handed to the adapter as one quoted
+string: Rundesk parses none of it and it never reaches a shell.
+
+### Attachments, in and out
+
 **A local link in the agent's final answer is an attachment declaration.** `[report](/absolute/report.pdf)`
 attaches a file, `![preview](/absolute/preview.png)` attaches an image, and a local
 `file:///absolute/path` destination works too. Percent-encoded characters in either local form are
@@ -49,6 +64,8 @@ alan   discord  rundesk#4471, reaching you#0     2        yes   connected (pid 9
 cole   discord  colebot#8812, reaching you#0     1        no    not connected
 ```
 
+### What `STANDING` means
+
 `STANDING` is asked of the kernel through the claim an adapter holds, exactly as `rundesk gateways`
 asks whether a gateway is up, and the record beside it is read only afterwards — a record holds a
 pid, and a pid whose process is gone is a number that now belongs to something else. `cannot tell` is
@@ -78,6 +95,8 @@ because a state nothing here can resolve is a state to report and not to be sile
 
 `--allow` is required, is repeatable, and takes the id that platform knows somebody by.
 
+#### What the platform wants first
+
 **What the platform wants first.** Rundesk holds no list of what any platform needs, so what a
 channel asks for comes from its adapter and is named on the refusal. For the shipped Discord adapter
 that is three things, all of them from Discord rather than from here: a **bot token** (Developer
@@ -106,6 +125,8 @@ alan is connected to discord
         invite    https://discord.com/oauth2/authorize?client_id=...
         the bot is not in any server until somebody with permission adds it there
 ```
+
+#### What `add` writes, and when
 
 **`add` connects once and leaves nothing running**, which is what `standing not connected` on the
 last line means — so the next thing to type is `rundesk gateways start <agent>`. The **invite** is
@@ -138,6 +159,8 @@ is dropped in silence rather than answered with a refusal that would confirm som
 is found, asked offline what it can do, and then asked to connect; only an `ok` from that last
 question writes a row. A channel that is misconfigured has to be found out about while somebody is
 standing at a terminal, not at three in the morning when they ask the agent something.
+
+#### Where the credential is kept
 
 **The credential is read from the terminal and never passed as an argument** — `env` says why at
 length — and it is written down *before* the connection is proven, deliberately: somebody who has

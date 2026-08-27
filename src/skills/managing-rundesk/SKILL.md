@@ -70,6 +70,8 @@ to identify the exact target and consequence. Most groups list when called with 
 | [Retrospective](references/retrospective.md) | Write the bounded usage-cycle diary from evidence and compare prior improvements |
 | [Self-improvement](references/self-improvement.md) | Review proven friction, continuity, capability gaps, and skills |
 | [Configuration](references/configuration.md) | Status, version, install settings, and secret values |
+| [Permissions](references/permissions.md) | What macOS lets this install do, and whose grants an answer is about |
+| [Teams](references/teams.md) | Install and reconcile version-controlled agent teams |
 | [OAuth login](references/oauth-login.md) | Configure an installed provider; connect, select, extend, or recover accounts |
 | [Lifecycle](references/lifecycle.md) | Install, update, uninstall, and purge |
 

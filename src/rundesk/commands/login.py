@@ -27,7 +27,8 @@ Asking = Callable[[str], Optional[str]]
 
 def register(sub: Subcommands) -> None:
     login = sub.add_parser("login", help="connect an account through its verified sign-in flow")
-    login.add_argument("provider", help="provider ID declared by an installed catalog skill")
+    login.add_argument("provider", metavar="<provider>",
+                       help="provider ID declared by an installed catalog skill")
     login.add_argument("--profile", default="",
                        help="a second OAuth app configuration; rarely needed")
     login.add_argument("--replace-client", action="store_true",

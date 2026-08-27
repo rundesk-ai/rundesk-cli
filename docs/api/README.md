@@ -8,52 +8,36 @@ command.
 
 | Page | Covers |
 |---|---|
-| [agents.md](./agents.md) | `agents` — add, configure, remove, and what removal takes with it |
-| [gateways.md](./gateways.md) | `gateways` — start, stop, restart, logs, run |
-| [channels.md](./channels.md) | `channels` — add, test, configure, remove, doctor |
-| [schedules.md](./schedules.md) | `schedules` — add, update, show, run, remove |
-| [skills.md](./skills.md) | `skills` — install, grant, revoke, update, doctor |
-| [teams.md](./teams.md) | `teams` — install and update a declared team |
-| [providers.md](./providers.md) | `providers`, `login`, and the private token bridge |
-| [conversations.md](./conversations.md) | `ask`, `asked`, `messages`, `turns` |
 | [install.md](./install.md) | `status`, `version`, `install`, `update`, `uninstall` |
 | [configure.md](./configure.md) | `configure`, `env`, `backups`, `permissions` |
+| [agents.md](./agents.md) | `agents` — list, add, configure, remove |
+| [gateways.md](./gateways.md) | `gateways` — list, start, stop, restart, logs, run |
+| [conversations.md](./conversations.md) | `ask`, `asked`, `messages`, `turns` |
+| [providers.md](./providers.md) | `providers`, `login`, and the private token bridge |
+| [schedules.md](./schedules.md) | `schedules` — list, add, update, show, run, remove |
+| [channels.md](./channels.md) | `channels` — list, add, show, configure, test, remove, doctor |
+| [skills.md](./skills.md) | `skills` — catalogs, grants, profiles, and what a held skill needs |
+| [teams.md](./teams.md) | `teams` — list, install, update |
 
 ## Every verb, in one place
+
+In the order `rundesk --help` prints them, so the page and the command can be read side by side.
+A group with a `list` sub-verb also lists when called bare.
 
 ```sh
 rundesk status                            # the version, where the install is, and every configured value
 rundesk version                           # the version, and whether it is out of date
-rundesk configure [--<setting> <value>]   # change what this install is configured with
-rundesk agents                            # the agents this install keeps
+rundesk configure [--backup-enabled <yes|no>] [--backup-retention <n>] [--turn-records-days <n>] [--update-enabled <yes|no>] [--update-time <HH:MM>]
+rundesk agents list                       # the agents this install keeps
 rundesk agents add <agent> --provider <provider> [--alias <alias>] [--describes <text>]        # make one
-rundesk agents configure <agent> [--provider <provider> [--alias <alias>]] [--describes <text>] [--self-improve <true|false>] [--delegate-to <agent> ... | --delegate-to-any | --delegate-to-none]  # change one
+rundesk agents configure <agent> [--provider <provider>] [--alias <alias>] [--describes <text>] [--self-improve <true|false>] [--delegate-to <agent> ... | --delegate-to-any | --delegate-to-none]
 rundesk agents remove <agent> --confirm   # take one away, and everything it remembers
-rundesk gateways                          # every agent, and how its gateway stands
+rundesk gateways list                     # every agent, and how its gateway stands
 rundesk gateways start <agent>            # start one, and prove a gateway came up
-rundesk gateways stop <agent> | --all     # take the job back, gracefully
-rundesk gateways restart <agent> [--continue] | --all  # refuse active work; otherwise stop and start
-rundesk gateways logs <agent> [-n <lines>]  # what one gateway has been saying
+rundesk gateways stop <agent> | --all [--force]        # take the job back, gracefully
+rundesk gateways restart <agent> | --all [--force] [--continue]  # refuse active work; otherwise stop and start
+rundesk gateways logs <agent> [-n, --lines <lines>]  # what one gateway has been saying
 rundesk gateways run <agent>              # be the gateway, in this terminal
-rundesk schedules                         # everything every agent starts because the time came
-rundesk schedules list <agent>            # one agent's
-rundesk schedules add <agent> <schedule> --run '<program>' | --ask '<prompt>'  --when '<cron>' | --at <moment>
-rundesk schedules update <agent> <schedule> [--when|--at|--until|--run|--ask|--enable|--disable]
-rundesk schedules show <agent> <schedule> # everything one was given
-rundesk schedules run <agent> <schedule>  # run one now, in this terminal
-rundesk schedules remove <agent> <schedule>       # take one away
-rundesk channels                          # every agent's channels, and how each one stands
-rundesk channels list <agent>             # one agent's
-rundesk channels add <agent> <adapter> --allow <id> [--notify] [--with '<adapter opts>']
-rundesk channels show <agent> <adapter>   # everything one channel was given
-rundesk channels configure <agent> <adapter> [--allow <id>] [--deny <id>] [--notify]
-rundesk channels test <agent> <adapter>   # connect again, and say what it reached
-rundesk channels remove <agent> <adapter> --confirm       # take one away
-rundesk channels doctor [<agent>]         # what cannot be used, and exactly why
-rundesk providers aliases list <provider> # additional account aliases and normalized status
-rundesk providers aliases add <provider> <alias>  # register an empty provider-owned home
-rundesk providers aliases remove <provider> <alias> --confirm  # remove an unused alias home
-rundesk providers status|login|logout <provider> [--alias <alias>]  # provider-owned auth flows
 rundesk backups                           # the copies of what rundesk keeps for you
 rundesk backups save                      # copy what rundesk keeps, now
 rundesk backups restore <backup> --confirm        # put a copy back
@@ -64,24 +48,58 @@ rundesk env set <key>                     # keep one — typed, never passed as 
 rundesk env unset <key>                   # empty one, leaving the name
 rundesk login <provider> [--profile <name>]        # connect a verified account in the browser
 rundesk login <provider> --replace-client [--confirm]  # rotate this app client, discarding its grants
-rundesk skills                            # every skill this install has, and who holds which
-rundesk skills list [<agent>]             # with an agent: what it holds, and what that needs
+rundesk ask <agent> <prompt> [--fresh] [--read-only] [--model <model>] [--thinking] [--quiet]
+rundesk ask <agent> <prompt> [--provider <provider>] [--alias <alias>]   # these two, for a delegation only
+rundesk asked [--agent <agent>]           # what this agent has handed to other agents
+rundesk asked show <id>                   # one delegation in full
+rundesk asked say <id> <words>            # steer work that is still going
+rundesk asked stop <id>                   # ask for work to end before it finishes
+rundesk asked resume <id> <words>         # carry a finished one on, in the session it had
+rundesk messages <agent> [--search <words>] [--channel <channel>] [--source <kind>] [--conversation <id>] [--since <YYYY-MM-DD>] [--limit <n>] [--full]
+rundesk providers list                    # every provider adapter this install can run
+rundesk providers check <provider>        # ask one what it can do, offline
+rundesk providers instructions [<agent>] [--situation <person|schedule|agent>] [--layers] [--turn <turn>]
+rundesk providers run <agent> --schedule <schedule>   # take one scheduled turn here — what a firing starts
+rundesk providers aliases list <provider> # additional account aliases and normalized status
+rundesk providers aliases add <provider> <alias>  # register an empty provider-owned home
+rundesk providers aliases remove <provider> <alias> --confirm  # remove an unused alias home
+rundesk providers status <provider> [--alias <alias>]   # check one account with the provider's own command
+rundesk providers login <provider> [--alias <alias>]    # run the provider's own interactive login
+rundesk providers logout <provider> [--alias <alias>] [--confirm]   # run the provider's own logout
+rundesk permissions list                  # every probe, what it is for, and what it touches
+rundesk permissions lineage               # whose grants an answer here would be about
+rundesk permissions check [<probe> ...] [--everything] [--verbose]   # prove them now, and record it
+rundesk turns <agent> [<turn>] [--limit <n>] [--conversation <id>]
+rundesk schedules list [<agent>] [--expired]    # everything every agent starts because the time came
+rundesk schedules add <agent> <schedule> --when '<cron>' | --at <moment> --run '<program>' | --ask '<prompt>' [--until <moment>] [--disabled]
+rundesk schedules update <agent> <schedule> [--when|--at|--until|--run|--ask|--enable|--disable]
+rundesk schedules show <agent> <schedule> # everything one was given
+rundesk schedules run <agent> <schedule> [--wait <seconds>]   # run one now, in this terminal
+rundesk schedules remove <agent> <schedule>       # take one away
+rundesk channels list [<agent>]           # every agent's channels, and how each one stands
+rundesk channels add <agent> <adapter> --allow <id> [--notify] [--with '<adapter opts>']
+rundesk channels show <agent> <adapter>   # everything one channel was given
+rundesk channels configure <agent> <adapter> [--allow <id>] [--deny <id>] [--notify]
+rundesk channels test <agent> <adapter>   # connect again, and say what it reached
+rundesk channels remove <agent> <adapter> --confirm       # take one away
+rundesk channels doctor [<agent>]         # what cannot be used, and exactly why
+rundesk skills list [<agent>]             # every skill this install has, and who holds which
 rundesk skills catalogs                   # every catalog, its version and where it came from
-rundesk skills install <repository> [--confirm]   # install a catalog of skills
-rundesk skills update <catalog> [--confirm]       # check one against where it came from
-rundesk skills remove <catalog> [--confirm]       # take one away, and every skill in it
+rundesk skills install <repository> --confirm     # install a catalog of skills
+rundesk skills update <catalog> --confirm         # check one against where it came from
+rundesk skills remove <catalog> --confirm         # take one away, and every skill in it
 rundesk skills grant <agent> <catalog>/<skill> [--as <name>]   # give an agent a skill
 rundesk skills revoke <agent> <skill>     # take one away from an agent
 rundesk skills profiles <catalog>/<skill>         # every account one skill is configured for
 rundesk skills configure <catalog>/<skill> [--profile <name>]  # set what it needs, guided
 rundesk skills forget <catalog>/<skill> [--profile <name>] --confirm   # empty one account
 rundesk skills doctor [<agent>]           # what cannot be used, and exactly why
-rundesk teams                            # every installed team and its members
+rundesk teams list                        # every installed team and its members
 rundesk teams install <repository> [--provider <provider>] [--confirm]
 rundesk teams update <team> [--provider <provider>] [--confirm]
+rundesk install [--source <dir>] [--bin-dir <dir>]   # what install.sh runs
 rundesk update [--continue]               # move to the newest release, or say it is up to date
 rundesk uninstall --confirm [--purge]     # remove rundesk; --purge also takes the data
-rundesk install [--source <dir>] [--bin-dir <dir>]   # what install.sh runs
 ```
 
 ## Some flags are required by the verb rather than by argparse
@@ -153,4 +171,4 @@ exited `0` would tell a script the removal was done.
 **The gateway process itself is the one exception on this page, and it is not an exception to the
 table.** `rundesk gateways run` exits `0` on every refusal. That code is not a report to a person;
 it is a sentence in a conversation with launchd, where `0` means *do not bring me back*. See
-[`gateways.md`](../concepts/gateways.md).
+[`concepts/gateways.md`](../concepts/gateways.md).
