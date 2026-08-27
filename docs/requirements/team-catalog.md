@@ -1,7 +1,7 @@
 ---
 id: TEAM
 name: Versioned agent teams, and what an install owes their declaration
-last_verified: 2026-08-25
+last_verified: 2026-08-26
 ---
 
 ## What this is
@@ -25,8 +25,9 @@ credentials, and models stay local to each install. What a team is and how it re
 
 **These rows were authored on 2026-08-25 from the acceptance list this document previously carried,
 and have not been reviewed by the product owner.** They restate conditions that were already
-written down; the wording is new. A ✅ names test methods observed to pass on 2026-08-25 in
-`test_team_catalogs.py` (11 tests) and `test_teams_command.py` (32 tests). A ❌ is not a claim the
+written down; the wording is new. R-TEAM-27 was explicitly requested by the product owner on
+2026-08-26. A ✅ names test methods observed to pass on 2026-08-26 in
+`test_team_catalogs.py` (11 tests) and `test_teams_command.py` (37 tests). A ❌ is not a claim the
 behavior is absent, only that nothing here proves it.
 
 |  | ID | Requirement | Evidence |
@@ -57,6 +58,7 @@ behavior is absent, only that nothing here proves it.
 | ❌ | R-TEAM-24 | Each member's `AGENTS.md` and `CLAUDE.md` match the catalog byte for byte and no `MEMORY.md` remains | not proven — reconciliation is covered, but no test names the byte-for-byte page comparison or the absent memory page |
 | ❌ | R-TEAM-25 | An unreadable member's records refuse that team before any dependency, gateway, catalog, or member changes, and the teams after it still refresh | not proven — no test names this ordering |
 | ❌ | R-TEAM-26 | An agent holding a grant from the team's catalog but declared by no team has that grant put back, and its own pages and records left alone | not proven — no test names this case |
+| ✅ | R-TEAM-27 | A confirmed team update may replace its recorded source without deleting the team or its members; the new source is validated without the old ETag, previewed before mutation, recorded even for identical content, and the old source and member state are restored on failure | `test_update_may_change_the_recorded_source_without_deleting_the_team`, `test_source_change_fetches_and_reconciles_the_new_catalog`, `test_source_change_to_github_does_not_send_the_previous_sources_etag`, `test_source_change_refuses_a_repository_with_another_catalog_name`, `test_failed_source_change_restores_the_original_source_and_members` |
 
 ## Open questions
 
