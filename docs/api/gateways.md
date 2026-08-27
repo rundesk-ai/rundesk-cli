@@ -9,6 +9,15 @@ when it dies. With no sub-verb it lists them, the way `agents` and `backups` do.
 What a gateway is, and every state one can get stuck in, is [`gateways.md`](../concepts/gateways.md). This is
 what each verb guarantees and what each refuses.
 
+| Command | Does |
+|---|---|
+| `gateways [list]` | every agent, and how its gateway stands |
+| `gateways start <agent>` | start one, and prove a gateway came up |
+| `gateways stop <agent> \| --all [--force]` | take the job back, gracefully |
+| `gateways restart <agent> \| --all [--force] [--continue]` | refuse active work; otherwise stop and start |
+| `gateways logs <agent> [-n, --lines <lines>]` | what one gateway has been saying (default 20) |
+| `gateways run <agent>` | be the gateway, in this terminal |
+
 ```console
 $ rundesk gateways
 gateways in /Users/you/.rundesk/data/agents
@@ -205,9 +214,9 @@ perfectly ordinary day log and a traceback in a file the day log knows nothing a
 $ rundesk gateways logs cole -n 5
 logs for cole in /Users/you/.rundesk/data/agents/cole/logs
         what cole's own gateway wrote, in /Users/you/.rundesk/data/agents/cole/logs:
-[2026-08-05 08:26:43-04:00] INFO:    gateway up for cole on 0.51.0 as pid 95177
+[2026-08-05 08:26:43-04:00] INFO:    gateway up for cole on <version> as pid 95177
 [2026-08-05 08:26:45-04:00] INFO:    gateway stopping for cole: asked to stop with signal 15
-[2026-08-05 08:28:40-04:00] INFO:    gateway up for cole on 0.51.0 as pid 96111
+[2026-08-05 08:28:40-04:00] INFO:    gateway up for cole on <version> as pid 96111
 [2026-08-05 08:28:42-04:00] WARNING: gateway did not start: a gateway is already running for cole as pid 96111 — one agent has one gateway, and this one is standing down
         the supervisor caught nothing in gateway.out or gateway.err — everything above is the gateway's own log
 ```
@@ -247,7 +256,7 @@ holding:
 
 ```console
 $ rundesk gateways run cole
-[2026-08-05 08:28:42-04:00] gateway cole: this process is pid 96134, running 0.51.0
+[2026-08-05 08:28:42-04:00] gateway cole: this process is pid 96134, running <version>
 gateway: NOT RUNNING — a gateway is already running for cole as pid 96111 — one agent has one gateway, and this one is standing down
 ```
 

@@ -1,5 +1,25 @@
 # Configuration, values, and copies
 
+| Command | Does |
+|---|---|
+| `configure` | every setting this install has, and what each is now |
+| `configure --backup-enabled <yes\|no> --backup-retention <n> --turn-records-days <n> --update-enabled <yes\|no> --update-time <HH:MM>` | change one or more |
+| `env [list]` | every value rundesk keeps, shown only as a hint |
+| `env check <key>` | whether one is set — exits non-zero when it is not |
+| `env set <key>` | keep one, typed at the prompt and never passed as an argument |
+| `env unset <key>` | empty one, leaving the name |
+| `backups` | the copies of what rundesk keeps for you, newest first |
+| `backups save` | copy what rundesk keeps, now |
+| `backups restore <backup> --confirm` | put a copy back |
+| `backups set-location <path>` | keep the copies in another directory |
+| `permissions [list]` | every probe, what it is for, and what it touches |
+| `permissions lineage` | whose grants an answer here would be about |
+| `permissions check [<probe> …] [--everything] [--verbose]` | prove them now, and record what was found |
+
+The settings `configure` accepts are generated from what the install stores, so this table and
+`rundesk configure --help` cannot disagree. `migration`, `command_link`, `last_updated_at` and
+`permissions` are managed by Rundesk and are shown by `status` rather than set here.
+
 ## configure
 
 Shows what the install is configured with, or changes it.
@@ -227,19 +247,12 @@ permissions: 1 of 11 cannot be used by …/Python:
 
 `check` proves them now and writes down what it found; naming a group (`control`) or one probe
 (`files/full-disk`) proves only that, and leaves every other stored answer at its older timestamp.
-With nothing named it proves everything needed to operate the machine; `--everything` adds the rest.
+With nothing named it proves everything needed to operate the machine; `--everything` adds the rest,
+and `--verbose` also prints what each program really said.
 It **refuses to run at all** when it cannot work out which lineage it is in — a table of verdicts with
 no process named is a claim about nobody.
 
-Seven verdicts, one per thing there is to do: `ready`, `blocked`, `unasked`, `closed`, `absent`,
-`unrunnable`, `unproven`. The last is the third state and counts as trouble — a check that proved
-nothing has proved nothing. Exit `0` only when everything asked for is `ready`.
-
-**Nothing prompts and nothing is left behind.** Every probe is a preflight or a read; where no
-non-prompting way to ask exists, the probe answers `unproven` rather than guessing. The screenshot is
-eight pixels of one corner and is deleted on every path — and it is not attempted at all without the
-grant, because asking for one without it was measured making macOS *write* the grant.
-
-[`permissions.md`](../concepts/permissions.md) has the whole of it, and
-[`research/2026-08-08-what-this-mac-lets-a-process-do.md`](../research/2026-08-08-what-this-mac-lets-a-process-do.md)
-has the measurements.
+Exit `0` only when everything asked for is `ready`. The seven verdicts, what each probe touches,
+and why nothing here ever prompts are in
+[`concepts/permissions.md`](../concepts/permissions.md); the measurements behind them are in
+[`research/2026-08-08-what-this-mac-lets-a-process-do.md`](../research/2026-08-08-what-this-mac-lets-a-process-do.md).

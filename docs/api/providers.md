@@ -2,16 +2,30 @@
 
 ## providers
 
-An omitted account alias is the provider's ordinary account and preserves previous behavior.
-`default` is reserved. `login` and `logout` are interactive official provider commands; Rundesk does
-not accept or display credentials. Removal and logout refuse an account used by an active turn, and
-removal also refuses configured agent defaults and unsettled delegations. Login and ordinary default
-changes remain available during active work; prior admission stays fixed and later turns see the
-new selection. Destructive account changes serialize with durable references and turn admission.
-
 The brains this install can run. A provider is a **program rundesk runs**, never code it loads, so
-this asks about programs — where each one is, and what it says it can do. All three verbs are
-offline: none runs a turn, needs an account, or reaches a network.
+this asks about programs — where each one is, and what it says it can do.
+
+| Command | Does |
+|---|---|
+| `providers [list]` | every provider adapter this install can run |
+| `providers check <provider>` | ask one what it can do, offline |
+| `providers instructions [<agent>] [--situation <person\|schedule\|agent>] [--layers] [--turn <turn>]` | what a brain is told before it reads the task |
+| `providers run <agent> --schedule <schedule>` | take one scheduled turn here — what a firing starts |
+| `providers aliases list <provider>` | registered additional accounts, and their status |
+| `providers aliases add <provider> <alias>` | register one additional account |
+| `providers aliases remove <provider> <alias> --confirm` | remove an alias and its home |
+| `providers status\|login\|logout <provider> [--alias <alias>]` | run the provider's own account command |
+
+`list`, `check` and `instructions` are offline: none runs a turn, needs an account, or reaches a
+network. `run` takes a real turn, and `status`, `login` and `logout` hand off to the provider's own
+interactive command.
+
+**Accounts.** An omitted alias is the provider's ordinary account. `default` is reserved. Rundesk
+never accepts or displays a credential — `login` and `logout` are the provider's own interactive
+commands. Removal and logout refuse an account an active turn is using; removal also refuses one
+that is a configured agent default or holds an unsettled delegation. Login and ordinary default
+changes stay available during active work: prior admission stays fixed, and later turns see the new
+selection. Destructive account changes serialize with durable references and turn admission.
 
 ```console
 $ rundesk providers
@@ -60,9 +74,10 @@ a_person_asked  593
 ```
 
 What a brain is told before it reads a word of the task, with what each layer costs. Without
-`--layers` it prints the prompt itself; with `--trigger` it renders a different situation. Naming no
-agent leaves the placeholders standing, which is how to read the shape of a layer on an install with
-no agents in it.
+`--layers` it prints the prompt itself; `--situation` renders it as `person`, `schedule` or `agent`
+asked for it, and `--turn <turn>` re-composes what a past turn was sent and says whether it still
+matches. Naming no agent leaves the placeholders standing, which is how to read the shape of a layer
+on an install with no agents in it.
 
 The number at the end is a fingerprint of the whole. Every turn records it, so what a brain was told
 is provable afterwards without a copy of it being kept — and a prompt that changed between releases

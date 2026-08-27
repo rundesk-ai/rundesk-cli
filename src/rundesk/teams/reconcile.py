@@ -1,7 +1,16 @@
 """Make installed team declarations true of their named agents.
 
 Provider choice remains local. Team content owns role instructions, memory absence, description,
-delegation scope, and the exact optional skill allowlist.
+delegation scope, and the grants its own declaration names.
+
+**A member's ``skills`` array is the set of grants this team manages, not everything that member
+may hold.** Reconciliation compares the previously installed declaration with the incoming one: a
+grant this team declared and no longer declares is taken away, a declared grant that is absent is
+put back, and every other grant is left exactly where it stands. That is what lets an owner give
+one specialist an extra skill without the next team update quietly removing it, and it is why the
+comparison is against the *previous declaration* rather than against whatever the member holds —
+"not declared" and "not this team's" are different facts, and only the first one is this
+lifecycle's to act on.
 """
 
 from typing import List, Optional
@@ -27,7 +36,12 @@ def missing(team: catalogs.Team) -> List[str]:
 
 
 def preflight(team: catalogs.Team, provider: Optional[str] = None) -> None:
-    """Prove ownership, provider availability, and skill-name collisions before changing agents."""
+    """Prove ownership and provider availability before changing agents.
+
+    Grant-name collisions are `preflight_grants`, deliberately not folded in here: they may only be
+    asked about a member this team is allowed to govern, and whether it is allowed is what the
+    callers below establish first.
+    """
     owners = catalogs.owners()
     for one in team.members:
         owner = owners.get(one.name)
@@ -37,6 +51,29 @@ def preflight(team: catalogs.Team, provider: Optional[str] = None) -> None:
     if absent and (provider is None or not provider.strip()):
         raise Refused("a provider is required for new team members " + ", ".join(absent) +
                       " — add --provider <provider>")
+
+
+def preflight_grants(team: catalogs.Team, previous: Optional[catalogs.Team],
+                     only: Optional[str] = None) -> None:
+    """Refuse before anything moves when a user-managed grant occupies a name this team needs.
+
+    **Asked only about members this team may govern, and only after that has been established.** An
+    agent no team manages holds grants that are none of this team's business until its owner has
+    handed the name over, and answering that agent with a collision it cannot act on hid the one
+    refusal that could be acted on — `rundesk agents remove <agent> --confirm`.
+
+    `only` narrows it to a single member. Turn admission passes the member being admitted, because
+    a collision belonging to a teammate is that teammate's turn to refuse: read across the whole
+    team it stopped agents that had nothing to do with it from working at all.
+
+    `previous` is the declaration installed before this one, and is what tells a grant this team is
+    about to stop managing from a grant that was never this team's. Absent, every held grant outside
+    the incoming declaration reads as somebody else's — the right answer for an install, where no
+    member may exist yet.
+    """
+    occupied = occupying(team, previous, only)
+    if occupied:
+        raise Refused("; ".join(occupied))
 
 
 def preflight_install(team: catalogs.Team, provider: Optional[str] = None) -> None:
@@ -51,7 +88,8 @@ def preflight_install(team: catalogs.Team, provider: Optional[str] = None) -> No
     preflight(team, provider)
 
 
-def preflight_update(team: catalogs.Team, provider: Optional[str] = None) -> None:
+def preflight_update(team: catalogs.Team, provider: Optional[str] = None,
+                     previous: Optional[catalogs.Team] = None) -> None:
     """Prove an update may govern every declared member before anything moves.
 
     `preflight_install` refuses every existing name so each member starts from catalog-owned
@@ -72,16 +110,28 @@ def preflight_update(team: catalogs.Team, provider: Optional[str] = None) -> Non
     `restoring` owns the page rule and is asked for it rather than repeating it, and asks it again
     itself under the install lock; between the two answers, the lock is what holds the shape of
     those paths still.
+
+    `previous` is read here too, before the catalog swap, because afterwards it is gone: once the
+    incoming declaration is installed there is nothing left to say which grants this team used to
+    manage, and a name collision would be met with the member's pages and records already moved.
+
+    **The name check comes before the grant check**, and the order is the whole point of them being
+    two statements rather than one: a newly declared name held by an agent no team manages is
+    answered with the removal command that clears it, rather than with a complaint about a grant
+    that agent's owner never gave this team any say over.
     """
     preflight(team, provider)
-    managed = catalogs.owners()
+    owners = catalogs.owners()
     known = set(directory.known())
-    taken = [one.name for one in team.members if one.name in known and one.name not in managed]
+    taken = [one.name for one in team.members if one.name in known and one.name not in owners]
     if taken:
         removals = ", ".join(
             f"{name} (rundesk agents remove {name} --confirm)" for name in taken)
         raise Refused(f"{team.name} declares agents no team manages and this update will not take "
                       "them over: " + removals)
+    # Every existing declared member is now this team's own, so every name a collision could be
+    # about is one it may govern.
+    preflight_grants(team, previous)
     for one in team.members:
         if one.name not in known:
             continue
@@ -95,23 +145,87 @@ def preflight_update(team: catalogs.Team, provider: Optional[str] = None) -> Non
             raise Refused(f"{team.name} cannot be reconciled: {trouble}")
 
 
-def retiring(team: catalogs.Team, one: catalogs.Member) -> List[grants.Grant]:
-    """Every current grant outside this member's positive allowlist, excluding product grants."""
-    desired = set(one.skills)
+def managed(team: Optional[catalogs.Team], name: str) -> List[str]:
+    """The skill addresses a declaration manages for one member, and none for a name it omits."""
+    if team is None:
+        return []
+    return next((one.skills for one in team.members if one.name == name), [])
+
+
+def retiring(previous: Optional[catalogs.Team], one: catalogs.Member) -> List[grants.Grant]:
+    """The exact team-managed grants the incoming declaration for this member no longer names.
+
+    Matched on the installed name **and** the full address. A copy somebody made with `--as` from
+    the same catalog skill stands under a name no declaration ever asked for, so it is not this
+    team's to take away; a grant from another catalog under the same name was never declared here
+    either, and reaching for it is what turned a declaration into an allowlist over everything the
+    member held.
+    """
+    obsolete = set(managed(previous, one.name)) - set(one.skills)
     return [held for held in grants.held(one.name)
-            if held.address not in desired
-            and held.name != library.REQUIRED_SKILL
-            and not (held.name == library.DELEGATING_SKILL
-                     and held.address == library.DELEGATING)]
+            if held.address in obsolete and held.name == held.skill]
+
+
+def occupying(team: catalogs.Team, previous: Optional[catalogs.Team],
+              only: Optional[str] = None) -> List[str]:
+    """Every user-managed grant standing where this declaration needs a name, and the way out.
+
+    Read before anything moves, because the answer is a refusal rather than a revocation: a grant
+    this team never declared belongs to whoever made it, and reconciliation may not take its name.
+    An alias is the recovery and the sentence names it, so nobody has to work out that `--as`
+    exists from a failure that already happened.
+
+    The conditional delegation grant is asked about on the same terms. Rundesk's own
+    `delegating-work` has to stand under that exact name for a member that may delegate, and
+    `grants` deliberately never replaces a name somebody else filled — so a declaration that turns
+    an inbound-only member outbound while a different `delegating-work` occupies the name would
+    otherwise report a member reconciled that cannot delegate at all. While the member stays
+    inbound-only Rundesk needs no grant there and the custom one is simply left alone.
+    """
+    known = set(directory.known())
+    trouble: List[str] = []
+    for one in team.members:
+        if one.name not in known or (only is not None and one.name != only):
+            continue
+        leaving = {held.at for held in retiring(previous, one)}
+        for address in one.skills:
+            standing = grants.holding(one.name, address.split("/", 1)[1])
+            if standing is None or standing.address == address or standing.at in leaving:
+                continue
+            trouble.append(_occupied(
+                one.name, standing, f"{team.name} declares {address} for {one.name}"))
+        if one.delegates_to:
+            standing = grants.holding(one.name, library.DELEGATING_SKILL)
+            if standing is not None and standing.address != library.DELEGATING:
+                trouble.append(_occupied(
+                    one.name, standing,
+                    f"{team.name} lets {one.name} delegate by name, which needs Rundesk's own "
+                    f"{library.DELEGATING}"))
+    return trouble
+
+
+def _occupied(agent: str, standing: grants.Grant, why: str) -> str:
+    """One collision and the two ways out of it, worded once for every caller that refuses."""
+    keeping = (f"keep it under another name (rundesk skills grant {agent} {standing.address} "
+               "--as <name>)" if standing.address else "grant it again under another name")
+    return (f"{why}, and {agent} already holds {standing.address or standing.name} under that "
+            f"name — revoke it (rundesk skills revoke {agent} {standing.name}) or {keeping}, "
+            "then retry")
 
 
 def apply(team: catalogs.Team, provider: Optional[str] = None,
-          installing: bool = False) -> List[str]:
-    """Reconcile every member and return concise evidence lines. Safe to run repeatedly."""
+          installing: bool = False, previous: Optional[catalogs.Team] = None) -> List[str]:
+    """Reconcile every member and return concise evidence lines. Safe to run repeatedly.
+
+    `previous` is the declaration this one replaces, read before the catalog swap. An install
+    passes none, and needs none: `preflight_install` has already refused every existing name, so
+    each member begins holding nothing but what this declaration gives it.
+    """
     if installing:
         preflight_install(team, provider)
     else:
         preflight(team, provider)
+        preflight_grants(team, previous)
     known = set(directory.known())
     changed: List[str] = []
     for one in team.members:
@@ -121,7 +235,7 @@ def apply(team: catalogs.Team, provider: Optional[str] = None,
             changed.append(f"{one.name}: agent created with provider {provider}")
 
     for one in team.members:
-        changed.extend(_member(team, one))
+        changed.extend(_member(team, one, previous))
         changed.extend(grants.required_reconciled(one.name))
     return changed
 
@@ -134,8 +248,15 @@ def current(agent: str) -> List[str]:
             return []
         team = catalogs.installed(owner)
         one = next(member for member in team.members if member.name == agent)
+        # The installed declaration is both what is wanted and what was last applied, so nothing
+        # is obsolete and nothing is taken away: this repairs the grants it manages and leaves
+        # every other grant the member holds exactly as it is.
         preflight(team)
-        changed = _member(team, one)
+        # This agent's own collisions only. A grant occupying a name on a *teammate* is that
+        # teammate's turn to refuse, and reading the whole team here made one member's occupied
+        # name stop every other member of that team from being admitted at all.
+        preflight_grants(team, team, only=agent)
+        changed = _member(team, one, team)
         changed.extend(grants.required_reconciled(one.name))
         return changed
     except Refused:
@@ -144,7 +265,8 @@ def current(agent: str) -> List[str]:
         raise Refused(f"{agent}'s installed team state could not be reconciled ({why})") from why
 
 
-def _member(team: catalogs.Team, one: catalogs.Member) -> List[str]:
+def _member(team: catalogs.Team, one: catalogs.Member,
+            previous: Optional[catalogs.Team]) -> List[str]:
     """Reconcile one existing member. The caller has proved the whole team first."""
     changed: List[str] = []
     text = (team.at / one.instructions).read_text(encoding="utf-8")
@@ -166,17 +288,17 @@ def _member(team: catalogs.Team, one: catalogs.Member) -> List[str]:
         records.stated(directory.records(one.name), moving)
         changed.append(f"{one.name}: description, delegation and upkeep reconciled")
 
-    for held in retiring(team, one):
+    for held in retiring(previous, one):
         grants.revoked(one.name, held.name)
         changed.append(f"{one.name}: revoked {held.address or held.name}")
     for address in one.skills:
-        skill_name = address.split("/", 1)[1]
-        holding = grants.holding(one.name, skill_name)
-        if holding is not None and holding.address != address:
-            grants.revoked(one.name, skill_name)
-            changed.append(f"{one.name}: revoked {holding.address or holding.name}")
-            holding = None
-        if holding is None:
+        standing = grants.holding(one.name, address.split("/", 1)[1])
+        if standing is not None and standing.address != address:
+            # `preflight` refuses this while nothing has moved. Reaching it here means the name was
+            # taken under the install lock, and taking it back is still not this lifecycle's to do.
+            raise Refused(_occupied(
+                one.name, standing, f"{team.name} declares {address} for {one.name}"))
+        if standing is None:
             grants.granted(one.name, library.look_up(address))
             changed.append(f"{one.name}: granted {address}")
     return changed

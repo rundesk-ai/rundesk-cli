@@ -10,9 +10,9 @@ the install that takes one.
 ## What a team catalog declares
 
 A team catalog is a version-controlled skill catalog that also declares a set of named agents. It
-owns those agents' durable instructions, memory policy, delegation scope, and positive skill
-allowlists. Provider accounts, channels, schedules, projects, credentials, and models remain local to
-each Rundesk installation.
+owns those agents' durable instructions, memory policy, delegation scope, and the skill grants it
+declares for them. Provider accounts, channels, schedules, projects, credentials, and models remain
+local to each Rundesk installation.
 
 The catalog contains ordinary `manifest.json` and `skills/` entries, plus:
 
@@ -31,9 +31,10 @@ for existing self-contained teams and has no `catalogs` field. Each member conta
 - `name`: the Rundesk agent name;
 - `description`: the sentence other agents use when routing work;
 - `instructions`: a relative path below `agents/` to its canonical `AGENTS.md`;
-- `skills`: the exact positive allowlist this member receives, which may be empty. Schema 2 uses
+- `skills`: the grants this team manages for the member, which may be empty. Schema 2 uses
   fully qualified `<catalog>/<skill>` addresses from the team or a declared dependency. Schema 1
-  keeps local skill names, interpreted as skills from the team catalog;
+  keeps local skill names, interpreted as skills from the team catalog. The array is not a list of
+  everything the member may hold — see [Which grants a team owns](#which-grants-a-team-owns);
 - `delegates_to`: the exact named-agent scope, as an array. An empty array makes the member
   inbound-only; and
 - `self_improve`: `true` or `false`, controlling Rundesk's protected weekly upkeep for this member.
@@ -104,7 +105,9 @@ No update adopts an agent it does not already manage. A declared member name alr
 agent no installed team manages fails the explicit team update and the manual or daily refresh
 alike, names the `rundesk agents remove <agent> --confirm` needed, and leaves that agent's files,
 records, and grants exactly as they were, together with the installed team's last working version.
-A name may only be taken over after the owner has removed the colliding agent.
+A name may only be taken over after the owner has removed the colliding agent. That refusal is
+asked before the grant-name check below, because it is the one the owner can act on: an agent no
+team manages holds grants this team has no say over until the name is handed across.
 
 Turn admission also performs a network-free reconciliation of that one member from the installed
 catalog before instructions or grants are read. Thus local drift cannot cross into a later turn;
@@ -118,19 +121,55 @@ For each member, reconciliation:
 3. removes `MEMORY.md`, making the team member explicitly memoryless;
 4. writes the declared description and delegation scope;
 5. enables or disables the member's protected weekly upkeep from `self_improve`;
-6. grants every declared fully qualified skill and revokes every grant outside that positive
-   allowlist;
+6. grants every declared fully qualified skill and revokes only the exact grants a previous
+   declaration gave this member and this one no longer does;
 7. preserves Rundesk's required operating skill and conditional delegation skill; and
 8. leaves the member's gateway stopped for the owner to start when wanted.
 
 A member removed by a later catalog version is released from team management rather than deleted.
-Removing agents, channels, schedules, credentials, or projects is outside this lifecycle. Removing
-an unlisted optional skill grant is part of the positive allowlist contract.
+Removing agents, channels, schedules, credentials, or projects is outside this lifecycle. Removing a
+grant this team no longer declares is part of the team-managed grant contract.
 
 Installation and the explicit team update do not start gateways. The successful command names
 `rundesk gateways start <agent>` so the owner can start only the agents they want to use. The
 combined manual/daily lifecycle instead stands down only online members and restores exactly that
 set after reconciliation; members that began offline remain offline.
+
+## Which grants a team owns
+
+A member's `skills` array is the set of **team-managed grants**, not a list of everything that
+member may hold. Every other grant standing in the member's own skills directory is **user-managed**
+and survives every update, refresh, and turn admission.
+
+| Grant | Who owns it | What reconciliation does |
+|---|---|---|
+| Declared by the incoming version | the team | granted when absent, left alone when already exact |
+| Declared by the previous version and not by this one | the team | revoked, matched on installed name **and** full `<catalog>/<skill>` address |
+| Anything else, including a copy made with `--as` | the owner | left exactly where it stands |
+| `managing-rundesk`, and Rundesk's own `delegating-work` for a member that may delegate | the product | reconciled by Rundesk, and a team may not declare either |
+
+Ownership is read from declarations rather than from a register: the installed declaration is
+readable until the moment its replacement lands, and a grant that is not an exact grant of the
+previous or incoming declaration was not this team's to take. Rundesk does not check whether a
+person or an authorized agent ran `rundesk skills grant`; both are user-managed.
+
+An initial installation is unaffected by any of this. Every member name must be absent first, so
+each member starts holding its declared grants and the product's, and nothing else.
+
+**A name a user-managed grant occupies is refused, never taken.** When an incoming declaration needs
+an installed name that a grant this team never declared is standing under, the update is refused
+before any dependency, gateway, catalog, page, record, or grant moves. An update or refresh is
+refused for the whole team; turn admission refuses only the member being admitted, so a collision
+belonging to one member never stops its teammates from working. The refusal names the member,
+the occupying grant, the declared address, and both ways out: revoke the grant with `rundesk skills
+revoke <agent> <skill>`, or keep it under another name with `rundesk skills grant <agent>
+<catalog>/<skill> --as <name>`. The same rule covers Rundesk's conditional delegation grant: while
+a member is inbound-only a `delegating-work` grant from anywhere else is the owner's and is left
+alone, and a later version that lets that member delegate by name is refused rather than reported
+as reconciled while the member cannot delegate at all.
+
+One limit no lifecycle can lift: a grant survives only while its catalog still supplies the skill
+behind it. A catalog version that retires a skill takes every grant to that skill, whoever made it.
 
 ## Ownership and safety
 
@@ -151,6 +190,6 @@ preserving its skills while adding team ownership and reconciling the declared a
 An agent turn may run a confirmed team install or update when the owner authorized that effect and
 the turn's configured tool access can invoke Rundesk. Rundesk does not infer owner authorization
 from agent-turn environment variables. Preview, `--confirm`, validation, collision, locking,
-reconciliation, positive allowlist, and stopped-gateway guarantees are identical for terminal and
+reconciliation, grant-ownership, and stopped-gateway guarantees are identical for terminal and
 in-turn callers. Repository protection, task authorization, and configured tool access remain the
 authority boundaries.

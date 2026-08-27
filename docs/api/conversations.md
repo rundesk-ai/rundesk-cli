@@ -4,6 +4,21 @@
 
 Ask an agent something, here, in this terminal, and watch it work.
 
+| Command | Does |
+|---|---|
+| `ask <agent> <prompt> [--fresh] [--read-only] [--model <model>] [--thinking] [--quiet]` | ask, and watch it work |
+| `ask <agent> <prompt> [--provider <provider>] [--alias <alias>]` | for a delegation only — which brain answers it |
+| `messages <agent> [--search <words>] [--channel <channel>] [--source <kind>] [--conversation <id>] [--since <YYYY-MM-DD>] [--limit <n>] [--full]` | what was said, and what was said back |
+| `turns <agent> [<turn>] [--limit <n>] [--conversation <id>]` | what each turn cost, and what one did |
+| `asked [--agent <agent>]` | what this agent has handed to other agents |
+| `asked show <id>` | one delegation in full |
+| `asked say <id> <words>` | steer work that is still going |
+| `asked stop <id>` | ask for work to end before it finishes |
+| `asked resume <id> <words>` | carry a finished one on, in the session it had |
+
+`ask` continues the agent's terminal conversation; `--fresh` starts a new one on the brain.
+`--limit` defaults to 20 on both `messages` and `turns`.
+
 ```console
 $ rundesk ask ava "what changed in the queue today?"
   read
@@ -90,16 +105,31 @@ prerequisite, and launchd brings it back at every login afterwards. A delegation
 is running would otherwise wait for ever while the agent that made it believed it had handed work
 over, which is a success nothing earned.
 
-`rundesk asked --agent ava` lists ava's work. `asked say <id> <words>` durably adds guidance to
-working work. The recipient's gateway offers it to the active provider turn immediately; if that
-turn has just ended or cannot be steered, the guidance remains for its next turn on the same
-delegation. `asked stop <id>` records an early end request; the recipient's next gateway beat stops
-the live provider process group, or settles an unstarted brief as stopped without launching it. The
-listing says `stopping` until that terminal outcome comes back, then settles it without waking the
-asking agent for another review response and lists it as `stopped`, never `answered`. Stopped work
-cannot be resumed. `asked resume <id> <words>` continues answered work in the provider session it
-already had. Each delegation has its own
-conversation, so two tasks handed to the same specialist by one parent turn cannot share an answer.
+## asked
+
+What this agent has handed to other agents, and the four verbs that act on one.
+
+`rundesk asked --agent ava` lists ava's work. Inside a turn the agent is already known, so `--agent`
+is needed only from a terminal.
+
+| Verb | Acts on | What happens |
+|---|---|---|
+| `asked show <id>` | any | the whole delegation, in full |
+| `asked say <id> <words>` | work still going | guidance is stored, then offered to the active turn |
+| `asked stop <id>` | work still going | an early end is recorded, and the next gateway beat carries it out |
+| `asked resume <id> <words>` | work already answered | the same ask continues, in the session it had |
+
+**`say` never fails for being late.** The recipient's gateway offers the guidance to the active
+provider turn immediately; if that turn has just ended or cannot be steered, the guidance stays for
+its next turn on the same delegation.
+
+**`stop` is not instant, and says so.** The next gateway beat stops the live provider process group,
+or settles an unstarted brief as stopped without launching it. The listing reads `stopping` until
+that terminal outcome comes back, then settles without waking the asking agent for another
+review — and lists it as `stopped`, never `answered`. **Stopped work cannot be resumed.**
+
+Each delegation has its own conversation, so two tasks handed to the same specialist by one parent
+turn cannot share an answer.
 
 `asked show <id>` distinguishes the requested values, the effective provider/model fixed at
 admission, and the provider/model the newest terminal target turn actually recorded. The unchecked

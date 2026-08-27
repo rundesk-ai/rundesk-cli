@@ -63,11 +63,11 @@ ABOUT_A_GATEWAY = (
 def register(sub: argparse._SubParsersAction) -> None:
     """`rundesk permissions [list|lineage|check]`, built beside the verb."""
     kept = sub.add_parser("permissions", help="what this Mac lets rundesk do")
-    what = kept.add_subparsers(dest="what")
+    what = kept.add_subparsers(dest="what", metavar="<what>")
     what.add_parser("list", help="every probe, what it is for, and what it touches")
     what.add_parser("lineage", help="whose grants an answer here would be about")
     asking = what.add_parser("check", help="prove them now, and write down what was found")
-    asking.add_argument("probes", nargs="*",
+    asking.add_argument("probes", metavar="<probe>", nargs="*",
                         help="a group (control) or one probe (files/full-disk); "
                              "nothing means everything needed")
     asking.add_argument("--everything", action="store_true",

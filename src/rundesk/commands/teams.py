@@ -112,11 +112,15 @@ def _refreshed(name: str, fetching: Optional[skill_catalogs.Fetching],
     settled = library.read(name)
     if settled.provenance is None:
         raise reconcile.Refused(f"nothing is written down about where {name} came from")
+    # Read before the fetch, because it is the only thing that says which grants this team already
+    # manages. After the swap the incoming declaration is the installed one and the difference —
+    # the grants to retire, and the names an owner's own grant may not be taken from — is gone.
+    previous = catalogs.installed(name)
     with skill_catalogs.brought(
             settled.provenance.source, settled.provenance.etag, fetching) as coming:
         incoming = (catalogs.installed(name) if coming.at is None or coming.manifest is None
                     else catalogs.read(coming.at, coming.manifest))
-        reconcile.preflight_update(incoming)
+        reconcile.preflight_update(incoming, previous=previous)
         with _prepared_dependencies(incoming, fetching) as dependencies:
             stopped: List[str] = []
             failure: Optional[BaseException] = None
@@ -134,7 +138,7 @@ def _refreshed(name: str, fetching: Optional[skill_catalogs.Fetching],
                         try:
                             with locking.only_one(paths.lock(), "this install",
                                                   locking.WHILE_A_DIRECTORY_MOVES):
-                                reconcile.preflight_update(incoming)
+                                reconcile.preflight_update(incoming, previous=previous)
                                 for dependency in dependencies:
                                     if dependency.coming is not None:
                                         skill_catalogs.installed(dependency.coming, saying)
@@ -142,7 +146,8 @@ def _refreshed(name: str, fetching: Optional[skill_catalogs.Fetching],
                                     moved = skill_catalogs.updated(
                                         name, coming, saying, validating=catalogs.read)
                                     grants.retired(name, moved.retired)
-                                    changed = reconcile.apply(catalogs.installed(name))
+                                    changed = reconcile.apply(catalogs.installed(name),
+                                                              previous=previous)
                         except TROUBLE as why:
                             failure = why
             finally:
@@ -298,6 +303,7 @@ def _updated(name: str, provider: Optional[str], source: Optional[str], confirm:
             return _failed(f"{name} is a skill catalog, not a team")
         if settled.provenance is None:
             return _failed(f"nothing is written down about where {name} came from")
+        previous = catalogs.installed(name)
         previous_source = settled.provenance.source
         selected_source = source.strip() if source is not None else previous_source
         source_changed = selected_source != previous_source
@@ -310,11 +316,11 @@ def _updated(name: str, provider: Optional[str], source: Optional[str], confirm:
                 return _failed(f"{selected_source} calls itself {coming.manifest.name}, not {name}")
             incoming = (catalogs.installed(name) if coming.at is None or coming.manifest is None
                         else catalogs.read(coming.at, coming.manifest))
-            reconcile.preflight_update(incoming, provider)
+            reconcile.preflight_update(incoming, provider, previous)
             with _prepared_dependencies(incoming, fetching) as dependencies:
                 if not confirm:
                     return _would_update(incoming, previous_source, selected_source, provider,
-                                         dependencies)
+                                         dependencies, previous)
                 # One decision from the ownership re-check through dependency, catalog and member
                 # writes. **The lock may not be released at the swap.** Once the new declaration is
                 # installed, `catalogs.owners()` maps every name in it to this team, so a
@@ -324,7 +330,7 @@ def _updated(name: str, provider: Optional[str], source: Optional[str], confirm:
                 # re-entrant install lock, so holding it across all of them costs nothing.
                 with locking.only_one(paths.lock(), "this install",
                                       locking.WHILE_A_DIRECTORY_MOVES):
-                    reconcile.preflight_update(incoming, provider)
+                    reconcile.preflight_update(incoming, provider, previous)
                     for dependency in dependencies:
                         if dependency.coming is not None:
                             skill_catalogs.installed(dependency.coming)
@@ -332,7 +338,7 @@ def _updated(name: str, provider: Optional[str], source: Optional[str], confirm:
                         moved = skill_catalogs.updated(name, coming, validating=catalogs.read)
                         grants.retired(name, moved.retired)
                         installed = catalogs.installed(name)
-                        changed = reconcile.apply(installed, provider)
+                        changed = reconcile.apply(installed, provider, previous=previous)
     except TROUBLE as why:
         return _failed(str(why), f"{name} was not fully reconciled",
                        f"retry with: {_update_command(name, provider, source)}")
@@ -364,21 +370,31 @@ def _would_install(team: catalogs.Team, source: str, provider: Optional[str],
 
 def _would_update(team: catalogs.Team, previous_source: str, source: str,
                   provider: Optional[str],
-                  dependencies: List[DependencyPlan]) -> int:
+                  dependencies: List[DependencyPlan],
+                  previous: Optional[catalogs.Team] = None) -> int:
     print(f"update: this would reconcile team {team.name} from {source}", file=sys.stderr)
     if source != previous_source:
         print(f"        source    {previous_source} -> {source}", file=sys.stderr)
     _preview_dependencies(team, dependencies)
-    _preview_members(team, provider)
-    print("        repair   instructions, memory absence, delegation, upkeep and skill allowlist",
-          file=sys.stderr)
+    _preview_members(team, provider, previous)
+    print("        repair   instructions, memory absence, delegation, upkeep and the skills this "
+          "team manages", file=sys.stderr)
     print("        nothing was changed. To go ahead:", file=sys.stderr)
     print(f"        {_update_command(team.name, provider, source if source != previous_source else None)}",
           file=sys.stderr)
     return FAILED
 
 
-def _preview_members(team: catalogs.Team, provider: Optional[str], installing: bool = False) -> None:
+def _preview_members(team: catalogs.Team, provider: Optional[str],
+                     previous: Optional[catalogs.Team] = None,
+                     installing: bool = False) -> None:
+    """Say what this team will manage for each member, and what it will leave alone.
+
+    The two ownership classes are named rather than implied. `allow only …` was read as the whole
+    of what a member would hold afterwards, which is what the reconciliation used to mean and no
+    longer does — the same words over the new behavior would have been a preview that lied about
+    every grant it was about to preserve.
+    """
     absent = set(reconcile.missing(team))
     for member in team.members:
         if installing or member.name in absent:
@@ -386,15 +402,16 @@ def _preview_members(team: catalogs.Team, provider: Optional[str], installing: b
         else:
             action = "reconcile"
         print(f"        member   {member.name} — {action}", file=sys.stderr)
-        allowed = ", ".join(member.skills) or "no optional skills"
+        team_managed = ", ".join(member.skills) or "no optional skills"
         print(f"                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; "
-              f"allow only {allowed} plus Rundesk-required skills; "
+              f"team-managed skills {team_managed} plus Rundesk-required skills; "
+              f"every other grant preserved; "
               f"weekly upkeep {'on' if member.self_improve else 'off'}; leave gateway stopped",
               file=sys.stderr)
         if member.name not in absent:
-            for held in reconcile.retiring(team, member):
-                print(f"        revoke   {member.name}: {held.address or held.name} — not allowed",
-                      file=sys.stderr)
+            for held in reconcile.retiring(previous, member):
+                print(f"        revoke   {member.name}: {held.address or held.name} — no longer "
+                      "team-managed", file=sys.stderr)
 
 
 def _preview_dependencies(team: catalogs.Team, dependencies: List[DependencyPlan]) -> None:

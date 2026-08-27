@@ -6,6 +6,20 @@ The skills this install has, which agent holds which, and what each of them need
 **catalog** is what you install, update and remove; a **skill** is what you grant. Nothing installs
 one skill and nothing removes one, because a catalog is what somebody publishes and follows.
 
+| Command | Does |
+|---|---|
+| `skills [list [<agent>]]` | every skill, or the ones one agent holds |
+| `skills catalogs` | every catalog, its version and where it came from |
+| `skills install <repository> --confirm` | install a catalog of skills |
+| `skills update <catalog> --confirm` | check one against where it came from |
+| `skills remove <catalog> --confirm` | take one away, and every skill in it |
+| `skills grant <agent> <catalog>/<skill> [--as <name>]` | give an agent a skill |
+| `skills revoke <agent> <skill>` | take one away from an agent |
+| `skills profiles <catalog>/<skill>` | every account one skill is configured for |
+| `skills configure <catalog>/<skill> [--profile <name>]` | set what it needs, guided |
+| `skills forget <catalog>/<skill> [--profile <name>] --confirm` | empty one account |
+| `skills doctor [<agent>]` | what cannot be used, and exactly why |
+
 ```console
 $ rundesk skills
 skills in /Users/you/.rundesk/data/skills
@@ -79,7 +93,7 @@ against the wrong company. A profile carries all of its own values or it is repo
 Values are typed, never passed as arguments, and never printed back — `env` says why. `configure` exits
 non-zero when the account is still incomplete, and `forget` empties a whole account at once.
 
-### doctor
+### skills doctor
 
 `rundesk skills doctor` says what cannot be used and why, names the one command that fixes it, and
 **exits non-zero when anything is wrong** — the way `env check` does, so a script can gate on it. It

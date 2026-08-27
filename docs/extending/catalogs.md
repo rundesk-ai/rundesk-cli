@@ -27,7 +27,7 @@ after its source and required skills match the declaration.
 
 A catalog that owns a tested set of named Rundesk agents is a **team catalog**. Use that boundary
 only when the catalog is responsible for keeping those agents' instructions, delegation scope, and
-positive skill allowlists in step across installations. Its schema and guarded lifecycle are specified in
+declared skill grants in step across installations. Its schema and guarded lifecycle are specified in
 [`requirements/team-catalog.md`](../requirements/team-catalog.md); ordinary topical skill catalogs do
 not need team files.
 
@@ -103,6 +103,18 @@ The `name` must match `manifest.json`. Every skill name must exist under `skills
 `instructions` path must stay inside `agents/`, and each member needs a unique Rundesk-safe name.
 Keep provider accounts, models, credentials, channels, schedules, and projects out of the catalog;
 those choices belong to each installation.
+
+A member's `skills` array is the set of grants your team manages, not everything that member may
+hold. Installing your team gives each new member exactly what it declares; a later version grants
+what it adds and revokes only the exact grants a previous version of your own declaration gave that
+member. Whatever an owner granted alongside it stays, including a copy made with `--as`, so publish
+the array as the capability set your workflow needs and leave installation-local additions to the
+owner. Removing a skill from your catalog is the one change that does take grants away from
+everybody, so retire a skill only when you mean that.
+
+Publishing a version whose declaration needs an installed name that an owner's own grant occupies
+refuses that install's update outright, and tells them which grant to revoke or re-alias. Prefer a
+skill name specific enough not to collide.
 
 Test the catalog from its local checkout before publishing it:
 

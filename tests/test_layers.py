@@ -26,6 +26,7 @@ accumulates because it is the file everybody already imports.
 Run directly: `python3 tests/test_layers.py`
 """
 
+import argparse
 import ast
 import hashlib
 import re
@@ -33,6 +34,7 @@ import unittest
 from pathlib import Path
 
 import support
+from rundesk import cli
 
 #: Which package may import which. `utils` is absent from every list on purpose.
 MAY_IMPORT = {
@@ -510,6 +512,68 @@ class TheTwoLayersSpellADelegationTheSameWay(support.Isolated):
                                  (landed.conversation,)).fetchone()
         self.assertEqual((kept.FROM_AGENT, kept.source_id_for("ava", 12)),
                          (stood["source"], stood["source_id"]))
+
+
+#: Written the way argparse prints it, so the two spellings of one flag are one column.
+FLAG_SPELLINGS = {"-n": "-n, --lines"}
+
+
+class TheCommandSurfaceIsPublished(unittest.TestCase):
+    """Every verb the parser offers appears in `docs/api/README.md`, read off the parser itself.
+
+    **The one page that claims to be complete is the one nothing was checking.** Its own opening
+    line calls itself every operation Rundesk offers, and a verb added to `cli.py` reaches a person
+    through `--help` whether or not anybody remembered the page — so the page drifts silently and
+    the drift is invisible to the person it misleads. Five whole groups had gone missing from it
+    before this case existed.
+
+    The block is written for a reader, so it compresses: `[list]` for a sub-verb that also runs
+    bare, brackets around anything optional. Both are undone here rather than banned there, because
+    a listing nobody wants to read is a listing that stops being maintained.
+    """
+
+    def published(self):
+        """The verb block, with the reader's compressions undone."""
+        page = (support.CHECKOUT / "docs" / "api" / "README.md").read_text(encoding="utf-8")
+        block = page.split("```sh", 1)[1].split("```", 1)[0]
+        plain = block.replace("[", " ").replace("]", " ").replace("|", " ")
+        return [" ".join(line.split()) for line in plain.splitlines() if line.strip()]
+
+    def offered(self, parser, named=()):
+        """Every command path the parser answers, and the flags each one takes."""
+        found = {named: {flag for action in parser._actions
+                         for flag in action.option_strings if flag not in ("-h", "--help")}}
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                for name, under in action.choices.items():
+                    # `_oauth` is suppressed from `--help` and exists for an inherited descriptor,
+                    # never for a person. A page that published it would be documenting plumbing.
+                    if not name.startswith("_"):
+                        found.update(self.offered(under, (*named, name)))
+        return found
+
+    def test_every_verb_the_parser_offers_is_on_the_page(self):
+        lines = self.published()
+        for named, flags in sorted(self.offered(cli.build_parser()).items()):
+            if not named:
+                continue
+            verb = "rundesk " + " ".join(named)
+            with self.subTest(verb=verb):
+                shown = [line for line in lines
+                         if line == verb or line.startswith(verb + " ")]
+                self.assertTrue(shown, f"{verb} is offered and is not on docs/api/README.md")
+                said = " ".join(shown)
+                for flag in sorted(flags):
+                    self.assertIn(FLAG_SPELLINGS.get(flag, flag), said,
+                                  f"{verb} takes {flag} and the page does not say so")
+
+    def test_the_count_the_page_claims_is_the_count_the_parser_offers(self):
+        # The opening line names the number in words. A verb added without touching the page leaves
+        # a page that is wrong twice — in what it lists, and in what it claims to have listed.
+        page = (support.CHECKOUT / "docs" / "api" / "README.md").read_text(encoding="utf-8")
+        offered = len(cli.offered(cli.build_parser()))
+        self.assertEqual(21, offered, "the count below was written for twenty-one groups")
+        self.assertIn("Twenty-one commands", page)
 
 
 class AgentGuideContract(unittest.TestCase):

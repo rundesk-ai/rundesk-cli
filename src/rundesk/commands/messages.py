@@ -39,7 +39,7 @@ NOWHERE = "—"
 def register(sub: Subcommands) -> None:
     """One verb, because there is one thing to do with a history: look through it."""
     said = sub.add_parser("messages", help="what an agent has been told, and what it said back")
-    said.add_argument("agent", metavar="<agent>")
+    said.add_argument("agent", metavar="<agent>", help="whose messages to read")
     said.add_argument("--search", metavar="<words>", default="",
                       help="find messages holding these words")
     said.add_argument("--channel", metavar="<channel>",
