@@ -20,23 +20,27 @@ Return format: Result, changed files, verification, limitations, and blocker if 
 
 Review the diff and test output yourself. “Tests passed” without the command or output is not proof.
 
+When implementation spans more than one repository or material risk boundary, derive separate
+dependency-ordered handoffs from this shape. Keep one handoff only for an atomic outcome whose shared
+invariant and proof would be weakened by splitting it.
+
 ## Code or design review
 
 ```text
-Task: Use the configured senior review role to review <base>...<head> for authentication-timeout correctness and regression risk; do not edit.
+Task: Review <base>...<head> for authentication-timeout correctness and regression risk; do not edit.
 Why: Decide whether it is safe to merge without weakening session or logout behavior.
 Scope: Review the exact diff, affected auth code, nearby callers needed to validate behavior, and relevant tests only.
 Authority: Inspect only; do not modify files, create a PR, or change repository state.
 Context: The original request is <request>. Acceptance requires <criteria>. The working tree is <clean | contains named unrelated changes>; the implementation is otherwise ready for review.
-Constraints: Follow repository rules and distinguish defects from optional improvements.
+Constraints: Follow repository rules. Highest-risk invariants are session expiry, explicit logout, and compatibility with existing authenticated callers.
 Evidence required: Severity, location, failure scenario, reasoning, and reproduction or test gap for each finding; checked coverage if there are no findings.
 Definition of done: Every scoped change is reviewed and the verdict is evidence-backed.
 Return format: Findings first, then checked coverage, uncertainties, and blocker if incomplete.
 ```
 
-The brief names the configured role to select its established focus; it does not repeat that role's
-generic checklist. The assignment supplies what the role cannot know: the exact change, supplied
-intent, acceptance criteria, repository state, and required proof.
+The assignment supplies only what the review target cannot know: the exact change, requested
+behavior, acceptance criteria, repository state, change-specific highest-risk invariants, and proof.
+It does not repeat the target's configured role or generic review checklist.
 
 ## Simplification review
 

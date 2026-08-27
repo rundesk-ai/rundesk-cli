@@ -1,6 +1,6 @@
 {
   "schema": 1,
   "name": "rundesk",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "How to operate this rundesk install, and how to write a skill for it."
 }

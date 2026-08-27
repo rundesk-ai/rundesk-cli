@@ -56,6 +56,19 @@ current turn is already an available route; do not add a gateway preflight. Send
 directly and let `ask` report if admission is no longer possible. Do not delegate to yourself, and
 do not delegate again from a turn that is already answering a delegation.
 
+Choose role fit before writing the brief. A complete brief cannot repair a role mismatch. Send
+implementation only to a target whose durable responsibility is implementing changes. Send
+independent review only to a review target, and only after a finished, inspectable change exists.
+Do not send discovery, planning, production analysis, or implementation to a target whose
+responsibility is reviewing completed changes.
+
+Before delegating implementation, identify its verification boundaries. Work spanning more than one
+repository or more than one material risk boundary normally becomes separate dependency-ordered
+phases, each leaving a coherent result with its own observable proof. Keep it in one handoff only
+when it is one atomic outcome that cannot be safely implemented or verified in phases; state the
+shared invariant and why splitting would weaken the result. Similar changes in two repositories are
+not atomic merely because their implementations resemble each other.
+
 If no permitted target materially fits, continue directly or report the routing gap. Do not bypass
 the delegation scope with an attended `ask`.
 
@@ -106,9 +119,11 @@ definition of done prevents a plausible summary from being mistaken for completi
 A quality brief lets the recipient begin without guessing and omits history that does not affect the
 assignment. Do not assume a named agent has the parent's conversation context. For a provider-local
 subagent, include assignment-specific context that its provider may not inherit, but do not copy the
-configured role's generic review or research instructions into the brief. For code review, identify
-the exact baseline or diff, the original request and acceptance criteria, the current working-tree
-state, and the files or nearby code that may be inspected.
+configured role's generic review or research instructions into the brief. For independent code
+review, provide the exact base and head or precise dirty diff, the requested behavior and acceptance
+criteria, the current working-tree state, the few highest-risk invariants specific to the change,
+and the evidence needed for a verdict. Omit the review target's generic checklist and do not restate
+its configured role.
 
 Never make a brief look complete by turning an inference into a fact or inventing a design intent,
 constraint, input, or acceptance criterion. Mark a material missing fact as an uncertainty or
