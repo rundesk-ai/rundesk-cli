@@ -61,9 +61,13 @@ installed team. Change the team declaration first; unreferenced dependency catal
 ordinary independent lifecycle.
 
 `rundesk teams update <team>` fetches the configured source, validates the replacement, previews
-catalog and member changes, and changes nothing. `--confirm` replaces changed catalog content and
-reconciles every declared member even when the fetched tree is unchanged, so the operation repairs
-instruction, memory, grant, and delegation drift. It refuses a newly declared member name already
+catalog and member changes, and changes nothing. `--source <repository>` changes that configured
+source through the same operation. A source change starts without the old source's ETag, must fetch
+a complete catalog with the installed team's exact name, and appears in the preview before
+confirmation. `--confirm` records the new source even when its tree is byte-identical, replaces
+changed catalog content, and reconciles every declared member, so the operation repairs instruction,
+memory, grant, and delegation drift. A failed source change restores the old tree, provenance, and
+member state together. It refuses a newly declared member name already
 held by an agent no team manages, at preview and at confirmation, and names the removal required.
 
 `rundesk update` and the daily automatic updater also check every installed team catalog, after the
