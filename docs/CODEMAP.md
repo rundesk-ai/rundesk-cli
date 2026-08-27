@@ -69,14 +69,16 @@ Being extensionless is why a directory-scanning lint does not see them.
 | `src/skills/` | the bundled `rundesk` catalog: `manifest.json` and 4 packages — `delegating-work`, `managing-github`, `managing-rundesk`, `writing-skills` |
 | `src/templates/` | the agent home: an `AGENTS.md`/`CLAUDE.md` pair placed from one source, `MEMORY.md`, and purpose-named area templates for plans, research, retros, scripts, and tasks |
 
-## Tests (tests/ — 84 suites, 3 support modules)
+## Tests (tests/ — 85 suites, 3 support modules)
 
 Directly runnable `unittest` suites. `tests/support.py` gives every case a temporary root, asserts
 that Rundesk resolved that root before the case runs, and points the proxy variables at a closed port
 so nothing a suite starts can leave the machine. `tests/fixtures_skills.py` holds skill fixtures, and
 `tests/fixtures_gateways.py` the gateway and channel harness the two gateway suites share.
 `scripts/suites` discovers every suite, runs each in its own interpreter, starts the slowest first
-from durations it recorded last run, and fails on empty discovery.
+from durations it recorded last run, and fails on empty discovery. `tests/test_suites_runner.py`
+proves that ordering never filters a suite out and that a damaged durations file cannot change a
+result.
 
 `tests/test_layers.py` is the architectural proof: it holds the package dependency graph, the
 agent-guide heading contract, and the repository template digests.
