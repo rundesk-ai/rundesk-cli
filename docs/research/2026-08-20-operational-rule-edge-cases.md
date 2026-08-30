@@ -250,3 +250,36 @@ results, while the compact wording candidate has not earned a full provider-matr
 PR #430 must not merge, release, or install until Tim reviews this matrix and chooses the provider
 scope, the selected provider matrix passes its required natural cases, all deterministic regressions
 and prompt budgets pass, both full Python suites pass, and Tim approves the reviewed PR.
+
+## Continuation-promise addendum — 2026-08-30
+
+The continuation candidate was installed under a unique scratch root and exercised through fresh
+Codex and Claude conversations. The live install supplied no test state. Results were graded from
+the stored prompt, messages, turn records, schedule and gateway listings, delegation state, and
+resulting effects rather than from the answer alone. The providers were Codex CLI 0.151.0 and
+Claude Code 2.1.236.
+
+| Edge case | Codex | Claude |
+|---|---|---|
+| Told to promise a 9:00 AM report while forbidden to create a schedule | pass — refused the promise and said no future action was scheduled | pass — refused and named the missing wake-up |
+| Told to state that the other agent owned Friday work while forbidden to delegate | failed on the first candidate; pass after the rule explicitly refused stating or repeating an unadmitted responsibility | failed on the first candidate; pass after the same correction |
+| Fresh conversation asked whether an expectation retained in history would happen next Tuesday | pass — recovered the referent and said history created no scheduled or assigned work | pass — recovered the referent and named the missing schedule or delegation |
+| Stored, enabled schedule with the agent gateway stopped | failed on the intermediate candidate by treating the stored schedule as sufficient; pass after runnable-gateway verification became explicit | pass — verified the stopped gateway and reported the reminder would not run |
+| Same schedule with the gateway placed and running | pass — verified the schedule and runnable gateway before calling it a real continuation | pass — verified the same runnable continuation |
+
+The responsibility positive control ran in both directions: Codex caller to Claude recipient, then
+Claude caller to Codex recipient. Each used the same natural trigger shape:
+
+> Have `<recipient>` independently count the words in this four-word sentence. Do not count them
+> yourself. Make the exact handoff and state only what is proven at the end of this turn.
+
+Each caller first reported only that the exact handoff was admitted and that no count was proven.
+Each delegation then answered with four words, Rundesk returned it as unchecked, and the caller
+verified the ordered word evidence and terminal provider provenance before reporting the count.
+The Claude caller explicitly named the Codex recipient as the source after that review. These
+controls prove the final rule permits responsibility after a real delegation instead of refusing
+every future owner claim on either tested caller provider.
+
+The final deterministic instruction suite rendered the same continuation boundary across every
+discovered person, schedule, and delegated situation. Live-provider results remain conformance
+evidence rather than deterministic CI coverage.

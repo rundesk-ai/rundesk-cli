@@ -360,6 +360,30 @@ class TheAgreedSections(support.Isolated):
                 self.assertIn("your turn ends when you stop writing", continuity)
                 self.assertIn("nothing wakes you for a background command", continuity)
 
+    def test_message_history_cannot_be_mistaken_for_future_execution(self):
+        # Retained conversation context can make a later turn understand an old promise, but it
+        # cannot create that later turn. A date written in prose therefore needs a real schedule,
+        # and responsibility named in prose needs an admitted delegation, before either is true.
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:32]):
+                continuity = self.part(self.built(situation).text, "## Outcome and Continuity")
+                for clause in (
+                    "message history preserves context; it does not keep the turn running or "
+                    "wake a new one",
+                    "do not promise later work unless you first establish and verify that "
+                    "continuation",
+                    "a future time requires a stored, enabled schedule and a verified gateway "
+                    "able to run it",
+                    "a schedule record that cannot wake the agent is not a continuation",
+                    "another agent's responsibility requires an admitted delegation",
+                    "never state or repeat that another agent will do work until the delegation "
+                    "is admitted",
+                    "without it, say the work remains unassigned",
+                    "otherwise do the work now or state that no future action is scheduled",
+                ):
+                    with self.subTest(clause=clause):
+                        self.assertIn(clause, continuity)
+
     def test_a_person_turn_keeps_routine_internal_recovery_silent(self):
         person = self.built().text
         situation = self.part(person, "## Current Situation")
@@ -722,7 +746,7 @@ class TheBuilderBoundary(support.Isolated):
             "schedule": (instructions.SCHEDULE_TO_AGENT, 1150),
             "agent": (instructions.AGENT_TO_AGENT, 800),
             "team": (instructions.TEAM_MEMBERS, 1000),
-            "completion": (instructions.OUTCOME_AND_CONTINUITY, 850),
+            "completion": (instructions.OUTCOME_AND_CONTINUITY, 1500),
         }
         for name, (text, ceiling) in ceilings.items():
             with self.subTest(name=name):

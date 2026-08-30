@@ -203,6 +203,15 @@ started so it outlives the turn. That obligation is stated because the licence a
 the letter and still failed: a measured turn started a server, proved it with a real `200`, did not
 kill it, and left the person a dead URL, because the child died with the turn that started it.
 
+Message history preserves context for a later turn; it does not keep the current turn running or
+create a later one. A promise tied to a future time is therefore valid only after the turn stores
+and enables a schedule and verifies that a gateway can run it; a schedule record on its own is not
+a wake-up. Assigning responsibility to another agent is valid only after an admitted delegation.
+Asking the agent to state, repeat, or agree with either claim does not make the missing continuation
+real: without the delegation the work remains unassigned, and without the runnable scheduled
+wake-up no future action is scheduled. The agent otherwise does the work now instead of promising
+later work.
+
 A turn ends in exactly one of three states: a verified outcome, a named blocker carrying its next
 action, or a continuation Rundesk resumes — a requester response, a scheduled wake-up, or a
 delegation return. The third is a permission and not only a prohibition, because an agent whose

@@ -1,7 +1,7 @@
 ---
 id: INS
 name: Rundesk operating and agent instructions
-last_verified: 2026-08-25
+last_verified: 2026-08-30
 ---
 
 ## What this is
@@ -24,11 +24,12 @@ must guarantee.
 
 ## Requirements
 
-A ✅ names the test methods observed to pass, and the whole suite was run on Python 3.14 and the
-3.9 floor on 2026-08-25 with 83 suites and 4,197 tests green. Cases asserting a universal boundary
-derive the situation set from the instruction module rather than a maintained list, so a situation
-added later is covered without a test edit — and that discovery fails when it finds no situation
-block, because a loop over nothing passes. The tests do not freeze editorial prose: copy may be
+A ✅ names the test methods observed to pass, and the whole suite was run through both required
+commands on Python 3.9 on 2026-08-30 with 85 suites and 4,164 tests green. Cases asserting a
+universal boundary derive the situation set from the instruction module rather than a maintained
+list, so a situation added later is covered without a test edit — and that discovery fails when it
+finds no situation block, because a loop over nothing passes. The tests do not freeze editorial
+prose: copy may be
 improved without rewriting them so long as the structural contract stays true.
 
 |  | ID | Requirement | Evidence |
@@ -67,6 +68,7 @@ improved without rewriting them so long as the structural contract stays true.
 | ✅ | R-INS-32 | The supported message lookup is stated as the whole of the search for conversation context, so a zero-match result ends the search rather than sending it outward to unrelated systems, projects, or checkouts | `test_the_supported_lookup_is_where_the_search_ends` |
 | ✅ | R-INS-33 | Every turn may end in exactly one of three states — a verified outcome, a named blocker carrying its next action, or a continuation Rundesk resumes at a requester response, a scheduled wake-up, or a delegation return — and work waiting on one of those is never reported as complete | `test_every_turn_cannot_end_without_delivery_or_a_continuation_path`, `test_every_turn_stops_when_the_requested_result_and_proof_are_complete` |
 | ✅ | R-INS-34 | Naming the outcome opens the section that bounds it rather than occupying a section of its own, and each section heading states when its rules apply | `test_the_outcome_is_named_where_the_scope_it_bounds_is_named`, `test_the_always_on_sections_are_present_once_and_in_order` |
+| ✅ | R-INS-35 | Every turn is told that retained message history preserves context but cannot keep a turn running or wake a new one; later work may be promised only after a real continuation is established and verified, a future time requires a stored enabled schedule and a gateway verified able to run it rather than a schedule record alone, another agent's responsibility requires an admitted delegation, a request to state or repeat an unsupported responsibility is refused as unassigned, and otherwise the work is done now or explicitly left unscheduled | `test_message_history_cannot_be_mistaken_for_future_execution` |
 
 ## Open questions
 
