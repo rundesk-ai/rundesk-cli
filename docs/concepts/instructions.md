@@ -195,20 +195,33 @@ The continuation rule states the mechanism rather than repeating the prohibition
 prohibition alone did not hold: told only that a background process is not a continuation path, a
 measured turn started one, started a monitor over it, wrote that it would report as soon as the
 result landed, and ended. Inside a harness that really does deliver such a notification that belief
-is correct, and only Rundesk's turn boundary makes it false. The turn is therefore told that it
-ends when the agent stops writing and that nothing wakes it for a background command, tool session,
-monitor, or child process; it waits for the result inside the turn, or stops the process and
-reports the blocker, unless that process is itself the requested outcome — which must then be
-started so it outlives the turn. That obligation is stated because the licence alone was obeyed to
+is correct, and only Rundesk's final-response boundary makes it false. The turn is therefore told
+that sending its final response ends the turn and that a background command, tool session, monitor,
+or child process cannot resume it. The agent waits for the result inside the turn or, when later
+verification is necessary, saves the work and establishes the scheduled continuation required by
+the second final-response condition. A process that is itself the requested outcome must be started
+so it outlives the turn. That obligation is stated because the licence alone was obeyed to
 the letter and still failed: a measured turn started a server, proved it with a real `200`, did not
 kill it, and left the person a dead URL, because the child died with the turn that started it.
 
-A turn ends in exactly one of three states: a verified outcome, a named blocker carrying its next
-action, or a continuation Rundesk resumes — a requester response, a scheduled wake-up, or a
-delegation return. The third is a permission and not only a prohibition, because an agent whose
-only honest endings were verified and blocked has nowhere to put a delegation still out or a
-schedule that will wake it. Work waiting on one of those three events is never reported as
-complete.
+History and saved state preserve enough context for a later turn to recover the work, but do not
+start that turn. Work spanning turns therefore keeps its current state, evidence, and next action
+in the project's own durable artifact or an active `tasks/` brief; changing task status does not go
+in `MEMORY.md`. The schedule command refuses an enabled self-schedule before writing unless the
+turn's gateway is currently known running. An enabled `--ask` self-schedule starts the later turn;
+`--run` starts a program rather than another agent turn. After the saved definition is verified, the
+agent does not inspect or report routine continuation infrastructure. Its final response names the
+verified current result and what the scheduled work will produce and when, plus a current material
+blocker only when that blocker affects the continuation.
+
+Sending the final response is permitted only after one of four conditions is true: the requested
+outcome and proof are verified; unfinished work has durable state and a scheduled Rundesk
+continuation; a named delegation is running and its answer will start a review turn; or a material
+blocker prevents further safe progress until an owner decision or external change. If none
+applies, the agent keeps working in the current turn. A completion response states the verified
+result. A scheduled response states both the verified current result and the future result and
+time. A delegation response states the result awaited. A blocker response states the required
+decision or external change. None narrates routine continuation machinery.
 
 ### Team Members
 

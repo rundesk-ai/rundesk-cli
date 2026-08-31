@@ -39,6 +39,21 @@ frozen prompt, lock, process record, output, and last attempt through this ordin
 [`commands.md`](../api/schedules.md) is what each verb guarantees and what each refuses. This is
 what a schedule *is*, and what to do when one is not doing what you expected.
 
+## A self-schedule write requires the current gateway
+
+Rundesk accepts an enabled schedule written by an agent for itself during its own turn only when the
+same agent's gateway is currently known to be running. If the gateway is stopped or its state cannot
+be verified, `schedules add` and `schedules update` refuse before changing the records and name the
+next operational action. This matters for a turn started with terminal `ask`, which can run without
+a gateway even though only a gateway fires the schedule. For `--ask`, a firing starts another agent
+turn; `--run` starts the named program instead.
+
+The guard is about the current self-scheduling command, not general permission to manage schedules
+or a guarantee that a future firing will occur. A command issued by a person at the terminal can
+still create an enabled schedule for an agent, and an agent can save or change a disabled schedule
+as a draft. An update to the agent's own schedule is guarded whenever the result would remain
+enabled, not only when the command explicitly says `--enable`.
+
 ## Two halves that know nothing about each other
 
 **When it is due** is arithmetic over what somebody typed, and it asks nothing of the machine but the

@@ -17,7 +17,9 @@ from unittest import mock
 
 import support
 from rundesk.agents import directory, records
+from rundesk.delegations import admitting
 from rundesk.exits import FAILED, OK, USAGE
+from rundesk.gateways import standing
 from rundesk.schedules import firing, kept, upkeep
 
 #: A program that really is on this machine, and one that is not. Located when a schedule is added,
@@ -164,6 +166,57 @@ class Adding(Scheduling):
         self.assertIn(f"{THERE} hello", out)
         self.assertIn("next", out)
 
+    def test_an_enabled_self_schedule_is_refused_without_a_running_gateway(self):
+        with mock.patch.dict("os.environ", {admitting.AGENT: self.agent,
+                                             admitting.RUN: "1"}):
+            code, _out, err = self.rundesk(
+                "schedules", "add", self.agent, "later",
+                "--at", "2099-01-01T09:00", "--ask", "Verify the result.")
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("cannot write an enabled schedule for itself while its gateway is not "
+                      "running", err)
+        self.assertIn(f"rundesk gateways start {self.agent}", err)
+        self.assertIn("nothing was added", err)
+        self.assertEqual([], kept.all(self.agent))
+
+    def test_an_enabled_self_schedule_is_admitted_while_its_gateway_is_running(self):
+        with mock.patch.dict("os.environ", {admitting.AGENT: self.agent,
+                                             admitting.RUN: "1"}), \
+                standing.holding(directory.where(self.agent)):
+            code, out, err = self.rundesk(
+                "schedules", "add", self.agent, "later",
+                "--at", "2099-01-01T09:00", "--ask", "Verify the result.")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("schedule later added", out)
+        self.assertEqual(1, kept.one(self.agent, "later")["enabled"])
+
+    def test_a_disabled_self_schedule_remains_a_valid_draft_without_a_gateway(self):
+        with mock.patch.dict("os.environ", {admitting.AGENT: self.agent,
+                                             admitting.RUN: "1"}):
+            code, _out, err = self.rundesk(
+                "schedules", "add", self.agent, "later", "--disabled",
+                "--at", "2099-01-01T09:00", "--ask", "Verify the result.")
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual(0, kept.one(self.agent, "later")["enabled"])
+
+    def test_a_self_schedule_is_not_written_when_gateway_state_cannot_be_known(self):
+        unknown = standing.Standing(standing.CANNOT_TELL, None, None,
+                                    "the gateway lock could not be opened")
+        with mock.patch.dict("os.environ", {admitting.AGENT: self.agent,
+                                             admitting.RUN: "1"}), \
+                mock.patch.object(standing, "standing", return_value=unknown):
+            code, _out, err = self.rundesk(
+                "schedules", "add", self.agent, "later",
+                "--at", "2099-01-01T09:00", "--ask", "Verify the result.")
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("cannot be verified", err)
+        self.assertIn("nothing was added", err)
+        self.assertEqual([], kept.all(self.agent))
+
     def test_a_schedule_can_state_one_moment_instead(self):
         code, _out, err = self.rundesk("schedules", "add", self.agent, "once",
                                       "--at", "2099-01-01T09:00", "--run", THERE)
@@ -295,6 +348,31 @@ class Updating(Scheduling):
         self.assertEqual(0, self.row()["enabled"])
         self.rundesk("schedules", "update", self.agent, "nightly", "--enable")
         self.assertEqual(1, self.row()["enabled"])
+
+    def test_a_self_schedule_cannot_be_enabled_without_a_running_gateway(self):
+        self.given("nightly", "--disabled")
+        with mock.patch.dict("os.environ", {admitting.AGENT: self.agent,
+                                             admitting.RUN: "1"}):
+            code, _out, err = self.rundesk(
+                "schedules", "update", self.agent, "nightly", "--enable")
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("cannot write an enabled schedule for itself while its gateway is not "
+                      "running", err)
+        self.assertIn("nothing was changed", err)
+        self.assertEqual(0, self.row()["enabled"])
+
+    def test_a_self_schedule_cannot_change_an_enabled_promise_without_a_gateway(self):
+        self.given()
+        with mock.patch.dict("os.environ", {admitting.AGENT: self.agent,
+                                             admitting.RUN: "1"}):
+            code, _out, err = self.rundesk(
+                "schedules", "update", self.agent, "nightly", "--when", "0 3 * * *")
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("cannot write an enabled schedule for itself while its gateway is not "
+                      "running", err)
+        self.assertEqual("0 2 * * *", self.row()["cron"])
 
     def test_enabling_and_disabling_at_once_is_the_command_line_being_wrong(self):
         self.given()

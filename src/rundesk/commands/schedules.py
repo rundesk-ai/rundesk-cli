@@ -53,7 +53,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from rundesk.agents import directory, migration, records
 from rundesk.commands import Subcommands, as_written, failed
 from rundesk.core import config, paths
+from rundesk.delegations import admitting
 from rundesk.exits import FAILED, OK, USAGE
+from rundesk.gateways import standing
 from rundesk.providers import answering, turns
 from rundesk.schedules import due, firing, kept, upkeep
 from rundesk.utils import locking, programs
@@ -282,6 +284,9 @@ def _added(args: argparse.Namespace) -> int:
     values = {"cron": args.when, "run_at": args.at, "expire_at": args.until,
               "command": args.program, "prompt": args.prompt,
               "enabled": 0 if args.disabled else 1}
+    refusal = _self_resumption_refusal(args.agent, bool(values["enabled"]))
+    if refusal:
+        return _failed(refusal[0], refusal[1], "nothing was added")
     try:
         # Understood before it is written, so a cron nobody can parse is refused where it was typed
         # rather than found by a gateway at the moment it was meant to run. The records refuse the
@@ -353,13 +358,40 @@ def _changed(args: argparse.Namespace) -> int:
         # Read, changed in a copy and understood before anything is written, so a change that would
         # leave a schedule nobody can act on is refused with the schedule as it was.
         was = kept.one(args.agent, args.schedule)
-        due.understood(dict(was, **values))
+        changed = dict(was, **values)
+        refusal = _self_resumption_refusal(args.agent, bool(changed.get("enabled")))
+        if refusal:
+            return _failed(refusal[0], refusal[1], "nothing was changed")
+        due.understood(changed)
         kept.changed(args.agent, args.schedule, values)
     except TROUBLE as why:
         return _failed(str(why), "nothing was changed")
 
     print(f"schedule {args.schedule} changed for {args.agent}")
     return _described(args.agent, args.schedule)
+
+
+def _self_resumption_refusal(agent: str, enabled: bool) -> Optional[Tuple[str, str]]:
+    """Why this turn cannot create an enabled schedule for itself, or that it can.
+
+    A terminal `ask` runs a provider without a gateway. Successful schedule storage therefore did
+    not used to prove anything could fire it, despite the agent having created the schedule from
+    inside its own turn. Refuse before the write when this is that exact self-scheduling path and
+    the gateway is not known online. A person scheduling an agent, or an agent storing a disabled
+    draft, keeps the existing behavior.
+    """
+    asking = admitting.whoever_is_asking()
+    if not enabled or not asking.is_a_turn or asking.agent != agent:
+        return None
+    state = standing.standing(directory.where(agent))
+    if state.how == standing.ONLINE:
+        return None
+    if state.how == standing.OFFLINE:
+        return (f"{agent} cannot write an enabled schedule for itself while its gateway is not "
+                "running",
+                f"start it with: rundesk gateways start {agent}")
+    return (f"whether {agent}'s gateway is running cannot be verified — {state.why}",
+            "see every gateway with: rundesk gateways")
 
 
 def _shown(agent: str, name: str) -> int:

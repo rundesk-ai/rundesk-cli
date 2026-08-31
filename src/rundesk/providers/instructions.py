@@ -348,9 +348,8 @@ These team members are available for named Rundesk delegation.
 #: only that a background process is not a continuation path, a measured turn started one, started
 #: a monitor over it, wrote *I will report as soon as it lands*, and ended — twice, on one provider,
 #: because inside a harness that really does deliver such a notification the belief is correct and
-#: only Rundesk's turn boundary makes it false. Naming that boundary — the turn ends when the agent
-#: stops writing and nothing wakes it for that process — moved the same probe to waiting for the
-#: result and reporting it, twice. The other provider passed either way.
+#: only Rundesk's final-response boundary makes it false. Naming that boundary moved the same probe
+#: to waiting for the result and reporting it, twice. The other provider passed either way.
 #:
 #: **A service that is the outcome has to survive the sentence that ends the turn.** The exception
 #: licensing a process to keep running said nothing about outliving the turn, and a measured turn
@@ -358,12 +357,15 @@ These team members are available for named Rundesk delegation.
 #: left the person a dead URL, because the child died with the turn that started it. One provider
 #: reached for `nohup` unprompted and the other did not, which is what makes it a rule rather than
 #: a habit to rely on.
+#: **Durable state and resumption are separate.** Saved state lets a later turn recover the work;
+#: an actual Rundesk resumption starts that turn. A long-running outcome needs both. Without a
+#: blocker or resumption, ending would abandon the outcome, so the current turn keeps working.
 OUTCOME_AND_CONTINUITY = """## Outcome and Continuity
 
-- Call an outcome complete only when every requested result, material claim, and reviewed handback is verified. An accepted command or a started process is progress, not proof.
-- While verification remains, say what happened, what you verified and how, and what is still unchecked.
-- Your turn ends when you stop writing. Nothing wakes you for a background command, tool session, monitor, or child process: wait for its result inside this turn, or stop it and report the blocker — unless that process is itself the requested outcome, which must then be started so it outlives the turn.
-- End on a verified outcome, on a named blocker with its next action, or on a continuation Rundesk resumes: a requester response, a scheduled wake-up, a delegation return. Work waiting on one of those is not complete."""
+- Verify every requested result, material claim, and reviewed handback before completion; commands and started processes are not proof. If checks remain, state what happened, what is verified, and what is unchecked.
+- Sending the final response ends this turn. Saved state keeps context but starts no turn. Background commands, tool sessions, monitors, or child processes cannot resume you. Wait for results or schedule verification under condition 2. A process that is the requested outcome must outlive the turn.
+- Send the final response only after one of four applies: (1) outcome and proof are verified; (2) unfinished work has saved state and a scheduled Rundesk continuation; (3) a named delegation runs and its answer starts a review turn; or (4) a material blocker prevents safe progress until an owner decision or external change. Otherwise keep working.
+- Cross-turn work saves state, evidence, next action in a project artifact or active `tasks/` brief, not memory. An enabled `--ask` self-schedule starts the later turn. Final response names: completion, verified result; schedule, verified current result, future result and time; delegation, result awaited; blocker, needed decision or change. Omit mechanics."""
 
 
 def build(*, situation: str = USER_TO_AGENT, variables: Optional[Mapping[str, object]] = None,
