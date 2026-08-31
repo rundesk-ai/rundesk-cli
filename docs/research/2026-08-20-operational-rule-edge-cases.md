@@ -265,7 +265,7 @@ Claude Code 2.1.236.
 | Complete, verifiable work with no later phase | pass — created the requested file, read it back, independently checked every value, and ended without a task brief or continuation claim | pass — did the same and, after the final conditional wording, did not add “Next: nothing” or narrate a missing continuation |
 | Two-phase project whose second phase must run a week later | pass — completed and verified Phase 1, saved state/evidence/next action in the project artifact, and stored an enabled one-time `--ask` resumption | pass — did the same; the project artifact was sufficient without putting changing state in memory |
 | Self-scheduling from a terminal turn whose gateway began stopped | pass — the first write was refused, the agent started its gateway, retried, and stored the enabled schedule | pass — followed the same recovery path; neither provider left a schedule row from the refused attempt |
-| Person-facing result after self-scheduling | pass — final contained the verified current outcome followed by the scheduled result and time | pass — final contained the same two sentences, with no gateway or missing-mechanism explanation |
+| Person-facing result after self-scheduling | pass — final contained the verified current outcome followed by the scheduled result and time | pass — final contained the same result and timing, with no gateway or missing-mechanism explanation |
 
 The complete-now control used this natural trigger shape:
 
@@ -286,10 +286,57 @@ enabled self-schedule before writing unless that turn's gateway is known running
 gateway Codex and Claude controls each received that refusal, started the gateway, retried, and
 stored the enabled schedule. Neither final response narrated gateway state or a hypothetical
 outage. A separate completed-work control caught and removed an over-broad response template that
-made Claude say “Next: nothing.”
+made Claude say “Next: nothing.” The later owner correction removed the replacement sentence-count
+template too: the rule now names the four conditions that permit a final response and the
+information each condition must report, without prescribing a fixed number of sentences.
 
 The final deterministic instruction suite renders the same outcome boundary across every
 discovered person, schedule, and delegated situation. The scheduling-skill regression separately
 proves enabled self-schedule add/update refusal while stopped or unverifiable, admission while
 running, and preservation of person-created schedules and disabled drafts. Live-provider results
 remain conformance evidence rather than deterministic CI coverage.
+
+### Owner-corrected four-condition probe
+
+The sentence-count template was replaced and the candidate was installed in a new disposable root.
+Fresh Codex and Claude conversations exercised each condition that now permits a final response.
+The stored turns, messages, delegations, schedule definitions, and task briefs were inspected; no
+answer was graded from prose alone.
+
+| Final condition | Codex | Claude |
+|---|---|---|
+| Verified outcome | pass — two local SHA-256 implementations agreed before the digest was reported | pass — three implementations agreed and the final named the verified evidence and nothing unchecked |
+| Scheduled continuation | pass — Phase 1 and a separate agent check were verified, state/evidence/next action were saved, and an enabled September 6 `--ask` continuation was stored | pass — three Phase 1 implementations agreed, the same durable state was saved, and an enabled September 6 `--ask` continuation was stored |
+| Running delegation | pass — the initial turn reported the admitted handoff and awaited result; the returned answer started a separate review turn that checked and recorded it | pass — the initial turn reported the admitted handoff and awaited result; each returned answer started a separate review turn, and the second blind replication closed the owner-required verification |
+| Material owner-decision blocker | pass — neither approved date was chosen without a criterion; the final named the authorized decision required | pass — preserved both approved dates, explained the underdetermination, and requested the deciding criterion without inventing one |
+
+The scheduled finals used natural prose of different lengths while carrying the same required facts:
+the verified current result, what the later work will produce, and when it will run. Neither provider
+reintroduced a two-sentence template, `Next: nothing`, routine gateway narration, or a false
+completion claim. Both delegation paths demonstrated the distinct lifecycle condition directly:
+an admitted handoff allowed the current turn to end, and the returned answer—not saved context or a
+background process—started the review turn.
+
+### Exact-fingerprint background-plus-schedule follow-up
+
+Independent review found that the first four-condition fixture predated a material clarification:
+background work may use the scheduled-continuation condition for later verification, and a
+scheduled final must name both the verified current result and the future result and time. The
+exact candidate was therefore installed in another disposable root and probed again. The stored
+person-turn instruction fingerprints were `fd09fb6e3113` for Codex and `95c322e8c759` for Claude.
+
+Each provider admitted a 45-second writer, recorded its live PID and next action in an active task
+brief, stored and verified an enabled one-time `--ask` continuation, and ended the initial turn
+without waiting for or claiming the file result. Both finals named the verified current admission
+and the future byte-level check and time, with no fixed sentence count or routine gateway narration.
+Each schedule then started a separate turn and inspected the file rather than trusting the earlier
+PID or task brief.
+
+Claude's writer survived its initial turn. The scheduled turn verified 19 bytes, an exact byte
+comparison, and no trailing newline, then reported `PASS`. Codex's ordinary child did not survive
+its initial turn. Its scheduled turn found the file missing and reported `FAIL` rather than
+converting prior process admission into false completion. Together the controls exercise both
+branches of the intended boundary: a real Rundesk schedule starts later verification, while a
+background process neither resumes the agent nor proves its own eventual result. The disposable
+root and raw records were purged after the stored turns, messages, schedule consumption, and task
+briefs were inspected.

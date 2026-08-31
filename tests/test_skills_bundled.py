@@ -900,8 +900,10 @@ class WhatAShippedSkillMayClaim(Bundled):
                       schedules)
         self.assertIn("After `show` verifies that schedule, stop inspecting",
                       schedules)
-        self.assertIn("the final is exactly two sentences: `<current verified outcome>.` `Next: "
-                      "<result> at <time>.`", schedules)
+        self.assertIn("the final states the verified current result and what the scheduled work "
+                      "will produce and when", schedules)
+        self.assertIn("Add a current material blocker only when it affects that continuation",
+                      schedules)
         self.assertIn("Do not name commands, gateways, or other routine continuation machinery "
                       "unless the owner asks", schedules)
         self.assertNotIn("Confirm the gateway will be running", schedules)

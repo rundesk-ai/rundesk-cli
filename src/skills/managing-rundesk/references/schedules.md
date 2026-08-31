@@ -63,9 +63,9 @@ self-schedule is accepted only from a turn whose gateway is currently known runn
 program instead. A successful enabled `--ask` self-schedule establishes the resumption path without
 another inspection. Do not report routine gateway state or a possible later outage as a current
 blocker. After `show` verifies that schedule, stop inspecting. Unless the owner asks for mechanics,
-the final is exactly two sentences: `<current verified outcome>.` `Next: <result> at <time>.` Add
-only a current material blocker. Do not name commands, gateways, or other routine continuation
-machinery unless the owner asks.
+the final states the verified current result and what the scheduled work will produce and when. Add
+a current material blocker only when it affects that continuation. Do not name commands, gateways,
+or other routine continuation machinery unless the owner asks.
 
 ## Operate and recover
 

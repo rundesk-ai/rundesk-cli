@@ -336,8 +336,8 @@ class TheAgreedSections(support.Isolated):
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
                 continuity = self.part(self.built(situation).text, "## Outcome and Continuity")
-                for term in ("background command", "tool session", "monitor", "child process",
-                             "wait for its result inside this turn", "blocker"):
+                for term in ("background commands", "tool sessions", "monitors", "child processes",
+                             "wait for results", "blocker"):
                     with self.subTest(term=term):
                         self.assertIn(term, continuity)
                 # A service that is itself the requested outcome is not a turn ending on an
@@ -345,22 +345,32 @@ class TheAgreedSections(support.Isolated):
                 # And the exception carries its own obligation: a measured turn obeyed the
                 # licence to the letter — started a server, proved it with a real 200, did not
                 # kill it — and left a dead URL, because the child died with the turn.
-                self.assertIn("unless that process is itself the requested outcome, which must "
-                              "then be started so it outlives the turn", continuity)
+                self.assertIn("a process that is the requested outcome must outlive the turn",
+                              continuity)
 
-    def test_the_continuation_rule_names_the_turn_boundary_that_makes_it_true(self):
+    def test_the_continuation_rule_names_the_final_response_boundary_that_makes_it_true(self):
         # Told only that a background process is not a continuation path, a measured turn started
         # one, started a monitor over it, wrote that it would report as soon as the result landed,
         # and ended — twice. Inside a harness that really does deliver such a notification the
-        # belief is correct, and only Rundesk's turn boundary makes it false, so the rule states
-        # that boundary rather than repeating the prohibition.
+        # belief is correct, and only Rundesk's final-response boundary makes it false, so the rule
+        # states that boundary rather than repeating the prohibition.
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
                 continuity = self.part(self.built(situation).text, "## Outcome and Continuity")
-                self.assertIn("your turn ends when you stop writing", continuity)
-                self.assertIn("nothing wakes you for a background command", continuity)
+                self.assertIn("sending the final response ends this turn", continuity)
+                self.assertIn("background commands", continuity)
+                self.assertIn("cannot resume you", continuity)
 
-    def test_long_running_work_keeps_state_and_a_real_resumption_path(self):
+    def test_a_background_process_may_be_verified_by_a_scheduled_continuation(self):
+        for situation in EVERY_SITUATION:
+            with self.subTest(situation=situation[:32]):
+                continuity = self.part(self.built(situation).text, "## Outcome and Continuity")
+                self.assertIn("wait for results or schedule verification under condition 2",
+                              continuity)
+                self.assertIn("unfinished work has saved state and a scheduled rundesk "
+                              "continuation", continuity)
+
+    def test_long_running_work_keeps_state_and_an_explicit_final_condition(self):
         # Saved state lets a later turn recover work but cannot start that turn. Multi-turn work
         # therefore needs both a durable next-action record and one event Rundesk actually resumes.
         # Without either a blocker or such an event, the current turn keeps working instead of
@@ -369,19 +379,17 @@ class TheAgreedSections(support.Isolated):
             with self.subTest(situation=situation[:32]):
                 continuity = self.part(self.built(situation).text, "## Outcome and Continuity")
                 for clause in (
-                    "history and saved state preserve context; they do not resume work",
-                    "when work spans turns, save its current state, evidence, and next action",
-                    "the project's durable artifact or an active `tasks/` brief, not durable "
-                    "memory",
-                    "if it has neither a blocker nor a resumption, keep working in this turn",
-                    "an enabled `--ask` self-schedule is a resumption path",
-                    "only then, final has two sentences and no preface",
-                    "current verified outcome; scheduled result and time",
-                    "add a third only for a current material blocker",
+                    "saved state keeps context but starts no turn",
+                    "cross-turn work saves state, evidence, next action",
+                    "a project artifact or active `tasks/` brief, not memory",
+                    "an enabled `--ask` self-schedule starts the later turn",
+                    "schedule, verified current result, future result and time",
+                    "delegation, result awaited",
+                    "blocker, needed decision or change",
                 ):
                     with self.subTest(clause=clause):
                         self.assertIn(clause, continuity)
-                for waste in ("gateway", "work remains unassigned",
+                for waste in ("gateway", "work remains unassigned", "exactly two sentences",
                               "no future action is scheduled", "next: nothing"):
                     with self.subTest(waste=waste):
                         self.assertNotIn(waste, continuity)
@@ -421,11 +429,11 @@ class TheAgreedSections(support.Isolated):
                 # Whole clauses, because the relationship is the requirement: separate fragments
                 # survive a text that says a started process proves the work, or that a report may
                 # stop at what happened. Each of those reversals has to fail here.
-                for clause in ("call an outcome complete only when every requested result, "
-                               "material claim, and reviewed handback is verified",
-                               "an accepted command or a started process is progress, not proof",
-                               "while verification remains, say what happened, what you verified "
-                               "and how, and what is still unchecked"):
+                for clause in ("verify every requested result, material claim, and reviewed "
+                               "handback before completion",
+                               "commands and started processes are not proof",
+                               "if checks remain, state what happened, what is verified, "
+                               "and what is unchecked"):
                     with self.subTest(clause=clause):
                         self.assertIn(clause, done)
                 # It is about work, not about the one shape of work that made it obvious. A rule
@@ -575,21 +583,26 @@ class SmallestSufficientChange(support.Isolated):
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
                 text = instructions.build(situation=situation, variables=EVERYTHING).text
-                self.assertIn("End only on a verified outcome, a named blocker with its next "
-                              "action, or unfinished work with an actual Rundesk resumption", text)
+                self.assertIn("Send the final response only after one of four applies", text)
+                self.assertIn("outcome and proof are verified", text)
 
-    def test_every_turn_cannot_end_without_delivery_or_a_continuation_path(self):
+    def test_every_turn_has_exactly_the_four_final_conditions(self):
+        expected = (
+            "- send the final response only after one of four applies: (1) outcome and proof are "
+            "verified; (2) unfinished work has saved state and a scheduled rundesk continuation; "
+            "(3) a named delegation runs and its answer starts a review turn; or (4) a material "
+            "blocker prevents safe progress until an owner decision or external change. "
+            "otherwise keep working."
+        )
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
                 text = instructions.build(situation=situation, variables=EVERYTHING).text
-                continuity = " ".join(
-                    text.split("## Outcome and Continuity", 1)[1].split("\n## ", 1)[0].split()
-                ).lower()
-                self.assertIn("end only on a verified outcome, a named blocker with its next "
-                              "action, or unfinished work with an actual rundesk resumption",
-                              continuity)
-                self.assertIn("if it has neither a blocker nor a resumption, keep working in this "
-                              "turn", continuity)
+                continuity = text.split("## Outcome and Continuity", 1)[1].split("\n## ", 1)[0]
+                condition_line = next(
+                    line.lower() for line in continuity.splitlines()
+                    if line.startswith("- Send the final response only after")
+                )
+                self.assertEqual(expected, condition_line)
 
     def test_broader_scope_requires_approval_with_impact(self):
         for situation in EVERY_SITUATION:
