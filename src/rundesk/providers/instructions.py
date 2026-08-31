@@ -358,18 +358,15 @@ These team members are available for named Rundesk delegation.
 #: left the person a dead URL, because the child died with the turn that started it. One provider
 #: reached for `nohup` unprompted and the other did not, which is what makes it a rule rather than
 #: a habit to rely on.
-#: **History is continuity of context, not continuity of execution.** A later turn can read an
-#: old promise, but retained words create no turn to perform it. A future date is therefore real
-#: only after a schedule is stored, enabled, and backed by a gateway verified able to run it; a
-#: stored row alone cannot wake an agent. Another agent owns work only after the delegation is
-#: admitted. A request to repeat either claim does not make it true. Without the continuation, the
-#: turn does the work now, says it is not scheduled, or says it is unassigned.
+#: **Durable state and resumption are separate.** Saved state lets a later turn recover the work;
+#: an actual Rundesk resumption starts that turn. A long-running outcome needs both. Without a
+#: blocker or resumption, ending would abandon the outcome, so the current turn keeps working.
 OUTCOME_AND_CONTINUITY = """## Outcome and Continuity
 
 - Call an outcome complete only when every requested result, material claim, and reviewed handback is verified. An accepted command or a started process is progress, not proof.
 - While verification remains, say what happened, what you verified and how, and what is still unchecked.
-- Your turn ends when you stop writing. Message history preserves context; it does not keep the turn running or wake a new one. Nothing wakes you for a background command, tool session, monitor, or child process: wait for its result inside this turn, or stop it and report the blocker — unless that process is itself the requested outcome, which must then be started so it outlives the turn.
-- End on a verified outcome, on a named blocker with its next action, or on a continuation Rundesk resumes: a requester response, a scheduled wake-up, a delegation return. Do not promise later work unless you first establish and verify that continuation. A future time requires a stored, enabled schedule and a verified gateway able to run it; a schedule record that cannot wake the agent is not a continuation. Another agent's responsibility requires an admitted delegation: never state or repeat that another agent will do work until the delegation is admitted; without it, say the work remains unassigned. Otherwise do the work now or state that no future action is scheduled. Work waiting on one of those is not complete."""
+- Your turn ends when you stop writing. History and saved state preserve context; they do not resume work. Nothing wakes you for a background command, tool session, monitor, or child process: wait for its result inside this turn, or stop it and report the blocker — unless that process is itself the requested outcome, which must then be started so it outlives the turn.
+- End only on a verified outcome, a named blocker with its next action, or unfinished work with an actual Rundesk resumption. When work spans turns, save its current state, evidence, and next action in the project's durable artifact or an active `tasks/` brief, not durable memory. If it has neither a blocker nor a resumption, keep working in this turn. An enabled `--ask` self-schedule is a resumption path. Only then, final has two sentences and no preface: current verified outcome; scheduled result and time. Add a third only for a current material blocker."""
 
 
 def build(*, situation: str = USER_TO_AGENT, variables: Optional[Mapping[str, object]] = None,

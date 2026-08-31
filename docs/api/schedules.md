@@ -69,6 +69,13 @@ rundesk cannot honour, and quietly reinterpreting it is worse than saying so. Wh
 
 ### schedules add
 
+When an agent schedules itself during its own turn, `add` or `update` accepts an enabled schedule
+only while that agent's gateway is known to be running. A stopped gateway, or one whose state cannot
+be verified, is refused before anything is written and the refusal says how to start or inspect it.
+This guard also applies when an update would leave an existing schedule enabled. Commands issued by
+a person at the terminal remain unguarded, and an agent may still save or update a disabled draft
+for later review.
+
 ```console
 $ rundesk schedules add cole nightly --when '0 2 * * *' --run '/usr/local/bin/backup.sh --full'
 schedule nightly added for cole

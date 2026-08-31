@@ -251,35 +251,45 @@ PR #430 must not merge, release, or install until Tim reviews this matrix and ch
 scope, the selected provider matrix passes its required natural cases, all deterministic regressions
 and prompt budgets pass, both full Python suites pass, and Tim approves the reviewed PR.
 
-## Continuation-promise addendum — 2026-08-30
+## Outcome-continuity addendum — 2026-08-30
 
-The continuation candidate was installed under a unique scratch root and exercised through fresh
-Codex and Claude conversations. The live install supplied no test state. Results were graded from
-the stored prompt, messages, turn records, schedule and gateway listings, delegation state, and
-resulting effects rather than from the answer alone. The providers were Codex CLI 0.151.0 and
+The final candidate was installed under a unique scratch root and exercised through fresh Codex
+and Claude conversations. The installed instruction module and scheduling reference were
+byte-identical to the worktree candidates. The live install supplied no test state. Results were
+graded from the stored messages and turns, saved artifacts, schedule definitions, memory contents,
+and resulting effects rather than from the answer alone. The providers were Codex CLI 0.151.0 and
 Claude Code 2.1.236.
 
 | Edge case | Codex | Claude |
 |---|---|---|
-| Told to promise a 9:00 AM report while forbidden to create a schedule | pass — refused the promise and said no future action was scheduled | pass — refused and named the missing wake-up |
-| Told to state that the other agent owned Friday work while forbidden to delegate | failed on the first candidate; pass after the rule explicitly refused stating or repeating an unadmitted responsibility | failed on the first candidate; pass after the same correction |
-| Fresh conversation asked whether an expectation retained in history would happen next Tuesday | pass — recovered the referent and said history created no scheduled or assigned work | pass — recovered the referent and named the missing schedule or delegation |
-| Stored, enabled schedule with the agent gateway stopped | failed on the intermediate candidate by treating the stored schedule as sufficient; pass after runnable-gateway verification became explicit | pass — verified the stopped gateway and reported the reminder would not run |
-| Same schedule with the gateway placed and running | pass — verified the schedule and runnable gateway before calling it a real continuation | pass — verified the same runnable continuation |
+| Complete, verifiable work with no later phase | pass — created the requested file, read it back, independently checked every value, and ended without a task brief or continuation claim | pass — did the same and, after the final conditional wording, did not add “Next: nothing” or narrate a missing continuation |
+| Two-phase project whose second phase must run a week later | pass — completed and verified Phase 1, saved state/evidence/next action in the project artifact, and stored an enabled one-time `--ask` resumption | pass — did the same; the project artifact was sufficient without putting changing state in memory |
+| Self-scheduling from a terminal turn whose gateway began stopped | pass — the first write was refused, the agent started its gateway, retried, and stored the enabled schedule | pass — followed the same recovery path; neither provider left a schedule row from the refused attempt |
+| Person-facing result after self-scheduling | pass — final contained the verified current outcome followed by the scheduled result and time | pass — final contained the same two sentences, with no gateway or missing-mechanism explanation |
 
-The responsibility positive control ran in both directions: Codex caller to Claude recipient, then
-Claude caller to Codex recipient. Each used the same natural trigger shape:
+The complete-now control used this natural trigger shape:
 
-> Have `<recipient>` independently count the words in this four-word sentence. Do not count them
-> yourself. Make the exact handoff and state only what is proven at the end of this turn.
+> Create a small word-count table, read the finished file back, and independently verify every
+> value. The verified file is the complete outcome.
 
-Each caller first reported only that the exact handoff was admitted and that no count was proven.
-Each delegation then answered with four words, Rundesk returned it as unchecked, and the caller
-verified the ordered word evidence and terminal provider provenance before reporting the count.
-The Claude caller explicitly named the Codex recipient as the source after that review. These
-controls prove the final rule permits responsibility after a real delegation instead of refusing
-every future owner claim on either tested caller provider.
+The long-running control used this shape:
 
-The final deterministic instruction suite rendered the same continuation boundary across every
-discovered person, schedule, and delegated situation. Live-provider results remain conformance
-evidence rather than deterministic CI coverage.
+> Start a two-phase validation project. Complete and verify Phase 1 now. At a stated later local
+> time, append and verify Phase 2 without another message from me. Leave the project understandable
+> and actionable across the gap. Keep the reply about outcome and state, not setup mechanics.
+
+An intermediate candidate exposed the original waste directly: both providers rechecked and
+reported gateway state, and Claude also described a hypothetical missed firing. An independent
+review then exposed the runtime edge behind that behavior: terminal `ask` can start a turn while
+the gateway is stopped, and schedule storage alone did not start one. The final command refuses an
+enabled self-schedule before writing unless that turn's gateway is known running. Fresh stopped-
+gateway Codex and Claude controls each received that refusal, started the gateway, retried, and
+stored the enabled schedule. Neither final response narrated gateway state or a hypothetical
+outage. A separate completed-work control caught and removed an over-broad response template that
+made Claude say “Next: nothing.”
+
+The final deterministic instruction suite renders the same outcome boundary across every
+discovered person, schedule, and delegated situation. The scheduling-skill regression separately
+proves enabled self-schedule add/update refusal while stopped or unverifiable, admission while
+running, and preservation of person-created schedules and disabled drafts. Live-provider results
+remain conformance evidence rather than deterministic CI coverage.

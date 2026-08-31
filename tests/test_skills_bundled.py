@@ -884,6 +884,30 @@ class WhatAShippedSkillMayClaim(Bundled):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, schedules)
 
+    def test_a_self_schedule_does_not_trigger_a_redundant_gateway_check(self):
+        schedules = " ".join((self.skills / "managing-rundesk" / "references" /
+                              "schedules.md").read_text(encoding="utf-8").split())
+        self.assertIn("An enabled self-schedule is accepted only from a turn whose gateway is "
+                      "currently known running", schedules)
+        self.assertIn("`add` and `update` refuse it before writing otherwise", schedules)
+        self.assertIn("A successful enabled `--ask` self-schedule establishes the resumption path "
+                      "without another inspection",
+                      schedules)
+        self.assertIn("For an agent resumption use `--ask`; `--run` starts a program instead",
+                      schedules)
+        self.assertIn("Do not report routine gateway state or a possible later outage as a "
+                      "current blocker",
+                      schedules)
+        self.assertIn("After `show` verifies that schedule, stop inspecting",
+                      schedules)
+        self.assertIn("the final is exactly two sentences: `<current verified outcome>.` `Next: "
+                      "<result> at <time>.`", schedules)
+        self.assertIn("Do not name commands, gateways, or other routine continuation machinery "
+                      "unless the owner asks", schedules)
+        self.assertNotIn("Confirm the gateway will be running", schedules)
+        self.assertNotIn("Verify the saved definition and that the agent's gateway is running",
+                         schedules)
+
     def test_no_shipped_skill_names_a_flag_this_build_does_not_have(self):
         # The verb check above reads `SKILL.md` alone, and a skill is mostly its references — which
         # is how `providers instructions --trigger` came to be taught for several releases while

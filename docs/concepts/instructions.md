@@ -203,21 +203,22 @@ started so it outlives the turn. That obligation is stated because the licence a
 the letter and still failed: a measured turn started a server, proved it with a real `200`, did not
 kill it, and left the person a dead URL, because the child died with the turn that started it.
 
-Message history preserves context for a later turn; it does not keep the current turn running or
-create a later one. A promise tied to a future time is therefore valid only after the turn stores
-and enables a schedule and verifies that a gateway can run it; a schedule record on its own is not
-a wake-up. Assigning responsibility to another agent is valid only after an admitted delegation.
-Asking the agent to state, repeat, or agree with either claim does not make the missing continuation
-real: without the delegation the work remains unassigned, and without the runnable scheduled
-wake-up no future action is scheduled. The agent otherwise does the work now instead of promising
-later work.
+History and saved state preserve enough context for a later turn to recover the work, but do not
+start that turn. Work spanning turns therefore keeps its current state, evidence, and next action
+in the project's own durable artifact or an active `tasks/` brief; changing task status does not go
+in `MEMORY.md`. An actual Rundesk resumption must also exist. If unfinished work has neither a
+blocker nor a resumption, the agent keeps working in the current turn instead of ending and
+abandoning the outcome. The schedule command refuses an enabled self-schedule before writing unless
+the turn's gateway is currently known running. An enabled `--ask` self-schedule establishes the
+resumption path; `--run` starts a program rather than another agent turn. After the saved definition
+is verified, the agent does not inspect or report routine continuation infrastructure. Its
+person-facing update gives the verified current outcome and the scheduled result and time in two
+sentences with no preface, adding a third only for a current material blocker. That shape applies
+only after this `--ask` self-scheduling path, never to an already complete outcome.
 
 A turn ends in exactly one of three states: a verified outcome, a named blocker carrying its next
-action, or a continuation Rundesk resumes — a requester response, a scheduled wake-up, or a
-delegation return. The third is a permission and not only a prohibition, because an agent whose
-only honest endings were verified and blocked has nowhere to put a delegation still out or a
-schedule that will wake it. Work waiting on one of those three events is never reported as
-complete.
+action, or unfinished work with an actual Rundesk resumption. Work waiting on the third state is
+not reported as complete. This permits resumable work without making its mechanics the focus.
 
 ### Team Members
 

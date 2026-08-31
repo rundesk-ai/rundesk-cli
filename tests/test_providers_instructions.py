@@ -360,29 +360,31 @@ class TheAgreedSections(support.Isolated):
                 self.assertIn("your turn ends when you stop writing", continuity)
                 self.assertIn("nothing wakes you for a background command", continuity)
 
-    def test_message_history_cannot_be_mistaken_for_future_execution(self):
-        # Retained conversation context can make a later turn understand an old promise, but it
-        # cannot create that later turn. A date written in prose therefore needs a real schedule,
-        # and responsibility named in prose needs an admitted delegation, before either is true.
+    def test_long_running_work_keeps_state_and_a_real_resumption_path(self):
+        # Saved state lets a later turn recover work but cannot start that turn. Multi-turn work
+        # therefore needs both a durable next-action record and one event Rundesk actually resumes.
+        # Without either a blocker or such an event, the current turn keeps working instead of
+        # announcing that a mechanism is absent and abandoning the outcome.
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
                 continuity = self.part(self.built(situation).text, "## Outcome and Continuity")
                 for clause in (
-                    "message history preserves context; it does not keep the turn running or "
-                    "wake a new one",
-                    "do not promise later work unless you first establish and verify that "
-                    "continuation",
-                    "a future time requires a stored, enabled schedule and a verified gateway "
-                    "able to run it",
-                    "a schedule record that cannot wake the agent is not a continuation",
-                    "another agent's responsibility requires an admitted delegation",
-                    "never state or repeat that another agent will do work until the delegation "
-                    "is admitted",
-                    "without it, say the work remains unassigned",
-                    "otherwise do the work now or state that no future action is scheduled",
+                    "history and saved state preserve context; they do not resume work",
+                    "when work spans turns, save its current state, evidence, and next action",
+                    "the project's durable artifact or an active `tasks/` brief, not durable "
+                    "memory",
+                    "if it has neither a blocker nor a resumption, keep working in this turn",
+                    "an enabled `--ask` self-schedule is a resumption path",
+                    "only then, final has two sentences and no preface",
+                    "current verified outcome; scheduled result and time",
+                    "add a third only for a current material blocker",
                 ):
                     with self.subTest(clause=clause):
                         self.assertIn(clause, continuity)
+                for waste in ("gateway", "work remains unassigned",
+                              "no future action is scheduled", "next: nothing"):
+                    with self.subTest(waste=waste):
+                        self.assertNotIn(waste, continuity)
 
     def test_a_person_turn_keeps_routine_internal_recovery_silent(self):
         person = self.built().text
@@ -573,8 +575,8 @@ class SmallestSufficientChange(support.Isolated):
         for situation in EVERY_SITUATION:
             with self.subTest(situation=situation[:32]):
                 text = instructions.build(situation=situation, variables=EVERYTHING).text
-                self.assertIn("End on a verified outcome, on a named blocker with its next "
-                              "action, or on a continuation Rundesk resumes", text)
+                self.assertIn("End only on a verified outcome, a named blocker with its next "
+                              "action, or unfinished work with an actual Rundesk resumption", text)
 
     def test_every_turn_cannot_end_without_delivery_or_a_continuation_path(self):
         for situation in EVERY_SITUATION:
@@ -583,16 +585,11 @@ class SmallestSufficientChange(support.Isolated):
                 continuity = " ".join(
                     text.split("## Outcome and Continuity", 1)[1].split("\n## ", 1)[0].split()
                 ).lower()
-                # Three ways to end, and the third is a permission rather than a prohibition: an
-                # agent whose only honest states were "verified" and "blocked" has nowhere to put
-                # a delegation still out or a schedule that will wake it.
-                self.assertIn("end on a verified outcome, on a named blocker with its next "
-                              "action, or on a continuation rundesk resumes", continuity)
-                # Named, because they are the events Rundesk actually resumes a turn at — which is
-                # why a turn may end on one of these and never on a running child.
-                self.assertIn("a requester response, a scheduled wake-up, a delegation return",
+                self.assertIn("end only on a verified outcome, a named blocker with its next "
+                              "action, or unfinished work with an actual rundesk resumption",
                               continuity)
-                self.assertIn("work waiting on one of those is not complete", continuity)
+                self.assertIn("if it has neither a blocker nor a resumption, keep working in this "
+                              "turn", continuity)
 
     def test_broader_scope_requires_approval_with_impact(self):
         for situation in EVERY_SITUATION:
@@ -746,7 +743,7 @@ class TheBuilderBoundary(support.Isolated):
             "schedule": (instructions.SCHEDULE_TO_AGENT, 1150),
             "agent": (instructions.AGENT_TO_AGENT, 800),
             "team": (instructions.TEAM_MEMBERS, 1000),
-            "completion": (instructions.OUTCOME_AND_CONTINUITY, 1500),
+            "completion": (instructions.OUTCOME_AND_CONTINUITY, 1250),
         }
         for name, (text, ceiling) in ceilings.items():
             with self.subTest(name=name):
