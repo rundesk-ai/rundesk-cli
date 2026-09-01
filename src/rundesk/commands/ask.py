@@ -67,7 +67,15 @@ def register(sub: Subcommands) -> None:
 
 def cmd_ask(args: argparse.Namespace) -> int:
     """A `Namespace` in, an exit code out."""
-    agent = args.agent
+    # **The name somebody typed, resolved to the one this install keeps.** `Beacon` and `beacon` are
+    # one agent — `directory.taken` refuses a second agent differing from an existing one only by
+    # ASCII letter case — and the resolved name is what everything below is decided on: the
+    # conversation the question lands in, the delegation scope a handoff is checked against, and
+    # the guard that says an agent asking itself is taking a turn. Resolving after any of those
+    # would admit an ASCII case variant against a name no policy mentions. A name nothing stands
+    # under comes back exactly as it was typed, so the refusal underneath still names what somebody
+    # asked for.
+    agent = directory.known_as(args.agent)
     trouble = directory.not_an_agent(agent)
     if trouble:
         return _failed(trouble, "see what there is with: rundesk agents")

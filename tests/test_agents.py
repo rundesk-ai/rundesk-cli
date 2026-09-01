@@ -175,6 +175,45 @@ class WhichAgentsThereAre(Agents):
         self.assertEqual([], directory.known())
 
 
+class WhichAgentANameMeans(Agents):
+    """`known_as` puts a typed name onto the agent standing there, and never onto a second one."""
+
+    def test_the_name_an_agent_actually_wears_is_answered_unchanged(self):
+        directory.made("cole", "anthropic")
+        self.assertEqual("cole", directory.known_as("cole"))
+
+    def test_a_name_differing_only_by_case_answers_the_agent_that_is_there(self):
+        # `taken` refuses a second agent differing only by ASCII letter case, so there is exactly
+        # one agent an ASCII case variant can mean and resolving it is never a choice between two
+        # identities.
+        directory.made("cole", "anthropic")
+        self.assertEqual("cole", directory.known_as("Cole"))
+        self.assertEqual("cole", directory.known_as("COLE"))
+
+    def test_resolving_a_name_neither_makes_an_agent_nor_renames_one(self):
+        directory.made("cole", "anthropic")
+        directory.known_as("COLE")
+        self.assertEqual(["cole"], directory.known())
+
+    def test_a_name_nothing_stands_under_comes_back_exactly_as_it_was_typed(self):
+        # So the caller's own refusal names what somebody typed rather than a folded version of it.
+        directory.made("cole", "anthropic")
+        self.assertEqual("Nobody", directory.known_as("Nobody"))
+
+    def test_a_pair_this_install_should_not_hold_resolves_to_neither_of_them(self):
+        # A restore onto a volume that tells `cole` and `Cole` apart, or a directory made by hand.
+        # Picking one is deciding whose agent somebody meant; the name is left as it was typed and
+        # the caller refuses it.
+        with mock.patch.object(directory, "known", return_value=["Cole", "cole"]):
+            self.assertEqual("COLE", directory.known_as("COLE"))
+            self.assertEqual("cole", directory.known_as("cole"))
+
+    def test_an_agents_directory_nobody_can_read_is_not_answered_with_a_guess(self):
+        # Unreadable is not unknown. `not_an_agent` is where it becomes a sentence.
+        with mock.patch.object(directory, "known", side_effect=OSError("permission denied")):
+            self.assertEqual("Cole", directory.known_as("Cole"))
+
+
 class WhetherANameMayBeUsedForANewAgent(Agents):
 
     def test_a_name_that_could_never_be_a_directory_is_refused_first(self):
