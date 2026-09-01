@@ -573,7 +573,10 @@ def stop_or_settle_pending(agent: str, conversation: int,
                            provider_name: Optional[str] = None,
                            provider_alias: Optional[str] = None,
                            model_name: Optional[str] = None) -> bool:
-    """Stop a live turn, or make an unstarted inbound delegation terminal without a provider.
+    """Stop a live turn, or make exact unstarted inbound messages terminal without a provider.
+
+    A delegated brief and a channel message both reach this: what has to be settled is the same
+    thing either way — durable rows a turn never admitted, which nothing else would ever settle.
 
     The conversation claim closes the race with the worker thread a previous gateway beat may have
     spawned. If that worker owns the claim but has not published itself in `_running` yet, `Busy`
@@ -606,7 +609,7 @@ def stop_or_settle_pending(agent: str, conversation: int,
                 kept.finish_turn(
                     agent, turn, kept.STOPPED,
                     {"failure_code": protocol.CANCELLED,
-                     "failure_message": "this delegated work was stopped before it began"})
+                     "failure_message": "this work was stopped before it began"})
             return True
     except Busy:
         # `claiming` precedes `_stoppable` by only the publication window. Reach once more now; if

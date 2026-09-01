@@ -580,13 +580,19 @@ what the previous build's contract published and what nothing here speaks.
 **All five have a producer.** `seen` is the one that needs no turn — a message arriving is the whole
 of the event — and it is sent the moment the message is written down, including on a redelivery,
 because the mark belongs to the message and an adapter that has just restarted no longer knows it put
-one up. The other four say what became of a turn: `working` goes up the moment one is admitted, and
-exactly one of `done`, `stopped` or `failed` when it settles.
+one up. The other four say what became of a turn: `working` goes up when a message is taken up, and
+exactly one of `done`, `stopped` or `failed` follows it.
 
 **A terminal state names the message it belongs to, and `working` does not.** `working` is the place's
 condition rather than one message's — it is a typing indicator, and a second mark there would say a
 turn had been seen twice — so it arrives without an `external_id` and there is nothing to react to.
-The other three always carry one.
+
+**One terminal state carries no `external_id` either, and it is the exception to plan for.**
+`working` goes up before admission is asked for, and admission can be refused before any turn
+exists — an install-wide change holds that barrier for a few seconds. The message stays pending and
+is answered later, so nothing may be marked; what must not happen is a place left typing for a turn
+that never began. So the terminal state arrives with no message named: **end the indicator on any
+terminal state, and put a mark up only when one names a message.**
 
 **Put the new mark up before taking the old one down.** A message with no mark for a moment reads as
 a turn nobody picked up, and the order is the only thing that decides which of those somebody sees.

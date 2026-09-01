@@ -41,7 +41,7 @@ from rundesk.delegations import hosting as delegations
 from rundesk.delegations import kept as delegations_kept
 from rundesk.providers import accounts, adapters, answering, kept, turns
 from rundesk.schedules import kept as schedules_kept
-from rundesk.utils import programs
+from rundesk.utils import locking, programs
 
 #: How long a case waits for a real turn to finish on its own thread. A ceiling rather than a sleep,
 #: so an ordinary run is through in tenths.
@@ -631,6 +631,84 @@ class AMessageOnAChannelIsAnswered(Answering):
         self.assertEqual("✋ Nothing is running here.",
                          gestures.controlled(self.agent, "discord", "1180", "2207",
                                              answering_hosting.STOP))
+
+    def test_admission_refused_before_a_turn_does_not_leave_the_place_typing(self):
+        """R-CH-37. A message read from the adapter while an install-wide change holds work
+        admission is kept pending on purpose. **The indicator is not**: `working` goes up before
+        admission is asked for, and this gateway suppresses that message afterwards — so nothing
+        else would ever send a state for it, and the place typed for a turn that never existed
+        until somebody restarted the adapter."""
+        self.a_channel(saying=self.a_message_arrived())
+        with mock.patch.object(turns, "run",
+                               side_effect=locking.Stuck("admitting provider work is busy")):
+            self.hosting_now()
+            self.assertTrue(self.waited_until(lambda: answering.FAILED in self.marks()),
+                            "the place was left typing with no turn behind it")
+
+        settled = [one for one in self.what_it_was_told()
+                   if one.get("do") == "state" and one.get("state") == answering.FAILED]
+        self.assertEqual([None], [one.get("external_id") for one in settled],
+                         "a message still waiting for a turn was marked as a settled one")
+        self.assertEqual([], kept.list_turns(self.agent), "a turn was recorded for a refused one")
+        self.assertEqual(["8841"], [one.external_id for one
+                                    in arriving.pending_on_channels(self.agent, 10)],
+                         "the message stopped being recoverable by a replacement gateway")
+
+    def test_stopping_settles_an_inbound_message_no_turn_ever_admitted(self):
+        """R-CH-9, R-CH-36. Somebody stopping what they sent is owed an answer whether or not a turn
+        was ever admitted for it — and the message is what carries the mark, so it is the message
+        that has to become terminal rather than the indicator alone."""
+        landed = arriving.recorded(self.agent, "discord", "1180", "2207", "please look", "8841")
+        self.a_channel()
+        watching = self.hosting_now()
+        gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
+                                      lambda agent: "online")
+
+        with mock.patch.object(adapters, "talking_to",
+                               side_effect=AssertionError("a provider was started")):
+            said = gestures.controlled(self.agent, "discord", "1180", "2207",
+                                       answering_hosting.STOP)
+
+        self.assertEqual("✋ Stopped.", said)
+        self.assertTrue(self.waited_until(lambda: answering.STOPPED in self.marks()),
+                        "the message somebody stopped was never marked")
+        stopped = [one for one in self.what_it_was_told()
+                   if one.get("do") == "state" and one.get("state") == answering.STOPPED]
+        self.assertEqual(["8841"], [one.get("external_id") for one in stopped])
+        self.assertEqual(1, len(kept.list_turns(self.agent)))
+        turn = kept.list_turns(self.agent)[0]
+        self.assertEqual(kept.STOPPED, turn["turn_status"])
+        self.assertEqual(turn["id"], arriving.turn_for_message(
+            self.agent, landed.conversation, landed.message),
+            "the message stayed pending and a later gateway would answer it")
+
+    def test_stopping_leaves_a_message_later_work_already_superseded_alone(self):
+        """R-CH-36. The rows a person may settle are the rows a replacement gateway may recover,
+        and no others: an older unclaimed message behind an answered one is not work anybody is
+        waiting on, so stopping neither settles it nor marks it."""
+        older = arriving.recorded(self.agent, "discord", "1180", "2207", "why no eyes?", "8841")
+        later = arriving.recorded(self.agent, "discord", "1180", "2207", "please update", "8842")
+        turn = kept.add_turn(self.agent, {
+            "conversation_id": later.conversation,
+            "provider_name": support.A_STAND_IN,
+            "access_mode": "work",
+        })
+        arriving.handled_by_turn(self.agent, later.conversation, (later.message,), turn)
+        kept.finish_turn(self.agent, turn, kept.DONE)
+        self.a_channel()
+        watching = self.hosting_now()
+        gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
+                                      lambda agent: "online")
+
+        said = gestures.controlled(self.agent, "discord", "1180", "2207",
+                                   answering_hosting.STOP)
+
+        self.assertEqual("✋ Nothing is running here.", said)
+        self.assertIsNone(arriving.turn_for_message(
+            self.agent, older.conversation, older.message))
+        self.assertEqual(1, len(kept.list_turns(self.agent)))
+        self.assertEqual([], self.what_it_was_told(),
+                         "a superseded message was marked by a stop that did not settle it")
 
     def a_provider(self, named="other"):
         """A second brain this install really has, so a change of provider has somewhere to go."""

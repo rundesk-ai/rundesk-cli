@@ -360,7 +360,8 @@ def pending_from(agent: str, conversation: int, author_id: str,
 
 def pending_on_channels(agent: str, most: int,
                         channels: Optional[Tuple[str, ...]] = None,
-                        after: int = 0) -> List[Pending]:
+                        after: int = 0,
+                        conversation: Optional[int] = None) -> List[Pending]:
     """Unclaimed user messages from channel conversations, oldest first and bounded.
 
     This is the restart boundary: a gateway may end after recording a platform message but before
@@ -370,6 +371,10 @@ def pending_on_channels(agent: str, most: int,
     Only the unresolved tail of a conversation may wake it. A later admitted message proves the
     exchange progressed after an older row failed admission; replaying that row after an unrelated
     restart is stale work, even when its platform id still makes the transport idempotent.
+
+    `conversation` narrows the same question to one exchange, for a person asking what is still
+    unanswered where they are standing. The tail rule is the reason it is a narrowing rather than a
+    second query: what a gesture may settle and what a sweep may replay have to be the same rows.
     """
     if channels is not None and not channels:
         return []
@@ -378,6 +383,9 @@ def pending_on_channels(agent: str, most: int,
     if channels is not None:
         channel_clause = " AND c.channel IN (" + ",".join("?" for _one in channels) + ")"
         parameters += tuple(channels)
+    if conversation is not None:
+        channel_clause += " AND m.conversation_id = ?"
+        parameters += (conversation,)
     parameters += (most,)
     with records.reading(directory.records(agent)) as conn:
         found = _rows(
