@@ -23,7 +23,7 @@ without deciding turn state or exposing private tool detail.
 
 A ✅ names the test methods that cite the requirement and were observed to pass on 2026-09-01 —
 `test_providers_answering.py`, `test_channels_hosting.py`, `test_channels_discord.py`, and
-`test_channels_delivery.py`, 394 tests across the four. A ❌ carries the acceptance that has not
+`test_channels_delivery.py`, 395 tests across the four. A ❌ carries the acceptance that has not
 been executed.
 
 |  | ID | Requirement | Evidence |
@@ -36,7 +36,7 @@ been executed.
 | ✅ | R-CH-6 | An attended channel may show broad activity and finished mid-turn remarks while work runs; it never exposes partial prose, raw tool arguments, or raw tool results. | `test_what_the_agent_did_is_shown_while_the_turn_is_still_running` |
 | ❌ | R-CH-7 | Agent prose crosses the channel only as complete units; a part-written response is held until complete. | not proven — Exercise fragmented and completed provider text. |
 | ❌ | R-CH-8 | The final answer is delivered once and in full, split into bounded pieces when needed; an attachment refusal does not silently remove the answer text. | not proven — Exercise short, long, empty, split, and partly refused attachment outcomes. |
-| ✅ | R-CH-9 | A person can stop the active turn in their conversation without stopping another conversation or silently starting queued work behind it. | `test_a_turn_can_be_stopped_from_the_conversation_it_is_running_in` |
+| ✅ | R-CH-9 | A person can stop the active turn in their conversation — including one still between its claim and the moment it is published — without stopping another conversation or silently starting queued work behind it. | `test_a_turn_can_be_stopped_from_the_conversation_it_is_running_in`, `test_stopping_reaches_a_turn_admitted_while_the_gesture_was_being_answered` |
 | ❌ | R-CH-10 | A person can start their conversation fresh so the next turn does not resume its prior provider session. | not proven — Invoke the shared fresh-session control before, during, and after a turn. |
 | ❌ | R-CH-11 | When a turn ends, its provider process and turn-specific work no longer run; the long-lived channel connection may remain hosted. | not proven — Observe child-process and turn-lock state after done, stopped, and failed outcomes. |
 | ❌ | R-CH-12 | A channel delivery failure is reported without changing what the provider turn actually did; no failed delivery is marked as a successful answer. | not proven — Refuse final delivery and inspect the turn record, state mark, person-visible fallback, and logs. |

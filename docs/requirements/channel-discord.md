@@ -23,7 +23,7 @@ command responses, and file uploads.
 
 A ✅ names the test methods that cite the requirement and were observed to pass on 2026-09-01 —
 `test_channels_discord.py`, `test_channels_delivery.py`, `test_channels_hosting.py`, and
-`test_providers_answering.py`, 394 tests across the four. A ❌ carries the acceptance that has not
+`test_providers_answering.py`, 395 tests across the four. A ❌ carries the acceptance that has not
 been executed. Offline scenarios cannot prove what Discord's own service displayed.
 
 |  | ID | Requirement | Evidence |

@@ -794,6 +794,37 @@ class AMessageOnAChannelIsAnswered(Answering):
                           in arriving.pending_on_channels(self.agent, 10)],
                          "work nobody stopped is no longer recoverable")
 
+    def test_stopping_reaches_a_turn_admitted_while_the_gesture_was_being_answered(self):
+        """R-CH-9. A turn takes the conversation's claim a moment before it publishes itself as one
+        this process can end, and `run_if` puts a durable admission decision between the two. A
+        `/stop` pressed in that window reached nothing: the person was told their conversation held
+        something no conversation could stop, and the turn they were watching ran to the end."""
+        landed = arriving.recorded(self.agent, "discord", "1180", "2207", "please look", "8841")
+        self.a_channel()
+        watching = self.hosting_now()
+        gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
+                                      lambda agent: "online")
+
+        with turns.claiming(self.agent, landed.conversation):
+            said = gestures.controlled(self.agent, "discord", "1180", "2207",
+                                       answering_hosting.STOP)
+
+            self.assertEqual("✋ Stopped.", said)
+            with turns._stoppable(self.agent, landed.conversation) as ours:
+                self.assertTrue(ours.asked,
+                                "the turn published under a stopped claim ran on to the end")
+
+        self.assertEqual([], kept.list_turns(self.agent),
+                         "a stopped turn was invented beside the one being admitted")
+        self.assertEqual(["8841"], [one.external_id for one
+                                    in arriving.pending_on_channels(self.agent, 10)],
+                         "a message the turn being admitted will take was settled here")
+        # The turn that was stopped marks its own message as it ends, and it has not ended yet.
+        self.assertFalse(self.waited_until(
+            lambda: any(one.get("do") == "state" for one in self.what_it_was_told()),
+            NOT_GOING_TO_HAPPEN),
+            "a message still waiting for the turn that owns it was marked here")
+
     def a_provider(self, named="other"):
         """A second brain this install really has, so a change of provider has somewhere to go."""
         where = paths.code() / "providers"

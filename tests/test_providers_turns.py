@@ -416,6 +416,45 @@ class OneTurnAtATimeInOneConversation(WithAnAgent):
             self.assertEqual(turns.run(two).turn_status, kept.DONE)
 
 
+class StoppingWhileATurnIsStillBeingAdmitted(WithAnAgent):
+    """The window between the conversation claim and the turn published against it.
+
+    A turn takes the claim first and publishes itself as one this process can end a moment later,
+    with a durable admission decision able to sit between the two. A stop arriving in there reached
+    nothing at all: the turn published itself with nothing asked of it and ran to the end, after the
+    person had already been answered.
+    """
+
+    def test_a_stop_between_the_claim_and_the_turn_is_carried_by_that_turn(self):
+        landed = arriving.recorded(self.agent, "discord", "ops", "2207", "please look", "8841")
+        with turns.claiming(self.agent, landed.conversation):
+            self.assertTrue(turns.busy(self.agent, landed.conversation),
+                            "the claim this stop has to reach was never taken")
+
+            reached = turns.stop_or_settle_pending(
+                self.agent, landed.conversation, (landed.message,))
+
+            self.assertEqual((True, ()), (reached.live, reached.settled),
+                             "the stop reached nothing while a turn was being admitted")
+            self.assertEqual([], kept.list_turns(self.agent),
+                             "a stopped turn was invented beside the one being admitted")
+            self.assertIsNone(arriving.turn_for_message(
+                self.agent, landed.conversation, landed.message),
+                "a message the turn being admitted will take was settled by the stop")
+            with turns._stoppable(self.agent, landed.conversation) as ours:
+                self.assertTrue(ours.asked,
+                                "the turn published under a stopped claim was never asked to end")
+
+    def test_a_stop_no_turn_ever_came_of_does_not_end_the_next_turn_here(self):
+        """The stop lives on the claim, so it goes when the claim does. A claim that never published
+        a turn — admission refused under it — must not hand its stop to whatever claims next."""
+        with turns.claiming(self.agent, 71):
+            self.assertTrue(turns.stop(self.agent, 71))
+
+        with turns.claiming(self.agent, 71), turns._stoppable(self.agent, 71) as ours:
+            self.assertFalse(ours.asked, "a stop outlived the claim it was left on")
+
+
 class WhenTheBrainDoesNotAnswer(WithAnAgent):
     def test_a_turn_that_produced_nothing_is_not_a_turn_that_worked(self):
         """Measured on a live gateway: `done ok:true`, four zero counters, fourteen milliseconds and

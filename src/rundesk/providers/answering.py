@@ -507,11 +507,11 @@ class OnAChannel(IntoAChannel):
                 external_id: Optional[str] = None) -> None:
         """Say what the turn is doing, in the words the channel layer renders. Never raises.
 
-        **A mark needs the message it goes on** (R-DIS-7, R-DIS-8). Sent without one, every state
-        crossed the seam correctly and the adapter had nothing to put a reaction on, so a turn was
-        marked 👀 when it arrived and never marked again — which reads as an agent that took the
-        message up and then forgot it. `working` is the exception and needs none: it is the typing
-        indicator rather than a mark, and it belongs to the place rather than to one message.
+        **A message mark needs the message it goes on** (R-DIS-7, R-DIS-8). Sent without one, every
+        state crossed the seam correctly and the adapter had nothing to put a reaction on. `working`
+        needs none because it is the place's typing indicator. A terminal state also omits the
+        message when admission failed before a turn existed: it ends that indicator without marking
+        the still-pending message.
         """
         hosting.marked(agent, self._where, self._hosted(), kind, place, state, external_id)
 

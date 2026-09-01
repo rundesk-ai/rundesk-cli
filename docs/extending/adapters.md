@@ -410,6 +410,7 @@ Five, and only five exist today.
  "files": [{"name": "chart.png", "at": "/…/agents/alan/home/chart.png", "bytes": 9,
             "sha256": "b1f3…"}]}
 {"do": "state", "place": "1180", "external_id": "8841", "state": "seen"}
+{"do": "state", "place": "1180", "state": "failed"}
 {"do": "activity", "place": "1180", "did": "run"}
 {"do": "delegation", "place": "1180", "state": "handed", "who": "dev", "ask": "del-41-4e07c5",
  "provider": "codex"}
@@ -422,7 +423,7 @@ Five, and only five exist today.
 | | Fields | |
 |---|---|---|
 | `deliver` | `id`, `place`, `text`, sometimes `files`, sometimes `reply_to`, sometimes `cost` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed` |
-| `state` | `place`, `external_id`, `state` | show what rundesk says a turn is doing |
+| `state` | `place`, `state`, sometimes `external_id` | show what rundesk says a turn is doing. `external_id` names the message the state belongs to; **without one the state belongs to the place** — see below |
 | `activity` | `place`, `did`, sometimes `ok`, sometimes `who` | show what the agent is doing, while it is still doing it |
 | `delegation` | `place`, `state`, `who`, `ask`, sometimes `elapsed`, sometimes `provider` and with it sometimes `provider_alias` | show what became of work this agent handed to another agent, which brain is doing it, and what has just been done to it |
 | `answered` | `ref`, `text` | the answer to a `control`, `query` or `configure` you sent, against the `ref` you gave it |
