@@ -278,6 +278,8 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
                 provider_name=support.A_STAND_IN, model_name="scoped-model")
 
         self.assertTrue(stopped)
+        self.assertEqual((False, (landed.message,)), (stopped.live, stopped.settled),
+                         "a caller cannot tell what became terminal from what it asked for")
         recorded = kept.list_turns(self.agent)[0]
         self.assertEqual(kept.STOPPED, recorded["turn_status"])
         self.assertEqual(protocol.CANCELLED, recorded["failure_code"])
@@ -291,8 +293,14 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
 
     def test_a_delegation_stop_reaches_a_live_turn(self):
         with turns._stoppable(self.agent, 71) as active:
-            self.assertTrue(turns.stop_or_settle_pending(self.agent, 71, ()))
+            reached = turns.stop_or_settle_pending(self.agent, 71, ())
+            self.assertTrue(reached)
             self.assertTrue(active.asked)
+
+        # A live turn settles and marks itself, so naming no message is the answer rather than an
+        # omission: a caller that read this as "these ids became terminal" would mark rows that are
+        # still pending behind the turn it just stopped.
+        self.assertEqual((True, ()), (reached.live, reached.settled))
 
     def test_what_was_asked_is_written_before_the_brain_is_started(self):
         got = self.run_turn()

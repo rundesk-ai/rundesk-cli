@@ -1628,6 +1628,29 @@ class HowLongTheIndicatorRuns(Records):
 
             self.during(exchange)
 
+    def test_a_terminal_state_naming_no_message_still_ends_it(self) -> None:
+        """R-CH-37. Admission can be refused before any turn exists, and the message stays pending
+        for a later gateway — so the state that ends the indicator names no message, and putting a
+        reaction on that message would say a turn it is still waiting for had settled."""
+        async def exchange(reaching: Any) -> None:
+            where = self.client.get_partial_messageable(800)
+            await self.marking(reaching, "800", "working")
+            for _ in range(4):             # let it renew at least once
+                await asyncio.sleep(0)
+            self.assertGreaterEqual(len(where.typed), 1, "it never started renewing")
+            await self.marking(reaching, "800", "failed")
+            self.assertNotIn(800, reaching.typing,
+                             "the place was left typing for a turn that never began")
+            renewed = len(where.typed)
+            for _ in range(4):
+                await asyncio.sleep(0)
+            self.assertEqual(renewed, len(where.typed), "it went on renewing after it ended")
+
+        self.during(exchange)
+        self.assertEqual([], self.client.places[800].marked,
+                         "a message still waiting for a turn was reacted to")
+        self.assertEqual([], self.client.places[800].unmarked)
+
     def test_a_message_being_seen_does_not_start_or_stop_one(self) -> None:
         # `seen` belongs to a message arriving and has no turn behind it.
         async def exchange(reaching: Any) -> None:

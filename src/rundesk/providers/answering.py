@@ -106,8 +106,12 @@ DELEGATED_PROMPT_AT_MOST = turns.DELEGATED_PROMPT_AT_MOST
 DELEGATED_MESSAGES_AT_MOST = turns.DELEGATED_MESSAGES_AT_MOST
 
 #: Pending inbound channel messages one stop may settle in a conversation. The exact ids become one
-#: atomic `UPDATE`, so this stays far below every supported SQLite variable ceiling; anything beyond
-#: it stays pending rather than being lost, exactly as an unclaimed message already does.
+#: atomic `UPDATE`, so this stays far below every supported SQLite variable ceiling.
+#:
+#: **A bound on what is marked, never on what is stopped.** They are taken from the newest end, and
+#: claiming the newest unclaimed row supersedes every older one — so a conversation holding more
+#: than this keeps rows nothing will ever run rather than rows a later sweep would start, and the
+#: word a person is given stays true. See `Gestures._stopped`.
 PENDING_STOPPED_AT_MOST = turns.DELEGATED_MESSAGES_AT_MOST
 
 
@@ -793,9 +797,16 @@ class Gestures:
         their agent appear to type for ever.
 
         So the pending tail is settled through the same path work stopped before its provider began
-        already takes, and the exact messages it settled are marked. No brain runs; an older message
-        a later turn has already superseded is not settled, marked or replayed, because the rows
-        this may settle are the same ones a replacement gateway may recover.
+        already takes, and no brain runs. An older message a later turn has already superseded is
+        not settled, marked or replayed, because the rows this may settle are the same ones a
+        replacement gateway may recover.
+
+        **Two things keep the word "stopped" true**, and each was a way of saying it and being
+        wrong. Nothing this stop leaves behind may still run, which is what taking the tail from its
+        newest end guarantees on a conversation holding more rows than one claim may hold. And only
+        the ids that were *actually* associated with the stopped turn are marked — a turn published
+        in the moment between reading those rows and claiming the conversation is what this stops
+        instead, and it marks its own message when it ends.
         """
         found = arriving.standing_in(agent, place)
         if found is None:
@@ -807,19 +818,33 @@ class Gestures:
             # of its own. Said as what it is rather than as a failure, because trying again will
             # not help.
             return "✋ Something is running here, but not something I can stop from a conversation."
+        # **From the newest end, so a bounded answer is still a whole one.** Claiming the newest
+        # row supersedes every older unclaimed one, which is the same rule a replacement gateway
+        # applies — so a conversation holding more unclaimed rows than this leaves none that could
+        # still run. Taking the oldest of them would leave the very rows a sweep starts with.
         pending = arriving.pending_on_channels(
-            agent, PENDING_STOPPED_AT_MOST, channels=(kind,), conversation=found)
+            agent, PENDING_STOPPED_AT_MOST, channels=(kind,), conversation=found, newest=True)
         if not pending:
             return "✋ Nothing is running here."
-        if not turns.stop_or_settle_pending(
-                agent, found, tuple(one.landed.message for one in pending)):
-            return "✋ Something is running here, but not something I can stop from a conversation."
-        for one in pending:
-            # The terminal state ends the place's indicator as well as marking the message, which
-            # is the whole of what the person asked for and is one record rather than two.
-            hosting.marked(agent, self._where, self._hosted(), kind, place, STOPPED,
-                           one.external_id)
-        return "✋ Stopped."
+        stopped = turns.stop_or_settle_pending(
+            agent, found, tuple(one.landed.message for one in pending))
+        if stopped.settled:
+            became = set(stopped.settled)
+            for one in pending:
+                if one.landed.message not in became:
+                    continue
+                # The terminal state ends the place's indicator as well as marking the message,
+                # which is the whole of what the person asked for and is one record rather than two.
+                hosting.marked(agent, self._where, self._hosted(), kind, place, STOPPED,
+                               one.external_id)
+            return "✋ Stopped."
+        if stopped.live:
+            # A turn was published between reading those rows and claiming the conversation, so
+            # what this stopped is that turn and every row read above is still pending. It writes
+            # its own outcome and marks its own message; marking this snapshot would put ✋ on work
+            # that is still waiting for a turn and would then be answered anyway.
+            return "✋ Stopped."
+        return "✋ Something is running here, but not something I can stop from a conversation."
 
 
 def _what_it_holds(agent: str) -> str:
@@ -972,14 +997,19 @@ class OnADelegation(IntoAChannel):
                   delegator: str, provider_name: Optional[str] = None,
                   model_name: Optional[str] = None,
                   provider_alias: Optional[str] = None) -> bool:
-        """End delegated work, including a brief stopped before its provider began."""
+        """End delegated work, including a brief stopped before its provider began.
+
+        **Whether anything was reached is the whole of what collection asks**, and it is the same
+        question it always asked: a delegation has no platform message to mark, so which of the two
+        `turns.Stopped` describes happened changes nothing here.
+        """
         _body, messages = _delegated_prompt(agent, conversation, delegator)
         if provider_name is None and provider_alias is None and model_name is None:
-            return turns.stop_or_settle_pending(agent, conversation, messages)
-        return turns.stop_or_settle_pending(agent, conversation, messages,
-                                            provider_name=provider_name,
-                                            provider_alias=provider_alias,
-                                            model_name=model_name)
+            return bool(turns.stop_or_settle_pending(agent, conversation, messages))
+        return bool(turns.stop_or_settle_pending(agent, conversation, messages,
+                                                 provider_name=provider_name,
+                                                 provider_alias=provider_alias,
+                                                 model_name=model_name))
 
     def review_this(self, agent: str, conversation: int, answer: str, from_agent: str,
                     delegation_id: str = "", answer_id: str = "") -> bool:

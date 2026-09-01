@@ -707,8 +707,92 @@ class AMessageOnAChannelIsAnswered(Answering):
         self.assertIsNone(arriving.turn_for_message(
             self.agent, older.conversation, older.message))
         self.assertEqual(1, len(kept.list_turns(self.agent)))
-        self.assertEqual([], self.what_it_was_told(),
+        self.assertFalse(self.waited_until(lambda: self.what_it_was_told(), NOT_GOING_TO_HAPPEN),
                          "a superseded message was marked by a stop that did not settle it")
+
+    def test_stopping_more_pending_messages_than_one_claim_holds_leaves_none_runnable(self):
+        """R-CH-36. One claim holds a bounded number of ids, and the bound is where saying
+        "stopped" stopped being true: the rows beyond it were the *oldest*, which is exactly what a
+        replacement gateway starts with — so the person was told their work was stopped and their
+        agent answered it later anyway. Taken from the newest end, what is left behind is
+        superseded by the row that was claimed and can never run."""
+        landed = [arriving.recorded(self.agent, "discord", "1180", "2207", f"ask {nth}",
+                                    f"88{nth:03d}")
+                  for nth in range(answering.PENDING_STOPPED_AT_MOST + 1)]
+        self.a_channel()
+        watching = self.hosting_now()
+        gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
+                                      lambda agent: "online")
+
+        said = gestures.controlled(self.agent, "discord", "1180", "2207",
+                                   answering_hosting.STOP)
+
+        self.assertEqual("✋ Stopped.", said)
+        self.assertEqual([], arriving.pending_on_channels(self.agent, len(landed) + 10),
+                         "a message this stop was told about can still be run by a later sweep")
+        turn = kept.list_turns(self.agent)[0]
+        self.assertEqual(kept.STOPPED, turn["turn_status"])
+        settled = [one for one in landed
+                   if arriving.turn_for_message(
+                       self.agent, one.conversation, one.message) == turn["id"]]
+        self.assertEqual(landed[1:], settled,
+                         "the claim did not take exactly the newest rows it marked")
+        self.assertTrue(self.waited_until(
+            lambda: len(self.marks()) >= answering.PENDING_STOPPED_AT_MOST))
+        marked = [one.get("external_id") for one in self.what_it_was_told()
+                  if one.get("do") == "state" and one.get("state") == answering.STOPPED]
+        self.assertEqual([f"88{nth:03d}" for nth
+                          in range(1, answering.PENDING_STOPPED_AT_MOST + 1)],
+                         marked, "a mark went on a row that was not settled, or one was missed")
+        self.assertIsNone(arriving.turn_for_message(
+            self.agent, landed[0].conversation, landed[0].message),
+            "the row beyond the claim was claimed by something")
+
+    def test_stopping_marks_nothing_when_a_turn_started_while_it_read_the_pending_rows(self):
+        """R-CH-36. `stop_or_settle_pending` reaches a live turn first, and a turn can be published
+        in the moment between reading the pending rows and claiming the conversation. What was
+        stopped is then that turn — which marks its own message — and every row read here is still
+        waiting for one. Marking them would put ✋ on work that is about to be answered."""
+        first = arriving.recorded(self.agent, "discord", "1180", "2207", "please look", "8841")
+        second = arriving.recorded(self.agent, "discord", "1180", "2207", "and this", "8842")
+        self.a_channel()
+        watching = self.hosting_now()
+        gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
+                                      lambda agent: "online")
+        published = contextlib.ExitStack()
+        self.addCleanup(published.close)
+        live = []
+        reading = arriving.pending_on_channels
+
+        def a_turn_is_published_while_reading(*called, **also):
+            found = reading(*called, **also)
+            if not live:
+                live.append(published.enter_context(
+                    turns._stoppable(self.agent, first.conversation)))
+            return found
+
+        with mock.patch.object(answering.arriving, "pending_on_channels",
+                               side_effect=a_turn_is_published_while_reading):
+            said = gestures.controlled(self.agent, "discord", "1180", "2207",
+                                       answering_hosting.STOP)
+
+        self.assertEqual("✋ Stopped.", said)
+        self.assertTrue(live[0].asked, "the turn that was published was never asked to end")
+        # A mark is written down this adapter's pipe and read on its own thread, so proving one was
+        # never sent has to spend the ceiling made for exactly that.
+        self.assertFalse(self.waited_until(
+            lambda: any(one.get("do") == "state" for one in self.what_it_was_told()),
+            NOT_GOING_TO_HAPPEN),
+            "a message still waiting for a turn was marked stopped")
+        self.assertEqual([], kept.list_turns(self.agent),
+                         "a stopped turn was invented beside the live one")
+        for one in (first, second):
+            self.assertIsNone(arriving.turn_for_message(
+                self.agent, one.conversation, one.message))
+        self.assertEqual(["8841", "8842"],
+                         [one.external_id for one
+                          in arriving.pending_on_channels(self.agent, 10)],
+                         "work nobody stopped is no longer recoverable")
 
     def a_provider(self, named="other"):
         """A second brain this install really has, so a change of provider has somewhere to go."""

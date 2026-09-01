@@ -568,11 +568,32 @@ def stop(agent: str, conversation: int) -> bool:
     return True
 
 
+class Stopped(NamedTuple):
+    """What one stop reached: a live turn, or the exact messages it settled instead.
+
+    **The two are not interchangeable and a caller has to tell them apart.** A live turn writes its
+    own outcome and marks its own message as it ends, and the pending rows around it stay pending —
+    while settling writes that outcome here, for exactly the ids this claimed. A caller that marked
+    what it *asked* to settle rather than what *was* settled would put a terminal mark on rows that
+    are still waiting for a turn, on the one path where the two differ: a turn published in the
+    moment between reading the pending rows and claiming the conversation.
+    """
+
+    #: A turn this process was running was asked to end. It settles itself.
+    live: bool = False
+    #: The exact durable message ids this associated with a stopped turn. Empty when none were.
+    settled: Tuple[int, ...] = ()
+
+    def __bool__(self) -> bool:
+        """Whether the stop reached anything at all — what a caller with nothing to mark asks."""
+        return self.live or bool(self.settled)
+
+
 def stop_or_settle_pending(agent: str, conversation: int,
                            inbound_messages: Tuple[int, ...],
                            provider_name: Optional[str] = None,
                            provider_alias: Optional[str] = None,
-                           model_name: Optional[str] = None) -> bool:
+                           model_name: Optional[str] = None) -> Stopped:
     """Stop a live turn, or make exact unstarted inbound messages terminal without a provider.
 
     A delegated brief and a channel message both reach this: what has to be settled is the same
@@ -581,11 +602,14 @@ def stop_or_settle_pending(agent: str, conversation: int,
     The conversation claim closes the race with the worker thread a previous gateway beat may have
     spawned. If that worker owns the claim but has not published itself in `_running` yet, `Busy`
     leaves the durable stop request for the next beat instead of inventing a second turn.
+
+    **Which of the two happened is the answer**, not a detail of it — see `Stopped`.
     """
     if stop(agent, conversation):
-        return True
-    if not inbound_messages:
-        return False
+        return Stopped(live=True)
+    claiming_messages = tuple(dict.fromkeys(int(one) for one in inbound_messages))
+    if not claiming_messages:
+        return Stopped()
     try:
         with claiming(agent, conversation):
             settled = records.read(directory.records(agent))
@@ -602,19 +626,21 @@ def stop_or_settle_pending(agent: str, conversation: int,
                 "access_mode": protocol.ACCESS_WORK,
             })
             try:
-                arriving.handled_by_turn(agent, conversation, inbound_messages, turn)
+                arriving.handled_by_turn(agent, conversation, claiming_messages, turn)
                 kept.add_turn_record(
-                    agent, turn, ADMITTED, {"messages": list(inbound_messages)})
+                    agent, turn, ADMITTED, {"messages": list(claiming_messages)})
             finally:
                 kept.finish_turn(
                     agent, turn, kept.STOPPED,
                     {"failure_code": protocol.CANCELLED,
                      "failure_message": "this work was stopped before it began"})
-            return True
+            # Only reached when the claim above took every id, because it is all or nothing: what
+            # is named here is exactly what became terminal.
+            return Stopped(settled=claiming_messages)
     except Busy:
         # `claiming` precedes `_stoppable` by only the publication window. Reach once more now; if
         # it is still between those two points, the durable row makes the next beat retry.
-        return stop(agent, conversation)
+        return Stopped(live=stop(agent, conversation))
 
 
 @contextlib.contextmanager

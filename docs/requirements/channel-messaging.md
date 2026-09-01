@@ -23,7 +23,7 @@ without deciding turn state or exposing private tool detail.
 
 A ✅ names the test methods that cite the requirement and were observed to pass on 2026-09-01 —
 `test_providers_answering.py`, `test_channels_hosting.py`, `test_channels_discord.py`, and
-`test_channels_delivery.py`, 391 tests across the four. A ❌ carries the acceptance that has not
+`test_channels_delivery.py`, 394 tests across the four. A ❌ carries the acceptance that has not
 been executed.
 
 |  | ID | Requirement | Evidence |
@@ -61,8 +61,8 @@ been executed.
 | ❌ | R-CH-33 | A replacement gateway recovers only the unresolved tail of a channel conversation, exactly once and at most one turn per conversation per sweep; older unclaimed messages cannot replay after later work was admitted. | not proven — Reproduce a stranded latest message, a later answered retry, later unrelated admitted work, concurrent pending messages in one conversation, and independent conversations. |
 | ❌ | R-CH-34 | An authorized person can request a graceful gateway shutdown from their channel. The response says what was requested without promising that an unsupervised gateway will return. | not proven — Exercise shutdown with supervised and unsupervised gateways and inspect the private acknowledgement and final gateway state. |
 | ❌ | R-CH-35 | The shared delegation query resolves the current platform place to one durable conversation after authorization, joins current named-agent work with only the provider-local lifecycle visible in the current provider session, labels session replacement and delivery routing, and excludes unrelated or stale completed work without mutating state. | not proven — Query authorized and unauthorized identities across two conversations before/after session reset and review; inspect turn/delegation counts, privacy sentinels, item identity/state/routing/timing, and partial-visibility wording. |
-| ✅ | R-CH-36 | Stopping settles the unresolved tail of inbound channel messages no turn ever admitted: they become one stopped turn with no provider started, each is marked stopped, the place's activity indicator ends, and a message a later admitted turn superseded is neither settled nor marked. | `test_stopping_settles_an_inbound_message_no_turn_ever_admitted`, `test_stopping_leaves_a_message_later_work_already_superseded_alone` |
-| ✅ | R-CH-37 | A message refused admission before any turn existed ends the activity indicator raised for it and stays pending and unmarked, so a replacement gateway can still recover it. | `test_admission_refused_before_a_turn_does_not_leave_the_place_typing` |
+| ✅ | R-CH-36 | Stopping settles the unresolved tail of inbound channel messages no turn ever admitted: they become one stopped turn with no provider started, exactly the messages that turn claimed are marked stopped, and the place's activity indicator ends. Nothing it leaves behind can still be run — neither a message a later admitted turn superseded nor a row beyond the bound of one claim — and a turn published while it read those rows is stopped instead, marking nothing and leaving them recoverable. | `test_stopping_settles_an_inbound_message_no_turn_ever_admitted`, `test_stopping_leaves_a_message_later_work_already_superseded_alone`, `test_stopping_more_pending_messages_than_one_claim_holds_leaves_none_runnable`, `test_stopping_marks_nothing_when_a_turn_started_while_it_read_the_pending_rows` |
+| ✅ | R-CH-37 | A message refused admission before any turn existed ends the activity indicator raised for it and stays pending and unmarked, so a replacement gateway can still recover it. The shipped adapter ends its own renewal on that terminal state and reacts to nothing. | `test_admission_refused_before_a_turn_does_not_leave_the_place_typing`, `test_a_terminal_state_naming_no_message_still_ends_it` |
 
 ## Open questions
 
