@@ -306,6 +306,48 @@ def not_an_agent(name: str) -> str:
     return f"{name} is not an agent on this install"
 
 
+def known_as(said: str) -> str:
+    """The name this install keeps for the agent `said` means, or `said` unchanged when it keeps none.
+
+    **A name differing only by ASCII letter case is the same agent.** `Beacon` typed at a terminal
+    is the agent standing under `beacon`, and `taken` beside this is why that is safe to act on: it
+    refuses a second agent whose name differs from an existing one only by ASCII letter case, so at
+    most one agent can answer to such a spelling and resolving one is never a choice between two
+    identities.
+
+    **The fold is the one `taken` compares by**, and deliberately not a second opinion about what
+    makes two names the same. A looser rule here would resolve to an agent that rule had allowed to
+    stand beside another; a stricter one would refuse a spelling that rule has already treated as
+    taken.
+
+    **An exact name wins outright**, before anything is folded, so a directory made outside rundesk
+    — restored onto a volume that does tell two spellings apart, or made by hand — is reached by the
+    name it actually wears.
+
+    **Nothing is renamed and nothing is made.** This resolves a name onto an agent already standing;
+    the spelling an agent has is the one its owner chose at `made`, and no caller of this can change
+    it.
+
+    **Unknown comes back as it was typed**, so the refusal a caller writes underneath names what
+    somebody actually typed rather than a folded version of it, and a name nothing stands under
+    fails exactly as it did before. An agents directory nobody can read comes back the same way:
+    `not_an_agent` is where that becomes a sentence, and answering with a resolution here would be
+    this module guessing on top of a directory it could not read.
+    """
+    try:
+        there = known()
+    except OSError:
+        return said
+    if said in there:
+        return said
+    folded = said.lower()
+    standing = [one for one in there if one.lower() == folded]
+    # One, or nothing. Two means this install holds the pair `taken` refuses, which a restore or a
+    # hand-made directory can still produce where the volume tells them apart — and picking one of
+    # them is deciding whose agent somebody meant rather than resolving a name.
+    return standing[0] if len(standing) == 1 else said
+
+
 def taken(name: str) -> str:
     """Why this name may not be used for a new agent, or `""` when it may.
 

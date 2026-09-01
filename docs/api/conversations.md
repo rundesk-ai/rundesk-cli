@@ -19,6 +19,14 @@ Ask an agent something, here, in this terminal, and watch it work.
 `ask` continues the agent's terminal conversation; `--fresh` starts a new one on the brain.
 `--limit` defaults to 20 on both `messages` and `turns`.
 
+**`ask` ignores ASCII letter case when matching an agent's name.** `rundesk ask Beacon` reaches the
+agent standing under `beacon`, and a handoff typed from inside a turn is admitted, scope-checked and
+self-checked against that resolved name rather than against the spelling. For ASCII case variants,
+there is never more than one agent a spelling could mean: `agents add` refuses a name differing
+from an existing agent's only by ASCII letter case. Nothing is renamed — the agent keeps the name
+its owner chose, which is the name every listing, every path and every other verb uses — and a name
+no agent stands under is refused exactly as it was typed.
+
 ```console
 $ rundesk ask ava "what changed in the queue today?"
   read
