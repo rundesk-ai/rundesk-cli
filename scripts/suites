@@ -16,6 +16,11 @@ already is: `support.Isolated` gives every case a scratch root of its own and ev
 per-process, so running eight interpreters is the same isolation eight times rather than a weaker
 one shared.
 
+**Nothing in a suite writes bytecode.** The setting is passed in the suite's environment rather
+than only as `-B`, so every installed copy and child interpreter a case starts inherits it too. On
+Apple's Python those disposable roots would otherwise remain mirrored under its global bytecode
+cache after the test deleted them.
+
 **The longest suite is the run.** Whole files are the unit of parallelism, so no schedule finishes
 before the slowest one does, and the work either side of it is free. That is why this starts the
 slowest suites first — see `_running_order` — and why a suite that has grown to twice its
@@ -133,13 +138,17 @@ def ran(suite):
     """
     began = time.monotonic()
     try:
+        environment = os.environ.copy()
+        # This must be inherited, not merely `-B` on the immediate interpreter: suites start
+        # installed copies and child interpreters of their own, all rooted in disposable trees.
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
         # `stdin` is closed on purpose. A command reading standard input because it is "not a
         # terminal" blocks on an open pipe with nothing in it, which never ends and names
         # nothing when it happens.
         ended = subprocess.run(
             [sys.executable, str(suite)],
             cwd=str(ROOT), stdin=subprocess.DEVNULL,
-            capture_output=True, text=True, timeout=PATIENCE_SECONDS)
+            capture_output=True, text=True, timeout=PATIENCE_SECONDS, env=environment)
         return ended.returncode == 0, ended.stdout + ended.stderr, time.monotonic() - began
     except subprocess.TimeoutExpired:
         return False, f"exceeded {PATIENCE_SECONDS} seconds", time.monotonic() - began

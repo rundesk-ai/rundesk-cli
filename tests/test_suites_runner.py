@@ -17,8 +17,10 @@ Run directly: `python3 tests/test_suites_runner.py`
 import importlib.machinery
 import importlib.util
 import json
+import os
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import support
 
@@ -104,6 +106,36 @@ class WhatItRemembers(support.Isolated):
         said = self.runner.REMEMBERED.read_text(encoding="utf-8")
         self.assertEqual({"test_a.py": 1.0, "test_b.py": 2.0}, json.loads(said))
         self.assertLess(said.index("test_a.py"), said.index("test_b.py"), "not written in order")
+
+
+class WhatASuiteInherits(support.Isolated):
+    """The suite and the programs it starts cannot leave bytecode for disposable roots behind."""
+
+    def test_bytecode_is_disabled_for_the_suite_and_its_child_without_changing_the_caller(self):
+        runner = the_runner()
+        runner.ROOT = self.home
+        (self.home / "subject.py").write_text("value = 1\n", encoding="utf-8")
+        suite = self.home / "suite.py"
+        suite.write_text(
+            "import os\n"
+            "import subprocess\n"
+            "import sys\n"
+            "import subject\n"
+            "assert os.environ['PYTHONDONTWRITEBYTECODE'] == '1'\n"
+            "subprocess.run([sys.executable, '-c', \"import os, subject; "
+            "assert os.environ['PYTHONDONTWRITEBYTECODE'] == '1'\"], check=True)\n",
+            encoding="utf-8")
+        cache = self.home / "global-bytecode-cache"
+
+        with mock.patch.dict(os.environ, {
+                "PYTHONDONTWRITEBYTECODE": "caller's value",
+                "PYTHONPYCACHEPREFIX": str(cache),
+        }):
+            ok, said, _seconds = runner.ran(suite)
+            self.assertEqual("caller's value", os.environ["PYTHONDONTWRITEBYTECODE"])
+
+        self.assertTrue(ok, said)
+        self.assertFalse(cache.exists(), "a disposable test root was mirrored into bytecode cache")
 
 
 class ARunThatDiscoveredNothing(support.Isolated):
