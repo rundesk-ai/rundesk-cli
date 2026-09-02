@@ -80,9 +80,10 @@ rundesk channels add ava discord --allow <your-discord-user-id> --notify
 rundesk gateways start ava
 ```
 
-`--notify` makes this the channel unprompted things go to — gateway notices, scheduled results,
-delegation answers. The [full Discord setup guide](./discord.md) walks through the Developer Portal
-and the permissions it needs.
+`--notify` makes this the channel adapter unprompted things go through — gateway notices, scheduled
+results, delegation answers. Discord sends each one privately to every allowed user. The
+[full Discord setup guide](./discord.md) walks through the Developer Portal and the permissions it
+needs.
 
 ## 6. Schedule work
 
@@ -90,8 +91,9 @@ and the permissions it needs.
 rundesk schedules add ava daily --when "0 4 * * *" --ask "review yesterday's changes"
 ```
 
-The result is delivered through the agent's notified channel. `rundesk schedules run ava daily` runs
-it now, in this terminal, without using up the moment it was due for.
+The result is delivered through the agent's notified channel adapter; on Discord, every allowed user
+gets a private copy. `rundesk schedules run ava daily` runs it now, in this terminal, without using
+up the moment it was due for.
 
 ## Where to go next
 

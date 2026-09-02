@@ -1089,6 +1089,22 @@ class TalkingToOne(Hosting):
             self.assertNotIn("reply_to", record)
             self.assertNotEqual("state", record.get("do"))
 
+    def test_only_an_unsolicited_delivery_is_named_as_a_notice(self):
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+
+        hosting.told(self.agent, self.where, watching, "discord", "1180", ["gateway up"],
+                     notice=True)
+        hosting.told(self.agent, self.where, watching, "discord", "1180", ["private answer"])
+
+        self.assertTrue(support.waited_until(
+            lambda: len([one for one in self.what_it_was_told()
+                         if one.get("do") == "deliver"]) == 2, PATIENCE))
+        delivered = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertIs(delivered[0]["notice"], True)
+        self.assertNotIn("notice", delivered[1])
+
     def test_an_answer_split_in_pieces_quotes_once(self):
         # One answer is one answer. Quoting the same message four times is four notifications.
         self.an_adapter()

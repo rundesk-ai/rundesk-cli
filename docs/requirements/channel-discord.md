@@ -1,7 +1,7 @@
 ---
 id: DIS
 name: Discord, as an agent is reached on it
-last_verified: 2026-09-01
+last_verified: 2026-09-02
 ---
 
 ## What this is
@@ -21,9 +21,9 @@ command responses, and file uploads.
 
 ## Requirements
 
-A ✅ names the test methods that cite the requirement and were observed to pass on 2026-09-01 —
+A ✅ names the test methods that cite the requirement and were observed to pass on 2026-09-02 —
 `test_channels_discord.py`, `test_channels_delivery.py`, `test_channels_hosting.py`, and
-`test_providers_answering.py`, 395 tests across the four. A ❌ carries the acceptance that has not
+`test_providers_answering.py`, 402 tests across the four. A ❌ carries the acceptance that has not
 been executed. Offline scenarios cannot prove what Discord's own service displayed.
 
 |  | ID | Requirement | Evidence |
@@ -42,7 +42,7 @@ been executed. Offline scenarios cannot prove what Discord's own service display
 | ❌ | R-DIS-12 | A control that changes a running turn is reflected by that turn's own state and outcome, not invented by the slash-command acknowledgement. | not proven — Stop, restart, and shut down active and idle cases. |
 | ❌ | R-DIS-13 | Text longer than one Discord message is split without loss at safe boundaries; only the first answer piece carries reply/recipient emphasis, and declared files accompany the last piece. | not proven — Compare reconstructed short, multiline, and no-break long answers with the original. |
 | ❌ | R-DIS-14 | Discord writes are paced and failures are correlated so a refused or rate-limited delivery is never reported as complete. | not proven — Exercise burst, rate-limit, forbidden, deleted-channel, and locked-thread cases. |
-| ❌ | R-DIS-15 | The notified owner receives a gateway-online notice after the Discord connection is ready and a gateway-going-offline notice during graceful shutdown. | not proven — Start and stop a gateway on real Discord with and without a notified channel. |
+| ❌ | R-DIS-15 | Every allowed user receives a private gateway-online notice after the Discord connection is ready and a gateway-going-offline notice during graceful shutdown. | not proven — Start and stop a gateway on real Discord with one and several allowed users, and with no notified channel. |
 | ❌ | R-DIS-16 | The bot presents the agent as online while its channel connection is serving and attempts to present it as offline during graceful shutdown without blocking shutdown indefinitely. | not proven — Observe presence across connect, resume, graceful stop, and a presence API refusal. |
 | ✅ | R-DIS-17 | A completed answer includes one quiet usage summary and omits quantities the provider did not report. | `test_cache_writes_are_never_shown`, `test_the_answer_carries_what_the_turn_cost_and_only_the_first_piece_does`, `test_the_whole_line_a_person_reads`, `test_what_a_turn_cost_stands_above_the_answer_in_small_print` |
 | ❌ | R-DIS-19 | Each accepted local file explicitly declared by the agent is uploaded with the final answer; a verification or Discord refusal is visible and never leaks the machine path. | not proven — Upload representative text/image files and exercise changed, missing, oversized, and permission-refused files. |
@@ -64,12 +64,13 @@ been executed. Offline scenarios cannot prove what Discord's own service display
 | ❌ | R-DIS-35 | A terminal notice never claims an idle turn is working and never erases the working indication for a newer turn. | not proven — Race two turns and their ending/working state records. |
 | ❌ | R-DIS-36 | `/skills` privately lists the current agent's granted skills in a complete, readable response. | not proven — Exercise no grants, many grants beyond one Discord message, and concurrent requests. |
 | ❌ | R-DIS-37 | `/schedules` privately lists the current agent's schedules that can still run, soonest first, and says when none remain. | not proven — Exercise repeating, future, expired, disabled, and unreadable schedules. |
-| ❌ | R-DIS-38 | A notice meant for the owner alone is sent as a direct message, starts no conversation, and is not recorded as agent-authored speech. | not proven — Exercise short, long, empty, refused, and retried notices. |
+| ❌ | R-DIS-38 | An unsolicited notice is sent as a private direct message to every allowed user, starts no conversation, and is not recorded as agent-authored speech. | not proven — Exercise short, long, empty, refused, and retried notices on real Discord. |
 | ❌ | R-DIS-39 | A notice addressed to one authorized user is sent privately to that user and refused for an identity outside the channel allow list. | not proven — Exercise authorized and unauthorized targeted notices. |
 | ❌ | R-DIS-40 | A completed answer names its recipient only in a place holding more than that one person; a direct message adds no redundant mention. | not proven — Compare direct, room, thread, and scheduled answers. |
 | ❌ | R-DIS-41 | When a completed answer names its recipient, the mention stands beneath the completion metadata rather than before it. | not proven — Inspect short and split answers in a multi-person place. |
 | ❌ | R-DIS-42 | `/agents` privately lists every known agent in deterministic, case-insensitive agent order. Each agent is exactly `- **name** (provider) — description` followed by `  - Skills: ...`, with skills in deterministic, case-insensitive order. Provider paths expose only their final component; missing providers say `provider unknown`; unreadable providers say `provider cannot be read`. Missing or empty descriptions say `no description`; unreadable descriptions say `description cannot be read`; no grants says `none`; unreadable grants says `cannot be read`. Zero agents says exactly `No agents.` The query starts no provider turn. | not proven — Exercise zero agents, described and undescribed agents, bare/path/missing/unreadable providers, no/one/many grants, unreadable records and grants, case-varied ordering, long output, and concurrent requests; verify exact privacy-safe Markdown, lossless ordered ephemeral followups, and no provider turn. |
 | ❌ | R-DIS-43 | `/delegations` privately shows each relevant named-agent and observable provider-local item once for the invoking DM, room, or thread. Named-agent work distinguishes active, stopping, returned-awaiting-review, and reviewed; preserves reset/replacement routing; excludes unrelated and stale work; and exposes no full prompt, result, hidden reasoning, credential, provider tool name, path, or opaque session handle. Provider-local visibility is explicitly partial. | not proven — Exercise authorized and unauthorized DM/room/thread queries, active/stopping/returned/reviewed and stale records, a reset origin routed into the current turn, provider-local start/result records, long concurrent responses, sentinels, and unchanged turn/delegation state. |
+| ✅ | R-DIS-44 | Every currently allowed Discord user receives one private copy of an unsolicited notice. A stale stored notification DM and duplicate DM destinations add no recipient, a schedule reply anchor is used only for its primary copy, and every recipient's attachment is independently verified. Direct answers never fan out. | `test_every_allowed_user_receives_the_notice_once`, `test_two_allowed_ids_for_one_dm_still_receive_one_notice`, `test_only_the_primary_notice_copy_quotes_the_schedule_announcement`, `test_each_recipient_gets_a_fresh_verified_attachment`, `test_a_direct_answer_stays_in_the_one_conversation_that_asked` |
 
 ## Open questions
 

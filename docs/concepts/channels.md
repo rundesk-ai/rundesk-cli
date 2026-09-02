@@ -33,10 +33,11 @@ time.
 anything is written, because a record of a message is a thing an agent could later be asked to read.
 An empty allow list authorises nobody, never everybody.
 
-**At most one channel may be `notified`**, held by a partial unique index. That is the channel gateway
-notices, scheduled results and other unprompted messages go to. It is moved in one transaction rather
-than set directly, because a caller that clears the old one and then fails to set the new leaves an
-agent that tells nobody anything.
+**At most one channel may be `notified`**, held by a partial unique index. That selects the adapter
+gateway notices, scheduled results and other unprompted messages use; it does not select one person.
+The shipped Discord adapter privately gives every user on that channel's allowlist one copy. The
+channel is moved in one transaction rather than set directly, because a caller that clears the old
+one and then fails to set the new leaves an agent that tells nobody anything.
 
 ## The adapter is a child, and its claim is the check
 

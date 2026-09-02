@@ -28,8 +28,9 @@ Prefix every command with `"$RUNDESK_COMMAND"`.
    token are one bot answering twice.
 3. Add at least one exact platform sender ID with repeatable `--allow`. An empty allow list is
    refused so a connected agent cannot silently answer nobody.
-4. **Pass `--notify` on the first channel, and make it the owner's own direct message.** See below:
-   this is the one setup mistake the command cannot warn about.
+4. **Pass `--notify` on the first channel.** On Discord, every allowed user receives unsolicited
+   notices privately; no separate recipient list is needed. See below: this is the one setup mistake
+   the command cannot warn about.
 5. Quote `--with` as one string. Rundesk passes those words to the adapter without a shell and does
    not interpret platform-specific options.
 6. Run `show`, `test`, and `doctor`; then inspect gateway logs after the gateway hosts it.
@@ -40,9 +41,10 @@ need not re-enter it for an unrelated retry.
 
 ## The notified channel, and why a first setup must not skip it
 
-**`--allow` is who may reach the agent. `--notify` is where the agent speaks first.** They are
-different questions and only the first is required, so a channel added without `--notify` connects,
-answers when spoken to, and never says anything on its own.
+**`--allow` is who may reach the agent and, on Discord, who receives its private unsolicited
+notices. `--notify` selects which channel adapter speaks first.** Only the first is required, so a
+channel added without `--notify` connects, answers when spoken to, and never says anything on its
+own.
 
 What is lost is everything unprompted: the gateway announcing that it came up and that it is going
 down, a skill gained or revoked, a schedule's report, a delegation handing its result back. The
@@ -54,12 +56,14 @@ never exist would hold the notice for ever, which is the same silence from the o
 `--notify` leaves a working agent and one word — `told no` — in the block it prints. Observed on a
 real setup: the bot answered a DM immediately and the owner asked why it had never announced itself.
 
-- **Make the owner's own direct message the notified channel**, on the first channel added. It
-  exists before any server does, only the owner can read it, and unprompted news is for them.
+- **Make Discord the notified channel** on the first channel added. Each allowed user receives their
+  own private copy; adding or denying an allowed ID changes that recipient set when the adapter next
+  starts. Direct replies still stay only in the conversation that asked.
 - Adding it afterwards is `channels configure <agent> <adapter> --notify` — **then restart the
   gateway**, because the up-notice is said once per gateway and the one already running has
   said it.
-- Only one channel per agent is the notified one. Selecting another moves that role.
+- Only one channel adapter per agent is notified. Selecting another moves that role; schedules do
+  not choose a caller's DM separately.
 
 ## Access and recovery
 

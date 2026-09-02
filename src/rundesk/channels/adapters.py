@@ -147,11 +147,11 @@ def checked(kind: str, options: Sequence[str], env: Dict[str, str],
     the adapter except the handful in `CARRIED`.
 
     **`RUNDESK_ALLOW` belongs in `env` too, and the caller puts it there.** Who may reach an agent is
-    not only a hosting-time fact: an adapter reports where unprompted things would land by opening
-    that conversation with the first id on the list, so one asked to connect without the list refuses
-    before it has signed in — and a caller that carried only the credential would meet that refusal
-    on every `add`. `channels.hosting` builds the same variable, from the same list, for the
-    long-lived half.
+    not only a hosting-time fact: an adapter may need to open private conversations for the people
+    on that list, including while it checks the first destination it can reach. One asked to connect
+    without the list can therefore refuse before it has signed in — and a caller that carried only
+    the credential would meet that refusal on every `add`. `channels.hosting` builds the same
+    variable, from the same list, for the long-lived half.
 
     **A program that died without printing an object failed; one that printed `ok: false` refused.**
     Both come back as `ok=False`, and `why` says which, because the sentence is the whole of what a
@@ -209,7 +209,6 @@ def _refused(why: str, named: Optional[List[str]] = None) -> Checked:
     """
     return Checked(ok=False, describes="", notify_place=None, settings="{}",
                    secret_names=list(named or []), invite="", why=why)
-
 
 
 

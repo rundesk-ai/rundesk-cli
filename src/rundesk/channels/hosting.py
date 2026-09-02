@@ -804,7 +804,7 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
          pieces: List[str], sending: Sequence[naming.Sending] = (),
          answering: Optional[str] = None, cost: str = "",
          landed_within: float = 0.0, noting: Optional[List[str]] = None,
-         refusals: Optional[List[str]] = None) -> bool:
+         refusals: Optional[List[str]] = None, notice: bool = False) -> bool:
     """Send something to a place through a running adapter. `False` when there is nothing to send it.
 
     `False` rather than an exception: a notice that could not be delivered because the adapter is
@@ -852,6 +852,11 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
     that way: an adapter is free to acknowledge nothing at all, so silence and success arrive here
     identically. What an empty list means is *nobody said this was refused*, which is the honest
     reading and the one `_delivered` in `providers.answering` acts on.
+
+    `notice` says nobody prompted this delivery in one conversation. The ordinary `place` stays as
+    its compatible primary destination, while an adapter that can address allowed people
+    individually may give each one a copy. Direct answers and remarks leave it false, so one
+    person's conversation is never widened into everybody's notification.
     """
     one = watching.running.get(kind)
     if one is None or one.talking is None:
@@ -872,6 +877,8 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
             record["cost"] = cost
         if answering and nth == 0:
             record["reply_to"] = answering
+        if notice:
+            record["notice"] = True
         one.awaiting[record["id"]] = answering if answering and nth == 0 else ""
         _make_room(one.awaiting)
         if not _said_to(where, one, record):
@@ -941,7 +948,7 @@ def announced(agent: str, where: Path, watching: Watching, kind: str, place: str
         return None
     written: List[str] = []
     if not told(agent, where, watching, kind, place, pieces, noting=written,
-                landed_within=within, refusals=refusals):
+                landed_within=within, refusals=refusals, notice=True):
         return None
     # One indivisible read of a dict two threads share, which is the only safe operation on it.
     # Nothing was acknowledged, or it was acknowledged with no id: both are `None`, and the caller

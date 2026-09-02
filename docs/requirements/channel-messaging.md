@@ -1,7 +1,7 @@
 ---
 id: CH
 name: A channel conversation and the work that arrives on it
-last_verified: 2026-09-01
+last_verified: 2026-09-02
 ---
 
 ## What this is
@@ -21,9 +21,9 @@ without deciding turn state or exposing private tool detail.
 
 ## Requirements
 
-A ✅ names the test methods that cite the requirement and were observed to pass on 2026-09-01 —
+A ✅ names the test methods that cite the requirement and were observed to pass on 2026-09-02 —
 `test_providers_answering.py`, `test_channels_hosting.py`, `test_channels_discord.py`, and
-`test_channels_delivery.py`, 395 tests across the four. A ❌ carries the acceptance that has not
+`test_channels_delivery.py`, 402 tests across the four. A ❌ carries the acceptance that has not
 been executed.
 
 |  | ID | Requirement | Evidence |
@@ -63,6 +63,7 @@ been executed.
 | ❌ | R-CH-35 | The shared delegation query resolves the current platform place to one durable conversation after authorization, joins current named-agent work with only the provider-local lifecycle visible in the current provider session, labels session replacement and delivery routing, and excludes unrelated or stale completed work without mutating state. | not proven — Query authorized and unauthorized identities across two conversations before/after session reset and review; inspect turn/delegation counts, privacy sentinels, item identity/state/routing/timing, and partial-visibility wording. |
 | ✅ | R-CH-36 | Stopping settles the unresolved tail of inbound channel messages no turn ever admitted: they become one stopped turn with no provider started, exactly the messages that turn claimed are marked stopped, and the place's activity indicator ends. Nothing it leaves behind can still be run — neither a message a later admitted turn superseded nor a row beyond the bound of one claim — and a turn published while it read those rows is stopped instead, marking nothing and leaving them recoverable. | `test_stopping_settles_an_inbound_message_no_turn_ever_admitted`, `test_stopping_leaves_a_message_later_work_already_superseded_alone`, `test_stopping_more_pending_messages_than_one_claim_holds_leaves_none_runnable`, `test_stopping_marks_nothing_when_a_turn_started_while_it_read_the_pending_rows` |
 | ✅ | R-CH-37 | A message refused admission before any turn existed ends the activity indicator raised for it and stays pending and unmarked, so a replacement gateway can still recover it. The shipped adapter ends its own renewal on that terminal state and reacts to nothing. | `test_admission_refused_before_a_turn_does_not_leave_the_place_typing`, `test_a_terminal_state_naming_no_message_still_ends_it` |
+| ✅ | R-CH-38 | An unsolicited delivery is explicitly distinguished from a direct answer. The shipped Discord adapter privately sends it once to every currently allowed user, while a direct answer stays only in the conversation that asked. | `test_only_an_unsolicited_delivery_is_named_as_a_notice`, `test_every_allowed_user_receives_the_notice_once`, `test_a_direct_answer_stays_in_the_one_conversation_that_asked` |
 
 ## Open questions
 

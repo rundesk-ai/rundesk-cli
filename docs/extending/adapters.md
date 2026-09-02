@@ -137,8 +137,8 @@ platform needs.** It never reaches a shell, so nothing in it is globbed, expande
 name the adapter named it.
 
 **`RUNDESK_ALLOW` is set here and not only at hosting time**, and it is not decoration: an adapter
-that reports where unprompted things would land does it by opening a private conversation with the
-first id on the list, so one asked to connect without the list refuses before it has signed in.
+may open private conversations for the people on the list, including while it checks the first
+destination it can reach, so one asked to connect without the list can refuse before it signs in.
 
 **Print:** one JSON object, read the same way as above.
 
@@ -405,7 +405,8 @@ Five, and only five exist today.
 
 ```json
 {"do": "deliver", "id": "1754431200.123456-0-7", "place": "1180", "text": "Three files changed…",
- "reply_to": "8841", "cost": "codex · 2.2k input · 481 output · 78k cached · 1m elapsed"}
+ "reply_to": "8841", "cost": "codex · 2.2k input · 481 output · 78k cached · 1m elapsed",
+ "notice": true}
 {"do": "deliver", "id": "1754431200.123456-2-9", "place": "1180", "text": "here it is",
  "files": [{"name": "chart.png", "at": "/…/agents/alan/home/chart.png", "bytes": 9,
             "sha256": "b1f3…"}]}
@@ -422,7 +423,7 @@ Five, and only five exist today.
 
 | | Fields | |
 |---|---|---|
-| `deliver` | `id`, `place`, `text`, sometimes `files`, sometimes `reply_to`, sometimes `cost` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed` |
+| `deliver` | `id`, `place`, `text`, sometimes `files`, `reply_to`, `cost`, or `notice` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed`. `notice: true` means nobody prompted this delivery in one conversation; `place` remains its compatible primary destination |
 | `state` | `place`, `state`, sometimes `external_id` | show what rundesk says a turn is doing. `external_id` names the message the state belongs to; **without one the state belongs to the place** — see below |
 | `activity` | `place`, `did`, sometimes `ok`, sometimes `who` | show what the agent is doing, while it is still doing it |
 | `delegation` | `place`, `state`, `who`, `ask`, sometimes `elapsed`, sometimes `provider` and with it sometimes `provider_alias` | show what became of work this agent handed to another agent, which brain is doing it, and what has just been done to it |
@@ -433,6 +434,13 @@ Five, and only five exist today.
 words describing a file are what a reader wants above it, and a platform hangs an attachment under
 the message it came with. A record carrying `files` and an empty `text` is one to take; a record with
 neither is never sent.
+
+**`notice: true` is permission to fan out, not a second destination.** It appears only on gateway
+notices, schedule announcements and reports, and other unsolicited delivery. An adapter that can
+privately address the allowed identities may give each one a copy; the shipped Discord adapter does.
+An adapter that does not implement fan-out ignores the optional field and keeps delivering to
+`place`, which preserves the existing contract. Never infer this from the text and never fan out a
+delivery without it: ordinary answers belong only in the conversation that asked.
 
 **`reply_to` is how rundesk says *this one is the answer*.** It carries the `external_id` of the
 message being answered. A delivery with it is posted as a reply to that message; a delivery without

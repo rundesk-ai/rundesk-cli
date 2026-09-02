@@ -1583,6 +1583,9 @@ class AScheduleThatAsksTheAgent(Answering):
         self.assertEqual("nightly", review["schedule_name"])
         self.assertTrue(self.waited_until(lambda: len(self.delivered()) > before))
         self.assertIn(marker, " ".join(self.delivered()[before:]))
+        report = [one for one in self.what_it_was_told() if one.get("do") == "deliver"][-1]
+        self.assertIs(report["notice"], True,
+                      "the scheduled review was sent as one person's private answer")
         later = self.marks()
         self.assertIn(answering.WORKING, later)
         self.assertTrue(any(one in (answering.DONE, answering.STOPPED, answering.FAILED)

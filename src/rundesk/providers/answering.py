@@ -239,7 +239,7 @@ class IntoAChannel:
 
     def _delivered(self, agent: str, kind: str, place: str, got: turns.Outcome,
                    external_id: Optional[str] = None,
-                   linked_earlier: Tuple[str, ...] = ()) -> str:
+                   linked_earlier: Tuple[str, ...] = (), notice: bool = False) -> str:
         """The answer, cut to what this platform takes, with whatever the brain made beside it.
 
         **Hands back why the platform would not take it, or `""`.** A turn whose answer was refused
@@ -306,7 +306,7 @@ class IntoAChannel:
         turned_away: List[str] = []
         wrote = hosting.told(agent, self._where, self._hosted(), kind, place, pieces,
                              sending=prepared.files, answering=external_id, cost=cost,
-                             landed_within=LANDS_WITHIN, refusals=turned_away)
+                             landed_within=LANDS_WITHIN, refusals=turned_away, notice=notice)
         if not wrote:
             # Nothing was hosting this channel by the time the answer was ready. The words exist in
             # the agent's own records either way; what does not exist is anywhere a person can read
@@ -1182,7 +1182,9 @@ class OnADelegation(IntoAChannel):
                             hosting.marked(
                                 agent, self._where, self._hosted(), kind, delivery_place, became)
                     if kind and watching:
-                        self._out_loud(agent, kind, delivery_place, got, watching, about)
+                        self._out_loud(
+                            agent, kind, delivery_place, got, watching, about,
+                            notice=source == arriving.FROM_SCHEDULE)
                     return True
                 except turns.Busy:
                     said_into = turns.Admission()
@@ -1222,7 +1224,7 @@ class OnADelegation(IntoAChannel):
         return None
 
     def _out_loud(self, agent: str, kind: str, place: str, got: turns.Outcome,
-                  watching: "_Streaming", about: str) -> None:
+                  watching: "_Streaming", about: str, notice: bool = False) -> None:
         """Send what the turn settled with to the room it was asked in. **Never raises.**
 
         Guarded rather than left to the caller's `except`: a platform that would not take the answer
@@ -1235,7 +1237,7 @@ class OnADelegation(IntoAChannel):
         """
         try:
             refused = self._delivered(
-                agent, kind, place, got, None, tuple(watching.linked))
+                agent, kind, place, got, None, tuple(watching.linked), notice=notice)
         except Exception as why:  # noqa: BLE001 — a thread, and nobody is above it
             _note(self._where, f"{about} could not be sent to {kind} ({why})", logs.ERROR)
             return
