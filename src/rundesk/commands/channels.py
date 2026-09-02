@@ -193,7 +193,8 @@ def register(sub: Subcommands) -> None:
     changed.add_argument("--notify", action="store_true",
                          help="make this the channel unprompted things go to")
 
-    tried = what.add_parser("test", help="ask the adapter to connect again, and say what it reached")
+    tried = what.add_parser("test", help="ask the adapter to reach the platform again, and say "
+                                         "what it found")
     _named(tried)
 
     gone = what.add_parser("remove", help="take a channel away")
@@ -814,7 +815,7 @@ def _configured(args: argparse.Namespace) -> int:
 
 
 def _tested(agent: str, kind: str, reaching: Optional[Reaching]) -> int:
-    """Ask the adapter to connect again with what the channel already has, and say what it reached.
+    """Ask the adapter to reach the platform again, and say what it found.
 
     **Changes nothing, including the record of what it found.** A credential that was reset in
     somebody's developer portal is the case this exists for, and the answer to that is a sentence at
@@ -921,10 +922,10 @@ def _doctored(agent: Optional[str], reaching: Optional[Reaching]) -> int:
     non-zero for a channel it could not reach even though the question it was asked was answered
     perfectly well.
 
-    **It really connects.** A credential that is set and no longer accepted is the failure this
-    exists to find, and nothing on this machine can tell that from one that is: the adapter has to be
-    asked. So a channel whose credential is missing is `BLOCKED` without a round trip, and everything
-    else pays for one.
+    **It really asks the adapter.** A credential that is set and no longer accepted is the failure
+    this exists to find, and nothing on this machine can tell that from one that is: the adapter has
+    to be asked. So a channel whose credential is missing is `BLOCKED` without a round trip, and
+    everything else pays for the adapter-specific check.
     """
     if agent is not None:
         gone_wrong = directory.not_an_agent(agent)

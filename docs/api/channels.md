@@ -18,7 +18,7 @@ they say it.
 | `channels add <agent> <adapter> --allow <id> [--notify] [--with '<adapter opts>']` | connect an agent to a platform |
 | `channels show <agent> <adapter>` | everything one channel was given |
 | `channels configure <agent> <adapter> [--allow <id>] [--deny <id>] [--notify]` | change who may reach it, or what is notified |
-| `channels test <agent> <adapter>` | connect again, and say what it reached |
+| `channels test <agent> <adapter>` | reach the platform again, and say what it found |
 | `channels remove <agent> <adapter> --confirm` | take one away |
 | `channels doctor [<agent>]` | what cannot be used, and exactly why |
 
@@ -292,7 +292,7 @@ those; an agent whose gateway you had stopped yourself needs starting.
 **4 · Now prove it, on the release that reads the scoped name.**
 
 ```sh
-rundesk channels test alan discord           # really connects, as this agent. Writes nothing
+rundesk channels test alan discord           # reaches the platform again. Writes nothing
 rundesk channels doctor                      # exits non-zero if anything is not ready
 ```
 
@@ -337,10 +337,14 @@ list and a round trip to a platform, and none of that comes back from a copy of 
 
 ### channels test
 
-Asks the adapter to connect again with what the channel already has, and says what it reached. It
+Asks the adapter to reach the platform again with what the channel already has, and says what it found. It
 changes nothing at all, including the record of what it found — a token that was reset in somebody's
 developer portal is the case this exists for, and the answer to that is a sentence at a terminal
 rather than a channel quietly rewritten underneath whoever is reading it.
+
+What reaching proves is adapter-specific. Discord opens its gateway connection. Slack authenticates,
+validates the granted scopes, and obtains a Socket Mode URL without opening a second websocket that
+could take live events from the gateway's connection.
 
 ### channels remove
 
@@ -388,7 +392,7 @@ no honest thing to type.
 
 | Verdict | Means |
 |---|---|
-| `READY` | the adapter is there, its credential is set, and it connected just now |
+| `READY` | the adapter is there, its credential is set, and its `--check` came back `ok` just now |
 | `BLOCKED` | no name this channel's credential could stand under holds anything this install can read — including one that is there and cannot be opened, which is never read past to the shared name |
 | `UNREACHABLE` | everything is in place and `--check` failed now — the platform said why |
 | `DANGLING` | there is no program behind this channel any more |
@@ -405,10 +409,10 @@ exits `78` its gateway stops starting it for the rest of that gateway's life, an
 existed the channel was reported `READY` while nothing had hosted it for hours. `rundesk gateways
 restart <agent>` is the whole of the fix, and it is what the summary tells you to type.
 
-**It really connects**, and that is what `UNREACHABLE` costs. A credential that is set and no longer
-accepted is the failure this exists to find, and nothing on this machine can tell that from a working
-one: the adapter has to be asked. A channel whose credential is missing is `BLOCKED` without paying
-for a round trip.
+**It really asks the adapter**, and that platform-specific round trip is what `UNREACHABLE` costs. A
+credential that is set and no longer accepted is the failure this exists to find, and nothing on
+this machine can tell that from a working one: the adapter has to be asked. A channel whose
+credential is missing is `BLOCKED` without paying for a round trip.
 
 The columns are measured against what is actually there rather than fixed. The findings go to stdout
 and the summary to stderr, so a script can read one and ignore the other — and the findings are

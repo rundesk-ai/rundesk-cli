@@ -69,7 +69,7 @@ import sys
 import threading
 import time
 import traceback
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
 #: The vendor library, bound by `the_library()` at the moment it is first needed.
 #:
@@ -226,6 +226,18 @@ STATUS_METHOD = "agents.sessions.setStatus"
 #: produces no event — it is not filtered out here, it never arrives.
 MENTION = "app_mention"
 MESSAGE = "message"
+HELLO = "hello"
+EVENTS_API = "events_api"
+
+#: Content-free diagnostic boundaries. Each is written to the gateway log at most once per run.
+IGNORED = {
+    "not_an_event": "Slack delivered an envelope that was not an events_api event",
+    "no_event": "Slack delivered an events_api envelope without an event object",
+    "not_woken": "Slack delivered an event this adapter does not wake for",
+    "already": "Slack redelivered an event this adapter had already handled",
+    "not_allowed": "Slack delivered an event outside the configured sender and place allow lists",
+    "woken": "Slack delivered an allowed event that woke this channel",
+}
 
 #: Message subtypes that are not somebody speaking. A join notice, an edit and a deletion all arrive
 #: on the same event as a message does, and answering one is answering nothing. Most of these carry
@@ -955,8 +967,13 @@ class Reaching:
         #: The channel-and-thread pairs whose own session Slack refuses, so the same place is not
         #: asked about on every turn. Bounded, and it quiets nothing but the places in it.
         self.sessionless: Dict[str, float] = {}
-        #: Whether the socket is up, so `ready` and `gone` are said on the change.
+        #: Whether Slack has greeted the current socket, so `ready` and `gone` are earned facts.
         self.connected = False
+        #: The SDK session Slack most recently greeted. A different current session is not ready
+        #: until its own greeting arrives.
+        self.greeted_session: Optional[str] = None
+        #: Diagnostic boundaries already reported. Fixed words only, bounded by `IGNORED`.
+        self.reported: Set[str] = set()
         self.stopping = threading.Event()
         #: Held across every write to the maps above and to `connected`. **Two kinds of thread write
         #: here** — the socket client's own workers carry what arrives, and one thread of this
@@ -994,10 +1011,10 @@ class Reaching:
                 signal.signal(sig, self._signalled)
 
         self.socket = SocketModeClient(app_token=app, web_client=self.web)
-        self.socket.socket_mode_request_listeners.append(self._envelope)
-        self.socket.on_close_listeners.append(lambda *_: self._down())
+        self._listening()
         reading = threading.Thread(target=self._reading, name="rundesk", daemon=True)
         watching = threading.Thread(target=self._watching, name="socket", daemon=True)
+        noted("opening the Socket Mode websocket and waiting for Slack to say hello on it", "info")
         try:
             self.socket.connect()
         except Exception as why:           # noqa: BLE001 — a platform boundary
@@ -1005,7 +1022,6 @@ class Reaching:
             self._trouble(_why_slack_refused(why), never_again=bool(final))
             say({"say": "gone", "why": self.trouble})
             return WILL_NOT_FIX if self.unrecoverable else 1
-        self._up()
         reading.start()
         watching.start()
 
@@ -1019,6 +1035,11 @@ class Reaching:
         if self.unrecoverable:
             return WILL_NOT_FIX
         return 1 if self.trouble else 0
+
+    def _listening(self) -> None:
+        """Register the raw greeting and decoded event boundaries on the vendor client."""
+        self.socket.socket_mode_request_listeners.append(self._envelope)
+        self.socket.message_listeners.append(self._said_about_connection)
 
     def _identified(self, who: Any) -> None:
         """Take who this app is from Slack's own answer, and derive none of it.
@@ -1068,39 +1089,59 @@ class Reaching:
 
     # -- the connection itself -------------------------------------------------------------
 
-    def _up(self) -> None:
-        """Said on connecting, once per change and not once per attempt behind it."""
-        with self.holding:
-            if self.connected:
+    def _said_about_connection(self, client: Any, message: Any, _raw: Any = None) -> None:
+        """Earn readiness from Slack's `hello`, without interpreting any private payload."""
+        try:
+            if not isinstance(message, dict) or str(message.get("type") or "") != HELLO:
                 return
-            self.connected = True
-        say({"say": "ready", "as": f"{self.named} in {self.team}" if self.named else self.team})
+            session: Optional[str] = None
+            with contextlib.suppress(Exception):
+                found = client.session_id()
+                session = str(found) if found else None
+            with self.holding:
+                replaced = bool(self.connected and self.greeted_session and session
+                                and session != self.greeted_session)
+                if replaced:
+                    self.connected = False
+                self.greeted_session = session
+                if not self.connected:
+                    self.connected = True
+                    became_ready = True
+                else:
+                    became_ready = False
+                noted("Slack said hello on this Socket Mode websocket", "info")
+                if replaced:
+                    say({"say": "gone",
+                         "why": "the Socket Mode websocket changed; its replacement has now said hello"})
+                if became_ready:
+                    say({"say": "ready",
+                         "as": f"{self.named} in {self.team}" if self.named else self.team})
+        except Exception:                  # noqa: BLE001 — one message is not the channel
+            cannot_say(traceback.format_exc())
 
-    def _down(self) -> None:
-        """Said once per loss, so somebody can tell a quiet agent from a deaf one.
-
-        Reached from two places — the client's own close listener and the watcher below — so the
-        change is decided under the lock and the record is written outside it.
-        """
+    def _reconcile(self) -> None:
+        """Withdraw readiness when the greeted websocket is gone or has been replaced."""
         with self.holding:
-            if not self.connected:
-                return
-            self.connected = False
-        say({"say": "gone", "why": "the socket closed"})
+            connected_now = bool(self.socket.is_connected())
+            session: Optional[str] = None
+            if connected_now:
+                with contextlib.suppress(Exception):
+                    found = self.socket.session_id()
+                    session = str(found) if found else None
+            replaced = bool(connected_now and self.connected and self.greeted_session and session
+                            and session != self.greeted_session)
+            if self.connected and (not connected_now or replaced):
+                self.connected = False
+                self.greeted_session = None
+                losing = ("the Socket Mode websocket changed and the replacement has not said hello"
+                          if replaced else "the socket closed")
+                say({"say": "gone", "why": losing})
 
     def _watching(self) -> None:
-        """Ask the socket whether it is still there, because nothing offers to say when it is back.
-
-        The built-in client reconnects on its own and has a listener for the close and none for the
-        open, so the two halves of *is it up* have to be asked in one place or `ready` would be said
-        on the first connection and never again.
-        """
+        """Ask whether the greeted websocket is still the one the client currently holds."""
         while not self.stopping.wait(WATCHING_SECONDS):
             try:
-                if self.socket.is_connected():
-                    self._up()
-                else:
-                    self._down()
+                self._reconcile()
             except Exception:              # noqa: BLE001 — asking must never end the program
                 cannot_say(traceback.format_exc())
 
@@ -1127,28 +1168,43 @@ class Reaching:
 
     def _an_event(self, request: Any) -> None:
         """What was in that envelope, if it is something this wakes for."""
-        if str(getattr(request, "type", "")) != "events_api":
+        if str(getattr(request, "type", "")) != EVENTS_API:
+            self._observed("not_an_event")
             return
         payload = getattr(request, "payload", None)
         if not isinstance(payload, dict):
+            self._observed("no_event")
             return
         event = payload.get("event")
         if not isinstance(event, dict):
+            self._observed("no_event")
             return
         kind = str(event.get("type") or "")
         woken = waking(kind, event, self.ours)
         if woken is None:
+            self._observed("not_woken")
             return
         # **Two keys and not one.** The envelope's own id catches Slack sending the same delivery
         # again; the message's own catches the same message arriving through a second event or a
         # reconnection that replayed it. Either alone leaves a way for one question to become two
         # turns.
+        if not self._may(woken):
+            self._observed("not_allowed")
+            return
         if self._already(str(payload.get("event_id") or ""),
                          f"{woken.channel}/{woken.ts}"):
+            self._observed("already")
             return
-        if not self._may(woken):
-            return
+        self._observed("woken")
         self._say_it_arrived(woken)
+
+    def _observed(self, boundary: str) -> None:
+        """Log one fixed sentence once; never repeat Slack content or identifiers."""
+        with self.holding:
+            if boundary in self.reported:
+                return
+            self.reported.add(boundary)
+        cannot_say(IGNORED[boundary])
 
     def _already(self, envelope: str, message: str) -> bool:
         """Whether this has been acted on. Written down here so the answer is the same twice."""

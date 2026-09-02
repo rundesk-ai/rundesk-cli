@@ -81,7 +81,8 @@ draining on the loop *is* that bug. The thread reads lines and records them; the
 whether the child is alive, starts one that is not, and stops them all at the end.
 
 `STANDING` in a listing is asked of the kernel through that claim, exactly as `rundesk gateways` asks
-about a gateway. `connected` means somebody is reading it.
+about a gateway. `connected` means the adapter earned the readiness signal it reports; for Slack,
+that requires Slack's `hello`, not merely a locally opened websocket.
 
 ## Going out: cut to what the platform takes
 

@@ -65,10 +65,9 @@ display_information:
 features:
   bot_user:
     display_name: rundesk
-    # False on purpose. A bot marked always online says an agent is up when the process behind it
-    # has gone; left false, the green dot follows the Socket Mode connection, which is exactly as
-    # long as the agent's gateway is running.
-    always_online: false
+    # Socket Mode does not drive Slack's presence indicator. Keep the bot visibly available;
+    # gateway health is reported by Rundesk and its logs, not by Slack's green dot.
+    always_online: true
 
   app_home:
     # Without both of these nobody can send the bot a direct message, and the channel is deaf with
@@ -333,8 +332,8 @@ from two of them never folds two exchanges into one.
 
 ## Troubleshooting
 
-Start with `rundesk channels doctor ava`, which really connects, and then `rundesk gateways logs
-ava`. What the adapter wrote to stderr is in
+Start with `rundesk channels doctor ava`, which authenticates and asks Slack for a Socket Mode URL
+without opening a second websocket. Then run `rundesk gateways logs ava`. What the adapter wrote to stderr is in
 `data/agents/ava/channels/slack/stderr.log`.
 
 | What you see | Usually |
@@ -345,6 +344,9 @@ ava`. What the adapter wrote to stderr is in
 | `has not been granted …` | a scope was added after the token was issued. Reinstall the app to the workspace |
 | `the app-level token … was not [accepted]` | Socket Mode is off, or the token has no `connections:write` |
 | `it is not in C… yet` | nobody has run `/invite @rundesk` there |
+| `opening the Socket Mode websocket…` with no later `Slack said hello…` | this machine opened the websocket but Slack has not greeted it; the channel does not report ready |
+| `Slack said hello…` with no `Slack delivered…` line after a test message | Slack established the websocket, but no event has crossed the adapter's observed boundaries yet |
+| `Slack delivered…` | the fixed sentence names the boundary reached; it never includes message text, member, channel, workspace, or credential values |
 | the bot answers a DM and ignores a channel | it was not invited, or nobody named it. It stays silent until named |
 | the bot ignores direct messages | **App Home** → **Messages Tab** is off. The manifest turns it on; an app made by hand often has neither |
 | no typing indicator ever appears | [step 2](#2-declare-the-app-as-an-agent) was skipped, or it was done after installing and the app has not been installed again since, or the exchange is a flat direct message. Nothing is posted in its place |

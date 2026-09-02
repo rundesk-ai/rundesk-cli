@@ -80,7 +80,7 @@ rundesk channels list [<agent>]           # every agent's channels, and how each
 rundesk channels add <agent> <adapter> --allow <id> [--notify] [--with '<adapter opts>']
 rundesk channels show <agent> <adapter>   # everything one channel was given
 rundesk channels configure <agent> <adapter> [--allow <id>] [--deny <id>] [--notify]
-rundesk channels test <agent> <adapter>   # connect again, and say what it reached
+rundesk channels test <agent> <adapter>   # reach the platform again, and say what it found
 rundesk channels remove <agent> <adapter> --confirm       # take one away
 rundesk channels doctor [<agent>]         # what cannot be used, and exactly why
 rundesk skills list [<agent>]             # every skill this install has, and who holds which

@@ -12,7 +12,7 @@ credential names, and whether unsolicited notifications go there. Two adapters s
 | `channels add <agent> <adapter> --allow <id> [--allow <id> ...] [--notify] [--with '<adapter opts>']` | Connect and persist a channel after the adapter proves it can reach the platform. |
 | `channels show <agent> <adapter>` | Show the complete stored channel definition. |
 | `channels configure <agent> <adapter> [--allow <id> ...] [--deny <id> ...] [--notify]` | Add or remove allowed senders and places, or choose the notification channel. |
-| `channels test <agent> <adapter>` | Connect again and report what the adapter reached. |
+| `channels test <agent> <adapter>` | Reach the platform again and report what the adapter found. |
 | `channels remove <agent> <adapter> [--confirm]` | Preview removal; `--confirm` removes the connection. |
 | `channels doctor [<agent>]` | Diagnose every channel or one agent's as READY, BLOCKED, UNREACHABLE, DANGLING, or GIVEN UP. |
 
@@ -48,9 +48,10 @@ Prefix every command with `"$RUNDESK_COMMAND"`.
    not interpret platform-specific options.
 6. Run `show`, `test`, and `doctor`; then inspect gateway logs after the gateway hosts it.
 
-`add`, `test`, and `doctor` may connect to the platform. `add` records the channel only after the
-adapter's check succeeds, although a credential typed during the attempt remains stored so the owner
-need not re-enter it for an unrelated retry.
+`add`, `test`, and `doctor` run the adapter's platform check. Discord opens its gateway connection;
+Slack authenticates and obtains a Socket Mode URL without opening it. `add` records the channel only
+after the check succeeds, although a credential typed during the attempt remains stored so the
+owner need not re-enter it for an unrelated retry.
 
 ## The notified channel, and why a first setup must not skip it
 

@@ -10,4 +10,4 @@ reported the version through three separate paths and pointed at its own install
 different constants, which is two chances for a product to disagree with itself about what it is.
 """
 
-__version__ = "0.60.0"
+__version__ = "0.60.1"
