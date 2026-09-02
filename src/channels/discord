@@ -1791,7 +1791,7 @@ class Reaching:
                     place = an_id(direct.id, "direct-message channel id")
                 except Refused:
                     raise
-                except Exception as why:       # noqa: BLE001 — a platform boundary
+                except Exception as why:
                     self._final(why)
                     raise Refused(
                         "Discord could not open a direct message for every allowed user: "
