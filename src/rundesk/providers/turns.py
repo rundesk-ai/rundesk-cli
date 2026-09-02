@@ -570,16 +570,18 @@ class Claim:
     stop is remembered against the claim, and the turn published against it carries it out — see
     `_stoppable`.
 
-    It lives exactly as long as the claim does, which is what keeps a stop that reached a claim no
-    turn ever came of from ending the *next* turn in that conversation.
+    It stays published until either the turn leaves `_stoppable` or a claim no turn came of ends.
+    The first boundary prevents a finished turn being reported as stopped; the second keeps a stop
+    left on an abandoned admission from ending the *next* turn in that conversation.
     """
 
     def __init__(self) -> None:
         self.asked = False
 
 
-#: The conversation claims this process holds, by conversation. Under `_running_lock`, because which
-#: of the two a stop reaches has to be one decision rather than two with a gap between them.
+#: The conversation claims this process holds that may still publish a turn, by conversation. Under
+#: `_running_lock`, because which of the two a stop reaches has to be one decision rather than two
+#: with a gap between them.
 _claimed: Dict[tuple, Claim] = {}
 
 
@@ -714,10 +716,15 @@ def _stoppable(agent: str, conversation: int) -> Iterator[Ours]:
     try:
         yield ours
     finally:
-        ours.reachability_known.set()
         with _running_lock:
             if _running.get((agent, conversation)) is ours:
                 del _running[(agent, conversation)]
+            # Retired with the published turn under the same lock, before the outer kernel claim is
+            # released. A stop in that remaining gap must not report a turn already settled as one
+            # it stopped. A claim that never published still leaves through `claiming`'s `finally`.
+            if claim is not None and _claimed.get((agent, conversation)) is claim:
+                del _claimed[(agent, conversation)]
+        ours.reachability_known.set()
         ours.ended.set()
 
 

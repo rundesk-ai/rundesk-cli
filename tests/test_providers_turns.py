@@ -454,6 +454,19 @@ class StoppingWhileATurnIsStillBeingAdmitted(WithAnAgent):
         with turns.claiming(self.agent, 71), turns._stoppable(self.agent, 71) as ours:
             self.assertFalse(ours.asked, "a stop outlived the claim it was left on")
 
+    def test_a_stop_after_the_turn_ended_but_before_its_claim_left_is_not_live(self):
+        """Once the published turn ends, its outer kernel claim may still be held for a moment.
+        That gap is no longer a turn this process can stop and must not earn a stopped answer."""
+        with turns.claiming(self.agent, 71):
+            with turns._stoppable(self.agent, 71):
+                pass
+
+            self.assertTrue(turns.busy(self.agent, 71),
+                            "the claim was not held across the post-turn gap")
+            reached = turns.stop_or_settle_pending(self.agent, 71, ())
+            self.assertEqual((False, ()), (reached.live, reached.settled),
+                             "a turn that already ended was reported as stopped")
+
 
 class WhenTheBrainDoesNotAnswer(WithAnAgent):
     def test_a_turn_that_produced_nothing_is_not_a_turn_that_worked(self):
