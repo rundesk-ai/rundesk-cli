@@ -658,9 +658,9 @@ class AMessageOnAChannelIsAnswered(Answering):
         """R-CH-9, R-CH-36. Somebody stopping what they sent is owed an answer whether or not a turn
         was ever admitted for it — and the message is what carries the mark, so it is the message
         that has to become terminal rather than the indicator alone."""
-        landed = arriving.recorded(self.agent, "discord", "1180", "2207", "please look", "8841")
         self.a_channel()
         watching = self.hosting_now()
+        landed = arriving.recorded(self.agent, "discord", "1180", "2207", "please look", "8841")
         gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
                                       lambda agent: "online")
 
@@ -716,11 +716,11 @@ class AMessageOnAChannelIsAnswered(Answering):
         replacement gateway starts with — so the person was told their work was stopped and their
         agent answered it later anyway. Taken from the newest end, what is left behind is
         superseded by the row that was claimed and can never run."""
+        self.a_channel()
+        watching = self.hosting_now()
         landed = [arriving.recorded(self.agent, "discord", "1180", "2207", f"ask {nth}",
                                     f"88{nth:03d}")
                   for nth in range(answering.PENDING_STOPPED_AT_MOST + 1)]
-        self.a_channel()
-        watching = self.hosting_now()
         gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
                                       lambda agent: "online")
 
@@ -753,10 +753,10 @@ class AMessageOnAChannelIsAnswered(Answering):
         in the moment between reading the pending rows and claiming the conversation. What was
         stopped is then that turn — which marks its own message — and every row read here is still
         waiting for one. Marking them would put ✋ on work that is about to be answered."""
-        first = arriving.recorded(self.agent, "discord", "1180", "2207", "please look", "8841")
-        second = arriving.recorded(self.agent, "discord", "1180", "2207", "and this", "8842")
         self.a_channel()
         watching = self.hosting_now()
+        first = arriving.recorded(self.agent, "discord", "1180", "2207", "please look", "8841")
+        second = arriving.recorded(self.agent, "discord", "1180", "2207", "and this", "8842")
         gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
                                       lambda agent: "online")
         published = contextlib.ExitStack()
@@ -799,9 +799,9 @@ class AMessageOnAChannelIsAnswered(Answering):
         this process can end, and `run_if` puts a durable admission decision between the two. A
         `/stop` pressed in that window reached nothing: the person was told their conversation held
         something no conversation could stop, and the turn they were watching ran to the end."""
-        landed = arriving.recorded(self.agent, "discord", "1180", "2207", "please look", "8841")
         self.a_channel()
         watching = self.hosting_now()
+        landed = arriving.recorded(self.agent, "discord", "1180", "2207", "please look", "8841")
         gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
                                       lambda agent: "online")
 
