@@ -9,8 +9,15 @@
 # machines is two different products.
 discord.py==2.7.1
 
-# slack_sdk was pinned here ahead of a Slack adapter and has been taken out again. Nothing
-# under src/channels/ imports it, so every `rundesk install` and `rundesk update` was
-# fetching and building a package for a channel this build cannot reach, configure, or
-# name. A pin is a thing a user pays for on every install; it goes in when the adapter
-# that imports it does, and not before.
+# slack_sdk is here on the same terms, and this time the adapter that imports it is here
+# too: src/channels/slack, and nothing under src/rundesk/. It was pinned once before a
+# Slack adapter existed and taken out again, because a pin is a thing a user pays for on
+# every install and every update — it goes in when the adapter that imports it does.
+#
+# Its *built-in* Socket Mode client implements the websocket protocol itself, so this line
+# adds exactly one package and nothing behind it: the aiohttp, websockets and
+# websocket-client variants are all optional extras and none of them is installed.
+# Verified on 2026-09-02 against a throwaway virtualenv on the Python 3.9 floor:
+# `pip install slack_sdk==3.43.0` left slack_sdk, pip and setuptools and nothing else, and
+# `slack_sdk.socket_mode.SocketModeClient` resolved to slack_sdk.socket_mode.builtin.client.
+slack_sdk==3.43.0

@@ -5,8 +5,8 @@ adapter behind it; the adapter owns the platform, and Rundesk owns access, turn 
 delivery.
 
 The verbs are [`../api/channels.md`](../api/channels.md); writing an adapter is
-[`../extending/adapters.md`](../extending/adapters.md). Setting up Discord is
-[`../guides/discord.md`](../guides/discord.md).
+[`../extending/adapters.md`](../extending/adapters.md). Setting one up is
+[`../guides/discord.md`](../guides/discord.md) or [`../guides/slack.md`](../guides/slack.md).
 
 ## A channel is a connection, not a place
 
@@ -33,11 +33,39 @@ time.
 anything is written, because a record of a message is a thing an agent could later be asked to read.
 An empty allow list authorises nobody, never everybody.
 
-**At most one channel may be `notified`**, held by a partial unique index. That selects the adapter
-gateway notices, scheduled results and other unprompted messages use; it does not select one person.
-The shipped Discord adapter privately gives every user on that channel's allowlist one copy. The
-channel is moved in one transaction rather than set directly, because a caller that clears the old
-one and then fails to set the new leaves an agent that tells nobody anything.
+## Who may reach an agent, and from where
+
+**One list per channel, and each entry names one of two things.** A bare entry is a sender id and
+always was, so every list written before this existed means exactly what it meant. A typed entry says
+which kind of thing it names.
+
+| Entry | Allows |
+|---|---|
+| `2207` | that sender, wherever they say it |
+| `sender:2207` | the same thing, said out loud |
+| `place:C0OPS` | anybody the adapter reports as being in that place |
+
+The column is a JSON array of strings either way, so there is no second column and nothing to carry
+forward. `channels.kept` is the one place a string is read as either kind, and `channels.hosting`
+asks it about every message and every gesture — one rule over one list, because two rules would
+eventually disagree about the same person, and the one they disagreed about would be the one holding
+a control.
+
+**The decision is made against two stable ids and never against a word.** An adapter reports `user`
+and `external_place`; `display` and `where` are sentences it composed for a person to read, and a
+display name is somewhere a stranger writes whatever they like. **A place entry allows anybody who is
+somebody** — a record with no sender is an event rather than a person, and admitting one because of
+where it happened would make a place entry a way in for anything that can post there.
+
+The adapter is handed the two lists apart, as `RUNDESK_ALLOW` and `RUNDESK_ALLOW_PLACES`, and reads
+them only to avoid working for nothing. An adapter that reports no place can still be reached by
+naming a sender, which is what every channel could do before this existed.
+
+**At most one channel may be `notified`**, held by a partial unique index. That is the channel gateway
+notices, scheduled results and other unprompted messages go to; it does not select one person. The
+shipped Discord adapter privately gives every user on that channel's allowlist one copy. The channel
+is moved in one transaction rather than set directly, because a caller that clears the old one and
+then fails to set the new leaves an agent that tells nobody anything.
 
 ## The adapter is a child, and its claim is the check
 
@@ -110,5 +138,6 @@ anything is wrong.
 |---|---|
 | `standing not connected` after `add` | `add` connects once and leaves nothing running — start the gateway |
 | the bot is online and ignores messages | the sender is not on the allow list, or the platform's message-content permission is off |
+| a Slack bot answers a direct message and ignores a channel | it was not invited there, or nobody named it — see [`../guides/slack.md`](../guides/slack.md) |
 | nothing unprompted ever arrives | no channel is `--notify` |
 | the credential is set and the channel still fails | the value is kept under the adapter's own scoped name; `channels doctor` says which name it looked for |

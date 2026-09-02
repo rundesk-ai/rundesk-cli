@@ -1,7 +1,7 @@
 ---
 id: CAD
 name: The seam a channel adapter is reached through
-last_verified: 2026-08-26
+last_verified: 2026-09-02
 ---
 
 ## What this is
@@ -22,8 +22,9 @@ and how shared state is shown there.
 
 ## Requirements
 
-No row here is proven. `R-CAD-*` is cited in `src/rundesk/providers/answering.py` but no test names
-one, so every row carries the acceptance that has not been executed rather than a citation. The
+Only `R-CAD-25` is proven. `R-CAD-*` is cited in `src/rundesk/providers/answering.py` but no test
+names any other row, so each of those carries the acceptance that has not been executed rather than a
+citation. The
 mechanics were inspected against [adapters.md](../extending/adapters.md), `src/rundesk/channels/adapters.py`,
 `src/rundesk/channels/hosting.py`, and `src/rundesk/commands/channels.py`; inspection is not proof.
 
@@ -52,6 +53,7 @@ mechanics were inspected against [adapters.md](../extending/adapters.md), `src/r
 | ❌ | R-CAD-22 | The owner can list, inspect, reconnect-test, configure, remove, and diagnose a channel, with missing credentials, unreachable platforms, missing adapters, and a gateway that gave up reported as different states. | not proven — Execute the channel management flow against each state and compare the result and exit code. |
 | ❌ | R-CAD-23 | An adapter declares what it can present, and the owner is shown that declaration during setup without the channel becoming unusable for abilities it lacks. | not proven — Add adapters with full and empty capability declarations and complete a conversation on both. |
 | ❌ | R-CAD-24 | A transient adapter disconnect marks the channel offline immediately, gives the adapter time to reconnect itself, and replaces a live adapter that remains disconnected; durable messages wait until the channel is ready. | not proven — Simulate `ready` → `gone` → `ready`, then `ready` → `gone` without recovery; inspect channel status, adapter replacement, pending-message recovery, and permanent `EX_CONFIG` refusal. |
+| ✅ | R-CAD-25 | An adapter may report the platform's own identifier for the place a message or gesture came from, and is handed the allowed senders and the allowed places as two separate values. An adapter that reports no place, and one that has never heard of the second value, keeps working unchanged. | `test_an_adapter_is_handed_the_senders_bare_and_the_places_apart` (hosting and command), `test_an_arrival_that_names_no_place_still_admits_a_named_sender`, `test_the_stable_place_is_carried_in_a_field_of_its_own` |
 
 ## Open questions
 
@@ -63,5 +65,8 @@ mechanics were inspected against [adapters.md](../extending/adapters.md), `src/r
 - The maintained real-platform acceptance protocol and release gate. Offline lifecycle tests
   cannot prove service reconnection or display behavior.
 - Whether `R-CAD-16` was withdrawn deliberately. The numbering skips it.
-- Out of scope, and deliberately: provider-adapter behavior, Discord-specific presentation, Slack,
-  a marketplace or remote adapter registry, and per-place channel configuration.
+- Out of scope, and deliberately: provider-adapter behavior, platform-specific presentation —
+  Discord's in [channel-discord.md](./channel-discord.md) and Slack's in
+  [channel-slack.md](./channel-slack.md) — a marketplace or remote adapter registry, and per-place
+  channel *configuration*. A place named on the allow list is not that: it is who may reach the
+  agent, and the channel is still one connection with nothing written down per place.

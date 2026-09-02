@@ -19,6 +19,8 @@
   &nbsp;·&nbsp;
   <a href="#-discord"><strong>💬 Discord</strong></a>
   &nbsp;·&nbsp;
+  <a href="#-slack"><strong>💬 Slack</strong></a>
+  &nbsp;·&nbsp;
   <a href="#-documentation"><strong>📖 Docs</strong></a>
 </p>
 
@@ -28,7 +30,7 @@ locally on macOS with Codex, Claude Code, Grok, or Antigravity.
 
 ## ✨ Highlights
 
-- **Work from anywhere.** Continue one conversation from the terminal or Discord.
+- **Work from anywhere.** Continue one conversation from the terminal, Discord, or Slack.
 - **Keep agents available.** macOS `launchd` brings each gateway back after a crash, reboot, or
   update.
 - **Schedule work.** Run recurring or one-time tasks and deliver results through the agent's
@@ -199,6 +201,41 @@ rundesk channels doctor ava
 rundesk gateways logs ava
 ```
 
+## 💬 Slack
+
+Slack is the second included channel adapter. One Slack app per agent, over Socket Mode, with no
+public URL and no port to open. It answers every direct message and, in a channel it was invited to,
+only a message that names it — including inside somebody else's thread, where it replies in that
+thread and reads a bounded slice of it. Several agent bots can share one thread and each wakes only
+when it is named.
+
+**It is deliberately quiet.** The final answer is the only thing it posts: no running commentary, no
+tool or activity lines, no delegation notices, no token counts, and no footer. A turn shows as 👀 on
+the message that asked, Slack's own agent-session typing status while it works, and ✅ when the
+answer has gone out.
+
+Create an app from the manifest in the setup guide, **declare it as an agent in its app settings and
+only then install it to the workspace** — that declaration adds a scope, and a scope added after a
+token is issued does not reach it — copy the bot token (`xoxb-`) and an app-level token (`xapp-`,
+scope `connections:write`), invite the bot to a channel, and then:
+
+```sh
+slack_member_id=U01ABCDEF2G
+slack_channel_id=C01ABCDEF2G
+rundesk channels add ava slack --allow "$slack_member_id" --allow "place:$slack_channel_id" --notify
+rundesk gateways start ava
+```
+
+`--allow place:<channel id>` lets anybody in that Slack channel reach the agent; a bare id or
+`sender:<member id>` allows one person wherever they say it. Rundesk decides who may be answered, not
+the adapter. A Slack **user** token is refused by name, and no user-history or search scope is asked
+for.
+
+The [full Slack setup guide](docs/guides/slack.md) covers the app manifest, the ordered step that
+declares the app an agent, the minimum bot scopes, what the typing indicator needs, running several
+agents in one thread — where each reads what the other answered and never its own — and the
+difference between a workspace installation and an Enterprise Grid organisation approval.
+
 Custom channel adapters are executables too. Rundesk owns access control, turn state, history, and
 delivery while the adapter owns its platform. See the [channel adapter contract](docs/extending/adapters.md).
 
@@ -250,7 +287,7 @@ needed.
 - **[Commands](docs/api/)** — every operation, what each guarantees, and the exit codes
 - **[How it works](docs/concepts/)** — gateways, providers, channels, delegation, skills, lifecycle
 - **[Extending it](docs/extending/)** — the channel, provider, and catalog contracts
-- **[Guides](docs/guides/)** — first agent, running an install, teams, delegation, Discord
+- **[Guides](docs/guides/)** — first agent, running an install, teams, delegation, Discord, Slack
 - **[All documentation](docs/README.md)** — the index, including requirements and research
 
 ## 🤝 Contributing

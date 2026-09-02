@@ -1,8 +1,8 @@
 # Writing a channel adapter
 
 **This is what ships.** Every claim on this page was read out of the code as it stands: where it
-states a field, a bound or an exit code, it is because `src/rundesk/channels/`, the one working
-adapter in `src/channels/discord`, and the suites in `tests/` say so. Where the code and its own
+states a field, a bound or an exit code, it is because `src/rundesk/channels/`, the two working
+adapters in `src/channels/discord` and `src/channels/slack`, and the suites in `tests/` say so. Where the code and its own
 docstrings disagree, the code is what is written here and the disagreement is named.
 
 [`research/the-adapter-contracts.md`](../research/the-adapter-contracts.md) reproduces the contract the
@@ -30,8 +30,9 @@ channel that raised on import would take an agent's whole gateway with it.
 JSON. The example at the bottom of this page is `/bin/sh`.
 
 **A vendor library lives on the far side of the seam and never enters the gateway.** Reaching Discord
-needs `discord.py`; rundesk's own code imports nothing outside the standard library. The only reason
-those two facts are compatible is that the import happens in a different process.
+needs `discord.py` and reaching Slack needs `slack_sdk`; rundesk's own code imports nothing outside
+the standard library. The only reason those facts are compatible is that the import happens in a
+different process.
 
 ### Where one stands
 
@@ -42,8 +43,8 @@ those two facts are compatible is that the import happens in a different process
 | any path with a separator in it | yours, right now, wherever you are writing it |
 
 **A bare name resolves among the shipped ones first and then among the given ones**; anything with a
-separator is used as a path and is expanded for `~`. So `discord` is the adapter that ships,
-`my-thing` is one somebody dropped into `data/adapters/`, and
+separator is used as a path and is expanded for `~`. So `discord` and `slack` are the adapters that
+ship, `my-thing` is one somebody dropped into `data/adapters/`, and
 `/Users/me/work/thing` is one being written this afternoon and installed nowhere.
 
 The order is deliberate: a release's own adapter is the one somebody gets by typing its name, and an
@@ -133,8 +134,8 @@ word-split it and carried through exactly. **Rundesk parses none of it and holds
 platform needs.** It never reaches a shell, so nothing in it is globbed, expanded, or read as `;`,
 `&&` or a redirection.
 
-**Environment:** the handful, plus `RUNDESK_ALLOW`, plus each credential the adapter named, under the
-name the adapter named it.
+**Environment:** the handful, plus `RUNDESK_ALLOW` and `RUNDESK_ALLOW_PLACES`, plus each credential
+the adapter named, under the name the adapter named it.
 
 **`RUNDESK_ALLOW` is set here and not only at hosting time**, and it is not decoration: an adapter
 may open private conversations for the people on the list, including while it checks the first
@@ -218,7 +219,8 @@ two credentials is still an adapter that declares two names.
 | `RUNDESK_CHANNEL` | the platform, which is also the channel's name |
 | `RUNDESK_CHANNEL_HOME` | this channel's own directory — somewhere to put what you fetch |
 | `RUNDESK_SETTINGS` | the object your own `--check` returned, as JSON text. `{}` if you returned nothing |
-| `RUNDESK_ALLOW` | who may reach this agent here, comma separated |
+| `RUNDESK_ALLOW` | which **senders** may reach this agent here, comma separated |
+| `RUNDESK_ALLOW_PLACES` | which **places** anybody may reach it from, comma separated. Empty, or absent, where none was named |
 | each name from `secret.env` | its value, out of the install's sealed store — kept under `<NAME>__<AGENT>` and nowhere else, and always handed over as `<NAME>`. A name nothing is kept under is left out rather than set empty, and a plain `<NAME>` is never read |
 
 **stdin** is a pipe and is readable: records come in, one JSON object per line. **stdout** is a pipe
@@ -270,7 +272,8 @@ not a channel that has gone wrong.
 {"say": "arrived", "conversation": "1180", "user": "2207", "text": "what changed today?",
  "external_id": "8841",
  "attachments": [{"name": "report.csv", "at": "/…/channels/discord/fetched/8841/0", "bytes": 8}]}
-{"say": "control", "conversation": "1180", "user": "2207", "control": "stop", "ref": "i-9911"}
+{"say": "control", "conversation": "1180", "user": "2207", "control": "stop", "ref": "i-9911",
+ "external_place": "C0OPS"}
 {"say": "query", "conversation": "1180", "user": "2207", "query": "status", "ref": "i-9912"}
 {"say": "configure", "conversation": "1180", "user": "2207", "provider": "codex", "ref": "i-9913"}
 ```
@@ -283,9 +286,12 @@ not a channel that has gone wrong.
 | `failed` | `why` | `id` | one `WARNING` line: *could not deliver — …*. `id` releases what rundesk was holding for that delivery, and the reason is kept against it for whoever settles the turn behind it |
 | `delivered` | `id` | `external_id` | one line saying the answer reached the platform, naming the message it answered, and **`external_id` is kept** — see below. **Never a mark** |
 | `arrived` | `conversation`, `user`, and `text` **or** `attachments` | `external_id` | the message, if that user may be answered |
-| `control` | `control`, `user` | `conversation`, `ref` | one gesture, if that user may be answered and the word is one rundesk knows — see [gestures](#gestures) |
-| `query` | `query`, `user` | `conversation`, `ref` | one question, answered out of what this install already knows |
-| `configure` | `provider`, `user` | `conversation`, `ref` | the agent's default brain is changed |
+| `control` | `control`, `user` | `conversation`, `ref`, `external_place` | one gesture, if that user may be answered and the word is one rundesk knows — see [gestures](#gestures) |
+| `query` | `query`, `user` | `conversation`, `ref`, `external_place` | one question, answered out of what this install already knows |
+| `configure` | `provider`, `user` | `conversation`, `ref`, `external_place` | the agent's default brain is changed |
+
+**All three take `external_place` and it means what it means on an `arrived`.** Admission is one
+rule over one list, so a gesture made where a message would have been answered is answered too.
 
 **Say `ready` when you have the connection and `gone` when you lose it**, once per change and not
 once per reconnection attempt behind it — that is how somebody tells a quiet agent from a deaf one.
@@ -307,6 +313,7 @@ for goes to stderr; see [the rules](#the-rules-that-will-bite).
 | `external_id` | optional | the platform's own id for this message. **Without it there is no redelivery guard and no `seen` mark** |
 | `display` | optional | what the platform calls the person speaking. Reaches the brain, so an agent in a room can address somebody by name |
 | `where` | optional | **one ordinary sentence** saying where this was said — `a direct message`, `the ops room in Acme`. Rundesk never parses it and never names a room itself; what a place is called is the one thing only you know |
+| `external_place` | optional | the platform's own id for the place this was said in. **Read, and read for one thing only** — see [who may be answered](#who-may-be-answered). Never shown, never stored, never parsed |
 | `reply_to` | optional | the earlier message this one answers — see below. Left out entirely when it answers nothing |
 
 **`reply_to` is an object, and it is not the `reply_to` on a `deliver`.** One word, two records,
@@ -609,15 +616,40 @@ If the new one will not go up, the old one staying is the failure to prefer.
 
 ## The rules that will bite
 
-**Authorization is rundesk's, and a stranger gets silence.** You report who spoke; whether they may
-be answered is decided against the channel's own record and nothing you send changes it. A message
-from anybody else is never written down, never answered, and never logged — replying to say somebody
-is a stranger confirms the agent is listening and spends the owner's tokens doing it. **`RUNDESK_ALLOW`
-is not the authorization.** Read it only to avoid working for nothing: reacting, opening a thread or
-downloading three hundred megabytes for somebody who can never be answered is waste at best, and in a
-room full of people it is an agent visibly attending to a stranger it is about to ignore. Never show
-the list to anybody. It is read once, when you are started — a `channels configure --allow` reaches
-you when the gateway next starts your adapter, not before.
+<a id="who-may-be-answered"></a>
+**Authorization is rundesk's, and a stranger gets silence.** You report who spoke and where; whether
+they may be answered is decided against the channel's own record and nothing you send changes it. A
+message from anybody else is never written down, never answered, and never logged — replying to say
+somebody is a stranger confirms the agent is listening and spends the owner's tokens doing it.
+**`RUNDESK_ALLOW` and `RUNDESK_ALLOW_PLACES` are not the authorization.** Read them only to avoid
+working for nothing: reacting, opening a thread or downloading three hundred megabytes for somebody
+who can never be answered is waste at best, and in a room full of people it is an agent visibly
+attending to a stranger it is about to ignore. Never show either list to anybody. Both are read once,
+when you are started — a `channels configure --allow` reaches you when the gateway next starts your
+adapter, not before.
+
+**Two identifiers reach that decision and nothing else does**: `user`, and `external_place`. Both
+have to be what the platform itself knows — the id a person cannot choose, and the id of the place
+rather than its name. `display` and `where` are words you composed for a person to read and are
+deliberately not consulted, so a display name shaped like a channel id opens nothing.
+
+**Send `external_place` if your platform has one.** Without it, a channel can be reached only by
+naming a sender, which is exactly what every channel could do before this field existed — so an
+adapter that has never heard of it is a whole adapter and nothing fails. With it, an owner can allow
+everybody in one room. It is never stored, never shown, and never parsed by rundesk.
+
+**What an owner writes on the allow list**, which is where the two arrive from:
+
+| Entry | Means |
+|---|---|
+| `2207` | that sender, wherever they say it. **The plain form, and what every list held before this** |
+| `sender:2207` | the same thing, said out loud |
+| `place:C0OPS` | anybody your adapter reports as being in `C0OPS` |
+
+Only those two words make an entry typed; anything else before a colon is the start of an id, so a
+platform whose ids carry one keeps meaning what it meant. **A place entry allows anybody who is
+somebody**: a record arriving with no `user` is an event rather than a person, and is refused however
+allowed the place is.
 
 **Rundesk decides what state a turn is in; you decide only how it looks.** An adapter working out on
 its own when a message had been seen would be re-implementing the turn, and two surfaces would
@@ -819,8 +851,11 @@ own `id` for that delivery — so something rundesk sent can later be replied to
 adapter that acknowledges without one is a whole adapter and nothing fails: the report is then posted
 on its own rather than as a reply, which is the honest outcome for a platform that has no ids.
 
-**`place` on an `arrived` is read by nothing.** The shipped adapter sends `"dm"` or `"room"` and
-rundesk keeps neither. `display` and `where` **are** read — both reach the brain as part of the turn,
+**`place` on an `arrived` is still read by nothing, and `external_place` is not it.** The shipped
+Discord adapter sends `"dm"` or `"room"` in `place` and rundesk keeps neither; the stable id lives in
+`external_place`, which is a different field for the reason that they are different facts — one is a
+word for a reader and the other is what an authorization decision is made against.
+Rundesk keeps neither of them either. `display` and `where` **are** read — both reach the brain as part of the turn,
 which is how an agent in a shared room can name the person it is answering and say which room it is
 standing in. They were dead for a while and this page said so.
 

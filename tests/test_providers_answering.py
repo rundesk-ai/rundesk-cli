@@ -863,6 +863,18 @@ class AMessageOnAChannelIsAnswered(Answering):
             self.a_gesture().configured(self.agent, "discord", "1180", "2207", other)
         self.assertIsNone(records.read(directory.records(self.agent))["provider_alias"])
 
+    def test_a_channel_that_allows_a_place_is_never_a_single_user_channel(self):
+        """R-CH-26. A provider is an agent-wide default, so it may be changed only from a channel one
+        person uses. A place entry allows an unknown number of people — who is in a room is the
+        platform's to change — so it is not that channel however few senders stand beside it."""
+        self.a_channel(allowed=("2207", "place:C0OPS"))
+        other = self.a_provider()
+        was = records.read(directory.records(self.agent))["provider_name"]
+        said = self.a_gesture().configured(self.agent, "discord", "1180", "2207", other)
+        self.assertIn("one person uses", said)
+        self.assertEqual(was, records.read(directory.records(self.agent))["provider_name"],
+                         "a room's membership decided what this agent is for everybody")
+
     def test_a_brain_this_install_does_not_have_is_refused_before_anything_is_written(self):
         """A default nothing stands behind is an agent whose every turn fails from the next message
         on, and the person who typed it would be the last to find out."""

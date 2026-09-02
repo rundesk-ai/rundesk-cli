@@ -9,5 +9,6 @@ One task each, start to finish, with the failures that interrupt it.
 | [teams.md](./teams.md) | Install a team of named specialists, and keep it current |
 | [delegation.md](./delegation.md) | Have one agent hand work to another |
 | [discord.md](./discord.md) | Create a Discord bot and connect it to an agent |
+| [slack.md](./slack.md) | Create a Slack app and connect it to an agent |
 | [development.md](./development.md) | Run and test a checkout without installing it |
 | [live-agent-verification.md](./live-agent-verification.md) | Reproduce edge-case tests against a real provider |

@@ -1144,9 +1144,12 @@ def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any],
     now, and this half is what answers for every other way a pipe can end.
     """
     kind = one.kind
-    allowed = set()
+    # **Nothing admitted while this cannot be read**, which is what an empty `Admitting` means. A
+    # list that will not parse is a list nobody has decided, and reading it as "everybody" is the one
+    # mistake here that cannot be taken back.
+    admitting = kept.Admitting((), ())
     with contextlib.suppress(Exception):
-        allowed = set(kept.who_may_reach(row))
+        admitting = kept.admitting(row)
     complained = set()
 
     def lost(reason: str) -> None:
@@ -1170,13 +1173,13 @@ def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any],
             if isinstance(said, lines.Gap):
                 continue
             with contextlib.suppress(Exception):
-                _heard(agent, where, one, said, allowed, watching)
+                _heard(agent, where, one, said, admitting, watching)
     except Exception as why:                           # noqa: BLE001 — see the module docstring
         with contextlib.suppress(Exception):
             _note(where, f"channel {kind}: this gateway stopped listening to it ({why})", logs.ERROR)
 
 
-def _heard(agent: str, where: Path, one: Running, line: str, allowed: set,
+def _heard(agent: str, where: Path, one: Running, line: str, admitting: kept.Admitting,
            watching: Optional[Watching] = None) -> None:
     """One record an adapter sent. Anything unrecognised is kept quiet rather than refused loudly."""
     kind = one.kind
@@ -1193,7 +1196,7 @@ def _heard(agent: str, where: Path, one: Running, line: str, allowed: set,
 
     saying = record.get("say")
     if saying == "arrived":
-        _arrived(agent, where, one, record, allowed)
+        _arrived(agent, where, one, record, admitting)
     elif saying == "ready":
         if one.connected is not None:
             one.connected.set()
@@ -1222,17 +1225,22 @@ def _heard(agent: str, where: Path, one: Running, line: str, allowed: set,
     elif saying == "failed":
         _refused(where, kind, one, record)
     elif saying in ("control", "query", "configure"):
-        _gestured(agent, where, one, record, allowed, saying)
+        _gestured(agent, where, one, record, admitting, saying)
 
 
 def _gestured(agent: str, where: Path, one: Running, record: Dict[str, Any],
-              allowed: set, saying: str) -> None:
+              admitting: kept.Admitting, saying: str) -> None:
     """One gesture somebody made — a control, a question, or a default being changed.
 
     **Refused here for the same reason a message is, and in silence.** The adapter narrows this
     first so that a stranger is not shown a spinner for an answer that will never come, but that is
     to avoid visible work and is never the decision: only this side is trusted, and telling somebody
     they are a stranger confirms the agent is listening (R-CH-23).
+
+    **Admitted by the same rule a message is, and out of the same list** (R-CH-39). A gesture made
+    in a place the channel allows is a gesture from somebody who may reach the agent there; two
+    rules over one list would eventually disagree about the same person, and the one they disagreed
+    about would be the one holding a control.
 
     **A word outside the closed set is nothing this gateway does**, and is dropped rather than
     passed on. A gesture whose name is whatever the caller typed is a command runner with a chat
@@ -1245,7 +1253,7 @@ def _gestured(agent: str, where: Path, one: Running, record: Dict[str, Any],
     """
     kind = one.kind
     who = str(record.get("user") or "")
-    if who not in allowed:
+    if not admitting.admits(who, _where_said(record)):
         return
     if one.steering is None:
         _note(where, f"channel {kind}: {who} asked for something, and nothing here answers a "
@@ -1343,7 +1351,8 @@ def _refused(where: Path, kind: str, one: Running, record: Dict[str, Any]) -> No
     one.awaiting.pop(given, None)
 
 
-def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allowed: set) -> None:
+def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
+             admitting: kept.Admitting) -> None:
     """One message somebody sent. **Recorded only if they may be answered.**
 
     A stranger's message is never written down, and they are never told anything: replying to say
@@ -1351,12 +1360,18 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allo
     Nothing is recorded either, because a record of it is something an agent could later be asked
     to read.
 
+    **Two stable identifiers decide it and nothing else does** (R-CH-39): the id that platform knows
+    the speaker by, and the id it knows the place by. `display` and `where` are words an adapter
+    composed for a person to read — a display name is somewhere a stranger writes whatever they like
+    — so neither reaches this decision, and a channel that allows a place is not opened by anybody
+    who can name it in their own profile.
+
     Then, and only for somebody who may be answered, two things go the other way: whatever they
     attached is taken in, and the message is marked as seen.
     """
     kind = one.kind
     who = str(record.get("user") or "")
-    if who not in allowed:
+    if not admitting.admits(who, _where_said(record)):
         return
     place = str(record.get("conversation") or "")
     body = str(record.get("text") or "")
@@ -1405,6 +1420,21 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allo
     # **Handed on, never run here.** This is the thread reading one adapter's output, and a turn
     # takes minutes — see `Answering`.
     one.answering.answer(agent, kind, place, who, body, external, landed)
+
+
+def _where_said(record: Dict[str, Any]) -> str:
+    """The platform's own id for the place this was said in, or `""` when the adapter said none.
+
+    **`external_place` and never `place`.** The older field carries a word the shipped Discord
+    adapter composes for a reader — `"dm"`, `"room"` — which nothing has ever read and which no
+    platform guarantees to be stable, unique, or even distinct between two rooms. Deciding
+    authorization on it would admit every room at once for any adapter that sent the same word
+    twice, so the stable id has a field of its own and the display word keeps meaning nothing.
+
+    An adapter that reports no place is one whose channels can only be reached by naming a sender,
+    which is what every channel could be reached by before this existed.
+    """
+    return str(record.get("external_place") or "")
 
 
 def _joining_one(agent: str, one: Running, landed: arriving.Landed) -> bool:
@@ -1792,13 +1822,22 @@ def _the_environment(agent: str, kind: str, row: Dict[str, Any]) -> Dict[str, st
     is the only thing that can download an attachment; it is handed somewhere to put one rather than
     left to invent a path, and what it stages there is only ever taken from inside this directory —
     see `files.landed`, which will not take a file from anywhere else.
+
+    **`RUNDESK_ALLOW` carries sender ids and only sender ids, exactly as it always has.** A typed
+    `sender:` entry arrives here bare, so an adapter written before typed entries existed is handed
+    what it has always been handed and narrows exactly as it always did. The places are a variable of
+    their own for the same reason: folding them into one list would hand every existing adapter a
+    string that matches no sender it will ever see, and its own narrowing would then drop a person
+    this side would have admitted — a silent refusal with nothing anywhere to read.
     """
+    admitting = kept.admitting(row)
     built = {
         "RUNDESK_AGENT": agent,
         "RUNDESK_CHANNEL": str(row.get("kind") or ""),
         "RUNDESK_CHANNEL_HOME": str(at(agent, kind)),
         "RUNDESK_SETTINGS": str(row.get("settings") or "{}"),
-        "RUNDESK_ALLOW": ",".join(kept.who_may_reach(row)),
+        "RUNDESK_ALLOW": ",".join(admitting.senders),
+        "RUNDESK_ALLOW_PLACES": ",".join(admitting.places),
     }
     built.update(credentials.handed(agent, _named_secrets(row)))
     return built

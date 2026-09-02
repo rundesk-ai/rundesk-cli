@@ -1,7 +1,8 @@
 # Channels
 
-A channel is one adapter connection for one agent. It holds the platform settings, allowed sender
-IDs, credential name, and whether unsolicited notifications go there.
+A channel is one adapter connection for one agent. It holds the platform settings, the allow list,
+credential names, and whether unsolicited notifications go there. Two adapters ship: `discord` and
+`slack`.
 
 ## Commands
 
@@ -10,7 +11,7 @@ IDs, credential name, and whether unsolicited notifications go there.
 | `channels` or `channels list [<agent>]` | List all channels or one agent's. |
 | `channels add <agent> <adapter> --allow <id> [--allow <id> ...] [--notify] [--with '<adapter opts>']` | Connect and persist a channel after the adapter proves it can reach the platform. |
 | `channels show <agent> <adapter>` | Show the complete stored channel definition. |
-| `channels configure <agent> <adapter> [--allow <id> ...] [--deny <id> ...] [--notify]` | Add or remove allowed senders or choose the notification channel. |
+| `channels configure <agent> <adapter> [--allow <id> ...] [--deny <id> ...] [--notify]` | Add or remove allowed senders and places, or choose the notification channel. |
 | `channels test <agent> <adapter>` | Connect again and report what the adapter reached. |
 | `channels remove <agent> <adapter> [--confirm]` | Preview removal; `--confirm` removes the connection. |
 | `channels doctor [<agent>]` | Diagnose every channel or one agent's as READY, BLOCKED, UNREACHABLE, DANGLING, or GIVEN UP. |
@@ -25,12 +26,24 @@ Prefix every command with `"$RUNDESK_COMMAND"`.
    value. **The name is per-agent and there is no shared fallback**: the adapter declares
    `DISCORD_BOT_TOKEN`, the value is kept under `DISCORD_BOT_TOKEN__ALAN`, and a plain
    `DISCORD_BOT_TOKEN` is not read at all. One Discord application per agent — two agents behind one
-   token are one bot answering twice.
-3. Add at least one exact platform sender ID with repeatable `--allow`. An empty allow list is
-   refused so a connected agent cannot silently answer nobody.
-4. **Pass `--notify` on the first channel.** On Discord, every allowed user receives unsolicited
-   notices privately; no separate recipient list is needed. See below: this is the one setup mistake
-   the command cannot warn about.
+   token are one bot answering twice. The `slack` adapter declares two names,
+   `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`, and refuses a Slack user token by name.
+3. Add at least one entry with repeatable `--allow`. An empty allow list is refused so a connected
+   agent cannot silently answer nobody. An entry is one of three things:
+
+   | Entry | Allows |
+   |---|---|
+   | `2207` | that sender, wherever they say it — the plain form every list has always used |
+   | `sender:2207` | the same thing, said out loud |
+   | `place:C0OPS` | anybody the adapter reports as being in that place |
+
+   Only `sender:` and `place:` make an entry typed; anything else before a colon is part of the ID.
+   An entry naming nothing (`place:` with no ID) is refused. `--deny` takes an entry written exactly
+   as it stands on the list. Rundesk decides admission, never the adapter, and a place entry never
+   admits an event with no sender behind it.
+4. **Pass `--notify` on the first channel, and make it the owner's own direct message.** On Discord,
+   every allowed user receives unsolicited notices privately; no separate recipient list is needed.
+   See below: this is the one setup mistake the command cannot warn about.
 5. Quote `--with` as one string. Rundesk passes those words to the adapter without a shell and does
    not interpret platform-specific options.
 6. Run `show`, `test`, and `doctor`; then inspect gateway logs after the gateway hosts it.

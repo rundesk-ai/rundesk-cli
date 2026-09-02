@@ -12,7 +12,7 @@ Run directly: `python3 tests/test_packages.py`
 """
 
 import unittest
-from typing import List
+from typing import ClassVar, List
 
 import support
 from rundesk.lifecycle import packages
@@ -160,6 +160,56 @@ class WhetherAChannelCanStart(Packages):
         self.assertTrue(packages.ready(self.app))
         packages.interpreter(self.app).unlink()
         self.assertFalse(packages.ready(self.app))
+
+
+class WhatEveryPinIsFor(unittest.TestCase):
+    """Every pin this repository ships is imported by an adapter this repository ships.
+
+    **The failure this catches has already happened once**, and the file it guards says so in its own
+    comments: a pin was carried for a release with nothing importing it, so every `install` and every
+    `update` fetched and built a package for a channel that did not exist. A pin is a thing a user
+    pays for on every install, so one with no reader is one to take out.
+
+    It reads the repository's real `requirements.txt` and the real adapters, because a fixture
+    agreeing with itself would prove neither.
+    """
+
+    #: Which module each distribution is imported as. A table rather than a rule, because the two
+    #: names are unrelated — `discord.py` is imported as `discord` — and a rule guessing between them
+    #: would be a rule that goes wrong the first time somebody adds a third.
+    IMPORTED_AS: ClassVar[dict] = {"discord.py": "discord", "slack_sdk": "slack_sdk"}
+
+    def pinned(self):
+        return [one.split("==")[0]
+                for one in packages.wanted(support.CHECKOUT) if one.strip()]
+
+    def test_there_is_something_to_check(self):
+        # A discovery check that discovered nothing has proved nothing, whatever it returns.
+        self.assertTrue(self.pinned(), "requirements.txt named no distribution at all")
+
+    def test_every_pin_is_named_here(self):
+        # So that adding a pin without saying what imports it fails in this file rather than on
+        # somebody's install six months later.
+        self.assertEqual(sorted(self.IMPORTED_AS), sorted(self.pinned()))
+
+    def test_every_pin_is_imported_by_an_adapter_that_ships(self):
+        adapters = [one for one in (support.CHECKOUT / "src").rglob("*")
+                    if one.is_file() and one.parent.name in ("channels", "providers")]
+        self.assertTrue(adapters, "no shipped adapter was found to read")
+        read = "\n".join(one.read_text(encoding="utf-8") for one in adapters)
+        for named in self.pinned():
+            with self.subTest(named=named):
+                self.assertIn(f"import {self.IMPORTED_AS[named]}", read,
+                              f"{named} is pinned and no shipped adapter imports it")
+
+    def test_nothing_under_src_rundesk_imports_one(self):
+        # The other half of the same rule, and the one the product's own brief promises: rundesk's
+        # code is standard library only, and a pin lives on the far side of a pipe.
+        core = "\n".join(one.read_text(encoding="utf-8")
+                          for one in (support.CHECKOUT / "src" / "rundesk").rglob("*.py"))
+        for named in self.pinned():
+            with self.subTest(named=named):
+                self.assertNotIn(f"import {self.IMPORTED_AS[named]}", core)
 
 
 if __name__ == "__main__":
