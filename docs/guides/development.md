@@ -85,8 +85,9 @@ python3 tests/test_cli.py       # one of them
 writes no bytecode, and the reason is worth knowing: a suite that rewrites a source file and runs
 again — a mutation check, proving a test fails before it passes — can be answered from a `.pyc`
 compiled from the version before the edit. It has produced a green run against code that was
-broken, and a red one against code that was fine, twice in one day. `scripts/suites` is unaffected
-because it starts each suite in its own interpreter, but a hand-run loop is not.
+broken, and a red one against code that was fine, twice in one day. `scripts/suites` disables
+bytecode in the environment it gives every suite, so installed copies and child interpreters inherit
+the setting too; a hand-run loop does not.
 
 `scripts/suites` **finds** the suites rather than listing them, so a file added to `tests/` runs the
 day it lands, and CI calls the same script — a list kept in two places is a list that disagrees with
