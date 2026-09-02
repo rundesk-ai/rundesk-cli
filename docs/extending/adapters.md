@@ -962,7 +962,7 @@ export RUNDESK_HOME=/tmp/scratch-rundesk
 rundesk agents add alan --provider anthropic
 rundesk channels add alan ~/work/quiet --allow 341709...
 rundesk channels show alan ~/work/quiet
-rundesk channels test alan ~/work/quiet    # connect again; changes nothing
+rundesk channels test alan ~/work/quiet    # reach the platform again; changes nothing
 rundesk channels doctor
 ```
 
@@ -974,8 +974,9 @@ at the real install.
 there once and kept nowhere, so it is the only place you will ever see it; `keeps` is the directory
 that becomes your `RUNDESK_CHANNEL_HOME`; `standing` is asked of the kernel through the claim.
 
-**`rundesk channels doctor` really connects**, exits non-zero when anything is wrong, and answers in
-one of four words:
+**`rundesk channels doctor` runs the adapter's `--check`**, exits non-zero when anything is wrong,
+and answers in one of four words. What `--check` proves belongs to that adapter: Discord opens its
+gateway connection; Slack authenticates and obtains a Socket Mode URL without opening it.
 
 | | What it says about your adapter |
 |---|---|

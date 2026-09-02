@@ -45,9 +45,11 @@ is rather than pretending otherwise.
 lets a fidelity difference be a fact rather than a guess — an adapter that cannot edit a message is
 told apart from one that can and did not.
 
-**`--check`** connects, signs in, and reports what it reached. **Nothing about a channel is written
-down until it says so.** An agent whose channel is misconfigured has to find out while somebody is
-standing at a terminal, not at three in the morning when they ask it something.
+**`--check`** reaches the platform as that adapter defines and reports what it found. Discord opens
+its gateway connection; Slack authenticates and obtains a Socket Mode URL without opening it.
+**Nothing about a channel is written down until it says so.** An agent whose channel is
+misconfigured has to find out while somebody is standing at a terminal, not at three in the morning
+when they ask it something.
 
 **`ok: false` is an answer and exits `0`.** What is read is the object, not the exit code: a program
 that dies without printing one *failed*, and one that printed `ok: false` *refused*, and those lead
@@ -209,7 +211,6 @@ def _refused(why: str, named: Optional[List[str]] = None) -> Checked:
     """
     return Checked(ok=False, describes="", notify_place=None, settings="{}",
                    secret_names=list(named or []), invite="", why=why)
-
 
 
 

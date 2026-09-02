@@ -28,6 +28,7 @@ import importlib.util
 import io
 import json
 import os
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -205,9 +206,11 @@ class Socket:
         #: Shared with the stand-in web client, so what happened first is a fact rather than a guess.
         self.timeline: List[str] = []
         self.socket_mode_request_listeners: List[Any] = []
+        self.message_listeners: List[Any] = []
         self.on_close_listeners: List[Any] = []
         self.acknowledged: List[str] = []
         self.up = True
+        self.session = "s-1"
         self.closed = False
 
     def send_socket_mode_response(self, answer: Any) -> None:
@@ -223,6 +226,19 @@ class Socket:
 
     def is_connected(self) -> bool:
         return self.up
+
+    def session_id(self) -> str:
+        return self.session
+
+    def greet(self) -> None:
+        message = {"type": "hello", "num_connections": 1}
+        raw = json.dumps(message)
+        for listener in list(self.message_listeners):
+            listener(self, message, raw)
+
+    def replace(self) -> None:
+        self.session = "s-2"
+        self.up = True
 
 
 class Answering:
@@ -282,10 +298,17 @@ class Wired(unittest.TestCase):
         one.ours, one.our_bot, one.team, one.named = US, OUR_BOT, TEAM, "rundesk"
         return one
 
-    def during(self, doing) -> List[Dict[str, Any]]:
+    def hosted(self) -> Any:
+        """A connection with the same listeners production registers before connecting."""
+        one = self.reaching()
+        one._listening()
+        return one
+
+    def during(self, doing: Any, errors: Optional[io.StringIO] = None) -> List[Dict[str, Any]]:
         """Run something and hand back every record it put on stdout, parsed."""
         caught = io.StringIO()
-        with contextlib.redirect_stdout(caught):
+        errors = errors or io.StringIO()
+        with contextlib.redirect_stdout(caught), contextlib.redirect_stderr(errors):
             doing()
         return [json.loads(line) for line in caught.getvalue().splitlines() if line.strip()]
 
@@ -709,6 +732,12 @@ class WhatArrives(Wired):
         request = Envelope(event, **named)
         return self.during(lambda: one._envelope(one.socket, request))
 
+    def logged(self, doing: Any) -> str:
+        caught = io.StringIO()
+        with contextlib.redirect_stderr(caught), contextlib.redirect_stdout(io.StringIO()):
+            doing()
+        return caught.getvalue()
+
     def test_an_envelope_is_acknowledged_before_anything_else_happens(self) -> None:
         # **Before, and not merely as well as.** Slack gives three seconds and redelivers whatever is
         # not acknowledged inside them, so an ack that waits on a thread being read and a name being
@@ -725,9 +754,9 @@ class WhatArrives(Wired):
         # stand behind anything that can raise.
         one = self.reaching()
         cannot = io.StringIO()
-        with contextlib.redirect_stderr(cannot):
-            with mock.patch.object(one, "_an_event", side_effect=RuntimeError("no")):
-                records = self.during(lambda: one._envelope(one.socket, Envelope(a_direct())))
+        with mock.patch.object(one, "_an_event", side_effect=RuntimeError("no")):
+            records = self.during(lambda: one._envelope(one.socket, Envelope(a_direct())),
+                                  errors=cannot)
         self.assertEqual(one.socket.acknowledged, ["e-1"])
         self.assertIn("could not act on a Slack event", self.only(records, "note")["text"])
         # stdout is a protocol and stderr is for what this has no words for. A traceback written
@@ -811,6 +840,28 @@ class WhatArrives(Wired):
     def test_a_place_it_does_not_allow_costs_nothing(self) -> None:
         one = self.reaching(allow=[], places=[PRIVATE])
         self.assertEqual(self.envelope(one, a_mention(channel=ROOM, user=STRANGER)), [])
+
+    def test_an_ignored_event_logs_only_its_fixed_boundary(self) -> None:
+        one = self.reaching(allow=[])
+        logged = self.logged(lambda: one._envelope(
+            one.socket, Envelope(a_direct(user=STRANGER, text="private words"))))
+        self.assertEqual(logged.strip(), adapter.IGNORED["not_allowed"])
+        for private in (STRANGER, DM, TEAM, "private words"):
+            self.assertNotIn(private, logged)
+
+    def test_each_diagnostic_boundary_is_logged_once(self) -> None:
+        one = self.reaching()
+        logged = self.logged(lambda: (
+            one._envelope(one.socket, Envelope(a_mention(text="nothing for you"))),
+            one._envelope(one.socket, Envelope(a_mention(text="still nothing"),
+                                               envelope_id="e-2", event_id="Ev2")),
+        ))
+        self.assertEqual(logged.splitlines(), [adapter.IGNORED["not_woken"]])
+
+    def test_an_allowed_event_logs_that_it_reached_the_channel(self) -> None:
+        one = self.reaching()
+        logged = self.logged(lambda: one._envelope(one.socket, Envelope(a_direct())))
+        self.assertEqual(logged.strip(), adapter.IGNORED["woken"])
 
     # -- the same message twice ------------------------------------------------------------
 
@@ -1765,23 +1816,129 @@ class WhatItNeverShows(Wired):
 class TheConnection(Wired):
     """`ready` and `gone` are how somebody tells a quiet agent from a deaf one."""
 
-    def test_it_says_ready_once_however_often_it_is_asked(self) -> None:
-        one = self.reaching()
-        records = self.during(lambda: (one._up(), one._up()))
+    def test_run_does_not_mark_a_locally_opened_socket_ready(self) -> None:
+        one = adapter.Reaching([THEM], [])
+        one.stopping.set()
+        socket = Socket(app_token="xapp-x")
+        with mock.patch.object(adapter, "WebClient", lambda **named: Web()), \
+                mock.patch.object(adapter, "SocketModeClient", lambda **named: socket), \
+                mock.patch.object(adapter, "rundesk_says", lambda *_: iter(())):
+            records = self.during(lambda: one.run("xoxb-x", "xapp-x"))
+        self.none(records, "ready")
+        self.assertIn("waiting for Slack to say hello", self.only(records, "note")["text"])
+
+    def test_an_open_socket_is_not_ready_until_slack_says_hello(self) -> None:
+        one = self.hosted()
+        self.assertEqual(self.during(one._reconcile), [])
+        self.assertFalse(one.connected)
+
+    def test_slacks_hello_is_what_makes_the_channel_ready(self) -> None:
+        one = self.hosted()
+        records = self.during(one.socket.greet)
+        self.only(records, "ready")
+        self.assertIn("Slack said hello", self.only(records, "note")["text"])
+
+    def test_it_says_ready_once_however_often_slack_greets_it(self) -> None:
+        one = self.hosted()
+        records = self.during(lambda: (one.socket.greet(), one.socket.greet()))
         self.assertEqual(len([said for said in records if said.get("say") == "ready"]), 1)
 
     def test_it_says_gone_once_per_loss(self) -> None:
-        one = self.reaching()
-        records = self.during(lambda: (one._up(), one._down(), one._down()))
+        one = self.hosted()
+        self.during(one.socket.greet)
+        one.socket.close()
+        records = self.during(lambda: (one._reconcile(), one._reconcile()))
         self.assertEqual(len([said for said in records if said.get("say") == "gone"]), 1)
 
     def test_a_loss_before_it_was_ever_up_says_nothing(self) -> None:
-        one = self.reaching()
-        self.assertEqual(self.during(one._down), [])
+        one = self.hosted()
+        one.socket.close()
+        self.assertEqual(self.during(one._reconcile), [])
+
+    def test_a_replacement_is_not_ready_until_slack_greets_it(self) -> None:
+        one = self.hosted()
+        self.during(one.socket.greet)
+        one.socket.replace()
+        gone = self.during(one._reconcile)
+        self.only(gone, "gone")
+        self.assertFalse(one.connected)
+        self.only(self.during(one.socket.greet), "ready")
+
+    def test_a_replacement_greeting_marks_the_change_even_between_watcher_checks(self) -> None:
+        one = self.hosted()
+        self.during(one.socket.greet)
+        one.socket.replace()
+        records = self.during(one.socket.greet)
+        self.only(records, "gone")
+        self.only(records, "ready")
+
+    def test_replacement_loss_is_recorded_before_a_racing_hello_earns_ready(self) -> None:
+        one = self.hosted()
+        self.during(one.socket.greet)
+        one.socket.replace()
+        gone_entered = threading.Event()
+        release_gone = threading.Event()
+        records: List[str] = []
+
+        def recording(record: Dict[str, Any]) -> None:
+            if record.get("say") == "gone":
+                gone_entered.set()
+                release_gone.wait(1)
+            if record.get("say") in {"gone", "ready"}:
+                records.append(record["say"])
+
+        with mock.patch.object(adapter, "say", side_effect=recording):
+            losing = threading.Thread(target=one._reconcile)
+            greeting = threading.Thread(target=one.socket.greet)
+            losing.start()
+            self.assertTrue(gone_entered.wait(1))
+            greeting.start()
+            self.assertTrue(greeting.is_alive(), "hello passed a loss record still being written")
+            release_gone.set()
+            losing.join(1)
+            greeting.join(1)
+
+        self.assertEqual(records, ["gone", "ready"])
+        self.assertTrue(one.connected)
+
+    def test_a_stale_close_snapshot_cannot_erase_a_replacement_hello(self) -> None:
+        one = self.hosted()
+        self.during(one.socket.greet)
+        one.socket.up = False
+        snapshot_started = threading.Event()
+        release_snapshot = threading.Event()
+        records: List[str] = []
+
+        def stale_closed() -> bool:
+            snapshot_started.set()
+            release_snapshot.wait(1)
+            return False
+
+        def recording(record: Dict[str, Any]) -> None:
+            if record.get("say") in {"gone", "ready"}:
+                records.append(record["say"])
+
+        with mock.patch.object(one.socket, "is_connected", side_effect=stale_closed), \
+                mock.patch.object(adapter, "say", side_effect=recording):
+            losing = threading.Thread(target=one._reconcile)
+            losing.start()
+            self.assertTrue(snapshot_started.wait(1))
+            one.socket.replace()
+            greeting = threading.Thread(target=one.socket.greet)
+            greeting.start()
+            blocked = greeting.is_alive()
+            release_snapshot.set()
+            losing.join(1)
+            greeting.join(1)
+
+        self.assertTrue(blocked, "hello passed a socket snapshot still being applied")
+        self.assertEqual(records, ["gone", "ready"])
+        self.assertTrue(one.connected)
+        self.assertEqual(one.greeted_session, "s-2")
 
     def test_ready_names_the_bot_and_the_workspace(self) -> None:
-        one = self.reaching()
-        said = self.only(self.during(one._up), "ready")
+        one = self.hosted()
+        said = self.only(self.during(one.socket.greet), "ready")
         self.assertIn("rundesk", said["as"])
         self.assertIn(TEAM, said["as"])
 
@@ -1799,6 +1956,46 @@ class TheConnection(Wired):
                                           "RUNDESK_ALLOW": THEM, "RUNDESK_ALLOW_PLACES": ""}):
             records = self.during(lambda: self.assertEqual(adapter.serving(), adapter.WILL_NOT_FIX))
         self.assertIn("Slack tokens", self.only(records, "note")["text"])
+
+
+class TheDocumentedContract(unittest.TestCase):
+    """The setup and command pages agree with what the Slack adapter actually proves."""
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def text(self, path: str) -> str:
+        return (self.ROOT / path).read_text(encoding="utf-8")
+
+    def test_the_manifest_keeps_the_bot_visible_without_calling_presence_health(self) -> None:
+        guide = self.text("docs/guides/slack.md")
+        self.assertIn("always_online: true", guide)
+        self.assertNotIn("always_online: false", guide)
+        self.assertNotIn("green dot follows the Socket Mode connection", guide)
+
+    def test_every_owning_page_keeps_the_slack_probe_non_listening(self) -> None:
+        pages = (
+            "docs/api/README.md",
+            "docs/api/channels.md",
+            "docs/concepts/channels.md",
+            "docs/extending/adapters.md",
+            "docs/guides/slack.md",
+            "src/rundesk/channels/adapters.py",
+            "src/rundesk/commands/channels.py",
+            "src/skills/managing-rundesk/references/channels.md",
+        )
+        for path in pages:
+            with self.subTest(path=path):
+                said = self.text(path)
+                self.assertNotIn("channels doctor` really connects", said)
+                self.assertNotIn("channels test <agent> <adapter>   # connect again", said)
+                self.assertNotIn("ask the adapter to connect again", said)
+                self.assertNotIn("`--check`** connects", said)
+                self.assertNotIn("**It really connects", said)
+                self.assertNotIn("may connect to the platform", said)
+                self.assertNotIn("| Connect again and report", said)
+        self.assertIn("without opening a second websocket",
+                      self.text("docs/api/channels.md"))
+        self.assertIn("without opening it", self.text("docs/extending/adapters.md"))
 
 
 # ---------------------------------------------------------------------------------------------
