@@ -55,6 +55,21 @@ esac
 exit 0
 """
 
+#: One that needs no credential and reports the two variables saying who may reach the agent, so a
+#: case can prove what an adapter is really asked its question with. **The two are apart on purpose**:
+#: `RUNDESK_ALLOW` has carried sender ids since before an entry could say what it named.
+AN_ADAPTER_THAT_REPORTS_WHO_MAY_REACH = """#!/bin/sh
+case "$1" in
+  --capabilities) echo '{"max_text": 2000}' ;;
+  --check)
+    printf '{"ok": true, "describes": "a bot", "notify_place": "1180",
+             "settings": {"allow": "%s", "places": "%s"}, "secret": {"env": []}}\\n' \\
+           "$RUNDESK_ALLOW" "$RUNDESK_ALLOW_PLACES"
+    ;;
+esac
+exit 0
+"""
+
 #: One that connects, is told no, and names nothing to set — there is nothing to prompt for and
 #: nothing to be done but read the sentence.
 AN_ADAPTER_THAT_REFUSES = """#!/bin/sh
@@ -552,6 +567,79 @@ class ChangingWhoMayReachIt(Channels):
         code, _out, err = self.rundesk("channels", "configure", "alan", "chat", "--notify")
         self.assertEqual(0, code, err)
         self.assertEqual("chat", kept.told("alan")["kind"])
+
+
+class WhatAnAllowEntryMayName(Channels):
+    """A bare id is a sender and always was; a typed entry says which of the two it names.
+
+    Nothing about the stored shape changes: the column is a JSON array of strings either way, so
+    there is no migration and every channel on every install goes on meaning what it meant.
+    """
+
+    def reporting(self, kind: str = "chat"):
+        self.an_adapter(kind, AN_ADAPTER_THAT_REPORTS_WHO_MAY_REACH)
+
+    def test_a_place_is_written_down_exactly_as_it_was_typed(self):
+        self.reporting()
+        code, _out, err = self.rundesk("channels", "add", "alan", "chat",
+                                       "--allow", "place:C0OPS")
+        self.assertEqual(0, code, err)
+        self.assertEqual(["place:C0OPS"], kept.who_may_reach(kept.one("alan", "chat")))
+
+    def test_a_legacy_bare_id_is_still_written_down_bare(self):
+        self.reporting()
+        code, _out, err = self.rundesk("channels", "add", "alan", "chat", "--allow", "1180")
+        self.assertEqual(0, code, err)
+        self.assertEqual(["1180"], kept.who_may_reach(kept.one("alan", "chat")))
+
+    def test_the_adapter_is_asked_with_the_senders_bare_and_the_places_apart(self):
+        # An adapter written before typed entries existed is handed what it has always been handed,
+        # so its own narrowing cannot drop somebody this install would have admitted.
+        self.reporting()
+        code, _out, err = self.rundesk("channels", "add", "alan", "chat",
+                                       "--allow", "1180", "--allow", "sender:2207",
+                                       "--allow", "place:C0OPS")
+        self.assertEqual(0, code, err)
+        self.assertEqual({"allow": "1180,2207", "places": "C0OPS"},
+                         json.loads(kept.one("alan", "chat")["settings"]))
+
+    def test_an_entry_naming_nothing_is_refused_where_somebody_can_read_it(self):
+        # `channels.kept` drops such an entry when it reads a row, which is right for a row that
+        # already holds one and wrong for a command somebody is standing at a terminal typing: they
+        # would be told the channel was configured and find that it answered nobody.
+        self.reporting()
+        for said in ("sender:", "place:"):
+            with self.subTest(said=said):
+                code, out, err = self.rundesk("channels", "add", "alan", "chat",
+                                              "--allow", said)
+                self.assertEqual(1, code)
+                self.assertEqual("", out)
+                self.assertIn("names no", err)
+                self.assertIn("--allow", err)
+                self.assertEqual([], kept.all("alan"))
+
+    def test_a_place_can_be_added_to_a_channel_that_already_stands(self):
+        self.a_channel()
+        code, out, err = self.rundesk("channels", "configure", "alan", "chat",
+                                      "--allow", "place:C0OPS")
+        self.assertEqual(0, code, err)
+        self.assertIn("place:C0OPS", out)
+        self.assertEqual(["1180", "place:C0OPS"], kept.who_may_reach(kept.one("alan", "chat")))
+
+    def test_a_place_is_denied_by_the_entry_it_stands_as(self):
+        self.a_channel()
+        self.rundesk("channels", "configure", "alan", "chat", "--allow", "place:C0OPS")
+        code, _out, err = self.rundesk("channels", "configure", "alan", "chat",
+                                       "--deny", "place:C0OPS")
+        self.assertEqual(0, code, err)
+        self.assertEqual(["1180"], kept.who_may_reach(kept.one("alan", "chat")))
+
+    def test_denying_an_entry_naming_nothing_is_refused_before_anything_is_written(self):
+        self.a_channel()
+        code, _out, err = self.rundesk("channels", "configure", "alan", "chat", "--deny", "place:")
+        self.assertEqual(1, code)
+        self.assertIn("names no place", err)
+        self.assertEqual(["1180"], kept.who_may_reach(kept.one("alan", "chat")))
 
 
 class AskingItToConnectAgain(Channels):

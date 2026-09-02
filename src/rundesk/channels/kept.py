@@ -26,13 +26,27 @@ Neither of those can reach zero or two: the records refuse an empty allow list a
 channel, and this module refuses them earlier, in words about what somebody typed rather than about
 a constraint they have never seen.
 
+## What an entry in that list may name
+
+**A bare entry is a sender id and always was**, so every list written before this paragraph existed
+goes on meaning exactly what it meant. A typed entry says which kind of thing it names — `sender:`
+for one person on that platform, `place:` for one place on it, where anybody the platform reports as
+being there may reach the agent. There is no schema change and nothing to carry forward: the column
+is a JSON array of strings either way, and `admitting` is the one place that reads what a string
+means.
+
+**The decision stays here and never moves to the adapter.** An adapter supplies the two stable
+identifiers a platform knows — who spoke, and where — and `channels.hosting` asks this module
+whether that pair is admitted. An adapter narrows first to avoid working for nothing; nothing it
+sends is the decision.
+
 May depend on `agents`, `core` and `utils`.
 """
 
 import json
 import sqlite3
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from rundesk.agents import directory, records
 from rundesk.core import config
@@ -44,6 +58,43 @@ TABLE = "channels"
 #: and `kind` are the row's identity, `created_at` is the records' own account of themselves, and
 #: `notified` has `telling` because it is the one column two rows may not agree about.
 SETTABLE = ("describes", "notify_place", "secret_names", "settings", "allowed")
+
+#: The two things an allow entry may name, and the separator that marks one as typed. **Closed, and
+#: that is the whole of its value**: an entry whose prefix is anything else is a bare sender id, so a
+#: platform whose ids happen to contain a colon keeps meaning what it meant. Written as words rather
+#: than as letters because they are also what somebody types after `--allow`.
+SENDER = "sender"
+PLACE = "place"
+TYPED = (SENDER, PLACE)
+AS = ":"
+
+
+class Admitting(NamedTuple):
+    """Who a channel admits, and from where. Read once when an adapter starts, asked per message.
+
+    Two tuples rather than two sets, because the order somebody typed is load-bearing on the way
+    out: an adapter reports where unprompted things would land by opening a conversation with the
+    **first** sender on the list, so a set would hand it a different owner between runs.
+    """
+
+    #: Every sender id this channel names, in the order the list holds them.
+    senders: Tuple[str, ...]
+    #: Every external place id this channel names, in the same order.
+    places: Tuple[str, ...]
+
+    def admits(self, sender: str, place: str = "") -> bool:
+        """Whether this pair may reach the agent. **An unnamed sender is never one of them.**
+
+        A place entry allows anybody the platform reports as being in that place, and *anybody* is
+        still somebody: a record arriving with no sender at all is an event rather than a person —
+        a bot, a join notice, a platform's own housekeeping — and admitting one because of where it
+        happened would turn a place entry into a way in for anything that can post there.
+        """
+        if not sender:
+            return False
+        if sender in self.senders:
+            return True
+        return bool(place) and place in self.places
 
 
 class Refused(Exception):
@@ -219,6 +270,53 @@ def who_may_reach(row: Dict[str, Any]) -> List[str]:
     caller that parsed it itself would be a caller that could parse it differently.
     """
     return _read_list(row.get("allowed"), f"the {row.get('kind')} channel")
+
+
+def admitting(row: Dict[str, Any]) -> Admitting:
+    """What a channel's allow list admits, sorted into the two things an entry may name.
+
+    Here rather than at each call site for the reason `who_may_reach` is: the column holds text, and
+    every caller that decided for itself what one of those strings meant would be a caller that could
+    decide differently — which for this column is two answers to *who may reach this agent*.
+
+    **Raises rather than answering empty**, exactly as `who_may_reach` does. An `Admitting` with
+    nothing in it admits nobody, so a list that merely could not be read must never look like one.
+    """
+    return admitted_by(who_may_reach(row))
+
+
+def admitted_by(entries: Sequence[str]) -> Admitting:
+    """The same reading, of a list already in hand — what `RUNDESK_ALLOW` is built from.
+
+    **A prefix that is not one of the two closed words is not a prefix**, it is the start of an id.
+    That is what keeps a list written before typed entries existed meaning exactly what it meant, and
+    it is why the words are matched whole rather than split on the first colon and hoped about.
+
+    **A typed entry naming nothing is dropped.** `sender:` with nothing after it is not an id, and
+    the two directions are not equally safe: kept as the literal text it would sit in the list
+    matching a sender nobody can be, and read as *any sender* it would open the channel to everybody.
+    Dropped, it admits nobody, which is what an entry that names nobody should do. `channels add`
+    refuses one before it is ever written.
+    """
+    senders: List[str] = []
+    places: List[str] = []
+    for entry in entries:
+        kind, marked, named = str(entry).partition(AS)
+        if marked and kind in TYPED:
+            if named:
+                (senders if kind == SENDER else places).append(named)
+        elif entry:
+            senders.append(str(entry))
+    return Admitting(_once(senders), _once(places))
+
+
+def _once(named: List[str]) -> Tuple[str, ...]:
+    """The same ids, each kept the first time it is seen. One id said twice is one id."""
+    kept: List[str] = []
+    for one in named:
+        if one not in kept:
+            kept.append(one)
+    return tuple(kept)
 
 
 def _read_list(said: Any, whose: str) -> List[str]:

@@ -763,11 +763,16 @@ class Gestures:
         return f"**{agent}** now uses **{shown}**. This conversation starts fresh."
 
     def _only_one(self, agent: str, kind: str) -> Optional[str]:
-        """The single person this channel allows, or `None` where it allows any other number."""
+        """The single person this channel allows, or `None` where it allows any other number.
+
+        **A channel that allows a place allows an unknown number of people**, so it is never this
+        one however few senders stand beside it: who is in a room is the platform's to change, and
+        an agent-wide default is not something a room's membership gets to decide.
+        """
         with contextlib.suppress(Exception):
-            allowed = channels_kept.who_may_reach(channels_kept.one(agent, kind))
-            if len(allowed) == 1:
-                return str(allowed[0])
+            allowed = channels_kept.admitting(channels_kept.one(agent, kind))
+            if len(allowed.senders) == 1 and not allowed.places:
+                return allowed.senders[0]
         return None
 
     def _forgotten(self, agent: str, place: str) -> str:

@@ -22,8 +22,8 @@ they say it.
 | `channels remove <agent> <adapter> --confirm` | take one away |
 | `channels doctor [<agent>]` | what cannot be used, and exactly why |
 
-`--allow` and `--deny` repeat, once per person. `--with` is handed to the adapter as one quoted
-string: Rundesk parses none of it and it never reaches a shell.
+`--allow` and `--deny` repeat, once per person or place. `--with` is handed to the adapter as one
+quoted string: Rundesk parses none of it and it never reaches a shell.
 
 ### Attachments, in and out
 
@@ -64,6 +64,10 @@ alan   discord  rundesk#4471, reaching you#0     2        yes   connected (pid 9
 cole   discord  colebot#8812, reaching you#0     1        no    not connected
 ```
 
+**`ALLOWED` counts entries, not people.** A `place:` entry admits everybody the platform reports as
+being in that place, so one entry may be a room full of them. `channels show` prints the entries
+themselves.
+
 ### What `STANDING` means
 
 `STANDING` is asked of the kernel through the claim an adapter holds, exactly as `rundesk gateways`
@@ -95,10 +99,31 @@ because a state nothing here can resolve is a state to report and not to be sile
 
 `--allow` is required, is repeatable, and takes the id that platform knows somebody by.
 
+#### What an entry may name
+
+| Entry | Allows |
+|---|---|
+| `341709...` | that sender, wherever they say it. **The plain form, and what every list held before this** |
+| `sender:341709...` | the same thing, said out loud |
+| `place:C01ABCDEF2G` | anybody the adapter reports as being in that place |
+
+Only those two words make an entry typed, so a platform whose ids carry a colon keeps meaning what it
+meant. An entry naming nothing — `place:` with no id — is refused where it was typed, and `--deny`
+takes an entry written exactly as it stands on the list.
+
+A place entry allows anybody who is somebody: an event with no sender behind it — a bot, a join
+notice, a platform's own housekeeping — is refused however allowed the place is. **The adapter never
+makes this decision**; it reports the two ids the platform knows and Rundesk decides. See
+[`concepts/channels.md`](../concepts/channels.md#who-may-reach-an-agent-and-from-where).
+
 #### What the platform wants first
 
 **What the platform wants first.** Rundesk holds no list of what any platform needs, so what a
-channel asks for comes from its adapter and is named on the refusal. For the shipped Discord adapter
+channel asks for comes from its adapter and is named on the refusal. The shipped **Slack** adapter
+asks for two: a **bot token** (`xoxb-`, OAuth & Permissions) and an **app-level token** (`xapp-`,
+Basic Information → App-Level Tokens, scope `connections:write`). A user token is refused by name.
+The [Slack setup guide](../guides/slack.md) walks it through, including the app manifest, the minimum
+bot scopes, and what Slack's agent-session typing indicator needs. For the shipped Discord adapter
 that is three things, all of them from Discord rather than from here: a **bot token** (Developer
 Portal → your application → Bot → Reset Token), the **Message Content Intent** switched on for that
 bot (same page, under Privileged Gateway Intents — without it Discord blanks every message in a room

@@ -52,7 +52,8 @@ who it is being sold to, are the owner's to state and are deliberately not guess
 
 - `launchd` — hosts each agent's gateway and brings it back after a crash, a reboot, or an update.
 - The provider CLIs — `codex`, `claude`, `grok`, `antigravity`, run under the owner's existing login.
-- Discord — the shipped channel adapter, and the one runtime pin in `requirements.txt`.
+- Discord and Slack — the two shipped channel adapters, and the two runtime pins in
+  `requirements.txt`.
 - GitHub — `github.com` and `api.github.com`, for release archives during install and update, and
   for fetching skill and team catalogs.
 - SQLite — the per-agent record store, through the standard library's `sqlite3`.

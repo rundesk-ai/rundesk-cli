@@ -13,6 +13,7 @@ topic page — and it does not argue for the design. Every file takes the same c
 | [channel-adapter.md](./channel-adapter.md) | The seam a channel adapter is reached through |
 | [channel-messaging.md](./channel-messaging.md) | A channel conversation, and the work that arrives on it |
 | [channel-discord.md](./channel-discord.md) | Discord, as an agent is reached on it |
+| [channel-slack.md](./channel-slack.md) | Slack, as an agent is reached on it |
 | [provider-account-alias.md](./provider-account-alias.md) | Additional provider accounts, and the alias that selects one |
 | [rundesk-instructions.md](./rundesk-instructions.md) | What every turn is told, and who owns each layer of it |
 | [team-catalog.md](./team-catalog.md) | Versioned agent teams, and what an install owes their declaration |
@@ -51,3 +52,8 @@ Three predecessor contracts were removed on 2026-08-25 — the previous build's 
 Slack behavior, and its machine-permissions draft. Their requirement namespaces were cited nowhere
 else, and [`concepts/permissions.md`](../concepts/permissions.md) remains the source of truth for
 what macOS lets Rundesk do. Git history holds them.
+
+**`SLK` is the one of those three that has been reissued.** The rebuilt Slack adapter took the
+namespace back on 2026-09-02 and numbers from `R-SLK-1` again. That is safe here and would not be in
+general: nothing in the tree cited a withdrawn `R-SLK-*` row, which was checked before it was
+reissued. `ROL` and `DEL` stay withdrawn.

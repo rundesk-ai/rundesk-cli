@@ -100,6 +100,25 @@ for line in sys.stdin:
         continue
 """
 
+#: One that writes down the two variables saying who may reach the agent, so a case can prove what
+#: an adapter is really handed. **The two are kept apart on purpose**: `RUNDESK_ALLOW` has carried
+#: sender ids since before an entry could say what it named, and an adapter written then still reads
+#: exactly what it always read.
+AN_ADAPTER_THAT_REPORTS_WHO_MAY_REACH = """#!/usr/bin/env python3
+import json, os, sys
+settings = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
+with open(settings["told"], "a") as writing:
+    writing.write(json.dumps({"allow": os.environ.get("RUNDESK_ALLOW"),
+                              "places": os.environ.get("RUNDESK_ALLOW_PLACES")}) + "\\n")
+print(json.dumps({"say": "ready"}), flush=True)
+for line in sys.stdin:
+    try:
+        if json.loads(line).get("do") == "stop":
+            break
+    except ValueError:
+        continue
+"""
+
 #: One that reports its own environment before doing anything else, so a case can prove **which**
 #: name answered and under which name the value arrived. It reads the declared name with no
 #: fallback, exactly as a real adapter does — the resolution is rundesk's business and the far side
@@ -685,6 +704,137 @@ class ListeningToOne(Hosting):
             PATIENCE),
             "an adapter that had said far more than a pipe holds could not answer, which is the "
             "deadlock a thread per adapter exists to make unreachable")
+
+
+class WhoMayReachAnAgentHere(Hosting):
+    """Admission, which is rundesk's and is decided against two stable ids and nothing else.
+
+    Every case here goes through a real adapter and a real gateway, because the thing being proved
+    is that what an adapter *says* about a message reaches the decision and that nothing else does.
+    A unit case on `kept.admits` proves the rule; these prove it is the rule that runs.
+    """
+
+    def arriving_from(self, user="2207", **also):
+        return self.a_message_arrived(user=user, **also)
+
+    def recorded(self):
+        return arriving.conversations(self.agent)
+
+    def settled(self):
+        """Wait until the adapter has connected, so a case that expects nothing has really waited."""
+        self.assertTrue(support.waited_until(
+            lambda: "channel discord: connected" in self.said_in_the_log(), PATIENCE))
+
+    def test_a_legacy_bare_entry_still_admits_the_sender_it_always_did(self):
+        self.an_adapter()
+        self.a_channel(allowed=("2207",), saying=self.arriving_from("2207"))
+        self.hosting_now()
+        self.assertTrue(support.waited_until(lambda: len(self.recorded()) == 1, PATIENCE))
+
+    def test_a_typed_sender_entry_admits_that_sender(self):
+        self.an_adapter()
+        self.a_channel(allowed=("sender:2207",), saying=self.arriving_from("2207"))
+        self.hosting_now()
+        self.assertTrue(support.waited_until(lambda: len(self.recorded()) == 1, PATIENCE))
+
+    def test_a_typed_sender_entry_admits_nobody_else_in_the_same_place(self):
+        self.an_adapter()
+        self.a_channel(allowed=("sender:2207",),
+                       saying=self.arriving_from("nobody-invited", external_place="C0OPS"))
+        self.hosting_now()
+        self.settled()
+        self.assertEqual([], self.recorded())
+
+    def test_a_place_entry_admits_any_real_person_in_that_place(self):
+        # The intended owner configuration: anybody in a channel the owner chose.
+        self.an_adapter()
+        self.a_channel(allowed=("place:C0OPS",),
+                       saying=self.arriving_from("somebody-else", external_place="C0OPS"))
+        self.hosting_now()
+        self.assertTrue(support.waited_until(lambda: len(self.recorded()) == 1, PATIENCE))
+
+    def test_a_place_entry_admits_nobody_standing_somewhere_else(self):
+        self.an_adapter()
+        self.a_channel(allowed=("place:C0OPS",),
+                       saying=self.arriving_from("somebody-else", external_place="C0SECRET"))
+        self.hosting_now()
+        self.settled()
+        self.assertEqual([], self.recorded())
+
+    def test_a_place_entry_admits_nothing_that_said_where_it_was_and_not_who(self):
+        # A record with no sender is an event rather than a person, and admitting one because of
+        # where it happened would turn a place entry into a way in for anything that can post there.
+        self.an_adapter()
+        self.a_channel(allowed=("place:C0OPS",),
+                       saying=self.arriving_from("", external_place="C0OPS"))
+        self.hosting_now()
+        self.settled()
+        self.assertEqual([], self.recorded())
+
+    def test_a_forged_display_field_admits_nobody(self):
+        # `display` and `where` are words an adapter composed for a person to read. A display name is
+        # somewhere a stranger writes whatever they like, so neither reaches this decision.
+        self.an_adapter()
+        self.a_channel(allowed=("place:C0OPS", "sender:2207"), saying=self.arriving_from(
+            "nobody-invited", display="place:C0OPS", where="the C0OPS channel", place="C0OPS"))
+        self.hosting_now()
+        self.settled()
+        self.assertEqual([], self.recorded())
+
+    def test_a_place_named_only_in_the_display_only_field_admits_nobody(self):
+        # `place` on an arrival is the shipped Discord adapter's `"dm"`/`"room"` and is read by
+        # nothing. Deciding on it would admit every room at once for an adapter that sent one word.
+        self.an_adapter()
+        self.a_channel(allowed=("place:room",),
+                       saying=self.arriving_from("nobody-invited", place="room"))
+        self.hosting_now()
+        self.settled()
+        self.assertEqual([], self.recorded())
+
+    def test_an_arrival_that_names_no_place_still_admits_a_named_sender(self):
+        # Every adapter written before an external place existed reports none, and every channel on
+        # every install goes on working exactly as it did.
+        self.an_adapter()
+        self.a_channel(allowed=("2207", "place:C0OPS"), saying=self.arriving_from("2207"))
+        self.hosting_now()
+        self.assertTrue(support.waited_until(lambda: len(self.recorded()) == 1, PATIENCE))
+
+    def test_a_gesture_is_admitted_by_the_same_rule_a_message_is(self):
+        steering = _SteeringStub()
+        self.an_adapter()
+        self.a_channel(allowed=("place:C0OPS",), saying=json.dumps({
+            "say": "control", "conversation": "1180", "user": "somebody-else",
+            "external_place": "C0OPS", "control": hosting.STOP, "ref": "i-1"}))
+        watching = self.hosting_now(steering=steering)
+        self.assertTrue(support.waited_until(
+            lambda: hosting.connected(watching, "discord"), PATIENCE))
+        self.assertTrue(support.waited_until(lambda: steering.controlled_with, PATIENCE),
+                        "a control from an admitted place never reached anything")
+
+    def test_a_gesture_from_a_place_this_channel_does_not_allow_is_dropped_in_silence(self):
+        steering = _SteeringStub()
+        self.an_adapter()
+        self.a_channel(allowed=("place:C0OPS",), saying=json.dumps({
+            "say": "control", "conversation": "1180", "user": "somebody-else",
+            "external_place": "C0SECRET", "control": hosting.STOP, "ref": "i-1"}))
+        watching = self.hosting_now(steering=steering)
+        self.assertTrue(support.waited_until(
+            lambda: hosting.connected(watching, "discord"), PATIENCE))
+        for _ in range(3):
+            self.looked_again(watching)
+        self.assertEqual([], steering.controlled_with)
+        self.assertEqual([], [one for one in self.what_it_was_told()
+                              if one.get("do") == "answered"])
+
+    def test_an_adapter_is_handed_the_senders_bare_and_the_places_apart(self):
+        self.an_adapter(body=AN_ADAPTER_THAT_REPORTS_WHO_MAY_REACH)
+        self.a_channel(allowed=("2207", "sender:4418", "place:C0OPS"))
+        self.hosting_now()
+        self.assertTrue(support.waited_until(lambda: self.what_it_was_told(), PATIENCE))
+        said = self.what_it_was_told()[0]
+        self.assertEqual("2207,4418", said["allow"],
+                         "a typed sender did not arrive in the shape every adapter already reads")
+        self.assertEqual("C0OPS", said["places"])
 
 
 class HowMuchOfALineIsHeld(Hosting):

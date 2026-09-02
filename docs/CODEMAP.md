@@ -54,12 +54,12 @@ agent steps run from `0001_the_records_an_agent_keeps` to
 `0013_the_models_a_turn_knows_and_the_counters_it_keeps`. The lifecycle registry exists and holds no
 shipped step yet.
 
-## Adapters (src/ — 5)
+## Adapters (src/ — 6)
 
 Executables with a shebang and no `.py`, run as separate programs exchanging newline-delimited JSON.
 Being extensionless is why a directory-scanning lint does not see them.
 
-- `src/channels/discord`
+- `src/channels/` — `discord`, `slack`
 - `src/providers/` — `codex`, `claude`, `grok`, `antigravity`
 
 ## Shipped artifacts (src/ — 2 trees)
@@ -69,7 +69,7 @@ Being extensionless is why a directory-scanning lint does not see them.
 | `src/skills/` | the bundled `rundesk` catalog: `manifest.json` and 4 packages — `delegating-work`, `managing-github`, `managing-rundesk`, `writing-skills` |
 | `src/templates/` | the agent home: an `AGENTS.md`/`CLAUDE.md` pair placed from one source, `MEMORY.md`, and purpose-named area templates for plans, research, retros, scripts, and tasks |
 
-## Tests (tests/ — 85 suites, 3 support modules)
+## Tests (tests/ — 86 suites, 3 support modules)
 
 Directly runnable `unittest` suites. `tests/support.py` gives every case a temporary root, asserts
 that Rundesk resolved that root before the case runs, and points the proxy variables at a closed port
@@ -86,12 +86,13 @@ agent-guide heading contract, and the repository template digests.
 ## Documentation (docs/)
 
 Three files at the root — `README.md`, `BRIEF.md`, `CODEMAP.md` — and every other page in a home:
-`api/` (10 pages), `concepts/` (12), `guides/` (7), `extending/` (3), `requirements/` (7),
+`api/` (10 pages), `concepts/` (12), `guides/` (8), `extending/` (3), `requirements/` (8),
 `research/` (33), plus `assets/`. Each home carries its own index.
 
 ## Repository configuration (root)
 
-`requirements.txt` — adapter-only pins, exact. `ruff.toml` — the development and CI lint contract,
+`requirements.txt` — adapter-only pins, exact: `discord.py` for `src/channels/discord` and
+`slack_sdk` for `src/channels/slack`, and nothing under `src/rundesk/` imports either. `ruff.toml` — the development and CI lint contract,
 never a product dependency. `cli-versions.lock` — which vendor CLI version each shipped adapter was
 written against, and the captured stream that stands in for it so no suite needs an account or a
 network. `.github/workflows/build.yml` — the suites across `ubuntu-latest` and `macos-latest` on
