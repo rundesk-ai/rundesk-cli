@@ -162,8 +162,8 @@ its own is outside the supervisor's reach, so if the gateway does not stop it, n
 
 ## What a run says on a surface, and the two messages it is allowed
 
-A schedule that **asks the agent** reports where the agent is told things — the one channel marked
-`notified`, at its `notify_place`. Two messages, and never a third:
+A schedule that **asks the agent** reports through the one channel marked `notified`. On Discord,
+each allowed user receives both messages privately. Two messages per recipient, and never a third:
 
 | When | What goes out |
 |---|---|
@@ -201,7 +201,8 @@ the records hold that as a `CHECK` and the command says it in words. Every invoc
 agent-asking schedule gets **a fresh conversation and provider session**, so tonight cannot inherit
 last night's context and a run at three in the morning never lands in the exchange somebody types
 into. It may delegate to a named agent; that result returns to the same invocation session for review,
-and the reviewed final report goes to the agent's notified channel.
+and the reviewed final report goes through the agent's notified channel adapter. The schedule does
+not choose a caller's DM; the shipped Discord adapter privately sends it to every allowed user.
 
 `rundesk schedules run` takes either kind by hand, and neither uses up the minute it next falls due —
 testing a schedule must not be how you stop it happening.
@@ -209,6 +210,7 @@ testing a schedule must not be how you stop it happening.
 What is still not built: a schedule carries `provider_name` and `model_name` columns that nothing
 writes. A schedule runs on the agent's own brain, and a way to override that per schedule is a verb
 nobody has asked for. The `channel` and `channel_place_id` columns are the same — **where a run
-reports is the agent's notified channel and is not stated per schedule**, so those two are still
-written by nothing. A schedule that reports somewhere of its own is a verb nobody has asked for
-either, and the columns are what it would be built on.
+reports is the agent's notified channel adapter and is not stated per schedule**, so those two are
+still written by nothing. On Discord the adapter resolves the current allowlist to private DMs. A
+schedule that reports somewhere of its own is a verb nobody has asked for either, and the columns
+are what it would be built on.

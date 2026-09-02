@@ -1110,7 +1110,7 @@ def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
         heard = refusals if refusals is not None else []
         if hosting.told(name, where, channels_up, going.kind, going.place, going.pieces,
                         landed_within=landed_within, answering=answering, sending=sending,
-                        refusals=heard if landed_within > 0 else None):
+                        refusals=heard if landed_within > 0 else None, notice=True):
             if not heard:
                 return TOLD
             if refusals is None:

@@ -185,7 +185,9 @@ rundesk gateways start ava
 
 Rundesk prompts for the token without echoing it and verifies the connection before saving the
 channel. Use one Discord application per agent so each has its own identity. `--notify` makes this
-the channel for gateway notices, scheduled results, and other unprompted messages.
+the channel for gateway notices, scheduled results, and other unprompted messages. Discord sends
+each one privately to every user named by `--allow`; direct replies remain in the conversation that
+asked.
 
 The [full Discord setup guide](docs/guides/discord.md) walks through the Developer Portal, least-privilege
 permissions, installation, and troubleshooting step by step.

@@ -183,11 +183,19 @@ class Library:
 
 
 class Person:
-    def __init__(self, which: int, bot: bool = False, display_name: str = "Ann") -> None:
+    def __init__(self, which: int, bot: bool = False, display_name: str = "Ann",
+                 direct: Optional[int] = None) -> None:
         self.id = which
         self.bot = bot
         self.display_name = display_name
         self.name = display_name.lower()
+        self.direct = DMChannel(direct if direct is not None else which * 100)
+        self.dm_refuses: Optional[Exception] = None
+
+    async def create_dm(self) -> DMChannel:
+        if self.dm_refuses is not None:
+            raise self.dm_refuses
+        return self.direct
 
 
 class Posted:
@@ -307,12 +315,20 @@ class Client:
     def __init__(self, user: Person) -> None:
         self.user = user
         self.places: Dict[int, Messageable] = {}
+        self.users: Dict[int, Person] = {user.id: user}
+        self.fetched: List[int] = []
         #: Every presence this bot was asked to show, in the order it was asked.
         self.showed: List[str] = []
         self.closed = False
 
     def get_partial_messageable(self, place: int) -> Messageable:
         return self.places.setdefault(place, Messageable(place))
+
+    async def fetch_user(self, user: int) -> Person:
+        self.fetched.append(user)
+        if user not in self.users:
+            raise RuntimeError("Discord has no such user")
+        return self.users[user]
 
     async def change_presence(self, status: str) -> None:
         self.showed.append(status)
@@ -375,6 +391,7 @@ class Records(unittest.TestCase):
         self.me = Person(11, bot=True, display_name="rundesk")
         self.asker = Person(22)
         self.client = Client(self.me)
+        self.client.users[self.asker.id] = self.asker
         self.reaching: Any = None
 
     def during(self, doing) -> List[Dict[str, Any]]:
@@ -799,6 +816,92 @@ class WhenAThreadIsRefused(Records):
 # ---------------------------------------------------------------------------------------------
 # What a delivery quotes, and what it tints.
 # ---------------------------------------------------------------------------------------------
+
+
+class WhoANoticeReaches(Records):
+    """An unsolicited notice reaches the allowlist; one person's answer never does."""
+
+    def notifying(self, users: List[Person], **also: Any) -> List[Dict[str, Any]]:
+        for user in users:
+            self.client.users[user.id] = user
+
+        async def exchange(reaching: Any) -> None:
+            reaching.allow = [str(user.id) for user in users]
+            said = {"do": "deliver", "id": "notice-1", "place": "999", "text": "gateway up",
+                    "notice": True}
+            said.update(also)
+            await reaching._deliver(said)
+
+        return self.during(exchange)
+
+    def test_every_allowed_user_receives_the_notice_once(self) -> None:
+        second = Person(33)
+        records = self.notifying([self.asker, second])
+
+        self.assertEqual(1, len(self.client.places[self.asker.direct.id].sent))
+        self.assertEqual(1, len(self.client.places[second.direct.id].sent))
+        self.assertNotIn(999, self.client.places,
+                         "the stale stored DM was notified outside the current allowlist")
+        delivered = self.only(records, "delivered")
+        self.assertEqual(str(self.client.places[self.asker.direct.id].posted[0].id),
+                         delivered["external_id"])
+
+    def test_a_direct_answer_stays_in_the_one_conversation_that_asked(self) -> None:
+        second = Person(33)
+        self.client.users[second.id] = second
+
+        async def exchange(reaching: Any) -> None:
+            reaching.allow = [str(self.asker.id), str(second.id)]
+            await reaching._deliver(
+                {"do": "deliver", "id": "answer-1", "place": "500", "text": "private answer"})
+
+        self.during(exchange)
+        self.assertEqual([500], list(self.client.places))
+        self.assertEqual([], self.client.fetched,
+                         "a direct answer inspected notification recipients")
+
+    def test_only_the_primary_notice_copy_quotes_the_schedule_announcement(self) -> None:
+        second = Person(33)
+        self.notifying([self.asker, second], reply_to="61")
+
+        primary = self.client.places[self.asker.direct.id].sent[0]
+        secondary = self.client.places[second.direct.id].sent[0]
+        self.assertEqual(61, primary["reference"].message_id)
+        self.assertIsNone(secondary["reference"])
+        self.assertIs(secondary["mention_author"], False)
+
+    def test_two_allowed_ids_for_one_dm_still_receive_one_notice(self) -> None:
+        second = Person(33, direct=self.asker.direct.id)
+        self.notifying([self.asker, second])
+        self.assertEqual(1, len(self.client.places[self.asker.direct.id].sent))
+
+    def test_each_recipient_gets_a_fresh_verified_attachment(self) -> None:
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
+        at = Path(project.name).resolve() / "preview.png"
+        at.write_bytes(b"pixels")
+        second = Person(33)
+        self.notifying(
+            [self.asker, second], text="preview",
+            files=[{"name": "preview.png", "at": str(at), "bytes": 6,
+                    "sha256": hashlib.sha256(b"pixels").hexdigest()}])
+
+        primary = self.client.places[self.asker.direct.id].sent[0]["files"][0]
+        secondary = self.client.places[second.direct.id].sent[0]["files"][0]
+        self.assertIsNot(primary, secondary)
+        self.assertTrue(primary.fp.closed)
+        self.assertTrue(secondary.fp.closed)
+
+    def test_an_unreachable_allowed_user_refuses_before_notifying_anybody(self) -> None:
+        second = Person(33)
+        second.dm_refuses = RuntimeError("DMs are closed")
+        records = self.notifying([self.asker, second])
+
+        refused = self.only(records, "failed")
+        self.assertIn("every allowed user", refused["why"])
+        self.assertNotIn(str(self.asker.id), refused["why"])
+        self.assertNotIn(str(second.id), refused["why"])
+        self.assertEqual({}, self.client.places)
 
 
 class WhatADeliveryQuotes(Records):

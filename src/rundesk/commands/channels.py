@@ -593,10 +593,9 @@ def _handed(agent: str, allow: Sequence[str], names: Sequence[str]) -> Dict[str,
     """What an adapter is asked its question with: who it may answer, and each named credential.
 
     **`RUNDESK_ALLOW` is here and not only at hosting time**, and it is not decoration: an adapter
-    that opens a private conversation to report where unprompted things would land has to know whose
-    conversation, so a `--check` handed no allow list is refused by the adapter before it has even
-    signed in. `channels.hosting` builds the same variable from the same list for the long-lived
-    half.
+    that opens private conversations for unsolicited notices has to know whose conversations, so a
+    `--check` handed no allow list can be refused by the adapter before it has even signed in.
+    `channels.hosting` builds the same variable from the same list for the long-lived half.
 
     The credentials are `channels.credentials`' to resolve, and are resolved by the same call
     `channels.hosting` makes — so a `--check` that connected and an adapter that is really serving
@@ -681,6 +680,8 @@ def _where_it_writes(row: Dict[str, Any]) -> str:
     """Where unprompted things land, said only about the channel that is really the notified one."""
     if not row.get("notified"):
         return ""
+    if row.get("kind") == "discord":
+        return " — unprompted things go privately to every allowed user"
     return f" — unprompted things go to {as_written(row.get('notify_place'))}"
 
 

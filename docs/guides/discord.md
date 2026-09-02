@@ -115,9 +115,10 @@ Replace `ava` with the agent's name and the example ID with your own. Rundesk as
 without echoing it, connects to Discord, verifies Message Content Intent, and only then saves the
 channel.
 
-Use `--notify` for the first channel you add. `--allow` controls who may reach the agent;
-`--notify` selects where the agent sends gateway notices, schedule results, and returned delegated
-work. The owner's direct message is the safest default.
+Use `--notify` for the first channel you add. `--allow` controls who may reach the agent and who
+receives private gateway notices, schedule results, and returned delegated work. `--notify` selects
+Discord as the adapter for those unsolicited messages. Direct replies still go only to the DM,
+room, or thread that asked.
 
 On success, save the printed **invite** URL and open it to add the bot to a server. The URL already
 contains Rundesk's required scopes and permissions. The bot is not in a server until someone with

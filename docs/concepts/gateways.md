@@ -62,8 +62,9 @@ Underneath both is the part that had to be right before either could be trusted:
 holds its agent's name, says every fifteen seconds that it is still working, stops when it is asked
 to, and can be told apart from one that has died.
 
-**It also says three things out loud**, through the one channel an agent marked as the notified one:
-that it has come up, that it is stopping, and that a schedule failed or was stopped. Not that a
+**It also says three things out loud**, through the one channel adapter an agent marked as notified:
+that it has come up, that it is stopping, and that a schedule failed or was stopped. Discord gives
+every allowed user a private copy. Not that a
 schedule succeeded — a message per successful nightly job is how somebody learns to ignore the
 channel. An agent with no notified channel says nothing at all, which is what configuring none asks
 for.

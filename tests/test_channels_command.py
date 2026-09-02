@@ -396,6 +396,13 @@ class ConnectingAnAgent(Channels):
         self.assertEqual("chat", told["kind"])
         self.assertEqual("1180", told["notify_place"])
 
+    def test_a_notified_discord_channel_says_every_allowed_user_will_be_notified(self):
+        self.a_channel("--notify", kind="discord")
+        code, out, err = self.rundesk("channels", "show", "alan", "discord")
+        self.assertEqual(0, code, err)
+        self.assertIn("unprompted things go privately to every allowed user", out)
+        self.assertNotIn("unprompted things go to 1180", out)
+
     def test_without_notify_the_agent_tells_nobody_anything(self):
         self.a_channel()
         self.assertIsNone(kept.told("alan"))

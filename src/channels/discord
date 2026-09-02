@@ -1254,6 +1254,10 @@ class Reaching:
         self.asked: Dict[str, Any] = {}
         #: When each person was last shown the warning for something that cannot be undone.
         self.confirming: Dict[str, float] = {}
+        #: Each allowed person whose direct-message channel has been resolved for notices. The
+        #: allowlist is fixed for this process, so this is bounded by configuration rather than by
+        #: how long the adapter runs.
+        self.notice_places: Dict[str, int] = {}
         #: Whether the note about not being able to open a thread has already been said.
         self.threadless = False
         #: Whether the socket is up, so `gone` and `ready` are said on the change rather than on
@@ -1685,7 +1689,6 @@ class Reaching:
         """
         given = str(it.get("id") or "")
         text = it.get("text") or ""
-        files: List[Any] = []
         try:
             if not isinstance(text, str):
                 raise Refused("the text to deliver was not text")
@@ -1697,14 +1700,12 @@ class Reaching:
             # Named as a number before anything is opened, because a place this platform cannot
             # parse is the one failure here that no file and no text could ever get past.
             place = an_id(it.get("place"), "channel id")
-            for one in it.get("files") or []:
-                # Re-opening and hashing as much as 32 MiB is filesystem work, not event-loop work.
-                # Kept sequential so attachment order and all-or-none cleanup stay exact.
-                files.append(await asyncio.to_thread(a_verified_file, one))
-            if not text and not files:
+            attachments = it.get("files") or []
+            if not isinstance(attachments, list):
+                raise Refused("the files to deliver were not a list")
+            if not text and not attachments:
                 raise Refused("there was nothing to deliver: no text, and no file")
-            reference, tint = self._quoting(it.get("reply_to"), place)
-            where = self.client.get_partial_messageable(place)
+            places = await self._notice_places() if it.get("notice") is True else [place]
         # `OSError` is the backstop rather than a fourth expected case. Everything raised below is
         # meant to arrive as `Refused`, and one that did not — the snapshot, opened above its own
         # guard — escaped to `_reading`, which logs and goes on reading. **The delivery then had no
@@ -1712,17 +1713,41 @@ class Reaching:
         # the id, waits out its whole ceiling, collects no refusal, and reports the answer as sent.
         # Named here so that the next one converts to a refusal instead of to silence.
         except (Refused, TypeError, ValueError, OSError) as why:
-            closed(files)
             say({"say": "failed", "id": given, "why": str(why)})
             return
 
+        sent = None
         try:
-            sent = await where.send(content=text or None, files=files or None,
-                                    reference=reference, mention_author=tint)
+            for destination in places:
+                files: List[Any] = []
+                try:
+                    for one in attachments:
+                        # Each recipient gets a fresh verified snapshot. A platform upload consumes
+                        # and closes one, so sharing it would make the second person's attachment
+                        # depend on what the first send did with its file object.
+                        files.append(await asyncio.to_thread(a_verified_file, one))
+                    reference, tint = self._quoting(
+                        it.get("reply_to") if destination == places[0] else None, destination)
+                    where = self.client.get_partial_messageable(destination)
+                    posted = await where.send(content=text or None, files=files or None,
+                                              reference=reference, mention_author=tint)
+                finally:
+                    # The platform has consumed the upload before ``send`` returns. The snapshot is
+                    # ours, not durable output, and must close on success just as surely as refusal.
+                    closed(files)
+                if sent is None:
+                    sent = posted
+                self.handled[str(posted.id)] = Handled(place=destination, ours=True)
+                self._no_longer_last(destination)
+        except Refused as why:
+            say({"say": "failed", "id": given, "why": str(why)})
+            return
         except Exception as why:           # noqa: BLE001 — a platform boundary
             self._final(why)
             failed = {"say": "failed", "id": given,
-                      "why": f"Discord would not take it: {type(why).__name__}: {why}"}
+                      "why": f"Discord would not take every notice: {type(why).__name__}: {why}"
+                      if it.get("notice") is True else
+                      f"Discord would not take it: {type(why).__name__}: {why}"}
             # Present only where the library declined to wait a limit out itself. discord.py sleeps
             # through an ordinary rate limit, so an absent `retry_after` means *there is nothing to
             # tell you* and never *try again straight away*.
@@ -1731,19 +1756,50 @@ class Reaching:
                 failed["retry_after"] = float(after)
             say(failed)
             return
-        finally:
-            # The platform has consumed the upload before ``send`` returns. The snapshot is ours,
-            # not durable output, and must close on success just as surely as on refusal.
-            closed(files)
+        if sent is None:
+            say({"say": "failed", "id": given, "why": "there was no allowed Discord user to notify"})
+            return
         # Ours, and remembered as ours: a later delivery told to quote this one must not ping its
         # author, which is this bot.
-        self.handled[str(sent.id)] = Handled(place=place, ours=True)
-        # Anything posted here stands under the commentary, so the commentary stops growing. This is
-        # the answer, a remark said mid-turn, or a notice — every one of them a message the reader
-        # scrolls to, and every one of them a reason the next activity line starts somewhere new.
-        self._no_longer_last(place)
         self._make_room()
         say({"say": "delivered", "id": given, "external_id": str(sent.id)})
+
+    async def _notice_places(self) -> List[int]:
+        """Each allowed person's DM, once, without trusting the old configured destination.
+
+        The allowlist holds user ids and `place` holds a channel id; treating one as the other sends
+        to an unrelated Discord object. Resolve the users through Discord instead. The first
+        resolved DM remains first, so its platform message id is the one rundesk can quote when a
+        scheduled report follows its announcement.
+
+        The configured place is deliberately not sent to on its own. An allowlist can change after
+        a channel was first configured, leaving its old `notify_place` behind; using it as a target
+        would keep notifying somebody who is no longer allowed. Older adapters still receive that
+        place and retain their existing single-recipient behavior.
+        """
+        if not self.allow:
+            raise Refused("there was no allowed Discord user to notify")
+        places: List[int] = []
+        for allowed in self.allow:
+            user = str(allowed)
+            place = self.notice_places.get(user)
+            if place is None:
+                user_id = an_id(user, "Discord user id")
+                try:
+                    person = await self.client.fetch_user(user_id)
+                    direct = await person.create_dm()
+                    place = an_id(direct.id, "direct-message channel id")
+                except Refused:
+                    raise
+                except Exception as why:
+                    self._final(why)
+                    raise Refused(
+                        "Discord could not open a direct message for every allowed user: "
+                        f"{type(why).__name__}: {why}") from why
+                self.notice_places[user] = place
+            if place not in places:
+                places.append(place)
+        return places
 
     def _quoting(self, reply_to: Any, place: int):
         """What this delivery quotes and whether it tints — or neither, and why.

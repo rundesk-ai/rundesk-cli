@@ -139,15 +139,17 @@ failed, the failure says so and names `rundesk channels configure <agent> <adapt
 than sending somebody to add a channel that is already standing.
 
 **`--notify` is the other half of a first setup, and nothing refuses its absence.** `--allow` is who
-may *reach* the agent; `--notify` is where the agent *speaks first*. Left off, the channel connects
+may *reach* the agent and, on Discord, who receives private unprompted notices; `--notify` selects
+the channel adapter where the agent *speaks first*. Left off, the channel connects
 and answers when spoken to and never says anything unprompted — no gateway coming up or going down,
 no schedule report, no delegation handing back a result. That is a legitimate thing to want, so it
 is not an error; the only sign is `told no` in the block above. The up-notice is gated on the
 notified channel having reached its platform, and an agent with no notified channel counts as ready
 rather than waiting for a connection that will never exist.
 
-So **make the owner's own direct message the notified channel on the first channel added**. Adding
-it later is `channels configure <agent> <adapter> --notify`, followed by a gateway restart: the
+So **make Discord the notified channel on the first channel added**. Every allowed user receives
+their own private copy while direct answers remain in the conversation that asked. Adding it later
+is `channels configure <agent> <adapter> --notify`, followed by a gateway restart: the
 up-notice is said once per gateway, and one already running has said it.
 
 **An empty allow list authorises nobody, never everybody**, so leaving `--allow` off is refused —
@@ -204,9 +206,9 @@ list, so nothing in it is globbed, expanded, or read as `;`, `&&` or a redirecti
 rather than a bare `--` because argparse matches positionals in contiguous runs, and a flag between
 them makes the most natural spelling of `--` an `unrecognized arguments` error.
 
-`--notify` makes this the channel unprompted things go to. At most one channel per agent may be that,
-and where it writes is what the adapter reported rather than something to go and find: a gateway
-coming up is answering nobody and has no conversation to reply into.
+`--notify` makes this the channel adapter unprompted things go through. At most one channel per agent
+may be that. The shipped Discord adapter privately resolves every allowed user; the adapter-reported
+place remains the compatible destination for adapters that do not fan out.
 
 #### Moving an existing channel onto the agent's own name
 

@@ -179,7 +179,8 @@ it is never silently downgraded to an ordinary queued update.
 
 ### What the notified channel is told
 
-The notified channel receives these maintenance notices around a successful update:
+The notified channel adapter receives these maintenance notices around a successful update. Discord
+gives every allowed user a private copy:
 
 - `🛠️ Installing an update — I'm installing the new rundesk update, be back shortly.`
 - `👋 I'm back — new rundesk update installed, release notes for v<newer>`, with the release

@@ -583,6 +583,7 @@ for line in sys.stdin:
             writing.write(json.dumps({"place": record.get("place", ""),
                                       "text": record.get("text", ""),
                                       "files": record.get("files", []),
+                                      "notice": record.get("notice"),
                                       "reply_to": record.get("reply_to"),
                                       "external_id": named}) + "\\n")
         print(json.dumps({"say": "delivered", "id": record.get("id"),
@@ -660,6 +661,14 @@ class WhatAScheduledRunSaysOnASurface(WithAChannel):
         began, reported = self.of_a_schedule()[0], self.of_a_schedule()[1]
         self.assertEqual(began["external_id"], reported["reply_to"],
                          "the report did not quote the notice that said the run had begun")
+
+    def test_the_announcement_and_report_are_both_unsolicited_notices(self):
+        self.a_gateway_running_one_schedule()
+        self.assertTrue(support.waited_until(lambda: len(self.of_a_schedule()) >= 2,
+                                             self.PATIENCE), self.its_log())
+        began, reported = self.of_a_schedule()[0], self.of_a_schedule()[1]
+        self.assertIs(began["notice"], True)
+        self.assertIs(reported["notice"], True)
 
     def test_what_is_reported_is_what_the_agent_answered(self):
         """Not that a process exited zero. What an owner wants at six in the morning is what the
