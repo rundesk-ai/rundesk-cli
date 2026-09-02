@@ -1,7 +1,7 @@
 ---
 id: DIS
 name: Discord, as an agent is reached on it
-last_verified: 2026-08-25
+last_verified: 2026-09-01
 ---
 
 ## What this is
@@ -21,7 +21,7 @@ command responses, and file uploads.
 
 ## Requirements
 
-A ✅ names the test methods that cite the requirement and were observed to pass on 2026-08-25 —
+A ✅ names the test methods that cite the requirement and were observed to pass on 2026-09-01 —
 `test_channels_discord.py`, `test_channels_delivery.py`, `test_channels_hosting.py`, and
 `test_providers_answering.py`, 395 tests across the four. A ❌ carries the acceptance that has not
 been executed. Offline scenarios cannot prove what Discord's own service displayed.

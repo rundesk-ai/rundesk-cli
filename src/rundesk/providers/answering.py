@@ -105,6 +105,15 @@ DELEGATED_PROMPT_AT_MOST = turns.DELEGATED_PROMPT_AT_MOST
 #: guidance messages cannot make the claim itself fail. The rest stay pending for the next turn.
 DELEGATED_MESSAGES_AT_MOST = turns.DELEGATED_MESSAGES_AT_MOST
 
+#: Pending inbound channel messages one stop may settle in a conversation. The exact ids become one
+#: atomic `UPDATE`, so this stays far below every supported SQLite variable ceiling.
+#:
+#: **A bound on what is marked, never on what is stopped.** They are taken from the newest end, and
+#: claiming the newest unclaimed row supersedes every older one — so a conversation holding more
+#: than this keeps rows nothing will ever run rather than rows a later sweep would start, and the
+#: word a person is given stays true. See `Gestures._stopped`.
+PENDING_STOPPED_AT_MOST = turns.DELEGATED_MESSAGES_AT_MOST
+
 
 #: How many times a message that found the conversation busy is offered again.
 #:
@@ -479,6 +488,15 @@ class OnAChannel(IntoAChannel):
             _note(self._where, f"channel {kind}: admission stayed busy while answering {place} "
                                f"({why}); the message remains pending for retry", logs.WARNING)
             self._do_not_repeat_pending(agent, landed.message)
+            # **The indicator this thread put up is this thread's to take down** (R-CH-37).
+            # `working` is sent before admission is asked for, so a refusal here left a place
+            # typing with no turn behind it — for ever, because this message is now suppressed
+            # and nothing else in this gateway would ever send a state for it. Sent without the
+            # message's id on purpose: the message is still pending, and a mark on it would say the
+            # turn it is waiting for had settled. Left alone where this gateway is already running a
+            # turn in the same conversation, because that turn owns the indicator and ends it itself.
+            if not turns.running_here(agent, landed.conversation):
+                self._marked(agent, kind, place, FAILED)
         except Exception as why:                       # noqa: BLE001 — see the docstring
             _note(self._where, f"channel {kind}: answering {place} went wrong ({why})", logs.ERROR)
             self._do_not_repeat_pending(agent, landed.message)
@@ -489,11 +507,11 @@ class OnAChannel(IntoAChannel):
                 external_id: Optional[str] = None) -> None:
         """Say what the turn is doing, in the words the channel layer renders. Never raises.
 
-        **A mark needs the message it goes on** (R-DIS-7, R-DIS-8). Sent without one, every state
-        crossed the seam correctly and the adapter had nothing to put a reaction on, so a turn was
-        marked 👀 when it arrived and never marked again — which reads as an agent that took the
-        message up and then forgot it. `working` is the exception and needs none: it is the typing
-        indicator rather than a mark, and it belongs to the place rather than to one message.
+        **A message mark needs the message it goes on** (R-DIS-7, R-DIS-8). Sent without one, every
+        state crossed the seam correctly and the adapter had nothing to put a reaction on. `working`
+        needs none because it is the place's typing indicator. A terminal state also omits the
+        message when admission failed before a turn existed: it ends that indicator without marking
+        the still-pending message.
         """
         hosting.marked(agent, self._where, self._hosted(), kind, place, state, external_id)
 
@@ -655,7 +673,7 @@ class Gestures:
         if control == hosting.FORGET:
             return self._forgotten(agent, place)
         if control == hosting.STOP:
-            return self._stopped(agent, place)
+            return self._stopped(agent, kind, place)
         # **Announced before it happens, because the thing that would report it afterwards is the
         # thing going away.**
         self._wanted(control)
@@ -769,15 +787,63 @@ class Gestures:
                     "will be the last of the old conversation.")
         return "🧹 Started fresh. The next message begins a new session."
 
-    def _stopped(self, agent: str, place: str) -> str:
-        """End the turn running in this conversation (R-CH-9)."""
+    def _stopped(self, agent: str, kind: str, place: str) -> str:
+        """End the turn running here, or the work that never reached one (R-CH-9, R-CH-36).
+
+        **A message no turn ever admitted is still work somebody is waiting on.** Admission can be
+        refused before a turn exists — an install-wide change holds the admission barrier for a few
+        seconds — which leaves the message durably pending, the place showing an indicator with
+        nothing behind it, and this answering "nothing is running here" while the person watches
+        their agent appear to type for ever.
+
+        So the pending tail is settled through the same path work stopped before its provider began
+        already takes, and no brain runs. An older message a later turn has already superseded is
+        not settled, marked or replayed, because the rows this may settle are the same ones a
+        replacement gateway may recover.
+
+        **Two things keep the word "stopped" true**, and each was a way of saying it and being
+        wrong. Nothing this stop leaves behind may still run, which is what taking the tail from its
+        newest end guarantees on a conversation holding more rows than one claim may hold. And only
+        the ids that were *actually* associated with the stopped turn are marked — a turn published
+        in the moment between reading those rows and claiming the conversation is what this stops
+        instead, and it marks its own message when it ends.
+        """
         found = arriving.standing_in(agent, place)
-        if found is None or not turns.busy(agent, found):
+        if found is None:
             return "✋ Nothing is running here."
-        if turns.stop(agent, found):
+        if turns.busy(agent, found):
+            if turns.stop(agent, found):
+                return "✋ Stopped."
+            # Busy, and not by anything this process is running — a scheduled turn takes a process
+            # of its own. Said as what it is rather than as a failure, because trying again will
+            # not help.
+            return "✋ Something is running here, but not something I can stop from a conversation."
+        # **From the newest end, so a bounded answer is still a whole one.** Claiming the newest
+        # row supersedes every older unclaimed one, which is the same rule a replacement gateway
+        # applies — so a conversation holding more unclaimed rows than this leaves none that could
+        # still run. Taking the oldest of them would leave the very rows a sweep starts with.
+        pending = arriving.pending_on_channels(
+            agent, PENDING_STOPPED_AT_MOST, channels=(kind,), conversation=found, newest=True)
+        if not pending:
+            return "✋ Nothing is running here."
+        stopped = turns.stop_or_settle_pending(
+            agent, found, tuple(one.landed.message for one in pending))
+        if stopped.settled:
+            became = set(stopped.settled)
+            for one in pending:
+                if one.landed.message not in became:
+                    continue
+                # The terminal state ends the place's indicator as well as marking the message,
+                # which is the whole of what the person asked for and is one record rather than two.
+                hosting.marked(agent, self._where, self._hosted(), kind, place, STOPPED,
+                               one.external_id)
             return "✋ Stopped."
-        # Busy, and not by anything this process is running — a scheduled turn takes a process of
-        # its own. Said as what it is rather than as a failure, because trying again will not help.
+        if stopped.live:
+            # A turn was published between reading those rows and claiming the conversation, so
+            # what this stopped is that turn and every row read above is still pending. It writes
+            # its own outcome and marks its own message; marking this snapshot would put ✋ on work
+            # that is still waiting for a turn and would then be answered anyway.
+            return "✋ Stopped."
         return "✋ Something is running here, but not something I can stop from a conversation."
 
 
@@ -931,14 +997,19 @@ class OnADelegation(IntoAChannel):
                   delegator: str, provider_name: Optional[str] = None,
                   model_name: Optional[str] = None,
                   provider_alias: Optional[str] = None) -> bool:
-        """End delegated work, including a brief stopped before its provider began."""
+        """End delegated work, including a brief stopped before its provider began.
+
+        **Whether anything was reached is the whole of what collection asks**, and it is the same
+        question it always asked: a delegation has no platform message to mark, so which of the two
+        `turns.Stopped` describes happened changes nothing here.
+        """
         _body, messages = _delegated_prompt(agent, conversation, delegator)
         if provider_name is None and provider_alias is None and model_name is None:
-            return turns.stop_or_settle_pending(agent, conversation, messages)
-        return turns.stop_or_settle_pending(agent, conversation, messages,
-                                            provider_name=provider_name,
-                                            provider_alias=provider_alias,
-                                            model_name=model_name)
+            return bool(turns.stop_or_settle_pending(agent, conversation, messages))
+        return bool(turns.stop_or_settle_pending(agent, conversation, messages,
+                                                 provider_name=provider_name,
+                                                 provider_alias=provider_alias,
+                                                 model_name=model_name))
 
     def review_this(self, agent: str, conversation: int, answer: str, from_agent: str,
                     delegation_id: str = "", answer_id: str = "") -> bool:

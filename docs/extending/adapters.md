@@ -410,6 +410,7 @@ Five, and only five exist today.
  "files": [{"name": "chart.png", "at": "/…/agents/alan/home/chart.png", "bytes": 9,
             "sha256": "b1f3…"}]}
 {"do": "state", "place": "1180", "external_id": "8841", "state": "seen"}
+{"do": "state", "place": "1180", "state": "failed"}
 {"do": "activity", "place": "1180", "did": "run"}
 {"do": "delegation", "place": "1180", "state": "handed", "who": "dev", "ask": "del-41-4e07c5",
  "provider": "codex"}
@@ -422,7 +423,7 @@ Five, and only five exist today.
 | | Fields | |
 |---|---|---|
 | `deliver` | `id`, `place`, `text`, sometimes `files`, sometimes `reply_to`, sometimes `cost` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed` |
-| `state` | `place`, `external_id`, `state` | show what rundesk says a turn is doing |
+| `state` | `place`, `state`, sometimes `external_id` | show what rundesk says a turn is doing. `external_id` names the message the state belongs to; **without one the state belongs to the place** — see below |
 | `activity` | `place`, `did`, sometimes `ok`, sometimes `who` | show what the agent is doing, while it is still doing it |
 | `delegation` | `place`, `state`, `who`, `ask`, sometimes `elapsed`, sometimes `provider` and with it sometimes `provider_alias` | show what became of work this agent handed to another agent, which brain is doing it, and what has just been done to it |
 | `answered` | `ref`, `text` | the answer to a `control`, `query` or `configure` you sent, against the `ref` you gave it |
@@ -580,13 +581,19 @@ what the previous build's contract published and what nothing here speaks.
 **All five have a producer.** `seen` is the one that needs no turn — a message arriving is the whole
 of the event — and it is sent the moment the message is written down, including on a redelivery,
 because the mark belongs to the message and an adapter that has just restarted no longer knows it put
-one up. The other four say what became of a turn: `working` goes up the moment one is admitted, and
-exactly one of `done`, `stopped` or `failed` when it settles.
+one up. The other four say what became of a turn: `working` goes up when a message is taken up, and
+exactly one of `done`, `stopped` or `failed` follows it.
 
 **A terminal state names the message it belongs to, and `working` does not.** `working` is the place's
 condition rather than one message's — it is a typing indicator, and a second mark there would say a
 turn had been seen twice — so it arrives without an `external_id` and there is nothing to react to.
-The other three always carry one.
+
+**One terminal state carries no `external_id` either, and it is the exception to plan for.**
+`working` goes up before admission is asked for, and admission can be refused before any turn
+exists — an install-wide change holds that barrier for a few seconds. The message stays pending and
+is answered later, so nothing may be marked; what must not happen is a place left typing for a turn
+that never began. So the terminal state arrives with no message named: **end the indicator on any
+terminal state, and put a mark up only when one names a message.**
 
 **Put the new mark up before taking the old one down.** A message with no mark for a moment reads as
 a turn nobody picked up, and the order is the only thing that decides which of those somebody sees.

@@ -360,7 +360,9 @@ def pending_from(agent: str, conversation: int, author_id: str,
 
 def pending_on_channels(agent: str, most: int,
                         channels: Optional[Tuple[str, ...]] = None,
-                        after: int = 0) -> List[Pending]:
+                        after: int = 0,
+                        conversation: Optional[int] = None,
+                        newest: bool = False) -> List[Pending]:
     """Unclaimed user messages from channel conversations, oldest first and bounded.
 
     This is the restart boundary: a gateway may end after recording a platform message but before
@@ -370,6 +372,16 @@ def pending_on_channels(agent: str, most: int,
     Only the unresolved tail of a conversation may wake it. A later admitted message proves the
     exchange progressed after an older row failed admission; replaying that row after an unrelated
     restart is stale work, even when its platform id still makes the transport idempotent.
+
+    `conversation` narrows the same question to one exchange, for a person asking what is still
+    unanswered where they are standing. The tail rule is the reason it is a narrowing rather than a
+    second query: what a gesture may settle and what a sweep may replay have to be the same rows.
+
+    `newest` takes `most` from the **newest** end and hands them back in the same oldest-first
+    order. That is what makes a bounded answer a whole one: claiming the newest row makes every
+    older unclaimed row superseded by this same rule, so nothing is left behind that a replacement
+    gateway would still run — where taking the oldest `most` would leave exactly the rows that run
+    first. A sweep wants the oldest end and leaves nothing behind, so it stays the default.
     """
     if channels is not None and not channels:
         return []
@@ -378,6 +390,9 @@ def pending_on_channels(agent: str, most: int,
     if channels is not None:
         channel_clause = " AND c.channel IN (" + ",".join("?" for _one in channels) + ")"
         parameters += tuple(channels)
+    if conversation is not None:
+        channel_clause += " AND m.conversation_id = ?"
+        parameters += (conversation,)
     parameters += (most,)
     with records.reading(directory.records(agent)) as conn:
         found = _rows(
@@ -389,7 +404,10 @@ def pending_on_channels(agent: str, most: int,
             " AND m.external_id IS NOT NULL AND m.id > ?"
             + NO_LATER_ADMITTED
             + channel_clause +
-            " ORDER BY m.id LIMIT ?", parameters).fetchall()
+            (" ORDER BY m.id DESC LIMIT ?" if newest else " ORDER BY m.id LIMIT ?"),
+            parameters).fetchall()
+    if newest:
+        found = list(reversed(found))
     return [Pending(
         channel=str(one["channel"] or ""), place=str(one["source_id"]),
         author_id=str(one["author_id"]), body=str(one["body"] or ""),
