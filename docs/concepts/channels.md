@@ -82,9 +82,40 @@ whether the child is alive, starts one that is not, and stops them all at the en
 
 `STANDING` in a listing is asked of the kernel through that claim, exactly as `rundesk gateways` asks
 about a gateway. `connected` means the adapter earned the readiness signal it reports; for Slack,
-that requires Slack's `hello`, not merely a locally opened websocket.
+that requires Slack's `hello`, not merely a locally opened websocket. Where Slack names the app
+behind that websocket and it is not the app the bot token was issued by, the adapter says so in the
+agent's log and readiness is unaffected — every event would be going to the other app's connections,
+and that is a thing to be told rather than a thing this decides.
 
 ## Going out: cut to what the platform takes
+
+**An answer is composed for the surface that will show it.** What a brain says on the way to its
+answer and the answer itself are both prose it wrote, so nothing in the words tells them apart —
+the phase is known where the turn runs and nowhere else. A surface that shows a turn as it happens
+is sent each finished thought as the next one supersedes it, marked `remark`, and its answer is the
+last thought, because the rest is already on the platform. A surface that shows nothing until the
+end is sent none of them, and its answer is *every* closing thought — everything the brain finished
+saying after its last tool call, joined. What it said before and between its tools is working
+narration and reaches neither surface inside an answer.
+
+**A turn that closes on nothing still answers.** Where a turn completed and said nothing after its
+last tool call, a surface showing the answer alone would otherwise show a completion mark and no
+reply — an answer somebody cannot find rather than one that was never made. One short factual line
+goes instead, claiming neither success nor failure and nothing about the work. A turn somebody
+stopped is the exception and stays silent, because they know why it is quiet.
+
+**Read the same way for both, the second kind loses words.** Two shipped providers say several
+finished things after going to work and mark none of them final, so the last thought is the last of
+several and the earlier ones are commentary — commentary a quiet surface never showed. `stream` in
+the adapter's own `--capabilities` is what tells the two apart; unsaid means *shows it as it
+happens*, so an adapter written before the question keeps the behaviour it was written against.
+
+**An answer written is not an answer delivered.** What `told` reports is that the words were written
+to the adapter, which is microseconds; whether they reached the platform is a round trip away and
+arrives back as `delivered` or `failed`. A caller that waits — the one answering somebody — is told
+in the log when it waited and heard neither, because silence and success are otherwise the same
+sentence, and an adapter that has stopped reading its own input produces exactly the silence a
+working one is allowed to produce.
 
 The cutting is in Rundesk, not in each adapter, and that is the whole reason the module exists. The
 build this replaces held the limit in the adapter — 1900 in Discord's, 3800 in Slack's — and the two
@@ -140,5 +171,6 @@ anything is wrong.
 | `standing not connected` after `add` | `add` connects once and leaves nothing running — start the gateway |
 | the bot is online and ignores messages | the sender is not on the allow list, or the platform's message-content permission is off |
 | a Slack bot answers a direct message and ignores a channel | it was not invited there, or nobody named it — see [`../guides/slack.md`](../guides/slack.md) |
+| a Slack bot is connected and answers nothing at all | `rundesk gateways logs <agent>` names each boundary the websocket reached — see [`../guides/slack.md`](../guides/slack.md) |
 | nothing unprompted ever arrives | no channel is `--notify` |
 | the credential is set and the channel still fails | the value is kept under the adapter's own scoped name; `channels doctor` says which name it looked for |

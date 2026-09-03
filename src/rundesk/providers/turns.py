@@ -194,6 +194,10 @@ class Outcome(NamedTuple):
     turn_status: str
     reply: str = ""
     last_thought: str = ""
+    #: Everything the brain said after its last tool call, as one answer. What a surface that shows
+    #: nothing until the end answers with — `last_thought` is the closing *thought* and this is the
+    #: closing *response*, and they differ whenever a brain finished several things after its work.
+    closing_response: str = ""
     failure_code: Optional[str] = None
     failure_message: Optional[str] = None
     usage: protocol.Usage = protocol.Usage()
@@ -1204,6 +1208,7 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
     unattended = request.situation in (instructions.SCHEDULE_TO_AGENT,
                                        instructions.AGENT_TO_AGENT)
     closing = protocol.last_thought(said)
+    closing_response = protocol.closing_response(said)
     reply = closing if unattended else protocol.reply(said)
     answered = bool(reply.strip()) if unattended else protocol.has_answer(said)
     brain_said = protocol.brain_said_ok(said)
@@ -1276,7 +1281,8 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
 
     return {
         "outcome": Outcome(turn=turn, turn_status=status, reply=reply,
-                           last_thought=closing, failure_code=code,
+                           last_thought=closing, closing_response=closing_response,
+                           failure_code=code,
                            failure_message=message, usage=used,
                            files=tuple(protocol.file_records(said)),
                            provider_name=provider_name, provider_alias=provider_alias,

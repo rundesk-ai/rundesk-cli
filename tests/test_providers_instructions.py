@@ -273,15 +273,20 @@ class TheAgreedSections(support.Isolated):
         # audience's results" the boundary read as a scope for the search itself, and a live turn
         # narrowed the lookup to the room it stood in, then told the person that this channel's
         # history was empty and asked them to paste the outcome back.
-        for situation, section in ((instructions.USER_TO_AGENT, "## Messages and Attachments"),
-                                   (instructions.SCHEDULE_TO_AGENT, "## Messages and Attachments")):
+        floors = (
+            (instructions.USER_TO_AGENT,
+             "never repeat another person's or agent's private content outside its own audience"),
+            (instructions.SCHEDULE_TO_AGENT,
+             "never repeat another agent's or audience's content"),
+        )
+        for situation, floor in floors:
             with self.subTest(situation=situation[:32]):
-                messages = self.part(self.built(situation).text, section)
+                messages = self.part(self.built(situation).text, "## Messages and Attachments")
                 self.assertIn("both read every conversation this agent has had", messages)
                 self.assertIn("never narrow them to one channel or conversation", messages)
                 # The audience boundary survives, as a rule about what may be repeated back.
                 self.assertIn("answer only from", messages)
-                self.assertIn("never repeat another agent's or audience's content", messages)
+                self.assertIn(floor, messages)
 
     def test_a_person_is_never_asked_for_what_a_lookup_should_have_found(self):
         messages = self.part(self.built().text, "## Messages and Attachments")
@@ -292,7 +297,8 @@ class TheAgreedSections(support.Isolated):
         person = self.built().text
         messages = self.part(person, "## Messages and Attachments")
         self.assertIn("answer only from `terminal:ava` results", messages)
-        self.assertIn("never repeat another agent's or audience's content", messages)
+        self.assertIn("never repeat another person's or agent's private content outside its own "
+                      "audience", messages)
         for other in (instructions.SCHEDULE_TO_AGENT, instructions.AGENT_TO_AGENT):
             with self.subTest(situation=other[:32]):
                 self.assertNotIn("an unclear referent",
@@ -305,9 +311,55 @@ class TheAgreedSections(support.Isolated):
         for clause in ('then `messages ava --full` for the recent ones',
                        "answer only from `terminal:ava` results",
                        "never read conversation files",
-                       "never repeat another agent's or audience's content"):
+                       "never repeat another person's or agent's private content outside its own "
+                       "audience"):
             with self.subTest(clause=clause):
                 self.assertIn(clause, messages)
+
+    def test_a_wider_audience_is_opened_by_the_agents_own_rules_and_never_by_default(self):
+        """Retrieval and disclosure are two rules, and only the second one moves here.
+
+        An agent that needs continuity across the threads of one shared project cannot get it from
+        a block that ends the audience at the thread it is standing in — and every agent getting it
+        silently is the same mistake with the blast radius reversed. So the product text grants
+        nothing itself: it names the one thing that can widen the audience, which is the agent's own
+        instructions saying so by name.
+        """
+        messages = self.part(self.built().text, "## Messages and Attachments")
+        self.assertIn("plus wider shared context your own instructions authorize by name", messages)
+        # Nothing here is a grant: the permission and its condition are one clause, so a block read
+        # by an agent whose rules say nothing about it is the narrow block it always was.
+        self.assertIn("answer only from `terminal:ava` results, plus wider shared context", messages)
+
+    def test_no_other_situation_is_given_a_wider_audience_at_all(self):
+        # The person block is the only one that names an authorization, because it is the only one
+        # a person is waiting in. A schedule and a delegation keep the sentence they always had.
+        for situation in (instructions.SCHEDULE_TO_AGENT, instructions.AGENT_TO_AGENT):
+            with self.subTest(situation=situation[:32]):
+                self.assertNotIn("wider shared context", situation)
+
+    def test_the_disclosure_floor_holds_however_wide_the_authority_is(self):
+        """The carve-out is the originator's word or a canonical shared source, and nothing else —
+        so an agent authorized to read across threads still may not carry one person's private
+        exchange to a different audience."""
+        messages = self.part(self.built().text, "## Messages and Attachments")
+        self.assertIn("never repeat another person's or agent's private content outside its own "
+                      "audience unless it was authorized or a canonical shared source holds the "
+                      "same fact", messages)
+
+    def test_the_floor_covers_another_agents_content_and_not_only_a_persons(self):
+        # Narrowing this to a person was a slip made while fitting the sentence to its ceiling: an
+        # agent's conversation is somebody's private exchange too, and one agent repeating another
+        # agent's to a third audience is the same disclosure by a different route.
+        messages = self.part(self.built().text, "## Messages and Attachments")
+        self.assertIn("another person's or agent's private content", messages)
+
+    def test_the_search_that_finds_context_is_never_narrowed_by_the_audience_rule(self):
+        # Retrieval stays broad whatever the disclosure rule says: the two sentences sit in the
+        # same bullet list and a live turn once read the narrow one as a scope for the lookup.
+        messages = self.part(self.built().text, "## Messages and Attachments")
+        self.assertIn("both read every conversation this agent has had", messages)
+        self.assertIn("never narrow them to one channel or conversation", messages)
 
     def test_clarification_remains_available_when_recovery_cannot_unblock_progress(self):
         situation = self.part(self.built().text, "## Current Situation")
@@ -752,7 +804,12 @@ class TheBuilderBoundary(support.Isolated):
         ceilings = {
             "core": (instructions.CORE, 600),
             "rules": (instructions.OPERATING_RULES, 1700),
-            "person": (instructions.USER_TO_AGENT, 1600),
+            # Raised from 1600 by the audience bullet that separates *retrieving* context from
+            # *repeating* it. An agent may be authorized by its own instructions to use shared
+            # context from another thread, and the sentence permitting that has to carry the
+            # disclosure floor with it or the two read as a contradiction an agent settles either
+            # way. This is the smallest number the settled wording fits in.
+            "person": (instructions.USER_TO_AGENT, 1700),
             "schedule": (instructions.SCHEDULE_TO_AGENT, 1150),
             "agent": (instructions.AGENT_TO_AGENT, 800),
             "team": (instructions.TEAM_MEMBERS, 1000),

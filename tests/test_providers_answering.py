@@ -110,6 +110,20 @@ for line in sys.stdin:
                               "external_id": "8841"}), flush=True)
 """
 
+#: The same adapter, declaring nothing at all about streaming — a third-party adapter written
+#: before the question was asked. **Unsaid has to mean *shows it as it happens***, because that is
+#: what every surface did before, and reading it the other way would take the commentary away from
+#: an adapter whose author never opted out of it.
+AN_ADAPTER_THAT_DECLARES_NO_STREAMING = AN_ADAPTER.replace(
+    '{"stream": True, "max_text": 2000}', '{"max_text": 2000}')
+
+#: The same adapter, declaring that it shows nothing until the end — which is what the shipped
+#: Slack adapter declares. **The declaration is the whole difference**: what an answer is composed
+#: from depends on what the surface has already shown, and a surface that has shown nothing must be
+#: given everything the brain said or the thoughts before the last one are simply gone.
+AN_ADAPTER_THAT_SHOWS_ONLY_THE_ANSWER = AN_ADAPTER.replace(
+    '{"stream": True, "max_text": 2000}', '{"stream": False, "max_text": 2000}')
+
 
 class Answering(support.Isolated):
 
@@ -176,14 +190,24 @@ class Answering(support.Isolated):
         self.assertEqual([], left, "this case left something running, and every location rundesk "
                                    "reads is about to point somewhere else")
 
-    def a_channel(self, saying="", allowed=("2207",), refuse=""):
+    def a_channel(self, saying="", allowed=("2207",), refuse="", body=None):
         at = self.adapters / "discord"
-        at.write_text(AN_ADAPTER, encoding="utf-8")
+        at.write_text(body or AN_ADAPTER, encoding="utf-8")
         at.chmod(0o755)
         channels_kept.added(self.agent, "discord", {
             "describes": "discord", "allowed": json.dumps(list(allowed)),
             "settings": json.dumps({"saying": saying, "told": str(self.told),
                                     "refuse": refuse})})
+
+    def answers_for_a_surface(self, streaming):
+        """The thing that answers, with one surface's own declaration settled in advance.
+
+        Handed the answer rather than the adapter, because what is under test here is what the
+        watcher does with a finished thought and not how a capability is discovered.
+        """
+        answers = answering.OnAChannel(self.where, lambda: hosting.Watching({}, {}, {}))
+        answers._as_it_happens["discord"] = streaming
+        return answers
 
     def a_message_arrived(self, text="what changed today?", **also):
         said = {"say": "arrived", "conversation": "1180", "user": "2207",
@@ -559,6 +583,110 @@ class AMessageOnAChannelIsAnswered(Answering):
         # And the last one is the answer, carrying both.
         self.assertEqual("8841", posted[-1]["reply_to"])
         self.assertTrue(posted[-1].get("cost"))
+
+    def test_a_surface_that_shows_only_the_answer_is_given_every_finished_thought(self):
+        """R-CH-19, R-CAD-27, R-SLK-35. **The defect this exists for loses words, not duplicates
+        them.** Two shipped providers say several finished things after going to work and mark none
+        of them final, so `last_thought` is the last of them and the earlier ones are commentary. A
+        surface showing commentary has already posted those; one showing the answer alone has not,
+        and composing its answer the same way drops them. Every sentence, exactly once."""
+        self.a_stand_in_told(self.agent, remarks=["the migration is applied", "the workers caught up"],
+                             omit_final_response=True)
+        self.a_channel(saying=self.a_message_arrived(),
+                       body=AN_ADAPTER_THAT_SHOWS_ONLY_THE_ANSWER)
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 1))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertEqual(1, len(posted), f"one question was answered {len(posted)} times")
+        self.assertEqual([], [one for one in posted if one.get("remark")],
+                         "a surface that shows the answer alone was sent working commentary")
+        answer = posted[0]["text"]
+        for sentence in ("the migration is applied", "the workers caught up"):
+            with self.subTest(sentence=sentence):
+                self.assertEqual(1, answer.count(sentence),
+                                 f"{sentence!r} appears {answer.count(sentence)} times in {answer!r}")
+
+    def test_working_narration_is_left_out_of_a_quiet_surfaces_answer(self):
+        """R-SLK-10, R-CAD-27. **The correction to the correction.** Composing a quiet surface's
+        answer from everything the brain said fixed the loss and carried the narration in with it:
+        text said before the first tool call, and between one tool and the next, is the brain
+        thinking aloud on the way. A surface that shows the answer alone was never meant to show it,
+        and here it would arrive inside the one message that surface posts.
+
+        `also_did` puts a tool call after each finished thought, so the remark below is genuine
+        between-tool narration and the reply after it is the closing response.
+        """
+        self.a_stand_in_told(self.agent, remarks=["let me look at the migration"],
+                             also_did="ran the tests")
+        self.a_channel(saying=self.a_message_arrived(),
+                       body=AN_ADAPTER_THAT_SHOWS_ONLY_THE_ANSWER)
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 1))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertEqual(1, len(posted), f"one question was answered {len(posted)} times")
+        answer = posted[0]["text"]
+        self.assertNotIn("let me look at the migration", answer)
+        self.assertIn("You asked:", answer)
+
+    def test_a_surface_that_shows_a_turn_as_it_happens_still_gets_commentary(self):
+        """The other half, unchanged: Discord shows each finished thought as the next proves it was
+        not the last, and the answer is that last one and not a repeat of everything."""
+        self.a_stand_in_told(self.agent, remarks=["the migration is applied", "the workers caught up"],
+                             omit_final_response=True)
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 2))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertEqual(2, len(posted), "commentary and its answer are two deliveries here")
+        self.assertTrue(posted[0].get("remark"))
+        self.assertEqual("the migration is applied", posted[0]["text"])
+        self.assertEqual("the workers caught up", posted[-1]["text"])
+        self.assertNotIn("remark", posted[-1])
+
+    def test_an_adapter_that_declares_nothing_keeps_the_commentary_it_always_had(self):
+        """The compatibility half of the same rule. `stream` is a field this release added, so an
+        adapter that has never heard of it must behave exactly as it did — and the safe reading of
+        silence is the behaviour that shows more, never the one that composes differently."""
+        # Two finished thoughts, because a remark is posted when the *next* one proves it was not
+        # the last: one thought alone is an answer on any surface.
+        self.a_stand_in_told(self.agent, remarks=["one moment", "and another"],
+                             omit_final_response=True)
+        self.a_channel(saying=self.a_message_arrived(),
+                       body=AN_ADAPTER_THAT_DECLARES_NO_STREAMING)
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 2))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertTrue(posted[0].get("remark"),
+                        "an adapter that said nothing about streaming lost its commentary")
+
+    def test_a_file_declared_in_an_unposted_thought_still_goes_with_the_answer(self):
+        """A file the brain declared is declared however that thought reaches somebody. The thought
+        is not posted on a surface that shows the answer alone, and dropping the link with it would
+        lose the file rather than the words."""
+        watched = answering._Streaming(self.answers_for_a_surface(streaming=False),
+                                       self.agent, "discord", "1180")
+        watched.heard({"type": "text", "text": "made you [the chart](/tmp/a-chart.png)",
+                       "whole": True})
+        watched.heard({"type": "text", "text": "and that is all", "whole": True})
+        self.assertEqual(["/tmp/a-chart.png"], list(watched.linked))
+
+    def test_a_remark_says_it_is_one_so_a_final_only_surface_can_tell(self):
+        """R-CH-19. What a brain said on the way to its answer and the answer are both prose it
+        wrote, so a surface handed the two cannot tell them apart from the text — and one whose
+        whole shape is the answer alone posted both, which is one question answered twice. The
+        phase is known here and is said here; nothing downstream infers it."""
+        self.a_stand_in_told(self.agent, remarks=["one moment"])
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 2))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertTrue(posted[0].get("remark"), "a mid-turn remark crossed the seam unmarked")
+        self.assertNotIn("remark", posted[-1])
 
     def test_a_remark_already_posted_is_not_repeated_inside_the_answer(self):
         """R-CH-19. `protocol.last_thought` exists for exactly this and its docstring says so: a
@@ -1188,6 +1316,68 @@ class TwoTurnsInOneConversation(Answering):
         self.assertIn(marker, remembered[0])
         self.assertIn("ordinary working context", remembered[0])
         self.assertNotIn("You asked: the first", remembered[0])
+
+    def test_a_quiet_surface_posts_only_the_latest_of_two_explicit_finals(self):
+        """R-CAD-27, end to end. Supersession is the one part of the closing response that reading
+        every post-tool thought could have broken: joined instead of replaced, a person steering an
+        agent would be handed the answer they corrected and the corrected one together."""
+        marker = "LATEST-FINAL-903"
+        self.a_stand_in_told(
+            self.agent, steer=True, finish_after_steers=1, mark_final=True,
+            remarks=["ordinary working context"])
+        self.a_channel(saying=self.a_message_arrived(text="the first"),
+                       body=AN_ADAPTER_THAT_SHOWS_ONLY_THE_ANSWER)
+        watching = self.hosting_now()
+        self.assertTrue(self.waited_until(self.a_turn_is_running),
+                        "no turn ever started to steer")
+        follow_up = arriving.recorded(
+            self.agent, "discord", "1180", "2207", marker, external_id="8842")
+
+        answering.OnAChannel(self.where, lambda: watching).answer(
+            self.agent, "discord", "1180", "2207", marker, "8842", follow_up)
+
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: marker in "\n".join(self.delivered())))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        answer = "\n".join(one["text"] for one in posted)
+        self.assertIn(marker, answer)
+        self.assertNotIn("You asked: the first", answer,
+                         "the superseded final was joined on rather than replaced")
+
+    def test_a_completed_quiet_turn_that_closed_on_nothing_still_says_so(self):
+        """**A completion mark and nothing beside it is not an answer.** The turn ends at its tool
+        boundary, so there is no closing response — and a surface that shows the answer alone then
+        showed ✅ against the question and no reply at all, which reads as an answer somebody cannot
+        find. One factual line instead, claiming nothing about the work."""
+        self.a_stand_in_told(self.agent, remarks=["let me look at that"],
+                             also_did="ran the tests", omit_final_response=True)
+        self.a_channel(saying=self.a_message_arrived(),
+                       body=AN_ADAPTER_THAT_SHOWS_ONLY_THE_ANSWER)
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 1))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertEqual(1, len(posted), f"{len(posted)} messages for a turn that said nothing")
+        self.assertEqual(answering.NOTHING_CLOSING, posted[0]["text"])
+        # It says what happened and claims nothing else — not that the work succeeded, not that it
+        # failed, and nothing about what the tool did.
+        for never in ("could not", "succeeded", "failed", "ran the tests"):
+            with self.subTest(never=never):
+                self.assertNotIn(never, posted[0]["text"])
+
+    def test_a_stopped_quiet_turn_that_closed_on_nothing_stays_silent(self):
+        """The one case where nothing is the honest answer: somebody who pressed `/stop` knows why
+        it is quiet, and a line explaining it reads as a fault they caused.
+
+        Proved by what is *sent*: an answer with nothing to say never reaches `told`, so a
+        connection hosting no adapter answers `""` rather than the refusal `told` gives a caller
+        whose words it could not write."""
+        answers = self.answers_for_a_surface(streaming=False)
+        stopped = turns.Outcome(turn=7, turn_status=kept.STOPPED)
+        completed = turns.Outcome(turn=8, turn_status=kept.DONE)
+        self.assertEqual("", answers._delivered(self.agent, "discord", "1180", stopped))
+        self.assertEqual("there was no channel to answer through",
+                         answers._delivered(self.agent, "discord", "1180", completed))
 
     def test_a_queued_follow_up_the_provider_refuses_receives_one_fallback_turn(self):
         landed = arriving.recorded(self.agent, "discord", "1180", "2207", "follow up")

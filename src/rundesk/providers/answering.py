@@ -40,6 +40,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from rundesk import __version__
 from rundesk.agents import directory, records
+from rundesk.channels import adapters as channels_adapters
 from rundesk.channels import arriving, delivery, hosting
 from rundesk.channels import kept as channels_kept
 from rundesk.core import config, paths
@@ -65,6 +66,15 @@ AS_A_STATE = {kept.DONE: DONE, kept.STOPPED: STOPPED, kept.FAILED: FAILED}
 #: is a `-# ` prefix and a newline — and none of that is rundesk's to write. Generous rather than
 #: exact, because the cost of being a few characters over is a delivery the adapter refuses whole.
 AROUND_THE_COST = 8
+
+#: What a surface that shows the answer alone is given when a turn completed and closed without
+#: saying anything after its last tool call. **A fact and nothing more.** It does not say the work
+#: succeeded, because this does not know; it does not say it failed, because it did not; and it says
+#: nothing about what the tools did, which is the part a person would most like invented for them.
+#: A surface that shows a turn as it happens needs none of this — the person watched it — and a
+#: stopped turn is not given it either, because somebody who pressed `/stop` knows why it is quiet.
+NOTHING_CLOSING = "This turn finished without a final answer."
+
 
 #: How long an answer waits to find out whether its platform took it, before the turn is settled.
 #:
@@ -210,11 +220,43 @@ class IntoAChannel:
         #: Asked each time rather than held: the gateway replaces what it is watching on every beat,
         #: and an object holding the first one would be answering into an adapter that has gone.
         self._hosted = hosted
+        #: Whether each surface shows a turn as it happens, by adapter kind. Asked of the adapter
+        #: once for the life of this gateway and remembered: it is a fact about the program on disk,
+        #: not about a turn, and asking it per answer would run that program for every reply.
+        self._as_it_happens: Dict[str, bool] = {}
+        self._asking = threading.Lock()
 
     @property
     def where(self) -> Path:
         """The gateway's own log, for what runs alongside a turn. Read-only on purpose."""
         return self._where
+
+    def streaming(self, kind: str) -> bool:
+        """Whether this surface shows a turn while it runs, from the adapter's own declaration.
+
+        **The composition of an answer depends on it, so it is asked and never assumed.** A surface
+        that shows working commentary has already shown everything the brain said before its last
+        thought, so its answer is that last thought alone; a surface that shows nothing until the
+        end has shown none of it, so its answer is everything the brain said. Read the wrong way
+        round, the second kind loses every thought but the last — which is what a brain that says
+        several finished things after going to work produces, and two shipped providers do.
+
+        **`stream` is the adapter's word for it** and `--capabilities` is where an adapter says so,
+        offline and with no account. Unsaid means *shows it as it happens*: that is what every
+        surface did before this question was asked, and a third-party adapter that has never heard
+        of the field keeps the behaviour it was written against.
+
+        Asked once per kind for the life of this gateway. The program on disk does not change under
+        a running gateway, and an update replaces the gateway with it.
+        """
+        with self._asking:
+            if kind not in self._as_it_happens:
+                said = True
+                with contextlib.suppress(Exception):
+                    declared = channels_adapters.capabilities(kind).get("stream", True)
+                    said = bool(declared)
+                self._as_it_happens[kind] = said
+            return self._as_it_happens[kind]
 
     def hosted(self) -> hosting.Watching:
         """What the gateway is watching **now** — asked again every time, never held."""
@@ -231,11 +273,17 @@ class IntoAChannel:
 
         Split like anything else, because a brain can say something finished and enormous, and the
         adapter refuses what it is handed rather than cutting it.
+
+        **Marked `remark` on the way out, and this is the only place that knows to.** What a brain
+        said before its answer and the answer itself are both prose it wrote, so a surface handed
+        the two cannot tell them apart — and one whose whole shape is *the answer and nothing else*
+        posted both, which is one question answered twice. The phase is known here, so it is said
+        here rather than guessed at the far end.
         """
         with contextlib.suppress(Exception):
             pieces = delivery.split(said, at_most=self._at_most(agent, kind))
             if pieces:
-                hosting.told(agent, self._where, self._hosted(), kind, place, pieces)
+                hosting.told(agent, self._where, self._hosted(), kind, place, pieces, remark=True)
 
     def _delivered(self, agent: str, kind: str, place: str, got: turns.Outcome,
                    external_id: Optional[str] = None,
@@ -263,9 +311,29 @@ class IntoAChannel:
         already shown as they landed. An explicit final produced before later guidance is a
         candidate that the later final supersedes, not another completed answer to post.
         """
-        # A channel turn has one final answer. Earlier completed thoughts were either already shown
-        # as commentary or superseded by a later explicit final after steering.
-        whole = got.last_thought if got.last_thought.strip() else got.reply
+        # **A channel turn has one final answer, and what that is depends on what the surface has
+        # already shown** (R-CH-19, R-CAD-27). Where working commentary went out as it was finished,
+        # the answer is the last thought and the rest is already on the platform.
+        #
+        # Where nothing goes out until the end, the answer is the closing response: every finished
+        # thought after the last tool call, and no earlier one. Both halves of that are load-bearing
+        # — a brain that says three finished things after going to work and marks none of them final
+        # has two of them dropped by anything that reads only the last, and `reply` in its place
+        # carries the narration it said before and between its tools into the one message a quiet
+        # surface posts. There is no fallback to `reply` here for the same reason.
+        if self.streaming(kind):
+            whole = got.last_thought if got.last_thought.strip() else got.reply
+        else:
+            whole = got.closing_response
+        # **A completion mark and nothing beside it is not an answer.** Where a turn completed and
+        # closed without a word after its last tool call, a surface showing the answer alone has
+        # nothing at all to show: the person sees ✅ against their question and no reply, which reads
+        # as an answer they cannot find rather than as one that was never made. A surface that shows
+        # a turn as it happens is unaffected — the person watched the working — and a stopped turn
+        # keeps the silence below, which is the one case where nothing is the honest answer.
+        if (not whole.strip() and not self.streaming(kind)
+                and got.worked and got.turn_status != kept.STOPPED):
+            whole = NOTHING_CLOSING
         # **A turn somebody stopped is never apologised for.** The sentence for a turn that produced
         # nothing exists because silence leaves a person unable to tell a broken agent from a slow
         # one — and somebody who has just pressed `/stop` knows exactly which this is. Told "I could
@@ -626,8 +694,12 @@ class _Streaming:
         # apparent answer.
         if previous and not previous[1] and previous[0].strip():
             shown, linked = delivery.declared_in(previous[0])
+            # **Collected whether or not it is posted.** A file the brain declared in a thought is
+            # declared however that thought reaches somebody, and a surface that shows the answer
+            # alone still sends the file with it.
             self.linked.extend(linked)
-            self._on.remark(self._agent, self._kind, self._place, shown)
+            if self._on.streaming(self._kind):
+                self._on.remark(self._agent, self._kind, self._place, shown)
 
     def _doing(self, did: str, ok: Optional[bool] = None, who: str = "") -> None:
         hosting.doing(self._agent, self._on.where, self._on.hosted(), self._kind, self._place,

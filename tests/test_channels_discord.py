@@ -986,6 +986,14 @@ class WhatADeliveryQuotes(Records):
         self.assertIsNone(sent["reference"])
         self.assertIs(sent["mention_author"], False)
 
+    def test_a_delivery_marked_as_a_remark_is_still_shown_here(self) -> None:
+        """R-CH-19, R-CAD-27. `remark: true` tells a surface that shows the answer alone which
+        delivery to leave out — and this surface shows a turn as it happens, so it shows both. An
+        optional field a shipped adapter ignores is the shape that keeps the seam compatible: the
+        one that came before it is `notice`."""
+        sent = self.delivering(place="500", text="checking staging first", remark=True)
+        self.assertEqual("checking staging first", sent["content"])
+
     def test_a_successful_upload_closes_its_temporary_snapshot(self) -> None:
         project = tempfile.TemporaryDirectory()
         self.addCleanup(project.cleanup)

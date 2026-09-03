@@ -804,7 +804,8 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
          pieces: List[str], sending: Sequence[naming.Sending] = (),
          answering: Optional[str] = None, cost: str = "",
          landed_within: float = 0.0, noting: Optional[List[str]] = None,
-         refusals: Optional[List[str]] = None, notice: bool = False) -> bool:
+         refusals: Optional[List[str]] = None, notice: bool = False,
+         remark: bool = False) -> bool:
     """Send something to a place through a running adapter. `False` when there is nothing to send it.
 
     `False` rather than an exception: a notice that could not be delivered because the adapter is
@@ -853,6 +854,16 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
     identically. What an empty list means is *nobody said this was refused*, which is the honest
     reading and the one `_delivered` in `providers.answering` acts on.
 
+    `remark` says this delivery is something the agent said **on the way to** its answer rather
+    than the answer itself (R-CAD-27, R-CH-19). One producer sets it — `providers.answering.remark` — and it
+    is the only thing that tells the two apart on the far side of the seam, because the text of a
+    remark and the text of an answer are both prose an agent wrote. A surface that shows running
+    commentary goes on showing every delivery and ignores the field, which is what the shipped
+    Discord adapter does; one whose whole shape is *the answer and nothing else* drops it, which is
+    what the shipped Slack adapter does. **Never inferred from the text**: what phase a brain was in
+    is known here and nowhere else, and a surface guessing it from what the words look like is the
+    same defect as guessing a mention from a display name.
+
     `notice` says nobody prompted this delivery in one conversation. The ordinary `place` stays as
     its compatible primary destination, while an adapter that can address allowed people
     individually may give each one a copy. Direct answers and remarks leave it false, so one
@@ -879,6 +890,8 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
             record["reply_to"] = answering
         if notice:
             record["notice"] = True
+        if remark:
+            record["remark"] = True
         one.awaiting[record["id"]] = answering if answering and nth == 0 else ""
         _make_room(one.awaiting)
         if not _said_to(where, one, record):
@@ -888,7 +901,29 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
         if noting is not None:
             noting.append(record["id"])
     if landed_within > 0:
-        _landed(one, written, landed_within)
+        landed = _landed(one, written, landed_within)
+        # **Counted after the wait, and the line is withheld when the count comes back empty.**
+        # The drain thread is still running: an acknowledgement that arrives between the deadline
+        # passing and this list being taken leaves nothing outstanding, and a line saying `0 of 1`
+        # would be a warning about a delivery that landed.
+        waiting = [each for each in written if one.awaiting.get(each) is not None]
+        if not landed and waiting:
+            # **Silence is not success, and this is the one caller that waited to find out.**
+            # `_landed` already knows nobody answered; throwing that away left the only outcome
+            # with no line at all: a turn whose words were written to a pipe an adapter had
+            # stopped reading delivered nothing, refused nothing, and said nothing, so a person
+            # watching the log saw the turn end and never learned their answer went nowhere.
+            # Not a failure — an adapter is free to acknowledge nothing and stays a whole adapter
+            # — which is why this is what was observed and never what it means.
+            # **Said once and not once per answer.** An adapter that legitimately acknowledges
+            # nothing would otherwise write this line for every turn it ever delivers. `_said_once`
+            # keys on the sentence, so a different count is a different sentence and still lands —
+            # which is what keeps *one of two* from being hidden behind an earlier *one of one*.
+            _said_once(where, watching, kind,
+                       f"channel {kind}: the adapter did not acknowledge {len(waiting)} of "
+                       f"{len(written)} deliveries inside {landed_within:g}s, so whether they "
+                       f"reached the platform is unknown — check that it is still reading what "
+                       f"rundesk sends it")
         if refusals is not None:
             # Taken out as they are read: a refusal answers one question once, and leaving it behind
             # would have it answer the next delivery that happened to reuse the moment in its id.
