@@ -12,6 +12,7 @@ topic page — and it does not argue for the design. Every file takes the same c
 | [agent-delegation.md](./agent-delegation.md) | One agent's ask of another, and the answer it returns |
 | [channel-adapter.md](./channel-adapter.md) | The seam a channel adapter is reached through |
 | [channel-messaging.md](./channel-messaging.md) | A channel conversation, and the work that arrives on it |
+| [channel-search.md](./channel-search.md) | Searching the platforms an agent is connected to |
 | [channel-discord.md](./channel-discord.md) | Discord, as an agent is reached on it |
 | [channel-slack.md](./channel-slack.md) | Slack, as an agent is reached on it |
 | [provider-account-alias.md](./provider-account-alias.md) | Additional provider accounts, and the alias that selects one |

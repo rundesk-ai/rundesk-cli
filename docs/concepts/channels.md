@@ -187,6 +187,36 @@ overwritten.
 screenshot remains owned by the tool that made it. Rundesk owns only the landed copies under the
 channel's dated `in/` directory.
 
+## Looking the other way: what the agent asks the channel
+
+Everything above is a channel carrying a message *to* an agent. A channel is also how an agent asks a
+question of the platform behind it — `rundesk search`, run by the agent mid-turn, as often as the
+question needs.
+
+**The same connection, and nothing more than it.** A search is handed the identity, allow list and
+credentials the channel is hosted with, so what it can reach is what that bot was admitted to: rooms
+it was invited to, and private conversations it is part of. Not a person's own messages with somebody
+else, and not a room the bot was never invited to. There is no scope on the command and none
+available to it.
+
+**One shape for every platform.** Each adapter answers the same request and returns the same row —
+who said it, where, when, the words, a link, and what is attached — so an agent learns this once and
+an agent with no channels has no search. What a platform can actually do differs a great deal and
+belongs to that platform's guide; the seam does not.
+
+**A search that did not finish is its own answer.** Found, found nothing, stopped early, and could
+not look are four states, and the third is never printed as an empty list on its own. An agent that
+read a spent budget as an absence would conclude a thing was never discussed.
+
+**Nothing a search finds is written down.** Results were said to somebody else, somewhere else, so
+they are handed back and never enter this agent's records, its conversations, or a backup. The one
+exception is a file: an attachment brought in by `--fetch` lands under the channel's dated `in/`
+directory, under the message it came from, owned and swept exactly like one that arrived on its own.
+There is no second place for it.
+
+See [`../api/conversations.md`](../api/conversations.md#search) for the verb and
+[`../extending/adapters.md`](../extending/adapters.md#search) for the contract an adapter answers.
+
 ## When a channel is not answering
 
 `rundesk channels doctor [<agent>]` names what cannot be used and why, and exits non-zero when
@@ -200,3 +230,5 @@ anything is wrong.
 | a Slack bot is connected and answers nothing at all | `rundesk gateways logs <agent>` names each boundary the websocket reached — see [`../guides/slack.md`](../guides/slack.md) |
 | nothing unprompted ever arrives | no channel is `--notify` |
 | the credential is set and the channel still fails | the value is kept under the adapter's own scoped name; `channels doctor` says which name it looked for |
+| `rundesk search` says a channel offers no search | that adapter does not answer the `search` invocation. Nothing is wrong with the channel and nothing is retried for it |
+| a search finds nothing that is plainly there | the bot was not invited to that place. A search sees what the bot sees, never what you see |

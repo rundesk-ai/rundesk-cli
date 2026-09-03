@@ -45,6 +45,8 @@ from rundesk.commands.providers import cmd_providers
 from rundesk.commands.providers import register as register_providers
 from rundesk.commands.schedules import cmd_schedules
 from rundesk.commands.schedules import register as register_schedules
+from rundesk.commands.search import cmd_search
+from rundesk.commands.search import register as register_search
 from rundesk.commands.skills import cmd_skills
 from rundesk.commands.skills import register as register_skills
 from rundesk.commands.status import cmd_status
@@ -84,6 +86,7 @@ examples:
   rundesk channels              how each agent is reached, and how it reaches back
   rundesk channels add <agent> <adapter> --allow <id>
   rundesk channels doctor       what a channel cannot do, and exactly why
+  rundesk search <agent> <words>  look through the platforms an agent is connected to
   rundesk backups               the copies of what rundesk keeps for you
   rundesk backups save          copy what rundesk keeps, now
   rundesk env list              the values rundesk hands to what it talks to
@@ -127,6 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_ask(sub)
     register_asked(sub)
     register_messages(sub)
+    register_search(sub)
     register_providers(sub)
     register_permissions(sub)
     register_turns(sub)
@@ -267,6 +271,8 @@ def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshin
         return cmd_asked(args)
     if args.command == "messages":
         return cmd_messages(args)
+    if args.command == "search":
+        return cmd_search(args, reaching)
     if args.command == "turns":
         return cmd_turns(args)
     if args.command == "permissions":
