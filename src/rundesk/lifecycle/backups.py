@@ -340,33 +340,43 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
         name = named(when, at)
         archive = files.incoming_of(at / name)
         files.discard(archive)
+        # Large staging belongs on the configured filesystem: relocating backups must also
+        # relocate the capacity boundary. The ZIP writer below does not seek, so this remains safe
+        # for cloud-backed destinations that reject ZIP's usual header rewrites. Made by hand rather
+        # than as a context manager, because a context manager's cleanup stands between the verified
+        # archive and its name — see below.
+        staging = Path(tempfile.mkdtemp(prefix=".rundesk-backup-", dir=str(at)))
         try:
-            # Large staging belongs on the configured filesystem: relocating backups must also
-            # relocate the capacity boundary. The ZIP writer below does not seek, so this remains
-            # safe for cloud-backed destinations that reject ZIP's usual header rewrites.
-            with tempfile.TemporaryDirectory(
-                    prefix=".rundesk-backup-", dir=str(at)) as staging:
-                pending = Path(staging) / "data"
-                vanished: List[str] = []
-                shutil.copytree(
-                    from_where, pending, symlinks=True,
-                    ignore=_without_provider_accounts(from_where),
-                    copy_function=_copying(from_where, vanished, said))
-                _without_update_intents(pending)
-                # **Before the rename, so a copy is never named like one until every database in it
-                # is a snapshot.** After it, the window between a copy appearing under its own name
-                # and its records being made consistent is a window a restore can happen in.
-                _snapshotted(from_where, pending, said)
-                _private_secrets(pending / "secrets")
-                _packed(pending, archive, when, vanished)
-                _verified(archive)
-            # The staging directory owns cleanup through its context. Publish only after that
-            # cleanup succeeds, or a cleanup failure would report no copy while leaving this name.
+            pending = staging / "data"
+            vanished: List[str] = []
+            shutil.copytree(
+                from_where, pending, symlinks=True,
+                ignore=_without_provider_accounts(from_where),
+                copy_function=_copying(from_where, vanished, said))
+            _without_update_intents(pending)
+            # **Before the rename, so a copy is never named like one until every database in it
+            # is a snapshot.** After it, the window between a copy appearing under its own name
+            # and its records being made consistent is a window a restore can happen in.
+            _snapshotted(from_where, pending, said)
+            _private_secrets(pending / "secrets")
+            _packed(pending, archive, when, vanished)
+            _verified(archive)
             os.rename(archive, at / name)
         except BaseException:
             # A Ctrl-C or a destination failure may leave staging litter, but never a finished name.
             files.discard(archive)
+            files.discard(staging)
             raise
+        # **The copy is whole and named before the staging goes, and litter never unmakes it**
+        # (R-BKP-2). Everything in the staging directory is already inside the verified archive, so
+        # a cloud-backed filesystem that will not let a file go while it is still syncing costs a
+        # sentence and not the copy — the same rule `prune` and `files.discard` already keep, and
+        # the opposite of what a context manager would have done here: raise out of its cleanup,
+        # into the guard above, and discard a backup that was finished a moment before.
+        files.discard(staging)
+        if staging.exists():
+            said(f"the staging directory {staging.name} could not be removed and is only litter — "
+                 f"the copy {name} is whole and does not depend on it")
     return name
 
 

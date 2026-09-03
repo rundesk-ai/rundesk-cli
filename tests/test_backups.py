@@ -2015,37 +2015,35 @@ class TheCommand(Copies):
         self.assertEqual(1, len(backups.kept(self.at)))
         self.assertNotIn("2020-01-01T00-00-00Z", backups.kept(self.at))
 
-    def test_save_staging_cleanup_failure_leaves_no_finished_copy_or_retention_claim(self):
+    def test_a_verified_copy_survives_its_staging_litter_and_says_so(self):
+        """R-BKP-2. Everything in the staging directory is already inside the verified archive, so
+        a filesystem that will not let it go costs a sentence and never the copy — the build this
+        replaces discarded a finished backup because its scratch files would not delete."""
         config.stated("backup_retention", 1, self.data)
         old = self.given_copy("2020-01-01T00-00-00Z")
-        temporary_directory = tempfile.TemporaryDirectory
+        really = shutil.rmtree
 
-        class CleanupFails:
-            def __init__(self, *args, **options):
-                self.temporary = temporary_directory(*args, **options)
+        def staging_will_not_go(where, *args, **options):
+            if Path(where).name.startswith(".rundesk-backup-"):
+                return None                        # a cloud-backed directory still syncing
+            return really(where, *args, **options)
 
-            def __enter__(self):
-                return self.temporary.__enter__()
-
-            def __exit__(self, kind, value, traceback):
-                self.temporary.__exit__(kind, value, traceback)
-                raise OSError("save staging cleanup failed")
-
-        def staging_cleanup_fails(*args, prefix=None, **options):
-            constructor = CleanupFails if prefix == ".rundesk-backup-" else temporary_directory
-            return constructor(*args, prefix=prefix, **options)
-
-        with mock.patch.object(
-                backups.tempfile, "TemporaryDirectory", side_effect=staging_cleanup_fails):
+        with mock.patch.object(backups.files.shutil, "rmtree", side_effect=staging_will_not_go):
             code, out, err = self.rundesk("backups", "save")
 
-        self.assertEqual(FAILED, code)
-        self.assertEqual("", out)
-        self.assertIn("save staging cleanup failed", err)
-        self.assertIn("no copy was made", err)
-        self.assertTrue(old.is_dir(), "the existing copy was removed")
-        self.assertEqual([old.name], self.entries(), "a finished new copy was left behind")
-        self.assertNotIn("let go of", out + err)
+        self.assertEqual(OK, code, err)
+        self.assertIn("saved", out)
+        saved = [one for one in backups.kept(self.at) if one.endswith(".zip")]
+        self.assertEqual(1, len(saved), "the verified copy was discarded over litter")
+        with self.opened_copy(saved[0]) as copied:
+            self.assertEqual("what the owner keeps", (copied / "marker.txt").read_text())
+        litter = [one for one in self.at.iterdir() if one.name.startswith(".rundesk-backup-")]
+        self.assertEqual(1, len(litter), "the litter this case left was not left")
+        self.assertIn("could not be removed and is only litter", out + err)
+        self.assertNotIn(litter[0].name, backups.kept(self.at), "litter was listed as a copy")
+        # Retention still ran, exactly as after any other successful save.
+        self.assertFalse(old.is_dir(), "retention did not follow a save that succeeded")
+        self.assertIn("let go of", out)
 
     def test_retention_cleanup_failure_reports_that_no_copy_was_let_go(self):
         config.stated("backup_retention", 1, self.data)
