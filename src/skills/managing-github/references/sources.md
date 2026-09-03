@@ -1,6 +1,6 @@
 # Sources
 
-Checked 2026-08-23. Official documentation establishes the GitHub and GitHub CLI contracts below;
+Checked 2026-09-02. Official documentation establishes the GitHub and GitHub CLI contracts below;
 independent practitioner guidance supports issue and change-description quality. Catalog conclusions
 are labeled separately.
 
@@ -32,6 +32,10 @@ are labeled separately.
 - The current [`gh pr create` reference](https://cli.github.com/manual/gh_pr_create) documents
   explicit base and head selection, body files, drafts, user-qualified fork heads, the lack of
   organization-qualified fork heads, and default-branch closing keywords.
+- The current [`gh pr merge` reference](https://cli.github.com/manual/gh_pr_merge) documents explicit
+  merge methods, merge-queue behavior, and `--match-head-commit`. GitHub CLI 2.95.0 was also observed
+  locally on 2026-09-02 to expose that head guard. This supports refusing a merge when the reviewed
+  head moved instead of silently merging different content.
 - The current [`gh pr review` reference](https://cli.github.com/manual/gh_pr_review) documents comment,
   approve, and request-changes decisions plus review bodies read from files. The current
   [`gh pr view` reference](https://cli.github.com/manual/gh_pr_view) documents hosted review,
@@ -97,6 +101,11 @@ are labeled separately.
 - GitHub delivery stays with the agent responsible for the outcome. This prevents account,
   repository, authority, evidence, and follow-up context from fragmenting across a mutation boundary;
   it is an accountability design decision rather than a GitHub platform rule.
+- An already-ready pull request takes a direct merge-and-release path while its recorded head OID
+  remains unchanged. This reuses exact-head evidence and removes duplicate planning, delegation,
+  validation, and review; it does not remove repository-required merge, default-branch, release,
+  deployment, or reconciliation gates. This is an owner operating requirement recorded on
+  2026-09-02, not a GitHub platform rule.
 - Live deployment-branch reconciliation is conditional on the repository's documented deployment
   model. GitHub sources establish base/head direction and protected delivery, but no universal branch
   name or automatic back-merge policy.

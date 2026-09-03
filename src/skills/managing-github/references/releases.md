@@ -17,6 +17,27 @@ gh release list --repo <owner/repo> --limit 20
 Stop if the worktree is dirty, required content is not merged and pushed, validation is incomplete,
 or the release branch, commit, repository, account, remote, tag owner, or automation is uncertain.
 
+## Continue directly from a verified merge
+
+When the same outcome already passed exact-head review and CI, was merged through the authorized
+pull-request path, and has release authority, carry that evidence forward. First verify the stored
+merge result and the exact merge commit's required default-branch workflow. That workflow is new
+evidence for the integrated commit; previous exact-head validation remains evidence for the unchanged
+pull-request content and is not work to repeat.
+
+Do not reopen implementation, delegate another review, rebuild the development plan, or rerun the
+previous exact-head validation merely because release execution has begun. Use one bounded wait
+mechanism for each required post-merge, release, or deployment workflow rather than repeatedly
+polling it. Then do only the release contract's remaining work: select and confirm the version and
+tag, publish through the repository's automation or documented manual path, verify stored release
+state and artifacts, exercise the required production check, and reconcile a deployment branch only
+when the repository requires it.
+
+A release-only version commit or pull request is new content and must pass its own required gates.
+If the default-branch workflow fails, the release range or tag is uncertain, authorization does not
+cover the exact release, or deployment needs corrective work, report the release blocker and stop.
+Do not turn release administration into an implementation cycle without authority for that work.
+
 ## Classify the branch before reconciling it
 
 Determine purpose from repository instructions and deployment workflows, never the branch name
