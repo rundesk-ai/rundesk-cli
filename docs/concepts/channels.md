@@ -212,7 +212,8 @@ read a spent budget as an absence would conclude a thing was never discussed.
 
 **Nothing a search finds is written down.** Results were said to somebody else, somewhere else, so
 they are handed back and never enter this agent's records, its conversations, or a backup. The one
-exception is a file: an attachment brought in by `--fetch` lands under the channel's dated `in/`
+exception is a file: an attachment — one that arrived with a message, or one brought in by
+`--fetch` — lands under the channel's dated `in/`
 directory, under the message it came from, owned and swept exactly like one that arrived on its own.
 There is no second place for it.
 

@@ -147,10 +147,10 @@ MAX_TEXT = 3800
 #: `react` and `thread` are real: a turn is marked on the message that asked for it, and a mention in
 #: a channel is answered in a thread of its own.
 #:
-#: `attach` is `True` for the direction a turn's answer travels: a file the agent declared is
-#: verified again and uploaded into the exact conversation the answer went to (R-SLK-47). **A file
-#: comes the other way only when it is asked for by name** — `fetch` brings in the attachments of
-#: one message a search found, and nothing takes a file off a message that merely arrived.
+#: `attach` is `True` in both directions. Out: a file the agent declared is verified again and
+#: uploaded into the exact conversation the answer went to (R-SLK-47). In: a file somebody attached
+#: to a message that wakes the agent is landed as it arrives, the way the Discord adapter lands one
+#: (R-SLK-66), and `fetch` brings in the files of one message a search found (R-SLK-58).
 #:
 #: `search` is `True` because this really looks, and it is the one key rundesk acts on: it is read
 #: offline and with no credential, and a channel that does not say `True` here is never asked to
@@ -190,10 +190,12 @@ USER_TOKEN_STARTS = "xoxp-"
 #: There is no `search:read`, no `users:read.email`, and nothing that would let this read a channel
 #: it has not been invited to.
 #:
-#: **This set is what makes a channel unreachable, so nothing new goes in it.** The four scopes
-#: `search` and `fetch` want are in `FURTHER_SCOPES` and are read at runtime instead — adding one
-#: here would take every already-connected Slack channel off the air the moment an install updated,
-#: until its owner reinstalled the app. See `FURTHER_SCOPES`, which says how each is degraded.
+#: **This set is what makes a channel unreachable, so what goes in it is the owner's decision.** The
+#: three scopes that only widen what an unscoped `search` can list are in `FURTHER_SCOPES` and are
+#: read at runtime instead, because a channel is whole without them. `files:read` is here on the
+#: owner's word (R-SLK-66): a file somebody attaches to a message is landed the way the Discord
+#: adapter lands one, and an app that cannot read one is a channel that drops what people send it —
+#: so it is refused at `--check`, and the cost is one reinstall per app installed before it existed.
 WANTED_SCOPES = {
     "app_mentions:read": "being named in a channel",
     "chat:write": "answering, and setting the agent session's status while a turn runs",
@@ -206,6 +208,7 @@ WANTED_SCOPES = {
     "reactions:write": "👀 while a turn runs, and ✅ once it has answered",
     "users:read": "saying who spoke, in the words Slack shows rather than as an id",
     "files:write": "uploading a file the agent attached to its answer",
+    "files:read": "landing a file somebody attached to a message, and downloading one a search found",
 }
 
 #: What a turn looks like on the exact message that asked for it, and the whole of it.
@@ -621,13 +624,15 @@ EVERY_KIND = (
     ("im", "im:read", "im:history", "Direct messages"),
 )
 
-#: The scopes `search` and `fetch` use that `--check` deliberately does not refuse over, and what
-#: each one buys.
+#: The scopes `search` uses that `--check` deliberately does not refuse over, and what each one
+#: buys. Each only widens what an *unscoped* search can list; a conversation named outright is read
+#: without any of them, and a channel is whole without them.
 #:
 #: **Never added to `WANTED_SCOPES`, and that is a decision recorded rather than an omission.** A
-#: scope in that set is a scope `--check` refuses on, so putting these four there would make every
+#: scope in that set is a scope `--check` refuses on, so putting these three there would make every
 #: Slack channel already connected unreachable the moment an install was updated, until its owner
-#: reinstalled the app — a broken install, for a capability nobody had asked for yet.
+#: reinstalled the app — a broken install, for a listing nobody had asked for. `files:read` was here
+#: for the same reason until the owner decided a file that arrives must land (R-SLK-66).
 #:
 #: Read at runtime instead, off Slack's own `x-oauth-scopes` header, by the same `_scopes_lacking`
 #: that builds the refusal above, and degraded honestly: a kind that cannot be listed is not looked
@@ -638,7 +643,6 @@ FURTHER_SCOPES = {
     "im:read": "listing the direct conversations this bot is in",
     "mpim:read": "listing the group direct conversations it is in",
     "mpim:history": "reading what was said in a group direct conversation",
-    "files:read": "downloading a file somebody attached to a message that was found",
 }
 
 #: What a scope that was not granted is said as, in `partial` and in a refusal.
@@ -1053,6 +1057,9 @@ class Waking(NamedTuple):
     #: Whether the thread was already standing when this arrived, which is the only case with any
     #: prior context to carry.
     joined: bool
+    #: What Slack says is attached, as it said it — each file object whole, so what is landed is
+    #: decided off the declared name, size and download url and nothing this file invented.
+    files: Tuple[Dict[str, Any], ...] = ()
 
 
 def waking(kind: str, event: Dict[str, Any], ours: str) -> Optional[Waking]:
@@ -1109,7 +1116,7 @@ def waking(kind: str, event: Dict[str, Any], ours: str) -> Optional[Waking]:
         # it *is* the history, so reading Slack's copy of the same exchange would hand a brain the
         # last few things it said back to itself.
         return Waking(channel, "", standing or ts, ts, who, without_our_name(text, ours), True,
-                      False)
+                      False, _files_on(event))
     if kind == MENTION:
         if a_direct_message(event):
             return None
@@ -1122,8 +1129,15 @@ def waking(kind: str, event: Dict[str, Any], ours: str) -> Optional[Waking]:
         # In a channel the two facts coincide: the thread that identifies the conversation is the
         # thread a person reads the answer in, and both are stated so neither has to be inferred.
         return Waking(channel, standing or ts, standing or ts, ts, who,
-                      without_our_name(text, ours), False, bool(standing) and standing != ts)
+                      without_our_name(text, ours), False, bool(standing) and standing != ts,
+                      _files_on(event))
     return None
+
+
+def _files_on(event: Dict[str, Any]) -> Tuple[Dict[str, Any], ...]:
+    """Every file object Slack put on this event, and nothing that is not one."""
+    files = event.get("files")
+    return tuple(one for one in files if isinstance(one, dict)) if isinstance(files, list) else ()
 
 
 def without_our_name(text: str, ours: str) -> str:
@@ -2325,7 +2339,7 @@ def fetch() -> int:
         who = web.auth_test()
     except Exception as why:               # noqa: BLE001 — a platform boundary
         return _refused(_why_slack_refused(why))
-    if "files:read" in set(_scopes_lacking(who, FURTHER_SCOPES)):
+    if "files:read" in set(_scopes_lacking(who, WANTED_SCOPES)):
         return _refused(WITHOUT_FILES)
     try:
         # Slack's own way of naming one message: the same second at both ends, and inclusive.
@@ -3047,7 +3061,10 @@ class Reaching:
         text = woken.text
         if woken.joined:
             text = with_context(text, self._earlier(woken))
-        if not text:
+        # **Before the words are judged, because a file is an ask too** (R-SLK-66). A message that
+        # is only an attachment used to be dropped here as a message with nothing in it.
+        brought = self._brought(woken)
+        if not text and not brought:
             return
         self._remember(self.standing, woken.ts, woken.channel)
         self._remember(self.replying, woken.ts, woken.answer_in)
@@ -3067,7 +3084,44 @@ class Reaching:
              **({"mention": handle} if handle else {}),
              "where": self._where_this_is(woken),
              "text": text,
-             "external_id": woken.ts})
+             "external_id": woken.ts,
+             # Only where something landed, so an ordinary message's record is the one it always
+             # was. Each entry is exactly what `fetch` reports and `channels.files.landed` takes.
+             **({"attachments": brought} if brought else {})})
+
+    def _brought(self, woken: Waking) -> List[Dict[str, Any]]:
+        """Every file on this message that landed, staged where rundesk will find it (R-SLK-66).
+
+        **The same rules `fetch` lands a message's files under, because it is the same act** — one
+        message's files, staged under this channel's own home, named by position, reported with the
+        size Slack declared. `_staged` holds those rules once, so a file that arrives and a file a
+        search found cannot come to be treated two ways.
+
+        **A file that will not come is a line in the agent's log and never a dropped message.** The
+        words still arrive, the files that did land are still reported, and the reason is where an
+        owner reads it: a missing `files:read` on an app installed before it was wanted arrives here
+        as Slack's own refusal of the download and is said as such.
+
+        Nowhere to put them is said once and the words go on: the same choice the Discord adapter
+        makes, because a message somebody sent is not something to lose over a directory.
+        """
+        if not woken.files:
+            return []
+        home = (os.environ.get("RUNDESK_CHANNEL_HOME") or "").strip()
+        if not home or not Path(home).is_absolute():
+            self._once("no_home", "nothing said where this channel may put what arrives, so a file "
+                                  "somebody attached was left where only Slack can reach it", "error")
+            return []
+        token = str(getattr(self.web, "token", "") or "")
+        if not token:
+            self._once("no_token", "no bot token was held to download a file somebody attached, so "
+                                   "it was left where only Slack can reach it", "error")
+            return []
+        brought, stopped = _staged({"files": list(woken.files)}, token,
+                                   Path(home) / FETCHED_IN / woken.ts)
+        for why in stopped:
+            noted(why, "error")
+        return brought
 
     def _earlier(self, woken: Waking) -> List[str]:
         """The newest lines of the thread above the message that named the agent.
