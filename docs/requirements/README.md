@@ -16,6 +16,7 @@ topic page — and it does not argue for the design. Every file takes the same c
 | [channel-slack.md](./channel-slack.md) | Slack, as an agent is reached on it |
 | [provider-account-alias.md](./provider-account-alias.md) | Additional provider accounts, and the alias that selects one |
 | [rundesk-instructions.md](./rundesk-instructions.md) | What every turn is told, and who owns each layer of it |
+| [schedule-notification-target.md](./schedule-notification-target.md) | The one destination a schedule reports to |
 | [team-catalog.md](./team-catalog.md) | Versioned agent teams, and what an install owes their declaration |
 
 ## The glyph is the whole point

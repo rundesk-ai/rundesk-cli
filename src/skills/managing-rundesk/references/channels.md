@@ -76,8 +76,9 @@ real setup: the bot answered a DM immediately and the owner asked why it had nev
 - Adding it afterwards is `channels configure <agent> <adapter> --notify` — **then restart the
   gateway**, because the up-notice is said once per gateway and the one already running has
   said it.
-- Only one channel adapter per agent is notified. Selecting another moves that role; schedules do
-  not choose a caller's DM separately.
+- Only one channel adapter per agent is notified. Selecting another moves that role. One schedule
+  may name its own destination with `schedules add|update --channel <channel> --to <id>`, which does
+  not move this role; nothing else chooses a caller's DM separately.
 
 ## Access and recovery
 

@@ -31,7 +31,7 @@ def a_row(**also):
     row = {"name": "nightly", "enabled": 1, "cron": "* * * * *", "run_at": None,
            "expire_at": None, "command": "/bin/echo hello", "prompt": None,
            "provider_name": None, "model_name": None, "channel": None,
-           "channel_place_id": None, "last_fired_for": None}
+           "channel_sender_id": None, "channel_place_id": None, "last_fired_for": None}
     row.update(also)
     return row
 
@@ -399,6 +399,70 @@ class HowAMinuteIsWrittenDown(support.Isolated):
         for said in (None, "", "   ", "who knows", "2026-08-05T09:30"):
             with self.subTest(said=said):
                 self.assertIsNone(due.from_minute(said))
+
+
+class WhereOneScheduleReports(support.Isolated):
+    """R-SCH-56. Three states, and the middle one is not a default.
+
+    *Nobody chose* is what every schedule written before this existed says, and it has to stay
+    tellable from a destination that happens to be the channel the agent is notified on — otherwise
+    an owner cannot be shown, or asked, what a schedule is actually aimed at.
+    """
+
+    def test_a_schedule_that_names_nothing_reports_nowhere_of_its_own(self):
+        self.assertIsNone(a_schedule().reports_to)
+        self.assertIsNone(due.target_of(a_row()))
+
+    def test_a_column_holding_only_spaces_reads_as_nothing_named(self):
+        # `--to "$UNSET"` is the shape of this, and a run of spaces has to mean the same as an
+        # empty column or a schedule would claim a destination nothing can be sent to.
+        self.assertIsNone(due.target_of(a_row(channel="   ", channel_place_id="  ")))
+
+    def test_a_place_is_read_as_a_place(self):
+        one = due.target_of(a_row(channel="slack", channel_place_id="C0OPS"))
+        self.assertEqual(due.Target("slack", "", "C0OPS"), one)
+
+    def test_a_person_is_read_as_a_person(self):
+        one = due.target_of(a_row(channel="discord", channel_sender_id="2207"))
+        self.assertEqual(due.Target("discord", "2207", ""), one)
+
+    def test_a_destination_carried_on_the_schedule_is_the_same_answer(self):
+        # Read once, on the way in, so nothing downstream asks the question a second time and gets
+        # a second answer.
+        one = a_schedule(channel="slack", channel_place_id="C0OPS")
+        self.assertEqual(due.Target("slack", "", "C0OPS"), one.reports_to)
+
+    def test_a_destination_with_no_channel_is_refused(self):
+        with self.assertRaises(due.NotASchedule) as refused:
+            due.target_of(a_row(channel_place_id="C0OPS"))
+        self.assertIn("names the destination and no channel", str(refused.exception))
+
+    def test_a_channel_with_no_destination_is_refused(self):
+        with self.assertRaises(due.NotASchedule) as refused:
+            due.target_of(a_row(channel="slack"))
+        self.assertIn("and this names neither", str(refused.exception))
+
+    def test_a_channel_naming_a_person_and_a_place_is_refused(self):
+        # The records refuse this too, and it is asked again here for the reason `understood` asks
+        # the other two pairs again: a row is still a person's typing at the moment it arrives, and
+        # a hand-edited database is exactly where one of these turns up.
+        with self.assertRaises(due.NotASchedule) as refused:
+            due.target_of(a_row(channel="slack", channel_sender_id="U09",
+                                channel_place_id="C0OPS"))
+        self.assertIn("and this names both", str(refused.exception))
+
+    def test_a_schedule_whose_destination_cannot_be_understood_is_not_a_schedule(self):
+        # It reaches the listing as a row that cannot be read, which is what `read` is for — never
+        # as a schedule that quietly reports to the notified channel instead.
+        with self.assertRaises(due.NotASchedule):
+            a_schedule(channel="slack")
+
+    def test_one_that_cannot_be_understood_does_not_stop_the_others(self):
+        kept, refused = due.read([a_row(name="fine"),
+                                  a_row(name="broken", channel="slack"),
+                                  a_row(name="also-fine")])
+        self.assertEqual(["fine", "also-fine"], [one.name for one in kept])
+        self.assertEqual(["broken"], [name for name, _ in refused])
 
 
 if __name__ == "__main__":

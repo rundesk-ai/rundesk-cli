@@ -287,7 +287,8 @@ class IntoAChannel:
 
     def _delivered(self, agent: str, kind: str, place: str, got: turns.Outcome,
                    external_id: Optional[str] = None,
-                   linked_earlier: Tuple[str, ...] = (), notice: bool = False) -> str:
+                   linked_earlier: Tuple[str, ...] = (), notice: bool = False,
+                   aimed: Optional[delivery.Aimed] = None) -> str:
         """The answer, cut to what this platform takes, with whatever the brain made beside it.
 
         **Hands back why the platform would not take it, or `""`.** A turn whose answer was refused
@@ -310,6 +311,10 @@ class IntoAChannel:
         **A channel turn answers with one final thought** (R-CH-19). Earlier working remarks were
         already shown as they landed. An explicit final produced before later guidance is a
         candidate that the later final supersedes, not another completed answer to post.
+
+        `aimed` is one destination named the way an allow-list entry names one, superseding `place`
+        — a schedule that reports somewhere of its own, whose review turn is what finally answers
+        when it delegated. It reaches `hosting.told` unchanged and is decided nowhere near here.
         """
         # **A channel turn has one final answer, and what that is depends on what the surface has
         # already shown** (R-CH-19, R-CAD-27). Where working commentary went out as it was finished,
@@ -374,7 +379,9 @@ class IntoAChannel:
         turned_away: List[str] = []
         wrote = hosting.told(agent, self._where, self._hosted(), kind, place, pieces,
                              sending=prepared.files, answering=external_id, cost=cost,
-                             landed_within=LANDS_WITHIN, refusals=turned_away, notice=notice)
+                             landed_within=LANDS_WITHIN, refusals=turned_away, notice=notice,
+                             to_sender=aimed.sender if aimed else "",
+                             to_place=aimed.place if aimed else "")
         if not wrote:
             # Nothing was hosting this channel by the time the answer was ready. The words exist in
             # the agent's own records either way; what does not exist is anywhere a person can read
@@ -1133,9 +1140,14 @@ class OnADelegation(IntoAChannel):
         under. Absent stays absent — see `channels.hosting.delegating`.
         """
         destination = self._destination(agent, conversation)
-        if destination is None:
+        if destination is None or destination.to is not None:
+            # **A run that reports to one named destination says nothing on the way**, which is what
+            # `docs/concepts/schedules.md` already promises every scheduled run: the notice and the
+            # report, and never a third message. A `delegation` record names its place directly and
+            # no adapter resolves a destination for one, so honouring the target here would mean
+            # posting this progress somewhere the schedule did not choose.
             return False
-        kind, place = destination
+        kind, place = destination.kind, destination.place
         # Rendered here, where `channels.delivery` is reachable and `delegations` is not — the same
         # words the cost line uses for the same quantity, so one turn's `47s elapsed` and one
         # delegation's `47s` are the same measure said the same way.
@@ -1218,11 +1230,19 @@ class OnADelegation(IntoAChannel):
         # no platform — a delegation being answered, a schedule, a terminal. Read once here rather
         # than inside the retry, because it cannot change between attempts.
         destination = self._destination(agent, conversation)
-        kind, delivery_place = destination if destination is not None else (None, place)
+        aimed = destination.to if destination is not None else None
+        kind = destination.kind if destination is not None else None
+        delivery_place = destination.place if destination is not None else place
+        # **A named destination shows nothing until the end.** A typing indicator and a running
+        # remark both name a place directly, and no adapter resolves a destination for either — so a
+        # turn aimed at one keeps the quiet every scheduled run already keeps, and the answer is the
+        # only thing that reaches a person. `showed` refuses the same records for the same reason.
+        showing = kind if aimed is None else None
         try:
             for again in range(TRIES):
                 try:
-                    watching = (_Streaming(self, agent, kind, delivery_place) if kind else None)
+                    watching = (_Streaming(self, agent, showing, delivery_place)
+                                if showing else None)
                     typing_started = False
                     got = None
 
@@ -1231,9 +1251,10 @@ class OnADelegation(IntoAChannel):
                         # Delegation and review turns have no new platform message to trigger the
                         # ordinary channel path. Admission is the exact moment they become real
                         # work, so a channel-backed conversation must start typing here as well.
-                        if kind:
+                        if showing:
                             typing_started = hosting.marked(
-                                agent, self._where, self._hosted(), kind, delivery_place, WORKING)
+                                agent, self._where, self._hosted(), showing, delivery_place,
+                                WORKING)
                         if admitted is not None:
                             admitted.accepted()
 
@@ -1251,17 +1272,17 @@ class OnADelegation(IntoAChannel):
                                       if watching and source == arriving.FROM_CHANNEL else None),
                             admitted=started)
                     finally:
-                        if kind and typing_started:
+                        if showing and typing_started:
                             became = (AS_A_STATE.get(got.turn_status, FAILED)
                                       if got is not None else FAILED)
                             # No external id: this terminal state ends the place-wide typing
                             # indicator but puts no reaction on a message nobody sent.
                             hosting.marked(
-                                agent, self._where, self._hosted(), kind, delivery_place, became)
-                    if kind and watching:
+                                agent, self._where, self._hosted(), showing, delivery_place, became)
+                    if kind:
                         self._out_loud(
                             agent, kind, delivery_place, got, watching, about,
-                            notice=source == arriving.FROM_SCHEDULE)
+                            notice=source == arriving.FROM_SCHEDULE, aimed=aimed)
                     return True
                 except turns.Busy:
                     said_into = turns.Admission()
@@ -1287,21 +1308,35 @@ class OnADelegation(IntoAChannel):
             return False
 
     @staticmethod
-    def _destination(agent: str, conversation: int) -> Optional[Tuple[str, str]]:
-        """Where this conversation is heard, including a schedule's configured notice DM."""
+    def _destination(agent: str, conversation: int) -> Optional[delivery.Telling]:
+        """Where this conversation is heard, or `None` where it stands on no platform.
+
+        **The resolver's own answer, carried rather than reduced to a pair.** A schedule may report
+        somewhere of its own, and a `(kind, place)` tuple has nowhere to put that — so this hands
+        back what `channels.delivery.notice` said, `to` and all. No words are asked for, because
+        what is wanted here is the destination and the answer is composed later.
+
+        A conversation standing on a schedule takes **that schedule's** destination. It is read from
+        the row rather than carried in, because the caller here is a review turn resuming an
+        invocation minutes or hours later; the row is the only thing that outlives it. A row that
+        cannot be read, or whose destination cannot be understood, falls back to the agent's
+        notified channel — where every scheduled report stood before this existed — because losing
+        the report entirely is the worse of the two ways to be wrong.
+        """
         stands = arriving.where_it_stands(agent, conversation)
         if stands is None:
             return None
         if stands[0] == arriving.FROM_CHANNEL:
             kind = arriving.on_which_channel(agent, conversation)
-            return (kind, stands[1]) if kind else None
+            return delivery.Telling(kind, stands[1], []) if kind else None
         if stands[0] == arriving.FROM_SCHEDULE:
-            telling = delivery.notice(agent, "")
-            return (telling.kind, telling.place) if telling is not None else None
+            return delivery.notice(
+                agent, "", **_where_one_schedule_reports(agent, stands[1]))
         return None
 
     def _out_loud(self, agent: str, kind: str, place: str, got: turns.Outcome,
-                  watching: "_Streaming", about: str, notice: bool = False) -> None:
+                  watching: Optional["_Streaming"], about: str, notice: bool = False,
+                  aimed: Optional[delivery.Aimed] = None) -> None:
         """Send what the turn settled with to the room it was asked in. **Never raises.**
 
         Guarded rather than left to the caller's `except`: a platform that would not take the answer
@@ -1311,10 +1346,18 @@ class OnADelegation(IntoAChannel):
         No mark goes with it. The four marks belong to *a message somebody sent*, and nobody sent
         this one: it is the agent picking its own conversation back up, so there is nothing on the
         platform for a reaction to land on.
+
+        `watching` is `None` for a turn aimed at a named destination, which streamed nothing and
+        therefore linked nothing. `aimed` is that destination, passed straight through.
         """
         try:
             refused = self._delivered(
-                agent, kind, place, got, None, tuple(watching.linked), notice=notice)
+                agent, kind, place, got, None,
+                # Nothing was shown on the way where nothing was streaming, so there is nothing
+                # already linked to carry forward — which is the whole of what an aimed turn does
+                # differently up to this point.
+                tuple(watching.linked) if watching is not None else (),
+                notice=notice, aimed=aimed)
         except Exception as why:  # noqa: BLE001 — a thread, and nobody is above it
             _note(self._where, f"{about} could not be sent to {kind} ({why})", logs.ERROR)
             return
@@ -1428,6 +1471,25 @@ class OnASchedule:
             where=directory.home(agent),
             env=firing.the_environment(),
             holding=(holding,))
+
+
+def _where_one_schedule_reports(agent: str, source_id: str) -> Dict[str, str]:
+    """Where the schedule behind this conversation reports, as the resolver's own arguments.
+
+    **Empty for every schedule that named nothing**, which is every schedule written before the
+    verb existed and the answer that keeps the agent's notified channel. Empty as well for a row
+    that cannot be read or whose destination cannot be understood: the report is what matters and
+    the notified channel is where it has always gone, so a target nobody can act on costs the
+    anchoring rather than the report.
+
+    Read here rather than carried, because the caller is a review turn resuming an invocation long
+    after the firing that started it — the row is the only thing that outlived the gateway.
+    """
+    with contextlib.suppress(Exception):
+        aimed = due.target_of(schedules_kept.one(agent, arriving.schedule_name(source_id)))
+        if aimed is not None:
+            return {"channel": aimed.channel, "sender": aimed.sender, "place": aimed.place}
+    return {}
 
 
 def for_a_schedule(agent: str, schedule: str, when=None) -> turns.Outcome:

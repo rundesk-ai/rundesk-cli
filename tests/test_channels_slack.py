@@ -3977,5 +3977,95 @@ class WhoItWorksFor(unittest.TestCase):
         self.assertEqual(self.read(allow=f",{THEM},")[0], [THEM])
 
 
+class WhereADeliveryIsAddressed(Wired):
+    """R-SLK-24. A destination rundesk names, resolved here because only here can resolve one.
+
+    rundesk holds no Slack credential: a user id is not the conversation that person reads, and
+    turning one into the other is `conversations.open`. And the string this adapter composes for a
+    place is its own — `docs/extending/adapters.md` says rundesk never parses one, so rundesk can
+    never build one either. Both are why the destination crosses as the id itself.
+    """
+
+    def told(self, one: Any, it: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return self.during(lambda: one._told(it))
+
+    def aimed(self, to: Any, **named: Any) -> Dict[str, Any]:
+        return dict({"do": "deliver", "id": "aimed-1",
+                     "place": adapter.conversation_of(TEAM, DM),
+                     "text": "the retro", "notice": True, "to": to}, **named)
+
+    def test_it_says_it_can_address_one(self) -> None:
+        self.assertIs(True, adapter.CAPABILITIES["address"])
+
+    def test_a_named_place_is_posted_to_directly(self) -> None:
+        one = self.reaching()
+        self.told(one, self.aimed({"place": ROOM}))
+        posted = one.web.made("chat_postMessage")[0]
+        self.assertEqual(posted["channel"], ROOM)
+        self.assertIsNone(posted["thread_ts"])
+
+    def test_a_named_place_supersedes_the_place_beside_it(self) -> None:
+        # The `place` on the record is the channel's own recorded destination, and delivering there
+        # is exactly the mis-delivery an aimed report exists to avoid.
+        one = self.reaching()
+        self.told(one, self.aimed({"place": ROOM}))
+        self.assertNotEqual(one.web.made("chat_postMessage")[0]["channel"], DM)
+
+    def test_a_named_person_reaches_the_conversation_slack_opens(self) -> None:
+        one = self.reaching()
+        self.told(one, self.aimed({"sender": THEM}))
+        self.assertEqual(one.web.made("conversations_open")[0]["users"], THEM)
+        self.assertEqual(one.web.made("chat_postMessage")[0]["channel"], DM)
+
+    def test_one_person_is_opened_once_however_often_they_are_written_to(self) -> None:
+        one = self.reaching()
+        self.told(one, self.aimed({"sender": THEM}))
+        self.told(one, self.aimed({"sender": THEM}, id="aimed-2"))
+        self.assertEqual(1, len(one.web.made("conversations_open")))
+        self.assertEqual(2, len(one.web.made("chat_postMessage")))
+
+    def test_a_threaded_report_hangs_off_the_notice(self) -> None:
+        # On Slack a reply *is* a thread, so nothing is opened: the anchor is `thread_ts`, and the
+        # name rundesk sent is for a platform that needs one.
+        one = self.reaching()
+        self.told(one, self.aimed({"place": ROOM}, reply_to="1700.000900",
+                                  threaded="weekly-retro"))
+        posted = one.web.made("chat_postMessage")[0]
+        self.assertEqual(posted["channel"], ROOM)
+        self.assertEqual(posted["thread_ts"], "1700.000900")
+
+    def test_nothing_is_threaded_without_something_to_hang_it_off(self) -> None:
+        one = self.reaching()
+        self.told(one, self.aimed({"place": ROOM}, threaded="weekly-retro"))
+        self.assertIsNone(one.web.made("chat_postMessage")[0]["thread_ts"])
+
+    def test_a_person_slack_will_not_open_a_conversation_with_is_refused(self) -> None:
+        one = self.reaching()
+        one.web.refuses["conversations_open"] = RuntimeError("user_not_found")
+        said = self.only(self.told(one, self.aimed({"sender": THEM})), "failed")
+        self.assertIn(f"direct conversation with {THEM}", said["why"])
+        self.assertEqual(one.web.made("chat_postMessage"), [])
+
+    def test_a_destination_naming_neither_is_refused_and_never_falls_back(self) -> None:
+        one = self.reaching()
+        said = self.only(self.told(one, self.aimed({})), "failed")
+        self.assertIn("neither a sender nor a place", said["why"])
+        self.assertEqual(one.web.made("chat_postMessage"), [])
+
+    def test_a_destination_that_is_not_an_object_is_refused(self) -> None:
+        one = self.reaching()
+        said = self.only(self.told(one, self.aimed("place:C0OPS")), "failed")
+        self.assertIn("was not an object", said["why"])
+        self.assertEqual(one.web.made("chat_postMessage"), [])
+
+    def test_an_ordinary_delivery_still_reads_its_place(self) -> None:
+        one = self.reaching()
+        self.told(one, {"do": "deliver", "id": "plain-1",
+                        "place": adapter.conversation_of(TEAM, ROOM, "1700.000100"),
+                        "text": "three files changed"})
+        posted = one.web.made("chat_postMessage")[0]
+        self.assertEqual((posted["channel"], posted["thread_ts"]), (ROOM, "1700.000100"))
+
+
 if __name__ == "__main__":
     unittest.main()

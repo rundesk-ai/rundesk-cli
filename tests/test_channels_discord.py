@@ -221,6 +221,13 @@ class PartialMessage:
         self.place = place
         self.id = which
 
+    async def create_thread(self, *, name: str) -> Thread:
+        """What a report is threaded under. The real `PartialMessage` has this too."""
+        self.place.threaded.append(name)
+        if self.place.threads_refuse is not None:
+            raise self.place.threads_refuse
+        return Thread(self.id * 3)
+
     async def add_reaction(self, mark: str) -> None:
         self.place.marked.append((self.id, mark))
 
@@ -246,6 +253,10 @@ class Messageable:
         #: Every time the indicator was renewed here, and what the platform said if it refused.
         self.typed: List[Any] = []
         self.typing_refuses: Optional[Exception] = None
+        #: Every thread opened on a message here, by the name it was given, and the refusal a case
+        #: needs to prove that a report degrades into the room rather than being lost.
+        self.threaded: List[str] = []
+        self.threads_refuse: Optional[Exception] = None
 
     async def send(self, **called: Any) -> Posted:
         self.sent.append(called)
@@ -323,6 +334,10 @@ class Client:
 
     def get_partial_messageable(self, place: int) -> Messageable:
         return self.places.setdefault(place, Messageable(place))
+
+    def get_channel(self, place: int) -> Optional[Messageable]:
+        """What the library has cached, and `None` where it has nothing — the real behaviour."""
+        return self.places.get(place)
 
     async def fetch_user(self, user: int) -> Person:
         self.fetched.append(user)
@@ -2284,6 +2299,145 @@ class WhatTheDotInTheMemberListSays(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as printed:
             asyncio.run(self.hosting._up())
         self.assertIn('"ready"', printed.getvalue())
+
+
+class WhereADeliveryIsAddressed(Records):
+    """R-DIS-40. A destination rundesk names, resolved here because only here can resolve one.
+
+    rundesk holds no Discord credential: a user id is not the channel that person reads, and turning
+    one into the other is `fetch_user` plus `create_dm`. So the id crosses the seam and this side
+    answers *where* — which is also why an aimed delivery is never fanned out, whatever `notice`
+    says about it.
+    """
+
+    def aimed(self, to: Dict[str, str], **also: Any) -> List[Dict[str, Any]]:
+        self.client.users[self.asker.id] = self.asker
+
+        async def exchange(reaching: Any) -> None:
+            reaching.allow = [str(self.asker.id)]
+            said = {"do": "deliver", "id": "aimed-1", "place": "999",
+                    "text": "the retro", "notice": True, "to": to}
+            said.update(also)
+            await reaching._deliver(said)
+
+        return self.during(exchange)
+
+    def test_it_says_it_can_address_one(self) -> None:
+        # The whole gate: rundesk refuses `--to` for a channel whose adapter does not say this, so
+        # a stale copy of it turns the verb off rather than mis-delivering.
+        self.assertIs(True, adapter.CAPABILITIES["address"])
+
+    def test_a_named_place_is_written_to_directly(self) -> None:
+        self.aimed({"place": "4242"})
+        self.assertEqual(1, len(self.client.places[4242].sent))
+        self.assertNotIn(999, self.client.places,
+                         "the delivery reached the place it superseded")
+
+    def test_a_named_person_reaches_the_conversation_they_read(self) -> None:
+        self.aimed({"sender": str(self.asker.id)})
+        self.assertEqual(1, len(self.client.places[self.asker.direct.id].sent))
+        self.assertEqual([self.asker.id], self.client.fetched)
+
+    def test_an_aimed_notice_is_never_copied_to_everybody(self) -> None:
+        # `notice` is *nobody prompted this*, which is why it may be announced at all. `to` is
+        # *this one destination*, which somebody chose. Copying an aimed one posts a schedule's
+        # retro to people it was deliberately not addressed to.
+        second = Person(33)
+        self.client.users[second.id] = second
+
+        async def exchange(reaching: Any) -> None:
+            reaching.allow = [str(self.asker.id), str(second.id)]
+            await reaching._deliver({"do": "deliver", "id": "aimed-2", "place": "999",
+                                     "text": "the retro", "notice": True,
+                                     "to": {"place": "4242"}})
+
+        self.during(exchange)
+        self.assertEqual([4242], list(self.client.places))
+
+    def test_the_id_handed_back_is_the_one_in_the_named_destination(self) -> None:
+        # It is what the report twenty minutes later has to hang off, and a message id from another
+        # place is one Discord cannot resolve there.
+        records = self.aimed({"place": "4242"})
+        self.assertEqual(str(self.client.places[4242].posted[0].id),
+                         self.only(records, "delivered")["external_id"])
+
+    def test_a_person_this_platform_will_not_open_a_conversation_with_is_refused(self) -> None:
+        # Refused rather than degraded: every other place in reach is one nobody chose.
+        self.asker.dm_refuses = RuntimeError("DMs are closed")
+        records = self.aimed({"sender": str(self.asker.id)})
+        refused = self.only(records, "failed")
+        self.assertIn(f"direct message with {self.asker.id}", refused["why"])
+
+    def test_a_destination_naming_neither_is_refused_and_never_falls_back(self) -> None:
+        records = self.aimed({})
+        self.assertIn("neither a sender nor a place", self.only(records, "failed")["why"])
+        self.assertEqual([], list(self.client.places))
+
+    def test_a_destination_that_is_not_an_object_is_refused(self) -> None:
+        records = self.aimed("place:4242")
+        self.assertIn("was not an object", self.only(records, "failed")["why"])
+
+
+class WhereAThreadedReportStands(Records):
+    """R-DIS-41. One thread per run, opened on the notice, and the room when there cannot be one."""
+
+    def threading(self, anchor: str = "61", named: str = "weekly-retro",
+                  **also: Any) -> List[Dict[str, Any]]:
+        async def exchange(reaching: Any) -> None:
+            reaching.allow = [str(self.asker.id)]
+            said = {"do": "deliver", "id": "report-1", "place": "999", "text": "the retro",
+                    "notice": True, "to": {"place": "4242"}, "reply_to": anchor,
+                    "threaded": named}
+            said.update(also)
+            await reaching._deliver(said)
+
+        return self.during(exchange)
+
+    def test_the_report_lands_in_a_thread_and_not_in_the_place(self) -> None:
+        self.client.places[4242] = Messageable(4242)
+        self.threading()
+        self.assertEqual(["weekly-retro"], self.client.places[4242].threaded)
+        self.assertEqual([], self.client.places[4242].sent,
+                          "the report was posted in the room rather than in its thread")
+        self.assertEqual(1, len(self.client.places[61 * 3].sent))
+
+    def test_the_thread_is_named_for_the_run(self) -> None:
+        self.client.places[4242] = Messageable(4242)
+        self.threading(named="friday-retro")
+        self.assertEqual(["friday-retro"], self.client.places[4242].threaded)
+
+    def test_a_second_delivery_joins_the_same_thread(self) -> None:
+        # A report arrives as several deliveries and a failure report may follow it. Asking Discord
+        # for a second thread on one message is refused, and a report split between a thread and
+        # the room above it is the unreadable outcome this prevents.
+        self.client.places[4242] = Messageable(4242)
+
+        async def exchange(reaching: Any) -> None:
+            reaching.allow = [str(self.asker.id)]
+            for nth in (1, 2):
+                await reaching._deliver(
+                    {"do": "deliver", "id": f"report-{nth}", "place": "999",
+                     "text": f"piece {nth}", "notice": True, "to": {"place": "4242"},
+                     "reply_to": "61", "threaded": "weekly-retro"})
+
+        self.during(exchange)
+        self.assertEqual(["weekly-retro"], self.client.places[4242].threaded)
+        self.assertEqual(2, len(self.client.places[61 * 3].sent))
+
+    def test_a_platform_that_will_not_open_one_gets_the_report_in_the_place(self) -> None:
+        # Degrades, never refuses. A report in the room is worse than a report in a thread and far
+        # better than no report — the same trade the adapter already makes answering a room.
+        self.client.places[4242] = Messageable(4242)
+        self.client.places[4242].threads_refuse = RuntimeError("no permission to open a thread")
+        records = self.threading()
+        self.assertEqual(1, len(self.client.places[4242].sent))
+        self.assertEqual("delivered", self.only(records, "delivered")["say"])
+
+    def test_nothing_is_threaded_without_something_to_hang_it_off(self) -> None:
+        self.client.places[4242] = Messageable(4242)
+        self.threading(reply_to=None)
+        self.assertEqual([], self.client.places[4242].threaded)
+        self.assertEqual(1, len(self.client.places[4242].sent))
 
 
 if __name__ == "__main__":
