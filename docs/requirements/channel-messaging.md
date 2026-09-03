@@ -1,7 +1,7 @@
 ---
 id: CH
 name: A channel conversation and the work that arrives on it
-last_verified: 2026-09-02
+last_verified: 2026-09-03
 ---
 
 ## What this is
@@ -65,6 +65,7 @@ been executed.
 | ✅ | R-CH-37 | A message refused admission before any turn existed ends the activity indicator raised for it and stays pending and unmarked, so a replacement gateway can still recover it. The shipped adapter ends its own renewal on that terminal state and reacts to nothing. | `test_admission_refused_before_a_turn_does_not_leave_the_place_typing`, `test_a_terminal_state_naming_no_message_still_ends_it` |
 | ✅ | R-CH-38 | An unsolicited delivery is explicitly distinguished from a direct answer. The shipped Discord adapter privately sends it once to every currently allowed user, while a direct answer stays only in the conversation that asked. | `test_only_an_unsolicited_delivery_is_named_as_a_notice`, `test_every_allowed_user_receives_the_notice_once`, `test_a_direct_answer_stays_in_the_one_conversation_that_asked` |
 | ✅ | R-CH-39 | An allow entry may name a sender or an external place. A bare entry is a sender, a place entry admits any identified sender the adapter reports from that place, and no place entry admits a record with no sender. The decision is made against the platform's own sender and place identifiers, never against a display or description field, and it is the same for a message and for a gesture. | `test_a_place_entry_admits_any_real_person_in_that_place`, `test_a_typed_sender_entry_admits_nobody_else_in_the_same_place`, `test_a_place_entry_admits_nothing_that_said_where_it_was_and_not_who`, `test_a_forged_display_field_admits_nobody`, `test_a_place_named_only_in_the_display_only_field_admits_nobody`, `test_a_gesture_is_admitted_by_the_same_rule_a_message_is`, `test_a_legacy_bare_entry_still_admits_the_sender_it_always_did` |
+| ✅ | R-CH-40 | Beside the speaker's name, the agent is told the platform's own handle for mentioning them, with the instruction that the handle is only for mentioning and never for saying; the bare id reaches no prompt. A handle that is not one token inside the bound is dropped rather than clipped, and a message with none carries no such line. | `test_a_brain_is_told_how_to_mention_whoever_spoke`, `test_the_handle_is_said_to_be_only_for_mentioning`, `test_no_handle_means_no_line_about_one`, `test_a_handle_with_no_name_beside_it_still_says_how_to_mention_them`, `test_a_handle_that_is_not_one_token_inside_the_bound_is_dropped_not_clipped`, `test_the_handle_on_an_arrival_reaches_what_the_brain_is_told` |
 
 ## Open questions
 

@@ -266,6 +266,12 @@ A_NAME_AT_MOST = 80
 #: named by whoever made it.
 A_PLACE_AT_MOST = 140
 
+#: How long the handle an adapter hands over for mentioning the speaker may be (R-CH-40). A handle
+#: is the platform's own markup around one id — `<@U012ABCDEF>`, `<@123456789012345678>` — so
+#: anything longer, or anything with a space in it, is not one and is dropped rather than clipped:
+#: half a handle mentions nobody and teaches the brain a token that arrives inert.
+A_MENTION_AT_MOST = 64
+
 #: Said at the end of a quote that did not fit, so that a brain reading it knows it is reading part.
 #: Without it a clipped quote is indistinguishable from somebody who stopped mid-sentence.
 A_QUOTE_CUT = "…(clipped)"
@@ -1478,7 +1484,7 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
     body = _also_replying(body, record.get("reply_to"))
     # Last of the three blocks, because it is the one about the message rather than its contents —
     # what was attached and what was being answered both belong nearer what somebody typed.
-    body = _also_who(body, record.get("display"), record.get("where"))
+    body = _also_who(body, record.get("display"), record.get("where"), record.get("mention"))
     landed = arriving.recorded(agent, kind, place, who, body, external)
     if external and not _joining_one(agent, one, landed):
         # **The mark belongs to the message that starts a turn, and to no other.** Said the moment it
@@ -1596,8 +1602,8 @@ def _flattened(said: Any, at_most: int) -> str:
     return " ".join(str(said or "").split())[:at_most]
 
 
-def _also_who(body: str, display: Any, where: Any) -> str:
-    """What somebody typed, and who said it and where (R-CH-21, R-DIS-21).
+def _also_who(body: str, display: Any, where: Any, mention: Any = None) -> str:
+    """What somebody typed, who said it and where, and how to mention them (R-CH-21, R-CH-40).
 
     **An agent that cannot say who it is talking to is an agent writing every answer as though it
     were a private terminal session.** Both fields crossed this seam already and both were read by
@@ -1615,15 +1621,50 @@ def _also_who(body: str, display: Any, where: Any) -> str:
 
     Both are a stranger's text: an account name and a room name are chosen by whoever made them, and
     both are bounded here whatever the adapter did.
+
+    **`mention` is how the speaker is mentioned, and it is handed over for that alone** (R-CH-40).
+    A name is what a brain reads and says; a mention is a platform's own markup around an id, and
+    the two are different facts about one person — an agent that knows only the name cannot mention
+    them, and the build this replaces knew only the name. The adapter composes the handle because
+    the markup is the platform's, and the sentence here tells the brain the one thing it must know
+    about it: it is for mentioning that person and is never said as words. **Never the bare id**,
+    which is the same distinction the owner drew — an id in an answer is a number nobody asked for,
+    and a handle is the person being addressed.
     """
     who = _flattened(display, A_NAME_AT_MOST)
     stood = _flattened(where, A_PLACE_AT_MOST)
-    if not who and not stood:
+    handle = _a_handle(mention)
+    if not who and not stood and not handle:
         return body
-    if not stood:
-        return f"{body}\n\n--\n\nSaid by {who}.".strip()
-    said = f"Said by {who} in {stood}." if who else f"Said in {stood}."
-    return f"{body}\n\n--\n\n{said}".strip()
+    lines = []
+    if who and stood:
+        lines.append(f"Said by {who} in {stood}.")
+    elif who:
+        lines.append(f"Said by {who}.")
+    elif stood:
+        lines.append(f"Said in {stood}.")
+    if handle:
+        lines.append(f"Mention {who or 'them'} as {handle} — a handle only for mentioning them, "
+                     f"never something to say.")
+    return f"{body}\n\n--\n\n{' '.join(lines)}".strip()
+
+
+def _a_handle(said: Any) -> str:
+    """An adapter's mention handle as one token, or `""` where what arrived is not one (R-CH-40).
+
+    **Dropped rather than clipped.** `_flattened` bounds a name by cutting it, which leaves a name
+    somebody can still read; a handle cut short mentions nobody, and one with a space in it is two
+    tokens of which at most one is a handle. So a handle is exactly one token inside the bound or it
+    is nothing — and nothing means the brain is told the name alone, as it always was.
+    """
+    if not isinstance(said, str):
+        # A list or a number would stringify into something with no space in it, and `str(["x"])`
+        # is not a handle for anybody — so the type is asked before the shape is.
+        return ""
+    token = _flattened(said, A_MENTION_AT_MOST + 1)
+    if not token or " " in token or len(token) > A_MENTION_AT_MOST:
+        return ""
+    return token
 
 
 def _also_replying(body: str, said: Any) -> str:

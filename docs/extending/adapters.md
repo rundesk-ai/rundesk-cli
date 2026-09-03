@@ -451,6 +451,7 @@ for goes to stderr; see [the rules](#the-rules-that-will-bite).
 | `attachments` | required unless `text` | what they attached, already fetched onto this machine — see below |
 | `external_id` | optional | the platform's own id for this message. **Without it there is no redelivery guard and no `seen` mark** |
 | `display` | optional | what the platform calls the person speaking. Reaches the brain, so an agent in a room can address somebody by name |
+| `mention` | optional | **your platform's own markup for mentioning the speaker** — `<@U012ABCDEF>` on Slack, `<@123456789012345678>` on Discord. It reaches the brain beside the name with one instruction: it is for mentioning that person and is never said as words, and the bare id never reaches a prompt at all. One token, at most 64 characters, or rundesk drops it rather than teaching half a handle. Send only a handle your own `deliver` path carries to the platform as a real mention |
 | `where` | optional | **one ordinary sentence** saying where this was said — `a direct message`, `the ops room in Acme`. Rundesk never parses it and never names a room itself; what a place is called is the one thing only you know |
 | `external_place` | optional | the platform's own id for the place this was said in. **Read, and read for one thing only** — see [who may be answered](#who-may-be-answered). Never shown, never stored, never parsed |
 | `reply_to` | optional | the earlier message this one answers — see below. Left out entirely when it answers nothing |

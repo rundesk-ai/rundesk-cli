@@ -83,6 +83,7 @@ been executed. Offline scenarios cannot prove what Discord's own service display
 | ✅ | R-DIS-56 | A file whose bytes arrive in more than one piece lands whole, whether or not Discord declared a size for it. | `test_a_body_that_arrives_in_pieces_lands_whole`, `test_a_body_in_pieces_that_discord_declared_no_size_for_still_lands_whole` |
 | ✅ | R-DIS-57 | A place counts as looked in once it has answered and never on the way in, so both halves of what a search says it looked through mean the same thing. | `test_a_place_is_counted_once_it_has_answered_and_never_on_the_way_in`, `test_a_server_still_indexing_measured_no_messages_and_says_nothing_about_them` |
 | ✅ | R-DIS-54 | The bot credential never reaches the file host, and this bot's own messages never come back as results. | `test_the_credential_does_not_go_to_the_file_host`, `test_this_bots_own_messages_never_come_back` |
+| ✅ | R-DIS-58 | An arrival carries Discord's own `<@id>` handle for whoever spoke, beside their display name, so an agent can mention them back. | `test_it_hands_over_the_handle_that_mentions_whoever_spoke` |
 | ❌ | R-DIS-55 | A search really reaches a live Discord server, a server still indexing really answers as one, and a fetched attachment really arrives. | not proven — no live server, application or credential was used, and none is permitted. Exercise an unscoped search, one scoped to a channel and to a private conversation, a window, a newly-created server whose index is not built, and a `--fetch` of a real attachment. |
 
 ## Open questions

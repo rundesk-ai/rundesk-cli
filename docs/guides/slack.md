@@ -44,7 +44,9 @@ footer under the answer. A turn looks like this and nothing else:
 A turn that was stopped, or that failed, takes the 👀 down and puts nothing up. The sentence the
 agent delivers is the news.
 
-**It can name one person and it cannot address a room.** An answer that names a Slack member —
+**It can name one person and it cannot address a room.** The agent is told, beside the name of
+whoever spoke, the exact handle that mentions them — only for mentioning them, never to repeat —
+so it can mention the person it is answering. An answer that names a Slack member —
 `<@U01ABCDEF2G>`, the markup Slack itself uses — arrives as a real mention, so an agent asked to
 loop somebody in can do it. Everything wider stays the text it looks like: `@channel`, `@here`,
 `@everyone`, a user group, a channel link, and anything malformed, because notifying a room full of

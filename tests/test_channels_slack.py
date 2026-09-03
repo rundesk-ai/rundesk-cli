@@ -1185,6 +1185,22 @@ class WhatArrives(Wired):
         self.assertEqual(said["display"], "Ann")
         self.assertEqual(said["where"], "a direct message, which nobody else can read")
 
+    def test_it_hands_over_the_exact_handle_that_mentions_whoever_spoke(self) -> None:
+        # R-SLK-65. Beside the name a brain says stands the token it mentions them with, and it is
+        # exactly the token the answer path keeps — so what is taught on the way in is what
+        # arrives as a mention on the way out rather than as punctuation.
+        one = self.reaching()
+        said = self.only(self.envelope(one, a_direct()), "arrived")
+        self.assertEqual(f"<@{THEM}>", said["mention"])
+        self.assertEqual(said["mention"], adapter.escaped_keeping_mentions(said["mention"]))
+
+    def test_a_handle_is_only_ever_one_the_answer_path_keeps(self) -> None:
+        # An id that is not a member's is no handle at all, rather than a token that would be
+        # escaped into `&lt;@…&gt;` the moment a brain wrote it back.
+        self.assertEqual("<@W024BE7LH>", adapter.a_handle_for("W024BE7LH"))
+        for wrong in ("", "u0ann", "U0ANN|dana", "!channel", "U" + "A" * 40):
+            self.assertEqual("", adapter.a_handle_for(wrong), repr(wrong))
+
     def test_it_says_which_channel_an_answer_is_being_written_in(self) -> None:
         one = self.reaching(places=[ROOM])
         said = self.only(self.envelope(one, a_mention()), "arrived")
