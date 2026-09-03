@@ -223,8 +223,8 @@ one app. Every answer to it is private to whoever typed it, and none of them sta
 
 **A file the agent attached goes with the answer**, verified again immediately before it is uploaded
 and shared into the same conversation and thread. If one cannot go, the words are still posted and a
-line under them says which file is missing. Nothing arriving is fetched; a file comes in only when the
-agent asks for one message's files by name with `rundesk search --fetch`.
+line under them says which file is missing. A file somebody attaches to a message lands with it, as on
+Discord, and `rundesk search --fetch` brings in the files of a message the agent found.
 
 **A direct message is one conversation however you thread it**, so its history and its session stay
 whole; the answer arrives in the thread you asked in, or in one rooted at your message. A thread in a

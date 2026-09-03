@@ -487,6 +487,16 @@ def a_direct(text: str = "what changed today?", ts: str = "1700.000100", user: s
     return said
 
 
+def a_slack_file(nth: int = 0, name: str = "plan.pdf", size: Optional[int] = 3,
+                 url: Optional[str] = None) -> Dict[str, Any]:
+    """One file object as Slack puts it on a message event."""
+    one: Dict[str, Any] = {"id": f"F{nth}", "name": name,
+                           "url_private_download": url or f"https://files.slack.com/arrived/{nth}"}
+    if size is not None:
+        one["size"] = size
+    return one
+
+
 class Wired(unittest.TestCase):
     """Everything a case needs: the vendor globals bound, and the records the adapter wrote."""
 
@@ -527,6 +537,10 @@ class Wired(unittest.TestCase):
         with contextlib.redirect_stdout(caught), contextlib.redirect_stderr(errors):
             doing()
         return [json.loads(line) for line in caught.getvalue().splitlines() if line.strip()]
+
+    def envelope(self, one: Any, event: Dict[str, Any], **named: Any) -> List[Dict[str, Any]]:
+        request = Envelope(event, **named)
+        return self.during(lambda: one._envelope(one.socket, request))
 
     def only(self, records: List[Dict[str, Any]], saying: str) -> Dict[str, Any]:
         found = [one for one in records if one.get("say") == saying]
@@ -574,12 +588,14 @@ class WhatItSaysItCanDo(unittest.TestCase):
         self.assertIs(adapter.CAPABILITIES["attach"], True)
         self.assertIn("files:write", adapter.WANTED_SCOPES)
 
-    def test_it_asks_for_no_scope_that_would_read_a_file_in(self) -> None:
-        # **`fetch` really does download a file, and `files:read` still must not be in this set.**
-        # `WANTED_SCOPES` is what `--check` refuses over, so a scope added here takes every already
-        # connected Slack channel off the air on update until its owner reinstalls the app. The
-        # scope is read at runtime off Slack's own header instead — see `FURTHER_SCOPES`.
-        for never in ("files:read", "remote_files:read", "remote_files:write"):
+    def test_it_asks_to_read_a_file_and_for_nothing_wider(self) -> None:
+        # **`files:read` is wanted, on the owner's word** (R-SLK-66): a file somebody attaches has to
+        # land the way it does on Discord, and an app that cannot read one drops what people send.
+        # The cost is stated in the guide — one reinstall per app installed before it existed — and
+        # nothing wider than reading a file this bot can already see is asked for.
+        self.assertIn("files:read", adapter.WANTED_SCOPES)
+        self.assertNotIn("files:read", adapter.FURTHER_SCOPES)
+        for never in ("remote_files:read", "remote_files:write", "search:read"):
             with self.subTest(never):
                 self.assertNotIn(never, adapter.WANTED_SCOPES)
 
@@ -1088,10 +1104,6 @@ class SigningIn(Wired):
 
 class WhatArrives(Wired):
     """One envelope in, one `arrived` record out — and nothing at all for a stranger."""
-
-    def envelope(self, one: Any, event: Dict[str, Any], **named: Any) -> List[Dict[str, Any]]:
-        request = Envelope(event, **named)
-        return self.during(lambda: one._envelope(one.socket, request))
 
     def logged(self, doing: Any) -> str:
         """Every fixed boundary sentence a run put in the agent's log, one to a line.
@@ -4787,11 +4799,12 @@ class BringingAFileIn(Searching):
                 self.assertEqual(self.made.made("conversations_history"), [])
 
     def test_without_files_read_it_refuses_and_names_the_scope(self) -> None:
-        """The scope is not in `WANTED_SCOPES` and must never be, so this is where an owner finds
-        out — with the reinstall named, because a scope added in an app's settings does not reach a
+        """`files:read` is wanted, so `--check` refuses a fresh connection without it — but a channel
+        connected before it was wanted holds a token without it, and this is where that owner finds
+        out: with the reinstall named, because a scope added in an app's settings does not reach a
         token that was issued before it."""
         made = self.carrying(self.a_file())
-        made.scopes = EVERY_SCOPE
+        made.scopes = ",".join(one for one in adapter.WANTED_SCOPES if one != "files:read")
         answered = self.fetched(made)
         self.assertFalse(answered["ok"])
         self.assertIn("files:read", answered["why"])
@@ -5076,6 +5089,108 @@ class WhereADeliveryIsAddressed(Wired):
                         "text": "three files changed"})
         posted = one.web.made("chat_postMessage")[0]
         self.assertEqual((posted["channel"], posted["thread_ts"]), (ROOM, "1700.000100"))
+
+
+class WhatArrivesWithAFile(Wired):
+    """R-SLK-66. A file somebody attached lands as the message arrives, the way it does on Discord.
+
+    **Staged by the same rules `fetch` stages under**, into this channel's own home, named by
+    position, reported with the size Slack declared — so rundesk lands it through the one landing
+    path it already has, and `rundesk messages` reads it back beside the words.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = Path(tempfile.mkdtemp(prefix="slack-arrived-"))
+        self.addCleanup(shutil.rmtree, str(self.home), True)
+        self.downloading = Downloading()
+        real = adapter.urlopen
+        self.addCleanup(setattr, adapter, "urlopen", real)
+        adapter.urlopen = self.downloading
+        patched = mock.patch.dict(os.environ, {"RUNDESK_CHANNEL_HOME": str(self.home)})
+        patched.start()
+        self.addCleanup(patched.stop)
+
+    def holding(self, one: Dict[str, Any], body: bytes) -> Dict[str, Any]:
+        self.downloading.holds[one["url_private_download"]] = body
+        return one
+
+    def notes(self, records: List[Dict[str, Any]]) -> str:
+        return " ".join(str(one.get("text") or "") for one in records if one.get("say") == "note")
+
+    def test_a_file_attached_to_a_message_lands_as_it_arrives(self) -> None:
+        one = self.reaching()
+        file = self.holding(a_slack_file(size=3), b"pdf")
+        records = self.envelope(one, a_direct(text="look at this", files=[file]))
+        said = self.only(records, "arrived")
+        self.assertEqual("look at this", said["text"])
+        self.assertEqual([{"at": str(self.home / adapter.FETCHED_IN / "1700.000100" / "0"),
+                           "name": "plan.pdf", "bytes": 3}], said["attachments"])
+        self.assertEqual(b"pdf", Path(said["attachments"][0]["at"]).read_bytes())
+
+    def test_the_bot_token_fetches_it_and_goes_in_the_header(self) -> None:
+        one = self.reaching()
+        self.envelope(one, a_direct(files=[self.holding(a_slack_file(), b"pdf")]))
+        self.assertEqual("Bearer xoxb-x", self.downloading.header(0))
+        self.assertNotIn("xoxb", self.downloading.asked[0].full_url)
+
+    def test_a_message_that_is_only_a_file_still_arrives(self) -> None:
+        # A message with nothing in it used to be dropped here, and a file is an ask too.
+        one = self.reaching()
+        said = self.only(self.envelope(one, a_direct(text="", files=[
+            self.holding(a_slack_file(), b"pdf")])), "arrived")
+        self.assertEqual("", said["text"])
+        self.assertEqual(1, len(said["attachments"]))
+
+    def test_a_message_with_no_file_carries_no_attachments_key_at_all(self) -> None:
+        said = self.only(self.envelope(self.reaching(), a_direct()), "arrived")
+        self.assertNotIn("attachments", said)
+        self.assertEqual([], self.downloading.asked)
+
+    def test_a_mention_in_a_channel_lands_its_file_too(self) -> None:
+        one = self.reaching(places=[ROOM])
+        said = self.only(self.envelope(one, a_mention(files=[
+            self.holding(a_slack_file(), b"pdf")])), "arrived")
+        self.assertEqual(1, len(said["attachments"]))
+
+    def test_with_nowhere_to_put_it_the_words_arrive_and_the_file_is_said_to_be_left(self) -> None:
+        os.environ.pop("RUNDESK_CHANNEL_HOME", None)
+        one = self.reaching()
+        records = self.envelope(one, a_direct(files=[self.holding(a_slack_file(), b"pdf")]))
+        said = self.only(records, "arrived")
+        self.assertNotIn("attachments", said)
+        self.assertIn("left where only Slack can reach it", self.notes(records))
+        self.assertEqual([], self.downloading.asked, "it downloaded into nowhere")
+
+    def test_a_file_slack_says_is_too_big_costs_no_bandwidth_and_is_said(self) -> None:
+        one = self.reaching()
+        records = self.envelope(one, a_direct(files=[
+            a_slack_file(name="huge.bin", size=adapter.BROUGHT_BYTES + 1)]))
+        self.assertNotIn("attachments", self.only(records, "arrived"))
+        self.assertIn("huge.bin", self.notes(records))
+        self.assertEqual([], self.downloading.asked)
+
+    def test_a_file_slack_will_not_hand_over_is_a_note_and_never_a_lost_message(self) -> None:
+        # An app installed before `files:read` was wanted arrives here as Slack refusing the
+        # download, and the words still reach the agent.
+        one = self.reaching()
+        file = a_slack_file()
+        self.downloading.raises[file["url_private_download"]] = OSError("HTTP Error 403")
+        records = self.envelope(one, a_direct(text="here", files=[file]))
+        said = self.only(records, "arrived")
+        self.assertEqual("here", said["text"])
+        self.assertNotIn("attachments", said)
+        self.assertIn("plan.pdf", self.notes(records))
+        self.assertEqual([], [one for one in self.home.rglob("*") if one.is_file()],
+                         "a file that did not come was left on disk")
+
+    def test_only_the_first_ten_land_and_the_rest_are_said(self) -> None:
+        one = self.reaching()
+        files = [self.holding(a_slack_file(nth=n, name=f"{n}.txt"), b"x")
+                 for n in range(adapter.BROUGHT_MOST + 2)]
+        records = self.envelope(one, a_direct(files=files))
+        self.assertEqual(adapter.BROUGHT_MOST, len(self.only(records, "arrived")["attachments"]))
+        self.assertIn(f"only the first {adapter.BROUGHT_MOST}", self.notes(records))
 
 
 if __name__ == "__main__":
