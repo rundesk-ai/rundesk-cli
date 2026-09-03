@@ -110,9 +110,15 @@ non-blank line — so a program that printed a warning before its answer has sti
 **Exit code:** read. Non-zero is `{}`. So is a program that did not start, one that did not finish in
 sixty seconds, and one that printed something that is not an object.
 
-**`{}` is a whole answer and never an error.** Every missing field is read as the least capable
-answer, so an adapter that does not recognise the flag and does something else can do nothing — which
-is complete, and is not a refusal. Nothing is retried and nothing is refused for it.
+**`{}` is a whole answer and never an error.** An adapter that does not recognise the flag and does
+something else can do nothing, which is complete and is not a refusal. Nothing is retried and nothing
+is refused for it.
+
+**A missing field is read as the least capable answer, with one exception.** `stream` defaults to
+`true`, because it says whether a surface shows a turn *as it happens* and rundesk composes an answer
+differently for a surface that does not — see [`stream`](#stream-decides-how-an-answer-is-composed).
+Read the least-capable way round, every adapter written before that field existed would have its
+working commentary taken away and its answers recomposed. Silence there means *unchanged*.
 
 Asked offline and with no account, so that **a fidelity difference is a fact rather than a guess**:
 an adapter that cannot edit a message is told apart from one that can and did not.
@@ -430,7 +436,7 @@ Five, and only five exist today.
 
 | | Fields | |
 |---|---|---|
-| `deliver` | `id`, `place`, `text`, sometimes `files`, `reply_to`, `cost`, or `notice` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed`. `notice: true` means nobody prompted this delivery in one conversation; `place` remains its compatible primary destination |
+| `deliver` | `id`, `place`, `text`, sometimes `files`, `reply_to`, `cost`, `notice`, or `remark` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed`. `notice: true` means nobody prompted this delivery in one conversation; `place` remains its compatible primary destination |
 | `state` | `place`, `state`, sometimes `external_id` | show what rundesk says a turn is doing. `external_id` names the message the state belongs to; **without one the state belongs to the place** — see below |
 | `activity` | `place`, `did`, sometimes `ok`, sometimes `who` | show what the agent is doing, while it is still doing it |
 | `delegation` | `place`, `state`, `who`, `ask`, sometimes `elapsed`, sometimes `provider` and with it sometimes `provider_alias` | show what became of work this agent handed to another agent, which brain is doing it, and what has just been done to it |
@@ -448,6 +454,15 @@ privately address the allowed identities may give each one a copy; the shipped D
 An adapter that does not implement fan-out ignores the optional field and keeps delivering to
 `place`, which preserves the existing contract. Never infer this from the text and never fan out a
 delivery without it: ordinary answers belong only in the conversation that asked.
+
+**`remark: true` is rundesk saying *this one is not the answer yet*.** It marks prose the agent
+finished saying on its way to answering, which is otherwise indistinguishable from the answer: both
+are words the brain wrote, and only the producer knows which phase it was in. A surface that shows a
+turn as it happens ignores the field and posts every delivery — what the shipped Discord adapter
+does, and what every adapter that has never heard of the field keeps doing. A surface whose whole
+shape is the answer alone drops the marked ones, which is what the shipped Slack adapter does, so
+one question is answered once however much the brain says while it works. Never infer it from the
+text, and never send it from an adapter: it travels outbound only.
 
 **`reply_to` is how rundesk says *this one is the answer*.** It carries the `external_id` of the
 message being answered. A delivery with it is posted as a reply to that message; a delivery without
@@ -829,11 +844,25 @@ separator in it is used as a path. `~` is expanded.
 Said plainly, because a page that quietly omitted this would be one somebody writes against and then
 cannot explain.
 
-**What `--capabilities` says is asked for and thrown away.** It is printed once, by `channels add`,
-and there is no column in the `channels` table holding it. `max_text` is the exception and is read —
-out of the channel's `settings`, where a `--check` may put it — so an adapter that reports one there
-is split to it and one that does not gets a flat 2000. Declare your real limit anyway, and go on
-checking the text you are handed, because that check is what catches the day the two disagree.
+**Most of what `--capabilities` says is asked for and thrown away.** It is printed once, by
+`channels add`, and there is no column in the `channels` table holding it. Two fields are read, and
+they are read from different places.
+
+`max_text` comes out of the channel's `settings`, where a `--check` may put it — so an adapter that
+reports one there is split to it and one that does not gets a flat 2000. Declare your real limit
+anyway, and go on checking the text you are handed, because that check is what catches the day the
+two disagree.
+
+<a id="stream-decides-how-an-answer-is-composed"></a>
+`stream` is asked of `--capabilities` itself, once per gateway, and **decides how an answer is
+composed**. `true` — and unsaid means `true` — is the behaviour every adapter had before the field:
+each finished thought is delivered as the next one supersedes it, marked `remark`, and the answer is
+the last thought, because the rest is already on the platform. `false` says this surface shows
+nothing until the end, so no such delivery is sent and the answer is every finished thought after the
+brain's last tool call, joined. What it said before and between its tools is working narration and is
+in neither. Declare `false` only if you really post nothing while a turn runs: declared wrongly, an
+answer arrives with the thinking that preceded it, or the thinking arrives with nothing to close
+it.
 
 **A delivery is correlated with what became of it, but never with a mark.** `{"say": "delivered",
 "id": …, "external_id": …}` is read: rundesk writes down that the answer reached the platform, naming
@@ -850,6 +879,13 @@ own `id` for that delivery — so something rundesk sent can later be replied to
 `💻 Working on…` puts its report under that notice twenty minutes later by quoting exactly this. An
 adapter that acknowledges without one is a whole adapter and nothing fails: the report is then posted
 on its own rather than as a reply, which is the honest outcome for a platform that has no ids.
+
+**Acknowledging nothing at all is still a whole adapter.** Where rundesk waited for words to land —
+which it does for a turn's answer — and heard neither `delivered` nor `failed`, it writes one line
+into the agent's log saying it does not know whether they arrived. That line is not a refusal and no
+turn fails over it: it exists because an adapter that has stopped reading its input is silent in
+exactly the way an adapter that never acknowledges is silent, and rundesk cannot tell the two apart
+without saying so. Send `delivered` and the line is never written.
 
 **`place` on an `arrived` is still read by nothing, and `external_place` is not it.** The shipped
 Discord adapter sends `"dm"` or `"room"` in `place` and rundesk keeps neither; the stable id lives in

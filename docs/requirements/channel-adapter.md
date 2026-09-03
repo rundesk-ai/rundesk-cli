@@ -1,7 +1,7 @@
 ---
 id: CAD
 name: The seam a channel adapter is reached through
-last_verified: 2026-09-02
+last_verified: 2026-09-03
 ---
 
 ## What this is
@@ -22,11 +22,12 @@ and how shared state is shown there.
 
 ## Requirements
 
-Only `R-CAD-25` is proven. `R-CAD-*` is cited in `src/rundesk/providers/answering.py` but no test
-names any other row, so each of those carries the acceptance that has not been executed rather than a
-citation. The
-mechanics were inspected against [adapters.md](../extending/adapters.md), `src/rundesk/channels/adapters.py`,
-`src/rundesk/channels/hosting.py`, and `src/rundesk/commands/channels.py`; inspection is not proof.
+`R-CAD-25`, `R-CAD-26` and `R-CAD-27` are proven and name the checks that prove them. Every other
+row carries the acceptance that has not been executed rather than a citation: `R-CAD-*` is cited in
+`src/rundesk/providers/answering.py`, but a citation is not a check. The mechanics of the unproven
+rows were inspected against [adapters.md](../extending/adapters.md),
+`src/rundesk/channels/adapters.py`, `src/rundesk/channels/hosting.py`, and
+`src/rundesk/commands/channels.py`; inspection is not proof.
 
 |  | ID | Requirement | Evidence |
 |:--:|---|---|---|
@@ -54,6 +55,8 @@ mechanics were inspected against [adapters.md](../extending/adapters.md), `src/r
 | ❌ | R-CAD-23 | An adapter declares what it can present, and the owner is shown that declaration during setup without the channel becoming unusable for abilities it lacks. | not proven — Add adapters with full and empty capability declarations and complete a conversation on both. |
 | ❌ | R-CAD-24 | A transient adapter disconnect marks the channel offline immediately, gives the adapter time to reconnect itself, and replaces a live adapter that remains disconnected; durable messages wait until the channel is ready. | not proven — Simulate `ready` → `gone` → `ready`, then `ready` → `gone` without recovery; inspect channel status, adapter replacement, pending-message recovery, and permanent `EX_CONFIG` refusal. |
 | ✅ | R-CAD-25 | An adapter may report the platform's own identifier for the place a message or gesture came from, and is handed the allowed senders and the allowed places as two separate values. An adapter that reports no place, and one that has never heard of the second value, keeps working unchanged. | `test_an_adapter_is_handed_the_senders_bare_and_the_places_apart` (hosting and command), `test_an_arrival_that_names_no_place_still_admits_a_named_sender`, `test_the_stable_place_is_carried_in_a_field_of_its_own` |
+| ✅ | R-CAD-26 | Where a caller waited for a delivery to land and no acknowledgement arrived, the agent's log says so and names how many of the deliveries are still outstanding, counted after the wait so a late acknowledgement is never reported as an unanswered one. It records that the outcome is unknown, never that the platform refused: an adapter that acknowledges nothing is a whole adapter and no turn fails over the line. | `test_a_delivery_nobody_ever_answered_is_said_rather_than_passed_over`, `test_only_the_deliveries_still_outstanding_are_counted`, `test_a_delivery_that_was_answered_is_not_reported_as_unanswered` |
+| ✅ | R-CAD-27 | An answer is composed for the surface that will show it, from the `stream` capability the adapter declares. Where a surface shows a turn as it happens, each finished thought is delivered as it is superseded, marked as something said on the way to the answer, and the answer is the last thought. Where a surface shows nothing until the end, no such delivery is sent and the answer is every finished thought **after the brain's last tool call**, joined — so several closing thoughts all survive while what was said before and between the tools, which is working narration, is in neither. An explicit final supersedes in both, and the latest one alone is the answer rather than every marked one joined. Where such a turn completes and closes without a word after its last tool call, one short factual line is delivered rather than nothing at all — it claims neither success nor failure and says nothing about what the work did — while a turn somebody stopped stays silent. An adapter that declares nothing keeps the first behaviour, no surface infers the phase from the text, and a file declared in an unposted thought still travels with the answer. | `test_a_surface_that_shows_only_the_answer_is_given_every_finished_thought`, `test_working_narration_is_left_out_of_a_quiet_surfaces_answer`, `test_a_quiet_surface_posts_only_the_latest_of_two_explicit_finals`, `test_a_completed_quiet_turn_that_closed_on_nothing_still_says_so`, `test_a_stopped_quiet_turn_that_closed_on_nothing_stays_silent`, `test_a_surface_that_shows_a_turn_as_it_happens_still_gets_commentary`, `test_an_adapter_that_declares_nothing_keeps_the_commentary_it_always_had`, `test_a_file_declared_in_an_unposted_thought_still_goes_with_the_answer`, `test_a_remark_says_it_is_one_so_a_final_only_surface_can_tell`, `test_a_delivery_marked_as_a_remark_is_still_shown_here` (Discord), `test_something_said_on_the_way_to_an_answer_is_not_posted` (Slack), and the composition itself in `test_every_thought_after_the_last_tool_joins_in_the_order_it_was_said`, `test_working_narration_before_and_between_the_tools_is_left_out`, `test_the_latest_explicit_final_is_the_whole_closing_response`, `test_a_turn_that_closed_at_a_tool_boundary_has_no_closing_response` (protocol) |
 
 ## Open questions
 

@@ -129,9 +129,22 @@ was empty, then asked them to paste the outcome back.
   agent has had. The turn never narrows them to one channel or conversation, and looks nowhere
   else, because nothing else holds this history — a stated boundary that also ends the outward
   search a bare prohibition invited.
-- The turn answers only from results for the current `{source_kind}:{audience_id}`, never reads
-  conversation files or records directly, and never repeats another agent's or audience's content.
-  This is a rule about what may be said back, not about where to look.
+- The turn answers only from results for the current `{source_kind}:{audience_id}`, plus whatever
+  wider shared context the agent's own instructions authorize by name. It never reads conversation
+  files or records directly, and never repeats another person's *or agent's* private content
+  outside its own audience unless it was authorized or a canonical shared source holds the same
+  fact. Another agent's conversation is somebody's private exchange as well, and one agent
+  repeating another's to a third audience is the same disclosure by a different route. This
+  is a rule about what may be said back, not about where to look.
+
+  **The default is the narrow one and the product text grants nothing.** An agent standing in one
+  shared project needs continuity across its threads; every agent getting that silently is the same
+  mistake with the blast radius reversed. So the permission and its condition are one clause: an
+  agent whose own instructions say nothing about a wider audience reads the block it always read.
+  What an authorization may widen is *which context is usable*; the disclosure floor below it does
+  not move, so no authorization carries one person's private exchange to a different audience. On
+  a person-facing turn only — a schedule and a delegation keep the unqualified sentence, because
+  neither has anybody present to be answered narrowly for.
 - The turn never reports history as empty or unavailable and never asks for what a lookup should
   have found. With no match it says the search found no match and asks only for what is missing;
   on a scheduled turn that unresolved remainder is a blocker instead of a question.

@@ -458,19 +458,50 @@ def last_thought(said: Iterable[Dict[str, Any]]) -> str:
     never passes that way — what it said is read back out of one row afterwards, so everything it
     thought aloud on the way would arrive as a report with the report buried at the end of it.
     """
+    each = _closing_thoughts(said)
+    return each[-1] if each else ""
+
+
+def closing_response(said: Iterable[Dict[str, Any]]) -> str:
+    """**Every** closing thought, as the one thing the brain said at the end of its turn.
+
+    `last_thought`'s sibling, and the difference is the whole of it: that one answers *which thought
+    was the closing one*, this one answers *what the closing response was*. They part where a brain
+    says several finished things after its final tool call and marks none of them the answer — two
+    shipped providers do — and the last of those is then one paragraph of a reply rather than the
+    reply.
+
+    **Working narration is not in it, and that is what separates this from `reply`.** Text said
+    before the brain went to work, and text between one tool call and the next, is the brain
+    thinking aloud on the way; a surface that shows a turn as it happens has already shown it, and a
+    surface that shows nothing until the end was never meant to. Only what came after the last tool
+    boundary is the closing response, which is the same seam `last_thought` reads and stated once.
+
+    An explicit final still supersedes: a provider that marks its answer has said which thought is
+    the answer, and a later one replaces an earlier one exactly as it does there.
+    """
+    return "\n\n".join(_closing_thoughts(said))
+
+
+def _closing_thoughts(said: Iterable[Dict[str, Any]]) -> List[str]:
+    """The finished thoughts that close a turn, in order. `[]` when it closed without saying one.
+
+    Written once because `last_thought` and `closing_response` are two readings of one seam, and two
+    copies of *where the working stops* is the pair that drifts: the day one of them learns about a
+    new way a brain reports going to work, the other goes on splitting somewhere else.
+    """
     # Text before the last tool boundary is activity, not a closing response. If the brain went to
     # work and then stopped without saying anything else, there is no final report to publish.
     records = list(said)
     explicit = [one for one in records if one.get("type") == "text" and one.get("final") is True]
     if explicit:
         each = thoughts(explicit)
-        return each[-1] if each else ""
+        return each[-1:]
     after = 0
     for at, one in enumerate(records):
         if one.get("type") in WENT_TO_WORK:
             after = at + 1
-    each = thoughts(records[after:])
-    return each[-1] if each else ""
+    return thoughts(records[after:])
 
 
 def _backwards(said: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:

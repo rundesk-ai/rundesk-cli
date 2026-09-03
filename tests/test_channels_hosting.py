@@ -157,6 +157,41 @@ for line in sys.stdin:
                           "why": "would not take it: 429 Too Many Requests"}), flush=True)
 """
 
+#: One that reads everything and answers nothing. **A whole adapter**: the contract says an
+#: acknowledgement is worth sending and never that one is owed, so this is a shape rundesk has to
+#: keep working with — and the shape a working adapter is indistinguishable from the moment it
+#: stops reading its own input, which is the failure this pair exists to tell apart.
+AN_ADAPTER_THAT_ACKNOWLEDGES_NOTHING = """#!/usr/bin/env python3
+import json, sys
+print(json.dumps({"say": "ready", "as": "a-bot"}), flush=True)
+for line in sys.stdin:
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    if record.get("do") == "stop":
+        break
+"""
+
+#: One that answers the first delivery it is sent and never the second, for the count in the line
+#: about deliveries nobody acknowledged: partly answered is neither of the two easy cases.
+AN_ADAPTER_THAT_ACKNOWLEDGES_ONE_IN_TWO = """#!/usr/bin/env python3
+import json, sys
+print(json.dumps({"say": "ready", "as": "a-bot"}), flush=True)
+answered = 0
+for line in sys.stdin:
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    if record.get("do") == "stop":
+        break
+    if record.get("do") == "deliver" and answered < 1:
+        answered += 1
+        print(json.dumps({"say": "delivered", "id": record.get("id"),
+                          "external_id": "9001"}), flush=True)
+"""
+
 #: One that says its configuration is what is wrong and exits `78` — `EX_CONFIG`, the code an
 #: adapter uses for a failure no restart can fix. A revoked token is the real case.
 AN_ADAPTER_THAT_CANNOT_COME_RIGHT = """#!/usr/bin/env python3
@@ -1881,6 +1916,22 @@ class WhoSaidItAndWhere(unittest.TestCase):
         self.assertNotIn("D" * (hosting.A_NAME_AT_MOST + 1), got)
         self.assertNotIn("R" * (hosting.A_PLACE_AT_MOST + 1), got)
 
+    def test_who_can_read_a_place_survives_the_bound_into_the_prompt(self):
+        """The bound is a guard against a stranger's text, and it clips from the end — so a place
+        sentence that says who can read it last is a sentence whose audience is what gets cut.
+
+        **The worst case is the externally shared one, not the public one.** A thread in a Slack
+        Connect channel whose name is the sixty characters that adapter allows one is 130
+        characters; the public sentence is 126, and testing that instead would leave four
+        characters of the real thing unproved. It is also the audience it would be worst to lose:
+        the sentence that warns a brain people outside the workspace are reading.
+        """
+        longest = f"a thread in the {'x' * 60} channel, which people outside this workspace can read"
+        self.assertEqual(130, len(longest))
+        self.assertLessEqual(len(longest), hosting.A_PLACE_AT_MOST)
+        got = hosting._also_who("what changed?", "Dana", longest)
+        self.assertIn("which people outside this workspace can read", got)
+
 
 class WhatAReplyPutsInFrontOfABrain(unittest.TestCase):
     """R-CH-29, R-CH-30. **The bounds are rundesk's**, and they are asked of the composer directly
@@ -2107,6 +2158,74 @@ class WhenAPlatformWillNotTakeIt(Hosting):
         hosting.told(self.agent, self.where, watching, "discord", "1180", ["the daily report"],
                      landed_within=5.0)
         self.assertIn("could not deliver", self.said_in_the_log())
+
+    def test_a_delivery_nobody_ever_answered_is_said_rather_than_passed_over(self):
+        # **The live failure.** A turn produced a nonempty answer, rundesk wrote it to the adapter,
+        # the adapter never acted on it, and the log carried no delivery and no refusal — so the
+        # only reading left was that it had worked. `_landed` knew; `told` threw the answer away.
+        self.an_adapter(body=AN_ADAPTER_THAT_ACKNOWLEDGES_NOTHING)
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+
+        turned_away = []
+        wrote = hosting.told(self.agent, self.where, watching, "discord", "1180",
+                             ["the answer nobody will ever see"], landed_within=1.0,
+                             refusals=turned_away)
+
+        self.assertTrue(wrote, "the words were written, which is what `told` reports")
+        self.assertEqual([], turned_away, "nobody refused this, and saying they did would be false")
+        said = self.said_in_the_log()
+        self.assertIn("did not acknowledge 1 of 1 deliveries", said)
+        self.assertIn("whether they reached the platform is unknown", said)
+
+    def test_only_the_deliveries_still_outstanding_are_counted(self):
+        # The drain thread is still running while this waits, so the count has to be taken after
+        # the wait and the line withheld when it comes back empty: `0 of 1` would be a warning
+        # about a delivery that landed a moment late.
+        self.an_adapter(body=AN_ADAPTER_THAT_ACKNOWLEDGES_ONE_IN_TWO)
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        hosting.told(self.agent, self.where, watching, "discord", "1180", ["first", "second"],
+                     landed_within=1.0)
+        said = self.said_in_the_log()
+        self.assertIn("did not acknowledge 1 of 2 deliveries", said)
+        self.assertNotIn("did not acknowledge 0 of", said)
+
+    def test_an_adapter_that_never_acknowledges_is_not_said_every_turn(self):
+        # A whole adapter may acknowledge nothing, so the line about it must not arrive once per
+        # answer for the life of the gateway.
+        self.an_adapter(body=AN_ADAPTER_THAT_ACKNOWLEDGES_NOTHING)
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        for _ in range(3):
+            hosting.told(self.agent, self.where, watching, "discord", "1180", ["again"],
+                         landed_within=1.0)
+        said = self.said_in_the_log()
+        self.assertEqual(1, said.count("did not acknowledge 1 of 1 deliveries"), said)
+
+    def test_a_different_count_is_still_worth_saying(self):
+        # Kept on the sentence rather than on the channel, so *one of two* is not hidden behind an
+        # earlier *one of one*: the count is the evidence.
+        self.an_adapter(body=AN_ADAPTER_THAT_ACKNOWLEDGES_NOTHING)
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        hosting.told(self.agent, self.where, watching, "discord", "1180", ["one"],
+                     landed_within=1.0)
+        hosting.told(self.agent, self.where, watching, "discord", "1180", ["one", "two"],
+                     landed_within=1.0)
+        said = self.said_in_the_log()
+        self.assertIn("did not acknowledge 1 of 1 deliveries", said)
+        self.assertIn("did not acknowledge 2 of 2 deliveries", said)
+
+    def test_a_delivery_that_was_answered_is_not_reported_as_unanswered(self):
+        # The other half: an ordinary acknowledging adapter must never earn that line, or it is one
+        # more sentence somebody learns to scroll past.
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        hosting.told(self.agent, self.where, watching, "discord", "1180", ["the daily report"],
+                     landed_within=5.0)
+        self.assertNotIn("did not acknowledge", self.said_in_the_log())
 
     def test_a_refusal_answers_one_question_once(self):
         # Taken out as it is read, or it would answer the next delivery that happened to reuse the

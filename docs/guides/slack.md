@@ -65,9 +65,12 @@ display_information:
 features:
   bot_user:
     display_name: rundesk
-    # Socket Mode does not drive Slack's presence indicator. Keep the bot visibly available;
-    # gateway health is reported by Rundesk and its logs, not by Slack's green dot.
-    always_online: true
+    # Slack's presence dot cannot represent whether this agent is running. Socket Mode and the
+    # Events API do not drive it, `users.setPresence` cannot force a bot active, and
+    # marking the bot always online is a static claim that stays green after the gateway stops —
+    # which reads as a healthy agent that answers nothing. Left false, the indicator is not an
+    # answer about Rundesk, and the answer is `rundesk gateways` and the agent's log.
+    always_online: false
 
   app_home:
     # Without both of these nobody can send the bot a direct message, and the channel is deaf with
@@ -315,6 +318,24 @@ it was about taken out. Her own earlier messages are left out of it — handing 
 it said back to itself is not context. That reading happens only when somebody names her; no bot's
 message ever wakes anything.
 
+## What the agent is told about where it is standing
+
+Every turn carries one ordinary sentence naming the audience, because a channel's name does not say
+who reads it and an agent deciding how much to disclose needs that more than it needs the name.
+
+| Where it was said | What the agent is told |
+|---|---|
+| a direct message | a direct message, which nobody else can read |
+| a public channel | the `<name>` channel, which anybody in this workspace can read |
+| a private channel | the `<name>` channel, which its invited members can read |
+| a Slack Connect channel | the `<name>` channel, which people outside this workspace can read |
+| a thread in any of them | *a thread in* the same sentence |
+
+Taken from `conversations.info` — `is_private` and `is_ext_shared` — and never from the name, which
+is a stranger's text and is flattened and clipped before it travels. Where Slack will not answer,
+the sentence claims the narrower audience: a channel nobody could describe is never called
+externally shared. This states who can read; it prescribes no policy about what to write.
+
 ## A workspace install is not an organisation install
 
 On Slack Enterprise Grid these are different acts and both may be needed.
@@ -333,8 +354,11 @@ from two of them never folds two exchanges into one.
 ## Troubleshooting
 
 Start with `rundesk channels doctor ava`, which authenticates and asks Slack for a Socket Mode URL
-without opening a second websocket. Then run `rundesk gateways logs ava`. What the adapter wrote to stderr is in
-`data/agents/ava/channels/slack/stderr.log`.
+without opening a second websocket. Then run `rundesk gateways logs ava`: every fixed boundary the
+adapter names — what arrived on the websocket, and what became of it — is a line in that log, said
+once per run and carrying no message text, id or credential. A traceback it had no words for is in
+`data/agents/ava/channels/slack/stderr.log`, which the gateway copies into the log only when it
+collects an adapter that has already exited — never while the channel is running.
 
 | What you see | Usually |
 |---|---|
@@ -345,7 +369,11 @@ without opening a second websocket. Then run `rundesk gateways logs ava`. What t
 | `the app-level token … was not [accepted]` | Socket Mode is off, or the token has no `connections:write` |
 | `it is not in C… yet` | nobody has run `/invite @rundesk` there |
 | `opening the Socket Mode websocket…` with no later `Slack said hello…` | this machine opened the websocket but Slack has not greeted it; the channel does not report ready |
-| `Slack said hello…` with no `Slack delivered…` line after a test message | Slack established the websocket, but no event has crossed the adapter's observed boundaries yet |
+| `Slack said hello…` and no `Slack sent…` line after a test message | Slack established the websocket and has sent nothing on it. The remaining causes are Slack's side: the app was not installed again after its event subscriptions changed, or the message went to a different connection — see the connection count below |
+| `Slack sent an events_api frame…` with no `Slack delivered…` line after it | the frame arrived and was not decoded into a request. That is the vendor client's boundary rather than the workspace's |
+| `Slack says this app has 2 open Socket Mode connections` | something else is holding a connection for the same app — another machine, or an adapter that outlived its gateway. Slack sends each event to one of them, so roughly half of what is said reaches nobody |
+| `a different Slack app than the bot token was issued by` | the two tokens came from two apps. Take the `xoxb-` token from one app's **OAuth & Permissions** and the `xapp-` token from that same app's **Basic Information**, then start the gateway again. The line is a report: the channel still reports ready and keeps running, and nothing restarts on its own |
+| `could not establish whether…one Slack app` | Slack would not answer `bots.info`, so the comparison was not made either way. It changes nothing else |
 | `Slack delivered…` | the fixed sentence names the boundary reached; it never includes message text, member, channel, workspace, or credential values |
 | the bot answers a DM and ignores a channel | it was not invited, or nobody named it. It stays silent until named |
 | the bot ignores direct messages | **App Home** → **Messages Tab** is off. The manifest turns it on; an app made by hand often has neither |

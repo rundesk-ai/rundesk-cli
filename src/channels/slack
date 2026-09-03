@@ -229,7 +229,12 @@ MESSAGE = "message"
 HELLO = "hello"
 EVENTS_API = "events_api"
 
-#: Content-free diagnostic boundaries. Each is written to the gateway log at most once per run.
+#: Content-free diagnostic boundaries a decoded envelope reaches. Each is said once per run, as a
+#: note record, which is what puts it in the agent's own log where `rundesk gateways logs` shows it.
+#: **stderr is not that place**: the gateway copies a bounded tail of an adapter's error stream into
+#: the log when it collects one that has already exited, and never while it is running — so a
+#: boundary written there is invisible for as long as the channel is working, which is exactly when
+#: somebody is asking why nothing arrives.
 IGNORED = {
     "not_an_event": "Slack delivered an envelope that was not an events_api event",
     "no_event": "Slack delivered an events_api envelope without an event object",
@@ -238,6 +243,53 @@ IGNORED = {
     "not_allowed": "Slack delivered an event outside the configured sender and place allow lists",
     "woken": "Slack delivered an allowed event that woke this channel",
 }
+
+#: The same, one step earlier: what arrived on the websocket itself, before anything was decoded.
+#: **Slack's own type string is never repeated**, so a frame carrying a private payload cannot put
+#: any part of it in a log: anything this release has no word for is `other`. `hello` has a sentence
+#: of its own below and is not named here twice.
+#:
+#: This is the boundary the decoded ones above cannot stand in for. An adapter that says nothing
+#: between `hello` and a turn leaves silence meaning two different things — Slack sent nothing, or
+#: Slack sent something this did not decode — and no evidence tells them apart.
+#:
+#: **Two words this deliberately does not have.** There is none for `disconnect`, because the vendor
+#: client acts on one and returns before any message listener is called. There is none for malformed
+#: input either: that client parses the frame itself, hands on a mapping and nothing else, and gives
+#: an empty one for anything that was not JSON — which arrives here as `other`, the same as any
+#: other frame this has no word for. Either would be a sentence that can never be said.
+ARRIVING = {
+    EVENTS_API: "Slack sent an events_api frame on this Socket Mode websocket",
+    "other": "Slack sent a frame of another kind on this Socket Mode websocket",
+}
+
+#: What is said, once per run, the first time rundesk sends something the agent said on its way to
+#: an answer. **The suppression is the surface working, not a fault** — but it is invisible from
+#: Slack, and an owner comparing what a brain wrote with what a channel shows has to be able to see
+#: that the difference was deliberate. Rundesk composes an answer for this surface out of every
+#: finished thought, so what is dropped here is a delivery whose words are in that answer already.
+NOT_THE_ANSWER = ("rundesk sent something the agent said before its answer; this surface shows the "
+                  "answer alone, so it was not posted")
+
+#: Whether the websocket and the bot token belong to one Slack app, said as a verdict and never as
+#: an id. **Two tokens from two apps is the failure this names**: both are valid, `auth.test`
+#: passes, the app-level token opens a socket and Slack greets it — and every event the bot is
+#: subscribed to goes to the *other* app's connections, so the agent is reachable by nothing while
+#: reporting itself connected. `bots.info` answers the bot token's app and Slack's own `hello`
+#: answers the socket's, and neither id is ever written down or logged.
+#:
+#: **All three are reports and none of them decides anything.** The comparison has never run against
+#: a live workspace, so what it costs to be wrong is what governs: a verdict that could end a
+#: working channel would take an agent off Slack over an inference nobody has watched, while one
+#: that only says what it saw costs a line in a log. Readiness is Slack's `hello` and stays that.
+ONE_APP = "the Socket Mode websocket and the bot token belong to the same Slack app"
+TWO_APPS = ("the app-level token opened a Socket Mode websocket for a different Slack app than the "
+            "bot token was issued by — Slack delivers an app's events only to that app's own "
+            "connections, so nothing said to this bot can arrive here. Both tokens have to come "
+            "from one app: the bot token from its OAuth & Permissions page, the app-level token "
+            "from the same app's Basic Information page")
+UNSURE_APP = ("could not establish whether the Socket Mode websocket and the bot token belong to "
+              "one Slack app, so this is not being treated as either")
 
 #: Message subtypes that are not somebody speaking. A join notice, an edit and a deletion all arrive
 #: on the same event as a message does, and answering one is answering nothing. Most of these carry
@@ -626,16 +678,41 @@ def with_context(text: str, earlier: List[str]) -> str:
     return f"{text}\n\n{CONTEXT_SAID}\n{block}".strip()
 
 
-def a_place(named: str, private: bool) -> str:
+def a_place(named: str, private: bool, external: bool = False) -> str:
     """Where an answer is being written, in words a brain can repeat, and never as an id.
 
     The platform's nouns, rundesk's sentence: rundesk may never name a channel — that is a layer
     which would have to be rewritten for every surface — so the naming happens here, and what crosses
     the seam is one line of ordinary English.
+
+    **Who can read it is said outright, because a name does not say it.** `the ops channel` was the
+    whole sentence for a public channel and for a private one alike, so the one fact an agent needs
+    in order to know how much to disclose — that it is standing somewhere other people are reading
+    — was the one fact the words left out. A brain cannot tell `ops` from `ops` and should not have
+    to: what is public in this workspace is public, and saying so is not a policy about what to
+    write. Nothing here tells it what to withhold.
+
+    **A Slack Connect channel is read by people this workspace does not contain**, and Slack says
+    so in `is_ext_shared` rather than in the name. Left to the workspace sentence it was the widest
+    audience an agent can stand in described as the narrowest one it knows, which is the reading
+    that matters most and was the one that was wrong. It is checked before `private`: a Connect
+    channel may be either, and who is on the other side of it is the larger fact.
+
+    Bounded by construction as well as by rundesk: the name is already flattened and clipped to
+    `WHERE_AT_MOST` before it arrives, and the longest sentence this can build — a thread in an
+    externally shared channel with a sixty-character name — is 130 characters against the 140
+    rundesk carries, so the clause cannot be the part that is cut off.
+    `test_the_longest_place_sentence_still_says_who_can_read_it` holds that against both bounds
+    rather than trusting this paragraph.
     """
-    if not named:
-        return "a private channel" if private else "a channel"
-    return f"the {named} channel"
+    if external:
+        return (f"the {named} channel, which people outside this workspace can read" if named
+                else "a channel shared with people outside this workspace, who can read it")
+    if private:
+        return (f"the {named} channel, which its invited members can read" if named
+                else "a private channel, which its invited members can read")
+    return (f"the {named} channel, which anybody in this workspace can read" if named
+            else "a channel, which anybody in this workspace can read")
 
 
 def rundesk_says(stream: Any, most: int = READS_MOST):
@@ -645,7 +722,20 @@ def rundesk_says(stream: Any, most: int = READS_MOST):
     faces both ways: a reader with no ceiling grows until the kernel ends the process, and the
     failure looks exactly like a hang. What is over the bound is thrown away with a line saying so,
     and reading carries on — one unreadable line is not a channel going away.
+
+    **`read1` and not `read`, and this is the whole of the difference between a channel that answers
+    and one that does not.** `sys.stdin.buffer` is a `BufferedReader`, and its `read(n)` is defined
+    to return `n` bytes: handed a pipe, it blocks until that many have arrived or the far side
+    closes. Rundesk speaks in single JSON lines of a few hundred bytes, so asking for `READ_BLOCK`
+    of them means the first delivery is not read until sixty-four kilobytes of later ones have
+    piled up behind it — which is never, on a channel answering one person. `read1` asks for at
+    most that many and returns what one read gives, which is the line that just arrived.
+
+    Measured against a real pipe: one 66-byte record was written and the reader stayed inside
+    `read` until the pipe was padded to `READ_BLOCK`. A stream with no `read1` — a stand-in, or a
+    file — keeps `read`, which is exact for both.
     """
+    reading = getattr(stream, "read1", None) or stream.read
     held = bytearray()
     dropping = False
     complained = False
@@ -663,7 +753,7 @@ def rundesk_says(stream: Any, most: int = READS_MOST):
         return True
 
     while True:
-        block = stream.read(READ_BLOCK)
+        block = reading(READ_BLOCK)
         if not block:
             break
         held += block
@@ -944,6 +1034,10 @@ class Reaching:
         self.our_bot = ""
         self.team = ""
         self.named = ""
+        #: Which Slack app issued the bot token, asked of `bots.info` once at startup and held only
+        #: to be compared with the app behind the websocket. `""` where Slack would not say, which
+        #: is a state of its own: unable to establish is never treated as a mismatch.
+        self.our_app = ""
         #: Envelopes and messages already acted on. Slack redelivers, and a turn run twice for one
         #: question is the failure that costs an owner real money.
         self.handled: Dict[str, float] = {}
@@ -954,7 +1048,7 @@ class Reaching:
         self.marks: Dict[str, str] = {}
         #: Display names and channel names already looked up. Both are asked of Slack once.
         self.people: Dict[str, str] = {}
-        self.rooms: Dict[str, Tuple[str, bool]] = {}
+        self.rooms: Dict[str, Tuple[str, bool, bool]] = {}
         #: Whether the agent-session status has been put down for the life of this adapter. **Set
         #: only by something that proves the mechanism itself is unavailable to this app** — one of
         #: `NO_SESSIONS_AT_ALL`, or a rate limit with no usable delay, where the quietest thing an
@@ -972,7 +1066,8 @@ class Reaching:
         #: The SDK session Slack most recently greeted. A different current session is not ready
         #: until its own greeting arrives.
         self.greeted_session: Optional[str] = None
-        #: Diagnostic boundaries already reported. Fixed words only, bounded by `IGNORED`.
+        #: Diagnostic boundaries already reported. Fixed words only, bounded by `ARRIVING`,
+        #: `IGNORED` and the handful the greeting itself is named by.
         self.reported: Set[str] = set()
         self.stopping = threading.Event()
         #: Held across every write to the maps above and to `connected`. **Two kinds of thread write
@@ -1005,6 +1100,7 @@ class Reaching:
             say({"say": "gone", "why": self.trouble})
             return WILL_NOT_FIX if self.unrecoverable else 1
         self._identified(who)
+        self._which_app()
 
         for sig in (signal.SIGTERM, signal.SIGINT):
             with contextlib.suppress(ValueError, OSError):
@@ -1055,6 +1151,24 @@ class Reaching:
         self.team = str(who.get("team_id") or "")
         self.named = str(who.get("user") or "")
 
+    def _which_app(self) -> None:
+        """Ask Slack which app issued the bot token, and hold the answer for one comparison.
+
+        **One call, at startup, and never fatal.** `bots.info` is answered by the `users:read` scope
+        this already asks for, so nothing new is wanted from an owner. A refusal, a shape this does
+        not recognise, or a token that carries no bot id all leave `our_app` empty — and empty means
+        *unable to establish*, which never earns a verdict and never puts a channel down.
+        """
+        if not self.our_bot:
+            return
+        try:
+            said = self.web.bots_info(bot=self.our_bot)
+            found = said.get("bot")
+            if isinstance(found, dict):
+                self.our_app = str(found.get("app_id") or "")
+        except Exception:                  # noqa: BLE001 — a platform boundary, and only a hint
+            self.our_app = ""
+
     def _signalled(self, *_: Any) -> None:
         """A signal arrived, so the wait below ends and the goodbye runs.
 
@@ -1090,15 +1204,27 @@ class Reaching:
     # -- the connection itself -------------------------------------------------------------
 
     def _said_about_connection(self, client: Any, message: Any, _raw: Any = None) -> None:
-        """Earn readiness from Slack's `hello`, without interpreting any private payload."""
+        """Name what arrived on the websocket, and earn readiness from Slack's `hello`.
+
+        **Every frame is named and none is read.** What is said of one is the fixed word `ARRIVING`
+        holds for its top-level type and nothing else — never the payload, never Slack's own type
+        string, and never an id. That naming is the whole difference between an adapter that is
+        being sent nothing and one that is being sent something it does not decode, and without it
+        both look the same from the log: a `hello`, and then silence.
+        """
         try:
-            if not isinstance(message, dict) or str(message.get("type") or "") != HELLO:
+            kind = str(message.get("type") or "") if isinstance(message, dict) else ""
+            if kind != HELLO:
+                word = kind if kind in ARRIVING else "other"
+                self._once(word, ARRIVING[word])
                 return
             session: Optional[str] = None
             with contextlib.suppress(Exception):
                 found = client.session_id()
                 session = str(found) if found else None
             with self.holding:
+                noted("Slack said hello on this Socket Mode websocket", "info")
+                self._greeted(message)
                 replaced = bool(self.connected and self.greeted_session and session
                                 and session != self.greeted_session)
                 if replaced:
@@ -1109,7 +1235,6 @@ class Reaching:
                     became_ready = True
                 else:
                     became_ready = False
-                noted("Slack said hello on this Socket Mode websocket", "info")
                 if replaced:
                     say({"say": "gone",
                          "why": "the Socket Mode websocket changed; its replacement has now said hello"})
@@ -1118,6 +1243,38 @@ class Reaching:
                          "as": f"{self.named} in {self.team}" if self.named else self.team})
         except Exception:                  # noqa: BLE001 — one message is not the channel
             cannot_say(traceback.format_exc())
+
+    def _greeted(self, message: Dict[str, Any]) -> None:
+        """Say what Slack's greeting reports about this connection. **It decides nothing.**
+
+        Two facts, both bounded, neither an identifier, and neither one a state this acts on.
+
+        **How many connections this app has open.** Slack delivers each event to one of them, so a
+        second connection somewhere else is a complete explanation for an agent that is greeted and
+        never woken — and a count is the only form of that fact this can hold without saying
+        anything about what opened the other one.
+
+        **Whether the socket is this bot's app.** Where both ids are known and differ, every event
+        this bot is subscribed to is being delivered to another app's connections, and the line says
+        which two tokens to reissue. It is still only a line: readiness is Slack's `hello`, this
+        does not withhold it, and nothing here ends or restarts the adapter. Ending a channel over
+        a comparison no live workspace has yet answered would risk taking an agent off Slack for an
+        inference, which costs more than the silence it is describing. Where either id is unknown,
+        nothing is concluded and that is said too.
+        """
+        count = message.get("num_connections")
+        if isinstance(count, int) and not isinstance(count, bool):
+            many = "" if count == 1 else "s, and sends each event to one of them"
+            self._once("connections",
+                       f"Slack says this app has {count} open Socket Mode connection{many}")
+        found = message.get("connection_info")
+        theirs = str(found.get("app_id") or "") if isinstance(found, dict) else ""
+        if not self.our_app or not theirs:
+            self._once("app_unsure", UNSURE_APP)
+        elif theirs == self.our_app:
+            self._once("app_same", ONE_APP)
+        else:
+            self._once("app_other", TWO_APPS, "warning")
 
     def _reconcile(self) -> None:
         """Withdraw readiness when the greeted websocket is gone or has been replaced."""
@@ -1199,12 +1356,25 @@ class Reaching:
         self._say_it_arrived(woken)
 
     def _observed(self, boundary: str) -> None:
-        """Log one fixed sentence once; never repeat Slack content or identifiers."""
+        """Log one fixed decoded boundary; never repeat Slack content or identifiers."""
+        self._once(boundary, IGNORED[boundary])
+
+    def _once(self, word: str, said: str, level: str = "info") -> None:
+        """Say one fixed sentence once for the life of this run, and never a second time.
+
+        **A note record rather than stderr**, because that is the stream rundesk reads as it happens
+        and writes into the agent's own log. What goes to stderr reaches that log only when the
+        gateway collects an adapter that has exited, so a diagnostic written there says nothing at
+        all for as long as the channel is working — which is the only time anybody is reading it.
+
+        Bounded by the fixed vocabularies above and by `reported`: one line per word per run, which
+        is what keeps a channel carrying thousands of events from writing thousands of lines.
+        """
         with self.holding:
-            if boundary in self.reported:
+            if word in self.reported:
                 return
-            self.reported.add(boundary)
-        cannot_say(IGNORED[boundary])
+            self.reported.add(word)
+        noted(said, level)
 
     def _already(self, envelope: str, message: str) -> bool:
         """Whether this has been acted on. Written down here so the answer is the same twice."""
@@ -1391,22 +1561,37 @@ class Reaching:
         return self.people[who]
 
     def _where_this_is(self, woken: Waking) -> str:
-        """Where this was said, in one ordinary sentence. Names, never ids."""
+        """Where this was said, in one ordinary sentence. Names, never ids.
+
+        Five places and each says who is reading: a direct message nobody else can see, a public
+        channel the workspace can read, a private channel its members can read, a channel shared
+        with another organisation that people outside this workspace can read, and a thread in any
+        of them.
+        """
         if woken.direct:
-            return "a direct message"
-        named, private = self._a_room(woken.channel)
-        where = a_place(named, private)
+            return "a direct message, which nobody else can read"
+        named, private, external = self._a_room(woken.channel)
+        where = a_place(named, private, external)
         return f"a thread in {where}" if woken.joined else where
 
-    def _a_room(self, channel: str) -> Tuple[str, bool]:
-        """What Slack calls this channel and whether it is private, asked once and remembered."""
+    def _a_room(self, channel: str) -> Tuple[str, bool, bool]:
+        """What Slack calls this channel, whether it is private, and whether it reaches outside
+        this workspace. Asked once and remembered.
+
+        **The fallback claims the narrower audience and never the wider one.** Where Slack will not
+        say, a `G` is taken as private — which it is — and nothing is taken as externally shared,
+        because the sentence for that warns a brain that strangers are reading and inventing that
+        warning from an unanswered call would teach it to distrust the words. The audience it then
+        describes is the one this adapter can stand behind.
+        """
         held = self.rooms.get(channel)
         if held is not None:
             return held
-        found = ("", channel.startswith("G"))
+        found = ("", channel.startswith("G"), False)
         try:
             said = self.web.conversations_info(channel=channel).get("channel") or {}
-            found = (flat(said.get("name"), WHERE_AT_MOST), bool(said.get("is_private")))
+            found = (flat(said.get("name"), WHERE_AT_MOST), bool(said.get("is_private")),
+                     bool(said.get("is_ext_shared")))
         except Exception as why:           # noqa: BLE001 — a platform boundary
             self._final(why)
         self._remember(self.rooms, channel, found)
@@ -1441,11 +1626,14 @@ class Reaching:
     def _told(self, it: Dict[str, Any]) -> None:
         """One command, done the way this platform does it — or deliberately not done at all.
 
-        **Three records are read and rendered as nothing, and that is the surface's whole shape.**
-        `activity` is the running commentary, `delegation` is work handed to another agent, and the
-        `cost` on a delivery is what the turn spent. Every one of them is bookkeeping about an
-        answer rather than the answer, and this surface shows a person the answer. They are named
-        here rather than left to the fallback so that nothing writes a line about them either.
+        **Four things are read and rendered as nothing, and that is the surface's whole shape.**
+        `activity` is the running commentary, `delegation` is work handed to another agent, the
+        `cost` on a delivery is what the turn spent, and a delivery marked `remark` is something the
+        agent said on the way to its answer rather than the answer. Every one of them is bookkeeping
+        about an answer, or a draft of one, rather than the answer itself — and this surface shows a
+        person the answer. The first three are named here rather than left to the fallback so that
+        nothing writes a line about them either; the fourth is a field on a delivery and is read by
+        `_deliver`.
         """
         doing = it.get("do")
         if doing == "deliver":
@@ -1474,7 +1662,17 @@ class Reaching:
         **Nothing is re-split.** Splitting happens once, on rundesk's side, for every platform, and
         text past the limit is rundesk having failed to do it — cutting it quietly here would report
         as whole a delivery that was not.
+
+        **A delivery marked `remark` is not posted** (R-SLK-10). It is something the agent said on
+        the way to its answer, which rundesk says outright rather than leaving this to work out from
+        the words — a brain that thinks out loud and then answers would otherwise be two messages
+        here for one question, and the second is the only one anybody asked for. Not acknowledged
+        either, because acknowledging is for what reached the platform and this never went; nothing
+        waits on a remark, and what it costs is one line in the log saying the surface did its job.
         """
+        if it.get("remark"):
+            self._once("remark", NOT_THE_ANSWER)
+            return
         given = str(it.get("id") or "")
         text = it.get("text") or ""
         try:

@@ -67,6 +67,12 @@ TEAM = "T0ACME"
 OUR_BOT = "B0BOT"
 PEER_BOT = "B0DEV"
 
+#: The Slack app the bot token was issued by, and a second app whose app-level token would open a
+#: websocket of its own. `bots.info` answers the first; Slack's own `hello` answers whichever app
+#: the socket really belongs to, and the adapter compares them without writing either down.
+OUR_APP = "A0OURS"
+ANOTHER_APP = "A0OTHER"
+
 
 class Answered(dict):
     """What a Slack call hands back: a mapping, and the headers that came with it.
@@ -112,7 +118,13 @@ class Web:
         self.scopes = EVERY_SCOPE
         self.identity = {"ok": True, "user_id": US, "user": "rundesk", "team_id": TEAM,
                          "team": "Acme", "bot_id": "B0BOT"}
+        #: What `bots.info` says about this app's own bot user. `{}` for a Slack that will not say,
+        #: which is the state the adapter must treat as unable to establish rather than as a match.
+        self.bot: Dict[str, Any] = {"id": OUR_BOT, "app_id": OUR_APP}
         self.members = {ROOM: True, PRIVATE: True}
+        #: Whether `conversations.info` reports this channel as shared with another organisation.
+        #: Slack Connect is a field on that answer and nothing about the name or the id.
+        self.shared_outside = False
         self.replies: List[Dict[str, Any]] = []
         #: What `users.info` says a member is called, where a case needs a particular answer.
         self.people: Dict[str, str] = {}
@@ -136,6 +148,10 @@ class Web:
         self._called("auth_test", **named)
         return Answered(self.identity, {"x-oauth-scopes": self.scopes})
 
+    def bots_info(self, **named: Any) -> Answered:
+        self._called("bots_info", **named)
+        return Answered({"ok": True, "bot": dict(self.bot)}) if self.bot else Answered({"ok": True})
+
     def apps_connections_open(self, **named: Any) -> Answered:
         self._called("apps_connections_open", **named)
         return Answered({"ok": True, "url": "wss://example.invalid/link"})
@@ -149,6 +165,7 @@ class Web:
         channel = named.get("channel", "")
         return Answered({"ok": True, "channel": {
             "id": channel, "name": "ops", "is_private": channel.startswith("G"),
+            "is_ext_shared": self.shared_outside,
             "is_member": self.members.get(channel, False)}})
 
     def conversations_replies(self, **named: Any) -> Answered:
@@ -230,11 +247,17 @@ class Socket:
     def session_id(self) -> str:
         return self.session
 
-    def greet(self) -> None:
-        message = {"type": "hello", "num_connections": 1}
-        raw = json.dumps(message)
+    def sends(self, message: Any) -> None:
+        """One raw frame, handed to the message listeners the way the vendor client hands one."""
+        raw = json.dumps(message) if isinstance(message, (dict, list)) else str(message)
         for listener in list(self.message_listeners):
             listener(self, message, raw)
+
+    def greet(self, app: str = "", connections: int = 1) -> None:
+        message: Dict[str, Any] = {"type": "hello", "num_connections": connections}
+        if app:
+            message["connection_info"] = {"app_id": app}
+        self.sends(message)
 
     def replace(self) -> None:
         self.session = "s-2"
@@ -315,6 +338,13 @@ class Wired(unittest.TestCase):
     def only(self, records: List[Dict[str, Any]], saying: str) -> Dict[str, Any]:
         found = [one for one in records if one.get("say") == saying]
         self.assertEqual(len(found), 1, f"expected one {saying!r} in {records}")
+        return found[0]
+
+    def note(self, records: List[Dict[str, Any]], saying: str) -> Dict[str, Any]:
+        """The one note record carrying these words, of however many a run said."""
+        found = [one for one in records
+                 if one.get("say") == "note" and saying in str(one.get("text") or "")]
+        self.assertEqual(len(found), 1, f"expected one note saying {saying!r} in {records}")
         return found[0]
 
     def none(self, records: List[Dict[str, Any]], saying: str) -> None:
@@ -538,6 +568,54 @@ class ReadingWhatRundeskSays(unittest.TestCase):
     def read(self, said: bytes, most: int = 64) -> List[str]:
         return list(adapter.rundesk_says(io.BytesIO(said), most))
 
+    def test_one_short_line_is_read_before_anything_else_arrives(self) -> None:
+        """The one case a memory buffer cannot stand in for: a pipe carrying one short line.
+
+        **The live failure this exists for.** Rundesk wrote a delivery to a working adapter, the
+        adapter acted on none of it, and nothing on either side said so. Nothing was wrong with the
+        delivery: it was sitting inside a `read` waiting for sixty-four kilobytes of company that a
+        channel answering one person never sends. `io.BytesIO` answers `read(n)` with whatever it
+        holds, so every other case here passes against exactly that reader.
+
+        Written so that a regression **fails** rather than hangs: the write end is closed in the
+        `finally`, which ends a blocked read at EOF, and the thread is joined before the stream is
+        touched — closing a stream another thread is reading is its own deadlock.
+        """
+        readable, writable = os.pipe()
+        stream = os.fdopen(readable, "rb")
+        said = b'{"do": "deliver", "id": "1-0-1", "text": "hello"}\n'
+        got: List[str] = []
+        arrived = threading.Event()
+
+        def reading() -> None:
+            for line in adapter.rundesk_says(stream):
+                got.append(line)
+                arrived.set()
+
+        thread = threading.Thread(target=reading, daemon=True, name="reading")
+        thread.start()
+        try:
+            os.write(writable, said)
+            landed = arrived.wait(5.0)
+        finally:
+            os.close(writable)
+            thread.join(5.0)
+            stream.close()
+        self.assertTrue(landed, "one whole line sat unread in the pipe until it was closed, so "
+                                "nothing rundesk says reaches this adapter while it is running")
+        self.assertEqual(got, [said.decode().strip()])
+
+    def test_a_stream_that_offers_only_read_is_still_read(self) -> None:
+        # A stand-in, or a file: no `read1` to ask for, and `read` is exact for both.
+        class OnlyRead:
+            def __init__(self, said: bytes) -> None:
+                self.held = io.BytesIO(said)
+
+            def read(self, most: int) -> bytes:
+                return self.held.read(most)
+
+        self.assertEqual(list(adapter.rundesk_says(OnlyRead(b'{"do": "a"}\n'))), ['{"do": "a"}'])
+
     def test_every_line_arrives_whole(self) -> None:
         self.assertEqual(self.read(b'{"do": "a"}\n{"do": "b"}\n'), ['{"do": "a"}', '{"do": "b"}'])
 
@@ -733,10 +811,33 @@ class WhatArrives(Wired):
         return self.during(lambda: one._envelope(one.socket, request))
 
     def logged(self, doing: Any) -> str:
-        caught = io.StringIO()
-        with contextlib.redirect_stderr(caught), contextlib.redirect_stdout(io.StringIO()):
+        """Every fixed boundary sentence a run put in the agent's log, one to a line.
+
+        **Read off stdout, because a note record is what reaches that log.** stderr is caught too
+        and required to be empty: the gateway copies an adapter's error stream into the log only
+        when it collects one that has already exited, so a boundary written there says nothing for
+        as long as the channel is working — which is the only time anybody goes looking for one.
+        """
+        caught, errors = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(caught), contextlib.redirect_stderr(errors):
             doing()
-        return caught.getvalue()
+        self.assertEqual(errors.getvalue(), "", "a boundary went to stderr, where nothing shows it")
+        records = [json.loads(line) for line in caught.getvalue().splitlines() if line.strip()]
+        return "\n".join(one["text"] for one in records if one.get("say") == "note")
+
+    def woke_nothing(self, records: List[Dict[str, Any]], *boundaries: str) -> None:
+        """Nothing arrived, and the run said exactly these fixed boundary sentences and no other.
+
+        **Named one by one rather than checked for membership.** A case that accepts any sentence
+        in the vocabulary passes when the adapter reaches the wrong boundary for the right reason —
+        a stranger reported as unknown rather than as unallowed — which is the difference the
+        boundaries exist to record.
+        """
+        self.none(records, "arrived")
+        for record in records:
+            self.assertEqual(record.get("say"), "note", record)
+        self.assertEqual([str(record.get("text")) for record in records],
+                         [adapter.IGNORED[one] for one in boundaries])
 
     def test_an_envelope_is_acknowledged_before_anything_else_happens(self) -> None:
         # **Before, and not merely as well as.** Slack gives three seconds and redelivers whatever is
@@ -799,18 +900,92 @@ class WhatArrives(Wired):
         one = self.reaching()
         said = self.only(self.envelope(one, a_direct()), "arrived")
         self.assertEqual(said["display"], "Ann")
-        self.assertEqual(said["where"], "a direct message")
+        self.assertEqual(said["where"], "a direct message, which nobody else can read")
 
     def test_it_says_which_channel_an_answer_is_being_written_in(self) -> None:
         one = self.reaching(places=[ROOM])
         said = self.only(self.envelope(one, a_mention()), "arrived")
-        self.assertEqual(said["where"], "the ops channel")
+        self.assertEqual(said["where"],
+                         "the ops channel, which anybody in this workspace can read")
 
     def test_a_mention_inside_a_thread_says_it_is_in_one(self) -> None:
         one = self.reaching(places=[ROOM])
         said = self.only(self.envelope(one, a_mention(ts="1705.000100", thread="1700.000100")),
                          "arrived")
-        self.assertEqual(said["where"], "a thread in the ops channel")
+        self.assertEqual(said["where"],
+                         "a thread in the ops channel, which anybody in this workspace can read")
+
+    def test_a_private_channel_says_only_its_members_can_read_it(self) -> None:
+        # **The distinction the old sentence lost.** `the ops channel` was the whole of it for a
+        # public channel and a private one alike, so the one thing an agent needs in order to judge
+        # how much to disclose was the one thing the words left out.
+        one = self.reaching(places=[PRIVATE])
+        said = self.only(self.envelope(one, a_mention(channel=PRIVATE)), "arrived")
+        self.assertEqual(said["where"],
+                         "the ops channel, which its invited members can read")
+
+    def test_a_channel_shared_with_another_organisation_says_strangers_can_read_it(self) -> None:
+        """Slack Connect is the widest audience an agent can stand in, and `is_ext_shared` is the
+        only place Slack says so — the name looks like any other channel's. Described as a
+        workspace channel it was the widest audience reported as the narrowest one this adapter
+        knows about, which is the reading that matters most to somebody deciding what to disclose."""
+        one = self.reaching(places=[ROOM])
+        one.web.shared_outside = True
+        said = self.only(self.envelope(one, a_mention()), "arrived")
+        self.assertEqual(said["where"],
+                         "the ops channel, which people outside this workspace can read")
+
+    def test_a_private_channel_shared_outside_is_named_by_its_widest_audience(self) -> None:
+        # A Connect channel may be private too, and being private inside this workspace says
+        # nothing about who is on the other side of it.
+        one = self.reaching(places=[PRIVATE])
+        one.web.shared_outside = True
+        said = self.only(self.envelope(one, a_mention(channel=PRIVATE)), "arrived")
+        self.assertIn("outside this workspace", said["where"])
+
+    def test_a_channel_slack_would_not_name_still_says_who_can_read_it(self) -> None:
+        one = self.reaching(places=[ROOM])
+        one.web.refuses["conversations_info"] = Refused("no", Answered({"error": "channel_not_found"}))
+        said = self.only(self.envelope(one, a_mention()), "arrived")
+        self.assertEqual(said["where"], "a channel, which anybody in this workspace can read")
+
+    def test_the_longest_place_sentence_still_says_who_can_read_it(self) -> None:
+        """Rundesk clips what an adapter says about a place from the end, at 140 characters, so a
+        sentence built to run past that would arrive with its audience cut off. The longest this
+        can build is a thread in an externally shared channel whose name is the most it carries —
+        130 characters, against the public sentence's 126 — and every audience is checked because
+        the one that grows is not the one anybody would guess."""
+        for private, external in ((False, False), (True, False), (False, True), (True, True)):
+            with self.subTest(private=private, external=external):
+                longest = f"a thread in {adapter.a_place('x' * adapter.WHERE_AT_MOST, private, external)}"
+                self.assertLessEqual(len(longest), 140)
+                self.assertTrue(longest.endswith("can read"))
+                if external:
+                    self.assertEqual(130, len(longest), "the worst case is no longer 130")
+
+    def test_a_channel_slack_would_not_describe_is_never_called_externally_shared(self) -> None:
+        # The fallback claims the narrower audience. Inventing the warning from an unanswered call
+        # would teach a brain that the sentence does not mean what it says.
+        one = self.reaching(places=[ROOM])
+        one.web.refuses["conversations_info"] = Refused("no", Answered({"error": "ratelimited"}))
+        said = self.only(self.envelope(one, a_mention()), "arrived")
+        self.assertNotIn("outside this workspace", said["where"])
+
+    def test_no_two_audiences_are_described_by_the_same_sentence(self) -> None:
+        """Every audience an agent can stand in, built the way the arrival record builds it — the
+        direct message through `_where_this_is`, because that is the only place its sentence
+        exists, and the four channel audiences through `a_place`."""
+        one = self.reaching()
+        direct = one._where_this_is(adapter.waking(adapter.MESSAGE, a_direct(), US))
+        said = {direct,
+                adapter.a_place("", False), adapter.a_place("", True),
+                adapter.a_place("ops", False), adapter.a_place("ops", True),
+                adapter.a_place("ops", False, True)}
+        self.assertEqual(len(said), 6, said)
+        self.assertIn("a direct message", direct)
+        for sentence in said:
+            with self.subTest(sentence=sentence):
+                self.assertIn("can read", sentence)
 
     def test_a_name_slack_will_not_give_up_falls_back_to_the_id(self) -> None:
         one = self.reaching()
@@ -829,7 +1004,7 @@ class WhatArrives(Wired):
     def test_a_stranger_costs_nothing_and_is_told_nothing(self) -> None:
         one = self.reaching()
         records = self.envelope(one, a_direct(user=STRANGER))
-        self.assertEqual(records, [])
+        self.woke_nothing(records, "not_allowed")
         self.assertEqual(one.web.calls, [])
 
     def test_a_place_this_channel_allows_is_worth_working_for(self) -> None:
@@ -839,7 +1014,8 @@ class WhatArrives(Wired):
 
     def test_a_place_it_does_not_allow_costs_nothing(self) -> None:
         one = self.reaching(allow=[], places=[PRIVATE])
-        self.assertEqual(self.envelope(one, a_mention(channel=ROOM, user=STRANGER)), [])
+        self.woke_nothing(self.envelope(one, a_mention(channel=ROOM, user=STRANGER)),
+                          "not_allowed")
 
     def test_an_ignored_event_logs_only_its_fixed_boundary(self) -> None:
         one = self.reaching(allow=[])
@@ -869,8 +1045,8 @@ class WhatArrives(Wired):
         one = self.reaching()
         first = self.envelope(one, a_direct(), envelope_id="e-1", event_id="Ev1")
         again = self.envelope(one, a_direct(), envelope_id="e-1", event_id="Ev1")
-        self.assertEqual(len(first), 1)
-        self.assertEqual(again, [])
+        self.assertEqual(len([one for one in first if one.get("say") == "arrived"]), 1)
+        self.woke_nothing(again, "already")
 
     def test_the_same_message_through_a_second_event_is_acted_on_once(self) -> None:
         # A reconnection replays with a fresh envelope and a fresh event id; the message's own id is
@@ -878,7 +1054,7 @@ class WhatArrives(Wired):
         one = self.reaching()
         self.envelope(one, a_direct(), envelope_id="e-1", event_id="Ev1")
         again = self.envelope(one, a_direct(), envelope_id="e-2", event_id="Ev2")
-        self.assertEqual(again, [])
+        self.woke_nothing(again, "already")
 
     def test_two_different_messages_are_two_arrivals(self) -> None:
         one = self.reaching()
@@ -908,17 +1084,17 @@ class WhatArrives(Wired):
 
     def test_an_envelope_that_is_not_an_event_wakes_nothing(self) -> None:
         one = self.reaching()
-        self.assertEqual(self.envelope(one, a_direct(), kind="slash_commands"), [])
+        self.woke_nothing(self.envelope(one, a_direct(), kind="slash_commands"), "not_an_event")
 
     def test_a_payload_with_nothing_in_it_wakes_nothing(self) -> None:
         one = self.reaching()
         request = Envelope(a_direct())
         request.payload = {"event_id": "Ev1"}
-        self.assertEqual(self.during(lambda: one._envelope(one.socket, request)), [])
+        self.woke_nothing(self.during(lambda: one._envelope(one.socket, request)), "no_event")
 
     def test_a_message_with_nothing_in_it_is_never_reported(self) -> None:
         one = self.reaching()
-        self.assertEqual(self.envelope(one, a_direct(text="")), [])
+        self.woke_nothing(self.envelope(one, a_direct(text="")), "woken")
 
     # -- the bounded slice of a thread -----------------------------------------------------
 
@@ -986,7 +1162,7 @@ class WhatArrives(Wired):
         self.a_long_thread(one, adapter.CONTEXT_PAGE * adapter.CONTEXT_PAGES + 50)
         records = self.envelope(one, a_mention(ts="9999.000100", thread="1600.000100"))
         self.assertEqual(len(one.web.made("conversations_replies")), adapter.CONTEXT_PAGES)
-        self.assertIn("longer than", self.only(records, "note")["text"])
+        self.assertIn("longer than", self.note(records, "longer than")["text"])
         self.only(records, "arrived")
 
     def test_what_the_walk_holds_is_bounded_however_long_the_thread_is(self) -> None:
@@ -1138,7 +1314,7 @@ class WhatArrives(Wired):
         said = {"type": adapter.MENTION, "bot_id": PEER_BOT, "user": "U0DEV",
                 "text": f"<@{US}> what do you think?", "ts": "1706.000100", "channel": ROOM}
         self.assertIsNone(adapter.waking(adapter.MENTION, said, US))
-        self.assertEqual(self.envelope(one, said), [])
+        self.woke_nothing(self.envelope(one, said), "not_woken")
 
     def test_a_join_notice_in_the_thread_is_still_not_carried(self) -> None:
         one = self.reaching(places=[ROOM])
@@ -1183,7 +1359,7 @@ class WhatArrives(Wired):
         # flattened and clipped, and it reaches nothing else.
         one = self.reaching()
         one.web.refuses["users_info"] = Refused("no", Answered({"error": "user_not_found"}))
-        self.assertEqual(self.envelope(one, a_direct(user=STRANGER)), [])
+        self.woke_nothing(self.envelope(one, a_direct(user=STRANGER)), "not_allowed")
         self.assertEqual(one.web.calls, [])
 
 
@@ -1202,6 +1378,32 @@ class WhatGoesOut(Wired):
         return dict({"do": "deliver", "id": "1754431200.123456-0-7",
                      "place": adapter.conversation_of(TEAM, ROOM, "1700.000100"),
                      "text": "three files changed"}, **named)
+
+    def test_something_said_on_the_way_to_an_answer_is_not_posted(self) -> None:
+        """R-SLK-10, R-CH-19. A brain that thinks out loud and then answers was two messages here
+        for one question, and only the second was ever asked for. Rundesk says which is which; this
+        surface never reads it out of the words."""
+        one = self.reaching()
+        records = self.told(one, self.a_delivery(text="checking staging first", remark=True))
+        self.assertEqual(one.web.made("chat_postMessage"), [])
+        self.none(records, "delivered")
+        self.none(records, "failed")
+
+    def test_the_answer_after_a_remark_is_still_posted(self) -> None:
+        one = self.reaching()
+        self.told(one, self.a_delivery(text="checking staging first", remark=True))
+        self.told(one, self.a_delivery(text="three files changed"))
+        posted = one.web.made("chat_postMessage")
+        self.assertEqual([call["text"] for call in posted], ["three files changed"])
+
+    def test_a_remark_that_was_not_shown_is_said_once_in_the_log(self) -> None:
+        # Invisible from Slack either way, so the difference between *suppressed* and *lost* has to
+        # be readable somewhere. Once per run, like every other boundary this names.
+        one = self.reaching()
+        records = self.told(one, self.a_delivery(text="one moment", remark=True))
+        self.assertEqual(self.note(records, adapter.NOT_THE_ANSWER)["text"], adapter.NOT_THE_ANSWER)
+        again = self.told(one, self.a_delivery(text="another moment", remark=True))
+        self.none(again, "note")
 
     def test_an_answer_is_posted_in_the_thread_the_turn_is_in(self) -> None:
         one = self.reaching()
@@ -1836,7 +2038,7 @@ class TheConnection(Wired):
         one = self.hosted()
         records = self.during(one.socket.greet)
         self.only(records, "ready")
-        self.assertIn("Slack said hello", self.only(records, "note")["text"])
+        self.note(records, "Slack said hello")
 
     def test_it_says_ready_once_however_often_slack_greets_it(self) -> None:
         one = self.hosted()
@@ -1958,6 +2160,215 @@ class TheConnection(Wired):
         self.assertIn("Slack tokens", self.only(records, "note")["text"])
 
 
+# ---------------------------------------------------------------------------------------------
+# What the websocket itself says, before anything is decoded.
+# ---------------------------------------------------------------------------------------------
+
+
+class WhatTheSocketSays(Wired):
+    """The boundary between *Slack sent nothing* and *this decoded nothing*.
+
+    Without it the two are one silence in the log — a `hello`, and then no more — and a live channel
+    that answers nobody cannot be told from a workspace that never sent an event. Everything proved
+    here is a fixed word: Slack's own type string is never repeated and no id is ever written down.
+    """
+
+    def notes(self, one: Any, doing: Any) -> List[str]:
+        """Every note a run said, in order, with stderr required to have stayed empty."""
+        errors = io.StringIO()
+        records = self.during(doing, errors=errors)
+        self.assertEqual(errors.getvalue(), "", "something went to stderr, where nothing shows it")
+        return [str(said.get("text")) for said in records if said.get("say") == "note"]
+
+    def test_an_events_api_frame_is_named_where_the_gateway_shows_it(self) -> None:
+        one = self.hosted()
+        said = self.notes(one, lambda: one.socket.sends(
+            {"type": "events_api", "envelope_id": "e-1", "payload": {"event": a_direct()}}))
+        self.assertEqual(said, [adapter.ARRIVING["events_api"]])
+
+    def test_a_frame_this_release_has_no_word_for_is_named_without_repeating_slacks(self) -> None:
+        one = self.hosted()
+        said = self.notes(one, lambda: one.socket.sends(
+            {"type": "some_future_thing", "payload": {"text": "private words"}}))
+        self.assertEqual(said, [adapter.ARRIVING["other"]])
+        self.assertNotIn("some_future_thing", " ".join(said))
+        self.assertNotIn("private words", " ".join(said))
+
+    def test_a_frame_carrying_no_type_at_all_is_named_other(self) -> None:
+        # The vendor client parses the frame itself and hands on a mapping, giving an empty one for
+        # anything that was not JSON. So there is no malformed boundary to reach: what arrives for
+        # input nobody could read is `{}`, and `{}` is a frame this has no word for.
+        one = self.hosted()
+        self.assertEqual(self.notes(one, lambda: one.socket.sends({})),
+                         [adapter.ARRIVING["other"]])
+
+    def test_each_arriving_boundary_is_named_once_however_many_frames_come(self) -> None:
+        one = self.hosted()
+        frame = {"type": "events_api", "envelope_id": "e-1", "payload": {"event": a_direct()}}
+        said = self.notes(one, lambda: (one.socket.sends(frame), one.socket.sends(frame),
+                                        one.socket.sends({"type": "one_more_kind"}),
+                                        one.socket.sends({"type": "and_another"})))
+        self.assertEqual(said, [adapter.ARRIVING["events_api"], adapter.ARRIVING["other"]])
+
+    def test_a_greeting_is_not_named_twice_over(self) -> None:
+        # `hello` has a sentence of its own, said on every greeting because a replacement socket is
+        # worth seeing. It is not also one of the arriving words.
+        one = self.hosted()
+        said = self.notes(one, one.socket.greet)
+        self.assertNotIn(adapter.ARRIVING["other"], said)
+        self.assertEqual(len([line for line in said if "said hello" in line]), 1)
+
+    def test_the_number_of_connections_slack_reports_is_recorded_as_a_number(self) -> None:
+        # Slack delivers each event to exactly one open connection, so a second one somewhere else
+        # is a complete explanation for a channel that is greeted and never woken.
+        one = self.hosted()
+        said = self.notes(one, lambda: one.socket.greet(connections=2))
+        self.assertIn("2 open Socket Mode connections", " ".join(said))
+        self.assertIn("sends each event to one of them", " ".join(said))
+
+    def test_the_one_connection_an_ordinary_channel_has_is_said_as_one(self) -> None:
+        one = self.hosted()
+        counted = [said for said in self.notes(one, one.socket.greet)
+                   if "open Socket Mode connection" in said]
+        self.assertEqual(len(counted), 1, counted)
+        self.assertIn("1 open Socket Mode connection", counted[0])
+        self.assertNotIn("connections", counted[0])
+
+    def test_a_connection_count_that_is_not_a_number_is_not_reported_as_one(self) -> None:
+        one = self.hosted()
+        said = self.notes(one, lambda: one.socket.sends({"type": "hello",
+                                                         "num_connections": "two"}))
+        self.assertEqual([line for line in said if "open Socket Mode connection" in line], [])
+
+    def test_the_count_is_said_once_however_often_slack_greets_it(self) -> None:
+        one = self.hosted()
+        said = self.notes(one, lambda: (one.socket.greet(), one.socket.replace(),
+                                        one.socket.greet()))
+        self.assertEqual(len([line for line in said if "open Socket Mode connection" in line]), 1)
+
+
+class WhichAppTheSocketBelongsTo(Wired):
+    """Two valid tokens from two different Slack apps: greeted, connected, and reachable by nobody.
+
+    Slack delivers an app's events only to that app's own connections. Every earlier check passes —
+    `auth.test`, the scopes, `apps.connections.open`, `hello` — so the one thing that tells this
+    apart from a quiet workspace is asking whether the two tokens name one app.
+    """
+
+    def greeted(self, ours: str = OUR_APP) -> Any:
+        """A hosted connection that already knows which app issued its bot token."""
+        one = self.hosted()
+        one.our_app = ours
+        return one
+
+    def test_the_app_behind_the_bot_token_is_asked_of_slack_once_at_startup(self) -> None:
+        one = adapter.Reaching([THEM], [])
+        one.stopping.set()
+        web = Web()
+        socket = Socket(app_token="xapp-x")
+        with mock.patch.object(adapter, "WebClient", lambda **named: web), \
+                mock.patch.object(adapter, "SocketModeClient", lambda **named: socket), \
+                mock.patch.object(adapter, "rundesk_says", lambda *_: iter(())):
+            self.during(lambda: one.run("xoxb-x", "xapp-x"))
+        self.assertEqual([call["bot"] for call in web.made("bots_info")], [OUR_BOT])
+        self.assertEqual(one.our_app, OUR_APP)
+
+    def test_a_slack_that_will_not_say_which_app_is_not_a_failure_to_start(self) -> None:
+        one = adapter.Reaching([THEM], [])
+        one.stopping.set()
+        web = Web()
+        web.refuses["bots_info"] = Refused("no", Answered({"error": "missing_scope"}))
+        with mock.patch.object(adapter, "WebClient", lambda **named: web), \
+                mock.patch.object(adapter, "SocketModeClient",
+                                  lambda **named: Socket(app_token="xapp-x")), \
+                mock.patch.object(adapter, "rundesk_says", lambda *_: iter(())):
+            self.assertEqual(self.during(lambda: one.run("xoxb-x", "xapp-x"))[-1]["say"], "gone")
+        self.assertEqual(one.our_app, "")
+        self.assertFalse(one.unrecoverable)
+
+    def test_a_slack_that_answers_without_the_bot_it_was_asked_about_settles_nothing(self) -> None:
+        # `ok: true` and no `bot` is not a refusal, and it is not an app id either. The partition
+        # that matters is what `our_app` is left as, because empty is what makes the verdict unsure.
+        one = adapter.Reaching([THEM], [])
+        one.stopping.set()
+        web = Web()
+        web.bot = {}
+        with mock.patch.object(adapter, "WebClient", lambda **named: web), \
+                mock.patch.object(adapter, "SocketModeClient",
+                                  lambda **named: Socket(app_token="xapp-x")), \
+                mock.patch.object(adapter, "rundesk_says", lambda *_: iter(())):
+            self.during(lambda: one.run("xoxb-x", "xapp-x"))
+        self.assertEqual(len(web.made("bots_info")), 1)
+        self.assertEqual(one.our_app, "")
+        self.assertFalse(one.unrecoverable)
+
+    def test_one_app_behind_both_tokens_is_said_and_earns_ready(self) -> None:
+        one = self.greeted()
+        records = self.during(lambda: one.socket.greet(app=OUR_APP))
+        self.only(records, "ready")
+        self.note(records, adapter.ONE_APP)
+
+    def test_a_socket_belonging_to_another_app_is_reported_and_still_earns_ready(self) -> None:
+        # **The verdict is a line and not a decision.** Nothing here has been answered by a live
+        # workspace yet, and a comparison that could take an agent off Slack costs more when it is
+        # wrong than the silence it describes costs when it is right.
+        one = self.greeted()
+        records = self.during(lambda: one.socket.greet(app=ANOTHER_APP))
+        self.only(records, "ready")
+        self.note(records, adapter.TWO_APPS)
+        self.assertTrue(one.connected)
+
+    def test_a_socket_belonging_to_another_app_ends_and_restarts_nothing(self) -> None:
+        one = self.greeted()
+        self.during(lambda: one.socket.greet(app=ANOTHER_APP))
+        self.assertFalse(one.unrecoverable)
+        self.assertFalse(one.stopping.is_set())
+        self.assertEqual(one.trouble, "")
+
+    def test_the_mismatch_is_said_where_an_owner_is_meant_to_act_on_it(self) -> None:
+        one = self.greeted()
+        records = self.during(lambda: one.socket.greet(app=ANOTHER_APP))
+        self.assertEqual(self.note(records, adapter.TWO_APPS)["level"], "warning")
+
+    def test_the_mismatch_says_which_two_tokens_to_reissue(self) -> None:
+        one = self.greeted()
+        records = self.during(lambda: one.socket.greet(app=ANOTHER_APP))
+        said = self.note(records, "different Slack app")["text"]
+        self.assertIn("bot token", said)
+        self.assertIn("app-level token", said)
+
+    def test_neither_app_id_is_ever_written_into_anything_said(self) -> None:
+        # A match and a mismatch are both verdicts about two ids, and neither id is one of them.
+        for app in (OUR_APP, ANOTHER_APP):
+            with self.subTest(app=app):
+                one = self.greeted()
+                said = json.dumps(self.during(functools.partial(one.socket.greet, app=app)))
+                self.assertNotIn(OUR_APP, said)
+                self.assertNotIn(ANOTHER_APP, said)
+                self.assertNotIn(ANOTHER_APP, one.trouble)
+
+    def test_a_greeting_that_names_no_app_settles_nothing_and_stays_ready(self) -> None:
+        one = self.greeted()
+        records = self.during(one.socket.greet)
+        self.only(records, "ready")
+        self.note(records, adapter.UNSURE_APP)
+        self.assertFalse(one.unrecoverable)
+
+    def test_a_bot_token_whose_app_slack_would_not_say_settles_nothing(self) -> None:
+        one = self.greeted(ours="")
+        records = self.during(lambda: one.socket.greet(app=ANOTHER_APP))
+        self.only(records, "ready")
+        self.note(records, adapter.UNSURE_APP)
+        self.assertFalse(one.unrecoverable)
+
+    def test_the_verdict_is_said_once_however_often_slack_greets_it(self) -> None:
+        one = self.greeted()
+        records = self.during(lambda: (one.socket.greet(app=OUR_APP), one.socket.replace(),
+                                       one.socket.greet(app=OUR_APP)))
+        self.assertEqual(len([said for said in records
+                              if said.get("say") == "note" and said["text"] == adapter.ONE_APP]), 1)
+
+
 class TheDocumentedContract(unittest.TestCase):
     """The setup and command pages agree with what the Slack adapter actually proves."""
 
@@ -1966,11 +2377,25 @@ class TheDocumentedContract(unittest.TestCase):
     def text(self, path: str) -> str:
         return (self.ROOT / path).read_text(encoding="utf-8")
 
-    def test_the_manifest_keeps_the_bot_visible_without_calling_presence_health(self) -> None:
+    def test_no_page_claims_slack_presence_is_gateway_health(self) -> None:
+        """R-SLK-30. An indicator that cannot follow the websocket must not be recommended as
+        though it could: `always_online: true` stays green after the gateway stops, which reads as
+        a healthy agent answering nothing. Slack drives the dot from neither Socket Mode nor the
+        Events API, and `users.setPresence` cannot force a bot active, so the honest setting is the
+        one that leaves the dot out of the question."""
         guide = self.text("docs/guides/slack.md")
-        self.assertIn("always_online: true", guide)
-        self.assertNotIn("always_online: false", guide)
+        self.assertIn("always_online: false", guide)
+        self.assertNotIn("always_online: true", guide)
         self.assertNotIn("green dot follows the Socket Mode connection", guide)
+        self.assertIn("cannot represent whether this agent is running", guide)
+
+    def test_nothing_here_reads_or_writes_slack_presence(self) -> None:
+        # The other half of the same requirement: no dynamic mechanism was invented in place of
+        # the static one, because Slack publishes none that a bot can drive.
+        source = self.text("src/channels/slack")
+        for never in ("users.setPresence", "users_setPresence", "setPresence"):
+            with self.subTest(never=never):
+                self.assertNotIn(never, source)
 
     def test_every_owning_page_keeps_the_slack_probe_non_listening(self) -> None:
         pages = (

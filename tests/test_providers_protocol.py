@@ -327,6 +327,51 @@ class SplittingWhatTheBrainSaid(support.Isolated):
     def test_a_turn_that_said_nothing_closes_on_nothing(self):
         self.assertEqual(protocol.last_thought([done()]), "")
 
+    # -- the closing response: `last_thought`'s sibling, and the four ways they differ --------
+
+    def test_every_thought_after_the_last_tool_joins_in_the_order_it_was_said(self):
+        """The reading `last_thought` cannot give: a brain that finished three things after its
+        work and marked none of them the answer said all three, in that order."""
+        said = [text("Checking the files.", whole=True),
+                {"type": "tool", "id": "1", "did": "read"},
+                {"type": "result", "id": "1", "ok": True},
+                text("The migration is applied.", whole=True),
+                text("The workers caught up.", whole=True)]
+        self.assertEqual(protocol.closing_response(said),
+                         "The migration is applied.\n\nThe workers caught up.")
+
+    def test_working_narration_before_and_between_the_tools_is_left_out(self):
+        """The reading `reply` cannot give: text before the first tool and text between two of them
+        is the brain thinking aloud on the way, and the closing response is what it said at the
+        end."""
+        said = [text("Let me look.", whole=True),
+                {"type": "tool", "id": "1", "did": "read"},
+                {"type": "result", "id": "1", "ok": True},
+                text("Now the database.", whole=True),
+                {"type": "tool", "id": "2", "did": "query"},
+                {"type": "result", "id": "2", "ok": True},
+                text("Three files changed.", whole=True)]
+        self.assertEqual(protocol.closing_response(said), "Three files changed.")
+        self.assertIn("Let me look.", protocol.reply(said))
+
+    def test_the_latest_explicit_final_is_the_whole_closing_response(self):
+        """Supersession, and it is the same rule `last_thought` keeps: a provider that marks its
+        answer has said which thought is the answer, and a later one replaces an earlier one. The
+        superseded final is not joined on to it."""
+        said = [{**text("A first answer.", whole=True), "final": True},
+                text("more guidance arrived", whole=True),
+                {**text("The answer after steering.", whole=True), "final": True}]
+        self.assertEqual(protocol.closing_response(said), "The answer after steering.")
+
+    def test_a_turn_that_closed_at_a_tool_boundary_has_no_closing_response(self):
+        """Nothing after the work is nothing to answer with, and it is empty rather than the last
+        thing said before the tool ran."""
+        said = [text("Checking the files.", whole=True),
+                {"type": "tool", "id": "1", "did": "read"},
+                {"type": "result", "id": "1", "ok": True}, done()]
+        self.assertEqual(protocol.closing_response(said), "")
+        self.assertEqual(protocol.last_thought(said), "")
+
     def test_blank_lines_inside_a_thought_are_the_brains_and_are_kept(self):
         said = [text("first para\n\nsecond para", whole=True)]
         self.assertEqual(protocol.thoughts(said), ["first para\n\nsecond para"])
