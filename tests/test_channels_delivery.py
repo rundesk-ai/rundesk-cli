@@ -64,8 +64,12 @@ class Splitting(support.Isolated):
             self.assertIn(f"line {nth}", rejoined)
 
 
-class SplittingAroundCode(Splitting):
-    """A block split across two messages renders as one broken block and a page of plain text."""
+class SplittingAroundCode(support.Isolated):
+    """A block split across two messages renders as one broken block and a page of plain text.
+
+    `support.Isolated` rather than `Splitting`, which holds only cases and no helper worth
+    inheriting: subclassing it re-ran all seven of them for the three added here.
+    """
 
     def test_a_fence_left_open_is_closed_and_opened_again(self):
         said = "```\n" + "\n".join("x" * 30 for _ in range(20)) + "\n```"
@@ -196,6 +200,56 @@ class WhereANoticeGoes(support.Isolated):
     def test_a_long_notice_is_cut_the_same_way_as_anything_else(self):
         self.a_channel("discord", told=True)
         telling = delivery.notice(self.agent, "\n".join("x" * 30 for _ in range(50)), at_most=200)
+        self.assertGreater(len(telling.pieces), 1)
+        for piece in telling.pieces:
+            self.assertLessEqual(len(piece), 200)
+
+    def test_a_named_destination_replaces_the_notified_channel_entirely(self):
+        # The whole point of the verb: one schedule's retro reaches the Slack place it named
+        # while its agent goes on being notified on Discord.
+        self.a_channel("discord", told=True, place="1180")
+        telling = delivery.notice(self.agent, "working", channel="slack", place="C0OPS")
+        self.assertEqual("slack", telling.kind)
+        self.assertEqual(delivery.Aimed(sender="", place="C0OPS"), telling.to)
+
+    def test_the_channels_own_place_is_cleared_when_a_destination_is_named(self):
+        # **Exactly one of the two decides where this lands.** A `place` left standing beside a
+        # named destination is a second answer an adapter could reach for, and the one it would
+        # reach for is the notified channel's — which is the mis-delivery this exists to prevent.
+        self.a_channel("discord", told=True, place="1180")
+        telling = delivery.notice(self.agent, "working", channel="slack", place="C0OPS")
+        self.assertEqual("", telling.place)
+
+    def test_a_named_person_crosses_as_a_person(self):
+        telling = delivery.notice(self.agent, "working", channel="discord", sender="2207")
+        self.assertEqual(delivery.Aimed(sender="2207", place=""), telling.to)
+        self.assertEqual("discord", telling.kind)
+
+    def test_a_destination_is_answered_for_an_agent_that_tells_nobody_anything(self):
+        # It does not go through the notified channel, so there being none is beside the point —
+        # and answering `None` here would silently lose a report somebody asked for.
+        self.assertIsNone(delivery.notice(self.agent, "working"))
+        telling = delivery.notice(self.agent, "working", channel="slack", place="C0OPS")
+        self.assertIsNotNone(telling)
+
+    def test_naming_nothing_still_answers_with_the_notified_channel(self):
+        # The one resolver, and the absent case is byte-for-byte what it always was.
+        self.a_channel("discord", told=True, place="1180")
+        telling = delivery.notice(self.agent, "gateway up", channel="", sender="", place="")
+        self.assertEqual(("discord", "1180"), (telling.kind, telling.place))
+        self.assertIsNone(telling.to)
+
+    def test_a_destination_naming_a_person_and_a_place_is_refused(self):
+        with self.assertRaises(ValueError):
+            delivery.notice(self.agent, "working", channel="slack", sender="U09", place="C0OPS")
+
+    def test_a_channel_naming_neither_is_refused(self):
+        with self.assertRaises(ValueError):
+            delivery.notice(self.agent, "working", channel="slack")
+
+    def test_a_named_destination_is_cut_the_same_way_as_anything_else(self):
+        telling = delivery.notice(self.agent, "\n".join("x" * 30 for _ in range(50)),
+                                  at_most=200, channel="slack", place="C0OPS")
         self.assertGreater(len(telling.pieces), 1)
         for piece in telling.pieces:
             self.assertLessEqual(len(piece), 200)

@@ -9,8 +9,8 @@ due. The gateway is the clock that fires it.
 |---|---|
 | `schedules` or `schedules list [<agent>]` | List schedules that can still run, for every agent or one. |
 | `schedules list [<agent>] --expired` | List only schedules that can never run again. |
-| `schedules add <agent> <schedule> (--when <cron> | --at <moment>) (--run <program> | --ask <prompt>) [--until <moment>] [--disabled]` | Create repeating or one-time work. |
-| `schedules update <agent> <schedule> [--when <cron> | --at <moment>] [--run <program> | --ask <prompt>] [--until <moment>] [--enable | --disable]` | Change stated fields and keep execution history. |
+| `schedules add <agent> <schedule> (--when <cron> | --at <moment>) (--run <program> | --ask <prompt>) [--until <moment>] [--disabled] [--channel <channel> --to <id>]` | Create repeating or one-time work. |
+| `schedules update <agent> <schedule> [--when <cron> | --at <moment>] [--run <program> | --ask <prompt>] [--until <moment>] [--enable | --disable] [--channel <channel> --to <id>]` | Change stated fields and keep execution history. |
 | `schedules show <agent> <schedule>` | Show the complete definition and state. |
 | `schedules run <agent> <schedule> [--wait <seconds>]` | Run now in this terminal; default wait is 3600 seconds. |
 | `schedules remove <agent> <schedule>` | Remove the schedule. This has no confirmation preview. |
@@ -33,8 +33,23 @@ Verify an outcome now when it is already observable instead of scheduling avoida
 Make an `--ask` prompt executable on fresh context: name what to inspect, the expected result, the
 evidence to use, and who should hear about success or failure. Ask the agent to perform the check,
 not merely remind the owner that a check was planned. Keep the check within the original authority;
-a schedule changes when work runs, not what changes it is allowed to make. Confirm the gateway will
-be running, and configure a notified channel when the result must reach the owner proactively.
+a schedule changes when work runs, not what changes it is allowed to make. Configure a notified
+channel when the result must reach the owner proactively.
+
+## Send one schedule's report somewhere of its own
+
+Name `--channel` and `--to` together to send that schedule's notice and report to one place or one
+person instead of the agent's notified channel. The agent's notified channel does not move. Omit
+both to keep it.
+
+- Write `--to` the way an allow-list entry is written: a bare sender id for that person's direct
+  message, `place:<id>` for that place. The destination must already be on that channel's allow
+  list, as the same kind of thing; check with `channels show <agent> <channel>` first, because a
+  destination held as the other kind is refused rather than reinterpreted.
+- One flag without the other is refused, and so is a channel the agent does not have or an adapter
+  that does not say it can address a destination. Every refusal happens before anything is written.
+- A place target puts the report in a thread on its own notice; a direct message does not. Neither
+  posts anything between the two messages.
 
 ## Time and execution rules
 
@@ -57,15 +72,22 @@ time to the owner; do not substitute an open-ended window such as “later” or
 should not have to return merely to restart work already promised.
 
 Do not create a schedule for an aspiration, an unapproved state change, or work with a missing
-decision. A schedule preserves timing, not authority. Verify the saved definition and that the
-agent's gateway is running; without both, no future work is arranged.
+decision. A schedule preserves timing, not authority. Verify the saved definition. An enabled
+self-schedule is accepted only from a turn whose gateway is currently known running; `add` and
+`update` refuse it before writing otherwise. For an agent resumption use `--ask`; `--run` starts a
+program instead. A successful enabled `--ask` self-schedule establishes the resumption path without
+another inspection. Do not report routine gateway state or a possible later outage as a current
+blocker. After `show` verifies that schedule, stop inspecting. Unless the owner asks for mechanics,
+the final states the verified current result and what the scheduled work will produce and when. Add
+a current material blocker only when it affects that continuation. Do not name commands, gateways,
+or other routine continuation machinery unless the owner asks.
 
 ## Operate and recover
 
 1. Add disabled when rollout needs inspection, then `show` and `run` it manually.
 2. Manual `run` takes the same durable claim as the gateway and refuses a duplicate. It records the
    result but does not consume or shift the next due time.
-3. Enable only after the manual result is correct and the gateway is running.
+3. Enable only after the manual result is correct.
 4. Inspect `show`, `gateways logs <agent>`, and `turns <agent>` for failures.
 
 Rundesk durably claims work before starting it and does not replay every minute missed while a

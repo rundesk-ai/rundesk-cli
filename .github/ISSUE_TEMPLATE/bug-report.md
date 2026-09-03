@@ -33,3 +33,9 @@ assignees: ""
 ## Scope and privacy
 
 <!-- State the affected surface and confirm the report contains no credentials, personal data, private identifiers, or owner-specific paths. -->
+
+## Agent
+
+<!-- Only for a named agent: replace the placeholder with its display name and keep this section. Anyone else deletes the section entirely. Never add provider, model, tool, session, or generated-by branding. -->
+
+🤖 by <Agent>

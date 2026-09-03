@@ -115,7 +115,7 @@ def register(sub: Subcommands) -> None:
                       help="re-compose what a past turn was sent, and say whether it still matches")
 
     taking = what.add_parser("run", help="take one scheduled turn here — what a firing starts")
-    taking.add_argument("agent", metavar="<agent>")
+    taking.add_argument("agent", metavar="<agent>", help="whose scheduled turn to take")
     taking.add_argument("--schedule", metavar="<schedule>", required=True,
                         help="which schedule this turn is for")
 

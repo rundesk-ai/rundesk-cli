@@ -1405,7 +1405,7 @@ class UninstallTakesTheJobsBack(WithAnAgent):
 
     def test_a_purge_takes_the_agents_with_the_data(self):
         code, out, err = self.rundesk_with(support.ASupervisor(), "uninstall", "--confirm",
-                                           "--purge")
+                                           "--purge", "--root", str(paths.home()))
         self.assertEqual(OK, code, err)
         self.assertIn(self.label, out)
         self.assertFalse((self.home / "data" / "agents" / "cole").exists())
@@ -1449,7 +1449,7 @@ class OnTheParser(WithAnAgent):
 
 
 class TheExitCodes(WithAnAgent):
-    """Every code this group hands back, against `docs/commands.md`'s table of three.
+    """Every code this group hands back, against `docs/api/README.md`'s table of three.
 
     `0` it was done, `1` it was attempted and did not work, `2` **the command line itself was
     wrong**. A person reads the words and a script reads the number, and a script that reads the

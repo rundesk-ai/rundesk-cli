@@ -8,17 +8,22 @@ an install, so every case that touches settling would pass without the handoff e
 Run directly: `python3 tests/test_install.py`
 """
 
+import io
 import os
 import shutil
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import support
+from rundesk.agents import directory
 from rundesk.commands import automatic_updates
+from rundesk.commands import install as installing
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
+from rundesk.gateways import standing
 from rundesk.lifecycle import tree
 from rundesk.skills import catalogs, library
 
@@ -28,6 +33,24 @@ import sys
 print("this program is broken", file=sys.stderr)
 raise SystemExit(1)
 """
+
+
+def _as_it_stands(at: Path):
+    """`at` in enough detail that taking it away, or putting something else there, is visible.
+
+    `None` when it is not there at all, which is the one answer a case comparing before with
+    after has to be able to tell apart from every other. `__pycache__` is left out because the
+    installed program writes it into `app/src` while it runs, so it is the one thing under the
+    program tree that moves without anybody having removed anything.
+    """
+    if at.is_symlink():
+        return "link", os.readlink(at)
+    if at.is_dir():
+        return "directory", sorted(str(one.relative_to(at)) for one in at.rglob("*")
+                                   if "__pycache__" not in one.parts)
+    if at.is_file():
+        return "file", at.read_bytes()
+    return None
 
 
 class TheBootstrapInstaller(support.Isolated):
@@ -84,7 +107,8 @@ class TheBootstrapInstaller(support.Isolated):
 
                 self.assertEqual(0, ended.returncode, ended.stderr)
                 self.assertIn("Usage:", ended.stdout)
-                self.assertIn("rundesk uninstall --confirm [--purge]", ended.stdout)
+                self.assertIn(
+                    "rundesk uninstall --confirm [--purge --root <dir>]", ended.stdout)
                 self.assertEqual("", ended.stderr)
                 self.assert_state_was_not_changed()
 
@@ -138,6 +162,44 @@ class Installing(support.Isolated):
         for key, value in also.items():
             argv += [f"--{key.replace('_', '-')}", str(value)]
         return support.run(argv)
+
+    def _what_a_removal_would_take(self):
+        """Everything a confirmed removal takes before it ever reaches `data/`, as it stands now.
+
+        The coordinator is asked for the scratch root's own login directory, which is where both
+        this harness and the copy an install places put a coordinator definition.
+        """
+        one = automatic_updates.coordinator(self.root, self.root / "LaunchAgents")
+        return {
+            "the program": _as_it_stands(paths.app()),
+            "the command link": _as_it_stands(self.bin / "rundesk"),
+            "the automatic update job": _as_it_stands(automatic_updates.plist_of(one)),
+            "the automatic update shim": _as_it_stands(automatic_updates.shim_of(one)),
+            "the automatic update receipt": _as_it_stands(automatic_updates.receipt_at(one)),
+        }
+
+    def a_removable_install(self):
+        """The same, with every one of those artifacts proved to be there before a refusal is asked
+        for.
+
+        **A data sentinel alone cannot tell a guard that refuses first from one that refuses late.**
+        The coordinator job and its shim go first, then every gateway job, then the command link,
+        then `app/`, and only then `data/`. A refusal reached after any of those is still a refusal,
+        still exits `FAILED`, and still leaves the sentinel sitting where it was written.
+
+        Proving each artifact is standing first is what stops the comparison being vacuous: absent
+        compared with absent passes for an install nobody placed as happily as for one left whole.
+        """
+        standing = self._what_a_removal_would_take()
+        for what, how in standing.items():
+            self.assertIsNotNone(
+                how, f"{what} was not there before the refusal, so this case could not see it go")
+        return standing
+
+    def assert_the_refusal_took_nothing(self, before):
+        """Nothing a removal takes may have gone before the command refused to remove anything."""
+        self.assertEqual(before, self._what_a_removal_would_take(),
+                         "a refusal removed something before it refused")
 
 
 class AFreshInstall(Installing):
@@ -196,6 +258,34 @@ class AFreshInstall(Installing):
         self.install()
         self.assertNotEqual("1999-12-31T23:59:59Z", config.read(paths.data())["last_updated_at"])
 
+    def test_installing_over_a_running_gateway_hands_off_before_replacing_the_program(self):
+        self.install()
+        agent = directory.made("cole", "codex")
+        installed = (paths.app() / "README.md").read_text()
+        self.given_a_tree(self.source, marker="a different release")
+
+        with standing.holding(agent), \
+                mock.patch.object(installing, "_guarded_update", return_value=OK) as guarded:
+            code, out, err = self.install()
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual("", out)
+        guarded.assert_called_once_with()
+        self.assertEqual(installed, (paths.app() / "README.md").read_text())
+
+    def test_the_live_install_handoff_runs_its_installed_guarded_updater(self):
+        self.install()
+        answer = support.ran(OK, out="update queued until current work finishes\n")
+        said = io.StringIO()
+
+        with mock.patch.object(installing.programs, "run", return_value=answer) as ran, \
+                mock.patch.object(sys, "stdout", said):
+            self.assertEqual(OK, installing._guarded_update())
+
+        ran.assert_called_once_with(
+            [str(paths.app() / "rundesk"), "update"], installing.GUARDED_UPDATE_SECONDS)
+        self.assertEqual(answer.out, said.getvalue())
+
     def test_a_program_that_will_not_run_is_never_reported_as_installed(self):
         # An installer that reports success without checking has told somebody their machine is
         # ready when it is not, and they find out later and somewhere else.
@@ -230,6 +320,82 @@ class AFreshInstall(Installing):
         self.assertEqual(0, ended.returncode, ended.stderr)
         self.assertIn(str(self.root), ended.stdout)
         self.assertNotIn(str(fake_home / ".rundesk"), ended.stdout)
+
+    def test_an_inferred_installed_root_cannot_confirm_a_purge(self):
+        self.install()
+        theirs = paths.data() / "something-of-theirs"
+        theirs.write_text("mine")
+        environment = os.environ.copy()
+        for name in (paths.HOME_IS, "RUNDESK_AGENT", "RUNDESK_RUN", "RUNDESK_CWD"):
+            environment.pop(name, None)
+        before = self.a_removable_install()
+
+        ended = subprocess.run(
+            [str(self.bin / "rundesk"), "uninstall", "--confirm", "--purge"],
+            capture_output=True, text=True, env=environment,
+            stdin=subprocess.DEVNULL, timeout=30)
+
+        self.assertEqual(FAILED, ended.returncode)
+        self.assertIn("--root is required", ended.stderr)
+        self.assertIn(f"{paths.HOME_IS}={self.root}", ended.stderr)
+        self.assertIn(f"--root {self.root}", ended.stderr)
+        self.assertTrue(theirs.exists(), "an inferred root let a purge take the owner's data")
+        self.assert_the_refusal_took_nothing(before)
+
+    def test_an_inferred_installed_root_can_preview_a_purge(self):
+        self.install()
+        environment = os.environ.copy()
+        for name in (paths.HOME_IS, "RUNDESK_AGENT", "RUNDESK_RUN", "RUNDESK_CWD"):
+            environment.pop(name, None)
+
+        ended = subprocess.run(
+            [str(self.bin / "rundesk"), "uninstall", "--purge"],
+            capture_output=True, text=True, env=environment,
+            stdin=subprocess.DEVNULL, timeout=30)
+
+        self.assertEqual(FAILED, ended.returncode)
+        self.assertIn(f"this would remove rundesk from {self.root}", ended.stderr)
+        self.assertIn(
+            f"{paths.HOME_IS}={self.root} rundesk uninstall --confirm --purge "
+            f"--root {self.root}", ended.stderr)
+        self.assertTrue(paths.data().exists(), "a preview removed the owner's data")
+
+    def test_an_ambient_matching_root_cannot_confirm_a_purge_without_a_root_argument(self):
+        self.install()
+        theirs = paths.data() / "something-of-theirs"
+        theirs.write_text("mine")
+        environment = os.environ.copy()
+        environment[paths.HOME_IS] = str(self.root)
+        for name in ("RUNDESK_AGENT", "RUNDESK_RUN", "RUNDESK_CWD"):
+            environment.pop(name, None)
+        before = self.a_removable_install()
+
+        ended = subprocess.run(
+            [str(self.bin / "rundesk"), "uninstall", "--confirm", "--purge"],
+            capture_output=True, text=True, env=environment,
+            stdin=subprocess.DEVNULL, timeout=30)
+
+        self.assertEqual(FAILED, ended.returncode)
+        self.assertIn("--root is required", ended.stderr)
+        self.assertTrue(theirs.exists(), "an ambient root was accepted as an explicit purge target")
+        self.assert_the_refusal_took_nothing(before)
+
+    def test_an_explicit_installed_root_can_confirm_a_purge(self):
+        self.install()
+        environment = os.environ.copy()
+        environment[paths.HOME_IS] = str(self.root)
+        for name in ("RUNDESK_AGENT", "RUNDESK_RUN", "RUNDESK_CWD"):
+            environment.pop(name, None)
+
+        ended = subprocess.run(
+            [str(self.bin / "rundesk"), "uninstall", "--confirm", "--purge",
+             "--root", str(self.root)],
+            capture_output=True, text=True, env=environment,
+            stdin=subprocess.DEVNULL, timeout=30)
+
+        self.assertEqual(OK, ended.returncode, ended.stderr)
+        self.assertIn(f"uninstall: confirmed target is {self.root}", ended.stderr)
+        self.assertFalse(paths.data().exists())
 
     def test_an_explicit_home_override_still_wins_over_the_launcher_root(self):
         self.install()
@@ -285,6 +451,31 @@ class AFreshInstall(Installing):
         self.assertEqual(0, ended.returncode, ended.stderr)
         self.assertIn(str(self.root), ended.stdout)
         self.assertNotIn(str(Path.home() / ".rundesk"), ended.stdout)
+
+    def test_a_provider_turn_cannot_purge_a_root_different_from_the_one_stated(self):
+        self.install()
+        theirs = paths.data() / "something-of-theirs"
+        theirs.write_text("mine")
+        agent_home = self.root / "data" / "agents" / "ava" / "home"
+        agent_home.mkdir(parents=True)
+        (agent_home.parent / "state.db").touch()
+        environment = os.environ.copy()
+        environment[paths.HOME_IS] = str(self.home / "the-root-the-caller-stated")
+        environment["RUNDESK_CWD"] = str(agent_home)
+        environment["RUNDESK_AGENT"] = "ava"
+        environment["RUNDESK_RUN"] = "1"
+        before = self.a_removable_install()
+
+        ended = subprocess.run(
+            [str(self.bin / "rundesk"), "uninstall", "--confirm", "--purge",
+             "--root", str(self.home / "the-root-the-caller-stated")],
+            capture_output=True, text=True, env=environment,
+            stdin=subprocess.DEVNULL, timeout=30)
+
+        self.assertEqual(FAILED, ended.returncode)
+        self.assertIn(f"but {paths.HOME_IS} resolves to {self.root}", ended.stderr)
+        self.assertTrue(theirs.exists(), "the launcher changed roots and the purge still ran")
+        self.assert_the_refusal_took_nothing(before)
 
     def test_a_stray_agent_directory_cannot_override_an_explicit_home(self):
         self.install()
@@ -435,9 +626,16 @@ class PuttingTheCommandOnAPath(Installing):
         self.assertEqual(OK, code, err)
 
 
-class Uninstalling(Installing):
+class RemovingAnInstall(Installing):
+    """How a removal is driven, and nothing about what one does.
 
-    def uninstall(self, *argv):
+    **No case of its own, and that is the whole point of it standing here.** `unittest` inherits
+    test methods, so a class that carries both the helpers and the cases hands every case to every
+    subclass that wanted only the helpers — and `WhenAPurgeCannotFinish` below wanted only the
+    helpers. It ran all twenty-one of `Uninstalling`'s cases a second time to add one of its own.
+    """
+
+    def uninstall(self, *argv, **collaborators):
         """Removal driven exactly as a person runs it — **nothing is redirected**.
 
         This deliberately does not point `tree.BIN_DIRS` at the scratch directory. Doing so was
@@ -447,11 +645,20 @@ class Uninstalling(Installing):
 
         It is safe to leave alone because `tree.unlink` only removes a link that resolves into
         *this* install's own `app/`, and this install is under a temporary root.
+
+        `collaborators` are handed to `support.run_with`, so a case that needs to see what the
+        command asked the machine can pass its own `supervising=` stand-in.
         """
-        return support.run(["uninstall", "--confirm", *argv])
+        arguments = ["uninstall", "--confirm", *argv]
+        if "--purge" in argv and "--root" not in argv:
+            arguments += ["--root", str(paths.home())]
+        return support.run_with(arguments, **collaborators)
 
     def unconfirmed(self, *argv):
         return support.run(["uninstall", *argv])
+
+
+class Uninstalling(RemovingAnInstall):
 
     def test_without_confirming_nothing_is_removed(self):
         self.install()
@@ -476,6 +683,13 @@ class Uninstalling(Installing):
         self.assertIn("keep   " + str(paths.data()), plain)
         self.assertIn("everything rundesk kept", purging)
         self.assertIn("--confirm --purge", purging)
+
+    def test_the_preview_states_the_resolved_root_in_the_confirmation_command(self):
+        self.install()
+        _, _, err = self.unconfirmed("--purge")
+        self.assertIn(
+            f"{paths.HOME_IS}={self.root} rundesk uninstall --confirm --purge "
+            f"--root {self.root}", err)
 
     def test_purge_without_confirming_still_removes_nothing(self):
         self.install()
@@ -505,6 +719,9 @@ class Uninstalling(Installing):
 
         self.assertEqual(FAILED, code)
         self.assertIn("queued update worker", err)
+        target = f"uninstall: confirmed target is {self.root}"
+        self.assertIn(target, err)
+        self.assertLess(err.index(target), err.index("uninstall: FAILED"))
         self.assertTrue(paths.app().exists())
         self.assertTrue(automatic_updates.shim_of(one).exists())
 
@@ -521,6 +738,59 @@ class Uninstalling(Installing):
         code, _, err = self.uninstall("--purge")
         self.assertEqual(OK, code, err)
         self.assertFalse(paths.data().exists())
+
+    def test_a_confirmed_purge_refuses_a_relative_root_assertion(self):
+        self.install()
+        theirs = paths.data() / "something-of-theirs"
+        theirs.write_text("mine")
+        before = self.a_removable_install()
+        # Refused in this process, so the machine's supervisor is observable: the first thing a
+        # confirmed removal does is ask it to take the coordinator's job back, and a guard that
+        # ran too late would have asked before deciding it was never allowed to.
+        supervisor = support.ASupervisor()
+
+        code, _, err = self.uninstall("--purge", "--root", "somewhere-else",
+                                      supervising=supervisor)
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("--root must be an absolute path", err)
+        self.assertTrue(theirs.exists(), "a refused root assertion let the purge run")
+        self.assert_the_refusal_took_nothing(before)
+        self.assertEqual([], supervisor.asked,
+                         "a refused root assertion reached the machine's supervisor before it "
+                         "refused")
+
+    def test_a_validated_symlink_cannot_move_the_destructive_target_after_the_check(self):
+        self.install()
+        original = paths.home()
+        original_owner_data = paths.data() / "original-owner-data"
+        original_owner_data.write_text("take this")
+        another = self.home / "another-install"
+        (another / "app").mkdir(parents=True)
+        (another / "app" / "program").write_text("keep this")
+        (another / "data").mkdir()
+        other_owner_data = another / "data" / "other-owner-data"
+        other_owner_data.write_text("keep this")
+        selected = self.home / "selected-root"
+        selected.symlink_to(original, target_is_directory=True)
+        os.environ[paths.HOME_IS] = str(selected)
+        really_allowed = paths.allowed
+
+        def retarget_after_validation(where, called):
+            resolved = really_allowed(where, called)
+            if called == "--root":
+                selected.unlink()
+                selected.symlink_to(another, target_is_directory=True)
+            return resolved
+
+        with mock.patch.object(paths, "allowed", side_effect=retarget_after_validation):
+            code, _, err = support.run(
+                ["uninstall", "--confirm", "--purge", "--root", str(selected)])
+
+        self.assertEqual(OK, code, err)
+        self.assertFalse(original_owner_data.exists())
+        self.assertTrue(other_owner_data.exists(), "the validated root moved before the purge")
+        self.assertTrue((another / "app" / "program").exists())
 
     def test_copies_survive_removal_including_a_purge(self):
         # Not "not by default" — there is no argument to this command that reaches them.
@@ -651,7 +921,7 @@ class WhatLooksLikeARundeskTree(support.Isolated):
         self.assertFalse(tree.is_rundesk(self.home / "never-made"))
 
 
-class WhenAPurgeCannotFinish(Uninstalling):
+class WhenAPurgeCannotFinish(RemovingAnInstall):
     """A removal that did not happen must never report success — the rule this command exists for.
 
     Every purge case here succeeds, so the branch that turns a `data/` it could not remove into a

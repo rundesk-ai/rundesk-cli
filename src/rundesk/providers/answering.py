@@ -40,6 +40,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from rundesk import __version__
 from rundesk.agents import directory, records
+from rundesk.channels import adapters as channels_adapters
 from rundesk.channels import arriving, delivery, hosting
 from rundesk.channels import kept as channels_kept
 from rundesk.core import config, paths
@@ -65,6 +66,15 @@ AS_A_STATE = {kept.DONE: DONE, kept.STOPPED: STOPPED, kept.FAILED: FAILED}
 #: is a `-# ` prefix and a newline — and none of that is rundesk's to write. Generous rather than
 #: exact, because the cost of being a few characters over is a delivery the adapter refuses whole.
 AROUND_THE_COST = 8
+
+#: What a surface that shows the answer alone is given when a turn completed and closed without
+#: saying anything after its last tool call. **A fact and nothing more.** It does not say the work
+#: succeeded, because this does not know; it does not say it failed, because it did not; and it says
+#: nothing about what the tools did, which is the part a person would most like invented for them.
+#: A surface that shows a turn as it happens needs none of this — the person watched it — and a
+#: stopped turn is not given it either, because somebody who pressed `/stop` knows why it is quiet.
+NOTHING_CLOSING = "This turn finished without a final answer."
+
 
 #: How long an answer waits to find out whether its platform took it, before the turn is settled.
 #:
@@ -104,6 +114,15 @@ DELEGATED_PROMPT_AT_MOST = turns.DELEGATED_PROMPT_AT_MOST
 #: SQLite `UPDATE`; keeping it far below every supported SQLite variable ceiling means many tiny
 #: guidance messages cannot make the claim itself fail. The rest stay pending for the next turn.
 DELEGATED_MESSAGES_AT_MOST = turns.DELEGATED_MESSAGES_AT_MOST
+
+#: Pending inbound channel messages one stop may settle in a conversation. The exact ids become one
+#: atomic `UPDATE`, so this stays far below every supported SQLite variable ceiling.
+#:
+#: **A bound on what is marked, never on what is stopped.** They are taken from the newest end, and
+#: claiming the newest unclaimed row supersedes every older one — so a conversation holding more
+#: than this keeps rows nothing will ever run rather than rows a later sweep would start, and the
+#: word a person is given stays true. See `Gestures._stopped`.
+PENDING_STOPPED_AT_MOST = turns.DELEGATED_MESSAGES_AT_MOST
 
 
 #: How many times a message that found the conversation busy is offered again.
@@ -201,11 +220,43 @@ class IntoAChannel:
         #: Asked each time rather than held: the gateway replaces what it is watching on every beat,
         #: and an object holding the first one would be answering into an adapter that has gone.
         self._hosted = hosted
+        #: Whether each surface shows a turn as it happens, by adapter kind. Asked of the adapter
+        #: once for the life of this gateway and remembered: it is a fact about the program on disk,
+        #: not about a turn, and asking it per answer would run that program for every reply.
+        self._as_it_happens: Dict[str, bool] = {}
+        self._asking = threading.Lock()
 
     @property
     def where(self) -> Path:
         """The gateway's own log, for what runs alongside a turn. Read-only on purpose."""
         return self._where
+
+    def streaming(self, kind: str) -> bool:
+        """Whether this surface shows a turn while it runs, from the adapter's own declaration.
+
+        **The composition of an answer depends on it, so it is asked and never assumed.** A surface
+        that shows working commentary has already shown everything the brain said before its last
+        thought, so its answer is that last thought alone; a surface that shows nothing until the
+        end has shown none of it, so its answer is everything the brain said. Read the wrong way
+        round, the second kind loses every thought but the last — which is what a brain that says
+        several finished things after going to work produces, and two shipped providers do.
+
+        **`stream` is the adapter's word for it** and `--capabilities` is where an adapter says so,
+        offline and with no account. Unsaid means *shows it as it happens*: that is what every
+        surface did before this question was asked, and a third-party adapter that has never heard
+        of the field keeps the behaviour it was written against.
+
+        Asked once per kind for the life of this gateway. The program on disk does not change under
+        a running gateway, and an update replaces the gateway with it.
+        """
+        with self._asking:
+            if kind not in self._as_it_happens:
+                said = True
+                with contextlib.suppress(Exception):
+                    declared = channels_adapters.capabilities(kind).get("stream", True)
+                    said = bool(declared)
+                self._as_it_happens[kind] = said
+            return self._as_it_happens[kind]
 
     def hosted(self) -> hosting.Watching:
         """What the gateway is watching **now** — asked again every time, never held."""
@@ -222,15 +273,22 @@ class IntoAChannel:
 
         Split like anything else, because a brain can say something finished and enormous, and the
         adapter refuses what it is handed rather than cutting it.
+
+        **Marked `remark` on the way out, and this is the only place that knows to.** What a brain
+        said before its answer and the answer itself are both prose it wrote, so a surface handed
+        the two cannot tell them apart — and one whose whole shape is *the answer and nothing else*
+        posted both, which is one question answered twice. The phase is known here, so it is said
+        here rather than guessed at the far end.
         """
         with contextlib.suppress(Exception):
             pieces = delivery.split(said, at_most=self._at_most(agent, kind))
             if pieces:
-                hosting.told(agent, self._where, self._hosted(), kind, place, pieces)
+                hosting.told(agent, self._where, self._hosted(), kind, place, pieces, remark=True)
 
     def _delivered(self, agent: str, kind: str, place: str, got: turns.Outcome,
                    external_id: Optional[str] = None,
-                   linked_earlier: Tuple[str, ...] = ()) -> str:
+                   linked_earlier: Tuple[str, ...] = (), notice: bool = False,
+                   aimed: Optional[delivery.Aimed] = None) -> str:
         """The answer, cut to what this platform takes, with whatever the brain made beside it.
 
         **Hands back why the platform would not take it, or `""`.** A turn whose answer was refused
@@ -253,10 +311,34 @@ class IntoAChannel:
         **A channel turn answers with one final thought** (R-CH-19). Earlier working remarks were
         already shown as they landed. An explicit final produced before later guidance is a
         candidate that the later final supersedes, not another completed answer to post.
+
+        `aimed` is one destination named the way an allow-list entry names one, superseding `place`
+        — a schedule that reports somewhere of its own, whose review turn is what finally answers
+        when it delegated. It reaches `hosting.told` unchanged and is decided nowhere near here.
         """
-        # A channel turn has one final answer. Earlier completed thoughts were either already shown
-        # as commentary or superseded by a later explicit final after steering.
-        whole = got.last_thought if got.last_thought.strip() else got.reply
+        # **A channel turn has one final answer, and what that is depends on what the surface has
+        # already shown** (R-CH-19, R-CAD-27). Where working commentary went out as it was finished,
+        # the answer is the last thought and the rest is already on the platform.
+        #
+        # Where nothing goes out until the end, the answer is the closing response: every finished
+        # thought after the last tool call, and no earlier one. Both halves of that are load-bearing
+        # — a brain that says three finished things after going to work and marks none of them final
+        # has two of them dropped by anything that reads only the last, and `reply` in its place
+        # carries the narration it said before and between its tools into the one message a quiet
+        # surface posts. There is no fallback to `reply` here for the same reason.
+        if self.streaming(kind):
+            whole = got.last_thought if got.last_thought.strip() else got.reply
+        else:
+            whole = got.closing_response
+        # **A completion mark and nothing beside it is not an answer.** Where a turn completed and
+        # closed without a word after its last tool call, a surface showing the answer alone has
+        # nothing at all to show: the person sees ✅ against their question and no reply, which reads
+        # as an answer they cannot find rather than as one that was never made. A surface that shows
+        # a turn as it happens is unaffected — the person watched the working — and a stopped turn
+        # keeps the silence below, which is the one case where nothing is the honest answer.
+        if (not whole.strip() and not self.streaming(kind)
+                and got.worked and got.turn_status != kept.STOPPED):
+            whole = NOTHING_CLOSING
         # **A turn somebody stopped is never apologised for.** The sentence for a turn that produced
         # nothing exists because silence leaves a person unable to tell a broken agent from a slow
         # one — and somebody who has just pressed `/stop` knows exactly which this is. Told "I could
@@ -297,7 +379,9 @@ class IntoAChannel:
         turned_away: List[str] = []
         wrote = hosting.told(agent, self._where, self._hosted(), kind, place, pieces,
                              sending=prepared.files, answering=external_id, cost=cost,
-                             landed_within=LANDS_WITHIN, refusals=turned_away)
+                             landed_within=LANDS_WITHIN, refusals=turned_away, notice=notice,
+                             to_sender=aimed.sender if aimed else "",
+                             to_place=aimed.place if aimed else "")
         if not wrote:
             # Nothing was hosting this channel by the time the answer was ready. The words exist in
             # the agent's own records either way; what does not exist is anywhere a person can read
@@ -479,6 +563,15 @@ class OnAChannel(IntoAChannel):
             _note(self._where, f"channel {kind}: admission stayed busy while answering {place} "
                                f"({why}); the message remains pending for retry", logs.WARNING)
             self._do_not_repeat_pending(agent, landed.message)
+            # **The indicator this thread put up is this thread's to take down** (R-CH-37).
+            # `working` is sent before admission is asked for, so a refusal here left a place
+            # typing with no turn behind it — for ever, because this message is now suppressed
+            # and nothing else in this gateway would ever send a state for it. Sent without the
+            # message's id on purpose: the message is still pending, and a mark on it would say the
+            # turn it is waiting for had settled. Left alone where this gateway is already running a
+            # turn in the same conversation, because that turn owns the indicator and ends it itself.
+            if not turns.running_here(agent, landed.conversation):
+                self._marked(agent, kind, place, FAILED)
         except Exception as why:                       # noqa: BLE001 — see the docstring
             _note(self._where, f"channel {kind}: answering {place} went wrong ({why})", logs.ERROR)
             self._do_not_repeat_pending(agent, landed.message)
@@ -489,11 +582,11 @@ class OnAChannel(IntoAChannel):
                 external_id: Optional[str] = None) -> None:
         """Say what the turn is doing, in the words the channel layer renders. Never raises.
 
-        **A mark needs the message it goes on** (R-DIS-7, R-DIS-8). Sent without one, every state
-        crossed the seam correctly and the adapter had nothing to put a reaction on, so a turn was
-        marked 👀 when it arrived and never marked again — which reads as an agent that took the
-        message up and then forgot it. `working` is the exception and needs none: it is the typing
-        indicator rather than a mark, and it belongs to the place rather than to one message.
+        **A message mark needs the message it goes on** (R-DIS-7, R-DIS-8). Sent without one, every
+        state crossed the seam correctly and the adapter had nothing to put a reaction on. `working`
+        needs none because it is the place's typing indicator. A terminal state also omits the
+        message when admission failed before a turn existed: it ends that indicator without marking
+        the still-pending message.
         """
         hosting.marked(agent, self._where, self._hosted(), kind, place, state, external_id)
 
@@ -608,8 +701,12 @@ class _Streaming:
         # apparent answer.
         if previous and not previous[1] and previous[0].strip():
             shown, linked = delivery.declared_in(previous[0])
+            # **Collected whether or not it is posted.** A file the brain declared in a thought is
+            # declared however that thought reaches somebody, and a surface that shows the answer
+            # alone still sends the file with it.
             self.linked.extend(linked)
-            self._on.remark(self._agent, self._kind, self._place, shown)
+            if self._on.streaming(self._kind):
+                self._on.remark(self._agent, self._kind, self._place, shown)
 
     def _doing(self, did: str, ok: Optional[bool] = None, who: str = "") -> None:
         hosting.doing(self._agent, self._on.where, self._on.hosted(), self._kind, self._place,
@@ -655,7 +752,7 @@ class Gestures:
         if control == hosting.FORGET:
             return self._forgotten(agent, place)
         if control == hosting.STOP:
-            return self._stopped(agent, place)
+            return self._stopped(agent, kind, place)
         # **Announced before it happens, because the thing that would report it afterwards is the
         # thing going away.**
         self._wanted(control)
@@ -745,11 +842,16 @@ class Gestures:
         return f"**{agent}** now uses **{shown}**. This conversation starts fresh."
 
     def _only_one(self, agent: str, kind: str) -> Optional[str]:
-        """The single person this channel allows, or `None` where it allows any other number."""
+        """The single person this channel allows, or `None` where it allows any other number.
+
+        **A channel that allows a place allows an unknown number of people**, so it is never this
+        one however few senders stand beside it: who is in a room is the platform's to change, and
+        an agent-wide default is not something a room's membership gets to decide.
+        """
         with contextlib.suppress(Exception):
-            allowed = channels_kept.who_may_reach(channels_kept.one(agent, kind))
-            if len(allowed) == 1:
-                return str(allowed[0])
+            allowed = channels_kept.admitting(channels_kept.one(agent, kind))
+            if len(allowed.senders) == 1 and not allowed.places:
+                return allowed.senders[0]
         return None
 
     def _forgotten(self, agent: str, place: str) -> str:
@@ -769,15 +871,63 @@ class Gestures:
                     "will be the last of the old conversation.")
         return "🧹 Started fresh. The next message begins a new session."
 
-    def _stopped(self, agent: str, place: str) -> str:
-        """End the turn running in this conversation (R-CH-9)."""
+    def _stopped(self, agent: str, kind: str, place: str) -> str:
+        """End the turn running here, or the work that never reached one (R-CH-9, R-CH-36).
+
+        **A message no turn ever admitted is still work somebody is waiting on.** Admission can be
+        refused before a turn exists — an install-wide change holds the admission barrier for a few
+        seconds — which leaves the message durably pending, the place showing an indicator with
+        nothing behind it, and this answering "nothing is running here" while the person watches
+        their agent appear to type for ever.
+
+        So the pending tail is settled through the same path work stopped before its provider began
+        already takes, and no brain runs. An older message a later turn has already superseded is
+        not settled, marked or replayed, because the rows this may settle are the same ones a
+        replacement gateway may recover.
+
+        **Two things keep the word "stopped" true**, and each was a way of saying it and being
+        wrong. Nothing this stop leaves behind may still run, which is what taking the tail from its
+        newest end guarantees on a conversation holding more rows than one claim may hold. And only
+        the ids that were *actually* associated with the stopped turn are marked — a turn published
+        in the moment between reading those rows and claiming the conversation is what this stops
+        instead, and it marks its own message when it ends.
+        """
         found = arriving.standing_in(agent, place)
-        if found is None or not turns.busy(agent, found):
+        if found is None:
             return "✋ Nothing is running here."
-        if turns.stop(agent, found):
+        if turns.busy(agent, found):
+            if turns.stop(agent, found):
+                return "✋ Stopped."
+            # Busy, and not by anything this process is running — a scheduled turn takes a process
+            # of its own. Said as what it is rather than as a failure, because trying again will
+            # not help.
+            return "✋ Something is running here, but not something I can stop from a conversation."
+        # **From the newest end, so a bounded answer is still a whole one.** Claiming the newest
+        # row supersedes every older unclaimed one, which is the same rule a replacement gateway
+        # applies — so a conversation holding more unclaimed rows than this leaves none that could
+        # still run. Taking the oldest of them would leave the very rows a sweep starts with.
+        pending = arriving.pending_on_channels(
+            agent, PENDING_STOPPED_AT_MOST, channels=(kind,), conversation=found, newest=True)
+        if not pending:
+            return "✋ Nothing is running here."
+        stopped = turns.stop_or_settle_pending(
+            agent, found, tuple(one.landed.message for one in pending))
+        if stopped.settled:
+            became = set(stopped.settled)
+            for one in pending:
+                if one.landed.message not in became:
+                    continue
+                # The terminal state ends the place's indicator as well as marking the message,
+                # which is the whole of what the person asked for and is one record rather than two.
+                hosting.marked(agent, self._where, self._hosted(), kind, place, STOPPED,
+                               one.external_id)
             return "✋ Stopped."
-        # Busy, and not by anything this process is running — a scheduled turn takes a process of
-        # its own. Said as what it is rather than as a failure, because trying again will not help.
+        if stopped.live:
+            # A turn was published between reading those rows and claiming the conversation, so
+            # what this stopped is that turn and every row read above is still pending. It writes
+            # its own outcome and marks its own message; marking this snapshot would put ✋ on work
+            # that is still waiting for a turn and would then be answered anyway.
+            return "✋ Stopped."
         return "✋ Something is running here, but not something I can stop from a conversation."
 
 
@@ -931,14 +1081,19 @@ class OnADelegation(IntoAChannel):
                   delegator: str, provider_name: Optional[str] = None,
                   model_name: Optional[str] = None,
                   provider_alias: Optional[str] = None) -> bool:
-        """End delegated work, including a brief stopped before its provider began."""
+        """End delegated work, including a brief stopped before its provider began.
+
+        **Whether anything was reached is the whole of what collection asks**, and it is the same
+        question it always asked: a delegation has no platform message to mark, so which of the two
+        `turns.Stopped` describes happened changes nothing here.
+        """
         _body, messages = _delegated_prompt(agent, conversation, delegator)
         if provider_name is None and provider_alias is None and model_name is None:
-            return turns.stop_or_settle_pending(agent, conversation, messages)
-        return turns.stop_or_settle_pending(agent, conversation, messages,
-                                            provider_name=provider_name,
-                                            provider_alias=provider_alias,
-                                            model_name=model_name)
+            return bool(turns.stop_or_settle_pending(agent, conversation, messages))
+        return bool(turns.stop_or_settle_pending(agent, conversation, messages,
+                                                 provider_name=provider_name,
+                                                 provider_alias=provider_alias,
+                                                 model_name=model_name))
 
     def review_this(self, agent: str, conversation: int, answer: str, from_agent: str,
                     delegation_id: str = "", answer_id: str = "") -> bool:
@@ -985,9 +1140,14 @@ class OnADelegation(IntoAChannel):
         under. Absent stays absent — see `channels.hosting.delegating`.
         """
         destination = self._destination(agent, conversation)
-        if destination is None:
+        if destination is None or destination.to is not None:
+            # **A run that reports to one named destination says nothing on the way**, which is what
+            # `docs/concepts/schedules.md` already promises every scheduled run: the notice and the
+            # report, and never a third message. A `delegation` record names its place directly and
+            # no adapter resolves a destination for one, so honouring the target here would mean
+            # posting this progress somewhere the schedule did not choose.
             return False
-        kind, place = destination
+        kind, place = destination.kind, destination.place
         # Rendered here, where `channels.delivery` is reachable and `delegations` is not — the same
         # words the cost line uses for the same quantity, so one turn's `47s elapsed` and one
         # delegation's `47s` are the same measure said the same way.
@@ -1070,11 +1230,19 @@ class OnADelegation(IntoAChannel):
         # no platform — a delegation being answered, a schedule, a terminal. Read once here rather
         # than inside the retry, because it cannot change between attempts.
         destination = self._destination(agent, conversation)
-        kind, delivery_place = destination if destination is not None else (None, place)
+        aimed = destination.to if destination is not None else None
+        kind = destination.kind if destination is not None else None
+        delivery_place = destination.place if destination is not None else place
+        # **A named destination shows nothing until the end.** A typing indicator and a running
+        # remark both name a place directly, and no adapter resolves a destination for either — so a
+        # turn aimed at one keeps the quiet every scheduled run already keeps, and the answer is the
+        # only thing that reaches a person. `showed` refuses the same records for the same reason.
+        showing = kind if aimed is None else None
         try:
             for again in range(TRIES):
                 try:
-                    watching = (_Streaming(self, agent, kind, delivery_place) if kind else None)
+                    watching = (_Streaming(self, agent, showing, delivery_place)
+                                if showing else None)
                     typing_started = False
                     got = None
 
@@ -1083,9 +1251,10 @@ class OnADelegation(IntoAChannel):
                         # Delegation and review turns have no new platform message to trigger the
                         # ordinary channel path. Admission is the exact moment they become real
                         # work, so a channel-backed conversation must start typing here as well.
-                        if kind:
+                        if showing:
                             typing_started = hosting.marked(
-                                agent, self._where, self._hosted(), kind, delivery_place, WORKING)
+                                agent, self._where, self._hosted(), showing, delivery_place,
+                                WORKING)
                         if admitted is not None:
                             admitted.accepted()
 
@@ -1103,15 +1272,17 @@ class OnADelegation(IntoAChannel):
                                       if watching and source == arriving.FROM_CHANNEL else None),
                             admitted=started)
                     finally:
-                        if kind and typing_started:
+                        if showing and typing_started:
                             became = (AS_A_STATE.get(got.turn_status, FAILED)
                                       if got is not None else FAILED)
                             # No external id: this terminal state ends the place-wide typing
                             # indicator but puts no reaction on a message nobody sent.
                             hosting.marked(
-                                agent, self._where, self._hosted(), kind, delivery_place, became)
-                    if kind and watching:
-                        self._out_loud(agent, kind, delivery_place, got, watching, about)
+                                agent, self._where, self._hosted(), showing, delivery_place, became)
+                    if kind:
+                        self._out_loud(
+                            agent, kind, delivery_place, got, watching, about,
+                            notice=source == arriving.FROM_SCHEDULE, aimed=aimed)
                     return True
                 except turns.Busy:
                     said_into = turns.Admission()
@@ -1137,21 +1308,35 @@ class OnADelegation(IntoAChannel):
             return False
 
     @staticmethod
-    def _destination(agent: str, conversation: int) -> Optional[Tuple[str, str]]:
-        """Where this conversation is heard, including a schedule's configured notice DM."""
+    def _destination(agent: str, conversation: int) -> Optional[delivery.Telling]:
+        """Where this conversation is heard, or `None` where it stands on no platform.
+
+        **The resolver's own answer, carried rather than reduced to a pair.** A schedule may report
+        somewhere of its own, and a `(kind, place)` tuple has nowhere to put that — so this hands
+        back what `channels.delivery.notice` said, `to` and all. No words are asked for, because
+        what is wanted here is the destination and the answer is composed later.
+
+        A conversation standing on a schedule takes **that schedule's** destination. It is read from
+        the row rather than carried in, because the caller here is a review turn resuming an
+        invocation minutes or hours later; the row is the only thing that outlives it. A row that
+        cannot be read, or whose destination cannot be understood, falls back to the agent's
+        notified channel — where every scheduled report stood before this existed — because losing
+        the report entirely is the worse of the two ways to be wrong.
+        """
         stands = arriving.where_it_stands(agent, conversation)
         if stands is None:
             return None
         if stands[0] == arriving.FROM_CHANNEL:
             kind = arriving.on_which_channel(agent, conversation)
-            return (kind, stands[1]) if kind else None
+            return delivery.Telling(kind, stands[1], []) if kind else None
         if stands[0] == arriving.FROM_SCHEDULE:
-            telling = delivery.notice(agent, "")
-            return (telling.kind, telling.place) if telling is not None else None
+            return delivery.notice(
+                agent, "", **_where_one_schedule_reports(agent, stands[1]))
         return None
 
     def _out_loud(self, agent: str, kind: str, place: str, got: turns.Outcome,
-                  watching: "_Streaming", about: str) -> None:
+                  watching: Optional["_Streaming"], about: str, notice: bool = False,
+                  aimed: Optional[delivery.Aimed] = None) -> None:
         """Send what the turn settled with to the room it was asked in. **Never raises.**
 
         Guarded rather than left to the caller's `except`: a platform that would not take the answer
@@ -1161,10 +1346,18 @@ class OnADelegation(IntoAChannel):
         No mark goes with it. The four marks belong to *a message somebody sent*, and nobody sent
         this one: it is the agent picking its own conversation back up, so there is nothing on the
         platform for a reaction to land on.
+
+        `watching` is `None` for a turn aimed at a named destination, which streamed nothing and
+        therefore linked nothing. `aimed` is that destination, passed straight through.
         """
         try:
             refused = self._delivered(
-                agent, kind, place, got, None, tuple(watching.linked))
+                agent, kind, place, got, None,
+                # Nothing was shown on the way where nothing was streaming, so there is nothing
+                # already linked to carry forward — which is the whole of what an aimed turn does
+                # differently up to this point.
+                tuple(watching.linked) if watching is not None else (),
+                notice=notice, aimed=aimed)
         except Exception as why:  # noqa: BLE001 — a thread, and nobody is above it
             _note(self._where, f"{about} could not be sent to {kind} ({why})", logs.ERROR)
             return
@@ -1278,6 +1471,25 @@ class OnASchedule:
             where=directory.home(agent),
             env=firing.the_environment(),
             holding=(holding,))
+
+
+def _where_one_schedule_reports(agent: str, source_id: str) -> Dict[str, str]:
+    """Where the schedule behind this conversation reports, as the resolver's own arguments.
+
+    **Empty for every schedule that named nothing**, which is every schedule written before the
+    verb existed and the answer that keeps the agent's notified channel. Empty as well for a row
+    that cannot be read or whose destination cannot be understood: the report is what matters and
+    the notified channel is where it has always gone, so a target nobody can act on costs the
+    anchoring rather than the report.
+
+    Read here rather than carried, because the caller is a review turn resuming an invocation long
+    after the firing that started it — the row is the only thing that outlived the gateway.
+    """
+    with contextlib.suppress(Exception):
+        aimed = due.target_of(schedules_kept.one(agent, arriving.schedule_name(source_id)))
+        if aimed is not None:
+            return {"channel": aimed.channel, "sender": aimed.sender, "place": aimed.place}
+    return {}
 
 
 def for_a_schedule(agent: str, schedule: str, when=None) -> turns.Outcome:

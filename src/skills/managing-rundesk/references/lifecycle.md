@@ -10,7 +10,7 @@ machine-level operations; preserve owner data and report every refusal.
 | `install [--source <dir>] [--bin-dir <dir>]` | Install from a program tree and place the command link in the chosen PATH directory. Defaults use the running source and installer-selected bin directory. |
 | `update [--continue]` | Check the published release and move to it, optionally resuming the active originating channel turn after health returns. |
 | `uninstall [--confirm]` | Preview removal; `--confirm` removes program, job definitions, and command link while retaining owner data, backups, and credentials. |
-| `uninstall --purge [--confirm]` | Also remove owner data and the live credential store. Backups, which may contain credentials, are never removed. |
+| `uninstall --purge [--confirm] [--root <dir>]` | Also remove owner data and the live credential store. A confirmed purge requires `--root` to match `RUNDESK_HOME`; backups, which may contain credentials, are never removed. |
 
 Prefix every command with `"$RUNDESK_COMMAND"` for an existing install. An update may restart the
 gateway hosting the current agent; Rundesk queues that restart until the active turn finishes and
@@ -39,8 +39,9 @@ then brings the gateway back online.
 
 Use `--continue` only inside the active channel provider turn that must verify and finish its own
 work afterward. It is explicit opt-in: ordinary and automatic updates never wake a conversation.
-Rundesk refuses terminal or ambiguous callers and suppresses a duplicate when newer owner input or
-a newer turn already moved the conversation on. It resumes the exact provider session when safe;
+Rundesk accepts owner guidance already incorporated into that same active turn and binds the handoff
+to its latest message. It refuses terminal or ambiguous callers and suppresses a duplicate when
+newer owner input or a newer turn already moved the conversation on. It resumes the exact provider session when safe;
 otherwise it wakes the same conversation in a fresh session and directs context recovery through
 `messages`.
 
@@ -48,8 +49,10 @@ otherwise it wakes the same conversation in a fresh session and directs context 
 
 1. Save and list backups. Run the exact uninstall without `--confirm` and inspect the preview.
 2. Use ordinary uninstall unless the owner explicitly requested deletion of data and credentials.
-3. Add `--confirm` only after the owner approves the named root and retained/removed categories.
-4. Report what was removed and what remains, especially the backup location.
+3. Copy the root-bound command from the preview. A confirmed purge refuses a missing or mismatched
+   `--root`; do not reconstruct or omit either its `RUNDESK_HOME` assignment or root assertion.
+4. Add `--confirm` only after the owner approves the named root and retained/removed categories.
+5. Report what was removed and what remains, especially the backup location.
 
 Uninstall stops placed jobs before removing the program. `--purge` is irreversible from the live
 install data, but backups survive and can contain recoverable credentials.

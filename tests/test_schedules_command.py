@@ -12,12 +12,17 @@ that asserts on a private shape goes green while the sentence a person reads goe
 Run directly: `python3 tests/test_schedules_command.py`
 """
 
+import json
 import unittest
 from unittest import mock
 
 import support
 from rundesk.agents import directory, records
+from rundesk.channels import kept as channels
+from rundesk.core import paths
+from rundesk.delegations import admitting
 from rundesk.exits import FAILED, OK, USAGE
+from rundesk.gateways import standing
 from rundesk.schedules import firing, kept, upkeep
 
 #: A program that really is on this machine, and one that is not. Located when a schedule is added,
@@ -164,6 +169,57 @@ class Adding(Scheduling):
         self.assertIn(f"{THERE} hello", out)
         self.assertIn("next", out)
 
+    def test_an_enabled_self_schedule_is_refused_without_a_running_gateway(self):
+        with mock.patch.dict("os.environ", {admitting.AGENT: self.agent,
+                                             admitting.RUN: "1"}):
+            code, _out, err = self.rundesk(
+                "schedules", "add", self.agent, "later",
+                "--at", "2099-01-01T09:00", "--ask", "Verify the result.")
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("cannot write an enabled schedule for itself while its gateway is not "
+                      "running", err)
+        self.assertIn(f"rundesk gateways start {self.agent}", err)
+        self.assertIn("nothing was added", err)
+        self.assertEqual([], kept.all(self.agent))
+
+    def test_an_enabled_self_schedule_is_admitted_while_its_gateway_is_running(self):
+        with mock.patch.dict("os.environ", {admitting.AGENT: self.agent,
+                                             admitting.RUN: "1"}), \
+                standing.holding(directory.where(self.agent)):
+            code, out, err = self.rundesk(
+                "schedules", "add", self.agent, "later",
+                "--at", "2099-01-01T09:00", "--ask", "Verify the result.")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("schedule later added", out)
+        self.assertEqual(1, kept.one(self.agent, "later")["enabled"])
+
+    def test_a_disabled_self_schedule_remains_a_valid_draft_without_a_gateway(self):
+        with mock.patch.dict("os.environ", {admitting.AGENT: self.agent,
+                                             admitting.RUN: "1"}):
+            code, _out, err = self.rundesk(
+                "schedules", "add", self.agent, "later", "--disabled",
+                "--at", "2099-01-01T09:00", "--ask", "Verify the result.")
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual(0, kept.one(self.agent, "later")["enabled"])
+
+    def test_a_self_schedule_is_not_written_when_gateway_state_cannot_be_known(self):
+        unknown = standing.Standing(standing.CANNOT_TELL, None, None,
+                                    "the gateway lock could not be opened")
+        with mock.patch.dict("os.environ", {admitting.AGENT: self.agent,
+                                             admitting.RUN: "1"}), \
+                mock.patch.object(standing, "standing", return_value=unknown):
+            code, _out, err = self.rundesk(
+                "schedules", "add", self.agent, "later",
+                "--at", "2099-01-01T09:00", "--ask", "Verify the result.")
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("cannot be verified", err)
+        self.assertIn("nothing was added", err)
+        self.assertEqual([], kept.all(self.agent))
+
     def test_a_schedule_can_state_one_moment_instead(self):
         code, _out, err = self.rundesk("schedules", "add", self.agent, "once",
                                       "--at", "2099-01-01T09:00", "--run", THERE)
@@ -295,6 +351,31 @@ class Updating(Scheduling):
         self.assertEqual(0, self.row()["enabled"])
         self.rundesk("schedules", "update", self.agent, "nightly", "--enable")
         self.assertEqual(1, self.row()["enabled"])
+
+    def test_a_self_schedule_cannot_be_enabled_without_a_running_gateway(self):
+        self.given("nightly", "--disabled")
+        with mock.patch.dict("os.environ", {admitting.AGENT: self.agent,
+                                             admitting.RUN: "1"}):
+            code, _out, err = self.rundesk(
+                "schedules", "update", self.agent, "nightly", "--enable")
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("cannot write an enabled schedule for itself while its gateway is not "
+                      "running", err)
+        self.assertIn("nothing was changed", err)
+        self.assertEqual(0, self.row()["enabled"])
+
+    def test_a_self_schedule_cannot_change_an_enabled_promise_without_a_gateway(self):
+        self.given()
+        with mock.patch.dict("os.environ", {admitting.AGENT: self.agent,
+                                             admitting.RUN: "1"}):
+            code, _out, err = self.rundesk(
+                "schedules", "update", self.agent, "nightly", "--when", "0 3 * * *")
+
+        self.assertEqual(FAILED, code)
+        self.assertIn("cannot write an enabled schedule for itself while its gateway is not "
+                      "running", err)
+        self.assertEqual("0 2 * * *", self.row()["cron"])
 
     def test_enabling_and_disabling_at_once_is_the_command_line_being_wrong(self):
         self.given()
@@ -709,6 +790,249 @@ class WhatTheExitCodeSays(Scheduling):
         code, _out, err = self.rundesk("schedules")
         self.assertEqual(FAILED, code)
         self.assertIn("schedules: FAILED", err)
+
+
+class WhereOneScheduleReports(Scheduling):
+    """R-SCH-58. `--channel` and `--to`, and every way they are refused.
+
+    Driven through the real parser and the real dispatch, and every destination is checked against a
+    real channel row with a real allow list — because *who may reach this agent* is the authority
+    this borrows and a case that invented its own answer would prove nothing about it.
+
+    The stand-in adapter is an install's own, under `data/adapters/`, and it is what makes the
+    capability gate provable with no platform anywhere near the case: one that says it can address a
+    destination and one that says nothing.
+    """
+
+    #: What the allow list holds: one person, one place, and one id that is on it as a person only —
+    #: which is what makes *the other kind* refusable in both directions.
+    A_PERSON = "U0ANN"
+    A_PLACE = "C0OPS"
+    A_PERSON_NOT_A_PLACE = "U0DALE"
+
+    ADDRESSES = """#!/usr/bin/env python3
+import json, sys
+if "--capabilities" in sys.argv:
+    print(json.dumps({"address": True, "max_text": 2000}))
+raise SystemExit(0)
+"""
+
+    SAYS_NOTHING = """#!/usr/bin/env python3
+import json, sys
+if "--capabilities" in sys.argv:
+    print(json.dumps({"max_text": 2000}))
+raise SystemExit(0)
+"""
+
+    def setUp(self):
+        super().setUp()
+        self.an_adapter("chat", self.ADDRESSES)
+        self.an_adapter("quiet", self.SAYS_NOTHING)
+        self.a_channel("chat")
+        self.a_channel("quiet")
+
+    def an_adapter(self, kind, body):
+        """One channel adapter this install has been given, standing where a real one would."""
+        at = paths.data() / "adapters" / kind
+        at.parent.mkdir(parents=True, exist_ok=True)
+        at.write_text(body, encoding="utf-8")
+        at.chmod(0o755)
+        return at
+
+    def a_channel(self, kind):
+        channels.added(self.agent, kind, {
+            "describes": kind,
+            "allowed": json.dumps([self.A_PERSON, f"place:{self.A_PLACE}",
+                                   self.A_PERSON_NOT_A_PLACE])})
+
+    def targeted(self, name="weekly-retro", *more):
+        return self.rundesk("schedules", "add", self.agent, name, "--when", "0 12 * * 5",
+                            "--ask", "Write the retro.", *more)
+
+    # -- what works ------------------------------------------------------------------
+
+    def test_a_place_is_taken_and_read_back_the_way_it_was_typed(self):
+        code, out, err = self.targeted("weekly-retro", "--channel", "chat",
+                                       "--to", f"place:{self.A_PLACE}")
+        self.assertEqual(OK, code, err)
+        self.assertIn(f"reports   chat place:{self.A_PLACE}", out)
+
+    def test_a_person_is_taken_and_read_back_as_a_bare_id(self):
+        code, out, err = self.targeted("daily-brief", "--channel", "chat", "--to", self.A_PERSON)
+        self.assertEqual(OK, code, err)
+        self.assertIn(f"reports   chat {self.A_PERSON}", out)
+
+    def test_the_typed_spelling_of_a_person_is_taken_too(self):
+        # An allow-list entry may say `sender:` out loud, so `--to` accepts what the list accepts —
+        # one reading of one string, and it is `channels.kept`'s.
+        code, out, err = self.targeted("daily-brief", "--channel", "chat",
+                                       "--to", f"sender:{self.A_PERSON}")
+        self.assertEqual(OK, code, err)
+        self.assertIn(f"reports   chat {self.A_PERSON}", out)
+
+    def test_it_is_what_the_records_hold(self):
+        self.targeted("weekly-retro", "--channel", "chat", "--to", f"place:{self.A_PLACE}")
+        row = self.row("weekly-retro")
+        self.assertEqual(("chat", None, self.A_PLACE),
+                         (row["channel"], row["channel_sender_id"], row["channel_place_id"]))
+
+    def test_show_says_it_too(self):
+        self.targeted("weekly-retro", "--channel", "chat", "--to", f"place:{self.A_PLACE}")
+        code, out, _ = self.rundesk("schedules", "show", self.agent, "weekly-retro")
+        self.assertEqual(OK, code)
+        self.assertIn(f"reports   chat place:{self.A_PLACE}", out)
+
+    def test_update_moves_it_from_a_place_to_a_person_and_clears_the_place(self):
+        # Both columns are written whichever one was named, or the records would refuse a row
+        # naming two destinations — about a column nobody typed.
+        self.targeted("weekly-retro", "--channel", "chat", "--to", f"place:{self.A_PLACE}")
+        code, out, err = self.rundesk("schedules", "update", self.agent, "weekly-retro",
+                                      "--channel", "chat", "--to", self.A_PERSON)
+        self.assertEqual(OK, code, err)
+        self.assertIn(f"reports   chat {self.A_PERSON}", out)
+        row = self.row("weekly-retro")
+        self.assertEqual((self.A_PERSON, None),
+                         (row["channel_sender_id"], row["channel_place_id"]))
+
+    def test_naming_only_the_destination_is_a_change_on_its_own(self):
+        # It would otherwise be refused as *nothing was named to change*, which is the sentence for
+        # a command that said nothing at all.
+        self.given("nightly")
+        code, _out, err = self.rundesk("schedules", "update", self.agent, "nightly",
+                                       "--channel", "chat", "--to", self.A_PERSON)
+        self.assertEqual(OK, code, err)
+
+    # -- what is untouched -----------------------------------------------------------
+
+    def test_a_schedule_that_names_neither_says_nothing_extra(self):
+        code, out, err = self.rundesk("schedules", "add", self.agent, "nightly",
+                                      "--when", "0 2 * * *", "--run", f"{THERE} hello")
+        self.assertEqual(OK, code, err)
+        self.assertNotIn("reports", out)
+
+    def test_a_schedule_that_names_neither_holds_nothing(self):
+        self.given("nightly")
+        row = self.row("nightly")
+        self.assertEqual((None, None, None),
+                         (row["channel"], row["channel_sender_id"], row["channel_place_id"]))
+
+    def test_a_listing_with_nothing_targeted_has_the_columns_it_always_had(self):
+        self.given("nightly")
+        _code, out, _ = self.rundesk("schedules", "list", self.agent)
+        self.assertIn("SCHEDULE", out)
+        self.assertNotIn("REPORTS", out)
+
+    def test_a_listing_gains_the_column_only_once_something_is_targeted(self):
+        self.given("nightly")
+        self.targeted("weekly-retro", "--channel", "chat", "--to", f"place:{self.A_PLACE}")
+        _code, out, _ = self.rundesk("schedules", "list", self.agent)
+        self.assertIn("REPORTS", out)
+        self.assertIn(f"chat place:{self.A_PLACE}", out)
+
+    def test_an_untargeted_row_in_that_listing_says_nothing_in_the_column(self):
+        self.given("nightly")
+        self.targeted("weekly-retro", "--channel", "chat", "--to", f"place:{self.A_PLACE}")
+        _code, out, _ = self.rundesk("schedules", "list", self.agent)
+        # Asserted to be there before it is read, so a listing that stopped printing the row
+        # fails saying so rather than passing an emptier assertion or erroring on an index.
+        nightly = [line for line in out.splitlines() if line.startswith("nightly")]
+        self.assertEqual(1, len(nightly), out)
+        self.assertNotIn("chat", nightly[0])
+
+    def test_a_bare_listing_of_every_agent_keeps_its_own_columns(self):
+        self.given("nightly")
+        _code, out, _ = self.rundesk("schedules")
+        self.assertIn("AGENT", out)
+        self.assertNotIn("REPORTS", out)
+
+    # -- every refusal ---------------------------------------------------------------
+
+    def test_a_channel_with_no_destination_is_refused_naming_the_missing_flag(self):
+        code, _out, err = self.targeted("r", "--channel", "chat")
+        self.assertEqual(FAILED, code)
+        self.assertIn("nothing said where on it", err)
+        self.assertIn("--to", err)
+        self.assertIn("nothing was added", err)
+        self.assertNothingWasWritten("r")
+
+    def test_a_destination_with_no_channel_is_refused_naming_the_missing_flag(self):
+        code, _out, err = self.targeted("r", "--to", f"place:{self.A_PLACE}")
+        self.assertEqual(FAILED, code)
+        self.assertIn("nothing said which channel", err)
+        self.assertIn("--channel", err)
+        self.assertNothingWasWritten("r")
+
+    def test_a_channel_this_install_does_not_have_is_refused(self):
+        code, _out, err = self.targeted("r", "--channel", "telegram",
+                                        "--to", f"place:{self.A_PLACE}")
+        self.assertEqual(FAILED, code)
+        self.assertIn("nothing on this install is a channel called telegram", err)
+        self.assertNothingWasWritten("r")
+
+    def test_a_channel_this_agent_does_not_have_is_refused(self):
+        # A different check and a different sentence: the adapter is there and the agent is not
+        # connected to it, so what to do about it is `channels add` rather than looking at a list.
+        self.an_adapter("elsewhere", self.ADDRESSES)
+        code, _out, err = self.targeted("r", "--channel", "elsewhere", "--to", self.A_PERSON)
+        self.assertEqual(FAILED, code)
+        self.assertIn(f"{self.agent} has no elsewhere channel", err)
+        self.assertIn(f"rundesk channels add {self.agent} elsewhere", err)
+        self.assertNothingWasWritten("r")
+
+    def test_a_destination_that_is_not_on_the_allow_list_is_refused(self):
+        code, _out, err = self.targeted("r", "--channel", "chat", "--to", "U0NOBODY")
+        self.assertEqual(FAILED, code)
+        self.assertIn("U0NOBODY is not on the chat channel's allow list", err)
+        self.assertNothingWasWritten("r")
+
+    def test_a_place_that_is_not_on_the_allow_list_is_refused(self):
+        code, _out, err = self.targeted("r", "--channel", "chat", "--to", "place:C0NOWHERE")
+        self.assertEqual(FAILED, code)
+        self.assertIn("C0NOWHERE is not a place on the chat channel's allow list", err)
+        self.assertNothingWasWritten("r")
+
+    def test_an_id_on_the_list_as_a_place_is_refused_when_named_as_a_person(self):
+        # Its own sentence, because it is not a typo: it is somebody having said `--to X` where
+        # they meant `--to place:X`, and *not on the allow list* would send them to look at a list
+        # the id is on.
+        code, _out, err = self.targeted("r", "--channel", "chat", "--to", self.A_PLACE)
+        self.assertEqual(FAILED, code)
+        self.assertIn("holds it as a place", err)
+        self.assertIn(f"say place:{self.A_PLACE}", err)
+        self.assertNothingWasWritten("r")
+
+    def test_an_id_on_the_list_as_a_person_is_refused_when_named_as_a_place(self):
+        code, _out, err = self.targeted("r", "--channel", "chat",
+                                        "--to", f"place:{self.A_PERSON_NOT_A_PLACE}")
+        self.assertEqual(FAILED, code)
+        self.assertIn("as a person", err)
+        self.assertIn(f"say --to {self.A_PERSON_NOT_A_PLACE}", err)
+        self.assertNothingWasWritten("r")
+
+    def test_an_adapter_that_cannot_address_one_is_refused(self):
+        code, _out, err = self.targeted("r", "--channel", "quiet", "--to", self.A_PERSON)
+        self.assertEqual(FAILED, code)
+        self.assertIn("does not say it can address a destination of its own", err)
+        self.assertNothingWasWritten("r")
+
+    def test_a_destination_naming_nothing_at_all_is_refused(self):
+        code, _out, err = self.targeted("r", "--channel", "chat", "--to", "place:")
+        self.assertEqual(FAILED, code)
+        self.assertIn("names nobody and nowhere", err)
+        self.assertNothingWasWritten("r")
+
+    def test_update_refuses_the_same_way_and_changes_nothing(self):
+        self.targeted("weekly-retro", "--channel", "chat", "--to", f"place:{self.A_PLACE}")
+        code, _out, err = self.rundesk("schedules", "update", self.agent, "weekly-retro",
+                                       "--channel", "chat", "--to", "U0NOBODY")
+        self.assertEqual(FAILED, code)
+        self.assertIn("nothing was changed", err)
+        self.assertEqual(self.A_PLACE, self.row("weekly-retro")["channel_place_id"])
+
+    def assertNothingWasWritten(self, name):
+        """Every refusal happens before the write, so the schedule must not be there at all."""
+        with self.assertRaises(records.NotThere):
+            kept.one(self.agent, name)
 
 
 if __name__ == "__main__":

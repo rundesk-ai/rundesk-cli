@@ -195,6 +195,34 @@ class WhenTheCommandLineIsWrong(Asking):
         self.assertEqual([], kept.list_turns(self.agent))
 
 
+class WhenTheNameIsTypedInAnotherCase(Asking):
+    """`Cole` and `cole` are one agent.
+
+    `directory.taken` refuses a second agent whose name differs from an existing one only by ASCII
+    letter case, so an ASCII case variant can only ever mean the one agent standing there — and a
+    person typing an agent's name the way they say it should reach it.
+    """
+
+    def test_a_mixed_case_name_reaches_the_agent_standing_under_it(self):
+        code, out, err = self.rundesk("ask", "Cole", "what changed today?")
+        self.assertEqual(OK, code, err)
+        self.assertIn("what changed today?", out)
+        self.assertEqual(1, len(kept.list_turns(self.agent)))
+
+    def test_the_stored_name_is_what_the_turn_is_taken_on_and_no_second_agent_appears(self):
+        """Resolved, never renamed: the agent keeps the name its owner chose and nothing is made
+        under the spelling somebody typed."""
+        self.assertEqual(OK, self.rundesk("ask", "COLE", "what changed today?")[0])
+        self.assertEqual([self.agent], directory.known())
+        self.assertEqual(1, len(kept.list_turns(self.agent)))
+
+    def test_a_case_variant_of_no_agent_is_refused_as_it_was_typed_and_takes_no_turn(self):
+        code, _out, err = self.rundesk("ask", "Nobody", "hello")
+        self.assertEqual(FAILED, code)
+        self.assertIn("Nobody is not an agent on this install", err)
+        self.assertEqual([], kept.list_turns(self.agent))
+
+
 class WhenOneAgentAsksAnother(support.Isolated):
     """The configured scope is enforced at admission, not merely hidden from the prompt."""
 
@@ -211,10 +239,17 @@ class WhenOneAgentAsksAnother(support.Isolated):
                  "2026-08-10T00:00:00Z"))
             self.turn = int(conn.execute("SELECT id FROM turns").fetchone()[0])
 
-    def ask_from_ava(self, target, *more):
+    def ask_from_ava(self, target, *more, whose_gateway=None):
+        """`target` is what gets typed; `whose_gateway` is the agent whose gateway is up.
+
+        The two differ only when an ASCII case variant is being typed, and naming the stored agent
+        is what keeps that variant away from the filesystem: a volume that tells `Forge` from
+        `forge` apart would otherwise be asked for a gateway standing in a directory that does not
+        exist.
+        """
         with mock.patch.dict(os.environ, {admitting.AGENT: "ava",
                                           admitting.RUN: str(self.turn)}), \
-                standing.holding(directory.where(target)):
+                standing.holding(directory.where(whose_gateway or target)):
             return self.rundesk("ask", target, "audit the exporter", *more)
 
     def test_an_allowed_target_is_admitted(self):
@@ -388,6 +423,60 @@ class WhenOneAgentAsksAnother(support.Isolated):
         self.assertEqual("", out)
         self.assertIn("trace", err)
         self.assertIn("not configured to delegate to trace", err)
+        recorded.assert_not_called()
+        self.assertEqual([], delegations.every("ava"))
+
+    def test_an_allowed_target_typed_in_another_case_is_admitted_as_the_stored_agent(self):
+        """The scope names `forge`, somebody types `Forge`, and admission is decided on the one
+        agent standing there rather than on the spelling."""
+        records.stated(directory.records("ava"),
+                       {"delegates_to": json.dumps(["forge"])})
+
+        code, out, err = self.ask_from_ava("Forge", whose_gateway="forge")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn(f"handed to forge ({os.path.basename(support.A_STAND_IN)})", out)
+        self.assertEqual(["forge"], [one.to_agent for one in delegations.every("ava")])
+        self.assertEqual(["ava", "forge", "trace"], directory.known())
+
+    def test_an_unlisted_target_typed_in_another_case_is_still_outside_the_scope(self):
+        """Resolving a name is not authority: `Trace` resolves to `trace`, and `trace` is not in
+        ava's allowlist."""
+        records.stated(directory.records("ava"),
+                       {"delegates_to": json.dumps(["forge"])})
+        with mock.patch("rundesk.commands.ask.arriving.recorded_for_a_delegation") as recorded:
+            code, out, err = self.ask_from_ava("Trace", whose_gateway="trace")
+
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("not configured to delegate to trace", err)
+        recorded.assert_not_called()
+        self.assertEqual([], delegations.every("ava"))
+
+    def test_an_agent_naming_itself_in_another_case_is_told_that_is_a_turn(self):
+        """The self-delegation guard reads the resolved name too, so `Ava` cannot walk past it."""
+        with mock.patch.dict(os.environ, {admitting.AGENT: "ava",
+                                          admitting.RUN: str(self.turn)}), \
+                mock.patch("rundesk.commands.ask.arriving.recorded_for_a_delegation") as recorded:
+            code, out, err = self.rundesk("ask", "Ava", "audit the exporter")
+
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("ava cannot hand work to itself", err)
+        recorded.assert_not_called()
+        self.assertEqual([], delegations.every("ava"))
+
+    def test_a_target_no_agent_stands_under_is_refused_as_typed_and_hands_nothing_over(self):
+        records.stated(directory.records("ava"),
+                       {"delegates_to": json.dumps(["forge"])})
+        with mock.patch.dict(os.environ, {admitting.AGENT: "ava",
+                                          admitting.RUN: str(self.turn)}), \
+                mock.patch("rundesk.commands.ask.arriving.recorded_for_a_delegation") as recorded:
+            code, out, err = self.rundesk("ask", "Nobody", "audit the exporter")
+
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("Nobody is not an agent on this install", err)
         recorded.assert_not_called()
         self.assertEqual([], delegations.every("ava"))
 

@@ -1,7 +1,7 @@
 """`rundesk permissions` — what this Mac lets rundesk do, and what is still not allowed.
 
 **This is not about a brain's tool permissions.** Every provider adapter already runs its CLI with
-that switched off, and `docs/providers.md` says so. What stops an agent taking a screenshot, clicking
+that switched off, and `docs/extending/providers.md` says so. What stops an agent taking a screenshot, clicking
 a button or driving a browser is macOS TCC, and that is what this asks about.
 
 ## The bare verb reports, the named one checks
@@ -63,11 +63,11 @@ ABOUT_A_GATEWAY = (
 def register(sub: argparse._SubParsersAction) -> None:
     """`rundesk permissions [list|lineage|check]`, built beside the verb."""
     kept = sub.add_parser("permissions", help="what this Mac lets rundesk do")
-    what = kept.add_subparsers(dest="what")
+    what = kept.add_subparsers(dest="what", metavar="<what>")
     what.add_parser("list", help="every probe, what it is for, and what it touches")
     what.add_parser("lineage", help="whose grants an answer here would be about")
     asking = what.add_parser("check", help="prove them now, and write down what was found")
-    asking.add_argument("probes", nargs="*",
+    asking.add_argument("probes", metavar="<probe>", nargs="*",
                         help="a group (control) or one probe (files/full-disk); "
                              "nothing means everything needed")
     asking.add_argument("--everything", action="store_true",

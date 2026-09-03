@@ -49,6 +49,10 @@ Check `skills catalogs` first. If the requested capability is absent, preview th
 Treat the unconfirmed preview as authoritative for the catalog's current skills. Add `--confirm`
 only after its source, name, and skills match the request.
 
+An agent turn may run the confirmed command when the owner authorized that effect and its configured
+tool access can invoke Rundesk. The turn environment grants no authority by itself; the ordinary
+preview, confirmation, validation, and locking guards still apply.
+
 The `desk-cli` catalog installs the agent instructions; it does not install the `desk` binary.
 Follow that repository's README to install or update the executable separately, and verify
 `desk --version` before granting its skill:

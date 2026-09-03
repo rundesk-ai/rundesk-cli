@@ -7,17 +7,19 @@ is a special case of itself is an install with a route nobody exercises.
 What it does, in order, and the order matters:
 
 1. Refuse a root that must not be one, **before anything is written**.
-2. Place the program at `app/`, staging and renaming so a failure leaves what was there.
-3. Hand off to the release that just landed to settle the install — make the directories, write or
+2. Hand an existing live install to its installed guarded updater, which queues behind work and
+   cycles every online gateway rather than leaving old processes across the program swap.
+3. Otherwise place the program at `app/`, staging and renaming so a failure leaves what was there.
+4. Hand off to the release that just landed to settle the install — make the directories, write or
    fill in `config.json`, and carry the migrations.
-4. Put `rundesk` on a PATH, refusing to write over a command belonging to something else.
-5. Prove the installed command answers, and fail if it does not.
+5. Put `rundesk` on a PATH, refusing to write over a command belonging to something else.
+6. Prove the installed command answers, and fail if it does not.
 
-Step 3 is a handoff for the same reason it is one in `update`: installing over an existing install is
+Step 4 is a handoff for the same reason it is one in `update`: installing over an existing install is
 an update by another name, and the migration steps that must run belong to the release that just
 landed rather than to whichever copy of rundesk happened to run the installer.
 
-Step 5 is the one worth defending: an installer that reports success without checking has told
+Step 6 is the one worth defending: an installer that reports success without checking has told
 somebody their machine is ready when it is not, and they find out later and somewhere else.
 """
 
@@ -28,15 +30,18 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from rundesk import __version__
+from rundesk.agents import directory
 from rundesk.commands import failed, skills, the_reason, update
 from rundesk.core import config, paths
 from rundesk.exits import OK
+from rundesk.gateways import standing
 from rundesk.lifecycle import packages, tree
 from rundesk.skills import catalogs
 from rundesk.utils import programs
 
 #: How long the installed command is given to answer before the install is called a failure.
 ANSWER_SECONDS = 30
+GUARDED_UPDATE_SECONDS = 600
 
 
 def cmd_install(args: argparse.Namespace,
@@ -54,6 +59,15 @@ def cmd_install(args: argparse.Namespace,
         root = paths.home()
     except paths.Refused as why:
         return _failed(str(why))
+
+    try:
+        guarded = paths.app().is_dir() and any(
+            standing.standing(directory.where(name)).how != standing.OFFLINE
+            for name in directory.known())
+    except (OSError, directory.Refused) as why:
+        return _failed(f"the existing gateways could not be checked before installation: {why}")
+    if guarded:
+        return _guarded_update()
 
     try:
         app = tree.place(from_where, root)
@@ -102,6 +116,20 @@ def cmd_install(args: argparse.Namespace,
     for line in trouble + list(skills.refreshed(refreshing)):
         print(f"        {line}", file=sys.stderr)
     return OK
+
+
+def _guarded_update() -> int:
+    """Hand an existing live install to its own queue-and-cycle update lifecycle."""
+    command = paths.app() / "rundesk"
+    ended = programs.run([str(command), "update"], GUARDED_UPDATE_SECONDS)
+    if ended.out:
+        sys.stdout.write(ended.out)
+    if ended.err:
+        sys.stderr.write(ended.err)
+    if ended.trouble:
+        return _failed(f"the existing install {ended.trouble} while starting its guarded update")
+    return ended.code if ended.code is not None else _failed(
+        "the existing install gave no result while starting its guarded update")
 
 
 def _the_packages(app: Path, building: Optional[Callable[..., programs.Ran]]) -> List[str]:

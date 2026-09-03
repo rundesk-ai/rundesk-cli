@@ -2,7 +2,7 @@
 
 **This is not about a brain's tool permissions.** Every provider adapter already runs its CLI with
 that system switched off — `--dangerously-skip-permissions`, `danger-full-access`,
-`bypassPermissions` — and `docs/providers.md` says so outright. What actually stops an agent taking
+`bypassPermissions` — and `docs/extending/providers.md` says so outright. What actually stops an agent taking
 a screenshot, clicking a button or driving a browser is **macOS TCC**, and that is what this package
 asks about.
 

@@ -53,6 +53,53 @@ def verbs_named(said: str):
     return found
 
 
+#: What a typed rundesk command may begin with. A reference table writes the bare verb and says
+#: "prefix every command with `\"$RUNDESK_COMMAND\"`" once at the foot, so a pattern that demanded
+#: the prefix read almost none of them — which is how `providers instructions --trigger` was taught
+#: for several releases with this file already checking the verbs beside it.
+_A_PREFIX = re.compile(r'^(?:rundesk|"\$RUNDESK_COMMAND") ')
+_A_FLAG = re.compile(r"(--[a-z][a-z-]+)")
+
+
+def flags_named(said: str, verbs):
+    """Every `--flag` a text tells somebody to type after a rundesk verb.
+
+    A fragment counts when its first word is a verb this build has, with or without the invocation
+    in front of it. That is what keeps `curl -fsSL` and `git --version` out while reading the tables
+    every reference is actually written as.
+    """
+    found = []
+
+    def read(fragment: str) -> None:
+        bare = _A_PREFIX.sub("", fragment.strip())
+        head = bare.split(" ", 1)
+        if len(head) == 2 and head[0] in verbs:
+            found.extend(_A_FLAG.findall(head[1]))
+
+    for block in _FENCED.findall(said):
+        for line in block.splitlines():
+            read(line.lstrip("$ ").strip())
+    for span in _INLINE.findall(_FENCED.sub("", said)):
+        read(span)
+    return found
+
+
+def flags_of(parser: argparse.ArgumentParser):
+    """Every flag this build really has, at any depth, read off the parser.
+
+    **`_oauth` is walked too, unlike the verb check.** The question here is whether a flag exists,
+    not whether a person should type it — and `writing-skills` documents the private token bridge
+    for whoever is writing an integration, so `--response-fd` is a flag a skill may correctly name.
+    """
+    found = set()
+    for action in parser._actions:
+        found.update(one for one in action.option_strings if one.startswith("--"))
+        if isinstance(action, argparse._SubParsersAction):
+            for under in action.choices.values():
+                found |= flags_of(under)
+    return found
+
+
 def verbs_of(parser: argparse.ArgumentParser):
     """Every verb this build really has, read off the parser rather than listed here.
 
@@ -103,11 +150,15 @@ class WhatIsShipped(Bundled):
         self.assertEqual(library.BUNDLED, manifest.name)
         self.assertEqual(library.SCHEMA, manifest.schema)
 
-    def test_it_holds_only_what_is_coupled_to_this_version(self):
-        # The reason this catalog exists at all. A skill about writing pull requests does not change
-        # when rundesk does, so shipping it here would tie a correction to it to a rundesk release —
-        # it belongs in the catalog that is fetched. Everything here is about *this* rundesk.
-        self.assertEqual(["delegating-work", "managing-rundesk", "writing-skills"], self.named())
+    def test_it_holds_only_first_party_operating_skills(self):
+        # This is the product-owned operating floor: guidance Rundesk maintains with its own
+        # lifecycle rather than borrowing from a general-purpose catalog. Some packages are tightly
+        # version-coupled; managing-github is here so guarded external delivery remains a first-party
+        # capability with one canonical owner.
+        self.assertEqual(
+            ["delegating-work", "managing-github", "managing-rundesk", "writing-skills"],
+            self.named(),
+        )
 
     def test_it_holds_the_skill_every_agent_is_required_to_have(self):
         # **This release must not ship a floor it does not satisfy.** Every agent is given
@@ -258,9 +309,10 @@ class WhatAShippedSkillMayClaim(Bundled):
                 self.assertIn(phrase, main)
 
     def test_live_agent_verification_keeps_the_edge_matrix_and_evidence_contract(self):
-        guide = (support.CHECKOUT / "docs" / "live-agent-verification.md").read_text(
+        guide = (support.CHECKOUT / "docs" / "guides" / "live-agent-verification.md").read_text(
             encoding="utf-8")
-        index = (support.CHECKOUT / "docs" / "README.md").read_text(encoding="utf-8")
+        # docs/README.md lists homes; the page's own home index lists the page.
+        index = (support.CHECKOUT / "docs" / "guides" / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("[live-agent-verification.md](./live-agent-verification.md)", index)
         for phrase in ("A convincing answer alone is not a pass",
@@ -449,6 +501,104 @@ class WhatAShippedSkillMayClaim(Bundled):
                 self.assertIn(phrase, delegating)
         self.assertIn("no push, issue, pull request, merge, tag, or release", examples)
 
+    def test_delegation_routes_implementation_and_review_before_briefing(self):
+        delegation_root = self.skills / "delegating-work"
+        delegating = " ".join(
+            (delegation_root / library.DECLARED).read_text(encoding="utf-8").split())
+        examples = " ".join(
+            (delegation_root / "references" / "brief-examples.md").read_text(
+                encoding="utf-8").split())
+
+        for phrase in (
+                "Choose role fit before writing the brief",
+                "A complete brief cannot repair a role mismatch",
+                "finished, inspectable change",
+                "more than one repository",
+                "more than one material risk boundary",
+                "separate dependency-ordered phases",
+                "one atomic outcome",
+                "Similar changes in two repositories are not atomic",
+                "exact base and head or precise dirty diff",
+                "few highest-risk invariants specific to the change",
+                "Omit the review target's generic checklist"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, delegating)
+
+        for phrase in (
+                "separate dependency-ordered handoffs",
+                "Task: Review <base>...<head>",
+                "Highest-risk invariants are session expiry",
+                "It does not repeat the target's configured role"):
+            with self.subTest(example=phrase):
+                self.assertIn(phrase, examples)
+        generic_role = r"(?i)configured [^.]{0,80}(?:review role|reviewer)"
+        self.assertNotRegex(examples, generic_role)
+        for bad_brief in (
+                "Use the configured senior review role to inspect the diff.",
+                "Have the configured DRY/simplicity review role inspect the diff.",
+                "Send this to the configured security reviewer."):
+            with self.subTest(bad_brief=bad_brief):
+                self.assertRegex(bad_brief, generic_role)
+
+    def test_github_delivery_cleans_only_disposable_merged_heads(self):
+        reference = (self.skills / "managing-github" / "references" /
+                     "pull-requests.md").read_text(encoding="utf-8")
+        for phrase in (
+                "## Clean up after merge",
+                "require `state: MERGED`",
+                "recorded `headRefOid`",
+                "a production or deployment branch",
+                "shared development or integration branch",
+                "never\nforce-remove an unclean or locked worktree",
+                "git push <push-remote> --delete <head>",
+                "verify the local listing and remote query return no matching ref"):
+            with self.subTest(cleanup_contract=phrase):
+                self.assertIn(phrase, reference)
+
+    def test_github_delivery_reconciles_issue_disposition_before_merge(self):
+        references = self.skills / "managing-github" / "references"
+        pull_requests = (references / "pull-requests.md").read_text(encoding="utf-8")
+        issues = (references / "issues.md").read_text(encoding="utf-8")
+
+        for phrase in (
+                "Reconcile every issue named by the assignment or pull request",
+                "A bare issue URL, `#123`, `Refs`, or",
+                "explicitly report\n  that the issue will remain open",
+                "inspect `closingIssuesReferences`",
+                "require `state: CLOSED`"):
+            with self.subTest(pull_request_contract=phrase):
+                self.assertIn(phrase, pull_requests)
+        for phrase in (
+                "Completed work targeting the default branch must use a full closing",
+                "Partial work must name the unmet acceptance criteria and leave the issue open",
+                "read the issue back instead of assuming the reference changed its state"):
+            with self.subTest(issue_contract=phrase):
+                self.assertIn(phrase, issues)
+
+    def test_github_delivery_takes_the_short_path_from_green_head_to_release(self):
+        references = self.skills / "managing-github" / "references"
+        pull_requests = (references / "pull-requests.md").read_text(encoding="utf-8")
+        releases = (references / "releases.md").read_text(encoding="utf-8")
+
+        for phrase in (
+                "## Merge an already-ready pull request",
+                "same recorded `headRefOid`",
+                "do not rerun local validation",
+                "Do not delegate",
+                "`--match-head-commit`",
+                "report the exact failed gate and stop"):
+            with self.subTest(pull_request_fast_path=phrase):
+                self.assertIn(phrase, pull_requests)
+        for phrase in (
+                "## Continue directly from a verified merge",
+                "exact merge commit's required default-branch workflow",
+                "Do not reopen implementation",
+                "previous exact-head validation",
+                "one bounded wait",
+                "report the release blocker and stop"):
+            with self.subTest(release_fast_path=phrase):
+                self.assertIn(phrase, releases)
+
     def test_agent_instruction_guidance_is_routed_and_has_each_required_section(self):
         skill = self.skills / "managing-rundesk"
         main = (skill / library.DECLARED).read_text(encoding="utf-8")
@@ -471,6 +621,23 @@ class WhatAShippedSkillMayClaim(Bundled):
                 self.assertEqual(1, agent_instructions.count(heading))
                 places.append(agent_instructions.index(heading))
         self.assertEqual(sorted(places), places)
+
+    def test_inbound_specialists_do_not_keep_cross_project_memory(self):
+        guidance = self.guidance()
+        for phrase in (
+                "An inbound specialist does not keep `MEMORY.md`",
+                "current work to the handback",
+                "project facts to that project's instructions or documentation",
+                "reusable methods to the owning skill",
+                "durable role behavior to agent instructions",
+                "universal behavior to Rundesk operating instructions",
+                "For a domain agent, `MEMORY.md` may hold durable learned context",
+                "remove the scaffold's `MEMORY.md`",
+                "move only still-valid material to the canonical project, skill, or instruction "
+                "owner",
+                "verify that `MEMORY.md` and every instruction to read or maintain it are absent"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guidance)
 
     def guidance(self):
         """The whole agent-instruction reference, whitespace-normalized."""
@@ -741,6 +908,64 @@ class WhatAShippedSkillMayClaim(Bundled):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, schedules)
 
+    def test_a_self_schedule_does_not_trigger_a_redundant_gateway_check(self):
+        schedules = " ".join((self.skills / "managing-rundesk" / "references" /
+                              "schedules.md").read_text(encoding="utf-8").split())
+        self.assertIn("An enabled self-schedule is accepted only from a turn whose gateway is "
+                      "currently known running", schedules)
+        self.assertIn("`add` and `update` refuse it before writing otherwise", schedules)
+        self.assertIn("A successful enabled `--ask` self-schedule establishes the resumption path "
+                      "without another inspection",
+                      schedules)
+        self.assertIn("For an agent resumption use `--ask`; `--run` starts a program instead",
+                      schedules)
+        self.assertIn("Do not report routine gateway state or a possible later outage as a "
+                      "current blocker",
+                      schedules)
+        self.assertIn("After `show` verifies that schedule, stop inspecting",
+                      schedules)
+        self.assertIn("the final states the verified current result and what the scheduled work "
+                      "will produce and when", schedules)
+        self.assertIn("Add a current material blocker only when it affects that continuation",
+                      schedules)
+        self.assertIn("Do not name commands, gateways, or other routine continuation machinery "
+                      "unless the owner asks", schedules)
+        self.assertNotIn("Confirm the gateway will be running", schedules)
+        self.assertNotIn("Verify the saved definition and that the agent's gateway is running",
+                         schedules)
+
+    def test_no_shipped_skill_names_a_flag_this_build_does_not_have(self):
+        # The verb check above reads `SKILL.md` alone, and a skill is mostly its references — which
+        # is how `providers instructions --trigger` came to be taught for several releases while
+        # the flag was called `--situation`. An agent following that types a command that fails,
+        # and nothing went red. Flags are checked across every page a skill ships.
+        there = flags_of(cli.build_parser())
+        self.assertTrue(there, "the parser answered no flags at all")
+        for name in self.named():
+            for page in sorted((self.skills / name).rglob("*.md")):
+                said = page.read_text(encoding="utf-8")
+                for flag in sorted(set(flags_named(said, verbs_of(cli.build_parser())))):
+                    with self.subTest(skill=name, page=page.name, flag=flag):
+                        self.assertIn(flag, there,
+                                      f"{name}/{page.name} tells an agent to type `{flag}`, and "
+                                      "this build has no such flag")
+
+    def test_the_flag_check_would_notice_one_that_is_not_there(self):
+        # The guard on the guard: the pattern has to actually find flags, and reject one that is
+        # spelled almost right. `--situation` is real; `--trigger` was what the skill said instead.
+        there = flags_of(cli.build_parser())
+        self.assertIn("--situation", there)
+        self.assertNotIn("--trigger", there)
+        verbs = verbs_of(cli.build_parser())
+        # Both spellings a reference really uses: the reachable form, and the bare table form.
+        self.assertEqual(
+            ["--trigger"],
+            flags_named('`"$RUNDESK_COMMAND" providers instructions ava --trigger person`', verbs))
+        self.assertEqual(
+            ["--trigger"],
+            flags_named("`providers instructions [<agent>] [--trigger <situation>]`", verbs))
+        self.assertEqual([], flags_named("`curl -fsSL https://example.test --silent`", verbs))
+
     def test_no_shipped_skill_names_a_verb_this_build_does_not_have(self):
         # `AGENTS.md`: a verb rundesk cannot perform is a verb rundesk does not have. A skill is the
         # one place that can be broken with nothing going red — it is read by an agent, on every
@@ -786,7 +1011,7 @@ class WhatAShippedSkillMayClaim(Bundled):
 
 
 class WhatTheDocumentationClaims(support.Isolated):
-    """`docs/commands.md` says it is the complete list of what rundesk can do.
+    """`docs/api/` says it is the complete list of what rundesk can do.
 
     That page is checked by people, and people are exactly who a stale verb misleads: `AGENTS.md`
     forbids offering an operation that is not built, and a documented verb that does not exist is the
@@ -795,7 +1020,7 @@ class WhatTheDocumentationClaims(support.Isolated):
     """
 
     def test_every_skills_sub_verb_the_docs_name_is_one_that_exists(self):
-        said = (support.CHECKOUT / "docs" / "commands.md").read_text(encoding="utf-8")
+        said = _the_published_surface()
         there = _sub_verbs_of("skills")
         self.assertTrue(there, "the parser answered no sub-verbs for skills")
         named = set(re.findall(r"rundesk skills ([a-z][a-z-]*)", said))
@@ -803,25 +1028,35 @@ class WhatTheDocumentationClaims(support.Isolated):
         for verb in sorted(named - {"list"}):
             with self.subTest(verb=verb):
                 self.assertIn(verb, there,
-                              f"docs/commands.md tells somebody to type `rundesk skills {verb}`, "
+                              f"docs/api/ tells somebody to type `rundesk skills {verb}`, "
                               "and this build has no such sub-verb")
 
     def test_every_sub_verb_that_exists_is_named_by_the_docs(self):
         # The other direction, because the page claims to be *complete*. A verb that shipped without
         # reaching the page is the shape that goes unnoticed for a release.
-        said = (support.CHECKOUT / "docs" / "commands.md").read_text(encoding="utf-8")
+        said = _the_published_surface()
         for verb in sorted(_sub_verbs_of("skills")):
             with self.subTest(verb=verb):
                 self.assertIn(f"rundesk skills {verb}", said,
-                              f"`rundesk skills {verb}` exists and docs/commands.md never names it")
+                              f"`rundesk skills {verb}` exists and no page under docs/api/ names it")
 
     def test_upkeep_overview_matches_the_evidence_based_contract(self):
-        said = " ".join((support.CHECKOUT / "docs" / "commands.md").read_text(
-            encoding="utf-8").split())
+        said = " ".join(_the_published_surface().split())
         self.assertIn("honest no-change", said)
         self.assertIn("only when selected friction indicates a capability gap", said)
         self.assertNotIn("and one testable improvement", said)
         self.assertNotIn("The pass compares available and granted skills", said)
+
+
+def _the_published_surface() -> str:
+    """Every page under `docs/api/`, joined.
+
+    The surface used to be one file. It is a directory now, and the completeness claim is about the
+    directory: a verb documented on any of its pages is documented, and one on none of them is not.
+    """
+    pages = sorted((support.CHECKOUT / "docs" / "api").glob("*.md"))
+    assert pages, "docs/api/ holds no pages"
+    return "\n".join(page.read_text(encoding="utf-8") for page in pages)
 
 
 def _sub_verbs_of(group: str):

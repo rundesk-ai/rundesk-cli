@@ -76,7 +76,10 @@ class AnInstallWithAgentsInIt(support.Isolated):
         under a temporary root, so nothing on a real PATH is ever a candidate. Redirecting it would
         make these cases agree with a bug rather than with the product.
         """
-        return support.run_with(["uninstall", "--confirm", *argv], **collaborators)
+        arguments = ["uninstall", "--confirm", *argv]
+        if "--purge" in argv and "--root" not in argv:
+            arguments += ["--root", str(paths.home())]
+        return support.run_with(arguments, **collaborators)
 
     def still_there(self):
         return sorted(one.name for one in self.agents if one.is_dir())

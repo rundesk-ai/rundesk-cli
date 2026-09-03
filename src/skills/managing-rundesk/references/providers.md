@@ -11,7 +11,7 @@ Rundesk imports no provider library.
 | `providers check <provider>` | Ask an adapter for capabilities offline; accepts a known name or program path. |
 | `providers aliases list|add|remove <provider> ...` | List, register, or confirmed-remove additional account aliases. `default` is reserved. |
 | `providers status|login|logout <provider> [--alias <alias>]` | Use the provider-owned account flow; login/logout are interactive and logout requires confirmation. |
-| `providers instructions [<agent>] [--trigger <situation>] [--layers] [--turn <turn>]` | Render current instructions, show only layer byte counts, or recompose a past turn and compare it. Use generated help for accepted situations. |
+| `providers instructions [<agent>] [--situation <person\|schedule\|agent>] [--layers] [--turn <turn>]` | Render current instructions, show only layer byte counts, or recompose a past turn and compare it. |
 | `providers run <agent> --schedule <schedule>` | Take the provider turn for an asking schedule. This is the schedule launch path, not the normal attended interface. |
 
 Prefix every command with `"$RUNDESK_COMMAND"`.

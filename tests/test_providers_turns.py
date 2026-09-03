@@ -53,6 +53,18 @@ class WithAnAgent(support.Isolated):
 
 
 class ATurnThatAnswers(WithAnAgent):
+    def test_team_state_is_reconciled_before_turn_admission(self):
+        with mock.patch.object(turns.team_reconcile, "current",
+                               wraps=turns.team_reconcile.current) as current:
+            self.run_turn()
+        current.assert_called_once_with("ava")
+
+    def test_a_team_reconciliation_refusal_stops_turn_admission(self):
+        with mock.patch.object(turns.team_reconcile, "current",
+                               side_effect=turns.team_reconcile.Refused("team state drift")):
+            with self.assertRaisesRegex(turns.NotRunnable, "team state drift"):
+                self.run_turn()
+
     def test_it_is_recorded_as_done_and_says_what_the_brain_said(self):
         got = self.run_turn()
         self.assertEqual(got.turn_status, kept.DONE)
@@ -266,6 +278,8 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
                 provider_name=support.A_STAND_IN, model_name="scoped-model")
 
         self.assertTrue(stopped)
+        self.assertEqual((False, (landed.message,)), (stopped.live, stopped.settled),
+                         "a caller cannot tell what became terminal from what it asked for")
         recorded = kept.list_turns(self.agent)[0]
         self.assertEqual(kept.STOPPED, recorded["turn_status"])
         self.assertEqual(protocol.CANCELLED, recorded["failure_code"])
@@ -279,8 +293,14 @@ class WhatWasSentIsProvableAfterwards(WithAnAgent):
 
     def test_a_delegation_stop_reaches_a_live_turn(self):
         with turns._stoppable(self.agent, 71) as active:
-            self.assertTrue(turns.stop_or_settle_pending(self.agent, 71, ()))
+            reached = turns.stop_or_settle_pending(self.agent, 71, ())
+            self.assertTrue(reached)
             self.assertTrue(active.asked)
+
+        # A live turn settles and marks itself, so naming no message is the answer rather than an
+        # omission: a caller that read this as "these ids became terminal" would mark rows that are
+        # still pending behind the turn it just stopped.
+        self.assertEqual((True, ()), (reached.live, reached.settled))
 
     def test_what_was_asked_is_written_before_the_brain_is_started(self):
         got = self.run_turn()
@@ -394,6 +414,58 @@ class OneTurnAtATimeInOneConversation(WithAnAgent):
                             source=arriving.FROM_CHANNEL, place="other")
         with turns.claiming("ava", one.conversation):
             self.assertEqual(turns.run(two).turn_status, kept.DONE)
+
+
+class StoppingWhileATurnIsStillBeingAdmitted(WithAnAgent):
+    """The window between the conversation claim and the turn published against it.
+
+    A turn takes the claim first and publishes itself as one this process can end a moment later,
+    with a durable admission decision able to sit between the two. A stop arriving in there reached
+    nothing at all: the turn published itself with nothing asked of it and ran to the end, after the
+    person had already been answered.
+    """
+
+    def test_a_stop_between_the_claim_and_the_turn_is_carried_by_that_turn(self):
+        landed = arriving.recorded(self.agent, "discord", "ops", "2207", "please look", "8841")
+        with turns.claiming(self.agent, landed.conversation):
+            self.assertTrue(turns.busy(self.agent, landed.conversation),
+                            "the claim this stop has to reach was never taken")
+
+            reached = turns.stop_or_settle_pending(
+                self.agent, landed.conversation, (landed.message,))
+
+            self.assertEqual((True, ()), (reached.live, reached.settled),
+                             "the stop reached nothing while a turn was being admitted")
+            self.assertEqual([], kept.list_turns(self.agent),
+                             "a stopped turn was invented beside the one being admitted")
+            self.assertIsNone(arriving.turn_for_message(
+                self.agent, landed.conversation, landed.message),
+                "a message the turn being admitted will take was settled by the stop")
+            with turns._stoppable(self.agent, landed.conversation) as ours:
+                self.assertTrue(ours.asked,
+                                "the turn published under a stopped claim was never asked to end")
+
+    def test_a_stop_no_turn_ever_came_of_does_not_end_the_next_turn_here(self):
+        """The stop lives on the claim, so it goes when the claim does. A claim that never published
+        a turn — admission refused under it — must not hand its stop to whatever claims next."""
+        with turns.claiming(self.agent, 71):
+            self.assertTrue(turns.stop(self.agent, 71))
+
+        with turns.claiming(self.agent, 71), turns._stoppable(self.agent, 71) as ours:
+            self.assertFalse(ours.asked, "a stop outlived the claim it was left on")
+
+    def test_a_stop_after_the_turn_ended_but_before_its_claim_left_is_not_live(self):
+        """Once the published turn ends, its outer kernel claim may still be held for a moment.
+        That gap is no longer a turn this process can stop and must not earn a stopped answer."""
+        with turns.claiming(self.agent, 71):
+            with turns._stoppable(self.agent, 71):
+                pass
+
+            self.assertTrue(turns.busy(self.agent, 71),
+                            "the claim was not held across the post-turn gap")
+            reached = turns.stop_or_settle_pending(self.agent, 71, ())
+            self.assertEqual((False, ()), (reached.live, reached.settled),
+                             "a turn that already ended was reported as stopped")
 
 
 class WhenTheBrainDoesNotAnswer(WithAnAgent):

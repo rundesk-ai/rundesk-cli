@@ -45,9 +45,13 @@ from rundesk.commands.providers import cmd_providers
 from rundesk.commands.providers import register as register_providers
 from rundesk.commands.schedules import cmd_schedules
 from rundesk.commands.schedules import register as register_schedules
+from rundesk.commands.search import cmd_search
+from rundesk.commands.search import register as register_search
 from rundesk.commands.skills import cmd_skills
 from rundesk.commands.skills import register as register_skills
 from rundesk.commands.status import cmd_status
+from rundesk.commands.teams import cmd_teams
+from rundesk.commands.teams import register as register_teams
 from rundesk.commands.turns import cmd_turns
 from rundesk.commands.turns import register as register_turns
 from rundesk.commands.uninstall import cmd_uninstall
@@ -82,12 +86,14 @@ examples:
   rundesk channels              how each agent is reached, and how it reaches back
   rundesk channels add <agent> <adapter> --allow <id>
   rundesk channels doctor       what a channel cannot do, and exactly why
+  rundesk search <agent> <words>  look through the platforms an agent is connected to
   rundesk backups               the copies of what rundesk keeps for you
   rundesk backups save          copy what rundesk keeps, now
   rundesk env list              the values rundesk hands to what it talks to
   rundesk login <provider>      connect a verified account in the browser
   rundesk skills                the skills this install has, and who holds which
   rundesk skills doctor         what an agent cannot use, and exactly why
+  rundesk teams                 the version-controlled teams on this install
   rundesk permissions           what this Mac lets rundesk do, as last checked
   rundesk permissions check     prove it now, and say what is still not allowed
   rundesk version               what version this is, and whether it is out of date
@@ -124,12 +130,14 @@ def build_parser() -> argparse.ArgumentParser:
     register_ask(sub)
     register_asked(sub)
     register_messages(sub)
+    register_search(sub)
     register_providers(sub)
     register_permissions(sub)
     register_turns(sub)
     register_schedules(sub)
     register_channels(sub)
     register_skills(sub)
+    register_teams(sub)
     register_oauth(sub)
     _register_install(sub)
     _register_update(sub)
@@ -169,6 +177,8 @@ def _register_uninstall(sub: Subcommands) -> None:
                       help="required — removal does nothing without it")
     gone.add_argument("--purge", action="store_true",
                       help="also take the data rundesk kept — never the backups")
+    gone.add_argument("--root", metavar="<dir>", default=None,
+                      help="required with a confirmed purge; must match RUNDESK_HOME")
 
 
 def main(argv: Optional[List[str]] = None, asking: Optional[release.Asking] = None,
@@ -263,6 +273,8 @@ def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshin
         return cmd_asked(args)
     if args.command == "messages":
         return cmd_messages(args)
+    if args.command == "search":
+        return cmd_search(args, reaching)
     if args.command == "turns":
         return cmd_turns(args)
     if args.command == "permissions":
@@ -275,6 +287,8 @@ def _the_verb(args: argparse.Namespace, asking, fetching, supervising, refreshin
         return cmd_channels(args, reaching)
     if args.command == "skills":
         return cmd_skills(args, refreshing)
+    if args.command == "teams":
+        return cmd_teams(args, refreshing)
     if args.command == "_oauth":
         return cmd_oauth(args, oauth_authorizing, oauth_posting)
     if args.command == "version":

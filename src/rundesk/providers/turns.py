@@ -72,6 +72,7 @@ from rundesk.providers import (
     team,
 )
 from rundesk.skills import grants
+from rundesk.teams import reconcile as team_reconcile
 from rundesk.utils import lines, locking, logs
 
 #: The one way finding a provider fails, named here so a caller has one thing to be ready for.
@@ -193,6 +194,10 @@ class Outcome(NamedTuple):
     turn_status: str
     reply: str = ""
     last_thought: str = ""
+    #: Everything the brain said after its last tool call, as one answer. What a surface that shows
+    #: nothing until the end answers with — `last_thought` is the closing *thought* and this is the
+    #: closing *response*, and they differ whenever a brain finished several things after its work.
+    closing_response: str = ""
     failure_code: Optional[str] = None
     failure_message: Optional[str] = None
     usage: protocol.Usage = protocol.Usage()
@@ -244,7 +249,12 @@ def claiming(agent: str, conversation: int, waiting: bool = False) -> Iterator[i
 
     **The file itself is left alone.** A lock lives on the inode, so unlinking it hands the name away
     and lets the next claim lock a fresh inode while this one is still held.
+
+    **The claim is published to this process as it is taken**, before the admission barrier is let
+    go — so nothing can see this conversation as busy and then find nothing of ours to stop. That
+    is the window a turn published against the claim cannot cover on its own; see `Claim`.
     """
+    claim = Claim()
     with locking.only_one(paths.work_admission_lock(), guarding="admitting provider work"):
         at = adapters.lock_of(agent, conversation)
         at.parent.mkdir(parents=True, exist_ok=True)
@@ -256,12 +266,19 @@ def claiming(agent: str, conversation: int, waiting: bool = False) -> Iterator[i
                 if not locking.busy(why):
                     raise
                 raise Busy(f"something is already answering in conversation {conversation}") from why
+            with _running_lock:
+                _claimed[(agent, conversation)] = claim
         except BaseException:
             os.close(held)
             raise
     try:
         yield held
     finally:
+        # Taken out only if it is still ours, the same care `_stoppable` takes: a claim that ended
+        # while somebody was stopping it must not hand that stop to the next claim here.
+        with _running_lock:
+            if _claimed.get((agent, conversation)) is claim:
+                del _claimed[(agent, conversation)]
         os.close(held)
 
 
@@ -546,6 +563,32 @@ _running: Dict[tuple, Ours] = {}
 _running_lock = threading.Lock()
 
 
+class Claim:
+    """One conversation claim this process holds, and whether a stop reached it before its turn.
+
+    **The window `Ours` cannot cover.** A turn is published as ours the moment the claim is
+    taken — but "the moment" is two statements, and `run_if` puts a durable admission decision
+    between them. A stop arriving inside it found `_running` empty and went nowhere: the turn
+    published itself with nothing asked of it and ran to the end, while the person had already been
+    told either that it was stopped or that it was not something a conversation could stop. So the
+    stop is remembered against the claim, and the turn published against it carries it out — see
+    `_stoppable`.
+
+    It stays published until either the turn leaves `_stoppable` or a claim no turn came of ends.
+    The first boundary prevents a finished turn being reported as stopped; the second keeps a stop
+    left on an abandoned admission from ending the *next* turn in that conversation.
+    """
+
+    def __init__(self) -> None:
+        self.asked = False
+
+
+#: The conversation claims this process holds that may still publish a turn, by conversation. Under
+#: `_running_lock`, because which of the two a stop reaches has to be one decision rather than two
+#: with a gap between them.
+_claimed: Dict[tuple, Claim] = {}
+
+
 def stop(agent: str, conversation: int) -> bool:
     """End the turn running in this conversation. `False` when there was none of ours to end.
 
@@ -558,30 +601,66 @@ def stop(agent: str, conversation: int) -> bool:
     with no `done` on it, and `_became` reads that as a turn nobody could call finished — `STOPPED`,
     which is the word the surface renders as ✋. So the account of a stopped turn is written by the
     same code that writes every other one, and there is no second path that could disagree with it.
+
+    **A turn still being admitted is one of ours.** The claim exists before the turn published
+    against it does, and a stop that reached only the claim is left there for that turn to carry
+    out — see `Claim`.
     """
     with _running_lock:
         running = _running.get((agent, conversation))
-    if running is None:
-        return False
+        if running is None:
+            claim = _claimed.get((agent, conversation))
+            if claim is None:
+                return False
+            claim.asked = True
+            return True
     running.ends()
     return True
+
+
+class Stopped(NamedTuple):
+    """What one stop reached: a live turn, or the exact messages it settled instead.
+
+    **The two are not interchangeable and a caller has to tell them apart.** A live turn writes its
+    own outcome and marks its own message as it ends, and the pending rows around it stay pending —
+    while settling writes that outcome here, for exactly the ids this claimed. A caller that marked
+    what it *asked* to settle rather than what *was* settled would put a terminal mark on rows that
+    are still waiting for a turn, on the one path where the two differ: a turn published in the
+    moment between reading the pending rows and claiming the conversation.
+    """
+
+    #: A turn this process was running was asked to end. It settles itself.
+    live: bool = False
+    #: The exact durable message ids this associated with a stopped turn. Empty when none were.
+    settled: Tuple[int, ...] = ()
+
+    def __bool__(self) -> bool:
+        """Whether the stop reached anything at all — what a caller with nothing to mark asks."""
+        return self.live or bool(self.settled)
 
 
 def stop_or_settle_pending(agent: str, conversation: int,
                            inbound_messages: Tuple[int, ...],
                            provider_name: Optional[str] = None,
                            provider_alias: Optional[str] = None,
-                           model_name: Optional[str] = None) -> bool:
-    """Stop a live turn, or make an unstarted inbound delegation terminal without a provider.
+                           model_name: Optional[str] = None) -> Stopped:
+    """Stop a live turn, or make exact unstarted inbound messages terminal without a provider.
+
+    A delegated brief and a channel message both reach this: what has to be settled is the same
+    thing either way — durable rows a turn never admitted, which nothing else would ever settle.
 
     The conversation claim closes the race with the worker thread a previous gateway beat may have
-    spawned. If that worker owns the claim but has not published itself in `_running` yet, `Busy`
-    leaves the durable stop request for the next beat instead of inventing a second turn.
+    spawned. A worker of this process's that owns the claim without having published its turn yet is
+    still reached, through the claim itself (`Claim`), so the stop lands on the turn being admitted
+    rather than a second turn being invented beside it.
+
+    **Which of the two happened is the answer**, not a detail of it — see `Stopped`.
     """
     if stop(agent, conversation):
-        return True
-    if not inbound_messages:
-        return False
+        return Stopped(live=True)
+    claiming_messages = tuple(dict.fromkeys(int(one) for one in inbound_messages))
+    if not claiming_messages:
+        return Stopped()
     try:
         with claiming(agent, conversation):
             settled = records.read(directory.records(agent))
@@ -598,19 +677,22 @@ def stop_or_settle_pending(agent: str, conversation: int,
                 "access_mode": protocol.ACCESS_WORK,
             })
             try:
-                arriving.handled_by_turn(agent, conversation, inbound_messages, turn)
+                arriving.handled_by_turn(agent, conversation, claiming_messages, turn)
                 kept.add_turn_record(
-                    agent, turn, ADMITTED, {"messages": list(inbound_messages)})
+                    agent, turn, ADMITTED, {"messages": list(claiming_messages)})
             finally:
                 kept.finish_turn(
                     agent, turn, kept.STOPPED,
                     {"failure_code": protocol.CANCELLED,
-                     "failure_message": "this delegated work was stopped before it began"})
-            return True
+                     "failure_message": "this work was stopped before it began"})
+            # Only reached when the claim above took every id, because it is all or nothing: what
+            # is named here is exactly what became terminal.
+            return Stopped(settled=claiming_messages)
     except Busy:
-        # `claiming` precedes `_stoppable` by only the publication window. Reach once more now; if
-        # it is still between those two points, the durable row makes the next beat retry.
-        return stop(agent, conversation)
+        # Somebody took the claim between the reach above and here. Reach once more: a claim of this
+        # process's hands the stop to the turn admitted under it, while a claim another process
+        # holds is not ours to end and the answer says exactly that.
+        return Stopped(live=stop(agent, conversation))
 
 
 @contextlib.contextmanager
@@ -620,17 +702,33 @@ def _stoppable(agent: str, conversation: int) -> Iterator[Ours]:
     Taken out in a `finally` and only if it is still ours, which is the same care `_reachable`
     takes: a turn that finished while somebody was pressing `/stop` must not have the *next* turn
     in that conversation stopped by an entry it left behind.
+
+    **A stop that arrived before this existed comes with the claim.** Publishing and reading that
+    are one decision under `_running_lock`, so a stop is either handed to this turn here or finds
+    it in `_running` — never neither. See `Claim`.
     """
     ours = Ours()
     with _running_lock:
+        claim = _claimed.get((agent, conversation))
         _running[(agent, conversation)] = ours
+        asked = claim is not None and claim.asked
+    if asked:
+        # A stop reached the claim this turn is being admitted under, before there was a turn to
+        # reach. Acted on now rather than lost: `Ours` holds it until there is a brain to signal,
+        # exactly as it does for a stop pressed while one is starting.
+        ours.ends()
     try:
         yield ours
     finally:
-        ours.reachability_known.set()
         with _running_lock:
             if _running.get((agent, conversation)) is ours:
                 del _running[(agent, conversation)]
+            # Retired with the published turn under the same lock, before the outer kernel claim is
+            # released. A stop in that remaining gap must not report a turn already settled as one
+            # it stopped. A claim that never published still leaves through `claiming`'s `finally`.
+            if claim is not None and _claimed.get((agent, conversation)) is claim:
+                del _claimed[(agent, conversation)]
+        ours.reachability_known.set()
         ours.ended.set()
 
 
@@ -827,6 +925,12 @@ def _admit(request: Request) -> _TurnAdmission:
     """Resolve and record a turn without an account change crossing its admission boundary."""
     agent = request.agent
     with locking.only_one(paths.lock(), "this install"):
+        # A team-managed identity is made canonical at the last local boundary before its
+        # instructions and grants are read. This fetches nothing and executes no catalog code.
+        try:
+            team_reconcile.current(agent)
+        except team_reconcile.Refused as why:
+            raise NotRunnable(str(why)) from why
         # **Resolved before anything is written down.** A provider nothing stands behind is a turn
         # that cannot start, and a row claiming admission would record something that never was.
         settled = records.read(directory.records(agent))
@@ -1104,6 +1208,7 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
     unattended = request.situation in (instructions.SCHEDULE_TO_AGENT,
                                        instructions.AGENT_TO_AGENT)
     closing = protocol.last_thought(said)
+    closing_response = protocol.closing_response(said)
     reply = closing if unattended else protocol.reply(said)
     answered = bool(reply.strip()) if unattended else protocol.has_answer(said)
     brain_said = protocol.brain_said_ok(said)
@@ -1176,7 +1281,8 @@ def _became(request: Request, turn: int, said: List[Dict[str, Any]], stream,
 
     return {
         "outcome": Outcome(turn=turn, turn_status=status, reply=reply,
-                           last_thought=closing, failure_code=code,
+                           last_thought=closing, closing_response=closing_response,
+                           failure_code=code,
                            failure_message=message, usage=used,
                            files=tuple(protocol.file_records(said)),
                            provider_name=provider_name, provider_alias=provider_alias,

@@ -51,7 +51,7 @@ TABLE = "schedules"
 #: failure is a claim nothing here can back.
 #:
 #: **`done` rather than `completed`, and the word is not this module's to pick.** `seen`, `working`,
-#: `done`, `stopped` and `failed` are the states an adapter renders, written down in `docs/adapters.md`
+#: `done`, `stopped` and `failed` are the states an adapter renders, written down in `docs/extending/adapters.md`
 #: with the note that they are *not* `taken`, `running`, `finished` — a published vocabulary somebody
 #: else's program is built against. `turns.turn_status` already speaks it. A firing's outcome never
 #: leaves this machine, so nothing forced the two apart except that they were written months apart,
@@ -67,7 +67,7 @@ OUTCOMES = (DONE, FAILED, STOPPED)
 #: records' own account of what has happened — a caller that could set those could rewrite history
 #: and then read it back as fact.
 SETTABLE = ("enabled", "cron", "run_at", "expire_at", "provider_name", "model_name",
-            "prompt", "command", "channel", "channel_place_id")
+            "prompt", "command", "channel", "channel_sender_id", "channel_place_id")
 
 #: Rundesk's per-agent upkeep is represented by a real row so it inherits the schedule lock,
 #: adoption, output and settlement guarantees. It is never a person's cron schedule: the gateway
@@ -342,6 +342,12 @@ def _why_the_records_refused(agent: str, name: str, why: sqlite3.IntegrityError)
     if "unique" in said:
         return (f"{agent} already has a schedule called {name} — change that one, or take it away "
                 "first")
+    if "channel_sender_id" in said:
+        # Its own sentence rather than the pair one below, because it is a different mistake: the
+        # two below are *when* and *what*, and this is *where*. Step `0014` is where the constraint
+        # and the reason for it are written down.
+        return (f"{name} reports to one person's direct message or to one place, never both — "
+                f"say one destination with --to ({why})")
     return (f"a schedule says when it runs over and over or the one moment it runs, and starts a "
             f"program or asks an agent — never both of a pair and never neither ({why})")
 

@@ -74,22 +74,22 @@ def origin(environ: Optional[Dict[str, str]] = None) -> Tuple[str, int, int, int
                 "FROM turns t JOIN conversations c ON c.id = t.conversation_id "
                 "WHERE t.id = ?", (turn,),
             ).fetchone()
-            messages = conn.execute(
+            message = conn.execute(
                 "SELECT id FROM conversation_messages WHERE conversation_id = ? "
-                "AND turn_id = ? AND author = ? ORDER BY id",
+                "AND turn_id = ? AND author = ? ORDER BY id DESC LIMIT 1",
                 (int(row["conversation_id"]) if row is not None else 0,
                  turn, arriving.BY_USER),
-            ).fetchall()
+            ).fetchone()
     except (OSError, records.NotThere, records.Unreadable) as why:
         raise NoOrigin(f"the active channel origin could not be read ({why})") from why
     if (row is None or row["turn_status"] != kept.WORKING
             or row["source"] != arriving.FROM_CHANNEL
-            or len(messages) != 1):
+            or message is None):
         raise NoOrigin("--continue requires one unambiguous active channel owner turn")
     conversation = int(row["conversation_id"])
     if turns.standing(agent, conversation) is not True:
         raise NoOrigin("--continue requires the initiating channel turn to still be active")
-    return agent, turn, conversation, int(messages[0]["id"])
+    return agent, turn, conversation, int(message["id"])
 
 
 def requested_from_origin(operation: str, pid: Optional[int] = None,

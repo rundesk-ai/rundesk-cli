@@ -229,6 +229,91 @@ class WhichChannelIsTold(Channels):
             kept.telling(self.agent, "discord", "1180")
 
 
+class WhatAnAllowEntryNames(Channels):
+    """A bare entry is a sender id and always was; a typed one says which of the two it names.
+
+    This is the reading the whole admission path rests on, so every way an entry can be written is
+    pinned here rather than inferred from the one shape the feature was built for.
+    """
+
+    def test_a_list_written_before_typed_entries_existed_means_what_it_meant(self):
+        # The compatibility case, and the one that must never move: every channel on every install
+        # holds bare ids, and each of them is a sender.
+        self.given("discord", allowed=("2207", "4418"))
+        admitting = kept.admitting(kept.one(self.agent, "discord"))
+        self.assertEqual(("2207", "4418"), admitting.senders)
+        self.assertEqual((), admitting.places)
+
+    def test_a_typed_sender_is_the_same_thing_said_out_loud(self):
+        self.assertEqual(("2207",), kept.admitted_by(["sender:2207"]).senders)
+
+    def test_a_typed_place_is_kept_apart_from_the_senders(self):
+        admitting = kept.admitted_by(["2207", "place:C0OPS"])
+        self.assertEqual(("2207",), admitting.senders)
+        self.assertEqual(("C0OPS",), admitting.places)
+
+    def test_the_order_somebody_typed_is_kept(self):
+        # An adapter reports where unprompted things would land by opening a conversation with the
+        # first sender on the list, so a set here would hand it a different owner between runs.
+        self.assertEqual(("4418", "2207"), kept.admitted_by(["4418", "sender:2207"]).senders)
+
+    def test_one_id_said_twice_is_one_id(self):
+        self.assertEqual(("2207",), kept.admitted_by(["2207", "sender:2207"]).senders)
+
+    def test_a_prefix_that_is_not_one_of_the_two_words_is_the_start_of_an_id(self):
+        # A platform whose ids carry a colon keeps meaning what it meant. Only the two closed words
+        # make an entry typed.
+        for said in ("user:2207", "team:2207", "SENDER:2207", "2207:8"):
+            with self.subTest(said=said):
+                self.assertEqual((said,), kept.admitted_by([said]).senders)
+
+    def test_a_typed_entry_naming_nothing_admits_nobody(self):
+        # Kept as text it would match a sender nobody can be; read as *any* sender it would open the
+        # channel to everybody. Dropped, it does what an entry naming nobody should do.
+        admitting = kept.admitted_by(["sender:", "place:"])
+        self.assertEqual((), admitting.senders)
+        self.assertEqual((), admitting.places)
+        self.assertFalse(admitting.admits("2207", "C0OPS"))
+
+    def test_a_list_that_cannot_be_read_is_never_read_as_nobody(self):
+        for said in ("not json at all", None, '{"who": "me"}'):
+            with self.subTest(said=said):
+                with self.assertRaises(records.Unreadable):
+                    kept.admitting({"kind": "discord", "allowed": said})
+
+
+class WhoIsAdmitted(unittest.TestCase):
+    """The decision itself, asked of the two stable ids and of nothing else."""
+
+    def test_a_named_sender_is_admitted_wherever_they_say_it(self):
+        admitting = kept.admitted_by(["2207"])
+        self.assertTrue(admitting.admits("2207"))
+        self.assertTrue(admitting.admits("2207", "C0OPS"))
+
+    def test_a_sender_entry_admits_only_that_sender(self):
+        self.assertFalse(kept.admitted_by(["sender:2207"]).admits("4418", "C0OPS"))
+
+    def test_a_place_entry_admits_anybody_in_that_place(self):
+        self.assertTrue(kept.admitted_by(["place:C0OPS"]).admits("4418", "C0OPS"))
+
+    def test_a_place_entry_admits_nobody_anywhere_else(self):
+        self.assertFalse(kept.admitted_by(["place:C0OPS"]).admits("4418", "C0SECRET"))
+
+    def test_a_place_entry_admits_nobody_who_said_where_they_were_and_not_who(self):
+        # A record with no sender is an event rather than a person — a bot, a join notice, a
+        # platform's own housekeeping — and admitting one because of *where* it happened would turn a
+        # place entry into a way in for anything that can post there.
+        self.assertFalse(kept.admitted_by(["place:C0OPS"]).admits("", "C0OPS"))
+
+    def test_an_empty_list_admits_nobody_and_never_everybody(self):
+        admitting = kept.admitted_by([])
+        self.assertFalse(admitting.admits("2207"))
+        self.assertFalse(admitting.admits("2207", "C0OPS"))
+
+    def test_saying_no_place_is_not_saying_every_place(self):
+        self.assertFalse(kept.admitted_by(["place:C0OPS"]).admits("4418"))
+
+
 class TakingOneAway(Channels):
 
     def test_a_channel_is_taken_away(self):

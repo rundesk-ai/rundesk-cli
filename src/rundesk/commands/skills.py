@@ -35,6 +35,7 @@ from rundesk.commands import Subcommands, env, failed, print_json
 from rundesk.core import paths, secrets
 from rundesk.exits import FAILED, OK
 from rundesk.skills import catalogs, doctor, grants, library, needs
+from rundesk.teams import catalogs as team_catalogs
 from rundesk.utils import archives, locking
 from rundesk.utils.terminal import NOTHING, as_table
 
@@ -173,7 +174,7 @@ def refreshed(refreshing: Optional[catalogs.Fetching] = None) -> List[str]:
     """
     said: List[str] = []
     try:
-        outcomes = catalogs.refresh(refreshing, _out_loud)
+        outcomes = catalogs.refresh(refreshing, _out_loud, _dependency_catalog)
     except TROUBLE as why:
         return [f"the skill catalogs could not be checked: {why}",
                 "rundesk skills catalogs says what is installed"]
@@ -340,6 +341,8 @@ def _would_install(coming: catalogs.Coming) -> int:
 
 def _updated(name: str, confirm: bool, fetching: Optional[catalogs.Fetching]) -> int:
     """Check a catalog against where it came from, or say what checking it would change."""
+    if library.is_team(name):
+        return _failed(f"{name} declares a team — update it with: rundesk teams update {name}")
     if not confirm:
         return _would_update(name, fetching)
     try:
@@ -347,7 +350,7 @@ def _updated(name: str, confirm: bool, fetching: Optional[catalogs.Fetching]) ->
         # back, and `catalogs.update` says those same facts through `saying` for the sweep in
         # `refreshed`, which has no other voice. Handed both, one `rundesk skills update` said the
         # outcome twice — once indented and once not.
-        did = catalogs.update(name, fetching)
+        did = catalogs.update(name, fetching, validating=_dependency_catalog)
     except TROUBLE as why:
         return _failed(str(why))
 
@@ -418,6 +421,7 @@ def _would_update(name: str, fetching: Optional[catalogs.Fetching]) -> int:
                 print(f"update: {name} {settled.manifest.version} is up to date — nothing would "
                       "change", file=sys.stderr)
             elif coming.manifest is not None:
+                _dependency_catalog(coming.at, coming.manifest)
                 # **Says the tree would be replaced, and names a version movement only when there
                 # is one.** What is on the far end is authoritative whether its version moved or
                 # not, so a catalog whose author edited a skill without bumping a number is one this
@@ -452,12 +456,24 @@ def _removed(name: str, confirm: bool) -> int:
     except TROUBLE as why:
         return _failed(str(why))
 
+    if library.is_team(name):
+        return _failed(f"{name} declares a team and cannot be removed through skills")
+
     stays = catalogs.what_stays(name)
     if stays:
         # Refused before `--confirm` is even looked at. A catalog that cannot be removed cannot be
         # removed with a flag either, and asking somebody to confirm something that will then be
         # refused is a worse answer than refusing now.
         return _failed(stays)
+
+    try:
+        dependents = team_catalogs.dependents(name)
+    except (team_catalogs.Refused, library.Refused, OSError) as why:
+        return _failed(f"installed team dependencies could not be checked ({why})")
+    if dependents:
+        return _failed(f"{name} is required by installed teams: "
+                       f"{', '.join(sorted(dependents))} — update those team declarations before "
+                       "removing it")
 
     holding = library.found(library.inside(name))
     if not confirm:
@@ -473,6 +489,23 @@ def _removed(name: str, confirm: bool) -> int:
     for agent in sorted(lost):
         print(f"        {agent} no longer holds {', '.join(lost[agent])}")
     return OK
+
+
+def _dependency_catalog(at: Path, manifest: library.Manifest) -> None:
+    """Refuse a replacement that would strand a skill required by an installed team."""
+    try:
+        dependents = team_catalogs.dependents(manifest.name)
+    except (team_catalogs.Refused, library.Refused, OSError) as why:
+        raise catalogs.Refused(f"installed team dependencies could not be checked ({why})") from why
+    available = set(library.found(at / library.INSIDE))
+    missing = {team: [skill for skill in skills if skill not in available]
+               for team, skills in dependents.items()}
+    missing = {team: skills for team, skills in missing.items() if skills}
+    if missing:
+        details = "; ".join(f"{team}: {', '.join(skills)}"
+                            for team, skills in sorted(missing.items()))
+        raise catalogs.Refused(
+            f"{manifest.name} cannot retire skills required by installed teams ({details})")
 
 
 def _would_remove(name: str, settled: library.Catalog, holding: List[str]) -> int:

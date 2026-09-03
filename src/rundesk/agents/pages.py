@@ -23,12 +23,14 @@ kept in step by anybody remembering is two files that disagree, and the disagree
 each brain reads only the one it looks for, so the two would drift into two different agents wearing
 one name. `tests/test_agent_pages.py` compares the bytes rather than trusting this sentence.
 
-## Absence is filled; an answer is never replaced
+## Rules and work areas are repaired; memory absence is an answer
 
 **A page that is already there is left exactly as it is, whatever it says.** These are the files an
 agent and its owner edit — the rules say so in as many words — so a release that rewrote them would
 be a release that silently changed how somebody's agent works, and the owner would find out by its
-behaviour rather than by being told.
+behaviour rather than by being told. New agents receive the memory scaffold, but an update does not
+recreate an absent `MEMORY.md`: removing it is how an owner expresses that this agent keeps no
+cross-run memory. Missing rules and work-area notes are still restored.
 
 That is `skills.grants` behaviour and deliberately not `lifecycle.home`'s: an install's `README.md`
 is rewritten every update because it holds nothing anybody typed, and these hold nothing else.
@@ -44,6 +46,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from rundesk.core import paths
+from rundesk.utils import files
 
 #: Where this release keeps them. **Answered on every call and never bound at import**: on a machine
 #: with a real install `~/.rundesk/app/src` exists, and a constant resolved at import time would
@@ -157,7 +160,8 @@ def _stands(page: Path) -> bool:
     return page.exists() or page.is_symlink()
 
 
-def place(home: Path, agent: str, text: Optional[Dict[str, str]] = None) -> List[str]:
+def place(home: Path, agent: str, text: Optional[Dict[str, str]] = None,
+          include_memory: bool = True) -> List[str]:
     """Put every page this home is missing into it. Hands back what was written, in order.
 
     **Fills an absence and never replaces an answer** — see the module docstring. A page already
@@ -166,10 +170,14 @@ def place(home: Path, agent: str, text: Optional[Dict[str, str]] = None) -> List
     `text` is what `read_shipped` gave, passed in when a caller is placing for many agents so the
     release's own files are read once rather than once per agent. Resolved in the body when it is
     not — never in the signature, where it would be bound at import and unreachable by a test.
+    `include_memory` is true for agent creation and false for the update sweep: a new agent needs a
+    complete scaffold, while absence in an existing home may be the owner's memory policy.
     """
     said = read_shipped() if text is None else text
     written = []
     for name in sorted(PAGES):
+        if name == "MEMORY.md" and not include_memory:
+            continue
         page = home / name
         if not _safe_parent(home, page) or _stands(page):
             continue
@@ -201,6 +209,32 @@ def _laid_down(page: Path, text: str) -> None:
         raise
 
 
+def replace_team(home: Path, text: str) -> List[str]:
+    """Replace a team-managed agent's two instruction pages and remove its memory page.
+
+    Team adoption is the explicit exception to this module's ordinary fill-only rule. The confirmed
+    team command has already named the overwrite and the removal; each replacement is still staged
+    and renamed so a provider sees old complete rules or new complete rules, never half a file.
+    """
+    written = []
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        page = home / name
+        if not _safe_parent(home, page):
+            raise OSError(f"{page.parent} is not a safe directory inside the agent home")
+        if not page.is_symlink() and page.is_file():
+            try:
+                if page.read_text(encoding="utf-8") == text:
+                    continue
+            except (OSError, UnicodeError):
+                pass
+        _laid_down(page, text)
+        written.append(name)
+    memory = home / "MEMORY.md"
+    if files.remove_one(memory):
+        written.append("MEMORY.md removed")
+    return written
+
+
 def everybody_has_theirs(names, home_of, saying=None) -> List[Tuple[str, str]]:
     """Give every agent the pages it is missing. Hands back what could not be done, per agent.
 
@@ -224,7 +258,7 @@ def everybody_has_theirs(names, home_of, saying=None) -> List[Tuple[str, str]]:
     left = []
     for name in names:
         try:
-            written = place(home_of(name), name, text)
+            written = place(home_of(name), name, text, include_memory=False)
         except OSError as why:
             left.append((name, str(why)))
             told(f"{name} is missing pages that could not be written ({why})")

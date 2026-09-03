@@ -24,6 +24,8 @@ Run directly: `python3 tests/test_providers_answering.py`
 """
 
 import contextlib
+import importlib.machinery
+import importlib.util
 import json
 import threading
 import time
@@ -41,7 +43,7 @@ from rundesk.delegations import hosting as delegations
 from rundesk.delegations import kept as delegations_kept
 from rundesk.providers import accounts, adapters, answering, kept, turns
 from rundesk.schedules import kept as schedules_kept
-from rundesk.utils import programs
+from rundesk.utils import locking, programs
 
 #: How long a case waits for a real turn to finish on its own thread. A ceiling rather than a sleep,
 #: so an ordinary run is through in tenths.
@@ -110,6 +112,20 @@ for line in sys.stdin:
                               "external_id": "8841"}), flush=True)
 """
 
+#: The same adapter, declaring nothing at all about streaming — a third-party adapter written
+#: before the question was asked. **Unsaid has to mean *shows it as it happens***, because that is
+#: what every surface did before, and reading it the other way would take the commentary away from
+#: an adapter whose author never opted out of it.
+AN_ADAPTER_THAT_DECLARES_NO_STREAMING = AN_ADAPTER.replace(
+    '{"stream": True, "max_text": 2000}', '{"max_text": 2000}')
+
+#: The same adapter, declaring that it shows nothing until the end — which is what the shipped
+#: Slack adapter declares. **The declaration is the whole difference**: what an answer is composed
+#: from depends on what the surface has already shown, and a surface that has shown nothing must be
+#: given everything the brain said or the thoughts before the last one are simply gone.
+AN_ADAPTER_THAT_SHOWS_ONLY_THE_ANSWER = AN_ADAPTER.replace(
+    '{"stream": True, "max_text": 2000}', '{"stream": False, "max_text": 2000}')
+
 
 class Answering(support.Isolated):
 
@@ -176,14 +192,24 @@ class Answering(support.Isolated):
         self.assertEqual([], left, "this case left something running, and every location rundesk "
                                    "reads is about to point somewhere else")
 
-    def a_channel(self, saying="", allowed=("2207",), refuse=""):
+    def a_channel(self, saying="", allowed=("2207",), refuse="", body=None):
         at = self.adapters / "discord"
-        at.write_text(AN_ADAPTER, encoding="utf-8")
+        at.write_text(body or AN_ADAPTER, encoding="utf-8")
         at.chmod(0o755)
         channels_kept.added(self.agent, "discord", {
             "describes": "discord", "allowed": json.dumps(list(allowed)),
             "settings": json.dumps({"saying": saying, "told": str(self.told),
                                     "refuse": refuse})})
+
+    def answers_for_a_surface(self, streaming):
+        """The thing that answers, with one surface's own declaration settled in advance.
+
+        Handed the answer rather than the adapter, because what is under test here is what the
+        watcher does with a finished thought and not how a capability is discovered.
+        """
+        answers = answering.OnAChannel(self.where, lambda: hosting.Watching({}, {}, {}))
+        answers._as_it_happens["discord"] = streaming
+        return answers
 
     def a_message_arrived(self, text="what changed today?", **also):
         said = {"say": "arrived", "conversation": "1180", "user": "2207",
@@ -560,6 +586,110 @@ class AMessageOnAChannelIsAnswered(Answering):
         self.assertEqual("8841", posted[-1]["reply_to"])
         self.assertTrue(posted[-1].get("cost"))
 
+    def test_a_surface_that_shows_only_the_answer_is_given_every_finished_thought(self):
+        """R-CH-19, R-CAD-27, R-SLK-35. **The defect this exists for loses words, not duplicates
+        them.** Two shipped providers say several finished things after going to work and mark none
+        of them final, so `last_thought` is the last of them and the earlier ones are commentary. A
+        surface showing commentary has already posted those; one showing the answer alone has not,
+        and composing its answer the same way drops them. Every sentence, exactly once."""
+        self.a_stand_in_told(self.agent, remarks=["the migration is applied", "the workers caught up"],
+                             omit_final_response=True)
+        self.a_channel(saying=self.a_message_arrived(),
+                       body=AN_ADAPTER_THAT_SHOWS_ONLY_THE_ANSWER)
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 1))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertEqual(1, len(posted), f"one question was answered {len(posted)} times")
+        self.assertEqual([], [one for one in posted if one.get("remark")],
+                         "a surface that shows the answer alone was sent working commentary")
+        answer = posted[0]["text"]
+        for sentence in ("the migration is applied", "the workers caught up"):
+            with self.subTest(sentence=sentence):
+                self.assertEqual(1, answer.count(sentence),
+                                 f"{sentence!r} appears {answer.count(sentence)} times in {answer!r}")
+
+    def test_working_narration_is_left_out_of_a_quiet_surfaces_answer(self):
+        """R-SLK-10, R-CAD-27. **The correction to the correction.** Composing a quiet surface's
+        answer from everything the brain said fixed the loss and carried the narration in with it:
+        text said before the first tool call, and between one tool and the next, is the brain
+        thinking aloud on the way. A surface that shows the answer alone was never meant to show it,
+        and here it would arrive inside the one message that surface posts.
+
+        `also_did` puts a tool call after each finished thought, so the remark below is genuine
+        between-tool narration and the reply after it is the closing response.
+        """
+        self.a_stand_in_told(self.agent, remarks=["let me look at the migration"],
+                             also_did="ran the tests")
+        self.a_channel(saying=self.a_message_arrived(),
+                       body=AN_ADAPTER_THAT_SHOWS_ONLY_THE_ANSWER)
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 1))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertEqual(1, len(posted), f"one question was answered {len(posted)} times")
+        answer = posted[0]["text"]
+        self.assertNotIn("let me look at the migration", answer)
+        self.assertIn("You asked:", answer)
+
+    def test_a_surface_that_shows_a_turn_as_it_happens_still_gets_commentary(self):
+        """The other half, unchanged: Discord shows each finished thought as the next proves it was
+        not the last, and the answer is that last one and not a repeat of everything."""
+        self.a_stand_in_told(self.agent, remarks=["the migration is applied", "the workers caught up"],
+                             omit_final_response=True)
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 2))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertEqual(2, len(posted), "commentary and its answer are two deliveries here")
+        self.assertTrue(posted[0].get("remark"))
+        self.assertEqual("the migration is applied", posted[0]["text"])
+        self.assertEqual("the workers caught up", posted[-1]["text"])
+        self.assertNotIn("remark", posted[-1])
+
+    def test_an_adapter_that_declares_nothing_keeps_the_commentary_it_always_had(self):
+        """The compatibility half of the same rule. `stream` is a field this release added, so an
+        adapter that has never heard of it must behave exactly as it did — and the safe reading of
+        silence is the behaviour that shows more, never the one that composes differently."""
+        # Two finished thoughts, because a remark is posted when the *next* one proves it was not
+        # the last: one thought alone is an answer on any surface.
+        self.a_stand_in_told(self.agent, remarks=["one moment", "and another"],
+                             omit_final_response=True)
+        self.a_channel(saying=self.a_message_arrived(),
+                       body=AN_ADAPTER_THAT_DECLARES_NO_STREAMING)
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 2))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertTrue(posted[0].get("remark"),
+                        "an adapter that said nothing about streaming lost its commentary")
+
+    def test_a_file_declared_in_an_unposted_thought_still_goes_with_the_answer(self):
+        """A file the brain declared is declared however that thought reaches somebody. The thought
+        is not posted on a surface that shows the answer alone, and dropping the link with it would
+        lose the file rather than the words."""
+        watched = answering._Streaming(self.answers_for_a_surface(streaming=False),
+                                       self.agent, "discord", "1180")
+        watched.heard({"type": "text", "text": "made you [the chart](/tmp/a-chart.png)",
+                       "whole": True})
+        watched.heard({"type": "text", "text": "and that is all", "whole": True})
+        self.assertEqual(["/tmp/a-chart.png"], list(watched.linked))
+
+    def test_a_remark_says_it_is_one_so_a_final_only_surface_can_tell(self):
+        """R-CH-19. What a brain said on the way to its answer and the answer are both prose it
+        wrote, so a surface handed the two cannot tell them apart from the text — and one whose
+        whole shape is the answer alone posted both, which is one question answered twice. The
+        phase is known here and is said here; nothing downstream infers it."""
+        self.a_stand_in_told(self.agent, remarks=["one moment"])
+        self.a_channel(saying=self.a_message_arrived())
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 2))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertTrue(posted[0].get("remark"), "a mid-turn remark crossed the seam unmarked")
+        self.assertNotIn("remark", posted[-1])
+
     def test_a_remark_already_posted_is_not_repeated_inside_the_answer(self):
         """R-CH-19. `protocol.last_thought` exists for exactly this and its docstring says so: a
         surface shown each finished remark as it landed has already had everything before the last
@@ -632,6 +762,199 @@ class AMessageOnAChannelIsAnswered(Answering):
                          gestures.controlled(self.agent, "discord", "1180", "2207",
                                              answering_hosting.STOP))
 
+    def test_admission_refused_before_a_turn_does_not_leave_the_place_typing(self):
+        """R-CH-37. A message read from the adapter while an install-wide change holds work
+        admission is kept pending on purpose. **The indicator is not**: `working` goes up before
+        admission is asked for, and this gateway suppresses that message afterwards — so nothing
+        else would ever send a state for it, and the place typed for a turn that never existed
+        until somebody restarted the adapter."""
+        self.a_channel(saying=self.a_message_arrived())
+        with mock.patch.object(turns, "run",
+                               side_effect=locking.Stuck("admitting provider work is busy")):
+            self.hosting_now()
+            self.assertTrue(self.waited_until(lambda: answering.FAILED in self.marks()),
+                            "the place was left typing with no turn behind it")
+
+        settled = [one for one in self.what_it_was_told()
+                   if one.get("do") == "state" and one.get("state") == answering.FAILED]
+        self.assertEqual([None], [one.get("external_id") for one in settled],
+                         "a message still waiting for a turn was marked as a settled one")
+        self.assertEqual([], kept.list_turns(self.agent), "a turn was recorded for a refused one")
+        self.assertEqual(["8841"], [one.external_id for one
+                                    in arriving.pending_on_channels(self.agent, 10)],
+                         "the message stopped being recoverable by a replacement gateway")
+
+    def test_stopping_settles_an_inbound_message_no_turn_ever_admitted(self):
+        """R-CH-9, R-CH-36. Somebody stopping what they sent is owed an answer whether or not a turn
+        was ever admitted for it — and the message is what carries the mark, so it is the message
+        that has to become terminal rather than the indicator alone."""
+        self.a_channel()
+        watching = self.hosting_now()
+        landed = arriving.recorded(self.agent, "discord", "1180", "2207", "please look", "8841")
+        gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
+                                      lambda agent: "online")
+
+        with mock.patch.object(adapters, "talking_to",
+                               side_effect=AssertionError("a provider was started")):
+            said = gestures.controlled(self.agent, "discord", "1180", "2207",
+                                       answering_hosting.STOP)
+
+        self.assertEqual("✋ Stopped.", said)
+        self.assertTrue(self.waited_until(lambda: answering.STOPPED in self.marks()),
+                        "the message somebody stopped was never marked")
+        stopped = [one for one in self.what_it_was_told()
+                   if one.get("do") == "state" and one.get("state") == answering.STOPPED]
+        self.assertEqual(["8841"], [one.get("external_id") for one in stopped])
+        self.assertEqual(1, len(kept.list_turns(self.agent)))
+        turn = kept.list_turns(self.agent)[0]
+        self.assertEqual(kept.STOPPED, turn["turn_status"])
+        self.assertEqual(turn["id"], arriving.turn_for_message(
+            self.agent, landed.conversation, landed.message),
+            "the message stayed pending and a later gateway would answer it")
+
+    def test_stopping_leaves_a_message_later_work_already_superseded_alone(self):
+        """R-CH-36. The rows a person may settle are the rows a replacement gateway may recover,
+        and no others: an older unclaimed message behind an answered one is not work anybody is
+        waiting on, so stopping neither settles it nor marks it."""
+        older = arriving.recorded(self.agent, "discord", "1180", "2207", "why no eyes?", "8841")
+        later = arriving.recorded(self.agent, "discord", "1180", "2207", "please update", "8842")
+        turn = kept.add_turn(self.agent, {
+            "conversation_id": later.conversation,
+            "provider_name": support.A_STAND_IN,
+            "access_mode": "work",
+        })
+        arriving.handled_by_turn(self.agent, later.conversation, (later.message,), turn)
+        kept.finish_turn(self.agent, turn, kept.DONE)
+        self.a_channel()
+        watching = self.hosting_now()
+        gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
+                                      lambda agent: "online")
+
+        said = gestures.controlled(self.agent, "discord", "1180", "2207",
+                                   answering_hosting.STOP)
+
+        self.assertEqual("✋ Nothing is running here.", said)
+        self.assertIsNone(arriving.turn_for_message(
+            self.agent, older.conversation, older.message))
+        self.assertEqual(1, len(kept.list_turns(self.agent)))
+        self.assertFalse(self.waited_until(lambda: self.what_it_was_told(), NOT_GOING_TO_HAPPEN),
+                         "a superseded message was marked by a stop that did not settle it")
+
+    def test_stopping_more_pending_messages_than_one_claim_holds_leaves_none_runnable(self):
+        """R-CH-36. One claim holds a bounded number of ids, and the bound is where saying
+        "stopped" stopped being true: the rows beyond it were the *oldest*, which is exactly what a
+        replacement gateway starts with — so the person was told their work was stopped and their
+        agent answered it later anyway. Taken from the newest end, what is left behind is
+        superseded by the row that was claimed and can never run."""
+        self.a_channel()
+        watching = self.hosting_now()
+        landed = [arriving.recorded(self.agent, "discord", "1180", "2207", f"ask {nth}",
+                                    f"88{nth:03d}")
+                  for nth in range(answering.PENDING_STOPPED_AT_MOST + 1)]
+        gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
+                                      lambda agent: "online")
+
+        said = gestures.controlled(self.agent, "discord", "1180", "2207",
+                                   answering_hosting.STOP)
+
+        self.assertEqual("✋ Stopped.", said)
+        self.assertEqual([], arriving.pending_on_channels(self.agent, len(landed) + 10),
+                         "a message this stop was told about can still be run by a later sweep")
+        turn = kept.list_turns(self.agent)[0]
+        self.assertEqual(kept.STOPPED, turn["turn_status"])
+        settled = [one for one in landed
+                   if arriving.turn_for_message(
+                       self.agent, one.conversation, one.message) == turn["id"]]
+        self.assertEqual(landed[1:], settled,
+                         "the claim did not take exactly the newest rows it marked")
+        self.assertTrue(self.waited_until(
+            lambda: len(self.marks()) >= answering.PENDING_STOPPED_AT_MOST))
+        marked = [one.get("external_id") for one in self.what_it_was_told()
+                  if one.get("do") == "state" and one.get("state") == answering.STOPPED]
+        self.assertEqual([f"88{nth:03d}" for nth
+                          in range(1, answering.PENDING_STOPPED_AT_MOST + 1)],
+                         marked, "a mark went on a row that was not settled, or one was missed")
+        self.assertIsNone(arriving.turn_for_message(
+            self.agent, landed[0].conversation, landed[0].message),
+            "the row beyond the claim was claimed by something")
+
+    def test_stopping_marks_nothing_when_a_turn_started_while_it_read_the_pending_rows(self):
+        """R-CH-36. `stop_or_settle_pending` reaches a live turn first, and a turn can be published
+        in the moment between reading the pending rows and claiming the conversation. What was
+        stopped is then that turn — which marks its own message — and every row read here is still
+        waiting for one. Marking them would put ✋ on work that is about to be answered."""
+        self.a_channel()
+        watching = self.hosting_now()
+        first = arriving.recorded(self.agent, "discord", "1180", "2207", "please look", "8841")
+        second = arriving.recorded(self.agent, "discord", "1180", "2207", "and this", "8842")
+        gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
+                                      lambda agent: "online")
+        published = contextlib.ExitStack()
+        self.addCleanup(published.close)
+        live = []
+        reading = arriving.pending_on_channels
+
+        def a_turn_is_published_while_reading(*called, **also):
+            found = reading(*called, **also)
+            if not live:
+                live.append(published.enter_context(
+                    turns._stoppable(self.agent, first.conversation)))
+            return found
+
+        with mock.patch.object(answering.arriving, "pending_on_channels",
+                               side_effect=a_turn_is_published_while_reading):
+            said = gestures.controlled(self.agent, "discord", "1180", "2207",
+                                       answering_hosting.STOP)
+
+        self.assertEqual("✋ Stopped.", said)
+        self.assertTrue(live[0].asked, "the turn that was published was never asked to end")
+        # A mark is written down this adapter's pipe and read on its own thread, so proving one was
+        # never sent has to spend the ceiling made for exactly that.
+        self.assertFalse(self.waited_until(
+            lambda: any(one.get("do") == "state" for one in self.what_it_was_told()),
+            NOT_GOING_TO_HAPPEN),
+            "a message still waiting for a turn was marked stopped")
+        self.assertEqual([], kept.list_turns(self.agent),
+                         "a stopped turn was invented beside the live one")
+        for one in (first, second):
+            self.assertIsNone(arriving.turn_for_message(
+                self.agent, one.conversation, one.message))
+        self.assertEqual(["8841", "8842"],
+                         [one.external_id for one
+                          in arriving.pending_on_channels(self.agent, 10)],
+                         "work nobody stopped is no longer recoverable")
+
+    def test_stopping_reaches_a_turn_admitted_while_the_gesture_was_being_answered(self):
+        """R-CH-9. A turn takes the conversation's claim a moment before it publishes itself as one
+        this process can end, and `run_if` puts a durable admission decision between the two. A
+        `/stop` pressed in that window reached nothing: the person was told their conversation held
+        something no conversation could stop, and the turn they were watching ran to the end."""
+        self.a_channel()
+        watching = self.hosting_now()
+        landed = arriving.recorded(self.agent, "discord", "1180", "2207", "please look", "8841")
+        gestures = answering.Gestures(self.where, lambda: watching, lambda word: None,
+                                      lambda agent: "online")
+
+        with turns.claiming(self.agent, landed.conversation):
+            said = gestures.controlled(self.agent, "discord", "1180", "2207",
+                                       answering_hosting.STOP)
+
+            self.assertEqual("✋ Stopped.", said)
+            with turns._stoppable(self.agent, landed.conversation) as ours:
+                self.assertTrue(ours.asked,
+                                "the turn published under a stopped claim ran on to the end")
+
+        self.assertEqual([], kept.list_turns(self.agent),
+                         "a stopped turn was invented beside the one being admitted")
+        self.assertEqual(["8841"], [one.external_id for one
+                                    in arriving.pending_on_channels(self.agent, 10)],
+                         "a message the turn being admitted will take was settled here")
+        # The turn that was stopped marks its own message as it ends, and it has not ended yet.
+        self.assertFalse(self.waited_until(
+            lambda: any(one.get("do") == "state" for one in self.what_it_was_told()),
+            NOT_GOING_TO_HAPPEN),
+            "a message still waiting for the turn that owns it was marked here")
+
     def a_provider(self, named="other"):
         """A second brain this install really has, so a change of provider has somewhere to go."""
         where = paths.code() / "providers"
@@ -669,6 +992,18 @@ class AMessageOnAChannelIsAnswered(Answering):
 
             self.a_gesture().configured(self.agent, "discord", "1180", "2207", other)
         self.assertIsNone(records.read(directory.records(self.agent))["provider_alias"])
+
+    def test_a_channel_that_allows_a_place_is_never_a_single_user_channel(self):
+        """R-CH-26. A provider is an agent-wide default, so it may be changed only from a channel one
+        person uses. A place entry allows an unknown number of people — who is in a room is the
+        platform's to change — so it is not that channel however few senders stand beside it."""
+        self.a_channel(allowed=("2207", "place:C0OPS"))
+        other = self.a_provider()
+        was = records.read(directory.records(self.agent))["provider_name"]
+        said = self.a_gesture().configured(self.agent, "discord", "1180", "2207", other)
+        self.assertIn("one person uses", said)
+        self.assertEqual(was, records.read(directory.records(self.agent))["provider_name"],
+                         "a room's membership decided what this agent is for everybody")
 
     def test_a_brain_this_install_does_not_have_is_refused_before_anything_is_written(self):
         """A default nothing stands behind is an agent whose every turn fails from the next message
@@ -983,6 +1318,68 @@ class TwoTurnsInOneConversation(Answering):
         self.assertIn(marker, remembered[0])
         self.assertIn("ordinary working context", remembered[0])
         self.assertNotIn("You asked: the first", remembered[0])
+
+    def test_a_quiet_surface_posts_only_the_latest_of_two_explicit_finals(self):
+        """R-CAD-27, end to end. Supersession is the one part of the closing response that reading
+        every post-tool thought could have broken: joined instead of replaced, a person steering an
+        agent would be handed the answer they corrected and the corrected one together."""
+        marker = "LATEST-FINAL-903"
+        self.a_stand_in_told(
+            self.agent, steer=True, finish_after_steers=1, mark_final=True,
+            remarks=["ordinary working context"])
+        self.a_channel(saying=self.a_message_arrived(text="the first"),
+                       body=AN_ADAPTER_THAT_SHOWS_ONLY_THE_ANSWER)
+        watching = self.hosting_now()
+        self.assertTrue(self.waited_until(self.a_turn_is_running),
+                        "no turn ever started to steer")
+        follow_up = arriving.recorded(
+            self.agent, "discord", "1180", "2207", marker, external_id="8842")
+
+        answering.OnAChannel(self.where, lambda: watching).answer(
+            self.agent, "discord", "1180", "2207", marker, "8842", follow_up)
+
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: marker in "\n".join(self.delivered())))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        answer = "\n".join(one["text"] for one in posted)
+        self.assertIn(marker, answer)
+        self.assertNotIn("You asked: the first", answer,
+                         "the superseded final was joined on rather than replaced")
+
+    def test_a_completed_quiet_turn_that_closed_on_nothing_still_says_so(self):
+        """**A completion mark and nothing beside it is not an answer.** The turn ends at its tool
+        boundary, so there is no closing response — and a surface that shows the answer alone then
+        showed ✅ against the question and no reply at all, which reads as an answer somebody cannot
+        find. One factual line instead, claiming nothing about the work."""
+        self.a_stand_in_told(self.agent, remarks=["let me look at that"],
+                             also_did="ran the tests", omit_final_response=True)
+        self.a_channel(saying=self.a_message_arrived(),
+                       body=AN_ADAPTER_THAT_SHOWS_ONLY_THE_ANSWER)
+        self.hosting_now()
+        self.waited_for_a_turn()
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) >= 1))
+        posted = [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+        self.assertEqual(1, len(posted), f"{len(posted)} messages for a turn that said nothing")
+        self.assertEqual(answering.NOTHING_CLOSING, posted[0]["text"])
+        # It says what happened and claims nothing else — not that the work succeeded, not that it
+        # failed, and nothing about what the tool did.
+        for never in ("could not", "succeeded", "failed", "ran the tests"):
+            with self.subTest(never=never):
+                self.assertNotIn(never, posted[0]["text"])
+
+    def test_a_stopped_quiet_turn_that_closed_on_nothing_stays_silent(self):
+        """The one case where nothing is the honest answer: somebody who pressed `/stop` knows why
+        it is quiet, and a line explaining it reads as a fault they caused.
+
+        Proved by what is *sent*: an answer with nothing to say never reaches `told`, so a
+        connection hosting no adapter answers `""` rather than the refusal `told` gives a caller
+        whose words it could not write."""
+        answers = self.answers_for_a_surface(streaming=False)
+        stopped = turns.Outcome(turn=7, turn_status=kept.STOPPED)
+        completed = turns.Outcome(turn=8, turn_status=kept.DONE)
+        self.assertEqual("", answers._delivered(self.agent, "discord", "1180", stopped))
+        self.assertEqual("there was no channel to answer through",
+                         answers._delivered(self.agent, "discord", "1180", completed))
 
     def test_a_queued_follow_up_the_provider_refuses_receives_one_fallback_turn(self):
         landed = arriving.recorded(self.agent, "discord", "1180", "2207", "follow up")
@@ -1390,10 +1787,156 @@ class AScheduleThatAsksTheAgent(Answering):
         self.assertEqual("nightly", review["schedule_name"])
         self.assertTrue(self.waited_until(lambda: len(self.delivered()) > before))
         self.assertIn(marker, " ".join(self.delivered()[before:]))
+        report = [one for one in self.what_it_was_told() if one.get("do") == "deliver"][-1]
+        self.assertIs(report["notice"], True,
+                      "the scheduled review was sent as one person's private answer")
         later = self.marks()
         self.assertIn(answering.WORKING, later)
         self.assertTrue(any(one in (answering.DONE, answering.STOPPED, answering.FAILED)
                             for one in later))
+
+    def test_a_delegated_result_reports_to_the_destination_the_schedule_named(self):
+        """R-SNT-30. The review turn is what finally answers when a scheduled run delegated, and it
+        has to answer where the schedule said — not where the agent is notified.
+
+        **The destination is read off the row here and nowhere else.** This turn resumes an
+        invocation long after the firing that started it; the gateway that carried the firing's own
+        copy may be gone, so the row is the only thing that outlived it. A path that carried nothing
+        would send the whole of a delegating schedule's report to the notified channel, which is the
+        one destination its owner did not choose.
+
+        The row is written directly rather than through `schedules add`, because what is under test
+        is the delivery path — `tests/test_schedules_command.py` owns whether a destination may be
+        written at all.
+        """
+        self.a_channel()
+        channels_kept.telling(self.agent, "discord", "1180")
+        self.hosting_now()
+        original = answering.for_a_schedule(self.agent, self.a_schedule(
+            channel="discord", channel_place_id="C0OPS"))
+        parent = kept.get_turn(self.agent, original.turn)
+        delegations_kept.made(
+            self.agent, "del-schedule-ddeeff", "trace",
+            int(parent["conversation_id"]), original.turn)
+        before = len(self.delivered())
+        marker = "SCHEDULE-DELEGATION-AIMED-407"
+
+        admitted = self.a_delegation_tenant().review_this(
+            self.agent, int(parent["conversation_id"]), marker, "trace",
+            "del-schedule-ddeeff", "answer-1")
+
+        self.assertTrue(admitted)
+        review = self.waited_for_a_turn(which=2)
+        self.assertEqual("nightly", review["schedule_name"])
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) > before))
+        report = [one for one in self.what_it_was_told() if one.get("do") == "deliver"][-1]
+        self.assertIn(marker, report["text"])
+        self.assertEqual({"place": "C0OPS"}, report.get("to"),
+                         "the reviewed report did not go to the destination the schedule named")
+        # Named as well as compared, because the notified place is a real destination this could
+        # plausibly have gone to and `""` is what says it did not.
+        self.assertEqual("", report["place"])
+
+    def test_a_delegated_result_of_an_untargeted_schedule_still_goes_to_the_notified_channel(self):
+        # The other half of the same rule, and the one that must not move: a schedule that named
+        # nothing is answered exactly where it always was.
+        self.a_channel()
+        channels_kept.telling(self.agent, "discord", "1180")
+        self.hosting_now()
+        original = answering.for_a_schedule(self.agent, self.a_schedule())
+        parent = kept.get_turn(self.agent, original.turn)
+        delegations_kept.made(
+            self.agent, "del-schedule-bbccdd", "trace",
+            int(parent["conversation_id"]), original.turn)
+        before = len(self.delivered())
+
+        self.a_delegation_tenant().review_this(
+            self.agent, int(parent["conversation_id"]), "SCHEDULE-DELEGATION-PLAIN-408", "trace",
+            "del-schedule-bbccdd", "answer-1")
+
+        self.waited_for_a_turn(which=2)
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) > before))
+        report = [one for one in self.what_it_was_told() if one.get("do") == "deliver"][-1]
+        self.assertNotIn("to", report)
+        self.assertEqual("1180", report["place"])
+
+    def test_an_aimed_review_turn_says_nothing_besides_the_report(self):
+        """R-SNT-32. A run that reports to one named destination keeps the quiet every scheduled
+        run keeps: the notice and the report, and never a third message.
+
+        **Everything the adapter was told, and not the last thing it was told.** A review turn
+        aimed at a destination streams nothing, opens no typing indicator and closes none — and
+        every case beside this one reads the final `deliver` record, which is still the right shape
+        however much chatter went in front of it. So the assertion is the whole list: what would go
+        wrong is extra records, and a check that skips to the end cannot see one.
+
+        The two records this would gain are the pair the untargeted run beside it still has —
+        `test_a_delegated_result_resumes_that_invocation_and_sends_the_final_report_to_dm` holds
+        that half, and it is why this is a destination's quiet rather than a schedule's.
+        """
+        self.a_channel()
+        channels_kept.telling(self.agent, "discord", "1180")
+        self.hosting_now()
+        original = answering.for_a_schedule(self.agent, self.a_schedule(
+            channel="discord", channel_place_id="C0OPS"))
+        parent = kept.get_turn(self.agent, original.turn)
+        delegations_kept.made(
+            self.agent, "del-schedule-eeff00", "trace",
+            int(parent["conversation_id"]), original.turn)
+        marker = "SCHEDULE-DELEGATION-QUIET-409"
+
+        self.a_delegation_tenant().review_this(
+            self.agent, int(parent["conversation_id"]), marker, "trace",
+            "del-schedule-eeff00", "answer-1")
+
+        self.waited_for_a_turn(which=2)
+        self.assertTrue(self.waited_until(lambda: self.delivered()))
+        told = self.what_it_was_told()
+        self.assertEqual(["deliver"], [one.get("do") for one in told],
+                         f"an aimed review turn said more than its report: {told}")
+        self.assertEqual({"place": "C0OPS"}, told[0].get("to"))
+        self.assertIn(marker, told[0]["text"])
+
+    def test_nothing_is_said_about_handed_over_work_where_a_schedule_named_a_destination(self):
+        """R-SNT-32, the other record an aimed run must not post. A `delegation` line names its
+        place directly and no adapter resolves a destination for one, so saying it would put a
+        schedule's progress somewhere the schedule did not choose.
+
+        Both halves are asserted — the answer this gives its caller, and that the adapter really
+        heard nothing — because the caller is a gateway beat that does nothing with `False` beyond
+        going round again.
+        """
+        self.a_channel()
+        channels_kept.telling(self.agent, "discord", "1180")
+        self.hosting_now()
+        original = answering.for_a_schedule(self.agent, self.a_schedule(
+            channel="discord", channel_place_id="C0OPS"))
+        conversation = int(kept.get_turn(self.agent, original.turn)["conversation_id"])
+
+        said = self.a_delegation_tenant().showed(
+            self.agent, conversation, delegations.HANDED_OVER, "dev", "del-41-4e07c5", 0)
+
+        self.assertFalse(said)
+        self.assertFalse(self.waited_until(lambda: self.delegating(), NOT_GOING_TO_HAPPEN),
+                         f"an aimed run posted its progress: {self.delegating()}")
+
+    def test_a_schedule_that_named_nothing_is_still_told_what_became_of_handed_over_work(self):
+        # R-SNT-25. The half that must not move: a schedule naming no destination goes on saying
+        # what it always said, in the place it always said it. Without this, the rule above is
+        # satisfied by a run that says nothing about a delegation ever.
+        self.a_channel()
+        channels_kept.telling(self.agent, "discord", "1180")
+        self.hosting_now()
+        original = answering.for_a_schedule(self.agent, self.a_schedule())
+        conversation = int(kept.get_turn(self.agent, original.turn)["conversation_id"])
+
+        said = self.a_delegation_tenant().showed(
+            self.agent, conversation, delegations.HANDED_OVER, "dev", "del-41-4e07c5", 0)
+
+        self.assertTrue(said)
+        self.assertTrue(self.waited_until(lambda: self.delegating()))
+        self.assertEqual(("dev", "1180"),
+                         (self.delegating()[0]["who"], self.delegating()[0]["place"]))
 
     def test_the_turn_is_tied_to_the_schedule_that_caused_it(self):
         """*What has the nightly schedule been doing?* is a question with one answer only if this
@@ -1551,6 +2094,50 @@ class ADelegatedResultReachesItsParent(Answering):
         self.assertTrue(any(one in (answering.DONE, answering.STOPPED, answering.FAILED)
                             for one in later[1:]),
                         "the wake-up typing indicator was never ended")
+
+
+class TheWaitAShippedAdapterAnswersInside(unittest.TestCase):
+    """The one seam neither side can check alone: how long rundesk waits, and how long an adapter
+    takes to answer.
+
+    **Two constants in two programs, and nothing but a comment between them.** `hosting.told` waits
+    `LANDS_WITHIN` for a delivery's terminal record and reads what became of it the instant that
+    wait ends; the shipped Slack adapter bounds its own file work under that number so the record it
+    writes is still being listened for. The adapter cannot import this — it is a separate program
+    and `src/rundesk` is deliberately off its path — so the check belongs on this side, which can
+    see both.
+
+    **What it prevents is a silent one.** Lower `LANDS_WITHIN` and nothing fails: the adapter goes
+    on spending a budget that is now too long, its `failed` arrives after rundesk has stopped
+    reading, the turn settles as complete, and a completion mark stands over an answer whose file
+    never went. That is R-SLK-49 broken by a number in a different file.
+    """
+
+    #: Loaded by path because an adapter is an executable with a shebang and no `.py` — the same
+    #: way `tests/test_channels_slack.py` loads it, and the same way rundesk runs it.
+    ADAPTER = Path(__file__).resolve().parent.parent / "src" / "channels" / "slack"
+
+    #: How much room the adapter's budget must leave inside the wait. Enough for the record to be
+    #: written and read rather than to arrive on the boundary and be missed by a tenth of a second.
+    MARGIN = 1.0
+
+    def the_adapter(self):
+        loader = importlib.machinery.SourceFileLoader("slack_for_the_seam", str(self.ADAPTER))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+        return module
+
+    def test_the_adapter_answers_a_delivery_inside_the_wait_for_it(self) -> None:
+        slack = self.the_adapter()
+        self.assertLessEqual(
+            slack.UPLOADS_WITHIN + self.MARGIN, answering.LANDS_WITHIN,
+            f"the Slack adapter gives one delivery {slack.UPLOADS_WITHIN:g}s of file work while "
+            f"rundesk waits {answering.LANDS_WITHIN:g}s for its answer — a `failed` record written "
+            f"after that wait is read by nothing, and the turn keeps its completion mark")
+        # The socket ceiling is what bounds an upload this adapter has stopped waiting for. It sits
+        # under the budget for the same reason, and above nothing: it is not the deadline.
+        self.assertLess(slack.AN_UPLOAD_WITHIN, slack.UPLOADS_WITHIN)
 
 
 if __name__ == "__main__":

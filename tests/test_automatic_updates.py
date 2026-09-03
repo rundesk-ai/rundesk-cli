@@ -42,6 +42,15 @@ class AutomaticUpdates(Isolated):
         self.assertTrue(waited_until(lambda: locking.is_held(at) is True, 2.0))
         return pid
 
+    def write_coordinator(self, one: automatic_updates.Coordinator, *, aged: bool = False) -> None:
+        one.into.mkdir(parents=True, exist_ok=True)
+        definition = automatic_updates.plist_of(one)
+        definition.write_bytes(
+            plistlib.dumps(automatic_updates.document(one, "03:00")))
+        if aged:
+            old = automatic_updates.time.time() - automatic_updates.ORPHAN_GRACE_SECONDS - 1
+            os.utime(definition, (old, old))
+
     def test_job_is_root_specific_and_uses_a_local_calendar(self) -> None:
         one = automatic_updates.coordinator(into=self.into)
         other = automatic_updates.coordinator(self.home / "other", self.into)
@@ -81,6 +90,216 @@ class AutomaticUpdates(Isolated):
         self.assertEqual(automatic_updates.shim_of(one).stat().st_mode & 0o777, 0o700)
         self.assertEqual(plistlib.loads(automatic_updates.plist_of(one).read_bytes())["Label"],
                          one.label)
+
+    def test_reconciliation_removes_a_coordinator_whose_install_vanished(self) -> None:
+        orphan = automatic_updates.coordinator(self.home / "vanished", self.into)
+        self.write_coordinator(orphan, aged=True)
+        supervisor = ASupervisor()
+
+        answer = automatic_updates.reconcile(supervisor, self.into)
+
+        self.assertEqual(job.PLACED, answer.how, answer.why)
+        self.assertFalse(automatic_updates.plist_of(orphan).exists())
+        self.assertIn(("bootout", orphan.label), supervisor.asked)
+
+    def test_reconciliation_preserves_another_functioning_install(self) -> None:
+        other = automatic_updates.coordinator(self.home / "other", self.into)
+        self.write_coordinator(other)
+        automatic_updates.shim_of(other).parent.mkdir(parents=True)
+        automatic_updates.shim_of(other).write_text("still installed\n")
+        supervisor = ASupervisor()
+
+        answer = automatic_updates.reconcile(supervisor, self.into)
+
+        self.assertEqual(job.PLACED, answer.how, answer.why)
+        self.assertTrue(automatic_updates.plist_of(other).exists())
+        self.assertNotIn(("bootout", other.label), supervisor.asked)
+
+    def test_reconciliation_preserves_a_recently_absent_install(self) -> None:
+        other = automatic_updates.coordinator(self.home / "recently-absent", self.into)
+        self.write_coordinator(other)
+        supervisor = ASupervisor()
+
+        answer = automatic_updates.reconcile(supervisor, self.into)
+
+        self.assertEqual(job.PLACED, answer.how, answer.why)
+        self.assertTrue(automatic_updates.plist_of(other).exists())
+        self.assertNotIn(("bootout", other.label), supervisor.asked)
+
+    def test_reconciliation_preserves_an_unavailable_parent(self) -> None:
+        unavailable = self.home / "unavailable" / "install"
+        other = automatic_updates.coordinator(unavailable, self.into)
+        self.write_coordinator(other, aged=True)
+        supervisor = ASupervisor()
+
+        answer = automatic_updates.reconcile(supervisor, self.into)
+
+        self.assertEqual(job.PLACED, answer.how, answer.why)
+        self.assertTrue(automatic_updates.plist_of(other).exists())
+        self.assertNotIn(("bootout", other.label), supervisor.asked)
+
+    def test_reconciliation_serializes_a_secondary_reinstall(self) -> None:
+        other = automatic_updates.coordinator(self.home / "returning", self.into)
+        self.write_coordinator(other, aged=True)
+        supervisor = ASupervisor()
+        attempted = threading.Event()
+        answers = []
+        taking = locking._taken
+
+        def reconcile() -> None:
+            answers.append(automatic_updates.reconcile(supervisor, self.into))
+
+        def observed_take(*args, **kwargs):
+            attempted.set()
+            return taking(*args, **kwargs)
+
+        current = automatic_updates.coordinator(into=self.into)
+        with locking.only_one(automatic_updates.reconciliation_lock_at(current)):
+            with mock.patch.object(locking, "_taken", side_effect=observed_take):
+                worker = threading.Thread(target=reconcile)
+                worker.start()
+                self.assertTrue(attempted.wait(1.0))
+                automatic_updates.shim_of(other).parent.mkdir(parents=True)
+                automatic_updates.shim_of(other).write_text("installed again\n")
+        worker.join(2.0)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(job.PLACED, answers[0].how, answers[0].why)
+        self.assertTrue(automatic_updates.plist_of(other).exists())
+        self.assertNotIn(("bootout", other.label), supervisor.asked)
+
+    def test_reconciliation_restores_a_secondary_reinstalled_by_an_older_release(self) -> None:
+        other = automatic_updates.coordinator(self.home / "returning", self.into)
+        self.write_coordinator(other, aged=True)
+        case = self
+
+        class OlderInstaller(ASupervisor):
+            def take_back(self, label):
+                automatic_updates.shim_of(other).parent.mkdir(parents=True, exist_ok=True)
+                automatic_updates.shim_of(other).write_text("installed by an older release\n")
+                case.write_coordinator(other)
+                return super().take_back(label)
+
+        supervisor = OlderInstaller()
+
+        answer = automatic_updates.reconcile(supervisor, self.into)
+
+        self.assertEqual(job.PLACED, answer.how, answer.why)
+        self.assertTrue(automatic_updates.plist_of(other).exists())
+        self.assertTrue(automatic_updates.shim_of(other).exists())
+        self.assertIn(("bootstrap", str(automatic_updates.plist_of(other))), supervisor.asked)
+        self.assertFalse(automatic_updates._claim_of(
+            automatic_updates.plist_of(other)).exists())
+
+    def test_reconciliation_recovers_an_interrupted_orphan_claim(self) -> None:
+        orphan = automatic_updates.coordinator(self.home / "vanished", self.into)
+        self.write_coordinator(orphan, aged=True)
+        claim = automatic_updates._claim_of(automatic_updates.plist_of(orphan))
+        automatic_updates.plist_of(orphan).rename(claim)
+        supervisor = ASupervisor()
+
+        answer = automatic_updates.reconcile(supervisor, self.into)
+
+        self.assertEqual(job.PLACED, answer.how, answer.why)
+        self.assertFalse(automatic_updates.plist_of(orphan).exists())
+        self.assertFalse(claim.exists())
+        self.assertIn(("bootout", orphan.label), supervisor.asked)
+
+    def test_reconciliation_restores_a_root_returning_during_take_back(self) -> None:
+        other = automatic_updates.coordinator(self.home / "returning", self.into)
+        self.write_coordinator(other, aged=True)
+
+        class ReturningRoot(ASupervisor):
+            def take_back(self, label):
+                automatic_updates.shim_of(other).parent.mkdir(parents=True, exist_ok=True)
+                automatic_updates.shim_of(other).write_text("installed again\n")
+                return super().take_back(label)
+
+        supervisor = ReturningRoot()
+
+        answer = automatic_updates.reconcile(supervisor, self.into)
+
+        self.assertEqual(job.PLACED, answer.how, answer.why)
+        self.assertTrue(automatic_updates.plist_of(other).exists())
+        self.assertIn(("bootstrap", str(automatic_updates.plist_of(other))), supervisor.asked)
+        self.assertFalse(automatic_updates._claim_of(
+            automatic_updates.plist_of(other)).exists())
+
+    def test_reconciliation_recovers_a_claimed_functioning_install(self) -> None:
+        other = automatic_updates.coordinator(self.home / "installed", self.into)
+        self.write_coordinator(other)
+        automatic_updates.shim_of(other).parent.mkdir(parents=True, exist_ok=True)
+        automatic_updates.shim_of(other).write_text("installed\n")
+        claim = automatic_updates._claim_of(automatic_updates.plist_of(other))
+        automatic_updates.plist_of(other).rename(claim)
+        supervisor = ASupervisor()
+
+        answer = automatic_updates.reconcile(supervisor, self.into)
+
+        self.assertEqual(job.PLACED, answer.how, answer.why)
+        self.assertTrue(automatic_updates.plist_of(other).exists())
+        self.assertFalse(claim.exists())
+        self.assertNotIn(("bootout", other.label), supervisor.asked)
+
+    def test_reconciliation_preserves_an_identity_mismatched_definition(self) -> None:
+        other = automatic_updates.coordinator(self.home / "gone", self.into)
+        document = automatic_updates.document(other, "03:00")
+        document["ProgramArguments"] = [str(self.home / "not-the-recorded-root" / "missing")]
+        other.into.mkdir(parents=True, exist_ok=True)
+        automatic_updates.plist_of(other).write_bytes(plistlib.dumps(document))
+        supervisor = ASupervisor()
+
+        answer = automatic_updates.reconcile(supervisor, self.into)
+
+        self.assertEqual(job.PLACED, answer.how, answer.why)
+        self.assertTrue(automatic_updates.plist_of(other).exists())
+        self.assertNotIn(("bootout", other.label), supervisor.asked)
+
+    def test_reconciliation_reports_an_orphan_it_cannot_take_back(self) -> None:
+        orphan = automatic_updates.coordinator(self.home / "vanished", self.into)
+        self.write_coordinator(orphan, aged=True)
+        supervisor = ASupervisor(bootout=ran(5, err="launchd refused"))
+
+        answer = automatic_updates.reconcile(supervisor, self.into)
+
+        self.assertEqual(job.CANNOT_TELL, answer.how)
+        self.assertIn("take back orphaned automatic update", answer.why)
+        self.assertTrue(automatic_updates.plist_of(orphan).exists())
+
+    def test_embedded_removal_releases_its_reconciliation_lock(self) -> None:
+        supervisor = ASupervisor()
+        automatic_updates.reconcile(supervisor, self.into)
+
+        answer = automatic_updates.remove(supervisor, self.into)
+
+        self.assertEqual("", answer)
+        self.assertFalse(self.into.exists())
+
+    def test_embedded_removal_never_splits_the_lock_between_waiters(self) -> None:
+        current = automatic_updates.coordinator(into=self.into)
+        at = automatic_updates.reconciliation_lock_at(current)
+        waiter_has_it = threading.Event()
+        release_waiter = threading.Event()
+
+        def wait_for_lock() -> None:
+            with locking.only_one(at):
+                waiter_has_it.set()
+                release_waiter.wait(2.0)
+
+        with locking.only_one(at):
+            waiter = threading.Thread(target=wait_for_lock)
+            waiter.start()
+        self.assertTrue(waiter_has_it.wait(1.0))
+        self.into.mkdir(parents=True)
+        self.into.rmdir()
+
+        with self.assertRaises(locking.Stuck):
+            with locking.only_one(at, waiting=0):
+                pass
+
+        release_waiter.set()
+        waiter.join(2.0)
+        self.assertFalse(waiter.is_alive())
 
     def test_time_change_replaces_the_loaded_definition(self) -> None:
         supervisor = ASupervisor()
@@ -448,7 +667,8 @@ class CommandWiring(Isolated):
         self.assertFalse(automatic_updates.shim_of(one).exists())
 
         code, out, err = support.run_with(
-            ["uninstall", "--confirm", "--purge"], supervising=supervisor)
+            ["uninstall", "--confirm", "--purge", "--root", str(paths.home())],
+            supervising=supervisor)
 
         self.assertEqual(OK, code, err)
         self.assertIn("rundesk removed", out)

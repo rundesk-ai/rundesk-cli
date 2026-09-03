@@ -37,6 +37,8 @@ and, with `--purge`, `data/`, out from under it. So the kernel is asked directly
 """
 
 import argparse
+import os
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -69,6 +71,28 @@ def cmd_uninstall(args: argparse.Namespace,
         root = paths.home()
     except paths.Refused as why:
         return _failed(str(why))
+
+    if args.confirm and args.purge:
+        if args.root is None:
+            return _failed(
+                "--root is required with --confirm --purge; the environment alone is not an "
+                "explicit destructive target",
+                "to go ahead, state and bind the resolved root on the command itself:",
+                _confirmation(root, True))
+        try:
+            confirmed_root = paths.allowed(Path(args.root).expanduser(), "--root")
+        except paths.Refused as why:
+            return _failed(str(why))
+        if not _same_root(confirmed_root, root):
+            return _failed(
+                f"--root resolves to {confirmed_root}, but {paths.HOME_IS} resolves to {root}")
+        # The assertion was made against this canonical path. Pin every later path lookup to that
+        # same answer so a symlink in the original environment cannot be retargeted between the
+        # check above and the filesystem work below.
+        os.environ[paths.HOME_IS] = str(root)
+
+    if args.confirm:
+        print(f"uninstall: confirmed target is {root}", file=sys.stderr)
 
     app = paths.app()
     automatic = automatic_updates.coordinator()
@@ -345,8 +369,25 @@ def _needs_confirming(root: Path, purging: bool) -> int:
         print(f"        keep   {paths.data()}", file=sys.stderr)
     print(f"        keep   {paths.backups()}", file=sys.stderr)
     print("        nothing was removed. To go ahead:", file=sys.stderr)
-    print(f"        rundesk uninstall --confirm{' --purge' if purging else ''}", file=sys.stderr)
+    print(f"        {_confirmation(root, purging)}", file=sys.stderr)
     return FAILED
+
+
+def _confirmation(root: Path, purging: bool) -> str:
+    """The shell-safe confirmation command, with its destructive target visible in the line."""
+    stated = shlex.quote(str(root))
+    return (f"{paths.HOME_IS}={stated} rundesk uninstall --confirm"
+            f"{' --purge --root ' + stated if purging else ''}")
+
+
+def _same_root(one: Path, other: Path) -> bool:
+    """Whether two resolved targets name the same directory on this filesystem."""
+    if one == other:
+        return True
+    try:
+        return os.path.samefile(str(one), str(other))
+    except OSError:
+        return False
 
 
 def _purge(data: Path) -> str:

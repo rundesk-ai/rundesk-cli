@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import plistlib
+import re
 import shlex
 import sys
 import tempfile
@@ -23,6 +24,9 @@ from rundesk.schedules import firing
 from rundesk.utils import locking, logs, programs
 
 UPDATE = "update"
+UPDATE_LABEL = re.compile(
+    rf"^{re.escape(job.FAMILY)}\.[0-9a-f]{{{job.FINGERPRINT}}}\.{UPDATE}$")
+ORPHAN_GRACE_SECONDS = 24 * 60 * 60
 CAPTURE_BYTES = 1024 * 1024
 CAPTURES_KEPT = 3
 LOG_DAYS = 30
@@ -49,6 +53,11 @@ class Coordinator(NamedTuple):
 class Reconciled(NamedTuple):
     how: str
     why: str = ""
+
+
+class Definition(NamedTuple):
+    label: str
+    root: Path
 
 
 class Daily(NamedTuple):
@@ -83,6 +92,16 @@ def shim_of(one: Coordinator) -> Path:
 
 def plist_of(one: Coordinator) -> Path:
     return one.into / f"{one.label}.plist"
+
+
+def reconciliation_lock_at(one: Coordinator) -> Path:
+    """The cross-install claim protecting coordinator definitions in one login directory."""
+    if one.into.parent == one.root:
+        # Embedded supervisors may remove their whole definition directory with the install. Keep
+        # the lock as its stable sibling: a lock pathname must never be unlinked after another
+        # process could have opened its inode, or a third caller can create and lock a second one.
+        return one.root.with_name(f".{one.root.name}.rundesk-automatic-updates.lock")
+    return one.into / ".rundesk-automatic-updates.lock"
 
 
 def logs_at(one: Coordinator) -> Path:
@@ -388,6 +407,213 @@ def document(one: Coordinator, update_time: str) -> Dict[str, object]:
     }
 
 
+def _coordinator_definition(candidate: Path, current: Coordinator,
+                            named_as: Optional[Path] = None) -> Optional[Definition]:
+    """The exact coordinator identity in one canonical or privately claimed definition."""
+    canonical = named_as or candidate
+    if canonical == plist_of(current):
+        return None
+    try:
+        saved = plistlib.loads(candidate.read_bytes())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(saved, dict):
+        return None
+    label = saved.get("Label")
+    arguments = saved.get("ProgramArguments")
+    root = saved.get("WorkingDirectory")
+    environ = saved.get("EnvironmentVariables")
+    if (not isinstance(label, str) or UPDATE_LABEL.fullmatch(label) is None
+            or canonical.name != f"{label}.plist"
+            or not isinstance(arguments, list) or len(arguments) != 1
+            or not isinstance(arguments[0], str) or not isinstance(root, str)
+            or not isinstance(environ, dict) or environ.get(paths.HOME_IS) != root):
+        return None
+    recorded_root = Path(root)
+    if not recorded_root.is_absolute():
+        return None
+    try:
+        other = coordinator(recorded_root.resolve(), current.into)
+    except OSError:
+        return None
+    if (other.label != label or str(other.root) != root
+            or arguments[0] != str(shim_of(other))):
+        return None
+    return Definition(label, recorded_root)
+
+
+def _orphaned_coordinator_label(candidate: Path, current: Coordinator,
+                                named_as: Optional[Path] = None) -> Optional[str]:
+    """An aged coordinator proven to name a vanished root, never an ambiguous lookalike."""
+    definition = _coordinator_definition(candidate, current, named_as)
+    if definition is None:
+        return None
+    try:
+        definition.root.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return None
+    else:
+        return None
+    try:
+        if not definition.root.parent.is_dir():
+            return None
+        age = time.time() - candidate.stat().st_mtime
+    except OSError:
+        return None
+    return definition.label if age >= ORPHAN_GRACE_SECONDS else None
+
+
+def _claim_of(candidate: Path) -> Path:
+    return candidate.with_name(f".{candidate.name}.orphaned")
+
+
+def _restore_claims(supervising: job.Supervising, current: Coordinator) -> str:
+    """Put an interrupted atomic claim back before deciding whether it is still orphaned."""
+    try:
+        claims = sorted(current.into.glob(".ai.rundesk.*.update.plist.orphaned"))
+    except OSError as why:
+        return f"orphaned automatic update claims could not be inspected ({why})"
+    for claim in claims:
+        canonical = claim.with_name(claim.name[1:-len(".orphaned")])
+        definition = _coordinator_definition(claim, current, canonical)
+        if definition is None:
+            return f"automatic update claim {claim} could not be identified safely"
+        try:
+            os.link(claim, canonical)
+        except FileExistsError:
+            # A non-participating older installer won the canonical pathname. The claim is the
+            # already-proven stale inode, so removing only that private link cannot touch its work.
+            canonical_definition = _coordinator_definition(canonical, current)
+            try:
+                same_inode = os.path.samefile(claim, canonical)
+            except OSError:
+                same_inode = False
+            if (not same_inode and (canonical_definition is None
+                                    or not canonical_definition.root.exists())):
+                return f"automatic update definition {canonical} changed while a claim was held"
+        except OSError as why:
+            return f"automatic update claim {claim} could not be restored ({why})"
+        try:
+            claim.unlink()
+        except OSError as why:
+            return f"automatic update claim {claim} could not be settled ({why})"
+        if definition.root.exists():
+            recovered = _restore_raced_coordinator(
+                supervising, canonical, current, definition.label)
+            if recovered:
+                return recovered
+    return ""
+
+
+def _restore_raced_coordinator(supervising: job.Supervising, candidate: Path,
+                               current: Coordinator, label: str) -> str:
+    """Put back a canonical definition that appeared while its old launchd job was retired."""
+    definition = _coordinator_definition(candidate, current)
+    if (definition is None or definition.label != label or not definition.root.exists()
+            or not shim_of(coordinator(definition.root, current.into)).is_file()):
+        return f"reinstalled automatic update definition {candidate} could not be identified safely"
+    standing = supervising.asked_about(label)
+    if standing.trouble is None and standing.code == 0:
+        return ""
+    if standing.trouble is not None or standing.code != job.NOT_KNOWN:
+        return _ran_wrong("inspect a reinstalled automatic update", standing, label)
+    landed = supervising.place(candidate)
+    if landed.trouble is None and landed.code == 0:
+        return ""
+    # An older installer may have bootstrapped between the inspection and this request.
+    standing = supervising.asked_about(label)
+    if standing.trouble is None and standing.code == 0:
+        return ""
+    return _ran_wrong("restore a reinstalled automatic update", landed, label)
+
+
+def _remove_orphaned_coordinators(supervising: job.Supervising, current: Coordinator) -> str:
+    """Take only structurally proven dead coordinator jobs from the shared login directory."""
+    restored = _restore_claims(supervising, current)
+    if restored:
+        return restored
+    try:
+        candidates = sorted(current.into.iterdir())
+    except FileNotFoundError:
+        return ""
+    except OSError as why:
+        return f"automatic update definitions could not be inspected ({why})"
+    for candidate in candidates:
+        label = _orphaned_coordinator_label(candidate, current)
+        if label is None:
+            continue
+        claim = _claim_of(candidate)
+        try:
+            candidate.rename(claim)
+        except FileNotFoundError:
+            continue
+        except OSError as why:
+            return f"orphaned automatic update definition {candidate} could not be claimed ({why})"
+        # `rename` captured one exact inode. Revalidate it at the private pathname: an older
+        # installer may have atomically replaced the canonical definition after classification.
+        if _orphaned_coordinator_label(claim, current, candidate) != label:
+            try:
+                os.link(claim, candidate)
+            except FileExistsError:
+                pass
+            except OSError as why:
+                return f"automatic update claim {claim} could not be restored ({why})"
+            return f"automatic update definition {candidate} changed while it was inspected"
+        # A writer that ignored the shared lock may have returned after the atomic claim. Never
+        # boot out its job merely because the old definition was already proven stale.
+        claimed = _coordinator_definition(claim, current, candidate)
+        if claimed is None:
+            return f"automatic update claim {claim} could not be identified safely"
+        if candidate.exists():
+            replacement = _coordinator_definition(candidate, current)
+            if replacement is None or replacement.label != label or not replacement.root.exists():
+                return f"automatic update definition {candidate} changed while a claim was held"
+            try:
+                claim.unlink()
+            except OSError as why:
+                return f"orphaned automatic update claim {claim} could not be removed ({why})"
+            continue
+        if claimed.root.exists():
+            try:
+                os.link(claim, candidate)
+                claim.unlink()
+            except FileExistsError:
+                pass
+            except OSError as why:
+                return f"automatic update claim {claim} could not be restored ({why})"
+            return (f"automatic update root returned while {candidate} was being inspected; "
+                    "its installer must finish reconciliation")
+        gone = supervising.take_back(label)
+        if gone.trouble is not None or gone.code not in (0, *job.ALREADY_GONE):
+            try:
+                os.link(claim, candidate)
+            except (FileExistsError, OSError):
+                pass
+            return _ran_wrong("take back orphaned automatic update", gone, label)
+        try:
+            claimed = _coordinator_definition(claim, current, candidate)
+            if claimed is None:
+                return f"automatic update claim {claim} could not be identified safely"
+            if candidate.exists():
+                recovered = _restore_raced_coordinator(supervising, candidate, current, label)
+                if recovered:
+                    return recovered
+            elif claimed.root.exists():
+                try:
+                    os.link(claim, candidate)
+                except FileExistsError:
+                    pass
+                recovered = _restore_raced_coordinator(supervising, candidate, current, label)
+                if recovered:
+                    return recovered
+            claim.unlink()
+        except OSError as why:
+            return f"orphaned automatic update claim {claim} could not be settled ({why})"
+    return ""
+
+
 def reconcile(supervising: Optional[job.Supervising] = None,
               into: Optional[Path] = None) -> Reconciled:
     """Make configured update intent and the per-install supervisor job agree."""
@@ -397,11 +623,25 @@ def reconcile(supervising: Optional[job.Supervising] = None,
     if not paths.app().is_dir():
         return Reconciled(job.NOT_PLACED, "this root is running from a checkout, not an install")
     try:
+        with locking.only_one(
+                reconciliation_lock_at(one), guarding="automatic update definitions"):
+            return _reconcile(one, supervising)
+    except (locking.Stuck, OSError) as why:
+        return Reconciled(job.CANNOT_TELL, str(why))
+
+
+def _reconcile(one: Coordinator, supervising: Optional[job.Supervising]) -> Reconciled:
+    """Reconcile one coordinator while every install sharing its definitions is excluded."""
+    try:
         wanted = config.read(paths.data())
     except config.Unreadable as why:
         return Reconciled(job.CANNOT_TELL, str(why))
+    by = supervising or job.Launchd()
+    orphaned = _remove_orphaned_coordinators(by, one)
+    if orphaned:
+        return Reconciled(job.CANNOT_TELL, orphaned)
     if not wanted["update_enabled"]:
-        why = remove(supervising, into)
+        why = remove(by, one.into)
         return Reconciled(job.NOT_PLACED if not why else job.CANNOT_TELL, why)
 
     desired = plistlib.dumps(document(one, wanted["update_time"]))
@@ -415,7 +655,6 @@ def reconcile(supervising: Optional[job.Supervising] = None,
     except OSError as why:
         return Reconciled(job.CANNOT_TELL, str(why))
 
-    by = supervising or job.Launchd()
     if current == desired and current_shim == shim and _receipt(one) == receipt:
         standing = by.asked_about(one.label)
         if standing.trouble is None and standing.code == 0:
@@ -446,6 +685,24 @@ def remove(supervising: Optional[job.Supervising] = None,
            into: Optional[Path] = None) -> str:
     """Remove this install's coordinator idempotently, before its program can disappear."""
     one = coordinator(into=into)
+    try:
+        with locking.only_one(
+                reconciliation_lock_at(one), guarding="automatic update definitions"):
+            result = _remove(one, supervising)
+    except (locking.Stuck, OSError) as why:
+        return str(why)
+    if one.into.parent == one.root:
+        try:
+            one.into.rmdir()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+    return result
+
+
+def _remove(one: Coordinator, supervising: Optional[job.Supervising]) -> str:
+    """Remove one coordinator while every install sharing its definitions is excluded."""
     by = supervising or job.Launchd()
     artifacts = plist_of(one).exists() or shim_of(one).exists()
     existed = artifacts
@@ -475,13 +732,6 @@ def remove(supervising: Optional[job.Supervising] = None,
             pass
         except OSError as why:
             return f"{path} could not be removed ({why})"
-    # Test and embedded supervisors may deliberately keep their plist directory below the install.
-    # The real ~/Library/LaunchAgents is never ours to remove, even when empty.
-    if one.into.parent == one.root:
-        try:
-            one.into.rmdir()
-        except OSError:
-            pass
     return ""
 
 
@@ -563,7 +813,19 @@ def _run(one: Coordinator, today: str, **updating: object) -> Daily:
                 return Daily(FAILED)
             if continuation is not None:
                 continuations.running(continuation[0], continuation[2])
+            surface_notes = []
+            external_reporting = updating.get("reporting")
+
+            def report_surface(said: str, failed: bool) -> None:
+                surface_notes.append((said, failed))
+                if callable(external_reporting):
+                    external_reporting(said, failed)
+
+            updating["reporting"] = report_surface
             attempt = update.attempt_update(argparse.Namespace(), **updating)
+            for surface_note, failed_surface in surface_notes:
+                level = logs.WARNING if failed_surface else logs.INFO
+                _note(one, surface_note, level)
             if attempt.queued:
                 return Daily(OK, "work began before update admission closed", True)
             if attempt.code == OK:
@@ -658,10 +920,11 @@ def _written_privately(where: Path, content: bytes, mode: int) -> None:
             pass
 
 
-def _ran_wrong(action: str, ran: object) -> str:
+def _ran_wrong(action: str, ran: object, label: Optional[str] = None) -> str:
     trouble = getattr(ran, "trouble", None)
     code = getattr(ran, "code", None)
-    return f"the supervisor could not {action} {coordinator().label} ({trouble or f'exit {code}'})"
+    return (f"the supervisor could not {action} {label or coordinator().label} "
+            f"({trouble or f'exit {code}'})")
 
 
 def _completed(one: Coordinator) -> str:

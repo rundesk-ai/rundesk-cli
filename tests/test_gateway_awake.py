@@ -185,6 +185,21 @@ class TheAssertionItHolds(unittest.TestCase):
         self.assertEqual(1, child.killed)
         self.assertEqual([awake.REAP_WITHIN], child.waited)
 
+    def test_non_utf8_text_in_an_unrelated_assertion_cannot_crash_gateway_startup(self):
+        guard = mock.Mock(pid=123)
+        answer = subprocess.CompletedProcess(
+            [awake.PMSET, "-g", "assertions"], 0,
+            "product: keyboard\ufffdname\n"
+            "pid 123(caffeinate) PreventUserIdleSystemSleep named: caffeinate\n", "")
+
+        with mock.patch.object(subprocess, "run", return_value=answer) as asked:
+            self.assertTrue(awake._published(guard))
+
+        asked.assert_called_once_with(
+            [awake.PMSET, "-g", "assertions"], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace",
+            timeout=awake.ASK_WITHIN, check=False)
+
 
 class TheGatewayOwnsIt(support.Isolated):
     def setUp(self):

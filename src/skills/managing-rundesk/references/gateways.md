@@ -13,7 +13,7 @@ One agent has one launchd job and one gateway.
 | `gateways stop --all [--force]` | Stop every gateway in this install. |
 | `gateways restart <agent> [--force] [--continue]` | Refuse active work, then stop and start one gateway; `--continue` is the safe active-turn self-restart form and cannot combine with `--force`. |
 | `gateways restart --all [--force]` | Atomically refuse if any gateway has active or unreadable work; otherwise restart every gateway. |
-| `gateways logs <agent> [-n <lines>]` | Read gateway and supervisor logs; default is 20 lines. |
+| `gateways logs <agent> [-n, --lines <lines>]` | Read gateway and supervisor logs; default is 20 lines. |
 | `gateways run <agent>` | Run the gateway in the current terminal instead of as a login job. |
 
 Prefix every command with `"$RUNDESK_COMMAND"`.

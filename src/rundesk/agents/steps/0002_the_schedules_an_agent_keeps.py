@@ -18,7 +18,7 @@ and `!=` lets every minute of it through.
 
 **Local, not UTC, and only these three.** `cron`, `run_at` and `expire_at` are what somebody typed
 and are matched against this machine's own clock, so they are kept exactly as typed —
-`docs/time.md`'s rule is about a *record*, and these are a statement about the future. `last_run_at`
+`docs/concepts/time.md`'s rule is about a *record*, and these are a statement about the future. `last_run_at`
 and `created_at` are records of something that happened, are compared and sorted, and are UTC in
 `core.config.MOMENT` like every other record this product keeps. `last_fired_for` is the odd one and
 deliberately so: it is compared against a minute the cron fields produced, and those are local.
@@ -29,7 +29,7 @@ keep, and one fact spelled three ways is three things to grep for. They were car
 anything wrote them, on the argument that a column added later is a second migration for every agent
 on every machine — and the release that runs a provider has since arrived and writes them.
 
-**`last_outcome` speaks the states an adapter renders.** `done`, not `completed`: `docs/adapters.md`
+**`last_outcome` speaks the states an adapter renders.** `done`, not `completed`: `docs/extending/adapters.md`
 publishes `seen`, `working`, `done`, `stopped`, `failed` and says plainly that they are not `taken`,
 `running`, `finished`. `turns.turn_status` already speaks it, and a firing's outcome is the same
 question asked of a different kind of work.

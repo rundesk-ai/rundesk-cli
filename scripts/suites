@@ -14,16 +14,28 @@ so in the one way anybody reads — its exit code.
 already is: `support.Isolated` gives every case a scratch root of its own and every guard in
 `tests/support.py` — the scrubbed environment, the stand-in supervisor, the closed network — is
 per-process, so running eight interpreters is the same isolation eight times rather than a weaker
-one shared. Measured on sixteen cores: 274 seconds sequential, 48 concurrent.
+one shared.
+
+**Nothing in a suite writes bytecode.** The setting is passed in the suite's environment rather
+than only as `-B`, so every installed copy and child interpreter a case starts inherits it too. On
+Apple's Python those disposable roots would otherwise remain mirrored under its global bytecode
+cache after the test deleted them.
+
+**The longest suite is the run.** Whole files are the unit of parallelism, so no schedule finishes
+before the slowest one does, and the work either side of it is free. That is why this starts the
+slowest suites first — see `_running_order` — and why a suite that has grown to twice its
+neighbours is worth splitting rather than tuning.
 
     python3 scripts/suites          # every suite
     python3 scripts/suites -q       # only the failures and the summary
     python3 scripts/suites -1       # one at a time, for a suite that only fails under load
 """
 
+import json
 import os
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -46,9 +58,9 @@ PATIENCE_SECONDS = 300
 #:
 #: **Fewer than there are cores, on purpose.** A suite is not one process: it starts gateways,
 #: adapters and whole `rundesk` commands of its own, so one worker per core oversubscribes the
-#: machine and every suite slows down together. Measured, sixteen workers finished *later* than
-#: eight and stretched the longest suite by half — and a ceiling reached because the machine was
-#: busy is a failure nobody can reproduce.
+#: machine and every suite slows down together. Re-measured on sixteen cores: sixteen workers
+#: finished no sooner than eight and inflated the sum of the suites' own times by 29 per cent — and
+#: a ceiling reached because the machine was busy is a failure nobody can reproduce.
 AT_ONCE = min(8, os.cpu_count() or 4)
 
 
@@ -57,23 +69,89 @@ def found():
     return sorted(TESTS.glob("test_*.py"))
 
 
+#: Where the last run's timings are kept, so the next one can start the slow suites first.
+#:
+#: **Learned rather than written down.** A list of durations kept by hand is a list that disagrees
+#: with the suites within a month, and the one thing worse than no ordering is an ordering everybody
+#: believes. Under `.scratch/`, which is already ignored, so it is neither an artifact of the
+#: repository nor something a checkout has to have: a cold run — CI, or the first run here — simply
+#: finds nothing and goes in the order suites were found in, which is what this did before.
+REMEMBERED = ROOT / ".scratch" / "suite-seconds.json"
+
+
+def _remembered():
+    """What each suite took last time, by name. Empty on anything unreadable.
+
+    Nothing here is load-bearing: it decides only what starts first. So a file that is missing,
+    truncated, from an older set of suites, or written by a different machine costs a little
+    scheduling and never a result — which is why it is read without ceremony and never validated.
+    """
+    try:
+        with open(REMEMBERED, encoding="utf-8") as reading:
+            said = json.load(reading)
+        return {name: float(seconds) for name, seconds in said.items()}
+    except (OSError, ValueError, AttributeError, TypeError):
+        return {}
+
+
+def _remember(seconds):
+    """Write this run's timings for the next one. A failure to write is not a failure of the run."""
+    try:
+        REMEMBERED.parent.mkdir(parents=True, exist_ok=True)
+        with open(REMEMBERED, "w", encoding="utf-8") as writing:
+            json.dump(seconds, writing, indent=1, sort_keys=True)
+    except OSError:
+        pass
+
+
+def _running_order(suites, seconds):
+    """The order to *start* them in: longest first, and anything unmeasured before all of them.
+
+    **Longest first because the longest suite is the run.** Whole files are the unit of parallelism,
+    so a suite that starts last runs alone with seven idle workers beside it, and a run can finish
+    no sooner than its slowest suite starts plus however long that suite takes. Starting the long
+    ones while there is still short work to fill in behind them is the whole of the difference.
+
+    **A suite nobody has timed goes first**, rather than last. It may be the new slowest one, and
+    guessing it is quick is the guess that costs something; guessing it is slow costs nothing but
+    its position. This is also what makes a stale file safe — a suite that has since been split or
+    renamed is simply unmeasured again.
+
+    Never a filter. Every suite handed in comes back out, which is the property that keeps this from
+    being able to reintroduce the empty run below.
+    """
+    ordered = sorted(suites, key=lambda suite: -seconds.get(suite.name, float("inf")))
+    assert len(ordered) == len(suites)
+    return ordered
+
+
 def ran(suite):
-    """One suite, in an interpreter of its own. Hands back whether it passed and what it said.
+    """One suite, in an interpreter of its own. Hands back whether it passed, what it said, and how
+    long it took.
 
     Never prints. **Several of these are in flight at once**, and a function that wrote as it went
     would interleave two suites' output line by line into something nobody can read.
+
+    The duration is measured here because here is where the suite is, and it is what `_remember`
+    writes for the next run to start in a better order. It is a timing under load rather than the
+    suite's own time alone, which is the right one: it is what the next run will do too.
     """
+    began = time.monotonic()
     try:
+        environment = os.environ.copy()
+        # This must be inherited, not merely `-B` on the immediate interpreter: suites start
+        # installed copies and child interpreters of their own, all rooted in disposable trees.
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
         # `stdin` is closed on purpose. A command reading standard input because it is "not a
         # terminal" blocks on an open pipe with nothing in it, which never ends and names
         # nothing when it happens.
         ended = subprocess.run(
             [sys.executable, str(suite)],
             cwd=str(ROOT), stdin=subprocess.DEVNULL,
-            capture_output=True, text=True, timeout=PATIENCE_SECONDS)
-        return ended.returncode == 0, ended.stdout + ended.stderr
+            capture_output=True, text=True, timeout=PATIENCE_SECONDS, env=environment)
+        return ended.returncode == 0, ended.stdout + ended.stderr, time.monotonic() - began
     except subprocess.TimeoutExpired:
-        return False, f"exceeded {PATIENCE_SECONDS} seconds"
+        return False, f"exceeded {PATIENCE_SECONDS} seconds", time.monotonic() - began
 
 
 def main(argv):
@@ -87,13 +165,23 @@ def main(argv):
         print("        a run that discovered nothing has proved nothing", file=sys.stderr)
         return 1
 
+    # **Started slowest first, reported in the order they were found.** Those are two different
+    # orders and they need to be: the schedule wants the long suites in flight early, while the
+    # report is read down the page and diffed against the last one, so it must not move about.
+    starting = suites if one_at_a_time else _running_order(suites, _remembered())
     with ThreadPoolExecutor(max_workers=1 if one_at_a_time else AT_ONCE) as pool:
-        # `map` rather than `as_completed`: this report is read down the page and diffed against the
-        # last one, so its order is the order suites were found in, whatever finishes first.
-        got = list(pool.map(ran, suites))
+        got = dict(zip(starting, pool.map(ran, starting)))
+
+    if not one_at_a_time:
+        # **Only a run under load is worth remembering.** These numbers exist to order the next
+        # ordinary run, and a suite timed with the machine to itself is a different measurement —
+        # shorter, and shorter by a different amount for each suite. Recording one here would make
+        # the file mean two things depending on which flag last wrote it.
+        _remember({suite.name: round(seconds, 1) for suite, (_ok, _said, seconds) in got.items()})
 
     failed = []
-    for suite, (ok, said) in zip(suites, got):
+    for suite in suites:
+        ok, said, _seconds = got[suite]
         print(f"{'ok  ' if ok else 'FAIL'} {suite.name}")
         if not ok:
             failed.append(suite.name)

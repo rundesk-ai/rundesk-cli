@@ -171,7 +171,8 @@ def register(sub: Subcommands) -> None:
     _named(new)
     new.add_argument("--allow", metavar="<id>", action="append", default=[],
                      help="required — an id that may reach this agent here, as that platform writes "
-                          "it; say it again for each person")
+                          "it; say it again for each person. `place:<id>` allows anybody in one "
+                          "place on that platform, and `sender:<id>` is the plain form said out loud")
     new.add_argument("--notify", action="store_true",
                      help="make this the channel unprompted things go to")
     new.add_argument("--with", dest="options", metavar="<adapter opts>", default="",
@@ -184,13 +185,16 @@ def register(sub: Subcommands) -> None:
     changed = what.add_parser("configure", help="change who may reach an agent here, or what is told")
     _named(changed)
     changed.add_argument("--allow", metavar="<id>", action="append", default=[],
-                         help="somebody else who may reach this agent here")
+                         help="somebody else who may reach this agent here, or `place:<id>` for "
+                              "anybody in one place on that platform")
     changed.add_argument("--deny", metavar="<id>", action="append", default=[],
-                         help="somebody who may no longer")
+                         help="somebody, or a place, that may no longer — written exactly as it "
+                              "stands on the list")
     changed.add_argument("--notify", action="store_true",
                          help="make this the channel unprompted things go to")
 
-    tried = what.add_parser("test", help="ask the adapter to connect again, and say what it reached")
+    tried = what.add_parser("test", help="ask the adapter to reach the platform again, and say "
+                                         "what it found")
     _named(tried)
 
     gone = what.add_parser("remove", help="take a channel away")
@@ -266,6 +270,22 @@ def allow_trouble(said: Sequence[str], typed: str) -> str:
     if blank:
         return ("an id with nothing in it is not one — that is usually a shell variable that was "
                 f"never set, so say it plainly with: {typed} --allow <id>")
+    return typed_trouble(said, typed)
+
+
+def typed_trouble(said: Sequence[str], typed: str) -> str:
+    """Why one of these names nothing, or `""` when each names something.
+
+    **`sender:` with nothing after it is refused where somebody can still see the sentence.**
+    `channels.kept` drops such an entry when it reads the list, which is the right thing to do to a
+    row that already holds one and the wrong thing to do to a command somebody is standing at a
+    terminal typing: they would be told the channel was configured and find it answered nobody.
+    """
+    for one in said:
+        kind, marked, named = one.strip().partition(kept.AS)
+        if marked and kind in kept.TYPED and not named:
+            return (f"{one.strip()!r} names no {kind} — say which one, as that platform writes it: "
+                    f"{typed} --allow {kind}{kept.AS}<id>")
     return ""
 
 
@@ -323,7 +343,7 @@ def change_trouble(add: Sequence[str], remove: Sequence[str], notify: bool, type
     if both:
         return (f"{both[0]} was named both to allow and to deny, which are two different "
                 "operations — say one of them, not both")
-    return ""
+    return typed_trouble(list(add) + list(remove), typed)
 
 
 def _listed(agent: Optional[str]) -> int:
@@ -377,7 +397,12 @@ def _rows_for(agent: str, showing_who: bool) -> List[Tuple[str, ...]]:
 
 
 def _who_many(row: Dict[str, Any]) -> str:
-    """How many people may reach the agent here, or that the list cannot be read.
+    """How many entries are on this channel's allow list, or that the list cannot be read.
+
+    **Entries, and not people.** One `place:` entry admits everybody the platform reports as being
+    there, so a count of people is not something this column could ever answer — `channels show`
+    prints the entries themselves, which is where the difference is visible. Saying `1` for a channel
+    a whole room can reach is the honest shape of a column that counts what was written down.
 
     A list nobody can read is never shown as zero: an empty one authorises nobody, so a column that
     said `0` for a column that is merely unreadable would report a channel as switched off when it
@@ -454,7 +479,7 @@ def _added(args: argparse.Namespace, reaching: Optional[Reaching]) -> int:
         # answer was written into the record, which is a mechanism that does not exist: `values`
         # below has no such key, the `channels` table has no column, and `kept.SETTABLE` names none.
         # The one capability anything reads is `max_text`, and it is read out of `settings`, where a
-        # `--check` may put it. `docs/adapters.md` says so under *what is not built yet*; a docstring
+        # `--check` may put it. `docs/extending/adapters.md` says so under *what is not built yet*; a docstring
         # asserting the opposite is worse than the gap, because nobody re-checks it.
         able = adapters.capabilities(args.adapter, reaching)
     except TROUBLE as why:
@@ -593,10 +618,9 @@ def _handed(agent: str, allow: Sequence[str], names: Sequence[str]) -> Dict[str,
     """What an adapter is asked its question with: who it may answer, and each named credential.
 
     **`RUNDESK_ALLOW` is here and not only at hosting time**, and it is not decoration: an adapter
-    that opens a private conversation to report where unprompted things would land has to know whose
-    conversation, so a `--check` handed no allow list is refused by the adapter before it has even
-    signed in. `channels.hosting` builds the same variable from the same list for the long-lived
-    half.
+    that opens private conversations for unsolicited notices has to know whose conversations, so a
+    `--check` handed no allow list can be refused by the adapter before it has even signed in.
+    `channels.hosting` builds the same variable from the same list for the long-lived half.
 
     The credentials are `channels.credentials`' to resolve, and are resolved by the same call
     `channels.hosting` makes — so a `--check` that connected and an adapter that is really serving
@@ -604,8 +628,15 @@ def _handed(agent: str, allow: Sequence[str], names: Sequence[str]) -> Dict[str,
 
     Reading a whole value is what `secrets.value` exists for — the programs rundesk starts — and a
     `--check` is one of them. Nothing here prints it.
+
+    **Sorted into senders and places by the one module that reads an entry**, so a `--check` and the
+    hosted half of the same channel are handed the same two lists. Building them here from the raw
+    strings would be a second reading of what an entry means, and the two would eventually differ
+    about which of them a person was on.
     """
-    built = {"RUNDESK_ALLOW": ",".join(allow)}
+    admitting = kept.admitted_by(allow)
+    built = {"RUNDESK_ALLOW": ",".join(admitting.senders),
+             "RUNDESK_ALLOW_PLACES": ",".join(admitting.places)}
     built.update(credentials.handed(agent, names))
     return built
 
@@ -681,6 +712,8 @@ def _where_it_writes(row: Dict[str, Any]) -> str:
     """Where unprompted things land, said only about the channel that is really the notified one."""
     if not row.get("notified"):
         return ""
+    if row.get("kind") == "discord":
+        return " — unprompted things go privately to every allowed user"
     return f" — unprompted things go to {as_written(row.get('notify_place'))}"
 
 
@@ -782,7 +815,7 @@ def _configured(args: argparse.Namespace) -> int:
 
 
 def _tested(agent: str, kind: str, reaching: Optional[Reaching]) -> int:
-    """Ask the adapter to connect again with what the channel already has, and say what it reached.
+    """Ask the adapter to reach the platform again, and say what it found.
 
     **Changes nothing, including the record of what it found.** A credential that was reset in
     somebody's developer portal is the case this exists for, and the answer to that is a sentence at
@@ -889,10 +922,10 @@ def _doctored(agent: Optional[str], reaching: Optional[Reaching]) -> int:
     non-zero for a channel it could not reach even though the question it was asked was answered
     perfectly well.
 
-    **It really connects.** A credential that is set and no longer accepted is the failure this
-    exists to find, and nothing on this machine can tell that from one that is: the adapter has to be
-    asked. So a channel whose credential is missing is `BLOCKED` without a round trip, and everything
-    else pays for one.
+    **It really asks the adapter.** A credential that is set and no longer accepted is the failure
+    this exists to find, and nothing on this machine can tell that from one that is: the adapter has
+    to be asked. So a channel whose credential is missing is `BLOCKED` without a round trip, and
+    everything else pays for the adapter-specific check.
     """
     if agent is not None:
         gone_wrong = directory.not_an_agent(agent)

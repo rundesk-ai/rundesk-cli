@@ -254,7 +254,7 @@ SAID_LINE_AT_MOST = 500
 #: the quote keeps its shape, because a quoted code block that lost its newlines would be unreadable,
 #: and is clipped instead.
 #:
-#: **Bounded here and not only in the adapter.** `docs/adapters.md` asks an adapter to narrow a
+#: **Bounded here and not only in the adapter.** `docs/extending/adapters.md` asks an adapter to narrow a
 #: display name before it sends one, and the shipped one does — but a bound that lives only on the
 #: far side of a seam is a bound a third-party adapter can be wrong about, and being wrong about it
 #: reaches a prompt. The numbers are the previous build's, which settled on them for this exact pair.
@@ -265,6 +265,12 @@ A_NAME_AT_MOST = 80
 #: and a longer bound for that reason — it may hold both a room and the server it stands in, each
 #: named by whoever made it.
 A_PLACE_AT_MOST = 140
+
+#: How long the handle an adapter hands over for mentioning the speaker may be (R-CH-40). A handle
+#: is the platform's own markup around one id — `<@U012ABCDEF>`, `<@123456789012345678>` — so
+#: anything longer, or anything with a space in it, is not one and is dropped rather than clipped:
+#: half a handle mentions nobody and teaches the brain a token that arrives inert.
+A_MENTION_AT_MOST = 64
 
 #: Said at the end of a quote that did not fit, so that a brain reading it knows it is reading part.
 #: Without it a clipped quote is indistinguishable from somebody who stopped mid-sentence.
@@ -804,7 +810,9 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
          pieces: List[str], sending: Sequence[naming.Sending] = (),
          answering: Optional[str] = None, cost: str = "",
          landed_within: float = 0.0, noting: Optional[List[str]] = None,
-         refusals: Optional[List[str]] = None) -> bool:
+         refusals: Optional[List[str]] = None, notice: bool = False,
+         remark: bool = False, to_sender: str = "", to_place: str = "",
+         threaded: str = "") -> bool:
     """Send something to a place through a running adapter. `False` when there is nothing to send it.
 
     `False` rather than an exception: a notice that could not be delivered because the adapter is
@@ -852,6 +860,44 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
     that way: an adapter is free to acknowledge nothing at all, so silence and success arrive here
     identically. What an empty list means is *nobody said this was refused*, which is the honest
     reading and the one `_delivered` in `providers.answering` acts on.
+
+    `remark` says this delivery is something the agent said **on the way to** its answer rather
+    than the answer itself (R-CAD-27, R-CH-19). One producer sets it — `providers.answering.remark` — and it
+    is the only thing that tells the two apart on the far side of the seam, because the text of a
+    remark and the text of an answer are both prose an agent wrote. A surface that shows running
+    commentary goes on showing every delivery and ignores the field, which is what the shipped
+    Discord adapter does; one whose whole shape is *the answer and nothing else* drops it, which is
+    what the shipped Slack adapter does. **Never inferred from the text**: what phase a brain was in
+    is known here and nowhere else, and a surface guessing it from what the words look like is the
+    same defect as guessing a mention from a display name.
+
+    `notice` says nobody prompted this delivery in one conversation. The ordinary `place` stays as
+    its compatible primary destination, while an adapter that can address allowed people
+    individually may give each one a copy. Direct answers and remarks leave it false, so one
+    person's conversation is never widened into everybody's notification.
+
+    **`to_sender` and `to_place` name one destination and supersede `place`**, for the caller that
+    was given a destination rather than inheriting the channel's. Exactly one of them says
+    something. They cross as the ids themselves because a sender id is not a conversation on either
+    shipped platform and a place id is not the string an adapter composed for a place — resolving
+    either needs the platform, and rundesk holds no credential for it. `docs/extending/adapters.md`
+    is the contract; `channels.adapters.capabilities(kind)["address"]` is how a caller knows an
+    adapter implements it, and nothing may send one to an adapter that does not.
+
+    **A named destination is one destination, so it is never fanned out.** `notice` stays true
+    because nobody prompted the delivery, and the two facts are separate: *unprompted* is why it may
+    be announced at all, and *this one place* is where it goes. An adapter that copies a notice to
+    every allowed person must not copy one that was aimed.
+
+    `threaded` asks for this delivery to stand in a thread hanging off the message `answering`
+    names, rather than as a plain reply to it, **and it is the name to give that thread** rather
+    than a flag. A thread is a place with a label on it and only this side knows what the run was
+    — a platform that needs one would otherwise have to read the words and invent it, which is the
+    guessing every other field here exists to avoid. For the report of a scheduled run in a shared
+    room: a notice at nine and an answer twenty minutes later are one exchange, and a room where
+    they are two loose messages is a room nobody can follow. Meaningless without `answering`,
+    because a thread has to hang off something, and ignored by a platform on which a reply is
+    already one.
     """
     one = watching.running.get(kind)
     if one is None or one.talking is None:
@@ -870,8 +916,27 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
         # cost lines is the same number said four times.
         if nth == 0 and cost:
             record["cost"] = cost
-        if answering and nth == 0:
+        # **A thread anchor is not a quote, so it goes on every piece.** `reply_to` alone means
+        # *quote this*, which is worth saying once; beside `threaded` it means *the thread hanging
+        # off this*, and a second piece without it would leave half a report in the room the thread
+        # was opened out of.
+        if answering and (nth == 0 or threaded):
             record["reply_to"] = answering
+        if notice:
+            record["notice"] = True
+        if remark:
+            record["remark"] = True
+        # **Written on every piece, unlike the quote and the cost.** Those two belong to the first
+        # message of an answer; this is *where the answer goes*, and a second piece landing in the
+        # notified channel because only the first carried the destination is the whole failure this
+        # exists to prevent.
+        if to_sender or to_place:
+            record["to"] = {"sender": to_sender} if to_sender else {"place": to_place}
+        if threaded and answering:
+            # Only ever beside a message to hang it off. A thread anchored on nothing is a request
+            # no platform can answer, and sending it would turn an unanchored report — which is
+            # survivable and documented — into a refused one.
+            record["threaded"] = threaded
         one.awaiting[record["id"]] = answering if answering and nth == 0 else ""
         _make_room(one.awaiting)
         if not _said_to(where, one, record):
@@ -881,7 +946,29 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
         if noting is not None:
             noting.append(record["id"])
     if landed_within > 0:
-        _landed(one, written, landed_within)
+        landed = _landed(one, written, landed_within)
+        # **Counted after the wait, and the line is withheld when the count comes back empty.**
+        # The drain thread is still running: an acknowledgement that arrives between the deadline
+        # passing and this list being taken leaves nothing outstanding, and a line saying `0 of 1`
+        # would be a warning about a delivery that landed.
+        waiting = [each for each in written if one.awaiting.get(each) is not None]
+        if not landed and waiting:
+            # **Silence is not success, and this is the one caller that waited to find out.**
+            # `_landed` already knows nobody answered; throwing that away left the only outcome
+            # with no line at all: a turn whose words were written to a pipe an adapter had
+            # stopped reading delivered nothing, refused nothing, and said nothing, so a person
+            # watching the log saw the turn end and never learned their answer went nowhere.
+            # Not a failure — an adapter is free to acknowledge nothing and stays a whole adapter
+            # — which is why this is what was observed and never what it means.
+            # **Said once and not once per answer.** An adapter that legitimately acknowledges
+            # nothing would otherwise write this line for every turn it ever delivers. `_said_once`
+            # keys on the sentence, so a different count is a different sentence and still lands —
+            # which is what keeps *one of two* from being hidden behind an earlier *one of one*.
+            _said_once(where, watching, kind,
+                       f"channel {kind}: the adapter did not acknowledge {len(waiting)} of "
+                       f"{len(written)} deliveries inside {landed_within:g}s, so whether they "
+                       f"reached the platform is unknown — check that it is still reading what "
+                       f"rundesk sends it")
         if refusals is not None:
             # Taken out as they are read: a refusal answers one question once, and leaving it behind
             # would have it answer the next delivery that happened to reuse the moment in its id.
@@ -892,7 +979,8 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
 
 def announced(agent: str, where: Path, watching: Watching, kind: str, place: str,
               pieces: List[str], within: float,
-              refusals: Optional[List[str]] = None) -> Optional[str]:
+              refusals: Optional[List[str]] = None,
+              to_sender: str = "", to_place: str = "") -> Optional[str]:
     """Say something, and hand back the platform's own id for the **first** message of it.
 
     `None` when nobody can say.
@@ -930,6 +1018,11 @@ def announced(agent: str, where: Path, watching: Watching, kind: str, place: str
     see the top of, so the first piece is the one worth quoting, exactly as `told` puts a quote on
     the first piece and no other.
 
+    **`to_sender` and `to_place` are `told`'s own too**, and the id handed back is the id of the
+    message in *that* destination — which is what the report following it has to hang off. See
+    `told`: the two supersede `place`, exactly one of them says anything, and an aimed announcement
+    is never fanned out.
+
     **The wait is `told`'s own**, and that is not a shortcut. `_delivered` writes what the platform
     called a delivery **before** it takes that delivery out of `awaiting`, and `landed_within` is
     exactly a wait for `awaiting` to empty — so by the moment `told` answers, `posted` holds whatever
@@ -941,7 +1034,8 @@ def announced(agent: str, where: Path, watching: Watching, kind: str, place: str
         return None
     written: List[str] = []
     if not told(agent, where, watching, kind, place, pieces, noting=written,
-                landed_within=within, refusals=refusals):
+                landed_within=within, refusals=refusals, notice=True,
+                to_sender=to_sender, to_place=to_place):
         return None
     # One indivisible read of a dict two threads share, which is the only safe operation on it.
     # Nothing was acknowledged, or it was acknowledged with no id: both are `None`, and the caller
@@ -1137,9 +1231,12 @@ def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any],
     now, and this half is what answers for every other way a pipe can end.
     """
     kind = one.kind
-    allowed = set()
+    # **Nothing admitted while this cannot be read**, which is what an empty `Admitting` means. A
+    # list that will not parse is a list nobody has decided, and reading it as "everybody" is the one
+    # mistake here that cannot be taken back.
+    admitting = kept.Admitting((), ())
     with contextlib.suppress(Exception):
-        allowed = set(kept.who_may_reach(row))
+        admitting = kept.admitting(row)
     complained = set()
 
     def lost(reason: str) -> None:
@@ -1163,13 +1260,13 @@ def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any],
             if isinstance(said, lines.Gap):
                 continue
             with contextlib.suppress(Exception):
-                _heard(agent, where, one, said, allowed, watching)
+                _heard(agent, where, one, said, admitting, watching)
     except Exception as why:                           # noqa: BLE001 — see the module docstring
         with contextlib.suppress(Exception):
             _note(where, f"channel {kind}: this gateway stopped listening to it ({why})", logs.ERROR)
 
 
-def _heard(agent: str, where: Path, one: Running, line: str, allowed: set,
+def _heard(agent: str, where: Path, one: Running, line: str, admitting: kept.Admitting,
            watching: Optional[Watching] = None) -> None:
     """One record an adapter sent. Anything unrecognised is kept quiet rather than refused loudly."""
     kind = one.kind
@@ -1186,7 +1283,7 @@ def _heard(agent: str, where: Path, one: Running, line: str, allowed: set,
 
     saying = record.get("say")
     if saying == "arrived":
-        _arrived(agent, where, one, record, allowed)
+        _arrived(agent, where, one, record, admitting)
     elif saying == "ready":
         if one.connected is not None:
             one.connected.set()
@@ -1215,17 +1312,22 @@ def _heard(agent: str, where: Path, one: Running, line: str, allowed: set,
     elif saying == "failed":
         _refused(where, kind, one, record)
     elif saying in ("control", "query", "configure"):
-        _gestured(agent, where, one, record, allowed, saying)
+        _gestured(agent, where, one, record, admitting, saying)
 
 
 def _gestured(agent: str, where: Path, one: Running, record: Dict[str, Any],
-              allowed: set, saying: str) -> None:
+              admitting: kept.Admitting, saying: str) -> None:
     """One gesture somebody made — a control, a question, or a default being changed.
 
     **Refused here for the same reason a message is, and in silence.** The adapter narrows this
     first so that a stranger is not shown a spinner for an answer that will never come, but that is
     to avoid visible work and is never the decision: only this side is trusted, and telling somebody
     they are a stranger confirms the agent is listening (R-CH-23).
+
+    **Admitted by the same rule a message is, and out of the same list** (R-CH-39). A gesture made
+    in a place the channel allows is a gesture from somebody who may reach the agent there; two
+    rules over one list would eventually disagree about the same person, and the one they disagreed
+    about would be the one holding a control.
 
     **A word outside the closed set is nothing this gateway does**, and is dropped rather than
     passed on. A gesture whose name is whatever the caller typed is a command runner with a chat
@@ -1238,7 +1340,7 @@ def _gestured(agent: str, where: Path, one: Running, record: Dict[str, Any],
     """
     kind = one.kind
     who = str(record.get("user") or "")
-    if who not in allowed:
+    if not admitting.admits(who, _where_said(record)):
         return
     if one.steering is None:
         _note(where, f"channel {kind}: {who} asked for something, and nothing here answers a "
@@ -1336,7 +1438,8 @@ def _refused(where: Path, kind: str, one: Running, record: Dict[str, Any]) -> No
     one.awaiting.pop(given, None)
 
 
-def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allowed: set) -> None:
+def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
+             admitting: kept.Admitting) -> None:
     """One message somebody sent. **Recorded only if they may be answered.**
 
     A stranger's message is never written down, and they are never told anything: replying to say
@@ -1344,12 +1447,18 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allo
     Nothing is recorded either, because a record of it is something an agent could later be asked
     to read.
 
+    **Two stable identifiers decide it and nothing else does** (R-CH-39): the id that platform knows
+    the speaker by, and the id it knows the place by. `display` and `where` are words an adapter
+    composed for a person to read — a display name is somewhere a stranger writes whatever they like
+    — so neither reaches this decision, and a channel that allows a place is not opened by anybody
+    who can name it in their own profile.
+
     Then, and only for somebody who may be answered, two things go the other way: whatever they
     attached is taken in, and the message is marked as seen.
     """
     kind = one.kind
     who = str(record.get("user") or "")
-    if who not in allowed:
+    if not admitting.admits(who, _where_said(record)):
         return
     place = str(record.get("conversation") or "")
     body = str(record.get("text") or "")
@@ -1375,7 +1484,7 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allo
     body = _also_replying(body, record.get("reply_to"))
     # Last of the three blocks, because it is the one about the message rather than its contents —
     # what was attached and what was being answered both belong nearer what somebody typed.
-    body = _also_who(body, record.get("display"), record.get("where"))
+    body = _also_who(body, record.get("display"), record.get("where"), record.get("mention"))
     landed = arriving.recorded(agent, kind, place, who, body, external)
     if external and not _joining_one(agent, one, landed):
         # **The mark belongs to the message that starts a turn, and to no other.** Said the moment it
@@ -1398,6 +1507,21 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any], allo
     # **Handed on, never run here.** This is the thread reading one adapter's output, and a turn
     # takes minutes — see `Answering`.
     one.answering.answer(agent, kind, place, who, body, external, landed)
+
+
+def _where_said(record: Dict[str, Any]) -> str:
+    """The platform's own id for the place this was said in, or `""` when the adapter said none.
+
+    **`external_place` and never `place`.** The older field carries a word the shipped Discord
+    adapter composes for a reader — `"dm"`, `"room"` — which nothing has ever read and which no
+    platform guarantees to be stable, unique, or even distinct between two rooms. Deciding
+    authorization on it would admit every room at once for any adapter that sent the same word
+    twice, so the stable id has a field of its own and the display word keeps meaning nothing.
+
+    An adapter that reports no place is one whose channels can only be reached by naming a sender,
+    which is what every channel could be reached by before this existed.
+    """
+    return str(record.get("external_place") or "")
 
 
 def _joining_one(agent: str, one: Running, landed: arriving.Landed) -> bool:
@@ -1478,8 +1602,8 @@ def _flattened(said: Any, at_most: int) -> str:
     return " ".join(str(said or "").split())[:at_most]
 
 
-def _also_who(body: str, display: Any, where: Any) -> str:
-    """What somebody typed, and who said it and where (R-CH-21, R-DIS-21).
+def _also_who(body: str, display: Any, where: Any, mention: Any = None) -> str:
+    """What somebody typed, who said it and where, and how to mention them (R-CH-21, R-CH-40).
 
     **An agent that cannot say who it is talking to is an agent writing every answer as though it
     were a private terminal session.** Both fields crossed this seam already and both were read by
@@ -1497,15 +1621,50 @@ def _also_who(body: str, display: Any, where: Any) -> str:
 
     Both are a stranger's text: an account name and a room name are chosen by whoever made them, and
     both are bounded here whatever the adapter did.
+
+    **`mention` is how the speaker is mentioned, and it is handed over for that alone** (R-CH-40).
+    A name is what a brain reads and says; a mention is a platform's own markup around an id, and
+    the two are different facts about one person — an agent that knows only the name cannot mention
+    them, and the build this replaces knew only the name. The adapter composes the handle because
+    the markup is the platform's, and the sentence here tells the brain the one thing it must know
+    about it: it is for mentioning that person and is never said as words. **Never the bare id**,
+    which is the same distinction the owner drew — an id in an answer is a number nobody asked for,
+    and a handle is the person being addressed.
     """
     who = _flattened(display, A_NAME_AT_MOST)
     stood = _flattened(where, A_PLACE_AT_MOST)
-    if not who and not stood:
+    handle = _a_handle(mention)
+    if not who and not stood and not handle:
         return body
-    if not stood:
-        return f"{body}\n\n--\n\nSaid by {who}.".strip()
-    said = f"Said by {who} in {stood}." if who else f"Said in {stood}."
-    return f"{body}\n\n--\n\n{said}".strip()
+    lines = []
+    if who and stood:
+        lines.append(f"Said by {who} in {stood}.")
+    elif who:
+        lines.append(f"Said by {who}.")
+    elif stood:
+        lines.append(f"Said in {stood}.")
+    if handle:
+        lines.append(f"Mention {who or 'them'} as {handle} — a handle only for mentioning them, "
+                     f"never something to say.")
+    return f"{body}\n\n--\n\n{' '.join(lines)}".strip()
+
+
+def _a_handle(said: Any) -> str:
+    """An adapter's mention handle as one token, or `""` where what arrived is not one (R-CH-40).
+
+    **Dropped rather than clipped.** `_flattened` bounds a name by cutting it, which leaves a name
+    somebody can still read; a handle cut short mentions nobody, and one with a space in it is two
+    tokens of which at most one is a handle. So a handle is exactly one token inside the bound or it
+    is nothing — and nothing means the brain is told the name alone, as it always was.
+    """
+    if not isinstance(said, str):
+        # A list or a number would stringify into something with no space in it, and `str(["x"])`
+        # is not a handle for anybody — so the type is asked before the shape is.
+        return ""
+    token = _flattened(said, A_MENTION_AT_MOST + 1)
+    if not token or " " in token or len(token) > A_MENTION_AT_MOST:
+        return ""
+    return token
 
 
 def _also_replying(body: str, said: Any) -> str:
@@ -1785,13 +1944,22 @@ def _the_environment(agent: str, kind: str, row: Dict[str, Any]) -> Dict[str, st
     is the only thing that can download an attachment; it is handed somewhere to put one rather than
     left to invent a path, and what it stages there is only ever taken from inside this directory —
     see `files.landed`, which will not take a file from anywhere else.
+
+    **`RUNDESK_ALLOW` carries sender ids and only sender ids, exactly as it always has.** A typed
+    `sender:` entry arrives here bare, so an adapter written before typed entries existed is handed
+    what it has always been handed and narrows exactly as it always did. The places are a variable of
+    their own for the same reason: folding them into one list would hand every existing adapter a
+    string that matches no sender it will ever see, and its own narrowing would then drop a person
+    this side would have admitted — a silent refusal with nothing anywhere to read.
     """
+    admitting = kept.admitting(row)
     built = {
         "RUNDESK_AGENT": agent,
         "RUNDESK_CHANNEL": str(row.get("kind") or ""),
         "RUNDESK_CHANNEL_HOME": str(at(agent, kind)),
         "RUNDESK_SETTINGS": str(row.get("settings") or "{}"),
-        "RUNDESK_ALLOW": ",".join(kept.who_may_reach(row)),
+        "RUNDESK_ALLOW": ",".join(admitting.senders),
+        "RUNDESK_ALLOW_PLACES": ",".join(admitting.places),
     }
     built.update(credentials.handed(agent, _named_secrets(row)))
     return built

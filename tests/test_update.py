@@ -527,6 +527,16 @@ class CarryingTheAgentsForward(Updating):
         self.assertTrue((directory.home("alpha") / "tasks" / "README.md").is_file(),
                         "the update did not give alpha the active task area")
 
+    def test_an_update_does_not_recreate_an_absent_agent_memory_page(self):
+        self.an_agent("alpha")
+        memory = directory.home("alpha") / "MEMORY.md"
+        memory.unlink()
+
+        code, _out, err = self.update(archive=self.an_archive())
+
+        self.assertEqual(OK, code, err)
+        self.assertFalse(memory.exists(), "the update recreated memory its owner had removed")
+
     def test_how_far_each_agent_got_is_recorded_in_its_own_records(self):
         self.an_agent("alpha")
         self.update(archive=self.an_archive(agent_steps={"9999_x": AN_AGENT_STEP}))

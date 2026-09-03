@@ -26,6 +26,7 @@ accumulates because it is the file everybody already imports.
 Run directly: `python3 tests/test_layers.py`
 """
 
+import argparse
 import ast
 import hashlib
 import re
@@ -33,6 +34,7 @@ import unittest
 from pathlib import Path
 
 import support
+from rundesk import cli
 
 #: Which package may import which. `utils` is absent from every list on purpose.
 MAY_IMPORT = {
@@ -77,7 +79,7 @@ MAY_IMPORT = {
     # its schedule asked, and `firing` publishes a `Starting` and takes an object of it exactly as
     # `hosting` publishes an `Answering`. Neither may reach here, which is what keeps "when is this
     # due" and "what does a brain cost" two questions with two answers.
-    "providers": ("skills", "channels", "schedules", "agents", "core", "utils"),
+    "providers": ("teams", "skills", "channels", "schedules", "agents", "core", "utils"),
     # And `gateways` reaches `schedules` rather than the other way round, because the gateway is
     # what turns "this is due" into work that has started. It is the only long-lived process this
     # product has, so it is the only thing that can hold a child and reap it.
@@ -99,11 +101,12 @@ MAY_IMPORT = {
     # reach here, so an agent is still something that can be made, carried and removed by code that
     # has never heard of a skill, and presenting a new agent's skills is done in `commands`.
     "skills": ("agents", "core", "utils"),
+    "teams": ("skills", "agents", "core", "utils"),
     # `commands` reaches `capabilities` and is the **only** package that does. That is what makes
     # the restriction below it enforceable: `capabilities` may not import `gateways` or `agents`, so
     # the shim prefix a lineage is recognised by and the agent a process was started for are
     # resolved here, where both are legal, and handed down as arguments.
-    "commands": ("skills", "providers", "channels", "schedules", "delegations", "gateways",
+    "commands": ("teams", "skills", "providers", "channels", "schedules", "delegations", "gateways",
                  "capabilities", "lifecycle", "agents", "core", "utils"),
 }
 
@@ -155,12 +158,12 @@ PR_TEMPLATE_ANCHORS = [
 ISSUE_TEMPLATE_HEADINGS = {
     "bug-report.md": [
         "## Problem", "## Reproduction", "## Expected behavior", "## Evidence",
-        "## Acceptance criteria", "## Environment", "## Scope and privacy",
+        "## Acceptance criteria", "## Environment", "## Scope and privacy", "## Agent",
     ],
     "change-proposal.md": [
         "## Problem", "## Proposed solution", "## Evidence",
         "## Scope and compatibility", "## Acceptance criteria", "## Verification",
-        "## Alternatives considered",
+        "## Alternatives considered", "## Agent",
     ],
 }
 
@@ -177,8 +180,8 @@ ISSUE_TEMPLATE_FRONTMATTER = {
 }
 
 ISSUE_TEMPLATE_DIGESTS = {
-    "bug-report.md": "9b8bb222a68b4c2a592512ee368c17bc8edc8e0750c5f76ba3e4dd65837e5187",
-    "change-proposal.md": "71f68d702f29e1cedd6b5a839b8a10df899240f68bd215d734ee77f5286cd379",
+    "bug-report.md": "6e8eadbdaf3198c29ed33edf6b3abaf7374cfca5adb05d46c85daedeb1281276",
+    "change-proposal.md": "82c13fe89d21778e23de6c9a7ae7e918960cf78d4b2cccd69041e9160e97fdbd",
 }
 
 SUPPORTED_CATALOG_URLS = [
@@ -511,6 +514,68 @@ class TheTwoLayersSpellADelegationTheSameWay(support.Isolated):
                          (stood["source"], stood["source_id"]))
 
 
+#: Written the way argparse prints it, so the two spellings of one flag are one column.
+FLAG_SPELLINGS = {"-n": "-n, --lines"}
+
+
+class TheCommandSurfaceIsPublished(unittest.TestCase):
+    """Every verb the parser offers appears in `docs/api/README.md`, read off the parser itself.
+
+    **The one page that claims to be complete is the one nothing was checking.** Its own opening
+    line calls itself every operation Rundesk offers, and a verb added to `cli.py` reaches a person
+    through `--help` whether or not anybody remembered the page — so the page drifts silently and
+    the drift is invisible to the person it misleads. Five whole groups had gone missing from it
+    before this case existed.
+
+    The block is written for a reader, so it compresses: `[list]` for a sub-verb that also runs
+    bare, brackets around anything optional. Both are undone here rather than banned there, because
+    a listing nobody wants to read is a listing that stops being maintained.
+    """
+
+    def published(self):
+        """The verb block, with the reader's compressions undone."""
+        page = (support.CHECKOUT / "docs" / "api" / "README.md").read_text(encoding="utf-8")
+        block = page.split("```sh", 1)[1].split("```", 1)[0]
+        plain = block.replace("[", " ").replace("]", " ").replace("|", " ")
+        return [" ".join(line.split()) for line in plain.splitlines() if line.strip()]
+
+    def offered(self, parser, named=()):
+        """Every command path the parser answers, and the flags each one takes."""
+        found = {named: {flag for action in parser._actions
+                         for flag in action.option_strings if flag not in ("-h", "--help")}}
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                for name, under in action.choices.items():
+                    # `_oauth` is suppressed from `--help` and exists for an inherited descriptor,
+                    # never for a person. A page that published it would be documenting plumbing.
+                    if not name.startswith("_"):
+                        found.update(self.offered(under, (*named, name)))
+        return found
+
+    def test_every_verb_the_parser_offers_is_on_the_page(self):
+        lines = self.published()
+        for named, flags in sorted(self.offered(cli.build_parser()).items()):
+            if not named:
+                continue
+            verb = "rundesk " + " ".join(named)
+            with self.subTest(verb=verb):
+                shown = [line for line in lines
+                         if line == verb or line.startswith(verb + " ")]
+                self.assertTrue(shown, f"{verb} is offered and is not on docs/api/README.md")
+                said = " ".join(shown)
+                for flag in sorted(flags):
+                    self.assertIn(FLAG_SPELLINGS.get(flag, flag), said,
+                                  f"{verb} takes {flag} and the page does not say so")
+
+    def test_the_count_the_page_claims_is_the_count_the_parser_offers(self):
+        # The opening line names the number in words. A verb added without touching the page leaves
+        # a page that is wrong twice — in what it lists, and in what it claims to have listed.
+        page = (support.CHECKOUT / "docs" / "api" / "README.md").read_text(encoding="utf-8")
+        offered = len(cli.offered(cli.build_parser()))
+        self.assertEqual(22, offered, "the count below was written for twenty-two groups")
+        self.assertIn("Twenty-two commands", page)
+
+
 class AgentGuideContract(unittest.TestCase):
     def test_guides_are_identical_and_keep_the_required_heading_order(self):
         agents = (support.CHECKOUT / "AGENTS.md").read_bytes()
@@ -549,19 +614,31 @@ class AgentGuideContract(unittest.TestCase):
                     ISSUE_TEMPLATE_DIGESTS[name],
                     hashlib.sha256(issue_bytes).hexdigest())
                 self.assertEqual(ISSUE_TEMPLATE_FRONTMATTER[name], issue.splitlines()[:7])
+                self.assertIn("🤖 by <Agent>", issue)
                 self.assertEqual(
                     expected,
                     [line for line in issue.splitlines() if line.startswith("## ")])
 
     def test_readme_and_docs_index_link_the_catalog_guide(self):
-        for path in (support.CHECKOUT / "README.md", support.CHECKOUT / "docs" / "README.md"):
-            with self.subTest(path=path.name):
-                self.assertIn("docs/catalogs.md" if path.name == "README.md"
-                              and path.parent == support.CHECKOUT else "catalogs.md",
-                              path.read_text(encoding="utf-8"))
+        # The docs index lists homes rather than pages, so the guide is reached through the index of
+        # the home that owns it. Both paths still have to lead somebody there.
+        for path, expected in (
+                (support.CHECKOUT / "README.md", "docs/extending/catalogs.md"),
+                (support.CHECKOUT / "docs" / "README.md", "extending/"),
+                (support.CHECKOUT / "docs" / "extending" / "README.md", "catalogs.md")):
+            with self.subTest(path=str(path.relative_to(support.CHECKOUT))):
+                self.assertIn(expected, path.read_text(encoding="utf-8"))
+
+    def test_readme_presents_the_development_team_with_its_linked_banner(self):
+        readme = (support.CHECKOUT / "README.md").read_text(encoding="utf-8")
+        banner = support.CHECKOUT / "assets" / "readme" / "rundesk-team-development-banner.png"
+        self.assertTrue(banner.is_file())
+        self.assertIn('href="https://github.com/rundesk-ai/rundesk-team-development"', readme)
+        self.assertIn('src="assets/readme/rundesk-team-development-banner.png"', readme)
+        self.assertIn("docs/extending/catalogs.md#building-a-team-catalog", readme)
 
     def test_catalog_guide_preserves_the_license_contract(self):
-        guide = (support.CHECKOUT / "docs" / "catalogs.md").read_text(encoding="utf-8")
+        guide = (support.CHECKOUT / "docs" / "extending" / "catalogs.md").read_text(encoding="utf-8")
         for required in (
             "├── LICENSE                        required repository license",
             "├── THIRD_PARTY_NOTICES.md         only when adapted work requires attribution",

@@ -60,7 +60,7 @@ to identify the exact target and consequence. Most groups list when called with 
 | [Agents](references/agents.md) | Add, describe, reassign, or remove agents |
 | [Agent instructions](references/agent-instructions.md) | Design or change persistent agent behavior |
 | [Gateways](references/gateways.md) | Start, stop, restart, run, inspect, or recover gateways |
-| [Conversations](references/conversations.md) | Ask agents; inspect messages, turns, usage, and failures |
+| [Conversations](references/conversations.md) | Ask agents; inspect messages, turns, usage, and failures; search the platforms an agent is connected to |
 | [Backups](references/backups.md) | Save, locate, move, or restore copies |
 | [Schedules](references/schedules.md) | Create timed work and proactive verification check-ins |
 | [Channels](references/channels.md) | Connect adapters, access lists, notifications, and diagnosis |
@@ -70,6 +70,8 @@ to identify the exact target and consequence. Most groups list when called with 
 | [Retrospective](references/retrospective.md) | Write the bounded usage-cycle diary from evidence and compare prior improvements |
 | [Self-improvement](references/self-improvement.md) | Review proven friction, continuity, capability gaps, and skills |
 | [Configuration](references/configuration.md) | Status, version, install settings, and secret values |
+| [Permissions](references/permissions.md) | What macOS lets this install do, and whose grants an answer is about |
+| [Teams](references/teams.md) | Install and reconcile version-controlled agent teams |
 | [OAuth login](references/oauth-login.md) | Configure an installed provider; connect, select, extend, or recover accounts |
 | [Lifecycle](references/lifecycle.md) | Install, update, uninstall, and purge |
 

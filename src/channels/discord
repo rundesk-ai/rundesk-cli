@@ -25,11 +25,19 @@ to be out of the way of. A message in a room that neither names us nor stands in
 is not answered at all: an agent in a shared server is quiet until it is spoken to.
 
 
-Three invocations, sharing almost nothing:
+Five invocations, sharing almost nothing:
 
     --capabilities   what this can do — offline, no account, the same answer every time
     --check          sign in, and report what was found, so a person confirms rather than pastes
     serve            hold the connection open and carry conversations until rundesk ends us
+    search           what was said about this, on the places this bot can reach
+    fetch            bring one message's files onto this machine, by the `ref` a search gave
+
+**`search` and `fetch` never open a gateway, and that is not a preference.** They are short-lived
+REST-only programs that run *beside* a `serve` holding this channel's claim, and a second IDENTIFY
+on one token is a second session against an identify budget that is not counted per process. So
+they sign in the way `--check` does — `Client.login`, which is HTTP alone — and reach Discord
+through the session that login built. They take no lock and hold nothing open.
 
 ## What crosses the seam
 
@@ -69,6 +77,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 import errno
 import fcntl
 import hashlib
@@ -111,8 +120,21 @@ MAX_TEXT = 2000
 #:
 #: `max_text` is the constant above and never a second copy of it. Two copies of one limit is how
 #: the build this replaces came to have a splitting rule fixed on one platform and not the other.
+#:
+#: `search` says this answers the `search` invocation, and it is **the one key here that is read
+#: rather than only printed**: rundesk asks this question offline and with no credential, and the
+#: answer is how it decides whether to run `search` at all. Declared `true` because the platform
+#: publishes a message search endpoint this bot's existing permission and intent already reach —
+#: and it would be worse to claim it on a platform where the search were a history walk, which is
+#: what `false` is here to say.
+#: **`address` is what lets a schedule report somewhere of its own.** rundesk holds no Discord
+#: credential, so it cannot turn a user id into the direct-message channel that user reads, and the
+#: id of a room is not the id of the conversation a bot writes into it — both are a platform round
+#: trip, and this is the side of the seam that can make one. Saying so is what allows rundesk to
+#: accept `--to` for this channel at all; an adapter that says nothing has `--to` refused where
+#: somebody typed it, which is better than a report going quietly to the wrong room.
 CAPABILITIES = {"stream": True, "edit": "full", "react": True, "thread": True, "attach": True,
-                "max_text": MAX_TEXT}
+                "address": True, "search": True, "max_text": MAX_TEXT}
 
 #: What Discord is told this connection wants:
 #:
@@ -281,8 +303,100 @@ FETCHED_IN = "fetched"
 #: bandwidth and somebody's disk on files that are going to be refused a moment later. In the build
 #: this replaces a message from anybody at all could pull down three hundred megabytes before the
 #: question of whether they may be answered had been asked.
+#: How much of a download is taken at a time. **Not the whole ceiling in one call**, because
+#: aiohttp's `StreamReader.read(n)` is documented to return "as soon as it is available" and to give
+#: "less than *n* bytes if there are less than *n* bytes in the buffer" — it is not `readexactly`,
+#: and asking once for the whole of a file landed whatever the first chunks happened to hold.
+A_DOWNLOAD_BLOCK = 64 * 1024
+
 BROUGHT_MOST = 10
 BROUGHT_BYTES = 32 * 1024 * 1024
+
+#: Where Discord's own REST API stands, and the version this file speaks. Written here rather than
+#: taken from `discord.http.Route.BASE`, because `search` and `fetch` reach the session directly and
+#: a base URL read off a private class attribute is a second private name to be broken by.
+DISCORD_API = "https://discord.com/api/v10"
+
+#: Where a person is sent to read one message they were shown. `@me` stands where a server id would
+#: for a private conversation, which is Discord's own spelling and not this file's invention.
+A_MESSAGE_AT = "https://discord.com/channels/{server}/{place}/{message}"
+
+#: The Discord epoch, and where a timestamp stands inside a snowflake. **Verified against the
+#: published API reference on 2026-09-03 rather than remembered**: an id is
+#: `(milliseconds since this epoch) << 22`, and the low twenty-two bits belong to the worker, the
+#: process and an increment. It is the whole of how `since` and `until` become `min_id` and
+#: `max_id`, and a wrong shift is a window silently somewhere else in history rather than a failure
+#: anybody could see.
+DISCORD_EPOCH_MS = 1420070400000
+SNOWFLAKE_SHIFT = 22
+
+#: What one `search` may spend, end to end. Rundesk allows a bounded invocation sixty seconds; this
+#: stops well inside that, so what comes back is this program's own account of where it got to
+#: rather than a process killed with nothing on stdout. **A spent budget is its own outcome** and is
+#: said in `partial` — an agent that read it as an absence of conversation would conclude a thing
+#: was never discussed, which is the one wrong answer this capability can give.
+LOOKED_WITHIN = 25.0
+
+#: How wide one search may reach. **Discord's Developer Policy forbids mining and scraping and
+#: defines neither**, so every search here is targeted and user-initiated: somebody asked their
+#: agent a question, and these are what stop that becoming a sweep of everything the bot can see.
+#: Each bounds round trips as well as reach, which is also how the whole thing fits the budget above.
+#:
+#: `SERVERS_LOOKED_IN_MOST` — how many servers one unscoped search asks about.
+#: `DMS_PAGED_MOST` — how many private conversations one unscoped search pages.
+#: `PAGES_MOST` — how many pages of one private conversation are walked, so no history walk is
+#: unbounded. A guild is not paged at all: one page per place, and never an `offset`.
+SERVERS_LOOKED_IN_MOST = 20
+DMS_PAGED_MOST = 10
+PAGES_MOST = 4
+
+#: What the published search endpoint takes, one limit at a time so a reader can check each against
+#: the reference page. `FOUND_AT_A_TIME` is its `limit`, whose maximum is twenty-five and not the
+#: hundred a caller may ask this program for — the difference is why `RESULTS_MOST` is separate.
+#: `A_DM_PAGE` is the *other* endpoint's, because a private conversation is not searched but paged.
+ASKED_ABOUT_MOST = 1024
+PLACES_ASKED_MOST = 500
+PEOPLE_ASKED_MOST = 100
+FOUND_AT_A_TIME = 25
+A_DM_PAGE = 100
+RESULTS_MOST = 100
+
+#: Discord's own code for a guild whose message index is not built yet. It arrives as HTTP `202`
+#: with this in the body, and **it is neither an error nor an empty result**: a guild still indexing
+#: that read as a guild with nothing in it is exactly the wrong answer. Rendered as its own line in
+#: `partial`, naming the guild, and never slept on or asked again inside one invocation.
+INDEX_NOT_READY = 110000
+
+#: How far back a search reaches when the caller named no `since`. **Said in `partial` every time it
+#: is used**, so a caller knows the answer covers a window and not all of history — which means a
+#: search given no `since` can never come back as the plain *found nothing*, and that is the point.
+DEFAULT_DAYS = 30
+
+#: How much of a found message travels. A result is a pointer to a conversation and not the
+#: conversation: this is enough to recognise the message, and the link beside it is how the whole of
+#: it is reached. Neither `SAID_MOST`, which is a bound on a name and would leave nothing readable,
+#: nor unbounded, which would put a hundred strangers' paragraphs into one prompt.
+FOUND_SAID_MOST = 300
+
+#: The longest `ref` this hands out — `<channel id>/<message id>`, which is two snowflakes and a
+#: separator and fits several times over. Short and opaque on purpose: rundesk keeps it and hands it
+#: straight back to `fetch`, so it is a name for one message and never a thing to be parsed
+#: anywhere else.
+REF_MOST = 64
+
+#: The query parameter Discord signs an attachment link's expiry into, as hexadecimal seconds since
+#: the Unix epoch. **Read rather than assumed.** Discord publishes no endpoint that refreshes a
+#: signed link and no promised lifetime for one, so `fetch` re-fetches the message to get a fresh
+#: link and this is only how a link that is *already* past is told from one worth spending a request
+#: on. Nothing here hard-codes how long one lasts.
+EXPIRES_AT = "ex"
+
+#: The channel types this file has to tell apart, by Discord's own numbers. Only these three matter:
+#: a private conversation is paged rather than searched, and a thread is described differently from
+#: a room. Everything else is a guild channel and is searched like one.
+A_DM = 1
+A_GROUP_DM = 3
+THREAD_TYPES = (10, 11, 12)
 
 #: The gestures this offers, as Discord's own commands (R-DIS-10). Each is `(name, what it says on
 #: the menu, the word rundesk speaks)`, and **the third is never the first**: `/new` is what a person
@@ -801,6 +915,37 @@ def thread_name(text: Any) -> str:
     return flat(text, THREAD_NAME_MOST) or THREAD_UNNAMED
 
 
+def a_place_called(direct: bool, thread: bool, named: Any, server: Any) -> str:
+    """Where something was said, in words a brain can repeat (R-DIS-21).
+
+    **The platform's nouns, rundesk's sentence.** Rundesk may never name a room or a server — that
+    is a layer which would have to be rewritten for the second surface — so the naming happens here
+    and what crosses the seam is one line of ordinary English any adapter could produce for its own
+    platform.
+
+    Names, never ids. An id is what a conversation is keyed by and is already carried beside this;
+    what this is for is an agent being able to say *which* room it is answering in, to the person
+    standing in it.
+
+    **One sentence for both sides of this file.** `serve` builds it from the vendor's own objects
+    as a message arrives and `search` builds it from the JSON a REST answer carried, and a second
+    copy of the wording is how two surfaces come to describe one room differently.
+
+    Flattened and bounded, because a server and a room are both named by whoever made them and both
+    stand in one sentence — and a name nobody could read still produces the plain form rather than
+    an empty phrase.
+    """
+    named = flat(named or "", WHERE_AT_MOST)
+    server = flat(server or "", WHERE_AT_MOST)
+    if direct:
+        return "a direct message"
+    if thread:
+        where = f"a thread called {named}" if named else "a thread"
+    else:
+        where = f"the {named} room" if named else "a room"
+    return f"{where} in {server}" if server else where
+
+
 def content_allowed(flags: Any) -> bool:
     """Whether Discord has granted this application the content of a room's messages.
 
@@ -1009,6 +1154,25 @@ def a_reached(part: str, directory: int) -> bool:
     return True
 
 
+def _aimed_at(said: Any) -> Optional[Tuple[str, str]]:
+    """The one destination a delivery names, as `("sender"|"place", id)`, or `None` for none.
+
+    **Read whole rather than guessed at.** `to` supersedes `place` entirely, so a malformed one must
+    never fall through to the place beside it: that place is the channel's own recorded destination
+    and delivering there is exactly the mis-delivery rundesk aimed this away from. Anything that is
+    not one of the two named kinds with something after it is `Refused`.
+    """
+    if said is None:
+        return None
+    if not isinstance(said, dict):
+        raise Refused("the destination to deliver to was not an object")
+    for kind in ("sender", "place"):
+        named = str(said.get(kind) or "")
+        if named:
+            return kind, named
+    raise Refused("the destination to deliver to named neither a sender nor a place")
+
+
 def an_id(said: Any, called: str) -> int:
     """A snowflake as the number Discord keeps it as, or `Refused` in words of our own.
 
@@ -1026,6 +1190,81 @@ def closed(files: List[Any]) -> None:
     for one in files:
         with contextlib.suppress(Exception):
             one.close()
+
+
+# ---------------------------------------------------------------------------------------------
+# A file on its way in, which is landed where rundesk will find it and never anywhere else.
+# ---------------------------------------------------------------------------------------------
+
+
+async def a_landing(into: Path, nth: int, name: str, declared: int, bringing) -> Dict[str, Any]:
+    """One arriving file, put where rundesk will look and said in the shape rundesk reads.
+
+    **One place for the rules two invocations share.** `serve` brings a message's files in as it
+    arrives and `fetch` brings the same files in again on its own, and every rule about them is one
+    rule: what no bandwidth may be spent on, where it is put, what is checked once it lands, and
+    which number is reported. Written twice they drift, and the half that drifts is the half no case
+    reaches — which is the recorded history of this exact code.
+
+    **Named by its position and never by anything the platform said** — a filename is a stranger's
+    text, and flattening one into an unused name is done once, on rundesk's side, by the code that
+    also has to make it unused.
+
+    **What a platform declares and what it sends are two facts.** A save that returned is not a file
+    of the right length: a fetch cut off part way leaves a readable file holding half of what
+    somebody sent, and nothing downstream can tell that from a small file.
+
+    **What the platform said, not what this measured.** Rundesk checks the declared size against the
+    file it lands, and a number taken from this program's own `stat()` makes that check compare
+    rundesk's measurement with rundesk's measurement — it agreed always, and a documented guarantee
+    had no way to fire. Left out entirely where Discord declared nothing, because said-nothing and
+    said-zero are different answers and `files.landed` reads an absent one as the first.
+
+    **Nothing is left behind on the way out.** A path this never reports is a path rundesk never
+    hears of, so `files.landed` — which removes every staged file it is told about, taken or refused
+    — cannot remove it, and `files.swept` never looks in here. Dropped by hand or it is debris for
+    the life of the install.
+
+    `Refused` on anything at all, carrying the sentence a person or an agent acts on.
+    """
+    if declared > BROUGHT_BYTES:
+        # Refused on what Discord declared, before a byte is fetched: the point of this bound is
+        # that somebody's bandwidth and somebody's disk are not spent on a file that is going to be
+        # refused a moment later anyway.
+        raise Refused(f"{name} is {declared} bytes, which is more than one message may bring in "
+                      f"({BROUGHT_BYTES})")
+    at = into / str(nth)
+    try:
+        into.mkdir(parents=True, exist_ok=True)
+        await bringing(at)
+        fetched = at.stat().st_size
+        if fetched > BROUGHT_BYTES:
+            raise Refused(f"it arrived as {fetched} bytes, past the {BROUGHT_BYTES} one "
+                          f"message may bring in")
+        if declared and fetched != declared:
+            raise Refused(f"Discord said {declared} bytes and {fetched} arrived, so this "
+                          "is not the whole of what was sent")
+    # A platform boundary, and everything past it is one answer: whatever a save, a socket or a
+    # filesystem raised, the file is not here and the sentence has to say so. Re-raised as `Refused`
+    # rather than swallowed, so a caller decides whether it is a note or a line of `partial`.
+    except Exception as why:
+        with contextlib.suppress(OSError):
+            at.unlink()
+        raise Refused(f"could not bring in {name}: {type(why).__name__}: {why}") from why
+    said = {"name": name, "at": str(at)}
+    if declared:
+        said["bytes"] = declared
+    return said
+
+
+def fetched_into(home: str, message: Any) -> Path:
+    """The one directory a message's files are staged in, under this channel's own home.
+
+    Its own function because three invocations name it and a second spelling of this path is a set
+    of files rundesk never removes: `serve` writes here, `fetch` writes here, and rundesk reads and
+    then clears exactly here.
+    """
+    return Path(home) / FETCHED_IN / str(message)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1254,6 +1493,15 @@ class Reaching:
         self.asked: Dict[str, Any] = {}
         #: When each person was last shown the warning for something that cannot be undone.
         self.confirming: Dict[str, float] = {}
+        #: Each allowed person whose direct-message channel has been resolved for notices. The
+        #: allowlist is fixed for this process, so this is bounded by configuration rather than by
+        #: how long the adapter runs.
+        self.notice_places: Dict[str, int] = {}
+        #: The thread opened for one report, by the id of the message it hangs off. Held for the
+        #: life of this process rather than written down: a thread is Discord's and outlives this,
+        #: and what this remembers is only *do not ask for a second one* — which a process that
+        #: came back up asks again, and Discord answers with the room.
+        self.report_threads: Dict[str, int] = {}
         #: Whether the note about not being able to open a thread has already been said.
         self.threadless = False
         #: Whether the socket is up, so `gone` and `ready` are said on the change rather than on
@@ -1458,6 +1706,9 @@ class Reaching:
              "place": "dm" if direct else "room",
              "user": str(message.author.id),
              "display": flat(getattr(message.author, "display_name", None) or message.author.name),
+             # **How to mention them, beside what to call them** (R-DIS-58). Discord's own markup
+             # around the author's id; a delivery carries it to the platform as a real mention.
+             "mention": f"<@{message.author.id}>",
              "where": self._where_this_is(message),
              "text": text,
              "external_id": str(message.id),
@@ -1467,29 +1718,19 @@ class Reaching:
              **({"reply_to": replying} if replying else {})})
 
     def _where_this_is(self, message) -> str:
-        """Where this was said, in words a brain can repeat (R-DIS-21).
+        """Where this was said, from the vendor's own objects. `a_place_called` says the sentence.
 
-        **The platform's nouns, rundesk's sentence.** Rundesk may never name a room or a server —
-        that is a layer which would have to be rewritten for the second surface — so the naming
-        happens here, where the vendor's objects actually are, and what crosses the seam is one line
-        of ordinary English that any adapter could produce for its own platform.
-
-        Names, never ids. An id is what a conversation is keyed by and is already carried; what this
-        is for is an agent being able to say *which* room it is answering in, to the person in it.
-
-        Flattened and bounded like every other stranger's text on its way to a prompt: a server and a
-        room are both named by whoever made them.
+        **Asked of the channel, and never of `message.guild`** for what kind of place it is — the
+        same rule `_arrived` is written under, and for the same reason: a stand-in that has never
+        heard of a guild answers `None` for one, and a room read as a private conversation is a room
+        where nobody has to name us first.
         """
         channel = message.channel
-        if isinstance(channel, discord.DMChannel):
-            return "a direct message"
-        named = flat(getattr(channel, "name", None) or "", WHERE_AT_MOST)
-        server = flat(getattr(getattr(message, "guild", None), "name", None) or "", WHERE_AT_MOST)
-        if isinstance(channel, discord.Thread):
-            where = f"a thread called {named}" if named else "a thread"
-        else:
-            where = f"the {named} room" if named else "a room"
-        return f"{where} in {server}" if server else where
+        return a_place_called(
+            direct=isinstance(channel, discord.DMChannel),
+            thread=isinstance(channel, discord.Thread),
+            named=getattr(channel, "name", None),
+            server=getattr(getattr(message, "guild", None), "name", None))
 
     def _replying_to(self, message) -> Optional[Dict[str, Any]]:
         """What this message replies to, or `None` when it replies to nothing (R-DIS-34).
@@ -1577,48 +1818,19 @@ class Reaching:
             noted("nothing said where this channel may put what it fetches, so an attachment was "
                   "left where only Discord can reach it", "error")
             return []
-        into = Path(home) / FETCHED_IN / str(message.id)
+        into = fetched_into(home, message.id)
         brought: List[Dict[str, Any]] = []
         for nth, one in enumerate(message.attachments[:BROUGHT_MOST]):
-            declared = int(one.size or 0)
-            if declared > BROUGHT_BYTES:
-                noted(f"{one.filename} is {declared} bytes, which is more than one message may "
-                      f"bring in ({BROUGHT_BYTES})")
-                continue
-            at = into / str(nth)
+            # Every rule about an arriving file — the bound, the path, the declared-against-arrived
+            # check, and which number is reported — is `a_landing`'s, so that `fetch` obeys the same
+            # ones rather than a second copy of them that drifted.
             try:
-                into.mkdir(parents=True, exist_ok=True)
-                await one.save(at)
-                # **What a platform declares and what it sends are two facts.** A save that returned
-                # is not a file of the right length: a fetch cut off part way leaves a readable file
-                # holding half of what somebody sent, and nothing downstream can tell that from a
-                # small file. Caught here, where it can simply be dropped.
-                fetched = at.stat().st_size
-                if fetched > BROUGHT_BYTES:
-                    raise Refused(f"it arrived as {fetched} bytes, past the {BROUGHT_BYTES} one "
-                                  f"message may bring in")
-                if declared and fetched != declared:
-                    raise Refused(f"Discord said {declared} bytes and {fetched} arrived, so this "
-                                  "is not the whole of what was sent")
-            except Exception as why:       # noqa: BLE001 — a platform boundary
-                # **Nothing is left behind on the way out.** A path this never reports is a path
-                # rundesk never hears of, so `files.landed` — which removes every staged file it is
-                # told about, taken or refused — cannot remove this one, and `files.swept` never
-                # looks in here. Dropped by hand or it is debris for the life of the install.
-                with contextlib.suppress(OSError):
-                    at.unlink()
-                noted(f"could not bring in {one.filename}: {type(why).__name__}: {why}")
-                continue
-            # **What the platform said, not what this measured.** Rundesk checks the declared size
-            # against the file it lands, and a number this took from its own `stat()` makes that
-            # check compare rundesk's measurement with rundesk's measurement — it agreed always, and
-            # a documented guarantee had no way to fire. Left out entirely when Discord declared
-            # nothing, because said-nothing and said-zero are different answers and `files.landed`
-            # reads an absent one as the first.
-            said = {"name": one.filename, "at": str(at)}
-            if declared:
-                said["bytes"] = declared
-            brought.append(said)
+                brought.append(
+                    await a_landing(into, nth, one.filename, int(one.size or 0), one.save))
+            except Refused as why:
+                # A file that could not be fetched is a line and never a refused message: the rest
+                # of what somebody sent is still worth carrying.
+                noted(str(why))
         if len(message.attachments) > BROUGHT_MOST:
             noted(f"{len(message.attachments)} files were attached and only the first "
                   f"{BROUGHT_MOST} were brought in")
@@ -1685,7 +1897,6 @@ class Reaching:
         """
         given = str(it.get("id") or "")
         text = it.get("text") or ""
-        files: List[Any] = []
         try:
             if not isinstance(text, str):
                 raise Refused("the text to deliver was not text")
@@ -1696,15 +1907,27 @@ class Reaching:
                               f"splitting happens once, on rundesk's side, for every platform")
             # Named as a number before anything is opened, because a place this platform cannot
             # parse is the one failure here that no file and no text could ever get past.
-            place = an_id(it.get("place"), "channel id")
-            for one in it.get("files") or []:
-                # Re-opening and hashing as much as 32 MiB is filesystem work, not event-loop work.
-                # Kept sequential so attachment order and all-or-none cleanup stay exact.
-                files.append(await asyncio.to_thread(a_verified_file, one))
-            if not text and not files:
+            aimed = _aimed_at(it.get("to"))
+            place = (await self._addressed(aimed) if aimed is not None
+                     else an_id(it.get("place"), "channel id"))
+            attachments = it.get("files") or []
+            if not isinstance(attachments, list):
+                raise Refused("the files to deliver were not a list")
+            if not text and not attachments:
                 raise Refused("there was nothing to deliver: no text, and no file")
-            reference, tint = self._quoting(it.get("reply_to"), place)
-            where = self.client.get_partial_messageable(place)
+            # **An aimed delivery is never fanned out**, whatever `notice` says. The two facts are
+            # separate: `notice` is *nobody prompted this*, which is why it may be announced at
+            # all, and `to` is *this one destination*, which somebody chose. Copying an aimed
+            # notice to every allowed user would post one schedule's retro to people it was
+            # deliberately not addressed to.
+            places = ([place] if aimed is not None
+                      else await self._notice_places() if it.get("notice") is True else [place])
+            # And into a thread hanging off the notice where rundesk asked for one, so a run's
+            # answer stands under the message that said it had begun rather than loose in the room
+            # twenty minutes later. `_in_a_thread` degrades to the room, never refuses.
+            named = it.get("threaded")
+            if named and it.get("reply_to"):
+                places = [await self._in_a_thread(place, it["reply_to"], named)]
         # `OSError` is the backstop rather than a fourth expected case. Everything raised below is
         # meant to arrive as `Refused`, and one that did not — the snapshot, opened above its own
         # guard — escaped to `_reading`, which logs and goes on reading. **The delivery then had no
@@ -1712,17 +1935,41 @@ class Reaching:
         # the id, waits out its whole ceiling, collects no refusal, and reports the answer as sent.
         # Named here so that the next one converts to a refusal instead of to silence.
         except (Refused, TypeError, ValueError, OSError) as why:
-            closed(files)
             say({"say": "failed", "id": given, "why": str(why)})
             return
 
+        sent = None
         try:
-            sent = await where.send(content=text or None, files=files or None,
-                                    reference=reference, mention_author=tint)
+            for destination in places:
+                files: List[Any] = []
+                try:
+                    for one in attachments:
+                        # Each recipient gets a fresh verified snapshot. A platform upload consumes
+                        # and closes one, so sharing it would make the second person's attachment
+                        # depend on what the first send did with its file object.
+                        files.append(await asyncio.to_thread(a_verified_file, one))
+                    reference, tint = self._quoting(
+                        it.get("reply_to") if destination == places[0] else None, destination)
+                    where = self.client.get_partial_messageable(destination)
+                    posted = await where.send(content=text or None, files=files or None,
+                                              reference=reference, mention_author=tint)
+                finally:
+                    # The platform has consumed the upload before ``send`` returns. The snapshot is
+                    # ours, not durable output, and must close on success just as surely as refusal.
+                    closed(files)
+                if sent is None:
+                    sent = posted
+                self.handled[str(posted.id)] = Handled(place=destination, ours=True)
+                self._no_longer_last(destination)
+        except Refused as why:
+            say({"say": "failed", "id": given, "why": str(why)})
+            return
         except Exception as why:           # noqa: BLE001 — a platform boundary
             self._final(why)
             failed = {"say": "failed", "id": given,
-                      "why": f"Discord would not take it: {type(why).__name__}: {why}"}
+                      "why": f"Discord would not take every notice: {type(why).__name__}: {why}"
+                      if it.get("notice") is True else
+                      f"Discord would not take it: {type(why).__name__}: {why}"}
             # Present only where the library declined to wait a limit out itself. discord.py sleeps
             # through an ordinary rate limit, so an absent `retry_after` means *there is nothing to
             # tell you* and never *try again straight away*.
@@ -1731,19 +1978,114 @@ class Reaching:
                 failed["retry_after"] = float(after)
             say(failed)
             return
-        finally:
-            # The platform has consumed the upload before ``send`` returns. The snapshot is ours,
-            # not durable output, and must close on success just as surely as on refusal.
-            closed(files)
+        if sent is None:
+            say({"say": "failed", "id": given, "why": "there was no allowed Discord user to notify"})
+            return
         # Ours, and remembered as ours: a later delivery told to quote this one must not ping its
         # author, which is this bot.
-        self.handled[str(sent.id)] = Handled(place=place, ours=True)
-        # Anything posted here stands under the commentary, so the commentary stops growing. This is
-        # the answer, a remark said mid-turn, or a notice — every one of them a message the reader
-        # scrolls to, and every one of them a reason the next activity line starts somewhere new.
-        self._no_longer_last(place)
         self._make_room()
         say({"say": "delivered", "id": given, "external_id": str(sent.id)})
+
+    async def _addressed(self, aimed: Tuple[str, str]) -> int:
+        """The Discord channel one named destination is written into. `Refused` when it cannot be.
+
+        A place is already a channel and needs nothing of the platform. A person is not: the id on
+        an allow list names *them*, and the conversation a bot writes to them is a channel Discord
+        has to be asked to open. `_a_direct_message` is that ask, and it is the same one
+        `_notice_places` makes for every allowed user — one implementation, so a destination aimed
+        at one person and a notice copied to all of them cannot resolve the same id two ways.
+
+        **Refused rather than degraded.** Everything else here that cannot reach a platform falls
+        back to something reasonable; there is nothing reasonable to fall back to for a delivery
+        somebody addressed, because every other channel in reach is one they did not choose.
+        """
+        kind, named = aimed
+        if kind == "place":
+            return an_id(named, "channel id")
+        return await self._a_direct_message(named, f"with {named}")
+
+    async def _a_direct_message(self, user: str, whose: str) -> int:
+        """The channel this person reads, opened once and remembered. `Refused` when Discord will not.
+
+        Remembered because a direct-message channel does not change and opening one is a round trip
+        on the path of every notice — the cache is `_notice_places`' own, so one person reached both
+        ways is one entry.
+
+        **`whose` is the caller's own words for what could not be opened**, because the two callers
+        have different news. A notice copied to everybody that fails on one of them reached nobody,
+        and *for every allowed user* is what a reader has to act on; a delivery aimed at one person
+        failed for that person, and naming them is what a reader has to act on. One sentence for
+        both would be wrong about one of them.
+        """
+        place = self.notice_places.get(user)
+        if place is not None:
+            return place
+        user_id = an_id(user, "Discord user id")
+        try:
+            person = await self.client.fetch_user(user_id)
+            direct = await person.create_dm()
+            place = an_id(direct.id, "direct-message channel id")
+        except Refused:
+            raise
+        except Exception as why:
+            self._final(why)
+            raise Refused(f"Discord could not open a direct message {whose}: "
+                          f"{type(why).__name__}: {why}") from why
+        self.notice_places[user] = place
+        return place
+
+    async def _in_a_thread(self, place: int, anchor: Any, named: Any) -> int:
+        """The thread hanging off this message, opened once — or `place` where there is none.
+
+        **One thread per run, and it is remembered by the message it hangs off.** A report arrives
+        as several deliveries and a failure report may arrive after it, and each has to land in the
+        same thread: asking Discord to open a second one on the same message is refused, and a
+        report split between a thread and the room above it is the unreadable outcome this exists to
+        prevent.
+
+        **Degrades to the room, exactly as answering a room message does.** Opening a thread needs
+        `CREATE_PUBLIC_THREADS`, which a bot invited before that permission was asked for does not
+        have — and a report in the room is worse than a report in a thread and far better than no
+        report. `_a_thread` says so once and keeps trying, so a permission granted while this runs
+        starts working with nothing restarted.
+        """
+        held = self.report_threads.get(str(anchor))
+        if held is not None:
+            return held
+        try:
+            where = self.client.get_channel(place) or self.client.get_partial_messageable(place)
+            message = where.get_partial_message(an_id(anchor, "message id"))
+        except Exception as why:           # noqa: BLE001 — a platform boundary
+            noted(f"could not reach the message a report was to be threaded under, so it was "
+                  f"posted in the place itself: {type(why).__name__}: {why}")
+            return place
+        opened = await self._a_thread(message, str(named))
+        if opened is None:
+            return place
+        self.report_threads[str(anchor)] = opened
+        return opened
+
+    async def _notice_places(self) -> List[int]:
+        """Each allowed person's DM, once, without trusting the old configured destination.
+
+        The allowlist holds user ids and `place` holds a channel id; treating one as the other sends
+        to an unrelated Discord object. Resolve the users through Discord instead. The first
+        resolved DM remains first, so its platform message id is the one rundesk can quote when a
+        scheduled report follows its announcement.
+
+        The configured place is deliberately not sent to on its own. An allowlist can change after
+        a channel was first configured, leaving its old `notify_place` behind; using it as a target
+        would keep notifying somebody who is no longer allowed. Older adapters still receive that
+        place and retain their existing single-recipient behavior.
+        """
+        if not self.allow:
+            raise Refused("there was no allowed Discord user to notify")
+        places: List[int] = []
+        for allowed in self.allow:
+            place = await self._a_direct_message(str(allowed), "for every allowed user")
+            if place not in places:
+                places.append(place)
+        return places
 
     def _quoting(self, reply_to: Any, place: int):
         """What this delivery quotes and whether it tints — or neither, and why.
@@ -2245,11 +2587,851 @@ async def serving() -> int:
         return WILL_NOT_FIX
 
 
+# ---------------------------------------------------------------------------------------------
+# Question four: what was said about this? — and question five: bring me that file.
+#
+# Both are short-lived, REST-only, and may run *beside* a `serve` holding this channel's claim.
+# Neither opens a gateway, neither takes a lock, and both exit `0` whatever they answer, exactly as
+# `--check` does: a refusal is an answer, and the object is what is read.
+# ---------------------------------------------------------------------------------------------
+
+
+def one_object() -> Optional[Dict[str, Any]]:
+    """The single JSON object these are asked with, read whole from stdin. `None` for anything else.
+
+    Bounded by `READS_MOST` for the reason it bounds a line on `serve`: a caller that never stops
+    writing must not be able to grow this process without limit. What is not an object comes back
+    as nothing, and the caller refuses in words of its own — `json`'s complaint names a Python
+    parser and never the thing anybody has to fix.
+    """
+    said = sys.stdin.read(READS_MOST + 1)
+    if len(said) > READS_MOST:
+        return None
+    try:
+        it = json.loads(said)
+    except ValueError:
+        return None
+    return it if isinstance(it, dict) else None
+
+
+def a_snowflake_at(when_ms: int) -> int:
+    """The smallest id Discord could have given a message written at this millisecond.
+
+    **This is the whole of how a day becomes a window.** The search endpoint takes `min_id` and
+    `max_id` and never a date, so a window is expressed as the ids its edges would have had. The low
+    twenty-two bits of an id belong to a worker, a process and an increment, so zeroing them puts
+    this at the very start of that millisecond and every real message in it stands above.
+    """
+    return max(0, when_ms - DISCORD_EPOCH_MS) << SNOWFLAKE_SHIFT
+
+
+def when_a_snowflake_was(which: int) -> str:
+    """The moment an id carries, in the one spelling of a time that crosses this seam."""
+    at = datetime.datetime.fromtimestamp(
+        ((which >> SNOWFLAKE_SHIFT) + DISCORD_EPOCH_MS) / 1000.0, datetime.timezone.utc)
+    return at.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def a_moment(said: Any, which: int) -> str:
+    """When a message was written — what Discord declared, or the id, which carries the same fact.
+
+    Discord sends an ISO-8601 timestamp with an offset and six fractional digits; what crosses this
+    seam is whole seconds and a `Z`, so nothing on the far side has to parse two shapes to compare
+    two results. **There is no state here for *when is unknown***: the snowflake behind every
+    message holds the same millisecond, so a timestamp this could not read is a wording problem
+    rather than a missing fact.
+    """
+    found = re.match(r"(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})", str(said or ""))
+    return f"{found.group(1)}T{found.group(2)}Z" if found else when_a_snowflake_was(which)
+
+
+def a_day(said: Any, called: str, ending: bool) -> Optional[int]:
+    """One `YYYY-MM-DD` as the id standing at that day's edge, or `None` where nothing was said.
+
+    **Inclusive at both ends, which is two different edges.** `since` is the first instant of its
+    day and `until` is the last instant of its own, so a day named as `until` is searched rather
+    than excluded. The failure that prevents is a caller asking about a month, being answered about
+    a month less its final day, and nothing anywhere saying so.
+    """
+    said = str(said or "").strip()
+    if not said:
+        return None
+    try:
+        day = datetime.datetime.strptime(said, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+    except ValueError as why:
+        raise Refused(f"{called} is {said!r}, which is not a day written as YYYY-MM-DD") from why
+    if ending:
+        day += datetime.timedelta(days=1)
+    at = a_snowflake_at(int(day.timestamp() * 1000))
+    return at - 1 if ending else at
+
+
+def the_session(client: Any):
+    """The HTTP session `Client.login` built, for a program that must never open a gateway.
+
+    **REST and never a websocket.** These two invocations may run beside a `serve` holding this
+    channel's claim, and a second IDENTIFY on one token is a second session against an identify
+    budget that is not counted per process. `login` reaches Discord over HTTP alone and leaves the
+    socket unopened, so what is wanted here is exactly what it built and nothing that connects.
+
+    **Asked for by the library's own private name, and refused in a sentence rather than as an
+    `AttributeError`.** discord.py keeps it as `HTTPClient.__session`, which mangles to this.
+
+    **Going round `HTTPClient.request` is not a preference.** That call hands back a decoded body
+    and nothing else, so the `202` a server still building its index answers with cannot be told
+    from a `200`; every `X-RateLimit-*` header — which Discord's own documentation says to read
+    rather than hard-code, because the buckets are dynamic — is gone; and it sleeps a rate limit out
+    and asks again, which is the one thing a bounded, targeted search must never do.
+    """
+    session = getattr(getattr(client, "http", None), "_HTTPClient__session", None)
+    if session is None or not hasattr(session, "request"):
+        raise Refused("discord.py signed in without handing over an HTTP session to search "
+                      "through — the library keeps it as HTTPClient.__session, and the pinned "
+                      "version no longer does")
+    return session
+
+
+def signed_with(client: Any, token: str) -> Dict[str, str]:
+    """What every request carries: this bot's own credential, and the user agent Discord requires.
+
+    The library's own user agent rather than one invented here, so what Discord sees from these two
+    invocations is what it sees from the rest of this adapter.
+    """
+    agent = str(getattr(getattr(client, "http", None), "user_agent", "") or "")
+    return {"Authorization": f"Bot {token}", "User-Agent": agent or "DiscordBot (rundesk)"}
+
+
+class Answered(NamedTuple):
+    """One HTTP answer as this file reads it. **The code and the headers are half of it.**
+
+    A body alone cannot say whether a server is still indexing, cannot say what is left of a rate
+    limit, and cannot be told from a refusal Cloudflare wrote in HTML — so all three travel.
+    """
+
+    #: What Discord answered with. `202` is a state of its own here and never a kind of success.
+    status: int
+    #: Every header, so `X-RateLimit-*` is read rather than a per-route limit being assumed.
+    headers: Any
+    #: The parsed body, or `{}` where the answer was not JSON at all.
+    body: Any
+
+
+class Looking:
+    """One search, and the whole of what it may spend looking.
+
+    Everything bounded is bounded here rather than at each place that asks something: the wall
+    clock, what was actually examined, and the sentences that say where this stopped.
+    """
+
+    def __init__(self, session: Any, headers: Dict[str, str]) -> None:
+        self.session = session
+        self.headers = headers
+        self.until = time.monotonic() + LOOKED_WITHIN
+        #: What was actually examined. **`None` until something was**, because said-nothing and
+        #: said-zero are different answers and rundesk reads an absent count as *did not say*.
+        self.places: Optional[int] = None
+        self.messages: Optional[int] = None
+        #: Where this could not reach, a line at a time and in the order it happened. **A `partial`
+        #: with anything in it is its own outcome** and never a flavour of having found nothing.
+        self.stopped: List[str] = []
+        #: Whether anything more may be asked at all. A spent budget and a rate limit both end the
+        #: search where it stands, and what was already found still comes back.
+        self.done = False
+
+    def left(self) -> float:
+        """How long this may still go on for."""
+        return self.until - time.monotonic()
+
+    def say(self, why: str) -> None:
+        """One line of where this could not reach. Said once: a bound met in five places is one
+        fact about the answer and not five."""
+        if why not in self.stopped:
+            self.stopped.append(why)
+
+    def stop(self, why: str) -> None:
+        """Where this got to, and no further."""
+        self.done = True
+        self.say(why)
+
+    def counted_place(self) -> None:
+        """One more place this really got an answer about.
+
+        **Counted when an answer arrives, never on the way in.** A place is only examined once
+        something came back about it: counted before the request, a place the budget ran out in
+        front of, or one whose request was never made, was reported as looked through — and the two
+        halves of `looked` then disagreed about what the word meant, which is exactly the confusion
+        `counted_messages` is written to avoid.
+
+        **Counted for a place that then gave nothing, and that is deliberate.** A server still
+        building its index and a room this bot may not read were both reached and both answered;
+        *what* came back is named in `partial`, which is where a caller reads why one of them held
+        nothing. Counting only places that answered with messages would leave a search that reached
+        five servers and could read none of them reporting the same reach as one that reached
+        nowhere at all.
+        """
+        self.places = (self.places or 0) + 1
+
+    def counted_messages(self, how_many: int) -> None:
+        """Messages actually examined — **including none of them**, which is a measurement and not
+        a silence. A place that answered with an empty list was looked in; one that refused, or that
+        is still indexing, was not, and never reaches this."""
+        self.messages = (self.messages or 0) + how_many
+
+    async def ask(self, method: str, path: str, params: Any = None,
+                  sending: Any = None) -> Optional[Answered]:
+        """One request, or `None` and a sentence saying why there will not be another.
+
+        **Never slept on and never asked again.** A caller is owed *where this got to* rather than a
+        longer wait, and ten thousand refused requests in ten minutes earns this machine's own
+        address a Cloudflare restriction — so a `429` ends the search and becomes `partial`.
+
+        **`X-RateLimit-Remaining` is read rather than a per-route limit being hard-coded**, which is
+        what Discord's own documentation asks for. An allowance with nothing left ends the search
+        too, because the only way past one is to wait and this never waits.
+        """
+        if self.done:
+            return None
+        if self.left() <= 0:
+            self.stop("the time this search may spend ran out before it had looked everywhere")
+            return None
+        try:
+            async with self.session.request(method, f"{DISCORD_API}{path}", params=params,
+                                            json=sending, headers=self.headers) as answer:
+                status = int(getattr(answer, "status", 0) or 0)
+                headers = getattr(answer, "headers", None) or {}
+                # Read as text and parsed below rather than left to the library's own decoder: a
+                # Cloudflare refusal is HTML, and a decoder that raises on it loses the status that
+                # says which refusal it was.
+                raw = await answer.text()
+        except Exception as why:           # noqa: BLE001 — a platform boundary
+            self.stop(f"Discord could not be reached: {type(why).__name__}: {why}")
+            return None
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            body = {}
+        if status == 429:
+            self.stop("Discord rate-limited this search, so it stopped where it stood rather than "
+                      "waiting the limit out and asking again")
+            return None
+        # **An exhausted bucket is an ordinary answer and never the end of a search.** `Remaining:
+        # 0` is what Discord says on the *last* request inside a window, on the route that request
+        # was for — and its buckets are per route and per major parameter, so ending everything on
+        # it abandoned unrelated routes, could end a search on its very first call before a single
+        # place had been looked at, and put a "stopped short" sentence on searches that had in fact
+        # finished. A refusal is a `429`, which is handled above; this is a number, not a refusal.
+        return Answered(status=status, headers=headers, body=body)
+
+
+class Somewhere(NamedTuple):
+    """One place a search will look, and enough about it to describe what it finds there."""
+
+    #: The channel in scope, or `""` where the whole of a server is.
+    place: str
+    #: The server it stands in, or `""` for a private conversation.
+    server: str
+    #: What that server is called, for the sentence every result from it carries.
+    server_named: str
+    #: Whether this is paged rather than searched. The published endpoint is a server's alone.
+    direct: bool
+
+
+def _why_not(answer: Answered) -> str:
+    """What Discord said about a refusal — its own words, bounded like anybody else's."""
+    said = answer.body.get("message") if isinstance(answer.body, dict) else None
+    return f"HTTP {answer.status}: {flat(said, WHERE_AT_MOST)}" if said else f"HTTP {answer.status}"
+
+
+def _a_server(one: Somewhere) -> str:
+    """A server as a person would name it in a sentence, falling back to the id Discord keeps."""
+    return flat(one.server_named, WHERE_AT_MOST) or f"server {one.server}"
+
+
+def _what_was_asked(asked: Dict[str, Any]):
+    """The request as this file will use it, or `Refused` in words a caller can act on."""
+    # Clipped without an ellipsis, unlike every other bound here: this is looked *for* rather than
+    # shown, and a `…` appended to it would be a character somebody has to have typed.
+    words = " ".join(str(asked.get("words") or "").split())[:ASKED_ABOUT_MOST]
+    if not words:
+        raise Refused("nothing was given to look for — a search here answers a question somebody "
+                      "asked and is never a sweep of everything this bot can see")
+    place = str(asked.get("place") or "").strip()
+    if place and not place.isdigit():
+        raise Refused(f"{place!r} is not a Discord channel id — an id here is the number Discord "
+                      f"keeps, never a room's name, which can be changed")
+    user = str(asked.get("user") or "").strip()
+    if user and not user.isdigit():
+        raise Refused(f"{user!r} is not a Discord user id — an id here is the number Discord "
+                      f"copies from Developer Mode, never a username, which can be changed")
+    since = a_day(asked.get("since"), "since", ending=False)
+    until = a_day(asked.get("until"), "until", ending=True)
+    wanted = asked.get("limit")
+    if isinstance(wanted, bool) or not isinstance(wanted, int) or not 1 <= wanted <= RESULTS_MOST:
+        raise Refused(f"limit is {wanted!r} — a search answers with between one and "
+                      f"{RESULTS_MOST} results")
+    return words, place, user, since, until, wanted
+
+
+async def searching() -> int:
+    """What was said about this, on the places this bot can reach.
+
+    One JSON object in, one JSON object out, and `0` on the way out whatever the answer was.
+
+    **Four outcomes, and not one of them may be read as another.**
+
+        found                its results, and `partial` empty
+        found nothing        no results, and `partial` empty — it looked everywhere it was asked
+                             to and matched nothing
+        looked as far as     `partial` is a sentence saying where it stopped, with results or
+        it could             without them. A spent budget, a rate limit, a server still building
+                             its index, a conversation it could not read and a window it chose
+                             itself are all this
+        could not look       `ok: false`, and `why` is the whole of what anybody can act on
+
+    **The third is why this is written the way it is.** An agent that read a spent budget as an
+    absence of conversation would conclude a thing had never been discussed, and that is the one
+    wrong answer this whole capability can give.
+    """
+    missing = the_library()
+    if missing:
+        return _refused(missing)
+    asked = one_object()
+    if asked is None:
+        return _refused("search is asked with one JSON object on stdin and was given something "
+                        "else")
+    try:
+        words, place, user, since, until, wanted = _what_was_asked(asked)
+    except Refused as why:
+        return _refused(str(why))
+    token = the_token()
+    if not token:
+        return _refused(f"there is no bot token — nothing set {TOKEN_FROM}", secret=True)
+
+    client, why_not = await _signed_in(token)
+    if client is None:
+        return _refused(why_not, secret="token" in why_not)
+    try:
+        looking = Looking(the_session(client), signed_with(client, token))
+        found = await _looked_for(looking, client, words, place, user, since, until, wanted)
+    except Refused as why:
+        await _quietly(client.close)
+        return _refused(str(why))
+    await _quietly(client.close)
+
+    said: Dict[str, Any] = {"ok": True, "results": found, "partial": "\n".join(looking.stopped)}
+    # **A count that was never taken is left out rather than sent as nought.** Rundesk reads an
+    # absent one as *did not say*, and a search that reached nowhere reporting `0` places would be
+    # this program claiming to have looked.
+    looked = {}
+    if looking.places is not None:
+        looked["places"] = looking.places
+    if looking.messages is not None:
+        looked["messages"] = looking.messages
+    if looked:
+        said["looked"] = looked
+    say(said)
+    return 0
+
+
+async def _signed_in(token: str):
+    """Sign in over HTTP alone, and hand back the client — or `None` and the sentence saying why.
+
+    **`Intents.none()` and never `intents_now()`.** Nothing here identifies, so nothing here has
+    intents; asking for the gateway's mask in a program that will not open one would say this
+    connects, and the whole point of these two invocations is that they do not.
+    """
+    try:
+        client = discord.Client(intents=discord.Intents.none())
+    except Exception as why:               # noqa: BLE001 — a platform boundary
+        return None, f"could not reach Discord: {type(why).__name__}: {why}"
+    try:
+        await client.login(token)
+    except Exception as why:               # noqa: BLE001 — a platform boundary, and the diagnosis
+        await _quietly(client.close)
+        if isinstance(why, discord.LoginFailure):
+            return None, (f"Discord would not accept the token in {TOKEN_FROM} — it may have been "
+                          f"reset in the Developer Portal, or be an application id rather than a "
+                          f"bot token")
+        return None, f"could not reach Discord: {type(why).__name__}: {why}"
+    return client, ""
+
+
+async def _looked_for(looking: Looking, client: Any, words: str, place: str, user: str,
+                      since: Optional[int], until: Optional[int], wanted: int):
+    """Every place in scope, one page each, newest first — stopping the moment the budget is gone."""
+    if since is None:
+        since = a_snowflake_at(int(time.time() * 1000) - DEFAULT_DAYS * 86400 * 1000)
+        # **Said out loud, and that is deliberate**: it means a search given no start date can never
+        # come back as the plain *found nothing*, because it did not look over all of history and an
+        # agent must not read it as though it had.
+        looking.say(f"no start date was given, so this looked back {DEFAULT_DAYS} days rather than "
+                    f"over all of history")
+    found: List[Dict[str, Any]] = []
+    for one in await _the_places(looking, place):
+        if looking.done:
+            break
+        # **Counted after it answers, and never before.** `counted_messages` already holds this
+        # rule and says so in its own docstring — a place that refused, or that is still building
+        # its index, was not looked in. Counting on the way in made the two halves of `looked`
+        # disagree about what "examined" means, and reported a server that answered *try again
+        # later* as one this had looked through.
+        if one.direct:
+            found.extend(await _paged(looking, words, user, since, until, one, wanted))
+        else:
+            found.extend(await _searched(looking, words, user, since, until, one, wanted))
+    # **Never this bot's own.** An agent handed back its own answers as though somebody had said
+    # them would read its own words as corroboration of them.
+    ours = str(getattr(getattr(client, "user", None), "id", "") or "")
+    found = [it for it in found if it["who"] != ours]
+    # Newest first across every place at once, because the ids are comparable and the places were
+    # asked one after another. Cut to what was asked for: what Discord hands back is its own bound
+    # and never the caller's.
+    found.sort(key=lambda it: int(it["ref"].rsplit("/", 1)[-1] or 0), reverse=True)
+    return found[:wanted]
+
+
+async def _the_places(looking: Looking, place: str) -> List[Somewhere]:
+    """Which places this will look in — the one it was pointed at, or everywhere it can reach.
+
+    **Bounded either way, and the bounds are the policy.** Discord's Developer Policy forbids mining
+    and scraping and defines neither, so an unscoped search asks a capped number of servers and
+    pages a capped number of private conversations — and says in `partial` when there were more,
+    rather than letting a bound pass for an answer.
+    """
+    if place:
+        return await _the_one_place(looking, place)
+    where: List[Somewhere] = []
+    answer = await looking.ask("GET", "/users/@me/guilds")
+    if answer is None:
+        return where
+    if answer.status >= 400 or not isinstance(answer.body, list):
+        looking.say(f"Discord would not say which servers this bot is in ({_why_not(answer)}), so "
+                    f"none of them was looked in")
+    else:
+        for server in answer.body[:SERVERS_LOOKED_IN_MOST]:
+            if isinstance(server, dict) and server.get("id"):
+                where.append(Somewhere(place="", server=str(server["id"]),
+                                       server_named=str(server.get("name") or ""), direct=False))
+        if len(answer.body) > SERVERS_LOOKED_IN_MOST:
+            looking.say(f"this bot is in {len(answer.body)} servers and only the first "
+                        f"{SERVERS_LOOKED_IN_MOST} of them were looked in")
+    where.extend(await _the_private_places(looking))
+    return where
+
+
+async def _the_one_place(looking: Looking, place: str) -> List[Somewhere]:
+    """The single channel a search was pointed at, told apart by what Discord says it is."""
+    answer = await looking.ask("GET", f"/channels/{place}")
+    if answer is None:
+        return []
+    if answer.status >= 400 or not isinstance(answer.body, dict):
+        looking.say(f"the place {place} could not be read ({_why_not(answer)}), so nothing there "
+                    f"was looked at — which is not the same as its holding nothing")
+        return []
+    server = str(answer.body.get("guild_id") or "")
+    if answer.body.get("type") in (A_DM, A_GROUP_DM) or not server:
+        return [Somewhere(place=place, server="", server_named="", direct=True)]
+    return [Somewhere(place=place, server=server,
+                      server_named=await _server_named(looking, server), direct=False)]
+
+
+async def _server_named(looking: Looking, server: str) -> str:
+    """What a server is called. `""` where Discord would not say, which reads as *a room* and never
+    as a server called nothing."""
+    answer = await looking.ask("GET", f"/guilds/{server}")
+    if answer is None or answer.status >= 400 or not isinstance(answer.body, dict):
+        return ""
+    return str(answer.body.get("name") or "")
+
+
+async def _the_private_places(looking: Looking) -> List[Somewhere]:
+    """The private conversations an unscoped search pages, which are the allowed people's own.
+
+    **A bot cannot be asked what private conversations it has**, so these are resolved from the one
+    list that says who may reach this agent at all — which is also what keeps this targeted: a
+    search never opens a conversation with somebody the channel does not allow.
+    """
+    allow = who_may_reach()
+    if not allow:
+        looking.say("nothing said who may reach this agent, so no private conversation was looked "
+                    "in — which is not the same as their holding nothing")
+        return []
+    where: List[Somewhere] = []
+    for one in allow[:DMS_PAGED_MOST]:
+        answer = await looking.ask("POST", "/users/@me/channels", sending={"recipient_id": one})
+        if answer is None:
+            break
+        if answer.status >= 400 or not isinstance(answer.body, dict) or not answer.body.get("id"):
+            looking.say(f"the private conversation with {one} could not be opened to be read "
+                        f"({_why_not(answer)}), so nothing in it was searched — which is not the "
+                        f"same as its holding nothing")
+            continue
+        where.append(Somewhere(place=str(answer.body["id"]), server="", server_named="",
+                               direct=True))
+    if len(allow) > DMS_PAGED_MOST:
+        looking.say(f"{len(allow)} people may reach this agent and only the first "
+                    f"{DMS_PAGED_MOST} private conversations were read")
+    return where
+
+
+async def _searched(looking: Looking, words: str, user: str, since: Optional[int],
+                    until: Optional[int], one: Somewhere, wanted: int):
+    """One server, one page, through Discord's own published message search.
+
+    **It needs no new permission, no new intent and no reinvite.** The endpoint asks for
+    `READ_MESSAGE_HISTORY`, which the invite has asked for since this file had a `PERMITS` table,
+    and is bounded by whether `MESSAGE_CONTENT` is on — which `--check` already refuses without.
+
+    **One page, and never an `offset`.** Discord says outright that a client should not rely on the
+    length of the `messages` array to paginate and that `total_results` may be inaccurate while
+    messages are being written, so neither is read as a cursor here. A search that walked past its
+    first page would be a walk of somebody's server rather than an answer to a question.
+
+    **`202` is its own state.** A server whose index Discord has not built yet answers with it and
+    with `code` 110000, and it is neither an error nor an empty result: it is named in `partial`,
+    it is not slept on, and it is not asked again inside this invocation.
+    """
+    params = [("content", words),
+              ("limit", str(min(FOUND_AT_A_TIME, wanted))),
+              ("sort_by", "timestamp"),
+              ("sort_order", "desc")]
+    # Both arrays take many and this sends at most one of each, because a search here is pointed at
+    # one place and one person or at nobody in particular. The published maxima stand as the bound
+    # on what could ever be added rather than as a thing this file is near.
+    if one.place:
+        params.append(("channel_id", one.place[:PLACES_ASKED_MOST]))
+    if user:
+        params.append(("author_id", user[:PEOPLE_ASKED_MOST]))
+    if since is not None:
+        params.append(("min_id", str(since)))
+    if until is not None:
+        params.append(("max_id", str(until)))
+    answer = await looking.ask("GET", f"/guilds/{one.server}/messages/search", params=params)
+    if answer is None:
+        return []
+    looking.counted_place()
+    body = answer.body if isinstance(answer.body, dict) else {}
+    if answer.status == 202 or body.get("code") == INDEX_NOT_READY:
+        looking.say(f"{_a_server(one)} is still building its message index, so nothing there was "
+                    f"searched — which is not the same as its holding nothing")
+        return []
+    if answer.status >= 400:
+        looking.say(f"{_a_server(one)} could not be searched ({_why_not(answer)}), so nothing "
+                    f"there was read — which is not the same as its holding nothing")
+        return []
+    # **An array of arrays**, which is what is left of a surrounding context Discord no longer
+    # returns. The first of each inner array is the message that matched; an empty inner array is a
+    # match whose message has gone since, and is passed over rather than read as a message with no
+    # id at all.
+    messages = [inner[0] for inner in (body.get("messages") or [])
+                if isinstance(inner, list) and inner and isinstance(inner[0], dict)]
+    # Examined is examined, and counted before anything is dropped for being unusable.
+    looking.counted_messages(len(messages))
+    # **A message with no id Discord would take back is not a result.** Its `ref` would name nothing
+    # `fetch` could resolve, and a row an agent cannot follow is worse than one row fewer.
+    # **And no place `fetch` could resolve is the same defect wearing the other face.** A hit
+    # without a `channel_id`, on a search not scoped to one, would carry a `ref` naming nothing and
+    # a link pointing at no channel — a row an agent can see and cannot follow.
+    messages = [it for it in messages
+                if str(it.get("id") or "").isdigit()
+                and (str(it.get("channel_id") or "").isdigit() or str(one.place or "").isdigit())]
+    if len(messages) >= min(FOUND_AT_A_TIME, wanted):
+        # **A full page is a reason to say it did not finish.** This deliberately never pages a
+        # guild search, so a page filled to the ceiling almost certainly left more behind — and a
+        # caller reading `partial: ""` is told the search looked everywhere it was asked to.
+        looking.say(f"{_a_server(one)} answered as many results as one search of it may return, so "
+                    f"there is more there than this looked at")
+    named = await _places_named(looking, one.server, body.get("threads")) if messages else {}
+    return [_a_result(it, one, named) for it in messages]
+
+
+async def _places_named(looking: Looking, server: str, threads: Any) -> Dict[str, Any]:
+    """What each room and thread in a server is called — asked once, and only where it is needed.
+
+    Asked after a server has produced something rather than before, so a server that matched nothing
+    costs one request and not two. The threads the search answer already carried are folded in for
+    nothing: a thread does not stand in a server's channel list, so without them every match inside
+    one would be described as a room.
+    """
+    named: Dict[str, Any] = {}
+    for one in (threads or []):
+        if isinstance(one, dict) and one.get("id"):
+            named[str(one["id"])] = (str(one.get("name") or ""), True)
+    answer = await looking.ask("GET", f"/guilds/{server}/channels")
+    if answer is None or answer.status >= 400 or not isinstance(answer.body, list):
+        # A name nobody would give up is not a failure worth a line of its own: `a_place_called`
+        # falls back to *a room in Acme*, which is true and is what a reader needs least of.
+        return named
+    for one in answer.body:
+        if isinstance(one, dict) and one.get("id"):
+            named.setdefault(str(one["id"]),
+                             (str(one.get("name") or ""), one.get("type") in THREAD_TYPES))
+    return named
+
+
+def _a_result(it: Dict[str, Any], one: Somewhere, named: Dict[str, Any]) -> Dict[str, Any]:
+    """One found message, as it crosses the seam.
+
+    **Every part of this is a stranger's text on its way into somebody's prompt** — a room's name, a
+    display name, and the message itself — so each is flattened and clipped by the helpers that do
+    it everywhere else in this file. A newline in any of them is somebody ending our line and
+    beginning one of their own.
+
+    **`ref` is short and opaque, and is the only thing `fetch` is ever given.** Rundesk keeps it and
+    hands it straight back, so it names one message and is never parsed anywhere else.
+
+    **No attachment link travels.** Discord signs one with an expiry and publishes nothing that
+    refreshes it, so a link put here would be stale by the time anybody used it — which is the whole
+    reason `fetch` asks for the message again.
+    """
+    author = it.get("author") if isinstance(it.get("author"), dict) else {}
+    member = it.get("member") if isinstance(it.get("member"), dict) else {}
+    place = str(it.get("channel_id") or one.place or "")
+    which = str(it.get("id") or "")
+    where_named, in_a_thread = named.get(place, ("", False))
+    brought = []
+    for a in (it.get("attachments") or []):
+        if not isinstance(a, dict):
+            continue
+        size = a.get("size")
+        one_file = {"name": flat(a.get("filename") or "", SAID_MOST)}
+        # What the platform declared, and left out entirely where it declared nothing — the same
+        # rule `a_landing` reports a landed file under, and for the same reason.
+        if isinstance(size, int) and not isinstance(size, bool):
+            one_file["bytes"] = size
+        brought.append(one_file)
+    return {"who": str(author.get("id") or ""),
+            "display": flat(member.get("nick") or author.get("global_name")
+                            or author.get("username") or ""),
+            "where": a_place_called(direct=one.direct, thread=bool(in_a_thread),
+                                    named=where_named, server=one.server_named),
+            "external_place": place,
+            "when": a_moment(it.get("timestamp"), int(which) if which.isdigit() else 0),
+            "text": flat(it.get("content") or "", FOUND_SAID_MOST),
+            "link": A_MESSAGE_AT.format(server=one.server or "@me", place=place, message=which),
+            "ref": f"{place}/{which}",
+            "attachments": brought}
+
+
+async def _paged(looking: Looking, words: str, user: str, since: Optional[int],
+                 until: Optional[int], one: Somewhere, wanted: int):
+    """One private conversation, walked back a page at a time and matched in this file.
+
+    **The published search endpoint is a server's.** Its permission language is conditioned on
+    operating in a guild channel and it says nothing whatever about a private one, so nothing here
+    assumes it works there. A private conversation is paged through `GET /channels/{id}/messages`
+    instead and matched here, plainly: `words` is looked for as text and never as a query language,
+    because two kinds of place answering one question differently is worse than one of them
+    answering it simply.
+
+    **Bounded to `PAGES_MOST` pages**, so this is a look and never a walk of somebody's history. A
+    conversation holding more says so in `partial` rather than passing for one that was exhausted.
+    """
+    looking_for = words.lower()
+    found: List[Dict[str, Any]] = []
+    # `before` and `after` cannot both be sent, so the window's far edge is walked and its near edge
+    # is the point this stops walking. One more than `max_id` because `before` is exclusive.
+    before = str(until + 1) if until is not None else ""
+    for _page in range(PAGES_MOST):
+        params = [("limit", str(A_DM_PAGE))]
+        if before:
+            params.append(("before", before))
+        answer = await looking.ask("GET", f"/channels/{one.place}/messages", params=params)
+        if answer is None:
+            return found
+        if not _page:
+            # Once per place rather than once per page: `looked` counts places, and a conversation
+            # read four pages deep is one place looked in and not four.
+            looking.counted_place()
+        if answer.status >= 400 or not isinstance(answer.body, list):
+            looking.say(f"the private conversation {one.place} could not be read "
+                        f"({_why_not(answer)}), so nothing in it was searched — which is not the "
+                        f"same as its holding nothing")
+            return found
+        looking.counted_messages(len(answer.body))
+        oldest = ""
+        for it in answer.body:
+            if not isinstance(it, dict):
+                continue
+            which = str(it.get("id") or "")
+            if not which.isdigit():
+                continue
+            oldest = which
+            if since is not None and int(which) < since:
+                return found              # past the near edge, and everything below is older still
+            author = it.get("author") if isinstance(it.get("author"), dict) else {}
+            if user and str(author.get("id") or "") != user:
+                continue
+            if looking_for not in str(it.get("content") or "").lower():
+                continue
+            found.append(_a_result(it, one, {}))
+            if len(found) >= wanted:
+                return found
+        if len(answer.body) < A_DM_PAGE or not oldest:
+            return found                  # Discord had no more to give, so this is the whole of it
+        before = oldest
+    looking.say(f"a private conversation held more than this looked at, so it was read back "
+                f"{PAGES_MOST} pages and no further")
+    return found
+
+
+def _already_stale(url: str) -> str:
+    """Why a signed link is not worth spending a request on, or `""`.
+
+    **The expiry is read and never assumed.** Discord signs `ex` into the query string as seconds
+    since the Unix epoch, in hexadecimal, and publishes no promised lifetime for one — so nothing
+    here hard-codes a validity window. A link carrying no `ex` at all is not judged: a host that
+    signs nothing is not a host whose signature has run out.
+    """
+    if not url:
+        return "Discord gave no link to fetch it from"
+    found = re.search(r"[?&]" + EXPIRES_AT + r"=([0-9a-fA-F]+)", url)
+    if found is None:
+        return ""
+    try:
+        expires = int(found.group(1), 16)
+    except ValueError:
+        return ""
+    if expires > time.time():
+        return ""
+    return ("the link Discord signed for it had already run out by the time the message was "
+            "fetched again, which is the one thing fetching it again is meant to prevent")
+
+
+def _downloading(looking: Looking, url: str):
+    """How one file's bytes arrive, for `a_landing` to land them.
+
+    **The credential does not go with it.** A CDN link carries its own signature in its query
+    string, and sending a bot token to a host that never needed one is a credential given away for
+    nothing.
+
+    **Read until the stream ends, and bounded as it goes.** `StreamReader.read(n)` is not
+    `readexactly`: aiohttp documents that it returns "as soon as it is available" and "will return
+    less than *n* bytes if there are less than *n* bytes in the buffer" — so one call for the whole
+    ceiling returns whatever the first chunks happened to hold. Asking once landed a truncated file
+    whenever a body arrived in more than one piece: where Discord had declared a size, `a_landing`
+    then reported a perfectly good attachment as "not the whole of what was sent", and where it had
+    declared none, half a file landed and was handed to the agent as whole. The running total keeps
+    the other half of the bargain — a host answering with more than one message may bring in cannot
+    spend this machine's memory before the landing gets a chance to refuse it.
+    """
+    async def bringing(at: Path) -> None:
+        held: List[bytes] = []
+        got = 0
+        async with looking.session.request("GET", url, headers={}) as answer:
+            status = int(getattr(answer, "status", 0) or 0)
+            if status >= 400:
+                raise Refused(f"Discord's file host answered HTTP {status}")
+            while True:
+                block = await answer.content.read(A_DOWNLOAD_BLOCK)
+                if not block:
+                    break
+                got += len(block)
+                if got > BROUGHT_BYTES:
+                    raise Refused(f"it is past the {BROUGHT_BYTES} bytes one message may bring in")
+                held.append(block)
+        at.write_bytes(b"".join(held))
+    return bringing
+
+
+async def fetching() -> int:
+    """Bring one message's files onto this machine, by the `ref` a search handed out.
+
+    **The message is asked for again before a byte is downloaded, and that is the whole design.**
+    Discord signs an attachment's link with an expiry — `ex`, `is` and `hm` in its query string —
+    and publishes no endpoint that refreshes one. The documented way to get a fresh link is to ask
+    for the message again, so a link carried over from a search result is never used: it was already
+    going stale when it was printed.
+
+    A file that will not come is a line in `partial` and never a refusal of the whole fetch — the
+    rest of what somebody attached is still worth having.
+
+    **Rundesk removes what is staged here either way**, taken or refused, so nothing is cleaned up
+    afterwards. And nothing is ever reported at a path this did not write.
+    """
+    missing = the_library()
+    if missing:
+        return _refused(missing)
+    asked = one_object()
+    if asked is None:
+        return _refused("fetch is asked with one JSON object on stdin and was given something else")
+    ref = str(asked.get("ref") or "").strip()
+    halves = ref.split("/")
+    if len(ref) > REF_MOST or len(halves) != 2 or not all(one.isdigit() for one in halves):
+        return _refused(f"{ref!r} is not a ref a search here handed out — one names a channel and "
+                        f"a message, as <channel id>/<message id>, and both halves are the numbers "
+                        f"Discord keeps its ids as")
+    place, which = halves
+    home = (os.environ.get("RUNDESK_CHANNEL_HOME") or "").strip()
+    if not home or not Path(home).is_absolute():
+        # The same rule the Slack adapter holds `fetch` to: a relative directory is one whose
+        # meaning depends on where this program happened to start, and a file put there is one
+        # rundesk will not take.
+        return _refused("nothing said where this channel may put what it fetches — "
+                        "RUNDESK_CHANNEL_HOME has to name this channel's own directory by an "
+                        "absolute path, so there is nowhere to bring a file to")
+    token = the_token()
+    if not token:
+        return _refused(f"there is no bot token — nothing set {TOKEN_FROM}", secret=True)
+
+    client, why_not = await _signed_in(token)
+    if client is None:
+        return _refused(why_not, secret="token" in why_not)
+    try:
+        looking = Looking(the_session(client), signed_with(client, token))
+    except Refused as why:
+        await _quietly(client.close)
+        return _refused(str(why))
+    answer = await looking.ask("GET", f"/channels/{place}/messages/{which}")
+    if answer is None or answer.status >= 400 or not isinstance(answer.body, dict):
+        await _quietly(client.close)
+        return _refused("\n".join(looking.stopped) if answer is None else
+                        f"the message {ref} could not be read again ({_why_not(answer)}) — a fetch "
+                        f"always asks for it afresh, because Discord signs an attachment link with "
+                        f"an expiry and publishes nothing that refreshes one")
+    brought, stopped = await _brought_again(looking, home, which, answer.body)
+    await _quietly(client.close)
+    say({"ok": True, "message": which, "attachments": brought,
+         "partial": "\n".join(looking.stopped + stopped)})
+    return 0
+
+
+async def _brought_again(looking: Looking, home: str, which: str, message: Dict[str, Any]):
+    """Every file on this message, landed under the convention a message's own files already use.
+
+    `fetched_into` and `a_landing` are the same two the arriving path uses, so where a file goes,
+    which number is reported as its size, and what happens to one that will not come are one set of
+    rules rather than two that drifted.
+    """
+    into = fetched_into(home, which)
+    attachments = [one for one in (message.get("attachments") or []) if isinstance(one, dict)]
+    brought: List[Dict[str, Any]] = []
+    stopped: List[str] = []
+    for nth, one in enumerate(attachments[:BROUGHT_MOST]):
+        name = flat(one.get("filename") or "", SAID_MOST) or str(nth)
+        size = one.get("size")
+        declared = int(size) if isinstance(size, int) and not isinstance(size, bool) else 0
+        gone = _already_stale(str(one.get("url") or ""))
+        if gone:
+            stopped.append(f"could not bring in {name}: {gone}")
+            continue
+        try:
+            brought.append(await a_landing(into, nth, name, declared,
+                                           _downloading(looking, str(one["url"]))))
+        except Refused as why:
+            stopped.append(str(why))
+    if len(attachments) > BROUGHT_MOST:
+        stopped.append(f"{len(attachments)} files are on this message and only the first "
+                       f"{BROUGHT_MOST} were brought in")
+    return brought, stopped
+
+
 def main(argv: List[str]) -> int:
-    """The three invocations, and nothing that quietly resembles one of them.
+    """The five invocations, and nothing that quietly resembles one of them.
 
     Matched exactly rather than searched for: an adapter that took a mistyped `--check` for a
     request for its capabilities would answer a question nobody asked and look as though it worked.
+    A mistyped `--search` is not `search`, and is told so on stderr like anything else.
     """
     if argv == ["--capabilities"]:
         return capabilities()
@@ -2257,8 +3439,12 @@ def main(argv: List[str]) -> int:
         return asyncio.run(check(list(argv[1:])))
     if argv == ["serve"]:
         return asyncio.run(serving())
+    if argv == ["search"]:
+        return asyncio.run(searching())
+    if argv == ["fetch"]:
+        return asyncio.run(fetching())
     cannot_say(f"discord: {' '.join(argv) or 'nothing'} is not one of --capabilities, "
-               f"--check [options] or serve")
+               f"--check [options], serve, search or fetch")
     return 2
 
 
