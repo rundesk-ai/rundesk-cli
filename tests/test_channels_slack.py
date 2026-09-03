@@ -4549,7 +4549,7 @@ class WhenASearchCannotSeeEverything(Searching):
         self.assertEqual(answered["partial"], "")
         self.assertIn("im", self.kinds())
 
-    def test_none_of_the_four_is_ever_a_check_refusal(self) -> None:
+    def test_none_of_the_three_is_ever_a_check_refusal(self) -> None:
         """The owner's decision, held down mechanically. A scope in `WANTED_SCOPES` is one `--check`
         refuses over, so adding one of these would make every already-connected Slack channel
         unreachable on update until its owner reinstalled the app."""

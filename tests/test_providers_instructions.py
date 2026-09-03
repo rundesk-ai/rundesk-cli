@@ -288,6 +288,15 @@ class TheAgreedSections(support.Isolated):
                 self.assertIn("answer only from", messages)
                 self.assertIn(floor, messages)
 
+    def test_an_attached_file_is_opened_where_it_stands_and_never_asked_for(self):
+        # R-INS-38. A file that arrived is a path under the message, on both platforms; an agent
+        # that asked the person to send it again had it the whole time.
+        for situation in (instructions.USER_TO_AGENT, instructions.SCHEDULE_TO_AGENT):
+            with self.subTest(situation=situation[:32]):
+                messages = self.part(self.built(situation).text, "## Messages and Attachments")
+                self.assertIn("attached to this message, on this machine:", messages)
+                self.assertIn("never ask for a file you were sent", messages)
+
     def test_a_person_is_never_asked_for_what_a_lookup_should_have_found(self):
         messages = self.part(self.built().text, "## Messages and Attachments")
         self.assertIn("never ask for what a lookup should have found", messages)

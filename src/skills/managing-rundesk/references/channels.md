@@ -80,6 +80,19 @@ real setup: the bot answered a DM immediately and the owner asked why it had nev
   may name its own destination with `schedules add|update --channel <channel> --to <id>`, which does
   not move this role; nothing else chooses a caller's DM separately.
 
+## Files on a channel
+
+- A file somebody attaches to a message lands with it on both adapters, under
+  `data/agents/<agent>/channels/<adapter>/in/<date>/<message>/`, and the message the agent reads
+  lists each path after `Attached to this message, on this machine:`. Open it there; do not ask
+  for it again. Ten files of 32 MiB per message; a file that would not come is named in
+  `gateways logs`.
+- To send a file, put an absolute Markdown link in the final answer — `[report](/absolute/report.pdf)`.
+  Slack posts the words first and names any file that could not go; Discord sends both together.
+- `search <agent> --fetch <ref> --channel <adapter>` brings in the files of a message a search found.
+  Slack needs `files:read` for any file to come in; an app installed before that scope was asked for
+  is reinstalled once, and `channels doctor` says so.
+
 ## Access and recovery
 
 - `--allow` and `--deny` modify the access list; denying its last ID is refused. IDs are adapter
