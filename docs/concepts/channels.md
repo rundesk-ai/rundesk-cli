@@ -33,6 +33,15 @@ time.
 anything is written, because a record of a message is a thing an agent could later be asked to read.
 An empty allow list authorises nobody, never everybody.
 
+**A conversation is an identity, and where an answer is read is not part of it.** The adapter decides
+which of its places are one exchange, and Rundesk keeps the history and the provider session under
+that one string — so a platform detail that only decides *where a reply appears* must stay out of it.
+The shipped Slack adapter learned this the hard way: keying a direct conversation by the Slack thread
+gave every threaded follow-up a session and a history of its own, and a turn already running in the
+same direct message did not know the new message was for it. It keys a direct conversation by the
+channel alone now, and derives the reply target from the `reply_to` Rundesk already carries — which
+also means a later message steering a running turn cannot move where that turn's answer lands.
+
 ## Who may reach an agent, and from where
 
 **One list per channel, and each entry names one of two things.** A bare entry is a sender id and
