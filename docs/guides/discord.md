@@ -146,6 +146,78 @@ rundesk channels configure ava discord --notify
 rundesk gateways restart ava
 ```
 
+## What it can search
+
+`rundesk search` lets the agent look through the servers this bot is in, mid-turn, and ask again once
+it has read the answer. It is the same verb on every platform — see
+[the command](../api/conversations.md#search) — and this section is only what *Discord* does behind
+it.
+
+```console
+$ rundesk search ava "the parser rewrite" --since 2026-08-01
+3 found on discord, holding 'the parser rewrite', since 2026-08-01  (6 places looked through)
+WHEN                  WHO   WHERE                     FILES  REF                       SAID
+2026-08-30T14:02:11Z  Dana  the ops room in Acme      1      1180…/1234…               the parser rewrite landed
+```
+
+**Nothing new has to be set up for this.** Discord publishes a message-search endpoint for bots, and
+it needs `READ_MESSAGE_HISTORY` and the Message Content Intent — both of which this bot already has,
+because [step 3](#3-enable-message-content-intent) and the invite in
+[step 4](#4-configure-the-installation) already ask for them. There is no new scope, no new
+permission, and no reason to send the invite again.
+
+### Where it looks, and where it cannot
+
+| | |
+|---|---|
+| channels in a server, where the bot may read history | **yes**, through Discord's own search |
+| threads in those channels | **yes** |
+| direct messages with the bot | **yes**, but read page by page rather than searched |
+| group direct messages the bot is in | **yes**, the same way |
+| channels the bot cannot view | **no** |
+| your own direct messages with other people | **no** |
+
+**Said plainly:** this searches what the *bot* can see, not what *you* can see. Discord has no
+supported way for an application to see anything else — a user token is a self-bot, which its
+developer terms do not permit — so this limit is not one a setting can lift.
+
+**Servers are searched and direct messages are paged, and the two behave differently.** Discord's
+search endpoint covers a server; there is no equivalent for a direct conversation, so those are read
+back a page at a time and matched here. A direct conversation therefore costs more and is bounded
+more tightly, and the agent is told when one could not be read rather than being left to read that
+as an empty conversation.
+
+### What it says when it could not look everywhere
+
+**A search that stopped early always says so**, and never prints as an empty result.
+
+| You will see it say | Because |
+|---|---|
+| it used a default window of the last 30 days | you gave no `--since`, and it will not read all of history by default |
+| a server is still building its index | Discord answers a search on a newly-indexed server with a "try again later" of its own. **This is not an empty server** — ask again shortly |
+| it stopped after so many servers, or so many pages | the search reached its own ceiling. Narrow it with `--place` or a shorter window |
+| a direct conversation could not be read | it says which, rather than reporting nothing was said there |
+| Discord rate-limited it | it stops rather than waiting one out. Waiting would spend a turn, and hammering through a rate limit is how a machine's own address earns a temporary ban |
+
+**Every search is targeted and bounded.** Nothing runs in the background, nothing walks history
+without a limit, and nothing is kept — which is what keeps this inside Discord's developer policy on
+collecting message data.
+
+### Bringing a file in
+
+A result's `REF` is what `--fetch` takes:
+
+```console
+$ rundesk search ava --fetch '1180…/1234…' --channel discord
+1 from 1180…/1234…, in ava's discord record
+```
+
+**The message is fetched again before anything is downloaded.** Discord signs attachment links with
+an expiry and publishes no endpoint that refreshes one, so a link carried over from a search result
+is already going stale — the fresh link comes from asking for the message again. Up to ten files of
+32 MiB each, and a file whose size does not match what Discord declared is refused while the rest
+still come.
+
 ## Troubleshooting
 
 Run the channel diagnosis first:
@@ -164,6 +236,17 @@ server channel, mention the bot in the first message so it can open the conversa
 
 Authorize the bot with the `applications.commands` scope. If the bot was already installed, open
 the invite printed by `channels add` and authorize it again.
+
+### A search finds nothing that is plainly there
+
+The bot was not invited to that channel, or cannot read its history. A search sees what the bot sees,
+never what you see. `rundesk search ava <words> --place <channel id>` on a channel it can read is the
+quickest way to tell the two apart.
+
+### A search says a server is still indexing
+
+Discord builds a search index per server and answers with a "try again later" until it is ready. That
+is not an empty server and not a failure — ask again shortly.
 
 ### The bot cannot answer in one channel
 

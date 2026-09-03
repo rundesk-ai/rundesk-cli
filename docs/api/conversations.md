@@ -9,6 +9,8 @@ Ask an agent something, here, in this terminal, and watch it work.
 | `ask <agent> <prompt> [--fresh] [--read-only] [--model <model>] [--thinking] [--quiet]` | ask, and watch it work |
 | `ask <agent> <prompt> [--provider <provider>] [--alias <alias>]` | for a delegation only — which brain answers it |
 | `messages <agent> [--search <words>] [--channel <channel>] [--source <kind>] [--conversation <id>] [--since <YYYY-MM-DD>] [--limit <n>] [--full]` | what was said, and what was said back |
+| `search <agent> <words> [--channel <channel>] [--place <id>] [--from <id>] [--since <YYYY-MM-DD>] [--until <YYYY-MM-DD>] [--limit <n>] [--full]` | what was said on the platforms it is connected to |
+| `search <agent> --fetch <ref> --channel <channel>` | bring one result's attachments in |
 | `turns <agent> [<turn>] [--limit <n>] [--conversation <id>]` | what each turn cost, and what one did |
 | `asked [--agent <agent>]` | what this agent has handed to other agents |
 | `asked show <id>` | one delegation in full |
@@ -17,7 +19,7 @@ Ask an agent something, here, in this terminal, and watch it work.
 | `asked resume <id> <words>` | carry a finished one on, in the session it had |
 
 `ask` continues the agent's terminal conversation; `--fresh` starts a new one on the brain.
-`--limit` defaults to 20 on both `messages` and `turns`.
+`--limit` defaults to 20 on `messages`, `search` and `turns`.
 
 **`ask` ignores ASCII letter case when matching an agent's name.** `rundesk ask Beacon` reaches the
 agent standing under `beacon`, and a handoff typed from inside a turn is admitted, scope-checked and
@@ -219,6 +221,110 @@ nothing ava said or was told holding 'invoice', on nowhere
 **Where an install has no full-text index it says so.** SQLite is not always built with one; the
 search then falls back to matching plain text, which finds different things — no stemming, no phrase,
 no ranking — and somebody comparing two answers has to know which they got.
+
+## search
+
+What was said on the platforms an agent is connected to, by anybody, whether the agent was there or
+not.
+
+`rundesk messages` and this are the same question asked of two different things, which is why they
+stand next to each other. That one reads the agent's own record — what it was told and what it said
+back. This one asks the platform.
+
+**The agent is the only caller this is shaped for.** A person searches Slack from Slack; what nothing
+else could do is let an agent in the middle of a turn ask its own channels a question, read the
+answer, narrow it and ask again. It is a verb the agent runs, on demand, as often as it needs to —
+including in a turn a schedule started, one somebody typed at a terminal, and one agent's delegation
+to another.
+
+```console
+$ rundesk search ava invoice --since 2026-08-01
+3 found on slack, holding 'invoice', since 2026-08-01  (7 places, 1400 messages looked through)
+WHEN                  WHO   WHERE            FILES  REF                      SAID
+2026-08-30T14:02:11Z  Dana  the ops room     1      C0OPS/1725026531.000200  can we re-send the invoice?
+2026-08-29T09:40:02Z  Sam   a direct message         D0SAM/1724924402.000100  invoice bug is in the parser
+2026-08-28T16:20:44Z  Dana  the ops room            C0OPS/1724861244.000300  [invoice] went out
+```
+
+**One verb, however many platforms.** Every channel answers the same request and returns the same
+row, and an adapter that cannot search says so and is skipped. So an agent learns this once, an agent
+with no channels has no search at all, and adding a platform adds no vocabulary. What each platform
+can actually do is that platform's — see [the Slack guide](../guides/slack.md#what-it-can-search) and
+[the Discord guide](../guides/discord.md#what-it-can-search).
+
+### What it can see is what the bot can see
+
+Nothing here widens an agent's reach. A channel is searched with exactly what `channels test` is
+handed — the bot's own credential, out of the agent's own name — so an agent finds what the bot it is
+hosted as was invited to, and nothing else. There is no scope on this command and none available to
+it.
+
+**Said plainly, because it is the first thing somebody expects and does not get:** this searches what
+the *bot* can see, not what *you* can see. Shared rooms the bot is in, yes. Your own private messages
+with other people, and rooms the bot was never invited to, no.
+
+### Four answers, and none of them means another
+
+| What happened | What it says |
+|---|---|
+| it found some | `3 found on slack` and the rows |
+| it looked everywhere it was asked to and matched nothing | `nothing found on slack` |
+| **it stopped before it had finished** | `nothing found yet` or `2 found so far`, and a `NOT THE WHOLE ANSWER` line saying where it stopped |
+| it could not look | the reason on stderr, and a non-zero exit |
+
+**The third is the one that matters.** A search that ran out of budget and a search that found
+nothing are the same empty table, and an agent that reads the first as the second concludes a thing
+was never discussed. So a search that did not finish says so on its own line, above the rows, whether
+there are rows or not — it is never an empty listing.
+
+```console
+$ rundesk search ava "the parser rewrite"
+nothing found yet on slack, holding 'the parser rewrite'  (2 places looked through)
+  NOT THE WHOLE ANSWER — stopped after 2 of 40 places; the rest were not looked at
+```
+
+### Narrowing, and where results go
+
+Five ways to narrow and they compose: `--channel` for which platform, `--place` for one room or
+private conversation, `--from` for one person, and `--since`/`--until` for a window. With none of
+them it is every place every channel this agent has can reach. `--limit` is how many *each* channel
+answers with; `--full` prints whole messages with their links instead of one line each.
+
+**Results are handed back and never written down.** They are not this agent's record — they were said
+to somebody else, somewhere else — so they do not appear in `rundesk messages`, do not enter a
+conversation, and are not carried into a backup. An agent that searches three times while narrowing a
+question leaves nothing behind.
+
+**The exit code says whether anything was looked through, not whether anything was found.** A search
+that ran everywhere and matched nothing did what it was asked and exits `0`; one where no channel
+could be searched exits non-zero, because a script reading `0` for that would carry on as though the
+words were not there to be found.
+
+### Bringing a file in
+
+`--fetch` takes the `ref` a result printed and brings that message's attachments onto this machine.
+
+```console
+$ rundesk search ava --fetch C0OPS/1725026531.000200 --channel slack
+2 from C0OPS/1725026531.000200, in ava's slack record
+/Users/you/.rundesk/data/agents/ava/channels/slack/in/2026-09-03/1725026531.000200/plan.pdf
+/Users/you/.rundesk/data/agents/ava/channels/slack/in/2026-09-03/1725026531.000200/notes.txt
+```
+
+**A second act rather than a field on a result, and the platform is why.** Discord signs its
+attachment links with an expiry and publishes nothing that refreshes one, so a link carried back in a
+search result is already going stale — the message has to be reached again and only then downloaded.
+Folding it in would also mean fetching every attachment of every result to answer a question about
+words.
+
+**`--fetch` names one result and narrows nothing.** Words, `--place`, `--from`, `--since` and
+`--until` all narrow a *search*, and are refused here rather than ignored — accepting them silently
+would answer a different question from the one that was typed.
+
+**A fetched file lands exactly where one that arrived would have**: under the channel's dated `in/`
+directory, under the message it came from, owned by Rundesk and swept with the rest of that day after
+sixty days. There is no second place for it. Up to ten files of 32 MiB each, and a file whose bytes do
+not match what the platform declared is refused by name while the others still come.
 
 ## turns
 

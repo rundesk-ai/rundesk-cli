@@ -572,8 +572,8 @@ class TheCommandSurfaceIsPublished(unittest.TestCase):
         # a page that is wrong twice — in what it lists, and in what it claims to have listed.
         page = (support.CHECKOUT / "docs" / "api" / "README.md").read_text(encoding="utf-8")
         offered = len(cli.offered(cli.build_parser()))
-        self.assertEqual(21, offered, "the count below was written for twenty-one groups")
-        self.assertIn("Twenty-one commands", page)
+        self.assertEqual(22, offered, "the count below was written for twenty-two groups")
+        self.assertIn("Twenty-two commands", page)
 
 
 class AgentGuideContract(unittest.TestCase):

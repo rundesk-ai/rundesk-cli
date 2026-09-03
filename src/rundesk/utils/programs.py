@@ -34,6 +34,7 @@ import contextlib
 import os
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import IO, Any, Dict, NamedTuple, Optional, Sequence, Union
@@ -41,6 +42,34 @@ from typing import IO, Any, Dict, NamedTuple, Optional, Sequence, Union
 #: What a program that never started, or would not finish, has instead of an exit code.
 DID_NOT_START = "did not start"
 WOULD_NOT_FINISH = "would not finish"
+
+#: How much may be handed to a program on its standard input by `run`. Well under the 64 KiB a pipe
+#: holds on this platform, and that headroom is the whole reason for the number: `run` writes the
+#: whole of it before it waits, so a program that has not read a byte yet still takes it and this
+#: side never blocks. Anything larger needs a reader on the other end and is a different mechanism.
+TOLD_AT_MOST = 16 * 1024
+
+#: What a caller that tried to hand over more than that is told, in place of an exit code. Named
+#: rather than written inline, because it is the one `trouble` that is this side's mistake and not
+#: the program's — and reading it as "the adapter failed" would send somebody to the wrong file.
+TOO_MUCH_TO_TELL = "was handed more on its input than can be given to a program that is not reading"
+
+#: How much of what a program printed is kept. Everything past it is read and thrown away rather
+#: than left in the pipe — see `_Draining` for why those are not the same choice.
+#:
+#: Generous on purpose. The largest answer anything here asks for is a channel adapter's `search`,
+#: whose published ceilings allow roughly a hundred kilobytes; this is two orders above that, so a
+#: program reaching it is one printing without stopping rather than one answering fully.
+SAID_AT_MOST = 8 * 1024 * 1024
+
+#: How much is read from a program's stream at a time. Large enough that a big answer is a handful
+#: of reads, small enough that nothing here holds a pathological block in memory twice.
+A_BLOCK = 64 * 1024
+
+#: How long a reader is waited for once the program's whole group has been signalled. It is not a
+#: budget for the program — that is `waiting` — but a guard on this function: a stream something
+#: unreachable is still holding open must not turn `run` into a call that never returns.
+READING_ENDS_WITHIN = 5.0
 
 
 class Ran(NamedTuple):
@@ -67,7 +96,7 @@ class Ran(NamedTuple):
 
 
 def run(argv: Sequence[str], waiting: float, where: Optional[Path] = None,
-        env: Optional[Dict[str, str]] = None) -> Ran:
+        env: Optional[Dict[str, str]] = None, telling: Optional[str] = None) -> Ran:
     """Run a program and hand back all three answers. Never raises for anything the program did.
 
     `waiting` is required rather than defaulted, so no caller arrives at a wait with no end by
@@ -76,11 +105,26 @@ def run(argv: Sequence[str], waiting: float, where: Optional[Path] = None,
 
     An exception from the program itself is not passed on: the whole point is that "it was not
     there" is an answer to be reported, not a traceback to be caught again at every call site.
+
+    **`telling` is what to put on its standard input, and said-nothing is not said-empty.** `None`
+    hands it `/dev/null` — which is what every caller had before this argument existed, and what a
+    program that must not be able to read anything gets. A string, including `""`, hands it a pipe
+    carrying exactly that and then closed, so a program waiting for a request gets one and then an
+    end-of-file rather than a wait with no end.
+
+    **It is written before the wait, and that ordering is the whole of why it is safe.** This waits
+    for the program and only then reads it, so a request written *after* the wait would be one the
+    program never sees while this side waits out the ceiling for it. Written first and closed, a
+    request under `TOLD_AT_MOST` fits in the pipe whether or not anything is reading yet, so neither
+    side blocks on the other. Larger than that is refused here rather than attempted: it needs a
+    reader on the far end, and this function is for a program that answers and stops.
     """
+    if telling is not None and len(telling.encode("utf-8", "replace")) > TOLD_AT_MOST:
+        return Ran(None, "", "", f"{TOO_MUCH_TO_TELL} ({TOLD_AT_MOST} bytes)")
     try:
         started = subprocess.Popen(
             [str(one) for one in argv],
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if telling is None else subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -98,12 +142,24 @@ def run(argv: Sequence[str], waiting: float, where: Optional[Path] = None,
         return Ran(None, "", "", f"{DID_NOT_START}: {why}")
 
     group = _group_of(started.pid)
+    if telling is not None:
+        _told(started, telling)
     with started:
-        # **Waited on, and only then read.** Reading until the pipe closes is not the same question
-        # as waiting for the program: a program that starts something of its own and exits leaves
-        # that child holding the pipe, so reading first waits for the *child* — and reports a
-        # program that finished instantly as one that would not finish, while leaving the real one
-        # running with nobody holding its id.
+        # **Drained while it is waited on, and waited on by the child rather than by the pipe.**
+        # Those are two rules that pull against each other and both have to hold.
+        #
+        # *Waited on by the child*, because a program that starts something of its own and exits
+        # leaves that child holding the capture pipe: reading until the pipe closes would wait out
+        # the whole ceiling for a program that finished instantly, report it would not finish, and
+        # leave the real one running with nobody holding its id.
+        #
+        # *Drained meanwhile*, because a pipe nobody is reading fills, and a program writing into a
+        # full one blocks for ever. That is not a hypothetical here: an adapter answering a `search`
+        # inside the ceilings `channels.adapters` publishes may print far more than a pipe holds, so
+        # waiting first and reading afterwards deadlocked a program that was obeying the contract
+        # and then blamed it — `would not finish` about a program that had finished everything but
+        # the last write. The threads are what let both rules hold at once.
+        out, err = _drained(started.stdout), _drained(started.stderr)
         trouble = None
         try:
             started.wait(timeout=waiting)
@@ -113,9 +169,84 @@ def run(argv: Sequence[str], waiting: float, where: Optional[Path] = None,
         # Either way, whatever is still in the group is not part of the answer. `run` is for a
         # program that answers and stops; anything it left behind holding the output is taken away
         # rather than waited on, and `start` is the way to launch something meant to outlive this.
+        # It is also what ends the readers: the last writer gone is the end-of-file they are on.
         _signalled(group, FIRMLY)
-        out, err = started.communicate()
-    return Ran(None if trouble else started.returncode, _said(out), _said(err), trouble)
+        said, wrong = out.what_it_said(), err.what_it_said()
+    return Ran(None if trouble else started.returncode, said, wrong, trouble)
+
+
+class _Draining:
+    """One captured stream, read on a thread of its own so nothing on the far side ever blocks.
+
+    **Bounded, and it goes on reading past the bound.** Keeping everything would let a program that
+    prints without stopping exhaust this process's memory; *stopping* reading at the bound would put
+    back the full pipe this exists to prevent. So it keeps the first `SAID_AT_MOST` and throws the
+    rest away, which is the only combination where neither side can be hurt by the other.
+
+    Never raises into the caller. A stream that goes away under it is a program that ended, which is
+    the ordinary case and not a failure — what became of the program is `Ran`'s to report.
+    """
+
+    def __init__(self, stream: Optional[IO[str]]) -> None:
+        self._held: list = []
+        self._kept = 0
+        self._reader = threading.Thread(target=self._reading, args=(stream,), daemon=True)
+        self._reader.start()
+
+    def _reading(self, stream: Optional[IO[str]]) -> None:
+        if stream is None:
+            return
+        try:
+            for block in iter(lambda: stream.read(A_BLOCK), ""):
+                if self._kept < SAID_AT_MOST:
+                    self._held.append(block[:SAID_AT_MOST - self._kept])
+                    self._kept += len(self._held[-1])
+        except (OSError, ValueError):
+            pass                    # the program ended and took its stream with it
+
+    def what_it_said(self) -> str:
+        """Everything it wrote, once the last writer has gone. Bounded by the wait, never open-ended.
+
+        **Joined with a ceiling of its own**, because the one thing that must not happen here is a
+        `run` that never returns: the group has been signalled by the time this is called, so a
+        reader still going is one whose far end something is holding open in a way this cannot
+        reach, and waiting on that for ever would be worse than answering with what did arrive.
+        """
+        self._reader.join(READING_ENDS_WITHIN)
+        return "".join(self._held)
+
+
+def _drained(stream: Optional[IO[str]]) -> _Draining:
+    """Start reading one of a program's streams straight away. See `_Draining`."""
+    return _Draining(stream)
+
+
+def _told(started: "subprocess.Popen", telling: str) -> None:
+    """Hand a program its request and close its input, so it reads an end rather than waiting.
+
+    **Nothing here is a failure of this side.** A program that has already exited — because it did
+    not recognise the argument, or refused before reading — closes the pipe, and writing into a
+    closed pipe raises `BrokenPipeError`. That program's own exit code and whatever it printed are
+    the answer, and raising here would replace a readable refusal with a traceback from the one
+    function that promises never to produce one.
+
+    Closed either way, including on that failure: a program left holding an input nothing will ever
+    close is a program waiting for a request that has already been sent.
+
+    **And then forgotten, which is the part that is not obvious.** `communicate()` flushes and closes
+    whatever `stdin` it still finds, and a handle this has already closed raises `ValueError` out of
+    the wait — turning every search into a traceback from inside the one function that promises not
+    to produce one. Setting it aside is how `subprocess` itself records that an input is spent.
+    """
+    if started.stdin is None:
+        return
+    try:
+        started.stdin.write(telling)
+    except (OSError, ValueError):
+        pass
+    with contextlib.suppress(OSError, ValueError):
+        started.stdin.close()
+    started.stdin = None
 
 
 def _said(maybe: Optional[Union[str, bytes]]) -> str:
