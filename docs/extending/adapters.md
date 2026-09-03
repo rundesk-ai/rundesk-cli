@@ -294,6 +294,7 @@ not a channel that has gone wrong.
 | `failed` | `why` | `id` | one `WARNING` line: *could not deliver — …*. `id` releases what rundesk was holding for that delivery, and the reason is kept against it for whoever settles the turn behind it |
 | `delivered` | `id` | `external_id` | one line saying the answer reached the platform, naming the message it answered, and **`external_id` is kept** — see below. **Never a mark** |
 | `arrived` | `conversation`, `user`, and `text` **or** `attachments` | `external_id` | the message, if that user may be answered |
+| | | | **`conversation` is identity, not a destination.** Rundesk keeps a conversation, a history and a provider session under it, so two of your places that are one exchange must be one string — the shipped Slack adapter keys a direct conversation by the channel alone, whatever Slack threading was used, and keeps *where an answer is read* as a separate fact it derives from `reply_to`. Splitting one exchange into two conversations splits the session with it |
 | `control` | `control`, `user` | `conversation`, `ref`, `external_place` | one gesture, if that user may be answered and the word is one rundesk knows — see [gestures](#gestures) |
 | `query` | `query`, `user` | `conversation`, `ref`, `external_place` | one question, answered out of what this install already knows |
 | `configure` | `provider`, `user` | `conversation`, `ref`, `external_place` | the agent's default brain is changed |
@@ -720,9 +721,18 @@ declared absolute path, opens every component with `O_NOFOLLOW` and reports
 the size and digest of the descriptor it opened. **Re-open it the same way, stream it into a snapshot,
 compare both against `bytes` and `sha256`, and send the snapshot rather than the path.** Between the
 approval and the send a concurrent turn can replace the file — or replace a directory above it with a
-link to somewhere else — and only a re-open sees that. Refuse the whole delivery on any mismatch:
-posting the words and quietly leaving the file behind reports a delivery that did not happen the way
-it was asked for, and nothing downstream could tell.
+link to somewhere else — and only a re-open sees that. **Nothing that did not verify is ever sent.**
+
+**Whether the words can still go depends on whether your platform sends them together.** Discord
+takes the message and its attachments in one call, so the shipped adapter refuses the whole delivery
+on any mismatch: posting the words and quietly leaving the file behind would report a delivery that
+did not happen the way it was asked for. Slack has no such call — the message is one request and each
+upload is another — so the shipped adapter posts the words, names every file that did not go in the
+conversation itself, and **reports the delivery `failed` even though the words landed**. Both are the
+same rule read against a different platform: a delivery asked for whole and arrived in part is never
+acknowledged as whole, because an acknowledgement is what a completion mark is composed from. What
+the split-call platform owes in exchange is visibility — say what is missing where the answer is,
+because the log is not somewhere the person who asked can read.
 
 **Open the directories on the way for search, not with `O_RDONLY | O_DIRECTORY`.** A walk needs to
 pass *through* a directory and never to list it, and asking for the larger of the two refuses a file
@@ -808,6 +818,7 @@ Rundesk's, unless the last column says otherwise.
 | `stderr.log` | 256 KiB, 3 kept | moved aside when the adapter is started. A channel that reconnects noisily for a week must not fill a disk, and the beginning of the trouble is the part worth keeping |
 | an adapter's last words copied into the agent's log | 20 lines, 500 chars each | the whole of it stays in the file; a megabyte of traceback would roll the rest of the day off the end of what somebody came to read |
 | a display name carried into a prompt | 80 chars, one line | **both sides', and neither is a copy of the other.** Narrow it so what you send is what you meant; rundesk narrows it again because a bound that lives only on the far side of a seam is one a third-party adapter can be wrong about. A display name is somewhere somebody can write something shaped like an instruction, and a newline is how they would end our sentence and start their own |
+| a delivery's terminal record | inside rundesk's wait for it | **the reason an adapter needs a budget of its own.** Rundesk waits `landed_within` for a `delivered` or a `failed` and reads what became of that delivery the instant the wait ends — 10 s today. Work that answers later answers into nothing: the turn has been settled, and a completion mark stands over a delivery that lost a piece. The shipped Slack adapter holds its whole upload phase to 8 s and each upload to 6, and reports a file it could not begin as one that did not go |
 | what one message may bring in | 10 files, 32 MiB each | *the adapter's*, and not a second copy of rundesk's — it exists so the adapter does not spend a platform's bandwidth on files that will be refused a moment later |
 
 ## The smallest adapter that is not a lie
@@ -943,7 +954,7 @@ somebody will arrive from that page looking for it.
 
 `control`, `query` and `configure` **do** exist, and this page said for a while that they did not —
 which was wrong, and wrong in the way that matters most, because somebody writing a third-party
-adapter against it could not implement a slash command at all. The shipped Discord adapter sends all
+adapter against it could not implement a slash command at all. Both shipped adapters send all
 three and the gateway answers them; the answer comes back as `{"do": "answered", "ref": …, "text":
 …}`, which is the fifth `do:` record. They are in the `say:` table above, where they belong — the
 correction was made in this paragraph first and the table went on saying *five* for a while longer,
@@ -999,16 +1010,33 @@ helpers are separate and limited to lifecycle events reported by the current pro
 the response explicitly calls that visibility partial. No prompt, result, provider tool name, or
 session handle is returned, and the query never starts a provider turn or changes delegation state.
 
-**The shipped Discord adapter never cuts a private slash answer at its message limit.** It sends the
-first piece and every continuation as ordered ephemeral followups to the interaction that supplied
-`ref`, preserving every character in order. This applies to `agents`, `skills`, `schedules`,
-`delegations`, and any other gesture answer long enough to need more than one Discord message. If Discord refuses a
-continuation, the adapter logs the refusal and attempts a private incomplete-response warning so the
-delivered prefix cannot be mistaken for the whole answer.
+**Rundesk does not split a gesture answer, so the adapter does.** A turn's answer is cut once, on
+rundesk's side, to the `max_text` you reported; this one never went near that splitter, so an
+install-wide `agents` directory arrives whole. Both shipped adapters cut it themselves, preserve
+every character in order, and warn privately rather than let a delivered prefix be mistaken for the
+whole answer.
+
+- **Discord never cuts one at its message limit.** It sends the first piece and every continuation
+  as ordered ephemeral followups to the interaction that supplied `ref`. If Discord refuses a
+  continuation, the adapter logs the refusal and attempts a private incomplete-response warning.
+- **Slack is bounded by its own allowance.** A command's `response_url` takes a published number of
+  responses, so the pieces that fit go out in order as ephemeral responses and a longer answer ends
+  with a line saying the rest is past what Slack shows. A refused piece is logged and warned about
+  the same way.
+
+Either applies to `agents`, `skills`, `schedules`, `delegations`, and any other gesture answer long
+enough to need more than one message.
 
 **A stranger's gesture is dropped in silence**, exactly as a stranger's message is. Narrowing it on
 your side first is worth doing so nobody is shown a spinner for an answer that will never come — but
 that is to avoid visible work, and it is never the decision.
+
+**Deduplicate a gesture by whatever identity your platform gives the invocation**, and never by who
+made it or what they typed — a genuine second press is identical in both. A platform that redelivers
+what it did not see acknowledged will otherwise hand you one gesture twice, and any gesture that
+counts a *repeat* as consent reads that redelivery as the confirmation: the shipped Slack adapter
+guards its `shutdown` confirmation on the Socket Mode envelope id for exactly that reason. The retry
+must still be acknowledged, and must leave no state behind it.
 
 **Nothing downloads on rundesk's side.** The adapter holds the credential and rundesk does not; the
 adapter fetches, and rundesk decides where it lands. The previous build's page has that the other way

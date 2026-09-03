@@ -51,8 +51,14 @@ open from a terminal and not from a gateway; `rundesk permissions` reports that,
 lineage it was proved in.
 
 **Outgoing files are not copied or deleted.** Project output remains project output, and a temporary
-Computer Use screenshot remains owned by that tool or the operating system. Discord's verification
-snapshot exists only for the send and is closed afterwards. Incoming channel files are different:
+Computer Use screenshot remains owned by that tool or the operating system. An adapter's
+verification snapshot exists only for the send and is closed afterwards.
+
+**Both shipped adapters send a file out; only Discord takes one in.** Discord carries the file with
+the message, so a file that will not verify refuses the whole delivery. Slack has no call that takes
+both: the words are posted, each file is verified and uploaded on its own, and a delivery whose file
+could not go names it in the conversation and is reported failed — so nothing marks an answer
+complete when a piece of it is missing. See [`../guides/slack.md`](../guides/slack.md#files-it-sends). Incoming channel files are different:
 Rundesk owns their landed copies under the channel's dated `in/` directory and sweeps whole days
 after 60 days, including for channels later disconnected.
 

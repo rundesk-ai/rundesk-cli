@@ -24,6 +24,8 @@ Run directly: `python3 tests/test_providers_answering.py`
 """
 
 import contextlib
+import importlib.machinery
+import importlib.util
 import json
 import threading
 import time
@@ -2092,6 +2094,50 @@ class ADelegatedResultReachesItsParent(Answering):
         self.assertTrue(any(one in (answering.DONE, answering.STOPPED, answering.FAILED)
                             for one in later[1:]),
                         "the wake-up typing indicator was never ended")
+
+
+class TheWaitAShippedAdapterAnswersInside(unittest.TestCase):
+    """The one seam neither side can check alone: how long rundesk waits, and how long an adapter
+    takes to answer.
+
+    **Two constants in two programs, and nothing but a comment between them.** `hosting.told` waits
+    `LANDS_WITHIN` for a delivery's terminal record and reads what became of it the instant that
+    wait ends; the shipped Slack adapter bounds its own file work under that number so the record it
+    writes is still being listened for. The adapter cannot import this — it is a separate program
+    and `src/rundesk` is deliberately off its path — so the check belongs on this side, which can
+    see both.
+
+    **What it prevents is a silent one.** Lower `LANDS_WITHIN` and nothing fails: the adapter goes
+    on spending a budget that is now too long, its `failed` arrives after rundesk has stopped
+    reading, the turn settles as complete, and a completion mark stands over an answer whose file
+    never went. That is R-SLK-49 broken by a number in a different file.
+    """
+
+    #: Loaded by path because an adapter is an executable with a shebang and no `.py` — the same
+    #: way `tests/test_channels_slack.py` loads it, and the same way rundesk runs it.
+    ADAPTER = Path(__file__).resolve().parent.parent / "src" / "channels" / "slack"
+
+    #: How much room the adapter's budget must leave inside the wait. Enough for the record to be
+    #: written and read rather than to arrive on the boundary and be missed by a tenth of a second.
+    MARGIN = 1.0
+
+    def the_adapter(self):
+        loader = importlib.machinery.SourceFileLoader("slack_for_the_seam", str(self.ADAPTER))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+        return module
+
+    def test_the_adapter_answers_a_delivery_inside_the_wait_for_it(self) -> None:
+        slack = self.the_adapter()
+        self.assertLessEqual(
+            slack.UPLOADS_WITHIN + self.MARGIN, answering.LANDS_WITHIN,
+            f"the Slack adapter gives one delivery {slack.UPLOADS_WITHIN:g}s of file work while "
+            f"rundesk waits {answering.LANDS_WITHIN:g}s for its answer — a `failed` record written "
+            f"after that wait is read by nothing, and the turn keeps its completion mark")
+        # The socket ceiling is what bounds an upload this adapter has stopped waiting for. It sits
+        # under the budget for the same reason, and above nothing: it is not the deadline.
+        self.assertLess(slack.AN_UPLOAD_WITHIN, slack.UPLOADS_WITHIN)
 
 
 if __name__ == "__main__":

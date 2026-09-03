@@ -209,10 +209,24 @@ only a message that names it — including inside somebody else's thread, where 
 thread and reads a bounded slice of it. Several agent bots can share one thread and each wakes only
 when it is named.
 
-**It is deliberately quiet.** The final answer is the only thing it posts: no running commentary, no
-tool or activity lines, no delegation notices, no token counts, and no footer. A turn shows as 👀 on
-the message that asked, Slack's own agent-session typing status while it works, and ✅ when the
-answer has gone out.
+**It is deliberately quiet.** The final answer is the only thing it posts into a conversation: no
+running commentary, no tool or activity lines, no delegation notices, no token counts, and no
+footer. A turn shows as 👀 on the message that asked, Slack's own agent-session typing status while
+it works, and ✅ when the answer has gone out. An answer can name one person with Slack's own
+`<@U…>` markup and can never address a room: `@channel`, `@here`, `@everyone`, a user group, and a
+channel link all arrive as the text they look like.
+
+**It offers one slash command, named after the agent** — `/ava status`, `/ava schedules`,
+`/ava provider codex` — because a Slack command name belongs to the whole workspace rather than to
+one app. Every answer to it is private to whoever typed it, and none of them starts a turn.
+
+**A file the agent attached goes with the answer**, verified again immediately before it is uploaded
+and shared into the same conversation and thread. If one cannot go, the words are still posted and a
+line under them says which file is missing. Nothing incoming is fetched.
+
+**A direct message is one conversation however you thread it**, so its history and its session stay
+whole; the answer arrives in the thread you asked in, or in one rooted at your message. A thread in a
+channel remains a conversation of its own.
 
 Create an app from the manifest in the setup guide, **declare it as an agent in its app settings and
 only then install it to the workspace** — that declaration adds a scope, and a scope added after a
