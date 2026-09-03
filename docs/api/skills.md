@@ -8,7 +8,7 @@ one skill and nothing removes one, because a catalog is what somebody publishes 
 
 | Command | Does |
 |---|---|
-| `skills [list [<agent>]]` | every skill, or the ones one agent holds |
+| `skills [list [<agent>]] [--json]` | every skill, or the ones one agent holds — `--json` writes one document carrying `schema_version: 1` instead of the table |
 | `skills catalogs` | every catalog, its version and where it came from |
 | `skills install <repository> --confirm` | install a catalog of skills |
 | `skills update <catalog> --confirm` | check one against where it came from |

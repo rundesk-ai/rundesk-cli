@@ -14,8 +14,9 @@ integration processes; it never puts an access or refresh token in a terminal or
 """
 
 import argparse
+import json
 import sys
-from typing import Any
+from typing import Any, Dict
 
 from rundesk.exits import FAILED
 
@@ -28,6 +29,15 @@ from rundesk.exits import FAILED
 #:
 #: Stays here rather than in `utils` because it is argparse's, and argparse is this layer's alone.
 Subcommands = argparse._SubParsersAction
+
+#: The public machine-readable command response this release understands.
+JSON_SCHEMA = 1
+
+
+def print_json(values: Dict[str, Any]) -> None:
+    """Print one stable UTF-8 JSON document for a machine-readable command response."""
+    print(json.dumps({"schema_version": JSON_SCHEMA, **values}, ensure_ascii=False,
+                     sort_keys=True, separators=(",", ":")))
 
 
 def failed(saying: str, *and_so: str) -> int:

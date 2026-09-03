@@ -41,6 +41,83 @@ class Listing(support.Isolated):
         self.assertIn("no agents yet", out)
         self.assertIn("rundesk agents add <agent> --provider <provider>", out)
 
+    def test_json_is_one_versioned_document_when_there_are_no_agents(self):
+        code, out, err = self.rundesk("agents", "--json")
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual({"schema_version": 1, "agents": []}, json.loads(out))
+        self.assertEqual(1, len(out.splitlines()))
+
+    def test_json_keeps_configuration_typed_for_a_local_consumer(self):
+        for name in ("cole", "forge"):
+            self.rundesk("agents", "add", name, "--provider", "claude")
+        self.rundesk("agents", "configure", "cole", "--delegate-to", "forge",
+                     "--self-improve", "off")
+        records.stated(directory.records("cole"), {"describes": "Owns\nreview."})
+
+        code, out, err = self.rundesk("agents", "list", "--json")
+
+        self.assertEqual(OK, code, err)
+        said = json.loads(out)
+        self.assertEqual(1, said["schema_version"])
+        cole = next(one for one in said["agents"] if one["name"] == "cole")
+        self.assertEqual({"name": "claude", "alias": None}, cole["provider"])
+        self.assertEqual({"status": "available", "value": "Owns review."},
+                         cole["description"])
+        self.assertEqual({"scope": "allowlist", "agents": ["forge"]}, cole["delegation"])
+        self.assertIs(False, cole["self_improve"])
+        self.assertEqual("readable", cole["record_status"])
+
+    def test_json_keeps_none_any_and_unavailable_records_distinct(self):
+        for name in ("any", "none"):
+            self.rundesk("agents", "add", name, "--provider", "claude")
+        self.rundesk("agents", "configure", "none", "--delegate-to-none")
+        with mock.patch.object(directory, "known", return_value=["any", "ghost", "none"]):
+            code, out, err = self.rundesk("agents", "--json")
+
+        self.assertEqual(OK, code, err)
+        agents = {one["name"]: one for one in json.loads(out)["agents"]}
+        self.assertEqual("any", agents["any"]["delegation"]["scope"])
+        self.assertEqual("none", agents["none"]["delegation"]["scope"])
+        self.assertEqual("not_found", agents["ghost"]["record_status"])
+        self.assertIsNone(agents["ghost"]["provider"])
+
+    def test_json_keeps_every_description_state_distinct(self):
+        # R-JSON-2. Not described, empty, and available are three answers a table shows as three
+        # words; a consumer reading the document has to be able to tell them apart the same way.
+        self.rundesk("agents", "add", "none", "--provider", "claude")
+        self.rundesk("agents", "add", "empty", "--provider", "claude", "--describes", "Set.")
+        self.rundesk("agents", "add", "said", "--provider", "claude", "--describes", "Owns it.")
+        records.stated(directory.records("empty"), {"describes": ""})
+
+        code, out, err = self.rundesk("agents", "--json")
+
+        self.assertEqual(OK, code, err)
+        agents = {one["name"]: one for one in json.loads(out)["agents"]}
+        self.assertEqual({"status": "not_described", "value": None}, agents["none"]["description"])
+        self.assertEqual({"status": "empty", "value": ""}, agents["empty"]["description"])
+        self.assertEqual({"status": "available", "value": "Owns it."}, agents["said"]["description"])
+
+    def test_json_says_a_legacy_record_has_no_description_column(self):
+        with mock.patch("rundesk.commands.agents.records.read", return_value={
+                "provider_name": "claude", "self_improve": 1, "delegates_to": None}):
+            self.assertEqual({"status": "unavailable", "value": None},
+                             agents_command._json_agent("legacy")["description"])
+
+    def test_json_says_a_record_that_cannot_be_read_is_unreadable(self):
+        # The directory is on the disk and something has to be done about it — the same reason the
+        # table says `cannot be read` rather than leaving the agent out.
+        self.rundesk("agents", "add", "cole", "--provider", "claude")
+        directory.records("cole").write_bytes(b"not a database at all")
+
+        code, out, err = self.rundesk("agents", "--json")
+
+        self.assertEqual(OK, code, err)
+        cole = next(one for one in json.loads(out)["agents"] if one["name"] == "cole")
+        self.assertEqual("unreadable", cole["record_status"])
+        self.assertIsNone(cole["provider"])
+        self.assertIsNone(cole["delegation"])
+
     def test_where_they_stand_is_said_even_when_there_are_none(self):
         # "No agents" and "no agents *here*" are different things to learn.
         _, out, _ = self.rundesk("agents")

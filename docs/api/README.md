@@ -25,10 +25,10 @@ In the order `rundesk --help` prints them, so the page and the command can be re
 A group with a `list` sub-verb also lists when called bare.
 
 ```sh
-rundesk status                            # the version, where the install is, and every configured value
+rundesk status [--json]                   # the version, where the install is, and every configured value
 rundesk version                           # the version, and whether it is out of date
 rundesk configure [--backup-enabled <yes|no>] [--backup-retention <n>] [--turn-records-days <n>] [--update-enabled <yes|no>] [--update-time <HH:MM>]
-rundesk agents list                       # the agents this install keeps
+rundesk agents list [--json]              # the agents this install keeps
 rundesk agents add <agent> --provider <provider> [--alias <alias>] [--describes <text>]        # make one
 rundesk agents configure <agent> [--provider <provider>] [--alias <alias>] [--describes <text>] [--self-improve <true|false>] [--delegate-to <agent> ... | --delegate-to-any | --delegate-to-none]
 rundesk agents remove <agent> --confirm   # take one away, and everything it remembers
@@ -85,7 +85,7 @@ rundesk channels configure <agent> <adapter> [--allow <id>] [--deny <id>] [--not
 rundesk channels test <agent> <adapter>   # reach the platform again, and say what it found
 rundesk channels remove <agent> <adapter> --confirm       # take one away
 rundesk channels doctor [<agent>]         # what cannot be used, and exactly why
-rundesk skills list [<agent>]             # every skill this install has, and who holds which
+rundesk skills list [<agent>] [--json]    # every skill this install has, and who holds which
 rundesk skills catalogs                   # every catalog, its version and where it came from
 rundesk skills install <repository> --confirm     # install a catalog of skills
 rundesk skills update <catalog> --confirm         # check one against where it came from

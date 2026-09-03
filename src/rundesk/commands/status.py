@@ -12,7 +12,7 @@ from typing import Any, List, Optional, Tuple
 
 from rundesk import __version__
 from rundesk.agents import directory
-from rundesk.commands import as_written, failed
+from rundesk.commands import as_written, failed, print_json
 from rundesk.core import config, paths
 from rundesk.exits import FAILED, OK
 from rundesk.gateways import job
@@ -23,7 +23,7 @@ from rundesk.utils.terminal import as_table
 PYTHON_FLOOR = (3, 9)
 
 
-def cmd_status(_args: argparse.Namespace,
+def cmd_status(args: argparse.Namespace,
                supervising: Optional[job.Supervising] = None) -> int:
     """Print what rundesk is and where it keeps things; exit non-zero when it could not run.
 
@@ -49,7 +49,10 @@ def cmd_status(_args: argparse.Namespace,
     rows.extend(_configured())
     from rundesk.commands import automatic_updates
     rows.append(("automatic update", automatic_updates.status(supervising)))
-    as_table(("WHAT", "IS"), rows)
+    if args.json:
+        print_json({"status": {name.replace(" ", "_"): value for name, value in rows}})
+    else:
+        as_table(("WHAT", "IS"), rows)
     return FAILED if unfit else OK
 
 
