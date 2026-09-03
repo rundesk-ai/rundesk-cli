@@ -61,7 +61,9 @@ eventually disagree about the same person, and the one they disagreed about woul
 a control.
 
 **The decision is made against two stable ids and never against a word.** An adapter reports `user`
-and `external_place`; `display` and `where` are sentences it composed for a person to read, and a
+and `external_place`; `display` and `where` are sentences it composed for a person to read, `mention`
+is the platform's own markup for mentioning the speaker — handed to the agent for that alone, so it
+can mention the person it is answering without ever being shown or saying a bare id — and a
 display name is somewhere a stranger writes whatever they like. **A place entry allows anybody who is
 somebody** — a record with no sender is an event rather than a person, and admitting one because of
 where it happened would make a place entry a way in for anything that can post there.

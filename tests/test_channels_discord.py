@@ -759,6 +759,17 @@ class WhereAMessageWasSaid(Records):
     def test_a_direct_message_says_so(self):
         self.assertEqual("a direct message", self.where_for(DMChannel(1180)))
 
+    def test_it_hands_over_the_handle_that_mentions_whoever_spoke(self):
+        # R-DIS-58. Discord's own markup around the author's id, beside the name a brain says.
+        message = Message(8841, DMChannel(1180), self.asker, "what changed?")
+
+        async def doing(reaching: Any) -> None:
+            await reaching._arrived(message)
+
+        said = self.only(self.during(doing), "arrived")
+        self.assertEqual(f"<@{self.asker.id}>", said["mention"])
+        self.assertEqual("Ann", said["display"])
+
     def test_a_room_is_named_with_the_server_it_stands_in(self):
         room = TextChannel(1180)
         room.name = "ops"

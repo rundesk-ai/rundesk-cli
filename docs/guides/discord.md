@@ -135,6 +135,8 @@ rundesk gateways start ava
 Then test the surfaces you enabled:
 
 - Send the bot a direct message.
+- The agent is told how to mention whoever spoke to it, and only for that, so an answer can
+  address the person it is answering.
 - Mention the bot in a server channel. It opens a thread; later messages in that thread do not need
   another mention.
 - Run `/status` to confirm the slash commands are available.

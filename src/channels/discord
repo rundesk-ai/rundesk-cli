@@ -1706,6 +1706,9 @@ class Reaching:
              "place": "dm" if direct else "room",
              "user": str(message.author.id),
              "display": flat(getattr(message.author, "display_name", None) or message.author.name),
+             # **How to mention them, beside what to call them** (R-DIS-58). Discord's own markup
+             # around the author's id; a delivery carries it to the platform as a real mention.
+             "mention": f"<@{message.author.id}>",
              "where": self._where_this_is(message),
              "text": text,
              "external_id": str(message.id),

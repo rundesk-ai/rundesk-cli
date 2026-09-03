@@ -910,6 +910,18 @@ def escaped_keeping_mentions(said: str) -> str:
     return "".join(kept)
 
 
+def a_handle_for(user: str) -> str:
+    """The exact markup that mentions this member, or `""` where the id is not one (R-SLK-65).
+
+    **The same token `escaped_keeping_mentions` keeps, checked by the same rule.** What arrives
+    beside a speaker's name is what the brain will write back to mention them, so it has to be a
+    token the answer path lets through as a mention — `A_MENTION` decides both, and a handle this
+    would escape on the way out is one that must not be taught on the way in.
+    """
+    said = f"<@{user}>" if user else ""
+    return said if said and A_MENTION.fullmatch(said) else ""
+
+
 def conversation_of(team: str, channel: str, thread: str = "") -> str:
     """The one string rundesk keeps this exchange under.
 
@@ -3039,6 +3051,7 @@ class Reaching:
             return
         self._remember(self.standing, woken.ts, woken.channel)
         self._remember(self.replying, woken.ts, woken.answer_in)
+        handle = a_handle_for(woken.user)
         say({"say": "arrived",
              "conversation": conversation_of(self.team, woken.channel, woken.thread),
              # **The stable id of the place, in a field of its own.** `place` below is a word for a
@@ -3048,6 +3061,10 @@ class Reaching:
              "place": "dm" if woken.direct else "room",
              "user": woken.user,
              "display": self._a_name(woken.user),
+             # **How to mention them, beside what to call them** (R-SLK-65). Sent only where the id
+             # is one `escaped_keeping_mentions` would keep, so nothing here teaches a brain a token
+             # the answer path would then escape into punctuation.
+             **({"mention": handle} if handle else {}),
              "where": self._where_this_is(woken),
              "text": text,
              "external_id": woken.ts})
