@@ -575,6 +575,30 @@ class WhatAShippedSkillMayClaim(Bundled):
             with self.subTest(issue_contract=phrase):
                 self.assertIn(phrase, issues)
 
+    def test_github_delivery_takes_the_short_path_from_green_head_to_release(self):
+        references = self.skills / "managing-github" / "references"
+        pull_requests = (references / "pull-requests.md").read_text(encoding="utf-8")
+        releases = (references / "releases.md").read_text(encoding="utf-8")
+
+        for phrase in (
+                "## Merge an already-ready pull request",
+                "same recorded `headRefOid`",
+                "do not rerun local validation",
+                "Do not delegate",
+                "`--match-head-commit`",
+                "report the exact failed gate and stop"):
+            with self.subTest(pull_request_fast_path=phrase):
+                self.assertIn(phrase, pull_requests)
+        for phrase in (
+                "## Continue directly from a verified merge",
+                "exact merge commit's required default-branch workflow",
+                "Do not reopen implementation",
+                "previous exact-head validation",
+                "one bounded wait",
+                "report the release blocker and stop"):
+            with self.subTest(release_fast_path=phrase):
+                self.assertIn(phrase, releases)
+
     def test_agent_instruction_guidance_is_routed_and_has_each_required_section(self):
         skill = self.skills / "managing-rundesk"
         main = (skill / library.DECLARED).read_text(encoding="utf-8")

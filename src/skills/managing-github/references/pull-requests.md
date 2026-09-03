@@ -160,6 +160,38 @@ gh pr checks <number> --repo <owner/repo>
 Verify repository, base, head, owner, title, body, template, identity, privacy, draft state, closing
 links, and URL. Report pending or failing checks; creation alone is not merge readiness.
 
+## Merge an already-ready pull request
+
+Take the direct path when the current request authorizes the merge and the pull request is already
+ready: it is not a draft, the same recorded `headRefOid` has passed the repository's required
+validation and CI, required reviews and issue disposition are resolved, the privacy inspection is
+complete, and no finding or uncertainty remains. Evidence stays current while that exact head stays
+current. Reconfirm its stored state; do not rerun local validation or technical review merely
+because execution has reached the merge step.
+
+Do not delegate, reopen implementation, create a new plan or task brief, or add an unrequired review
+or test solely because an already-ready pull request reached the merge step. Immediately before
+merging, read the stored gate state and require the head OID to remain unchanged. Use
+`--match-head-commit` so GitHub refuses the merge if the reviewed head moves between that check and
+the mutation:
+
+```sh
+gh pr view <number> --repo <owner/repo> \
+  --json url,state,isDraft,baseRefName,headRefName,headRefOid,reviewDecision,mergeable,mergeStateStatus,closingIssuesReferences,statusCheckRollup
+gh pr checks <number> --repo <owner/repo>
+gh pr merge <number> --repo <owner/repo> \
+  --squash \
+  --match-head-commit <recorded-head-oid>
+gh pr view <number> --repo <owner/repo> \
+  --json url,state,mergedAt,headRefOid,mergeCommit,closingIssuesReferences
+```
+
+Use the repository's required `--merge`, `--rebase`, or `--squash` method; the example uses squash.
+Afterward, read the pull request back and verify `state: MERGED`, `mergedAt`, the original head OID,
+the merge commit, and any completed issue state. If the head changed, a required check or review is
+not satisfied, the merge is refused, or authority is incomplete, report the exact failed gate and stop.
+Do not turn merge execution into a new correction or review cycle without authority for that work.
+
 ## Clean up after merge
 
 Treat cleanup as the final part of an authorized merge. Read the stored pull request again and
