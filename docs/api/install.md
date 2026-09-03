@@ -2,7 +2,7 @@
 
 | Command | Does |
 |---|---|
-| `status` | the version, where the install is, and every configured value |
+| `status [--json]` | the version, where the install is, and every configured value |
 | `version` | the version, and whether it is out of date |
 | `install [--source <dir>] [--bin-dir <dir>]` | what `install.sh` runs |
 | `update [--continue]` | move to the newest release, or say it is up to date |
@@ -13,7 +13,8 @@ result, not for a person at a terminal.
 
 ## status
 
-Answers *how rundesk is*. Takes no flags.
+Answers *how rundesk is*. Takes one flag: `--json` writes the same rows as one JSON document
+carrying `schema_version: 1`, for a script or a local interface that should not parse the table.
 
 ```console
 $ rundesk status

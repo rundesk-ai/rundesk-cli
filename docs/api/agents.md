@@ -8,7 +8,7 @@ nine times in ten.
 
 | Command | Does |
 |---|---|
-| `agents [list]` | every agent this install keeps, and what is behind it |
+| `agents [list] [--json]` | every agent this install keeps, and what is behind it — `--json` writes one document carrying `schema_version: 1` instead of the table |
 | `agents add <agent> --provider <provider> [--alias <alias>] [--describes <text>]` | make one |
 | `agents configure <agent> [--provider <provider>] [--alias <alias>] [--describes <text>] [--self-improve <true\|false>] [--delegate-to <agent> … \| --delegate-to-any \| --delegate-to-none]` | change what one is configured with |
 | `agents remove <agent> --confirm` | take one away, and everything it remembers |

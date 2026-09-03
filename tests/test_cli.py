@@ -8,6 +8,7 @@ Run directly: `python3 tests/test_cli.py`
 
 import contextlib
 import io
+import json
 import unittest
 from unittest import mock
 
@@ -118,6 +119,17 @@ class Status(support.Isolated):
         self.assertEqual(OK, code)
         self.assertIn(__version__, out)
         self.assertIn(str(self.home), out)
+
+    def test_json_is_one_versioned_document_for_a_local_consumer(self):
+        code, out, err = self.rundesk("status", "--json")
+
+        self.assertEqual(OK, code, err)
+        self.assertEqual("", err)
+        said = json.loads(out)
+        self.assertEqual(1, said["schema_version"])
+        self.assertEqual(__version__, said["status"]["version"])
+        self.assertEqual(str(self.home), said["status"]["home"])
+        self.assertEqual(1, len(out.splitlines()))
 
     def test_it_says_where_the_program_is_as_well_as_where_the_data_is(self):
         _, out, _ = self.rundesk("status")

@@ -54,8 +54,8 @@ lineage it was proved in.
 Computer Use screenshot remains owned by that tool or the operating system. An adapter's
 verification snapshot exists only for the send and is closed afterwards.
 
-**Both shipped adapters send a file out; Discord takes one in as it arrives, and Slack only when the
-agent asks for a message's files by name with `rundesk search --fetch`.** Discord carries the file with
+**Both shipped adapters send a file out and land one that arrives with a message; `rundesk search
+--fetch` brings in the files of a message an agent found.** Discord carries the file with
 the message, so a file that will not verify refuses the whole delivery. Slack has no call that takes
 both: the words are posted, each file is verified and uploaded on its own, and a delivery whose file
 could not go names it in the conversation and is reported failed — so nothing marks an answer

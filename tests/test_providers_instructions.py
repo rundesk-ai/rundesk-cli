@@ -288,6 +288,15 @@ class TheAgreedSections(support.Isolated):
                 self.assertIn("answer only from", messages)
                 self.assertIn(floor, messages)
 
+    def test_an_attached_file_is_opened_where_it_stands_and_never_asked_for(self):
+        # R-INS-38. A file that arrived is a path under the message, on both platforms; an agent
+        # that asked the person to send it again had it the whole time.
+        for situation in (instructions.USER_TO_AGENT, instructions.SCHEDULE_TO_AGENT):
+            with self.subTest(situation=situation[:32]):
+                messages = self.part(self.built(situation).text, "## Messages and Attachments")
+                self.assertIn("attached to this message, on this machine:", messages)
+                self.assertIn("never ask for it again", messages)
+
     def test_a_person_is_never_asked_for_what_a_lookup_should_have_found(self):
         messages = self.part(self.built().text, "## Messages and Attachments")
         self.assertIn("never ask for what a lookup should have found", messages)
@@ -809,8 +818,12 @@ class TheBuilderBoundary(support.Isolated):
             # context from another thread, and the sentence permitting that has to carry the
             # disclosure floor with it or the two read as a contradiction an agent settles either
             # way. This is the smallest number the settled wording fits in.
-            "person": (instructions.USER_TO_AGENT, 1700),
-            "schedule": (instructions.SCHEDULE_TO_AGENT, 1150),
+            # Raised from 1700 by the attached-file bullet: a file that arrived is a path under the
+            # message, and an agent not told so asked the person to send what it already had.
+            # Again the smallest number the settled wording fits in.
+            "person": (instructions.USER_TO_AGENT, 1875),
+            # Raised from 1150 for the same bullet, which a scheduled review reads too.
+            "schedule": (instructions.SCHEDULE_TO_AGENT, 1250),
             "agent": (instructions.AGENT_TO_AGENT, 800),
             "team": (instructions.TEAM_MEMBERS, 1000),
             "completion": (instructions.OUTCOME_AND_CONTINUITY, 1250),
