@@ -91,6 +91,11 @@ damaged, half-written or quietly absent has failed at the only moment it existed
   private extraction is reported as an operational failure, not as proof that the verified archive
   is unrestorable; the new copy remains and the command says that nothing was let go.
 - **Putting one back keeps what it replaces**, so a restore from the wrong name is recoverable.
+- **A copy an update takes before carrying is pruned like any other, and only afterwards.** Retention
+  runs once the settle has succeeded, so the rollback copy stands for as long as anything could need
+  it and an install that keeps seven never holds fifty. A failed settle prunes nothing.
+- **A copy that cannot be reached for a moment is not a copy that failed.** Only the shape of the
+  bytes makes an archive unrestorable; a read error ends the retention pass with nothing removed.
 - New copies are compressed archives; v0.40 directory copies remain valid restore inputs.
 - **A backup excludes provider-owned credential homes**, and carries the sealed value store and its
   key. Protect its location as credential-bearing data.

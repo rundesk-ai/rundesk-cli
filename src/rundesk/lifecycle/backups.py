@@ -100,7 +100,17 @@ import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO, Callable, ContextManager, Dict, Iterator, List, NamedTuple, Optional, Tuple
+from typing import (
+    BinaryIO,
+    Callable,
+    ContextManager,
+    Dict,
+    Iterator,
+    List,
+    NamedTuple,
+    Optional,
+    Tuple,
+)
 
 from rundesk.agents import directory, records
 from rundesk.agents import migration as agent_migration
@@ -698,8 +708,11 @@ def prune(keeping: int, backups: Optional[Path] = None,
         try:
             copies = [one for one in kept(at) if restorable(at, one)]
         except OSError as why:
-            raise Refused(f"retention could not be applied because its temporary validation "
-                          f"copy could not be cleaned up: {why}") from why
+            # One copy that could not be *checked* — not one that failed the check — ends the
+            # pass with nothing removed. Retention decides against the whole set it validated,
+            # and a set with a hole in it is not one to decide against.
+            raise Refused(f"retention could not be applied because a copy could not be checked: "
+                          f"{why}") from why
         for name in copies[keeping:]:
             try:
                 files.remove_one(at / name)
@@ -960,7 +973,11 @@ def _a_copy(at: Path, name: str) -> Path:
         try:
             with zipfile.ZipFile(where) as opened:
                 _archive_members(opened, name)
-        except (OSError, zipfile.BadZipFile) as why:
+        except zipfile.BadZipFile as why:
+            # **Only the shape of the bytes is a refusal.** An `OSError` here is the file being out
+            # of reach for a moment — a cloud-backed archive still syncing, a disk answering EIO —
+            # and is left to propagate: read as *not a copy*, it let retention delete the oldest
+            # good copy on the strength of one unreadable second (R-BKP-4).
             raise Refused(f"{name} is not a readable Rundesk backup archive: {why}") from why
         return where
     if not _has_the_mark(where):
@@ -989,7 +1006,12 @@ def _opened_copy(at: Path, name: str) -> Iterator[Path]:
             with zipfile.ZipFile(where) as opened:
                 members, _manifest = _archive_members(opened, name)
                 _unpacked(opened, members, root)
-        except (OSError, UnicodeError, zipfile.BadZipFile, ValueError) as why:
+        except (UnicodeError, zipfile.BadZipFile, ValueError) as why:
+            # **Structural, and only structural, becomes `Refused`.** These say the bytes are not
+            # a copy. An `OSError` says the bytes could not be reached just now — a cloud-backed
+            # file still syncing, a disk that answered EIO — and is left to propagate: retention
+            # that read it as *not a copy* deleted the oldest good one on the strength of a
+            # moment's unreadability, which is the failure `prune` refuses over.
             raise Refused(f"{name} could not be safely read: {why}") from why
         data = root / DATA_PREFIX.rstrip("/")
         if not _has_the_mark(data):

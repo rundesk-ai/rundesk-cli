@@ -338,6 +338,51 @@ class AnUpdateThatDoesNotLand(Updating):
         self.assertEqual(1, len(backups.kept(paths.backups())),
                          "no copy was taken before carrying")
 
+    def test_retention_is_applied_once_the_update_has_landed(self):
+        """R-BKP-5. The copy a settle takes counted against nothing: an install keeping seven held
+        fifty, one per update with a step to carry, because only `backups save` ever pruned."""
+        from datetime import datetime, timezone
+        config.stated("backup_enabled", True, paths.data())
+        config.stated("backup_retention", 1, paths.data())
+        at = paths.backups()
+        older = backups.save(paths.data(), at, when=datetime(2020, 1, 1, tzinfo=timezone.utc))
+        code, out, _ = self.update(archive=self.an_archive(steps={"0001_first": A_STEP}))
+        self.assertEqual(OK, code)
+        self.assertIn("kept", out)
+        self.assertIn(f"let go of {older}", out)
+        remaining = backups.kept(at)
+        self.assertEqual(1, len(remaining), remaining)
+        self.assertNotIn(older, remaining, "the copy past retention was kept")
+
+    def test_a_failed_settle_lets_go_of_no_copy(self):
+        """R-BKP-6. The copy named in the failure is the way back, and so is every older one."""
+        from datetime import datetime, timezone
+        config.stated("backup_enabled", True, paths.data())
+        config.stated("backup_retention", 1, paths.data())
+        at = paths.backups()
+        older = backups.save(paths.data(), at, when=datetime(2020, 1, 1, tzinfo=timezone.utc))
+        code, out, err = self.update(
+            archive=self.an_archive(steps={"0001_first": support.A_STEP_THAT_FAILS}))
+        self.assertEqual(FAILED, code)
+        self.assertIn("as it was before this is the copy", err)
+        self.assertEqual(2, len(backups.kept(at)), "a failed settle pruned a copy")
+        self.assertIn(older, backups.kept(at))
+        self.assertNotIn("let go of", out + err)
+
+    def test_an_update_that_took_no_copy_prunes_nothing(self):
+        # Retention is housekeeping after a copy, never a side effect of updating: an owner who
+        # keeps copies by hand is not surprised by an update thinning them.
+        from datetime import datetime, timezone
+        config.stated("backup_enabled", True, paths.data())
+        config.stated("backup_retention", 1, paths.data())
+        at = paths.backups()
+        for year in (2020, 2021):
+            backups.save(paths.data(), at, when=datetime(year, 1, 1, tzinfo=timezone.utc))
+        code, out, _ = self.update(archive=self.an_archive())
+        self.assertEqual(OK, code)
+        self.assertEqual(2, len(backups.kept(at)))
+        self.assertNotIn("let go of", out)
+
     def test_no_copy_is_taken_when_the_owner_keeps_none(self):
         # An owner who turned copies off should not be surprised by one appearing.
         config.stated("backup_enabled", False, paths.data())

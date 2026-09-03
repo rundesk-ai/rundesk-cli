@@ -193,7 +193,10 @@ running that exact version. An ordinary stop/start keeps the ordinary gateway no
 
 The program-tree swap never replaces `data/`; migration steps may deliberately carry its layout.
 When migration work is waiting and `backup_enabled` is on, settlement first makes and verifies the
-safety copy described under `backups save`. If that copy cannot be made, migration does not begin
+safety copy described under `backups save`, and once the whole settle has succeeded it lets go of the
+oldest copies past `backup_retention` exactly as `backups save` does — the copy just taken is the
+newest, so it is kept, and a settle that fails lets go of nothing. What retention could not do is
+said in the update's output and never fails the update. If that copy cannot be made, migration does not begin
 and the update fails with the reason; turning backups on therefore guarantees a rollback boundary
 rather than merely requesting one.
 

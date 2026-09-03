@@ -2088,7 +2088,9 @@ class TheCommand(Copies):
         def finished_archive_temporarily_unreadable(file, *args, **options):
             if isinstance(file, (str, os.PathLike)):
                 path = Path(file)
-                if path.parent == self.at and path.name.endswith(".zip"):
+                # Resolved on both sides: a scratch directory under /var stands under /private
+                # on macOS, and an unresolved comparison let every copy read as restorable.
+                if path.resolve().parent == self.at.resolve() and path.name.endswith(".zip"):
                     raise OSError("the finished archive is temporarily unreadable")
             return zip_file(file, *args, **options)
 
