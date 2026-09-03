@@ -485,6 +485,24 @@ class ListingWhatAnAgentHolds(Skills):
         self.assertEqual(0, skill["required_values"])
         self.assertEqual("READY", skill["standing"]["verdict"])
 
+    def test_json_reports_a_blocked_grant_and_what_it_still_needs(self):
+        # R-JSON-3. A grant with declared needs and nothing configured stands BLOCKED, and the
+        # document says so the way the table does, with the count of values it is waiting on.
+        self.rundesk("skills", "grant", "alan", "acme/jira")
+
+        code, out, err = self.rundesk("skills", "list", "alan", "--json")
+
+        self.assertEqual(0, code, err)
+        skill = json.loads(out)["skills"][0]
+        self.assertEqual("jira", skill["name"])
+        self.assertEqual("BLOCKED", skill["standing"]["verdict"])
+        self.assertGreater(skill["required_values"], 0)
+
+    def test_the_bare_verb_and_list_are_the_same_json_too(self):
+        self.rundesk("skills", "grant", "alan", "acme/writing-plans")
+        self.assertEqual(self.rundesk("skills", "--json"), self.rundesk("skills", "list", "--json"))
+        self.assertIn('"agents":["alan"]', self.rundesk("skills", "--json")[1])
+
     def test_the_whole_library_says_which_agents_hold_what(self):
         self.rundesk("skills", "grant", "alan", "acme/writing-plans")
         code, out, _err = self.rundesk("skills")
