@@ -17,22 +17,26 @@ somebody else's workspace goes wrong:
     a channel wakes on a mention and on nothing else, including inside a thread it already answered
     a stranger costs nothing and is told nothing
     what a turn looks like is 👀, Slack's own status, and ✅ — never a line of commentary
+    a command is answered privately, and a word rundesk does not know never leaves this file
 
     python3 tests/test_channels_slack.py
 """
 
 import contextlib
 import functools
+import hashlib
 import importlib.machinery
 import importlib.util
 import io
 import json
 import os
+import shutil
+import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 from unittest import mock
 
 #: The adapter is an executable with a shebang and no `.py`, so it is loaded by path rather than
@@ -61,6 +65,12 @@ ROOM = "C0OPS"
 PRIVATE = "G0SEC"
 DM = "D0ANN"
 TEAM = "T0ACME"
+
+#: The one command this workspace gave the agent, and where Slack takes its private answers. Both
+#: are synthetic: the name is whatever an app manifest declared, and a response url is Slack's own
+#: per-invocation address, so nothing real is ever written into a case here.
+COMMAND = "/ava"
+ANSWERING = "https://slack.invalid/commands/T0ACME/1/private"
 
 #: The two ids Slack gives an app for itself, and a second agent bot standing in the same thread.
 #: **`bot_id` is the app and `user_id` is its bot user**, and both are answered by `auth.test`.
@@ -109,6 +119,9 @@ class Web:
 
     def __init__(self, **named: Any) -> None:
         self.token = named.get("token", "")
+        #: The ceiling this client was built with. Uploads get one of their own, so a delivery's
+        #: whole file phase can stay inside the moment rundesk waits for its terminal record.
+        self.timeout = named.get("timeout")
         #: Every call this and the socket made, in one list, so *order* is assertable. An
         #: acknowledgement that arrives is not an acknowledgement that arrived first, and the
         #: difference is three seconds of Slack redelivering the same message.
@@ -209,6 +222,10 @@ class Web:
         self._called("reactions_remove", **named)
         return Answered({"ok": True})
 
+    def files_upload_v2(self, **named: Any) -> Answered:   # Slack's own spelling, kept verbatim
+        self._called("files_upload_v2", **named)
+        return Answered({"ok": True, "files": [{"id": "F0FILE"}]})
+
     def api_call(self, method: str, **named: Any) -> Answered:
         self._called(method, **named)
         return Answered({"ok": True})
@@ -264,6 +281,60 @@ class Socket:
         self.up = True
 
 
+class Posted:
+    """`WebhookResponse`: an HTTP status and a body, which is all a response url answers with."""
+
+    def __init__(self, status_code: int = 200, body: str = "ok") -> None:
+        self.status_code = status_code
+        self.body = body
+
+
+class Webhook:
+    """`slack_sdk.webhook.WebhookClient` — a command's own response url, and what went to it.
+
+    Recorded on the class rather than on an instance because the adapter builds one per answer: the
+    url is private to a single invocation and is never held open. `Wired.setUp` clears all of this,
+    and `reaching` points `timeline` at the web client's, so *what happened first* stays a fact.
+
+    **`ClassVar` is what says that out loud.** Every one of these is held by the class deliberately,
+    and the annotation is the difference between a record shared on purpose and the accident of a
+    mutable default — which is exactly what the next reader, and the linter, would otherwise have to
+    guess at.
+    """
+
+    timeline: ClassVar[List[str]] = []
+    sent: ClassVar[List[Dict[str, Any]]] = []
+    #: What Slack answers with, and whether the call fails outright. Set by a case that needs one.
+    status: ClassVar[int] = 200
+    raises: ClassVar[Optional[Exception]] = None
+
+    def __init__(self, url: str, timeout: Optional[int] = None) -> None:
+        self.url = url
+
+    def send(self, **named: Any) -> Posted:
+        Webhook.timeline.append("answered_privately")
+        Webhook.sent.append(dict(named, url=self.url))
+        if Webhook.raises is not None:
+            raise Webhook.raises
+        return Posted(Webhook.status)
+
+
+class Ticking:
+    """A monotonic clock a case advances itself.
+
+    **Advanced by what happens rather than by how often it is asked.** A clock that hands out a
+    prepared list of readings cannot tell *where* it was read: take one reading away and every
+    later one shifts up into its place, so a case fed that way passes against a budget started in
+    the wrong position. This one only moves when a case says something took time.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def tick(self, seconds: float) -> None:
+        self.now += seconds
+
+
 class Answering:
     """`SocketModeResponse`, which carries nothing but the envelope being acknowledged."""
 
@@ -279,6 +350,24 @@ class Envelope:
         self.type = kind
         self.envelope_id = envelope_id
         self.payload = {"event_id": event_id, "team_id": TEAM, "event": event}
+
+
+class Command:
+    """One `slash_commands` envelope as Slack delivers one: a payload, and no event in it.
+
+    **No `thread_ts`, because Slack's command payload has none.** That absence is the whole reason a
+    command names the conversation the channel keeps rather than the thread somebody typed it in.
+    """
+
+    def __init__(self, text: str = "status", user: str = THEM, channel: str = DM,
+                 command: str = COMMAND, envelope_id: str = "e-1", trigger_id: str = "t-1",
+                 **also: Any) -> None:
+        self.type = adapter.SLASH
+        self.envelope_id = envelope_id
+        self.payload: Dict[str, Any] = {
+            "command": command, "text": text, "user_id": user, "channel_id": channel,
+            "team_id": TEAM, "response_url": ANSWERING, "trigger_id": trigger_id}
+        self.payload.update(also)
 
 
 def a_mention(text: str = f"<@{US}> what changed today?", channel: str = ROOM,
@@ -307,17 +396,24 @@ class Wired(unittest.TestCase):
     def setUp(self) -> None:
         for name, value in (("slack_sdk", object()), ("SocketModeClient", Socket),
                             ("SocketModeResponse", Answering), ("WebClient", Web),
-                            ("SlackApiError", Refused)):
+                            ("WebhookClient", Webhook), ("SlackApiError", Refused)):
             setattr(adapter, name, value)
             self.addCleanup(setattr, adapter, name, None)
+        Webhook.timeline, Webhook.sent = [], []
+        Webhook.status, Webhook.raises = 200, None
 
     def reaching(self, allow: Optional[List[str]] = None,
                  places: Optional[List[str]] = None) -> Any:
         """A connection wired to a stand-in, already signed in, ready to be told things."""
         one = adapter.Reaching([THEM] if allow is None else allow, list(places or []))
         one.web = Web(token="xoxb-x")
+        # The same recorder under both names, so *what was called* stays one list while production
+        # keeps two clients with two ceilings — see
+        # `test_uploads_are_built_under_their_own_socket_ceiling`.
+        one.uploads = one.web
         one.socket = Socket(app_token="xapp-x")
         one.socket.timeline = one.web.timeline
+        Webhook.timeline = one.web.timeline
         one.ours, one.our_bot, one.team, one.named = US, OUR_BOT, TEAM, "rundesk"
         return one
 
@@ -370,11 +466,22 @@ class WhatItSaysItCanDo(unittest.TestCase):
         self.assertEqual(json.loads(caught.getvalue()), adapter.CAPABILITIES)
 
     def test_it_is_honest_about_being_quiet(self) -> None:
-        # Nothing here streams progress, nothing edits a posted message, and nothing attaches a file.
-        # A capability declared and not used is the day an adapter that lied starts being believed.
+        # Nothing here streams progress and nothing edits a posted message. A capability declared
+        # and not used is the day an adapter that lied about itself starts being believed.
         self.assertIs(adapter.CAPABILITIES["stream"], False)
         self.assertEqual(adapter.CAPABILITIES["edit"], "none")
-        self.assertIs(adapter.CAPABILITIES["attach"], False)
+
+    def test_it_says_it_attaches_because_it_really_uploads(self) -> None:
+        """R-SLK-47. A file the agent declared is verified again and uploaded into the conversation
+        the answer went to, so the declared capability is a fact rather than an aspiration."""
+        self.assertIs(adapter.CAPABILITIES["attach"], True)
+        self.assertIn("files:write", adapter.WANTED_SCOPES)
+
+    def test_it_asks_for_no_scope_that_would_read_a_file_in(self) -> None:
+        # One direction only: nothing here fetches an incoming file, so nothing asks to.
+        for never in ("files:read", "remote_files:read", "remote_files:write"):
+            with self.subTest(never):
+                self.assertNotIn(never, adapter.WANTED_SCOPES)
 
     def test_it_marks_and_threads_because_it_really_does(self) -> None:
         self.assertIs(adapter.CAPABILITIES["react"], True)
@@ -410,12 +517,23 @@ class WhenItWakes(unittest.TestCase):
         self.assertEqual(woken.channel, DM)
         self.assertEqual(woken.text, "what changed today?")
 
-    def test_a_direct_message_is_answered_where_it_was_said_and_opens_no_thread(self) -> None:
+    def test_a_direct_conversation_is_keyed_by_no_thread_at_all(self) -> None:
+        """R-SLK-50. Identity and reply target are two facts. A thread inside a direct message used
+        to key a conversation of its own, so a session and a history went with it."""
         self.assertEqual(self.woken(adapter.MESSAGE, a_direct()).thread, "")
+        threaded = self.woken(adapter.MESSAGE, a_direct(ts="1701.000100",
+                                                        thread_ts="1700.000100"))
+        self.assertEqual(threaded.thread, "")
 
-    def test_a_direct_message_in_a_thread_is_answered_in_that_thread(self) -> None:
+    def test_a_direct_message_is_answered_in_a_thread_rooted_at_itself(self) -> None:
+        # The visual target, which the conversation deliberately does not carry: two exchanges in
+        # one direct conversation stay readable apart without becoming two conversations.
+        woken = self.woken(adapter.MESSAGE, a_direct(ts="1700.000100"))
+        self.assertEqual(woken.answer_in, "1700.000100")
+
+    def test_a_direct_message_inside_a_thread_is_answered_in_that_thread(self) -> None:
         woken = self.woken(adapter.MESSAGE, a_direct(ts="1701.000100", thread_ts="1700.000100"))
-        self.assertEqual(woken.thread, "1700.000100")
+        self.assertEqual(woken.answer_in, "1700.000100")
 
     def test_a_direct_message_carries_no_thread_slice(self) -> None:
         # Rundesk already keeps this conversation, so reading Slack's copy of it would hand a brain
@@ -424,6 +542,15 @@ class WhenItWakes(unittest.TestCase):
         self.assertFalse(woken.joined)
 
     # -- a shared channel ------------------------------------------------------------------
+
+    def test_a_channel_keys_its_conversation_by_the_thread_it_answers_in(self) -> None:
+        # In a channel the two facts coincide, and both are stated rather than either inferred.
+        for event in (a_mention(ts="1700.000100"),
+                      a_mention(ts="1705.000100", thread="1700.000100")):
+            with self.subTest(event.get("thread_ts")):
+                woken = self.woken(adapter.MENTION, event)
+                self.assertEqual(woken.thread, "1700.000100")
+                self.assertEqual(woken.answer_in, woken.thread)
 
     def test_a_mention_at_the_top_of_a_channel_roots_a_thread_at_itself(self) -> None:
         woken = self.woken(adapter.MENTION, a_mention(ts="1700.000100"))
@@ -538,7 +665,13 @@ class HowAConversationIsNamed(unittest.TestCase):
 
 
 class WhatSlackReserves(unittest.TestCase):
-    """Escaping here is a safety property, not a rendering one."""
+    """Escaping here is a safety property, not a rendering one — and one person is the exception.
+
+    **Two rules, because two different things are being said.** `escaped` is the whole of it and is
+    what a private command answer goes through: those words are rundesk's account of stored records.
+    `escaped_keeping_mentions` is what a turn's answer goes through, and it keeps the exact markup
+    for one member because an agent asked to loop somebody in has to be able to.
+    """
 
     def test_an_answer_cannot_address_the_room(self) -> None:
         # `<!channel>` notifies everybody who can read the channel. An answer containing one — meant
@@ -546,7 +679,9 @@ class WhatSlackReserves(unittest.TestCase):
         self.assertEqual(adapter.escaped("<!channel> deploy now"),
                          "&lt;!channel&gt; deploy now")
 
-    def test_an_answer_cannot_ping_somebody(self) -> None:
+    def test_escaping_whole_leaves_even_one_person_inert(self) -> None:
+        # The rule a private command answer rests on, and it is deliberately the stricter of the
+        # two: nothing rundesk composes out of stored names is an agent addressing anybody.
         self.assertEqual(adapter.escaped(f"<@{THEM}>"), f"&lt;@{THEM}&gt;")
 
     def test_the_ampersand_is_escaped_first_so_nothing_is_escaped_twice(self) -> None:
@@ -555,6 +690,54 @@ class WhatSlackReserves(unittest.TestCase):
 
     def test_ordinary_text_is_left_alone(self) -> None:
         self.assertEqual(adapter.escaped("three files changed"), "three files changed")
+
+    # -- the one thing a turn's answer keeps -----------------------------------------------
+
+    def test_an_answer_keeps_an_exact_mention_of_one_person(self) -> None:
+        """R-SLK-15. An agent that names somebody meant to name them, and an escaped mention is a
+        line of punctuation that notified nobody and named nobody a reader could click."""
+        self.assertEqual(adapter.escaped_keeping_mentions(f"I'll ask <@{THEM}> to look"),
+                         f"I'll ask <@{THEM}> to look")
+
+    def test_an_answer_keeps_a_mention_of_an_enterprise_member(self) -> None:
+        # Slack documents `W…` for a member of an Enterprise Grid organisation. A rule that knew
+        # only `U…` would escape a real colleague on the installs with the most people around them.
+        self.assertEqual(adapter.escaped_keeping_mentions("<@W012A3CDE> please review"),
+                         "<@W012A3CDE> please review")
+
+    def test_an_answer_never_keeps_an_address_wider_than_one_person(self) -> None:
+        for wider in ("<!channel>", "<!here>", "<!everyone>", "<!subteam^S0DEV>",
+                      "<!subteam^S0DEV|@devs>", "<#C0OPS>", "<#C0OPS|ops>"):
+            with self.subTest(wider):
+                said = adapter.escaped_keeping_mentions(f"heads up {wider}")
+                self.assertNotIn("<", said)
+                self.assertNotIn(">", said)
+
+    def test_anything_that_is_not_exactly_one_person_is_escaped_like_any_other_text(self) -> None:
+        # Exact, and never nearly: the deprecated labelled form carries somebody else's label, a
+        # lowercased id is not Slack's shape, and a token that never closed is not a mention.
+        for nearly in (f"<@{THEM}|ann>", "<@u0ann>", "<@C0OPS>", "<@>", f"<@{THEM}",
+                       "<@U0ANN@U0EVE>", "< @U0ANN>"):
+            with self.subTest(nearly):
+                said = adapter.escaped_keeping_mentions(nearly)
+                self.assertNotIn("<", said)
+                self.assertNotIn(">", said)
+
+    def test_the_text_around_a_kept_mention_is_still_escaped(self) -> None:
+        self.assertEqual(
+            adapter.escaped_keeping_mentions(f"<!here> & <@{THEM}> <#C0OPS>"),
+            f"&lt;!here&gt; &amp; <@{THEM}> &lt;#C0OPS&gt;")
+
+    def test_a_stray_bracket_beside_a_kept_mention_is_still_escaped(self) -> None:
+        self.assertEqual(adapter.escaped_keeping_mentions(f"<@{THEM}>>"), f"<@{THEM}>&gt;")
+
+    def test_two_people_named_in_one_answer_are_both_kept(self) -> None:
+        self.assertEqual(adapter.escaped_keeping_mentions(f"<@{THEM}> and <@{STRANGER}>"),
+                         f"<@{THEM}> and <@{STRANGER}>")
+
+    def test_ordinary_text_is_left_alone_by_both_rules(self) -> None:
+        self.assertEqual(adapter.escaped_keeping_mentions("three files changed"),
+                         "three files changed")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1083,8 +1266,11 @@ class WhatArrives(Wired):
     # -- what is not an event at all -------------------------------------------------------
 
     def test_an_envelope_that_is_not_an_event_wakes_nothing(self) -> None:
+        # An interactive envelope rather than a `slash_commands` one, which this adapter now reads:
+        # what is proved here is that an envelope carrying no event wakes nothing, and a kind the
+        # adapter answers would prove the opposite of that while passing.
         one = self.reaching()
-        self.woke_nothing(self.envelope(one, a_direct(), kind="slash_commands"), "not_an_event")
+        self.woke_nothing(self.envelope(one, a_direct(), kind="interactive"), "not_an_event")
 
     def test_a_payload_with_nothing_in_it_wakes_nothing(self) -> None:
         one = self.reaching()
@@ -1412,7 +1598,10 @@ class WhatGoesOut(Wired):
         self.assertEqual(posted["channel"], ROOM)
         self.assertEqual(posted["thread_ts"], "1700.000100")
 
-    def test_an_answer_in_a_direct_message_starts_no_thread(self) -> None:
+    def test_a_delivery_that_answers_no_message_is_posted_flat(self) -> None:
+        # Nothing to be read beside, so there is no thread to open: a gateway notice and a
+        # schedule's report both arrive this way. Where an answer to a *message* goes is
+        # `OneDirectConversation`, which is a different question and has its own answer.
         one = self.reaching()
         self.told(one, self.a_delivery(place=adapter.conversation_of(TEAM, DM)))
         self.assertIsNone(one.web.made("chat_postMessage")[0]["thread_ts"])
@@ -1423,11 +1612,13 @@ class WhatGoesOut(Wired):
         self.assertEqual(said["id"], "1754431200.123456-0-7")
         self.assertEqual(said["external_id"], "1001.000100")
 
-    def test_everything_a_brain_wrote_is_escaped(self) -> None:
+    def test_what_a_brain_wrote_is_escaped_except_the_one_person_it_named(self) -> None:
+        """R-SLK-15. The answer that really goes to Slack: a room cannot be addressed, and the
+        member the agent deliberately named arrives as the mention Slack notifies on."""
         one = self.reaching()
-        self.told(one, self.a_delivery(text="<!channel> & <@U0ANN>"))
+        self.told(one, self.a_delivery(text=f"<!channel> & <@{THEM}>"))
         self.assertEqual(one.web.made("chat_postMessage")[0]["text"],
-                         "&lt;!channel&gt; &amp; &lt;@U0ANN&gt;")
+                         f"&lt;!channel&gt; &amp; <@{THEM}>")
 
     def test_text_past_the_limit_is_refused_rather_than_cut_a_second_time(self) -> None:
         one = self.reaching()
@@ -1440,12 +1631,13 @@ class WhatGoesOut(Wired):
         one = self.reaching()
         self.only(self.told(one, self.a_delivery(text="x" * adapter.MAX_TEXT)), "delivered")
 
-    def test_a_delivery_carrying_a_file_is_refused_in_words_that_say_why(self) -> None:
+    def test_a_file_described_without_a_digest_to_check_is_never_uploaded(self) -> None:
+        """R-SLK-48. Nothing is uploaded on the strength of a path: without the size and digest
+        rundesk approved there is nothing to compare the re-opened bytes against."""
         one = self.reaching()
-        said = self.only(self.told(one, self.a_delivery(files=[{"at": "/tmp/x", "bytes": 1}])),
-                         "failed")
-        self.assertIn("cannot attach a file", said["why"])
-        self.assertEqual(one.web.made("chat_postMessage"), [])
+        records = self.told(one, self.a_delivery(files=[{"at": "/tmp/x", "bytes": 1}]))
+        self.assertEqual(one.web.made("files_upload_v2"), [])
+        self.assertIn("without a digest", self.note(records, "could not attach")["text"])
 
     def test_a_place_this_adapter_cannot_address_is_a_failure_and_never_a_guess(self) -> None:
         one = self.reaching()
@@ -1456,6 +1648,12 @@ class WhatGoesOut(Wired):
     def test_a_delivery_with_nothing_in_it_is_never_sent(self) -> None:
         one = self.reaching()
         self.only(self.told(one, self.a_delivery(text="   ")), "failed")
+        self.assertEqual(one.web.made("chat_postMessage"), [])
+
+    def test_a_delivery_that_is_not_a_list_of_files_is_refused(self) -> None:
+        one = self.reaching()
+        said = self.only(self.told(one, self.a_delivery(files="chart.png")), "failed")
+        self.assertIn("were not a list", said["why"])
         self.assertEqual(one.web.made("chat_postMessage"), [])
 
     def test_text_that_is_not_text_is_refused(self) -> None:
@@ -2004,10 +2202,1249 @@ class WhatItNeverShows(Wired):
         self.assertEqual([made["text"] for made in one.web.made("chat_postMessage")],
                          ["three files changed"])
 
-    def test_nothing_is_posted_for_a_gesture_answer_because_none_is_ever_asked(self) -> None:
+    def test_a_gesture_answer_is_never_posted_where_a_channel_can_read_it(self) -> None:
+        # The one record this surface answers privately. Nothing about it reaches a channel: no
+        # message is posted, and an answer for a command this run never held reaches nobody at all.
         one = self.reaching()
-        self.assertEqual(self.told(one, {"do": "answered", "ref": "c-1", "text": "3 schedules"}), [])
+        self.assertEqual(self.told(one, {"do": "answered", "ref": "t-1", "text": "3 schedules"}), [])
         self.assertEqual(one.web.calls, [])
+        self.assertEqual(Webhook.sent, [])
+
+
+# ---------------------------------------------------------------------------------------------
+# One direct conversation, and where its answers are read.
+# ---------------------------------------------------------------------------------------------
+
+
+class OneDirectConversation(Wired):
+    """Identity and reply destination, told apart end to end (R-SLK-50).
+
+    **The defect this exists for:** a Slack thread inside a direct message keyed a conversation of
+    its own, so the durable conversation, the provider session and the busy-turn admission all split
+    the moment somebody threaded a follow-up. An agent asked *and the other one?* in a thread had
+    never heard of the other one, and a turn already running in the flat conversation did not know
+    the threaded message was for it.
+
+    What replaces it is two facts rather than one: the conversation is the direct conversation, and
+    where an answer is read is a property of the message being answered.
+    """
+
+    def arrived(self, one: Any, event: Dict[str, Any], **named: Any) -> Dict[str, Any]:
+        request = Envelope(event, **named)
+        return self.only(self.during(lambda: one._envelope(one.socket, request)), "arrived")
+
+    def delivered(self, one: Any, place: str, **also: Any) -> None:
+        it = dict({"do": "deliver", "id": "1754431200.123456-0-7", "place": place,
+                   "text": "here it is"}, **also)
+        self.during(lambda: one._deliver(it))
+
+    # -- one identity ----------------------------------------------------------------------
+
+    def test_a_flat_and_a_threaded_direct_message_are_one_conversation(self) -> None:
+        one = self.reaching()
+        flat = self.arrived(one, a_direct(ts="1700.000100"))
+        threaded = self.arrived(one, a_direct(ts="1701.000100", thread_ts="1700.000100"),
+                                envelope_id="e-2", event_id="Ev2")
+        self.assertEqual(flat["conversation"], adapter.conversation_of(TEAM, DM))
+        self.assertEqual(threaded["conversation"], flat["conversation"])
+
+    def test_a_threaded_message_then_a_flat_one_is_the_same_conversation(self) -> None:
+        one = self.reaching()
+        threaded = self.arrived(one, a_direct(ts="1700.000100", thread_ts="1699.000100"))
+        flat = self.arrived(one, a_direct(ts="1702.000100"), envelope_id="e-2", event_id="Ev2")
+        self.assertEqual(threaded["conversation"], adapter.conversation_of(TEAM, DM))
+        self.assertEqual(flat["conversation"], threaded["conversation"])
+
+    def test_two_different_threads_in_one_direct_message_are_one_conversation(self) -> None:
+        # What makes a later message steer the turn already running rather than start a second one:
+        # rundesk asks whether *this conversation* is busy, and both of these are it.
+        one = self.reaching()
+        first = self.arrived(one, a_direct(ts="1700.000100", thread_ts="1690.000100"))
+        second = self.arrived(one, a_direct(ts="1701.000100", thread_ts="1695.000100"),
+                              envelope_id="e-2", event_id="Ev2")
+        self.assertEqual(first["conversation"], second["conversation"])
+        self.assertNotEqual(first["external_id"], second["external_id"])
+
+    def test_a_direct_conversation_carries_its_channel_as_the_place_it_is_admitted_by(self) -> None:
+        one = self.reaching()
+        self.assertEqual(self.arrived(one, a_direct())["external_place"], DM)
+
+    # -- and a reply target of its own -----------------------------------------------------
+
+    def test_an_answer_to_a_flat_direct_message_opens_a_thread_under_it(self) -> None:
+        one = self.reaching()
+        self.arrived(one, a_direct(ts="1700.000100"))
+        self.delivered(one, adapter.conversation_of(TEAM, DM), reply_to="1700.000100")
+        made = one.web.made("chat_postMessage")[0]
+        self.assertEqual(made["channel"], DM)
+        self.assertEqual(made["thread_ts"], "1700.000100")
+
+    def test_an_answer_to_a_threaded_direct_message_stays_in_that_thread(self) -> None:
+        one = self.reaching()
+        self.arrived(one, a_direct(ts="1701.000100", thread_ts="1690.000100"))
+        self.delivered(one, adapter.conversation_of(TEAM, DM), reply_to="1701.000100")
+        self.assertEqual(one.web.made("chat_postMessage")[0]["thread_ts"], "1690.000100")
+
+    def test_a_later_message_in_another_thread_never_moves_the_answer(self) -> None:
+        """R-SLK-50. A message said into a turn already running steers what the agent says. Where
+        the answer appears was decided by the message that started it, and stays decided."""
+        one = self.reaching()
+        self.arrived(one, a_direct(ts="1700.000100"))
+        self.arrived(one, a_direct(ts="1701.000100", thread_ts="1695.000100"),
+                     envelope_id="e-2", event_id="Ev2")
+        self.delivered(one, adapter.conversation_of(TEAM, DM), reply_to="1700.000100")
+        self.assertEqual(one.web.made("chat_postMessage")[0]["thread_ts"], "1700.000100")
+
+    def test_one_answer_is_posted_once_however_many_messages_steered_it(self) -> None:
+        one = self.reaching()
+        self.arrived(one, a_direct(ts="1700.000100"))
+        self.arrived(one, a_direct(ts="1701.000100"), envelope_id="e-2", event_id="Ev2")
+        self.delivered(one, adapter.conversation_of(TEAM, DM), reply_to="1700.000100")
+        self.assertEqual(len(one.web.made("chat_postMessage")), 1)
+
+    def test_an_unprompted_notice_is_posted_flat_in_the_direct_conversation(self) -> None:
+        # A gateway notice and a schedule's report answer nobody, so they carry no `reply_to` and
+        # there is no message to be read beside: the conversation's own place is where they go.
+        one = self.reaching()
+        self.delivered(one, adapter.conversation_of(TEAM, DM), notice=True)
+        made = one.web.made("chat_postMessage")[0]
+        self.assertEqual(made["channel"], DM)
+        self.assertIsNone(made["thread_ts"])
+
+    def test_an_answer_to_a_message_this_run_never_saw_goes_to_the_conversation(self) -> None:
+        # A gateway restarted mid-turn holds no memory of the message. The conversation is still
+        # where the answer belongs, which is a flat direct message rather than nowhere at all.
+        one = self.reaching()
+        self.delivered(one, adapter.conversation_of(TEAM, DM), reply_to="1600.000100")
+        self.assertIsNone(one.web.made("chat_postMessage")[0]["thread_ts"])
+
+    def test_a_file_goes_into_the_same_thread_the_answer_did(self) -> None:
+        one = self.reaching()
+        self.arrived(one, a_direct(ts="1700.000100"))
+        held = tempfile.TemporaryDirectory()
+        self.addCleanup(held.cleanup)
+        at = Path(held.name).resolve() / "preview.png"
+        at.write_bytes(b"pixels")
+        self.delivered(one, adapter.conversation_of(TEAM, DM), reply_to="1700.000100",
+                       files=[{"name": at.name, "at": str(at), "bytes": 6,
+                               "sha256": hashlib.sha256(b"pixels").hexdigest()}])
+        self.assertEqual(one.web.made("files_upload_v2")[0]["thread_ts"], "1700.000100")
+
+    # -- a split answer, which is what rundesk really sends --------------------------------
+
+    def pieces(self, one: Any, place: str, *saying: Dict[str, Any]) -> None:
+        """Several deliveries the way `hosting.told` writes one answer: `reply_to` on the first
+        piece, the files on the last, and nothing on the ones between."""
+        for nth, piece in enumerate(saying):
+            it = dict({"do": "deliver", "id": f"1754431200.123456-{nth}-{nth + 1}",
+                       "place": place, "text": ""}, **piece)
+            self.during(lambda it=it: one._deliver(it))
+
+    def test_every_piece_of_a_split_direct_answer_lands_on_one_target(self) -> None:
+        """R-SLK-14. Rundesk marks only the first piece as the answer to something, and a direct
+        conversation's key holds no thread — so without one target the first piece stood in a
+        thread and every piece after it landed flat beside it."""
+        one = self.reaching()
+        self.arrived(one, a_direct(ts="1700.000100"))
+        self.pieces(one, adapter.conversation_of(TEAM, DM),
+                    {"text": "the first half", "reply_to": "1700.000100"},
+                    {"text": "and the second"})
+        posted = one.web.made("chat_postMessage")
+        self.assertEqual([made["text"] for made in posted], ["the first half", "and the second"])
+        self.assertEqual([made["thread_ts"] for made in posted],
+                         ["1700.000100", "1700.000100"])
+
+    def test_a_file_on_the_last_piece_lands_on_the_same_target(self) -> None:
+        """R-SLK-47. The files ride on the last piece of a split answer, which carries no
+        `reply_to` — so the file went flat while the answer it belongs under stood in a thread."""
+        one = self.reaching()
+        self.arrived(one, a_direct(ts="1700.000100"))
+        held = tempfile.TemporaryDirectory()
+        self.addCleanup(held.cleanup)
+        at = Path(held.name).resolve() / "preview.png"
+        at.write_bytes(b"pixels")
+        approved = {"name": at.name, "at": str(at), "bytes": 6,
+                    "sha256": hashlib.sha256(b"pixels").hexdigest()}
+        self.pieces(one, adapter.conversation_of(TEAM, DM),
+                    {"text": "the first half", "reply_to": "1700.000100"},
+                    {"text": "and the second", "files": [approved]})
+        self.assertEqual(one.web.made("files_upload_v2")[0]["thread_ts"], "1700.000100")
+        self.assertEqual({made["thread_ts"] for made in one.web.made("chat_postMessage")},
+                         {"1700.000100"})
+
+    def test_a_notice_between_two_pieces_stays_flat_and_moves_nothing(self) -> None:
+        # A schedule's report answers nobody, so it neither takes the target nor leaves one. Both
+        # halves matter: it must not be threaded, and it must not send the next piece flat.
+        one = self.reaching()
+        self.arrived(one, a_direct(ts="1700.000100"))
+        self.pieces(one, adapter.conversation_of(TEAM, DM),
+                    {"text": "the first half", "reply_to": "1700.000100"},
+                    {"text": "a scheduled report", "notice": True},
+                    {"text": "and the second"})
+        self.assertEqual([made["thread_ts"] for made in one.web.made("chat_postMessage")],
+                         ["1700.000100", None, "1700.000100"])
+
+    def test_a_notice_that_replies_to_something_still_remembers_nothing(self) -> None:
+        # A schedule's report is posted under the announcement that preceded it, so a notice can
+        # carry `reply_to` — and what it would remember is the flat conversation, which would take
+        # the next piece of the real answer out of the thread it belongs in.
+        one = self.reaching()
+        self.arrived(one, a_direct(ts="1700.000100"))
+        self.pieces(one, adapter.conversation_of(TEAM, DM),
+                    {"text": "the first half", "reply_to": "1700.000100"},
+                    {"text": "the nightly report", "reply_to": "1500.000100", "notice": True},
+                    {"text": "and the second"})
+        self.assertEqual([made["thread_ts"] for made in one.web.made("chat_postMessage")],
+                         ["1700.000100", None, "1700.000100"])
+
+    def test_a_notice_alone_in_a_conversation_is_never_threaded(self) -> None:
+        one = self.reaching()
+        self.pieces(one, adapter.conversation_of(TEAM, DM),
+                    {"text": "the gateway is up", "notice": True})
+        self.assertIsNone(one.web.made("chat_postMessage")[0]["thread_ts"])
+
+    def test_a_later_answer_in_the_same_conversation_takes_its_own_target(self) -> None:
+        # The target belongs to the answer being written, not to the conversation for ever: the
+        # next prompted answer resolves its own and every piece of *that* one follows it.
+        one = self.reaching()
+        self.arrived(one, a_direct(ts="1700.000100"))
+        self.arrived(one, a_direct(ts="1800.000100"), envelope_id="e-2", event_id="Ev2")
+        self.pieces(one, adapter.conversation_of(TEAM, DM),
+                    {"text": "about the first", "reply_to": "1700.000100"},
+                    {"text": "still the first"})
+        self.pieces(one, adapter.conversation_of(TEAM, DM),
+                    {"text": "about the second", "reply_to": "1800.000100"},
+                    {"text": "still the second"})
+        self.assertEqual([made["thread_ts"] for made in one.web.made("chat_postMessage")],
+                         ["1700.000100", "1700.000100", "1800.000100", "1800.000100"])
+
+    def test_one_conversation_never_takes_another_conversations_target(self) -> None:
+        one = self.reaching(places=[ROOM])
+        self.arrived(one, a_direct(ts="1700.000100"))
+        self.pieces(one, adapter.conversation_of(TEAM, DM),
+                    {"text": "in the direct message", "reply_to": "1700.000100"})
+        self.pieces(one, adapter.conversation_of(TEAM, ROOM, "1650.000100"),
+                    {"text": "a later piece in a channel"})
+        self.assertEqual([made["thread_ts"] for made in one.web.made("chat_postMessage")],
+                         ["1700.000100", "1650.000100"])
+
+    def test_every_piece_of_a_split_channel_answer_stays_in_its_thread(self) -> None:
+        # Unchanged, and proved rather than assumed: a channel conversation carries its own thread,
+        # so the pieces after the first were never the ones that went astray.
+        one = self.reaching(places=[ROOM])
+        self.arrived(one, a_mention(ts="1700.000100"))
+        self.pieces(one, adapter.conversation_of(TEAM, ROOM, "1700.000100"),
+                    {"text": "the first half", "reply_to": "1700.000100"},
+                    {"text": "and the second"})
+        self.assertEqual([made["thread_ts"] for made in one.web.made("chat_postMessage")],
+                         ["1700.000100", "1700.000100"])
+
+    def test_what_is_remembered_about_prompted_answers_is_bounded(self) -> None:
+        one = self.reaching()
+        for nth in range(adapter.LIVE_KEPT + 5):
+            self.pieces(one, adapter.conversation_of(TEAM, f"D{nth}"),
+                        {"text": "answered", "reply_to": "1700.000100"})
+        self.assertLessEqual(len(one.prompted), adapter.LIVE_KEPT)
+
+    # -- and nothing about a channel changes -----------------------------------------------
+
+    def test_a_channel_conversation_still_carries_the_thread_it_is_in(self) -> None:
+        one = self.reaching(places=[ROOM])
+        top = self.arrived(one, a_mention(ts="1700.000100"))
+        self.assertEqual(top["conversation"], adapter.conversation_of(TEAM, ROOM, "1700.000100"))
+        inside = self.arrived(one, a_mention(ts="1705.000100", thread="1690.000100"),
+                              envelope_id="e-2", event_id="Ev2")
+        self.assertEqual(inside["conversation"],
+                         adapter.conversation_of(TEAM, ROOM, "1690.000100"))
+
+    def test_a_channel_answer_still_goes_to_the_thread_its_conversation_names(self) -> None:
+        one = self.reaching(places=[ROOM])
+        self.arrived(one, a_mention(ts="1700.000100"))
+        self.delivered(one, adapter.conversation_of(TEAM, ROOM, "1700.000100"),
+                       reply_to="1700.000100")
+        self.assertEqual(one.web.made("chat_postMessage")[0]["thread_ts"], "1700.000100")
+
+    def test_two_channel_threads_remain_two_conversations(self) -> None:
+        one = self.reaching(places=[ROOM])
+        first = self.arrived(one, a_mention(ts="1700.000100", thread="1690.000100"))
+        second = self.arrived(one, a_mention(ts="1701.000100", thread="1695.000100"),
+                              envelope_id="e-2", event_id="Ev2")
+        self.assertNotEqual(first["conversation"], second["conversation"])
+
+    def test_a_redelivered_direct_message_is_still_acted_on_once(self) -> None:
+        one = self.reaching()
+        first = self.during(lambda: one._envelope(one.socket, Envelope(a_direct())))
+        again = self.during(lambda: one._envelope(one.socket, Envelope(a_direct())))
+        self.assertEqual(len([said for said in first if said.get("say") == "arrived"]), 1)
+        self.none(again, "arrived")
+
+    def test_what_is_remembered_about_reply_targets_is_bounded(self) -> None:
+        one = self.reaching()
+        for nth in range(adapter.LIVE_KEPT + 5):
+            self.during(lambda nth=nth: one._envelope(
+                one.socket, Envelope(a_direct(ts=f"17{nth:05d}.000100"),
+                                     envelope_id=f"e-{nth}", event_id=f"Ev{nth}")))
+        self.assertLessEqual(len(one.replying), adapter.LIVE_KEPT)
+
+
+# ---------------------------------------------------------------------------------------------
+# A file on its way out, verified again and uploaded where the answer went.
+# ---------------------------------------------------------------------------------------------
+
+
+class SendingAFileOut(Wired):
+    """What the agent attached, proved against real bytes on disk and a stand-in Slack.
+
+    **The files are real and only Slack is not.** Everything this exists to check is a fact about
+    the filesystem — that the bytes re-opened are the bytes approved, that a path is resolved a
+    second time rather than trusted, that a component swapped for a link is refused — and none of
+    it can be proved against a description of a file.
+    """
+
+    PIXELS = b"pixels"
+
+    def setUp(self) -> None:
+        super().setUp()
+        held = tempfile.TemporaryDirectory()
+        self.addCleanup(held.cleanup)
+        self.project = Path(held.name).resolve()
+
+    def a_file(self, named: str = "preview.png", body: bytes = PIXELS,
+               under: str = "project") -> Path:
+        """One real file on disk, in a directory of its own."""
+        at = self.project / under / named
+        at.parent.mkdir(parents=True, exist_ok=True)
+        at.write_bytes(body)
+        return at
+
+    def approved(self, at: Path, **also: Any) -> Dict[str, Any]:
+        """What rundesk sends about a file it opened, fingerprinted and approved."""
+        body = at.read_bytes()
+        return dict({"name": at.name, "at": str(at), "bytes": len(body),
+                     "sha256": hashlib.sha256(body).hexdigest()}, **also)
+
+    def delivering(self, one: Any, place: Optional[str] = None, text: str = "here it is",
+                   **also: Any) -> List[Dict[str, Any]]:
+        it = dict({"do": "deliver", "id": "1754431200.123456-0-7",
+                   "place": place or adapter.conversation_of(TEAM, ROOM, "1700.000100"),
+                   "text": text}, **also)
+        return self.during(lambda: one._deliver(it))
+
+    def uploaded(self, one: Any) -> List[Dict[str, Any]]:
+        return one.web.made("files_upload_v2")
+
+    def posted(self, one: Any) -> List[Dict[str, Any]]:
+        return one.web.made("chat_postMessage")
+
+    # -- the file really goes ---------------------------------------------------------------
+
+    def test_a_file_the_agent_attached_is_uploaded_with_the_bytes_that_were_approved(self) -> None:
+        """R-SLK-47, R-SLK-48. The whole point: the words go, and the file goes with them, from a
+        snapshot of the bytes this adapter re-opened rather than from the path it was handed."""
+        one = self.reaching()
+        at = self.a_file()
+        records = self.delivering(one, files=[self.approved(at)])
+        made = self.uploaded(one)
+        self.assertEqual(len(made), 1)
+        self.assertEqual(made[0]["content"], self.PIXELS)
+        self.assertEqual(made[0]["filename"], "preview.png")
+        self.assertEqual(self.only(records, "delivered")["id"], "1754431200.123456-0-7")
+
+    def test_the_current_upload_path_is_the_one_used_and_the_retired_one_is_not(self) -> None:
+        # `files.upload` is retired. Named here rather than left to a reader of the source, because
+        # a call that Slack has withdrawn fails only in a real workspace.
+        one = self.reaching()
+        self.delivering(one, files=[self.approved(self.a_file())])
+        self.assertEqual([call["method"] for call in one.web.calls
+                          if "files" in call["method"]], ["files_upload_v2"])
+        source = ADAPTER.read_text(encoding="utf-8")
+        for retired in ("files_upload(", "files.upload\"", "files.upload'"):
+            with self.subTest(retired):
+                self.assertNotIn(retired, source)
+
+    def test_the_words_are_posted_before_the_file_goes_up(self) -> None:
+        # Slack has no call carrying both, so the answer is a message and the file is an upload —
+        # and the words a person is waiting on are not held behind an upload that may be slow.
+        one = self.reaching()
+        self.delivering(one, files=[self.approved(self.a_file())])
+        self.assertEqual([one for one in one.web.timeline if one != "acknowledged"],
+                         ["chat_postMessage", "files_upload_v2"])
+
+    def test_a_file_is_shared_into_the_thread_the_answer_is_in(self) -> None:
+        one = self.reaching()
+        self.delivering(one, place=adapter.conversation_of(TEAM, ROOM, "1700.000100"),
+                        files=[self.approved(self.a_file())])
+        made = self.uploaded(one)[0]
+        self.assertEqual(made["channel"], ROOM)
+        self.assertEqual(made["thread_ts"], "1700.000100")
+
+    def test_a_file_in_a_direct_message_is_shared_into_that_conversation(self) -> None:
+        """R-SLK-47. The failure this fixes was worst here: a delivery carrying a file used to be
+        refused outright, so an answer with a chart in a direct message posted nothing at all."""
+        one = self.reaching()
+        self.delivering(one, place=adapter.conversation_of(TEAM, DM),
+                        files=[self.approved(self.a_file())])
+        made = self.uploaded(one)[0]
+        self.assertEqual(made["channel"], DM)
+        self.assertNotIn("thread_ts", made)
+        self.assertEqual(self.posted(one)[0]["channel"], DM)
+
+    def test_every_file_of_a_delivery_goes_up_in_the_order_it_was_given(self) -> None:
+        one = self.reaching()
+        first, second = self.a_file("one.png", b"first!"), self.a_file("two.png", b"second")
+        self.delivering(one, files=[self.approved(first), self.approved(second)])
+        self.assertEqual([made["filename"] for made in self.uploaded(one)],
+                         ["one.png", "two.png"])
+        self.assertEqual([made["content"] for made in self.uploaded(one)],
+                         [b"first!", b"second"])
+
+    def test_a_file_only_delivery_posts_no_message_and_still_uploads(self) -> None:
+        one = self.reaching()
+        records = self.delivering(one, text="", files=[self.approved(self.a_file())])
+        self.assertEqual(self.posted(one), [])
+        self.assertEqual(len(self.uploaded(one)), 1)
+        self.assertEqual(self.only(records, "delivered")["external_id"], "")
+
+    def test_a_name_with_a_separator_in_it_is_taken_as_a_bare_name(self) -> None:
+        # A filename pretending to be somewhere. Rundesk has already made the name its own; this is
+        # the same guard on this side of the seam, because this file is the one that uploads it.
+        one = self.reaching()
+        at = self.a_file()
+        self.delivering(one, files=[self.approved(at, name="../../etc/passwd")])
+        self.assertEqual(self.uploaded(one)[0]["filename"], "passwd")
+
+    # -- and only if it is still what was approved ------------------------------------------
+
+    def refused_upload(self, one: Any, said: Dict[str, Any],
+                       saying: str = "could not attach") -> str:
+        """Deliver one file that will not go, and hand back what the log said about it."""
+        records = self.delivering(one, files=[said])
+        self.assertEqual(self.uploaded(one), [], "something unverified was uploaded")
+        return str(self.note(records, saying)["text"])
+
+    def test_a_file_whose_bytes_changed_after_approval_is_never_uploaded(self) -> None:
+        one = self.reaching()
+        at = self.a_file()
+        said = self.approved(at)
+        at.write_bytes(b"replaced by a concurrent turn")
+        self.assertIn("changed after it was approved", self.refused_upload(one, said))
+
+    def test_a_file_swapped_for_different_bytes_of_the_same_length_is_never_uploaded(self) -> None:
+        """The case the digest exists for, and the only one a size cannot see. A concurrent turn
+        that rewrote the file in place leaves every byte count matching and every byte wrong."""
+        one = self.reaching()
+        at = self.a_file()
+        said = self.approved(at)
+        at.write_bytes(b"PIXELS")
+        self.assertEqual(len(at.read_bytes()), said["bytes"])
+        self.assertIn("changed after it was approved", self.refused_upload(one, said))
+
+    def test_a_file_replaced_by_a_pipe_is_refused_without_blocking(self) -> None:
+        """A pipe opens for reading and is not a file, and opening one with nobody writing to it
+        blocks for ever — which is an adapter that stops answering rather than one that refuses.
+
+        **The flag is asserted rather than the hang observed.** The case forces `O_NONBLOCK` on so
+        that it stays bounded even against an implementation that left it out, and then asks whether
+        the adapter had requested it; watching the hang instead would leave the suite itself hanging.
+        """
+        one = self.reaching()
+        at = self.a_file()
+        said = self.approved(at)
+        at.unlink()
+        os.mkfifo(str(at))
+        opened = adapter.os.open
+        asked_with = []
+
+        def opening(name: Any, flags: int, *arguments: Any, **named: Any) -> int:
+            if name == at.name:
+                asked_with.append(flags)
+                flags |= os.O_NONBLOCK
+            return opened(name, flags, *arguments, **named)
+
+        adapter.os.open = opening
+        self.addCleanup(setattr, adapter.os, "open", opened)
+        self.assertIn("not a regular file", self.refused_upload(one, said))
+        self.assertTrue(asked_with and asked_with[0] & os.O_NONBLOCK,
+                        "the final component may block before it is known to be a regular file")
+
+    def test_a_file_whose_size_no_longer_matches_is_never_uploaded(self) -> None:
+        one = self.reaching()
+        at = self.a_file()
+        said = self.approved(at)
+        at.write_bytes(self.PIXELS + self.PIXELS)
+        self.assertIn("changed after it was approved", self.refused_upload(one, said))
+
+    def test_a_file_that_grew_is_refused_rather_than_read_to_the_approved_length(self) -> None:
+        # The declared size bounds the read, so a file that grew is refused for having grown
+        # instead of being truncated into bytes that would still hash correctly.
+        one = self.reaching()
+        at = self.a_file()
+        said = self.approved(at)
+        at.write_bytes(self.PIXELS + b"and more")
+        self.assertIn("changed after it was approved", self.refused_upload(one, said))
+
+    def test_a_file_that_vanished_between_approval_and_upload_says_so(self) -> None:
+        one = self.reaching()
+        at = self.a_file()
+        said = self.approved(at)
+        at.unlink()
+        told = self.refused_upload(one, said)
+        self.assertIn("is not there now", told)
+        self.assertIn("ENOENT", told)
+
+    def test_a_component_replaced_by_a_symbolic_link_is_refused_as_one(self) -> None:
+        """R-SLK-48. The window the second check exists to close: a directory above an approved
+        file replaced by a link points the same path at somewhere else entirely."""
+        one = self.reaching()
+        at = self.a_file()
+        said = self.approved(at)
+        elsewhere = self.project / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / at.name).write_bytes(self.PIXELS)
+        shutil.rmtree(str(at.parent))
+        (self.project / "project").symlink_to(elsewhere, target_is_directory=True)
+        told = self.refused_upload(one, said)
+        self.assertIn("symbolic link", told)
+        self.assertIn(str(self.project / "project"), told)
+
+    def test_something_that_is_not_an_ordinary_file_is_refused(self) -> None:
+        one = self.reaching()
+        at = self.project / "project" / "preview.png"
+        at.parent.mkdir(parents=True)
+        at.write_bytes(self.PIXELS)
+        said = self.approved(at)
+        at.unlink()
+        at.mkdir()
+        self.assertIn("could not attach", self.refused_upload(one, said))
+
+    def test_a_relative_path_is_never_opened(self) -> None:
+        one = self.reaching()
+        told = self.refused_upload(one, {"name": "x.png", "at": "project/x.png", "bytes": 6,
+                                         "sha256": hashlib.sha256(self.PIXELS).hexdigest()})
+        self.assertIn("not an absolute path", told)
+
+    def test_a_file_with_no_name_and_no_path_is_still_nameable(self) -> None:
+        # The line a person reads has to name something, or it reads `Could not attach: .`
+        one = self.reaching()
+        self.delivering(one, files=[{"bytes": 6, "sha256": "0" * 64}])
+        self.assertEqual(self.posted(one)[-1]["text"], "Could not attach: a file.")
+
+    def test_a_file_described_by_nothing_at_all_is_refused(self) -> None:
+        one = self.reaching()
+        records = self.delivering(one, files=["/tmp/preview.png"])
+        self.assertEqual(self.uploaded(one), [])
+        self.assertIn("not described as a file", self.note(records, "not described")["text"])
+
+    # -- what a person is told when a file does not go --------------------------------------
+
+    def test_the_words_are_still_posted_when_a_file_will_not_go(self) -> None:
+        """R-SLK-49. The accepted turn is not abandoned for the sake of its attachment: the words
+        stay where a person can read them, and what did not go is named under them."""
+        one = self.reaching()
+        at = self.a_file()
+        said = self.approved(at)
+        at.write_bytes(b"changed")
+        records = self.delivering(one, text="here it is", files=[said])
+        self.assertEqual(self.posted(one)[0]["text"], "here it is")
+        self.none(records, "delivered")
+
+    def test_a_delivery_that_lost_its_file_is_reported_failed_so_nothing_ticks_it(self) -> None:
+        """R-SLK-49. Only a delivery that happened whole earns a completion mark. This one is
+        reported failed with the words still standing, which is what `providers.answering` reads
+        to settle the turn as failed — and a failed turn takes the 👀 down and puts nothing up."""
+        one = self.reaching()
+        at = self.a_file()
+        said = self.approved(at)
+        at.write_bytes(b"changed")
+        records = self.delivering(one, text="here it is", files=[said])
+        failed = self.only(records, "failed")
+        self.assertIn("the words were posted", failed["why"])
+        self.assertIn("preview.png", failed["why"])
+
+    def test_a_file_that_did_not_go_is_named_where_the_answer_is(self) -> None:
+        one = self.reaching()
+        at = self.a_file()
+        said = self.approved(at)
+        at.write_bytes(b"changed")
+        self.delivering(one, files=[said])
+        self.assertEqual([made["text"] for made in self.posted(one)],
+                         ["here it is", "Could not attach: preview.png."])
+
+    def test_what_a_person_is_told_never_carries_the_path(self) -> None:
+        # A conversation is not where a machine's layout belongs, and the reason with the whole
+        # path in it goes to the agent's own log instead.
+        one = self.reaching()
+        at = self.a_file()
+        said = self.approved(at)
+        at.unlink()
+        records = self.delivering(one, files=[said])
+        shown = self.posted(one)[-1]["text"]
+        self.assertNotIn(str(self.project), shown)
+        self.assertIn(str(at), self.note(records, "could not attach")["text"])
+
+    def test_only_the_files_that_failed_are_named_and_the_rest_still_go(self) -> None:
+        one = self.reaching()
+        good, bad = self.a_file("one.png", b"first!"), self.a_file("two.png", b"second")
+        said = self.approved(bad)
+        bad.write_bytes(b"changed!")
+        self.delivering(one, files=[self.approved(good), said])
+        self.assertEqual([made["filename"] for made in self.uploaded(one)], ["one.png"])
+        self.assertEqual(self.posted(one)[-1]["text"], "Could not attach: two.png.")
+
+    def test_a_file_only_delivery_that_could_not_go_is_refused_and_said_out_loud(self) -> None:
+        """R-SLK-49. Nothing landed, so the delivery failed — and a person watching the
+        conversation is told, because they cannot read the agent's log."""
+        one = self.reaching()
+        at = self.a_file()
+        said = self.approved(at)
+        at.write_bytes(b"changed")
+        records = self.delivering(one, text="", files=[said])
+        failed = self.only(records, "failed")
+        self.assertIn("only files and none of them went", failed["why"])
+        self.assertIn("preview.png", failed["why"])
+        self.assertEqual([made["text"] for made in self.posted(one)],
+                         ["Could not attach: preview.png."])
+
+    # -- and only for as long as the delivery has to answer in ------------------------------
+
+    def a_clock(self) -> Ticking:
+        """A monotonic clock this case advances, so a budget is proved rather than waited out.
+
+        **Injected rather than slept through.** The bound being checked is eight seconds; a suite
+        that spent them would be a suite nobody runs, and one that slept a fraction and asserted
+        proportionally would be measuring the machine it happened to run on.
+        """
+        clock = Ticking()
+        real = adapter.time.monotonic
+        self.addCleanup(setattr, adapter.time, "monotonic", real)
+        adapter.time.monotonic = lambda: clock.now
+        return clock
+
+    def spent_posting(self, one: Any, clock: Ticking, seconds: float) -> None:
+        """Make posting this delivery's message take that long, out of its own budget."""
+        posting = one.web.chat_postMessage
+
+        def slowly(**named: Any) -> Any:
+            clock.tick(seconds)
+            return posting(**named)
+
+        one.web.chat_postMessage = slowly
+
+    def saying_into(self, one: Any) -> None:
+        """Put every record this run writes into the same timeline as the platform calls.
+
+        **So *which came first* covers both sides of the seam** rather than one of them: the record
+        that settles a turn and the message that explains it to a person are written by two
+        different mechanisms, and the order between them is the thing being checked.
+        """
+        real = adapter.say
+
+        def said(record: Dict[str, Any]) -> None:
+            one.web.timeline.append("record:" + str(record.get("say")))
+            real(record)
+
+        self.addCleanup(setattr, adapter, "say", real)
+        adapter.say = said
+
+    def spent_uploading(self, one: Any, clock: Ticking, seconds: float) -> None:
+        """Make each upload take that long, out of the same budget."""
+        uploading = one.uploads.files_upload_v2
+
+        def slowly(**named: Any) -> Any:
+            clock.tick(seconds)
+            return uploading(**named)
+
+        one.uploads.files_upload_v2 = slowly
+
+    def test_a_delivery_stops_beginning_uploads_once_its_budget_is_spent(self) -> None:
+        """R-SLK-49. Rundesk waits a bounded moment for a terminal record and reads what became of
+        the delivery the instant that wait ends. Ten files at the per-call ceiling is five minutes,
+        so a phase with no budget of its own answers into a turn that has already been settled —
+        and a completion mark then stands over an answer whose file never went."""
+        one = self.reaching()
+        first, second = self.a_file("one.png", b"first!"), self.a_file("two.png", b"second")
+        clock = self.a_clock()
+        # The first upload spends the whole budget, so there is none left to wait on a second with
+        # and it is never begun.
+        self.spent_uploading(one, clock, adapter.UPLOADS_WITHIN + 1.0)
+        records = self.delivering(one, files=[self.approved(first), self.approved(second)])
+        self.assertEqual([made["filename"] for made in self.uploaded(one)], ["one.png"])
+        self.assertEqual(self.posted(one)[-1]["text"], "Could not attach: two.png.")
+        self.assertIn("was spent before this file was reached",
+                      self.note(records, "could not attach two.png")["text"])
+        self.only(records, "failed")
+
+    def test_a_delivery_taken_up_and_answered_promptly_begins_its_first_file(self) -> None:
+        # The ordinary case, and the one a budget must not break: the post was quick, so the whole
+        # of the budget is still there when the first file is reached.
+        one = self.reaching()
+        self.a_clock()
+        self.delivering(one, files=[self.approved(self.a_file())])
+        self.assertEqual(len(self.uploaded(one)), 1)
+
+    def test_a_delivery_whose_own_message_spent_the_budget_uploads_nothing(self) -> None:
+        """R-SLK-49. The budget is the delivery's, not the upload phase's: the message posted
+        before the files is spent out of the same wait, so a post slow enough to exhaust it leaves
+        no room to begin a file that could only answer too late."""
+        one = self.reaching()
+        clock = self.a_clock()
+        self.spent_posting(one, clock, adapter.UPLOADS_WITHIN + 1.0)
+        records = self.delivering(one, text="here it is", files=[self.approved(self.a_file())])
+        self.assertEqual(self.uploaded(one), [])
+        self.assertEqual(self.posted(one)[0]["text"], "here it is")
+        self.assertEqual(self.posted(one)[-1]["text"], "Could not attach: preview.png.")
+        self.only(records, "failed")
+
+    def test_a_delivery_inside_its_budget_uploads_everything_it_was_given(self) -> None:
+        one = self.reaching()
+        files = [self.approved(self.a_file(f"{nth}.png", b"pixels")) for nth in range(3)]
+        clock = self.a_clock()
+        self.spent_uploading(one, clock, 0.5)
+        self.delivering(one, files=files)
+        self.assertEqual(len(self.uploaded(one)), 3)
+
+    def test_a_running_upload_is_given_up_on_at_the_deadline(self) -> None:
+        """R-SLK-49. The defect this closes: the budget bounded when an upload *started* and nothing
+        bounded how long it ran, so one slow file answered after rundesk had stopped listening and
+        a completion mark stood over an answer whose file never went.
+
+        **Measured on the real clock**, because a deadline enforced by waiting is not something an
+        injected clock can see: `Thread.join` takes its timeout from the C clock, and a case that
+        patched `time.monotonic` would prove the arithmetic and miss the wait.
+        """
+        one = self.reaching()
+        released = threading.Event()
+        self.addCleanup(released.set)
+
+        def slowly(**named: Any) -> Any:
+            # Bounded rather than endless, so an implementation with no deadline fails this case
+            # instead of hanging the suite inside it.
+            released.wait(3.0)
+            return Answered({"ok": True})
+
+        one.uploads.files_upload_v2 = slowly
+        with mock.patch.object(adapter, "UPLOADS_WITHIN", 0.2):
+            began = time.monotonic()
+            records = self.delivering(one, files=[self.approved(self.a_file())])
+            took = time.monotonic() - began
+        self.assertLess(took, 1.5, f"the delivery answered after {took:.1f}s, past its own budget")
+        failed = self.only(records, "failed")
+        self.assertIn("preview.png", failed["why"])
+        self.assertIn("given up on", self.note(records, "could not attach")["text"])
+        # The worker is left running and cannot be cancelled, so what bounds the cost is that it
+        # can never hold this process open — see `_uploading`, which says so out loud.
+        left = [one for one in threading.enumerate() if one.name == "uploading"]
+        self.assertTrue(left and left[0].daemon,
+                        "an upload given up on was not left on a daemon worker")
+
+    def test_the_record_that_settles_the_turn_is_written_before_the_line_about_it(self) -> None:
+        """R-SLK-49. The line is a courtesy nothing waits on and the record is what the turn is
+        settled from, so writing the line first spent what was left of the budget on the courtesy
+        and let the record arrive after rundesk had stopped reading for it."""
+        one = self.reaching()
+        at = self.a_file()
+        said = self.approved(at)
+        at.unlink()
+        self.saying_into(one)
+        self.delivering(one, text="here it is", files=[said])
+        self.assertEqual(one.web.timeline,
+                         ["chat_postMessage", "record:note", "record:failed", "chat_postMessage"])
+
+    def test_slack_refusing_an_upload_is_reported_and_the_words_still_stand(self) -> None:
+        one = self.reaching()
+        one.web.refuses["files_upload_v2"] = Refused(
+            "no", Answered({"error": "file_uploads_disabled"}))
+        records = self.delivering(one, files=[self.approved(self.a_file())])
+        self.assertIn("file_uploads_disabled", self.note(records, "could not attach")["text"])
+        self.assertEqual([made["text"] for made in self.posted(one)],
+                         ["here it is", "Could not attach: preview.png."])
+        self.only(records, "failed")
+
+    def test_an_upload_slack_will_never_accept_again_ends_the_connection(self) -> None:
+        # The same rule every other call here follows: only the words that say the credential
+        # itself is gone end the adapter, and one refused upload is not one of them.
+        one = self.reaching()
+        one.web.refuses["files_upload_v2"] = Refused(
+            "no", Answered({"error": "token_revoked"}))
+        self.delivering(one, files=[self.approved(self.a_file())])
+        self.assertTrue(one.unrecoverable)
+        self.assertTrue(one.stopping.is_set())
+
+    def test_the_line_about_a_missing_file_is_escaped_like_anything_else(self) -> None:
+        one = self.reaching()
+        at = self.a_file("a<b>&c.png")
+        said = self.approved(at)
+        at.unlink()
+        self.delivering(one, files=[said])
+        self.assertEqual(self.posted(one)[-1]["text"],
+                         "Could not attach: a&lt;b&gt;&amp;c.png.")
+
+    def test_slack_refusing_the_line_about_a_missing_file_is_only_a_log_line(self) -> None:
+        # It is not a delivery: nothing waits on it, so a platform that refuses it must not turn
+        # into a second answer about the first one.
+        one = self.reaching()
+        at = self.a_file()
+        said = self.approved(at)
+        at.unlink()
+        one.web.refuses["chat_postMessage"] = Refused("no", Answered({"error": "ratelimited"}))
+        records = self.delivering(one, text="", files=[said])
+        self.assertIn("could not say in Slack what had not been attached",
+                      " ".join(str(record.get("text")) for record in records
+                               if record.get("say") == "note"))
+        self.only(records, "failed")
+
+
+# ---------------------------------------------------------------------------------------------
+# The one command it offers, and what never leaves this file.
+# ---------------------------------------------------------------------------------------------
+
+
+class TheCommandItOffers(Wired):
+    """One workspace-unique command per agent, its eleven subcommands, and a private answer.
+
+    Three things every case here is really about. **A word rundesk does not know never crosses the
+    seam** — the closed sets are the difference between a gesture and a command runner with a chat
+    window in front of it. **An answer is private to whoever typed it**, wherever they typed it, so
+    an install-wide directory of agents is never read by the room it was asked in. And **a stranger
+    costs nothing**, exactly as a stranger's message does.
+    """
+
+    def commanded(self, one: Any, **named: Any) -> List[Dict[str, Any]]:
+        """One slash command delivered the way the vendor client delivers one."""
+        request = Command(**named)
+        return self.during(lambda: one._envelope(one.socket, request))
+
+    def privately(self) -> List[str]:
+        """Every private answer this case sent, in order."""
+        return [str(sent["text"]) for sent in Webhook.sent]
+
+    def boundaries(self, records: List[Dict[str, Any]]) -> List[str]:
+        return [str(one.get("text")) for one in records if one.get("say") == "note"]
+
+    def gestured(self, one: Any, **named: Any) -> Dict[str, Any]:
+        """The one gesture record a command produced, whichever of the three it is."""
+        records = self.commanded(one, **named)
+        found = [record for record in records
+                 if record.get("say") in ("control", "query", "configure")]
+        self.assertEqual(len(found), 1, f"expected one gesture in {records}")
+        return found[0]
+
+    # -- what is offered, and under what name ----------------------------------------------
+
+    def test_one_command_offers_every_gesture_rundesk_knows(self) -> None:
+        """R-SLK-37. Eleven surfaces under one command, because a Slack command name is
+        workspace-wide and two agents offering `/status` is the second taking the first one's."""
+        typed = [name for name, _describes, _word in adapter.CONTROLS + adapter.QUERIES]
+        self.assertEqual([*typed, adapter.CONFIGURE[0]],
+                         ["stop", "new", "restart", "shutdown", "status", "version", "agents",
+                          "skills", "schedules", "delegations", "provider"])
+
+    def test_the_word_rundesk_speaks_is_the_word_it_published(self) -> None:
+        # Checked against rundesk's closed sets rather than trusted to match them: a word absent
+        # from them is a subcommand that is offered, typed, and does nothing at all.
+        self.assertEqual([word for _name, _describes, word in adapter.CONTROLS],
+                         ["stop", "forget", "restart", "shutdown"])
+        self.assertEqual([word for _name, _describes, word in adapter.QUERIES],
+                         ["status", "version", "agents", "skills", "schedules", "delegations"])
+
+    def test_new_is_what_a_person_is_offered_and_forget_is_what_rundesk_calls_it(self) -> None:
+        self.assertIn(("new", "Start a new session — the next message begins fresh", "forget"),
+                      adapter.CONTROLS)
+
+    def test_every_subcommand_says_what_it_does(self) -> None:
+        for name, describes, _word in adapter.CONTROLS + adapter.QUERIES:
+            with self.subTest(name):
+                self.assertTrue(describes.strip(), name)
+        self.assertTrue(adapter.CONFIGURE[1].strip())
+
+    # -- acknowledged first, and answered privately afterwards -----------------------------
+
+    def test_a_command_is_acknowledged_before_anything_else_happens(self) -> None:
+        """R-SLK-7, R-SLK-38. Slack gives three seconds and redelivers what is not acknowledged
+        inside them, so the ack cannot stand behind a decision or behind a private answer."""
+        one = self.reaching()
+        self.commanded(one, text="nonsense")
+        self.assertEqual(one.socket.acknowledged, ["e-1"])
+        self.assertEqual(one.web.timeline, ["acknowledged", "answered_privately"])
+
+    def test_a_command_is_acknowledged_even_when_it_offers_nothing_back(self) -> None:
+        one = self.reaching()
+        self.commanded(one, text="status")
+        self.assertEqual(one.socket.acknowledged, ["e-1"])
+
+    def test_an_answer_is_private_to_whoever_typed_the_command(self) -> None:
+        """R-SLK-38. Ephemeral, on that command's own url, and never a message in the channel."""
+        one = self.reaching()
+        asked = self.gestured(one, text="status", channel=ROOM)
+        self.during(lambda: one._told({"do": "answered", "ref": asked["ref"], "text": "up"}))
+        self.assertEqual(len(Webhook.sent), 1)
+        self.assertEqual(Webhook.sent[0]["url"], ANSWERING)
+        self.assertEqual(Webhook.sent[0]["response_type"], adapter.EPHEMERAL)
+        self.assertIs(Webhook.sent[0]["replace_original"], False)
+        self.assertEqual(one.web.made("chat_postMessage"), [])
+
+    def test_a_gesture_costs_no_platform_call_at_all(self) -> None:
+        # A gesture is answered out of what the install already knows, so nothing here signs in,
+        # reads a thread, or posts a message on the way to asking for one.
+        one = self.reaching()
+        self.commanded(one, text="version")
+        self.assertEqual(one.web.calls, [])
+
+    # -- the record each subcommand becomes -------------------------------------------------
+
+    def test_each_control_reaches_rundesk_as_the_word_it_speaks(self) -> None:
+        for name, _describes, word in adapter.CONTROLS:
+            if word == adapter.SHUTDOWN:
+                continue                   # asked twice on purpose — see the confirmation cases
+            with self.subTest(name):
+                one = self.reaching()
+                said = self.gestured(one, text=name)
+                self.assertEqual(said["say"], "control")
+                self.assertEqual(said["control"], word)
+
+    def test_each_question_reaches_rundesk_as_the_word_it_speaks(self) -> None:
+        for name, _describes, word in adapter.QUERIES:
+            with self.subTest(name):
+                one = self.reaching()
+                said = self.gestured(one, text=name)
+                self.assertEqual(said["say"], "query")
+                self.assertEqual(said["query"], word)
+
+    def test_a_question_carries_who_asked_it_where_and_what_answers_it(self) -> None:
+        """R-SLK-39. `delegations` is conversation-scoped and `schedules` is not, and both are the
+        same record: the closed word, the conversation, the stable place, the sender, and a ref."""
+        one = self.reaching()
+        said = self.gestured(one, text="delegations", channel=ROOM)
+        self.assertEqual(said, {"say": "query", "query": "delegations",
+                                "conversation": adapter.conversation_of(TEAM, ROOM),
+                                "external_place": ROOM, "user": THEM, "ref": "t-1"})
+
+    def test_a_command_names_the_conversation_the_channel_keeps(self) -> None:
+        """R-SLK-40. A command payload carries no `thread_ts`, so the conversation is the
+        channel's own — which is exactly what a direct message already keeps."""
+        one = self.reaching(places=[ROOM])
+        in_a_message = self.gestured(one, text="new")
+        self.assertEqual(in_a_message["conversation"], adapter.conversation_of(TEAM, DM))
+        in_a_channel = self.gestured(one, text="new", channel=ROOM, envelope_id="e-2",
+                                     trigger_id="t-2")
+        self.assertEqual(in_a_channel["conversation"], adapter.conversation_of(TEAM, ROOM))
+        # Two pieces and never three: nothing here invents the thread Slack did not name.
+        self.assertEqual(in_a_channel["conversation"].count(adapter.IN), 1)
+
+    def test_the_stable_place_is_carried_in_a_field_of_its_own(self) -> None:
+        # The id authorization is decided against, exactly as an arrival carries it. Admission is
+        # one rule over one list for a message and for a gesture alike.
+        one = self.reaching()
+        self.assertEqual(self.gestured(one, text="status", channel=ROOM)["external_place"], ROOM)
+
+    def test_the_provider_gesture_carries_the_name_and_the_alias(self) -> None:
+        one = self.reaching()
+        said = self.gestured(one, text="provider codex work")
+        self.assertEqual(said["say"], "configure")
+        self.assertEqual(said["provider"], "codex")
+        self.assertEqual(said["alias"], "work")
+
+    def test_the_provider_gesture_without_an_alias_names_none(self) -> None:
+        one = self.reaching()
+        said = self.gestured(one, text="provider codex")
+        self.assertNotIn("alias", said)
+
+    def test_the_subcommand_is_read_however_a_keyboard_capitalised_it(self) -> None:
+        one = self.reaching()
+        self.assertEqual(self.gestured(one, text="Status")["query"], "status")
+
+    def test_a_provider_is_carried_exactly_as_it_was_typed(self) -> None:
+        # A provider is a name or a path this machine has; lowering it would be this file editing
+        # what somebody typed, and `/Users/me/Work/brain` is not `/users/me/work/brain`.
+        one = self.reaching()
+        self.assertEqual(self.gestured(one, text="provider MyBrain")["provider"], "MyBrain")
+
+    # -- a word this does not offer ---------------------------------------------------------
+
+    def test_a_command_with_no_subcommand_is_answered_here_and_nowhere_else(self) -> None:
+        """R-SLK-41. Malformed input gets the private list of what there is, and no gesture."""
+        one = self.reaching()
+        records = self.commanded(one, text="")
+        self.assertEqual([one.get("say") for one in records], ["note"])
+        self.assertEqual(self.boundaries(records), [adapter.IGNORED["not_a_gesture"]])
+        self.assertEqual(len(Webhook.sent), 1)
+
+    def test_a_word_this_does_not_offer_is_answered_with_help_and_no_gesture(self) -> None:
+        for typed in ("stat", "usage", "provider", "provider codex work extra", "  "):
+            with self.subTest(typed):
+                Webhook.sent = []
+                one = self.reaching()
+                records = self.commanded(one, text=typed)
+                for record in records:
+                    self.assertEqual(record.get("say"), "note", record)
+                # Escaped on the way out like everything else this posts, which is what makes the
+                # `<name>` placeholder arrive as the characters somebody types over.
+                self.assertEqual(self.privately(), [adapter.escaped(adapter.the_help(COMMAND))])
+
+    def test_the_help_names_the_command_that_was_actually_typed(self) -> None:
+        # The name is the workspace's, declared in the app manifest, and is not held in this file.
+        one = self.reaching()
+        self.commanded(one, text="nonsense", command="/owen")
+        self.assertIn("*/owen*", self.privately()[0])
+        self.assertNotIn("/ava", self.privately()[0])
+
+    def test_the_help_lists_every_subcommand_there_is(self) -> None:
+        said = adapter.the_help(COMMAND)
+        for name, describes, _word in adapter.CONTROLS + adapter.QUERIES:
+            with self.subTest(name):
+                self.assertIn(f"`{name}` — {describes}", said)
+        self.assertIn("`provider <name> [alias]`", said)
+
+    def test_the_help_placeholders_reach_slack_as_the_characters_to_replace(self) -> None:
+        # `<name>` is how Slack addresses things, so an unescaped one would render as an entity
+        # rather than as the word somebody has to type over.
+        one = self.reaching()
+        self.commanded(one, text="nonsense")
+        self.assertIn("&lt;name&gt;", Webhook.sent[0]["text"])
+
+    def test_a_command_that_says_nothing_this_could_act_on_costs_nothing(self) -> None:
+        for named in ({"user": ""}, {"channel": ""}, {"response_url": ""}):
+            with self.subTest(str(named)):
+                one = self.reaching()
+                records = self.commanded(one, **named)
+                self.assertEqual(self.boundaries(records), [adapter.IGNORED["no_command"]])
+                self.assertEqual(Webhook.sent, [])
+
+    def test_an_envelope_with_no_payload_at_all_costs_nothing(self) -> None:
+        one = self.reaching()
+        request = Command()
+        request.payload = None
+        records = self.during(lambda: one._envelope(one.socket, request))
+        self.assertEqual(self.boundaries(records), [adapter.IGNORED["no_command"]])
+        self.assertEqual(one.socket.acknowledged, ["e-1"])
+
+    # -- whose command it is ----------------------------------------------------------------
+
+    def test_a_strangers_command_costs_nothing_and_is_told_nothing(self) -> None:
+        """R-SLK-9, R-SLK-42. Nothing is held open — the envelope is already acknowledged — so
+        silence is the whole answer, and telling somebody they are a stranger confirms the agent
+        is listening."""
+        one = self.reaching()
+        records = self.commanded(one, user=STRANGER)
+        self.assertEqual(self.boundaries(records), [adapter.IGNORED["not_theirs"]])
+        for record in records:
+            self.assertEqual(record.get("say"), "note", record)
+        self.assertEqual(Webhook.sent, [])
+        self.assertEqual(one.web.calls, [])
+
+    def test_a_command_from_a_place_this_channel_allows_is_worth_working_for(self) -> None:
+        # A place entry admits anybody the platform reports as being in that place, and it is the
+        # same rule for a gesture as for a message — see R-CH-39, which rundesk decides again.
+        one = self.reaching(allow=[], places=[ROOM])
+        said = self.gestured(one, text="status", channel=ROOM, user=STRANGER)
+        self.assertEqual(said["user"], STRANGER)
+        self.assertEqual(said["external_place"], ROOM)
+
+    def test_a_command_from_a_place_it_does_not_allow_costs_nothing(self) -> None:
+        one = self.reaching(allow=[], places=[ROOM])
+        records = self.commanded(one, text="status", channel=PRIVATE, user=STRANGER)
+        self.assertEqual(self.boundaries(records), [adapter.IGNORED["not_theirs"]])
+        self.assertEqual(Webhook.sent, [])
+
+    # -- the one thing that cannot be undone ------------------------------------------------
+
+    def test_shutdown_is_asked_for_twice_before_it_reaches_rundesk(self) -> None:
+        """R-SLK-43. A gateway shut down from here cannot be started from here, and one mistyped
+        subcommand is the failure the second ask prevents."""
+        one = self.reaching()
+        records = self.commanded(one, text="shutdown")
+        self.none(records, "control")
+        self.assertEqual(len(Webhook.sent), 1)
+        self.assertIn("again within 30s to confirm", Webhook.sent[0]["text"])
+        self.assertIn(f"*{COMMAND} shutdown*", Webhook.sent[0]["text"])
+
+    def test_a_second_shutdown_inside_the_window_reaches_rundesk(self) -> None:
+        # Two envelopes, which is what two asks are: Slack gives every invocation one of its own.
+        one = self.reaching()
+        self.commanded(one, text="shutdown")
+        said = self.gestured(one, text="shutdown", envelope_id="e-2", trigger_id="t-2")
+        self.assertEqual(said["control"], adapter.SHUTDOWN)
+
+    def test_the_same_envelope_delivered_twice_can_never_confirm_a_shutdown(self) -> None:
+        """R-SLK-43. The acknowledgement is written under `contextlib.suppress`, so one Slack never
+        received is a real state — and Slack answers it by sending the same envelope again. Read as
+        a second ask, one mistyped `shutdown` and one dropped acknowledgement would have ended the
+        gateway between them."""
+        one = self.reaching()
+        self.commanded(one, text="shutdown")
+        again = self.commanded(one, text="shutdown")
+        self.none(again, "control")
+        self.assertEqual(self.boundaries(again), [adapter.IGNORED["already_commanded"]])
+
+    def test_a_redelivered_command_changes_no_confirmation_state(self) -> None:
+        # The retry must leave the window exactly as it found it: neither consuming the ask that
+        # was standing nor starting a new one, so the person's own second ask still works.
+        one = self.reaching()
+        self.commanded(one, text="shutdown")
+        standing = dict(one.confirming)
+        self.commanded(one, text="shutdown")
+        self.assertEqual(one.confirming, standing)
+        said = self.gestured(one, text="shutdown", envelope_id="e-9", trigger_id="t-9")
+        self.assertEqual(said["control"], adapter.SHUTDOWN)
+
+    def test_a_redelivered_command_answers_nothing_and_asks_nothing(self) -> None:
+        one = self.reaching()
+        self.commanded(one, text="status")
+        sent_by_the_first = len(Webhook.sent)
+        again = self.commanded(one, text="status")
+        for record in again:
+            self.assertEqual(record.get("say"), "note", record)
+        self.assertEqual(len(Webhook.sent), sent_by_the_first)
+
+    def test_a_redelivered_command_is_still_acknowledged(self) -> None:
+        # Whatever became of the first acknowledgement, the second envelope gets one: an envelope
+        # nobody acknowledges is an envelope Slack keeps sending.
+        one = self.reaching()
+        self.commanded(one, text="status")
+        self.commanded(one, text="status")
+        self.assertEqual(one.socket.acknowledged, ["e-1", "e-1"])
+
+    def test_two_people_asking_at_once_are_two_commands(self) -> None:
+        one = self.reaching(allow=[THEM, STRANGER])
+        first = self.gestured(one, text="status")
+        second = self.gestured(one, text="status", user=STRANGER, envelope_id="e-2",
+                               trigger_id="t-2")
+        self.assertEqual(first["user"], THEM)
+        self.assertEqual(second["user"], STRANGER)
+
+    def test_a_second_shutdown_after_the_window_asks_again(self) -> None:
+        one = self.reaching()
+        self.commanded(one, text="shutdown")
+        one.confirming[THEM] = time.monotonic() - adapter.CONFIRM_WITHIN - 1
+        records = self.commanded(one, text="shutdown", envelope_id="e-2", trigger_id="t-2")
+        self.none(records, "control")
+        self.assertEqual(len(Webhook.sent), 2)
+
+    def test_one_persons_confirmation_is_never_another_persons(self) -> None:
+        one = self.reaching(allow=[THEM, STRANGER])
+        self.commanded(one, text="shutdown")
+        records = self.commanded(one, text="shutdown", user=STRANGER, envelope_id="e-2",
+                                 trigger_id="t-2")
+        self.none(records, "control")
+
+    def test_no_other_control_is_ever_asked_for_twice(self) -> None:
+        one = self.reaching()
+        self.assertEqual(self.gestured(one, text="restart")["control"], "restart")
+        self.assertEqual(Webhook.sent, [])
+
+    def test_what_is_remembered_about_confirmations_is_bounded(self) -> None:
+        one = self.reaching(allow=[])
+        one.places.append(ROOM)
+        for nth in range(adapter.LIVE_KEPT + 5):
+            self.commanded(one, text="shutdown", channel=ROOM, user=f"U{nth}",
+                           envelope_id=f"e-{nth}", trigger_id=f"t-{nth}")
+        self.assertLessEqual(len(one.confirming), adapter.LIVE_KEPT)
+
+    # -- the answer, put back on the command that asked for it ------------------------------
+
+    def test_the_answer_goes_back_on_the_command_that_asked_it(self) -> None:
+        one = self.reaching()
+        said = self.gestured(one, text="schedules")
+        self.during(lambda: one._told({"do": "answered", "ref": said["ref"],
+                                       "text": "ava has 2 schedules"}))
+        self.assertEqual(self.privately(), ["ava has 2 schedules"])
+
+    def test_an_answer_for_a_command_this_run_never_held_reaches_nobody(self) -> None:
+        one = self.reaching()
+        self.during(lambda: one._told({"do": "answered", "ref": "t-9", "text": "up"}))
+        self.assertEqual(Webhook.sent, [])
+
+    def test_a_url_answers_one_command_and_is_then_forgotten(self) -> None:
+        # Taken out as it is read: an answer completes one question once, and a url left behind is
+        # one a later record could put somebody else's answer on.
+        one = self.reaching()
+        said = self.gestured(one, text="status")
+        answered = {"do": "answered", "ref": said["ref"], "text": "up"}
+        self.during(lambda: (one._told(answered), one._told(answered)))
+        self.assertEqual(self.privately(), ["up"])
+
+    def test_a_gesture_rundesk_answered_with_nothing_says_nothing(self) -> None:
+        # A control reported by the turn's own outcome hands back no words at all (R-DIS-12).
+        one = self.reaching()
+        said = self.gestured(one, text="stop")
+        self.during(lambda: one._told({"do": "answered", "ref": said["ref"], "text": ""}))
+        self.assertEqual(Webhook.sent, [])
+
+    def test_a_private_answer_is_escaped_whole_including_a_person(self) -> None:
+        """R-SLK-15. A gesture answer is composed out of records — a schedule's name, a delegated
+        task's first line — and each of those is somewhere somebody else's words are kept, so this
+        path keeps the whole-escape rule that a turn's answer deliberately does not."""
+        one = self.reaching()
+        said = self.gestured(one, text="schedules")
+        self.during(lambda: one._told({"do": "answered", "ref": said["ref"],
+                                       "text": "<!channel> & <@U0ANN>"}))
+        self.assertEqual(self.privately(), ["&lt;!channel&gt; &amp; &lt;@U0ANN&gt;"])
+
+    def test_an_answer_past_one_message_is_sent_whole_in_ordered_pieces(self) -> None:
+        """R-SLK-44. A gesture answer never went through rundesk's splitter, so it is cut here —
+        and joining the pieces reproduces it exactly rather than dropping what fell between two."""
+        one = self.reaching()
+        said = self.gestured(one, text="agents")
+        answer = "\n".join(f"- agent {nth} holds one skill" for nth in range(200))
+        self.assertGreater(len(answer), adapter.MAX_TEXT)
+        self.during(lambda: one._told({"do": "answered", "ref": said["ref"], "text": answer}))
+        self.assertGreater(len(Webhook.sent), 1)
+        self.assertEqual("".join(self.privately()), answer)
+        for sent in self.privately():
+            self.assertLessEqual(len(sent), adapter.MAX_TEXT)
+
+    def test_an_answer_past_slacks_own_allowance_says_so_rather_than_stopping(self) -> None:
+        # Slack takes a bounded number of answers on one command's url. A list cut off where
+        # nobody was told is a list somebody reads as complete.
+        one = self.reaching()
+        said = self.gestured(one, text="agents")
+        answer = "\n".join(f"- agent {nth} holds one skill" for nth in range(2000))
+        self.during(lambda: one._told({"do": "answered", "ref": said["ref"], "text": answer}))
+        self.assertEqual(len(Webhook.sent), adapter.RESPONSES_MOST)
+        self.assertEqual(self.privately()[-1], adapter.TOO_LONG)
+        self.assertTrue(answer.startswith("".join(self.privately()[:-1])))
+
+    def test_a_piece_slack_refused_is_warned_about_rather_than_left_partial(self) -> None:
+        one = self.reaching()
+        said = self.gestured(one, text="status")
+        Webhook.status = 500
+        records = self.during(lambda: one._told({"do": "answered", "ref": said["ref"],
+                                                 "text": "up"}))
+        self.assertEqual(self.privately(), ["up", adapter.INCOMPLETE])
+        self.assertEqual(len([one for one in self.boundaries(records)
+                              if "would not take a private answer" in one]), 2)
+
+    def test_a_response_url_that_cannot_be_reached_is_said_and_never_retried(self) -> None:
+        one = self.reaching()
+        said = self.gestured(one, text="status")
+        Webhook.raises = RuntimeError("no route")
+        records = self.during(lambda: one._told({"do": "answered", "ref": said["ref"],
+                                                 "text": "up"}))
+        self.assertIn("could not answer a slash command privately",
+                      " ".join(self.boundaries(records)))
+        self.assertEqual(len(Webhook.sent), 2)      # the piece, then the warning about it
+
+    def test_what_is_remembered_about_commands_is_bounded(self) -> None:
+        one = self.reaching()
+        for nth in range(adapter.LIVE_KEPT + 5):
+            self.commanded(one, text="status", envelope_id=f"e-{nth}", trigger_id=f"t-{nth}")
+        self.assertLessEqual(len(one.asked), adapter.LIVE_KEPT)
+
+    # -- what the log says about it ---------------------------------------------------------
+
+    def test_a_command_that_reached_this_agent_is_logged_once(self) -> None:
+        one = self.reaching()
+        first = self.commanded(one, text="status")
+        again = self.commanded(one, text="version", envelope_id="e-2", trigger_id="t-2")
+        self.assertEqual(self.boundaries(first), [adapter.IGNORED["commanded"]])
+        self.assertEqual(self.boundaries(again), [])
+
+    def test_no_boundary_ever_repeats_what_somebody_typed(self) -> None:
+        # Every sentence is fixed and content-free: a command's text is a private payload and a
+        # log is not where it belongs (R-SLK-28).
+        one = self.reaching()
+        records = self.commanded(one, text="provider secret-brain")
+        self.assertNotIn("secret-brain", " ".join(self.boundaries(records)))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2017,6 +3454,31 @@ class WhatItNeverShows(Wired):
 
 class TheConnection(Wired):
     """`ready` and `gone` are how somebody tells a quiet agent from a deaf one."""
+
+    def test_uploads_are_built_under_their_own_socket_ceiling(self) -> None:
+        """One client cannot carry both bounds: a call a person is not waiting behind may block for
+        `CALL_WITHIN`, and a socket operation inside an upload may not.
+
+        **This proves the ceiling and not the deadline.** What bounds an upload the delivery has
+        stopped waiting for is this number; what bounds the delivery is the wait itself, which
+        `test_a_running_upload_is_given_up_on_at_the_deadline` is the check for.
+        """
+        one = adapter.Reaching([THEM], [])
+        one.stopping.set()
+        built = []
+
+        def building(**named: Any) -> Web:
+            made = Web(**named)
+            built.append(made)
+            return made
+
+        with mock.patch.object(adapter, "WebClient", building), \
+                mock.patch.object(adapter, "SocketModeClient", lambda **named: Socket()), \
+                mock.patch.object(adapter, "rundesk_says", lambda *_: iter(())):
+            self.during(lambda: one.run("xoxb-x", "xapp-x"))
+        self.assertEqual(one.web.timeout, adapter.CALL_WITHIN)
+        self.assertEqual(one.uploads.timeout, adapter.AN_UPLOAD_WITHIN)
+        self.assertLess(adapter.AN_UPLOAD_WITHIN, adapter.CALL_WITHIN)
 
     def test_run_does_not_mark_a_locally_opened_socket_ready(self) -> None:
         one = adapter.Reaching([THEM], [])
@@ -2185,6 +3647,15 @@ class WhatTheSocketSays(Wired):
         said = self.notes(one, lambda: one.socket.sends(
             {"type": "events_api", "envelope_id": "e-1", "payload": {"event": a_direct()}}))
         self.assertEqual(said, [adapter.ARRIVING["events_api"]])
+
+    def test_a_slash_commands_frame_is_named_where_the_gateway_shows_it(self) -> None:
+        # A command has a word of its own rather than falling to `other`, because *nothing arrived*
+        # and *a command arrived and did nothing* are the two things somebody is telling apart when
+        # they ask why typing it had no effect.
+        one = self.hosted()
+        said = self.notes(one, lambda: one.socket.sends(
+            {"type": adapter.SLASH, "envelope_id": "e-1", "payload": {"command": COMMAND}}))
+        self.assertEqual(said, [adapter.ARRIVING[adapter.SLASH]])
 
     def test_a_frame_this_release_has_no_word_for_is_named_without_repeating_slacks(self) -> None:
         one = self.hosted()
@@ -2396,6 +3867,66 @@ class TheDocumentedContract(unittest.TestCase):
         for never in ("users.setPresence", "users_setPresence", "setPresence"):
             with self.subTest(never=never):
                 self.assertNotIn(never, source)
+
+    def test_the_manifest_declares_one_command_named_after_the_agent(self) -> None:
+        """R-SLK-37, R-SLK-45. Slack publishes no method that adds a command to an app, so the
+        manifest in the guide is the whole of the setup contract: a page listing subcommands for a
+        command nobody in the workspace has is a page that cannot be followed."""
+        guide = self.text("docs/guides/slack.md")
+        self.assertIn("slash_commands:", guide)
+        self.assertIn("- command: /ava", guide)
+        # The scope the declaration itself needs, which is asked for in the manifest and
+        # deliberately not demanded of a token that was issued before the command existed.
+        self.assertIn("      - commands", guide)
+        self.assertNotIn("commands", adapter.WANTED_SCOPES)
+        self.assertNotIn("It offers no slash commands", guide)
+
+    def test_the_setup_page_names_every_subcommand_the_adapter_offers(self) -> None:
+        guide = self.text("docs/guides/slack.md")
+        for name, _describes, _word in adapter.CONTROLS + adapter.QUERIES:
+            with self.subTest(name):
+                self.assertIn(f"| `{name}` |", guide)
+        self.assertIn(f"| `{adapter.CONFIGURE[0]} <name> [alias]` |", guide)
+
+    def test_the_pages_say_one_person_may_be_named_and_a_room_may_not(self) -> None:
+        """R-SLK-15. The rule changed, and a page still promising that every mention is escaped
+        would be the one somebody trusts when they ask an agent to loop a colleague in."""
+        self.assertIn("It can name one person and it cannot address a room",
+                      self.text("docs/guides/slack.md"))
+        self.assertNotIn("no answer can address a channel or ping a person",
+                         self.text("docs/requirements/channel-slack.md"))
+
+    def test_the_manifest_asks_for_the_scope_the_upload_needs(self) -> None:
+        """R-SLK-47. The capability is declared, so the scope has to be in the paste that creates
+        the app — and a page that declared one without the other is a channel that connects and
+        then cannot upload."""
+        guide = self.text("docs/guides/slack.md")
+        self.assertIn("      - files:write", guide)
+        self.assertIn("files:write", adapter.WANTED_SCOPES)
+        self.assertNotIn("It attaches no files, in either direction", guide)
+        self.assertNotIn("attach=False", guide)
+
+    def test_the_pages_say_what_becomes_of_a_file_that_cannot_go(self) -> None:
+        # R-SLK-49. The honest half of the capability: a person has to know that the words stay,
+        # that the missing file is named, and that nothing ticks a delivery that arrived in part.
+        guide = self.text("docs/guides/slack.md")
+        self.assertIn("Could not attach:", guide)
+        self.assertIn(adapter.COULD_NOT_ATTACH.format("preview.png"), guide)
+
+    def test_the_pages_say_a_direct_message_is_one_conversation(self) -> None:
+        """R-SLK-50. The behavior somebody would otherwise report as a bug: an answer arriving in
+        a thread, and a conversation that is one whatever thread it was asked in."""
+        guide = self.text("docs/guides/slack.md")
+        self.assertIn("one conversation, however you thread it", guide)
+        wanted = self.text("docs/requirements/channel-slack.md")
+        self.assertNotIn("a direct message answer starts no thread", wanted)
+
+    def test_the_adapter_contract_says_a_conversation_is_identity(self) -> None:
+        # The seam is published, and a third-party adapter that keys one exchange as two
+        # conversations splits the session with it. Said where an adapter author reads it.
+        contract = self.text("docs/extending/adapters.md")
+        self.assertIn("`conversation` is identity, not a destination", contract)
+        self.assertIn("Nothing that did not verify is ever sent", contract)
 
     def test_every_owning_page_keeps_the_slack_probe_non_listening(self) -> None:
         pages = (
