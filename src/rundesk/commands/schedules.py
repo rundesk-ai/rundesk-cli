@@ -411,9 +411,12 @@ def reports_to(agent: str, channel: Optional[str], destination: Optional[str],
     # Asked last, and asked of the adapter rather than of its name: an adapter somebody wrote
     # themselves stands beside the shipped ones and answers for itself.
     if channel_adapters.capabilities(named).get(ADDRESSES) is not True:
+        # `channels doctor` and `channels show` repeat none of `--capabilities`, so the one place an
+        # owner has seen the answer is the `can` line `channels add` printed — and that is what the
+        # sentence points at rather than a verb that would show them nothing.
         return {}, (f"the {named} adapter does not say it can address a destination of its own, so "
-                    f"a schedule cannot report anywhere but {agent}'s notified channel — see what "
-                    f"it can do with: rundesk channels doctor {agent}")
+                    f"a schedule cannot report anywhere but {agent}'s notified channel — what it can "
+                    f"do is the `can` line rundesk channels add printed for it")
 
     # All three, always. The records refuse a row naming a person *and* a place, so setting either
     # has to clear the other or an update would be refused about a column nobody typed.

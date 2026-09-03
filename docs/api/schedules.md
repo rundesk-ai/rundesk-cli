@@ -175,10 +175,12 @@ room and its agent going on being notified on Discord is the whole point of the 
 | the adapter cannot address a destination of its own | `the quiet adapter does not say it can address a destination of its own` |
 | `--to` naming nothing at all | `'place:' names nobody and nowhere` |
 
-The last of those is the adapter's own answer rather than a guess from its name: a sender id is not
-a conversation on any platform rundesk holds a credential for, so the adapter has to say it can
-resolve one. [`adapters.md`](../extending/adapters.md) publishes the field, and
-[`channels doctor`](./channels.md) is what shows what an adapter says it can do.
+The adapter's refusal — the row before last — is the adapter's own answer rather than a guess from
+its name: a sender id is not a conversation on any platform rundesk holds a credential for, so the
+adapter has to say it can resolve one. [`adapters.md`](../extending/adapters.md) publishes the field
+as `address` in `--capabilities`. It is asked at the moment the destination is written and kept
+nowhere: the `can` line `rundesk channels add` printed is the one place an owner has seen it, and
+neither `channels show` nor `channels doctor` repeats it.
 
 **The allow list is checked once, when the destination is written, and never again.** So taking
 somebody off a channel's allow list **does not** stop a schedule already pointed at them: it goes on

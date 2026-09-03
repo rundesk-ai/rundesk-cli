@@ -902,12 +902,15 @@ reports one there is split to it and one that does not gets a flat 2000. Declare
 anyway, and go on checking the text you are handed, because that check is what catches the day the
 two disagree.
 
-<a id="stream-decides-how-an-answer-is-composed"></a>
 `address` is asked of `--capabilities` itself, at the moment somebody points a schedule at a
-destination on your channel, and **decides whether they may**. It is the one key rundesk asks before
-writing something down rather than while running: a destination it cannot hand you is refused where
-it was typed instead of failing at two in the morning.
+destination on your channel, and **decides whether that destination may be written down**. It is a
+gate at write time and not a promise about delivery: rundesk asks it once, before anything is
+stored, so a channel whose adapter cannot resolve a destination refuses `--to` where it was typed
+rather than at two in the morning. What the adapter does with a `to` it later receives is still the
+adapter's — a destination it cannot reach then is answered `failed`, and nothing re-asks the
+capability or re-checks the allow list on the way.
 
+<a id="stream-decides-how-an-answer-is-composed"></a>
 `stream` is asked of `--capabilities` itself, once per gateway, and **decides how an answer is
 composed**. `true` — and unsaid means `true` — is the behaviour every adapter had before the field:
 each finished thought is delivered as the next one supersedes it, marked `remark`, and the answer is
