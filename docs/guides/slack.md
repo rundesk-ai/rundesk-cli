@@ -54,12 +54,11 @@ people on the agent's behalf is not something anybody asked for. A private answe
 command is escaped whole — those words are Rundesk's account of stored records rather than the
 agent's own sentence.
 
-**It sends files out, and takes one in only when the agent goes and asks for it.** A file the agent
-attached to its answer is uploaded into the same conversation the answer went to — see
-[files it sends](#files-it-sends). Nothing arriving is fetched: a file somebody uploads to the agent
-is still not read. The one way a file comes in is `rundesk search <agent> --fetch`, which brings in
-the attachments of a message the agent found and asked for by name — see
-[what it can search](#what-it-can-search).
+**It sends files out and takes them in.** A file the agent attached to its answer is uploaded into
+the same conversation the answer went to — see [files it sends](#files-it-sends). A file somebody
+attaches to a message that wakes the agent lands with the message, the way it does on Discord, and
+`rundesk search <agent> --fetch` brings in the attachments of a message the agent found — see
+[what it can search](#what-it-can-search). Both need `files:read`, which the manifest asks for.
 
 **It offers one slash command**, named after the agent, and every one of its answers is private to
 whoever typed it — see [the one command it offers](#the-one-command-it-offers).
@@ -141,10 +140,13 @@ oauth_config:
       - users:read
       # Uploading a file the agent attached to its answer.
       - files:write
+      # Landing a file somebody attaches to a message, and downloading one a search found.
+      # Required: an app that cannot read a file is a channel that drops what people send it.
+      - files:read
       # Declaring the one slash command above. It reads nothing and grants no access to a
       # conversation; without it the command cannot be declared at all.
       - commands
-      # The last four are for `rundesk search`, and every one of them is optional. Leave them out
+      # The last three are for `rundesk search`, and every one of them is optional. Leave them out
       # and everything else on this page works exactly as it does today — the agent simply searches
       # fewer kinds of conversation, and says so when it does. Read
       # `## What it can search` below before you decide. None of them widens what the bot may see:
@@ -156,9 +158,6 @@ oauth_config:
       - mpim:read
       # Reading what was said in a group direct conversation it is in.
       - mpim:history
-      # Downloading a file somebody attached to a message the agent found. Without it, `search` works
-      # and `--fetch` refuses by name.
-      - files:read
 
 settings:
   event_subscriptions:
@@ -178,10 +177,10 @@ settings:
 to.** The bot sees direct messages sent to its own App Home and the channels somebody added it to.
 It does not inherit the installer's messages or their view of the workspace.
 
-**The four search scopes do not change that sentence, which is why they are safe to add.** Each one
-covers a conversation the bot is already in — listing the direct conversations it is part of, reading
-a group direct conversation it is part of, downloading a file from a message it can already read.
-None of them reaches a channel it was not invited to, and none of them is a user token.
+**The three search scopes and `files:read` do not change that sentence, which is why they are safe to
+add.** Each one covers a conversation the bot is already in — listing the direct conversations it is
+part of, reading a group direct conversation it is part of, downloading a file from a message it can
+already read. None of them reaches a channel it was not invited to, and none of them is a user token.
 
 ## 2. Declare the app as an agent
 
@@ -337,7 +336,7 @@ for the whole of what Rundesk does with a declaration.
 | what is uploaded | the bytes this adapter re-opened and verified, never the path |
 | where it lands | the answer's own channel and thread — including when the answer was long enough to be split and the files ride on its last piece |
 | how long one answer has to get its files up | 8 seconds from the moment the answer is taken up |
-| incoming files | not fetched, and no scope asks to |
+| incoming files | landed with the message that brought them — up to 10 of 32 MiB, under the channel's dated `in/` directory, the same place a fetched one goes |
 
 **Every file is verified again, immediately before its own upload.** The adapter re-opens the path
 itself with every directory on the way opened so it cannot be followed through a symbolic link,
@@ -437,8 +436,9 @@ $ rundesk search ava --fetch 'C0OPS/1725026531.000200' --channel slack
 2 from C0OPS/1725026531.000200, in ava's slack record
 ```
 
-This needs `files:read`. Without it, searching works and `--fetch` refuses by name, saying which
-scope to add. Up to ten files of 32 MiB each; the message is reached again before anything is
+This needs `files:read`, which the manifest asks for and `channels add` refuses without. An app
+installed before it was asked for still searches, and `--fetch` refuses by name, saying which scope
+to add. Up to ten files of 32 MiB each; the message is reached again before anything is
 downloaded, and a file whose size does not match what Slack declared is refused while the rest still
 come.
 
@@ -664,6 +664,7 @@ collects an adapter that has already exited — never while the channel is runni
 | `Could not attach: <name>.` under an answer | that file did not go. `rundesk gateways logs ava` carries the whole reason — a file that changed after it was approved, a path that no longer opens, Slack refusing the upload, or the answer's own upload budget spent before that file was reached |
 | a large attachment is named as not attached every time | it is not finishing inside the answer's 8-second upload budget. The words and the reason are both honest; what the file needs is a route off the machine that is not the answer |
 | `has not been granted files:write` | the app was installed before the file upload existed. Add the scope and **Reinstall to Workspace** |
+| `has not been granted files:read` | the app was installed before arriving files were landed. Add the scope and **Reinstall to Workspace**; until then a file somebody attaches is named in the agent's log as left where only Slack can reach it, and the words still arrive |
 | an answer arrives and its file does not, with nothing said | the delivery carried no file: Rundesk attaches only an explicitly declared absolute path, never a file the agent merely read |
 | a person the agent named shows as `<@U…>` text | only the exact `<@U…>` or `<@W…>` markup is kept. A labelled `<@U…\|name>`, a lowercased id, and anything malformed are escaped on purpose |
 | `Changing the brain is an agent-wide decision…` | `provider` is refused on a channel more than one person may reach |

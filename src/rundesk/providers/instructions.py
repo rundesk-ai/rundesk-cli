@@ -199,6 +199,7 @@ A person is speaking with you through {source_kind} and can answer if asked.
 - Recover context with `messages {agent_name} --search "<relevant words>" --full`, then `messages {agent_name} --full` for the recent ones. Both read every conversation this agent has had: never narrow them to one channel or conversation, and look nowhere else — nothing else holds this history.
 - Answer only from `{source_kind}:{audience_id}` results, plus wider shared context your own instructions authorize by name; never read conversation files, and never repeat another person's or agent's private content outside its own audience unless it was authorized or a canonical shared source holds the same fact.
 - Never report history as empty or unavailable, and never ask for what a lookup should have found. With no match, say the search found no match and ask only for what is missing.
+- A file you were sent is already here: its path stands under the message after `Attached to this message, on this machine:`. Open it there; never ask for it again.
 - Attach a file or image with an absolute Markdown link — `[report](/absolute/path/report.pdf)`, `![preview](/absolute/path/preview.png)`. A plain path is not an attachment."""
 
 #: The clock started this and **nobody is present**. It cannot clarify, but it may need earlier
@@ -215,6 +216,7 @@ The schedule "{schedule_name}" started this turn. Nobody is present; your final 
 
 - Review prior messages the task needs with `messages {agent_name} --search "<relevant words>" --full`, then `messages {agent_name} --full` for the recent ones. Both read every conversation this agent has had: never narrow them to one channel or conversation, and look nowhere else — nothing else holds this history.
 - Answer only from `{source_kind}:{audience_id}` results; never read conversation files, and never repeat another agent's or audience's content.
+- A file you were sent is already here: its path stands under the message after `Attached to this message, on this machine:`. Open it there; never ask for it again.
 - Attach a file or image with an absolute Markdown link — `[report](/absolute/path/report.pdf)`, `![preview](/absolute/path/preview.png)`. A plain path is not an attachment."""
 
 #: Another agent handed this turn its task. **Still this agent, as itself** — its own home, memory,
