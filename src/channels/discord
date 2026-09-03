@@ -3360,9 +3360,13 @@ async def fetching() -> int:
                         f"Discord keeps its ids as")
     place, which = halves
     home = (os.environ.get("RUNDESK_CHANNEL_HOME") or "").strip()
-    if not home:
-        return _refused("nothing said where this channel may put what it fetches, so there is "
-                        "nowhere to bring a file to")
+    if not home or not Path(home).is_absolute():
+        # The same rule the Slack adapter holds `fetch` to: a relative directory is one whose
+        # meaning depends on where this program happened to start, and a file put there is one
+        # rundesk will not take.
+        return _refused("nothing said where this channel may put what it fetches — "
+                        "RUNDESK_CHANNEL_HOME has to name this channel's own directory by an "
+                        "absolute path, so there is nowhere to bring a file to")
     token = the_token()
     if not token:
         return _refused(f"there is no bot token — nothing set {TOKEN_FROM}", secret=True)

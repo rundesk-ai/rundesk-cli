@@ -37,7 +37,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import IO, Any, Dict, NamedTuple, Optional, Sequence, Union
+from typing import IO, Any, Dict, NamedTuple, Optional, Sequence
 
 #: What a program that never started, or would not finish, has instead of an exit code.
 DID_NOT_START = "did not start"
@@ -247,17 +247,6 @@ def _told(started: "subprocess.Popen", telling: str) -> None:
     with contextlib.suppress(OSError, ValueError):
         started.stdin.close()
     started.stdin = None
-
-
-def _said(maybe: Optional[Union[str, bytes]]) -> str:
-    """What a timed-out program had written, whichever way this Python hands it over.
-
-    `TimeoutExpired` carries `bytes` on some versions and `str` on others depending on how the run
-    was asked for, and `None` when it wrote nothing at all. A caller should not have to know which.
-    """
-    if maybe is None:
-        return ""
-    return maybe.decode("utf-8", "replace") if isinstance(maybe, bytes) else str(maybe)
 
 
 # ---------------------------------------------------------------------------------------------
