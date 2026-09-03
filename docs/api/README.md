@@ -73,8 +73,8 @@ rundesk permissions lineage               # whose grants an answer here would be
 rundesk permissions check [<probe> ...] [--everything] [--verbose]   # prove them now, and record it
 rundesk turns <agent> [<turn>] [--limit <n>] [--conversation <id>]
 rundesk schedules list [<agent>] [--expired]    # everything every agent starts because the time came
-rundesk schedules add <agent> <schedule> --when '<cron>' | --at <moment> --run '<program>' | --ask '<prompt>' [--until <moment>] [--disabled]
-rundesk schedules update <agent> <schedule> [--when|--at|--until|--run|--ask|--enable|--disable]
+rundesk schedules add <agent> <schedule> --when '<cron>' | --at <moment> --run '<program>' | --ask '<prompt>' [--until <moment>] [--disabled] [--channel <channel> --to <id>]
+rundesk schedules update <agent> <schedule> [--when|--at|--until|--run|--ask|--enable|--disable|--channel <channel> --to <id>]
 rundesk schedules show <agent> <schedule> # everything one was given
 rundesk schedules run <agent> <schedule> [--wait <seconds>]   # run one now, in this terminal
 rundesk schedules remove <agent> <schedule>       # take one away

@@ -159,8 +159,13 @@ MAX_TEXT = 3800
 #: their history — bounded, and saying in `partial` wherever it stopped.
 #:
 #: `max_text` is the constant above and never a second copy of it.
+#: **`address` is what lets a schedule report somewhere of its own.** rundesk holds no Slack
+#: credential, so it cannot turn a user id into the direct conversation that user reads — that is
+#: `conversations.open`, a call only this side can make — and the string this adapter composes for a
+#: place is its own and never rundesk's to build. Saying so is what allows rundesk to accept `--to`
+#: for this channel; an adapter that says nothing has `--to` refused where somebody typed it.
 CAPABILITIES = {"stream": False, "edit": "none", "react": True, "thread": True, "attach": True,
-                "search": True, "max_text": MAX_TEXT}
+                "address": True, "search": True, "max_text": MAX_TEXT}
 
 #: Where the two credentials are read from. Slack needs both and one without the other reaches
 #: nothing: the app-level token opens the socket, the bot token calls the Web API. **Never an
@@ -976,6 +981,24 @@ def a_room_from(said: Dict[str, Any]) -> Tuple[str, bool, bool]:
     """
     return (flat(said.get("name"), WHERE_AT_MOST), bool(said.get("is_private")),
             bool(said.get("is_ext_shared")))
+
+
+def _aimed_at(said: Any) -> Optional[Tuple[str, str]]:
+    """The one destination a delivery names, as `("sender"|"place", id)`, or `None` for none.
+
+    **Read whole rather than guessed at.** `to` supersedes `place` entirely, so a malformed one must
+    never fall through to the place beside it — that place is the channel's own recorded destination
+    and delivering there is the mis-delivery rundesk aimed this away from.
+    """
+    if said is None:
+        return None
+    if not isinstance(said, dict):
+        raise Refused("the destination to deliver to was not an object")
+    for kind in ("sender", "place"):
+        named = str(said.get(kind) or "")
+        if named:
+            return kind, named
+    raise Refused("the destination to deliver to named neither a sender nor a place")
 
 
 def a_direct_message(event: Dict[str, Any]) -> bool:
@@ -2609,6 +2632,9 @@ class Reaching:
         #: Where a message this has seen is standing, by its own id, so a mark can be put on one
         #: without asking Slack about it again.
         self.standing: Dict[str, str] = {}
+        #: The direct conversation one person reads, by their own id. Held for the life of this
+        #: process because it does not change, and written down nowhere because Slack owns it.
+        self.opened: Dict[str, str] = {}
         #: The visual target of the prompted answer being written into each conversation, by that
         #: conversation's own key (R-SLK-14). **Rundesk puts `reply_to` on the first piece of a
         #: split answer and the files on the last**, so every piece after the first carries nothing
@@ -3410,6 +3436,45 @@ class Reaching:
             # not know is not a channel that has gone wrong.
             noted(f"nothing here does {doing!r}", "info")
 
+    def _addressed(self, aimed: Tuple[str, str]) -> str:
+        """The Slack conversation one named destination is written into. `Refused` when it cannot be.
+
+        A place is already a conversation id — a `C`, a `G` or a `D`, which is what an allow list's
+        places name. A person is not: the id names *them*, and the conversation they read is opened
+        with `conversations.open`, which needs the bot token this side holds and rundesk does not.
+
+        **Opened once and remembered.** A direct conversation does not change, and opening one is a
+        round trip on the path of every notice a schedule sends.
+
+        **Refused rather than degraded.** Everything else here that cannot reach the platform falls
+        back to something reasonable; there is nothing reasonable for a delivery somebody addressed,
+        because every other conversation in reach is one they did not choose.
+        """
+        kind, named = aimed
+        if kind == "place":
+            return named
+        held = self.opened.get(named)
+        if held is not None:
+            return held
+        try:
+            found = self.web.conversations_open(users=named)
+        # A platform boundary, like every other broad catch here — and **the only one that carries no
+        # `noqa`**, because it is the only one that re-raises. `BLE001` is about a handler that
+        # swallows; one that translates and raises on is not blind, so a directive here would be a
+        # suppression of nothing. The behaviour is deliberate and unchanged: anything the SDK throws
+        # reaches `_final`, which ends the connection on a `401` and leaves every other failure to
+        # this delivery alone, and then leaves as a `Refused` so `_deliver` reports `failed` rather
+        # than posting somewhere nobody chose.
+        except Exception as why:
+            self._final(why)
+            raise Refused(f"Slack would not open a direct conversation with {named}: "
+                          f"{_why_slack_refused(why)}") from why
+        where = str((found.get("channel") or {}).get("id") or "")
+        if not where:
+            raise Refused(f"Slack opened no direct conversation with {named}")
+        self.opened[named] = where
+        return where
+
     def _deliver(self, it: Dict[str, Any]) -> None:
         """Post what the agent said and report Slack's own id for it — or say why not.
 
@@ -3473,8 +3538,21 @@ class Reaching:
                               f"splitting happens once, on rundesk's side, for every platform")
             if not text.strip() and not carrying:
                 raise Refused("there was nothing to deliver: no text, and no file")
-            _, channel, thread = where_of(it.get("place"))
-            thread = self._answer_in(it, str(it.get("place") or ""), thread)
+            aimed = _aimed_at(it.get("to"))
+            if aimed is None:
+                _, channel, thread = where_of(it.get("place"))
+                thread = self._answer_in(it, str(it.get("place") or ""), thread)
+            else:
+                # **`to` supersedes `place` and the place is not looked at.** A destination somebody
+                # named is not necessarily one this adapter has ever written to, so it has no
+                # conversation string of ours — which is exactly why it crosses as an id — and no
+                # prompted answer stands in it for `_answer_in` to resolve a target from.
+                channel, thread = self._addressed(aimed), ""
+            # A thread, where rundesk asked for one and named the message to hang it off. On Slack
+            # a reply *is* a thread, so this is `thread_ts` and nothing has to be opened: the name
+            # rundesk sent is for a platform that needs one and is deliberately unused here.
+            if it.get("threaded") and it.get("reply_to"):
+                thread = str(it["reply_to"])
         except (Refused, TypeError, ValueError) as why:
             say({"say": "failed", "id": given, "why": str(why)})
             return

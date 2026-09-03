@@ -805,7 +805,8 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
          answering: Optional[str] = None, cost: str = "",
          landed_within: float = 0.0, noting: Optional[List[str]] = None,
          refusals: Optional[List[str]] = None, notice: bool = False,
-         remark: bool = False) -> bool:
+         remark: bool = False, to_sender: str = "", to_place: str = "",
+         threaded: str = "") -> bool:
     """Send something to a place through a running adapter. `False` when there is nothing to send it.
 
     `False` rather than an exception: a notice that could not be delivered because the adapter is
@@ -868,6 +869,29 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
     its compatible primary destination, while an adapter that can address allowed people
     individually may give each one a copy. Direct answers and remarks leave it false, so one
     person's conversation is never widened into everybody's notification.
+
+    **`to_sender` and `to_place` name one destination and supersede `place`**, for the caller that
+    was given a destination rather than inheriting the channel's. Exactly one of them says
+    something. They cross as the ids themselves because a sender id is not a conversation on either
+    shipped platform and a place id is not the string an adapter composed for a place — resolving
+    either needs the platform, and rundesk holds no credential for it. `docs/extending/adapters.md`
+    is the contract; `channels.adapters.capabilities(kind)["address"]` is how a caller knows an
+    adapter implements it, and nothing may send one to an adapter that does not.
+
+    **A named destination is one destination, so it is never fanned out.** `notice` stays true
+    because nobody prompted the delivery, and the two facts are separate: *unprompted* is why it may
+    be announced at all, and *this one place* is where it goes. An adapter that copies a notice to
+    every allowed person must not copy one that was aimed.
+
+    `threaded` asks for this delivery to stand in a thread hanging off the message `answering`
+    names, rather than as a plain reply to it, **and it is the name to give that thread** rather
+    than a flag. A thread is a place with a label on it and only this side knows what the run was
+    — a platform that needs one would otherwise have to read the words and invent it, which is the
+    guessing every other field here exists to avoid. For the report of a scheduled run in a shared
+    room: a notice at nine and an answer twenty minutes later are one exchange, and a room where
+    they are two loose messages is a room nobody can follow. Meaningless without `answering`,
+    because a thread has to hang off something, and ignored by a platform on which a reply is
+    already one.
     """
     one = watching.running.get(kind)
     if one is None or one.talking is None:
@@ -886,12 +910,27 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
         # cost lines is the same number said four times.
         if nth == 0 and cost:
             record["cost"] = cost
-        if answering and nth == 0:
+        # **A thread anchor is not a quote, so it goes on every piece.** `reply_to` alone means
+        # *quote this*, which is worth saying once; beside `threaded` it means *the thread hanging
+        # off this*, and a second piece without it would leave half a report in the room the thread
+        # was opened out of.
+        if answering and (nth == 0 or threaded):
             record["reply_to"] = answering
         if notice:
             record["notice"] = True
         if remark:
             record["remark"] = True
+        # **Written on every piece, unlike the quote and the cost.** Those two belong to the first
+        # message of an answer; this is *where the answer goes*, and a second piece landing in the
+        # notified channel because only the first carried the destination is the whole failure this
+        # exists to prevent.
+        if to_sender or to_place:
+            record["to"] = {"sender": to_sender} if to_sender else {"place": to_place}
+        if threaded and answering:
+            # Only ever beside a message to hang it off. A thread anchored on nothing is a request
+            # no platform can answer, and sending it would turn an unanchored report — which is
+            # survivable and documented — into a refused one.
+            record["threaded"] = threaded
         one.awaiting[record["id"]] = answering if answering and nth == 0 else ""
         _make_room(one.awaiting)
         if not _said_to(where, one, record):
@@ -934,7 +973,8 @@ def told(agent: str, where: Path, watching: Watching, kind: str, place: str,
 
 def announced(agent: str, where: Path, watching: Watching, kind: str, place: str,
               pieces: List[str], within: float,
-              refusals: Optional[List[str]] = None) -> Optional[str]:
+              refusals: Optional[List[str]] = None,
+              to_sender: str = "", to_place: str = "") -> Optional[str]:
     """Say something, and hand back the platform's own id for the **first** message of it.
 
     `None` when nobody can say.
@@ -972,6 +1012,11 @@ def announced(agent: str, where: Path, watching: Watching, kind: str, place: str
     see the top of, so the first piece is the one worth quoting, exactly as `told` puts a quote on
     the first piece and no other.
 
+    **`to_sender` and `to_place` are `told`'s own too**, and the id handed back is the id of the
+    message in *that* destination — which is what the report following it has to hang off. See
+    `told`: the two supersede `place`, exactly one of them says anything, and an aimed announcement
+    is never fanned out.
+
     **The wait is `told`'s own**, and that is not a shortcut. `_delivered` writes what the platform
     called a delivery **before** it takes that delivery out of `awaiting`, and `landed_within` is
     exactly a wait for `awaiting` to empty — so by the moment `told` answers, `posted` holds whatever
@@ -983,7 +1028,8 @@ def announced(agent: str, where: Path, watching: Watching, kind: str, place: str
         return None
     written: List[str] = []
     if not told(agent, where, watching, kind, place, pieces, noting=written,
-                landed_within=within, refusals=refusals, notice=True):
+                landed_within=within, refusals=refusals, notice=True,
+                to_sender=to_sender, to_place=to_place):
         return None
     # One indivisible read of a dict two threads share, which is the only safe operation on it.
     # Nothing was acknowledged, or it was acknowledged with no id: both are `None`, and the caller

@@ -212,7 +212,7 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from rundesk import __version__
 from rundesk.agents import directory, migration
@@ -224,7 +224,7 @@ from rundesk.delegations import kept as delegations_kept
 from rundesk.exits import OK
 from rundesk.gateways import awake, delegation_query, maintenance, standing
 from rundesk.providers import answering, continuations, kept, turns
-from rundesk.schedules import firing, upkeep
+from rundesk.schedules import due, firing, upkeep
 from rundesk.skills import grants
 from rundesk.utils import locking, logs
 
@@ -874,6 +874,11 @@ class _Notices:
     started again is a different child with a different pipe, and a channel configured since this was
     built is one a held value would never have seen — so this closes over a way of asking rather than
     over an answer, exactly as the teardown callbacks above do.
+
+    **A firing's own destination is a parameter of every verb, never a field of this.** One of these
+    serves every schedule an agent has, and two overlapping firings each keep the destination they
+    were fired with — so a `_Notices` that held one would send the second run's report into the first
+    run's room. `firing.Telling` states the same rule from the other side of the seam.
     """
 
     def __init__(self, name: str, where: Path, hosted: Callable[[], hosting.Watching]) -> None:
@@ -881,27 +886,35 @@ class _Notices:
         self.where = where
         self.hosted = hosted
 
-    def say(self, saying: str) -> None:
-        _told(self.name, self.where, self.hosted(), saying)
+    def say(self, saying: str, aimed: Optional[due.Target] = None) -> None:
+        _told(self.name, self.where, self.hosted(), saying, aimed=aimed)
 
-    def announced(self, saying: str, within: float) -> Optional[str]:
+    def announced(self, saying: str, within: float,
+                  aimed: Optional[due.Target] = None) -> Optional[str]:
         """Say that a run has begun, and hand back what the platform called that message.
 
         `None` where nothing was said or nothing can be quoted — no notified channel, no adapter up,
         or a platform whose adapter passes no ids. Every one of those means the report will stand on
         its own, which is worse than anchored and far better than silent.
+
+        `aimed` is where this run reports, and it goes to the one resolver rather than being applied
+        here: `channels.delivery.notice` is what turns *nobody chose* or *this destination* into a
+        channel and a place, and a second answer worked out in this method is the second routing
+        path there deliberately is not.
         """
         try:
-            going = delivery.notice(self.name, saying)
+            going = delivery.notice(self.name, saying, **_where_it_goes(aimed))
             if going is None:
                 return None
             return hosting.announced(self.name, self.where, self.hosted(), going.kind, going.place,
-                                     going.pieces, within)
+                                     going.pieces, within,
+                                     to_sender=going.to.sender if going.to else "",
+                                     to_place=going.to.place if going.to else "")
         except Exception:                          # noqa: BLE001 — see `_told`
             return None
 
     def reported(self, schedule: str, answering: Optional[str], became: str,
-                 began: str) -> None:
+                 began: str, aimed: Optional[due.Target] = None) -> None:
         """Put what a scheduled run came to underneath the notice that said it had begun.
 
         **The answer, and the outcome only where there is no answer.** What an owner wants at six in
@@ -919,6 +932,14 @@ class _Notices:
         the only thing that reaches a person. That is a property of where the work runs rather than a
         filter somebody has to maintain. When it delegates, the initial provisional report is
         suppressed; the review turn sends the final report after the result returns.
+
+        **A report aimed at a place stands in a thread of its own, hanging off the notice.** A room
+        is somebody else's, and a notice at nine with an answer twenty minutes later is one exchange
+        — left loose in the room they are two messages a reader has to pair up by hand, which is the
+        same argument the shipped Discord adapter already makes about answering a room message. Only
+        beside a notice there is to hang one off: a run that could not announce reports unanchored,
+        which is what it has always done. A direct message gets no thread and needs none, because
+        the whole conversation is the exchange.
         """
         try:
             initial = kept.schedule_turn_after(self.name, schedule, began)
@@ -948,19 +969,34 @@ class _Notices:
         for why in prepared.refused:
             logs.note(self.where, f"schedule {schedule}: {why}", logs.WARNING)
         adapter_refused: List[str] = []
+        # A thread only where there is a place to open one in and a notice to open it off. Both
+        # halves matter: a direct message is already the exchange, and an anchor nobody posted is
+        # nothing to hang a thread on.
+        # The schedule's own name is what the thread is called, because that is what the run was
+        # and it is the word an owner already reads in every listing about it.
+        in_a_thread = schedule if answering and aimed is not None and aimed.place else ""
         _told(self.name, self.where, self.hosted(), prepared.text,
               landed_within=ATTACHMENT_WITHIN if prepared.files else 0.0,
-              answering=answering, sending=prepared.files, refusals=adapter_refused)
+              answering=answering, sending=prepared.files, refusals=adapter_refused,
+              aimed=aimed, threaded=in_a_thread)
         if adapter_refused:
             for why in adapter_refused:
                 logs.note(self.where, f"schedule {schedule}: {why}", logs.WARNING)
             names = ", ".join(one.name for one in prepared.files)
-            telling = delivery.notice(self.name, prepared.text)
+            telling = delivery.notice(self.name, prepared.text, **_where_it_goes(aimed))
             last = telling.pieces[-1] if telling is not None and telling.pieces else prepared.text
-            fallback_answering = answering if telling is None or len(telling.pieces) == 1 else None
+            # **The failure report belongs to the same thread as the report it is about**, so the
+            # anchor is kept wherever one was opened. Dropping it is only about not quoting the
+            # notice twice on a report that was split — and inside a thread `reply_to` is not a
+            # quote at all but the thread it hangs off, which `hosting.told` puts on every piece.
+            # Dropped there, this line would stand in the room while the report it belongs to sits
+            # in the thread, which is the one place `docs/concepts/schedules.md` promises it is not.
+            fallback_answering = (
+                answering if in_a_thread or telling is None or len(telling.pieces) == 1 else None)
             fallback = "\n\n".join(
                 one for one in (last.strip(), f"Could not attach: {names}.") if one)
-            _told(self.name, self.where, self.hosted(), fallback, answering=fallback_answering)
+            _told(self.name, self.where, self.hosted(), fallback, answering=fallback_answering,
+                  aimed=aimed, threaded=in_a_thread)
 
 
 def _told_what_changed(name: str, where: Path, channels_up: hosting.Watching,
@@ -1052,10 +1088,25 @@ def _the_told_channel_is_connected(name: str, channels_up: hosting.Watching) -> 
     return False
 
 
+def _where_it_goes(aimed: Optional[due.Target]) -> Dict[str, str]:
+    """One firing's destination as the arguments the resolver takes, or none at all.
+
+    Here rather than at each of the four call sites, and it converts rather than decides: `schedules`
+    states a destination as a `due.Target` and `channels` takes three plain strings, because neither
+    layer may name the other's type and this module is the only one that sees both. **Nothing is
+    invented for an absent one** — no keys at all, so the resolver answers with the agent's notified
+    channel exactly as it did before any of this existed.
+    """
+    if aimed is None:
+        return {}
+    return {"channel": aimed.channel, "sender": aimed.sender, "place": aimed.place}
+
+
 def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
           landed_within: float = 0.0, answering: Optional[str] = None,
           sending: Sequence[arrivals.Sending] = (),
-          refusals: Optional[List[str]] = None) -> str:
+          refusals: Optional[List[str]] = None,
+          aimed: Optional[due.Target] = None, threaded: str = "") -> str:
     """Send one notice out through the channel this agent asked to be told things. Never raises.
 
     Answers which of **four** things happened, because a caller that has to decide whether to write
@@ -1088,6 +1139,11 @@ def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
     `hosting.told` answers `False` when there is no adapter to send through, and that is left alone
     for the same reason — a notice is an account of something, never the thing itself.
 
+    `aimed` is one firing's own destination, for the caller that was given one, and it reaches the
+    one resolver rather than being applied here. `threaded` asks for a report to stand in a thread
+    hanging off `answering` rather than as a plain reply to it — see `hosting.told`. Both are
+    absent for everything a gateway says about itself, which goes where the agent asked to be told.
+
     `answering` is the platform's id of a message this one goes underneath, for the caller that has
     one — a schedule's report, put below the notice that said the run had begun. Passed through
     rather than left to that caller to call `hosting.told` itself, because what would be duplicated
@@ -1100,7 +1156,7 @@ def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
     # unchanged and is the one that matters: `Exception` and never `BaseException`, so that `Stopped`
     # still lands. A restructure is exactly where that gets widened by accident.
     try:
-        going = delivery.notice(name, saying)
+        going = delivery.notice(name, saying, **_where_it_goes(aimed))
         if going is None:
             return TELLS_NOBODY
         # Collected whenever this waited, whether or not the caller asked for them: what the platform
@@ -1110,7 +1166,10 @@ def _told(name: str, where: Path, channels_up: hosting.Watching, saying: str,
         heard = refusals if refusals is not None else []
         if hosting.told(name, where, channels_up, going.kind, going.place, going.pieces,
                         landed_within=landed_within, answering=answering, sending=sending,
-                        refusals=heard if landed_within > 0 else None, notice=True):
+                        refusals=heard if landed_within > 0 else None, notice=True,
+                        to_sender=going.to.sender if going.to else "",
+                        to_place=going.to.place if going.to else "",
+                        threaded=threaded):
             if not heard:
                 return TOLD
             if refusals is None:

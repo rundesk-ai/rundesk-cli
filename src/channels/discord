@@ -127,8 +127,14 @@ MAX_TEXT = 2000
 #: publishes a message search endpoint this bot's existing permission and intent already reach —
 #: and it would be worse to claim it on a platform where the search were a history walk, which is
 #: what `false` is here to say.
+#: **`address` is what lets a schedule report somewhere of its own.** rundesk holds no Discord
+#: credential, so it cannot turn a user id into the direct-message channel that user reads, and the
+#: id of a room is not the id of the conversation a bot writes into it — both are a platform round
+#: trip, and this is the side of the seam that can make one. Saying so is what allows rundesk to
+#: accept `--to` for this channel at all; an adapter that says nothing has `--to` refused where
+#: somebody typed it, which is better than a report going quietly to the wrong room.
 CAPABILITIES = {"stream": True, "edit": "full", "react": True, "thread": True, "attach": True,
-                "search": True, "max_text": MAX_TEXT}
+                "address": True, "search": True, "max_text": MAX_TEXT}
 
 #: What Discord is told this connection wants:
 #:
@@ -1148,6 +1154,25 @@ def a_reached(part: str, directory: int) -> bool:
     return True
 
 
+def _aimed_at(said: Any) -> Optional[Tuple[str, str]]:
+    """The one destination a delivery names, as `("sender"|"place", id)`, or `None` for none.
+
+    **Read whole rather than guessed at.** `to` supersedes `place` entirely, so a malformed one must
+    never fall through to the place beside it: that place is the channel's own recorded destination
+    and delivering there is exactly the mis-delivery rundesk aimed this away from. Anything that is
+    not one of the two named kinds with something after it is `Refused`.
+    """
+    if said is None:
+        return None
+    if not isinstance(said, dict):
+        raise Refused("the destination to deliver to was not an object")
+    for kind in ("sender", "place"):
+        named = str(said.get(kind) or "")
+        if named:
+            return kind, named
+    raise Refused("the destination to deliver to named neither a sender nor a place")
+
+
 def an_id(said: Any, called: str) -> int:
     """A snowflake as the number Discord keeps it as, or `Refused` in words of our own.
 
@@ -1472,6 +1497,11 @@ class Reaching:
         #: allowlist is fixed for this process, so this is bounded by configuration rather than by
         #: how long the adapter runs.
         self.notice_places: Dict[str, int] = {}
+        #: The thread opened for one report, by the id of the message it hangs off. Held for the
+        #: life of this process rather than written down: a thread is Discord's and outlives this,
+        #: and what this remembers is only *do not ask for a second one* — which a process that
+        #: came back up asks again, and Discord answers with the room.
+        self.report_threads: Dict[str, int] = {}
         #: Whether the note about not being able to open a thread has already been said.
         self.threadless = False
         #: Whether the socket is up, so `gone` and `ready` are said on the change rather than on
@@ -1874,13 +1904,27 @@ class Reaching:
                               f"splitting happens once, on rundesk's side, for every platform")
             # Named as a number before anything is opened, because a place this platform cannot
             # parse is the one failure here that no file and no text could ever get past.
-            place = an_id(it.get("place"), "channel id")
+            aimed = _aimed_at(it.get("to"))
+            place = (await self._addressed(aimed) if aimed is not None
+                     else an_id(it.get("place"), "channel id"))
             attachments = it.get("files") or []
             if not isinstance(attachments, list):
                 raise Refused("the files to deliver were not a list")
             if not text and not attachments:
                 raise Refused("there was nothing to deliver: no text, and no file")
-            places = await self._notice_places() if it.get("notice") is True else [place]
+            # **An aimed delivery is never fanned out**, whatever `notice` says. The two facts are
+            # separate: `notice` is *nobody prompted this*, which is why it may be announced at
+            # all, and `to` is *this one destination*, which somebody chose. Copying an aimed
+            # notice to every allowed user would post one schedule's retro to people it was
+            # deliberately not addressed to.
+            places = ([place] if aimed is not None
+                      else await self._notice_places() if it.get("notice") is True else [place])
+            # And into a thread hanging off the notice where rundesk asked for one, so a run's
+            # answer stands under the message that said it had begun rather than loose in the room
+            # twenty minutes later. `_in_a_thread` degrades to the room, never refuses.
+            named = it.get("threaded")
+            if named and it.get("reply_to"):
+                places = [await self._in_a_thread(place, it["reply_to"], named)]
         # `OSError` is the backstop rather than a fourth expected case. Everything raised below is
         # meant to arrive as `Refused`, and one that did not — the snapshot, opened above its own
         # guard — escaped to `_reading`, which logs and goes on reading. **The delivery then had no
@@ -1939,6 +1983,85 @@ class Reaching:
         self._make_room()
         say({"say": "delivered", "id": given, "external_id": str(sent.id)})
 
+    async def _addressed(self, aimed: Tuple[str, str]) -> int:
+        """The Discord channel one named destination is written into. `Refused` when it cannot be.
+
+        A place is already a channel and needs nothing of the platform. A person is not: the id on
+        an allow list names *them*, and the conversation a bot writes to them is a channel Discord
+        has to be asked to open. `_a_direct_message` is that ask, and it is the same one
+        `_notice_places` makes for every allowed user — one implementation, so a destination aimed
+        at one person and a notice copied to all of them cannot resolve the same id two ways.
+
+        **Refused rather than degraded.** Everything else here that cannot reach a platform falls
+        back to something reasonable; there is nothing reasonable to fall back to for a delivery
+        somebody addressed, because every other channel in reach is one they did not choose.
+        """
+        kind, named = aimed
+        if kind == "place":
+            return an_id(named, "channel id")
+        return await self._a_direct_message(named, f"with {named}")
+
+    async def _a_direct_message(self, user: str, whose: str) -> int:
+        """The channel this person reads, opened once and remembered. `Refused` when Discord will not.
+
+        Remembered because a direct-message channel does not change and opening one is a round trip
+        on the path of every notice — the cache is `_notice_places`' own, so one person reached both
+        ways is one entry.
+
+        **`whose` is the caller's own words for what could not be opened**, because the two callers
+        have different news. A notice copied to everybody that fails on one of them reached nobody,
+        and *for every allowed user* is what a reader has to act on; a delivery aimed at one person
+        failed for that person, and naming them is what a reader has to act on. One sentence for
+        both would be wrong about one of them.
+        """
+        place = self.notice_places.get(user)
+        if place is not None:
+            return place
+        user_id = an_id(user, "Discord user id")
+        try:
+            person = await self.client.fetch_user(user_id)
+            direct = await person.create_dm()
+            place = an_id(direct.id, "direct-message channel id")
+        except Refused:
+            raise
+        except Exception as why:
+            self._final(why)
+            raise Refused(f"Discord could not open a direct message {whose}: "
+                          f"{type(why).__name__}: {why}") from why
+        self.notice_places[user] = place
+        return place
+
+    async def _in_a_thread(self, place: int, anchor: Any, named: Any) -> int:
+        """The thread hanging off this message, opened once — or `place` where there is none.
+
+        **One thread per run, and it is remembered by the message it hangs off.** A report arrives
+        as several deliveries and a failure report may arrive after it, and each has to land in the
+        same thread: asking Discord to open a second one on the same message is refused, and a
+        report split between a thread and the room above it is the unreadable outcome this exists to
+        prevent.
+
+        **Degrades to the room, exactly as answering a room message does.** Opening a thread needs
+        `CREATE_PUBLIC_THREADS`, which a bot invited before that permission was asked for does not
+        have — and a report in the room is worse than a report in a thread and far better than no
+        report. `_a_thread` says so once and keeps trying, so a permission granted while this runs
+        starts working with nothing restarted.
+        """
+        held = self.report_threads.get(str(anchor))
+        if held is not None:
+            return held
+        try:
+            where = self.client.get_channel(place) or self.client.get_partial_messageable(place)
+            message = where.get_partial_message(an_id(anchor, "message id"))
+        except Exception as why:           # noqa: BLE001 — a platform boundary
+            noted(f"could not reach the message a report was to be threaded under, so it was "
+                  f"posted in the place itself: {type(why).__name__}: {why}")
+            return place
+        opened = await self._a_thread(message, str(named))
+        if opened is None:
+            return place
+        self.report_threads[str(anchor)] = opened
+        return opened
+
     async def _notice_places(self) -> List[int]:
         """Each allowed person's DM, once, without trusting the old configured destination.
 
@@ -1956,22 +2079,7 @@ class Reaching:
             raise Refused("there was no allowed Discord user to notify")
         places: List[int] = []
         for allowed in self.allow:
-            user = str(allowed)
-            place = self.notice_places.get(user)
-            if place is None:
-                user_id = an_id(user, "Discord user id")
-                try:
-                    person = await self.client.fetch_user(user_id)
-                    direct = await person.create_dm()
-                    place = an_id(direct.id, "direct-message channel id")
-                except Refused:
-                    raise
-                except Exception as why:
-                    self._final(why)
-                    raise Refused(
-                        "Discord could not open a direct message for every allowed user: "
-                        f"{type(why).__name__}: {why}") from why
-                self.notice_places[user] = place
+            place = await self._a_direct_message(str(allowed), "for every allowed user")
             if place not in places:
                 places.append(place)
         return places

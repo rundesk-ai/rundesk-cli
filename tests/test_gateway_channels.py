@@ -34,7 +34,7 @@ from rundesk.exits import OK
 from rundesk.gateways import host, maintenance, standing
 from rundesk.providers import kept as turns_kept
 from rundesk.providers import protocol
-from rundesk.schedules import kept
+from rundesk.schedules import due, kept
 from rundesk.skills import grants, library
 
 #: One whose platform says no to everything: every delivery comes back a `failed` carrying a reason
@@ -585,6 +585,8 @@ for line in sys.stdin:
                                       "files": record.get("files", []),
                                       "notice": record.get("notice"),
                                       "reply_to": record.get("reply_to"),
+                                      "to": record.get("to"),
+                                      "threaded": record.get("threaded"),
                                       "external_id": named}) + "\\n")
         print(json.dumps({"say": "delivered", "id": record.get("id"),
                           "external_id": named}), flush=True)
@@ -850,9 +852,10 @@ class WhatAScheduledRunSaysOnASurface(WithAChannel):
         self.addCleanup(setattr, host, "_told", told)
 
         def refusing(name, where, watching, saying, landed_within=0.0, answering=None,
-                     sending=(), refusals=None):
+                     sending=(), refusals=None, aimed=None, threaded=False):
             calls.append({"text": saying, "within": landed_within,
-                          "sending": tuple(sending), "answering": answering})
+                          "sending": tuple(sending), "answering": answering,
+                          "aimed": aimed, "threaded": threaded})
             if sending and refusals is not None:
                 refusals.append("the file changed after approval")
             return host.TOLD
@@ -885,8 +888,9 @@ class WhatAScheduledRunSaysOnASurface(WithAChannel):
         self.addCleanup(setattr, host, "_told", told)
 
         def refusing(name, where, watching, saying, landed_within=0.0, answering=None,
-                     sending=(), refusals=None):
-            calls.append({"text": saying, "answering": answering})
+                     sending=(), refusals=None, aimed=None, threaded=False):
+            calls.append({"text": saying, "answering": answering,
+                          "aimed": aimed, "threaded": threaded})
             if sending and refusals is not None:
                 refusals.append("the file changed after approval")
             return host.TOLD
@@ -904,6 +908,54 @@ class WhatAScheduledRunSaysOnASurface(WithAChannel):
         self.assertEqual("msg-1", calls[0]["answering"])
         self.assertIsNone(calls[1]["answering"])
 
+    def test_a_split_reports_attach_failure_stays_in_the_thread_the_report_is_in(self):
+        """R-SNT-19. A place target whose report was long enough to split and whose file the
+        adapter would not take — the one combination that put the failure line in the room.
+
+        **Both halves are asserted, because either alone passes while the line still lands in the
+        room.** `hosting.told` writes `threaded` only beside the message it hangs off, so a
+        `threaded` with no `answering` is dropped on the way through and the line stands loose in a
+        room somebody else's — beside a report sitting in a thread, which is exactly what
+        `docs/concepts/schedules.md` says a targeted run does not do.
+
+        Dropping the anchor is right where there is no thread: it stops a split report quoting the
+        notice twice, which `test_a_long_scheduled_report_retries_only_its_refused_final_piece`
+        holds for the untargeted run beside this one.
+        """
+        self.a_channel()
+        at = self.home / "reports" / "preview.png"
+        at.parent.mkdir(parents=True)
+        at.write_bytes(b"pixels")
+        began = datetime.datetime(2026, 8, 4, 9, 0, tzinfo=datetime.timezone.utc)
+        said = "BEGIN\n" + "x" * 5000 + f"\nEND [preview]({at})"
+        arriving.said_by_agent(
+            self.name, arriving.FROM_SCHEDULE, "nightly", said,
+            when=datetime.datetime(2026, 8, 4, 9, 5, tzinfo=datetime.timezone.utc))
+        calls = []
+        told = host._told
+        self.addCleanup(setattr, host, "_told", told)
+
+        def refusing(name, where, watching, saying, landed_within=0.0, answering=None,
+                     sending=(), refusals=None, aimed=None, threaded=""):
+            calls.append({"text": saying, "answering": answering, "threaded": threaded})
+            if sending and refusals is not None:
+                refusals.append("the file changed after approval")
+            return host.TOLD
+
+        host._told = refusing
+        host._Notices(
+            self.name, standing.logs_at(self.at),
+            lambda: hosting.Watching({}, {}, {})).reported(
+                "nightly", "msg-1", "done", config.moment_of(began),
+                aimed=due.Target(channel="discord", place="C0OPS"))
+
+        self.assertEqual(2, len(calls))
+        self.assertIn("Could not attach: preview.png", calls[1]["text"])
+        self.assertEqual(("msg-1", "nightly"), (calls[0]["answering"], calls[0]["threaded"]),
+                         "the report itself did not open the thread")
+        self.assertEqual(("msg-1", "nightly"), (calls[1]["answering"], calls[1]["threaded"]),
+                         "the attach failure left the thread its own report stands in")
+
     def test_a_schedule_that_starts_a_program_says_neither(self):
         """It has no answer to report, so promising to report back is a promise rundesk does not
         keep — and a successful program stays as quiet as it always did."""
@@ -917,6 +969,112 @@ class WhatAScheduledRunSaysOnASurface(WithAChannel):
         self.several_beats()
         self.assertEqual([], self.of_a_schedule(),
                          f"a program schedule reached the surface: {self.of_a_schedule()}")
+
+
+class WhereAScheduledRunReports(WhatAScheduledRunSaysOnASurface):
+    """R-SCH-59. A schedule that named its own destination, through a real gateway.
+
+    Every layer between the clock and the platform is real here: the row on disk, the firing, the one
+    resolver, the record that crosses the seam, and a child adapter that writes down exactly what it
+    was asked to deliver. What this proves that the narrower suites cannot is that the destination
+    survives the whole of that path — a schedule aimed somewhere is aimed there at both ends of its
+    run, and one aimed nowhere is byte-for-byte the run it always was.
+    """
+
+    def a_gateway_running_one_targeted_schedule(self, **aimed):
+        """The same gateway, with the schedule naming where it reports.
+
+        The row is written directly rather than through the command, because what is under test is
+        the delivery path — `tests/test_schedules_command.py` owns the checks that decide whether a
+        destination may be written at all.
+        """
+        self.an_adapter(body=AN_ADAPTER_THAT_NAMES_WHAT_IT_POSTED)
+        self.a_channel()
+        self.a_stand_in_brain()
+        child = self.a_running_gateway(beat=self.A_SHORT_BEAT)
+        self.assertTrue(support.waited_until(
+            lambda: "channel discord: connected" in self.its_log(), self.PATIENCE),
+            f"the adapter never connected. It said: {self.its_log()}")
+        kept.added(self.name, "weekday-client-update",
+                   dict({"cron": "* * * * *", "prompt": "Post the weekday client update."},
+                        **aimed))
+        return child
+
+    def both_messages(self):
+        """The notice and the report, once both have really reached the adapter."""
+        self.assertTrue(support.waited_until(lambda: len(self.of_a_schedule()) >= 2,
+                                             self.PATIENCE),
+                        f"the run never reported. It heard: {self.what_was_posted()}. "
+                        f"It said: {self.its_log()}")
+        return self.of_a_schedule()[0], self.of_a_schedule()[1]
+
+    def test_the_notice_goes_to_the_place_the_schedule_named(self):
+        self.a_gateway_running_one_targeted_schedule(
+            channel="discord", channel_place_id="C0OPS")
+        began, _reported = self.both_messages()
+        self.assertEqual({"place": "C0OPS"}, began["to"])
+
+    def test_the_notified_channels_own_place_is_not_sent_beside_it(self):
+        # The one thing that would let an adapter deliver to the wrong one: two answers to *where*,
+        # and the one it would reach for is the agent's own.
+        self.a_gateway_running_one_targeted_schedule(
+            channel="discord", channel_place_id="C0OPS")
+        began, _reported = self.both_messages()
+        self.assertEqual("", began["place"])
+
+    def test_the_report_goes_to_the_same_place_as_the_notice(self):
+        self.a_gateway_running_one_targeted_schedule(
+            channel="discord", channel_place_id="C0OPS")
+        began, reported = self.both_messages()
+        # Both named rather than only compared with each other: two `None`s agree, and a report
+        # that quietly went to the notified channel would pass a comparison and fail an owner.
+        self.assertEqual({"place": "C0OPS"}, began["to"])
+        self.assertEqual({"place": "C0OPS"}, reported["to"])
+        self.assertEqual(began["external_id"], reported["reply_to"])
+
+    def test_the_report_asks_for_a_thread_named_after_the_run(self):
+        self.a_gateway_running_one_targeted_schedule(
+            channel="discord", channel_place_id="C0OPS")
+        _began, reported = self.both_messages()
+        self.assertEqual("weekday-client-update", reported["threaded"])
+
+    def test_a_notice_never_asks_for_a_thread_of_its_own(self):
+        # The thread hangs off the notice, so the notice cannot already be in one.
+        self.a_gateway_running_one_targeted_schedule(
+            channel="discord", channel_place_id="C0OPS")
+        began, _reported = self.both_messages()
+        self.assertIsNone(began["threaded"])
+
+    def test_a_direct_message_target_gets_the_platforms_own_presentation(self):
+        # A direct conversation *is* the exchange, so there is nothing to open and nothing to open
+        # it off — the report is a reply to the notice, exactly as it has always been.
+        self.a_gateway_running_one_targeted_schedule(
+            channel="discord", channel_sender_id="2207")
+        began, reported = self.both_messages()
+        self.assertEqual({"sender": "2207"}, began["to"])
+        self.assertEqual({"sender": "2207"}, reported["to"])
+        self.assertIsNone(reported["threaded"])
+        self.assertEqual(began["external_id"], reported["reply_to"])
+
+    def test_a_schedule_that_named_nothing_is_the_run_it_always_was(self):
+        self.a_gateway_running_one_targeted_schedule()
+        began, reported = self.both_messages()
+        for one in (began, reported):
+            self.assertIsNone(one["to"])
+            self.assertIsNone(one["threaded"])
+            self.assertEqual("1180", one["place"])
+
+    def test_a_quiet_run_still_reports_to_the_destination_it_named(self):
+        # Nothing said on the way, and the final message posted in the named place anyway.
+        # Nothing between the notice and the report ever reaches a surface for a scheduled run,
+        # so *quiet* is the ordinary condition here rather than an edge of one.
+        self.a_gateway_running_one_targeted_schedule(
+            channel="discord", channel_place_id="C0OPS")
+        _began, reported = self.both_messages()
+        self.assertEqual({"place": "C0OPS"}, reported["to"])
+        self.assertEqual(2, len(self.of_a_schedule()),
+                         f"a scheduled run said something other than its two messages: "
+                         f"{self.of_a_schedule()}")
 
 
 if __name__ == "__main__":

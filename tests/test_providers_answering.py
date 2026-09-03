@@ -1795,6 +1795,149 @@ class AScheduleThatAsksTheAgent(Answering):
         self.assertTrue(any(one in (answering.DONE, answering.STOPPED, answering.FAILED)
                             for one in later))
 
+    def test_a_delegated_result_reports_to_the_destination_the_schedule_named(self):
+        """R-SNT-30. The review turn is what finally answers when a scheduled run delegated, and it
+        has to answer where the schedule said — not where the agent is notified.
+
+        **The destination is read off the row here and nowhere else.** This turn resumes an
+        invocation long after the firing that started it; the gateway that carried the firing's own
+        copy may be gone, so the row is the only thing that outlived it. A path that carried nothing
+        would send the whole of a delegating schedule's report to the notified channel, which is the
+        one destination its owner did not choose.
+
+        The row is written directly rather than through `schedules add`, because what is under test
+        is the delivery path — `tests/test_schedules_command.py` owns whether a destination may be
+        written at all.
+        """
+        self.a_channel()
+        channels_kept.telling(self.agent, "discord", "1180")
+        self.hosting_now()
+        original = answering.for_a_schedule(self.agent, self.a_schedule(
+            channel="discord", channel_place_id="C0OPS"))
+        parent = kept.get_turn(self.agent, original.turn)
+        delegations_kept.made(
+            self.agent, "del-schedule-ddeeff", "trace",
+            int(parent["conversation_id"]), original.turn)
+        before = len(self.delivered())
+        marker = "SCHEDULE-DELEGATION-AIMED-407"
+
+        admitted = self.a_delegation_tenant().review_this(
+            self.agent, int(parent["conversation_id"]), marker, "trace",
+            "del-schedule-ddeeff", "answer-1")
+
+        self.assertTrue(admitted)
+        review = self.waited_for_a_turn(which=2)
+        self.assertEqual("nightly", review["schedule_name"])
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) > before))
+        report = [one for one in self.what_it_was_told() if one.get("do") == "deliver"][-1]
+        self.assertIn(marker, report["text"])
+        self.assertEqual({"place": "C0OPS"}, report.get("to"),
+                         "the reviewed report did not go to the destination the schedule named")
+        # Named as well as compared, because the notified place is a real destination this could
+        # plausibly have gone to and `""` is what says it did not.
+        self.assertEqual("", report["place"])
+
+    def test_a_delegated_result_of_an_untargeted_schedule_still_goes_to_the_notified_channel(self):
+        # The other half of the same rule, and the one that must not move: a schedule that named
+        # nothing is answered exactly where it always was.
+        self.a_channel()
+        channels_kept.telling(self.agent, "discord", "1180")
+        self.hosting_now()
+        original = answering.for_a_schedule(self.agent, self.a_schedule())
+        parent = kept.get_turn(self.agent, original.turn)
+        delegations_kept.made(
+            self.agent, "del-schedule-bbccdd", "trace",
+            int(parent["conversation_id"]), original.turn)
+        before = len(self.delivered())
+
+        self.a_delegation_tenant().review_this(
+            self.agent, int(parent["conversation_id"]), "SCHEDULE-DELEGATION-PLAIN-408", "trace",
+            "del-schedule-bbccdd", "answer-1")
+
+        self.waited_for_a_turn(which=2)
+        self.assertTrue(self.waited_until(lambda: len(self.delivered()) > before))
+        report = [one for one in self.what_it_was_told() if one.get("do") == "deliver"][-1]
+        self.assertNotIn("to", report)
+        self.assertEqual("1180", report["place"])
+
+    def test_an_aimed_review_turn_says_nothing_besides_the_report(self):
+        """R-SNT-32. A run that reports to one named destination keeps the quiet every scheduled
+        run keeps: the notice and the report, and never a third message.
+
+        **Everything the adapter was told, and not the last thing it was told.** A review turn
+        aimed at a destination streams nothing, opens no typing indicator and closes none — and
+        every case beside this one reads the final `deliver` record, which is still the right shape
+        however much chatter went in front of it. So the assertion is the whole list: what would go
+        wrong is extra records, and a check that skips to the end cannot see one.
+
+        The two records this would gain are the pair the untargeted run beside it still has —
+        `test_a_delegated_result_resumes_that_invocation_and_sends_the_final_report_to_dm` holds
+        that half, and it is why this is a destination's quiet rather than a schedule's.
+        """
+        self.a_channel()
+        channels_kept.telling(self.agent, "discord", "1180")
+        self.hosting_now()
+        original = answering.for_a_schedule(self.agent, self.a_schedule(
+            channel="discord", channel_place_id="C0OPS"))
+        parent = kept.get_turn(self.agent, original.turn)
+        delegations_kept.made(
+            self.agent, "del-schedule-eeff00", "trace",
+            int(parent["conversation_id"]), original.turn)
+        marker = "SCHEDULE-DELEGATION-QUIET-409"
+
+        self.a_delegation_tenant().review_this(
+            self.agent, int(parent["conversation_id"]), marker, "trace",
+            "del-schedule-eeff00", "answer-1")
+
+        self.waited_for_a_turn(which=2)
+        self.assertTrue(self.waited_until(lambda: self.delivered()))
+        told = self.what_it_was_told()
+        self.assertEqual(["deliver"], [one.get("do") for one in told],
+                         f"an aimed review turn said more than its report: {told}")
+        self.assertEqual({"place": "C0OPS"}, told[0].get("to"))
+        self.assertIn(marker, told[0]["text"])
+
+    def test_nothing_is_said_about_handed_over_work_where_a_schedule_named_a_destination(self):
+        """R-SNT-32, the other record an aimed run must not post. A `delegation` line names its
+        place directly and no adapter resolves a destination for one, so saying it would put a
+        schedule's progress somewhere the schedule did not choose.
+
+        Both halves are asserted — the answer this gives its caller, and that the adapter really
+        heard nothing — because the caller is a gateway beat that does nothing with `False` beyond
+        going round again.
+        """
+        self.a_channel()
+        channels_kept.telling(self.agent, "discord", "1180")
+        self.hosting_now()
+        original = answering.for_a_schedule(self.agent, self.a_schedule(
+            channel="discord", channel_place_id="C0OPS"))
+        conversation = int(kept.get_turn(self.agent, original.turn)["conversation_id"])
+
+        said = self.a_delegation_tenant().showed(
+            self.agent, conversation, delegations.HANDED_OVER, "dev", "del-41-4e07c5", 0)
+
+        self.assertFalse(said)
+        self.assertFalse(self.waited_until(lambda: self.delegating(), NOT_GOING_TO_HAPPEN),
+                         f"an aimed run posted its progress: {self.delegating()}")
+
+    def test_a_schedule_that_named_nothing_is_still_told_what_became_of_handed_over_work(self):
+        # R-SNT-25. The half that must not move: a schedule naming no destination goes on saying
+        # what it always said, in the place it always said it. Without this, the rule above is
+        # satisfied by a run that says nothing about a delegation ever.
+        self.a_channel()
+        channels_kept.telling(self.agent, "discord", "1180")
+        self.hosting_now()
+        original = answering.for_a_schedule(self.agent, self.a_schedule())
+        conversation = int(kept.get_turn(self.agent, original.turn)["conversation_id"])
+
+        said = self.a_delegation_tenant().showed(
+            self.agent, conversation, delegations.HANDED_OVER, "dev", "del-41-4e07c5", 0)
+
+        self.assertTrue(said)
+        self.assertTrue(self.waited_until(lambda: self.delegating()))
+        self.assertEqual(("dev", "1180"),
+                         (self.delegating()[0]["who"], self.delegating()[0]["place"]))
+
     def test_the_turn_is_tied_to_the_schedule_that_caused_it(self):
         """*What has the nightly schedule been doing?* is a question with one answer only if this
         is written down at the moment the turn is admitted."""

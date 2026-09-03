@@ -141,13 +141,15 @@ Asked offline and with no account, so that **a fidelity difference is a fact rat
 an adapter that cannot edit a message is told apart from one that can and did not.
 
 ```json
-{"stream": true, "edit": "full", "react": true, "thread": true, "attach": true, "search": true, "max_text": 2000}
+{"stream": true, "edit": "full", "react": true, "thread": true, "attach": true,
+ "address": true, "search": true, "max_text": 2000}
 ```
 
 That is the shipped Discord adapter's answer, and it is a fair template. **Be honest about what is in
 it**, and know what it costs today: rundesk asks the question, prints the answer on the `can` line of
 `channels add`, and **keeps none of it** — the `channels` table has no column for it, so `channels
-show` has nothing to show and nothing anywhere reads a key. See
+show` has nothing to show. Three keys are read: `max_text`, `stream`, and
+[`address`](#address-decides-whether-a-destination-may-be-named). See
 [what is not built yet](#what-is-not-built-yet).
 
 ### `--check`
@@ -554,6 +556,9 @@ Five, and only five exist today.
 {"do": "deliver", "id": "1754431200.123456-2-9", "place": "1180", "text": "here it is",
  "files": [{"name": "chart.png", "at": "/…/agents/alan/home/chart.png", "bytes": 9,
             "sha256": "b1f3…"}]}
+{"do": "deliver", "id": "1754431200.123456-3-2", "place": "", "text": "the weekly retro",
+ "to": {"place": "C0OPS"}, "reply_to": "8841", "threaded": "weekly-retro",
+ "notice": true}
 {"do": "state", "place": "1180", "external_id": "8841", "state": "seen"}
 {"do": "state", "place": "1180", "state": "failed"}
 {"do": "activity", "place": "1180", "did": "run"}
@@ -567,7 +572,7 @@ Five, and only five exist today.
 
 | | Fields | |
 |---|---|---|
-| `deliver` | `id`, `place`, `text`, sometimes `files`, `reply_to`, `cost`, `notice`, or `remark` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed`. `notice: true` means nobody prompted this delivery in one conversation; `place` remains its compatible primary destination |
+| `deliver` | `id`, `place`, `text`, sometimes `files`, `reply_to`, `cost`, `notice`, `remark`, `to`, or `threaded` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed`. `notice: true` means nobody prompted this delivery in one conversation; `place` remains its compatible primary destination unless `to` supersedes it |
 | `state` | `place`, `state`, sometimes `external_id` | show what rundesk says a turn is doing. `external_id` names the message the state belongs to; **without one the state belongs to the place** — see below |
 | `activity` | `place`, `did`, sometimes `ok`, sometimes `who` | show what the agent is doing, while it is still doing it |
 | `delegation` | `place`, `state`, `who`, `ask`, sometimes `elapsed`, sometimes `provider` and with it sometimes `provider_alias` | show what became of work this agent handed to another agent, which brain is doing it, and what has just been done to it |
@@ -585,6 +590,39 @@ privately address the allowed identities may give each one a copy; the shipped D
 An adapter that does not implement fan-out ignores the optional field and keeps delivering to
 `place`, which preserves the existing contract. Never infer this from the text and never fan out a
 delivery without it: ordinary answers belong only in the conversation that asked.
+
+<a id="address-decides-whether-a-destination-may-be-named"></a>
+**`to` is one destination rundesk was given rather than one it recorded, and it supersedes
+`place`.** It arrives only on an adapter that declared `address: true`, and it holds exactly one of
+two keys — `{"sender": "<id>"}` for that person's own conversation, or `{"place": "<id>"}` for that
+place. **The ids are the platform's own**, the same ones an allow list names, because rundesk holds
+no credential for your platform: it cannot open a conversation with somebody, and the string you
+compose for a place is yours and rundesk never parses one. So resolving it is yours, and it is the
+whole reason the field exists. `place` is empty beside it and must not be read.
+
+**Declare `address` only if you will resolve one, and refuse rather than degrade.** Where you cannot
+reach the named destination, answer `failed` and say why: every other place in reach is one nobody
+chose, and a report that arrived somewhere plausible is worse than one that visibly did not arrive.
+An adapter that declares nothing has rundesk refuse `--to` for its channel where somebody typed it,
+which is the honest outcome — see [`schedules.md`](../api/schedules.md).
+
+**A delivery carrying `to` is never fanned out**, whatever `notice` says. The two are separate facts:
+`notice` is *nobody prompted this*, which is why it may be announced at all, and `to` is *this one
+destination*, which somebody chose. Copying an aimed delivery to every allowed identity posts it to
+people it was deliberately not addressed to.
+
+**`threaded` is the name to give a thread hanging off `reply_to`**, rather than a flag. It arrives
+only beside a `reply_to` and only on an adapter that declared `address`, and it means *this belongs
+in a thread on that message* rather than *quote that message* — so it is on every piece of a split
+report, where a quote is on the first alone. It is a name because a thread is a place with a label
+on it and only rundesk knows what the run was; reading the words and inventing one is the guessing
+every other field here exists to avoid.
+
+Open one, remember it by the message it hangs off so a second delivery joins the same thread, and
+**degrade to the place if the platform will not** — a report in the room is worse than a report in a
+thread and far better than no report, which is the trade the shipped Discord adapter already makes
+answering a room. A platform on which a reply *is* a thread has nothing to open and ignores the name,
+which is what the shipped Slack adapter does with `thread_ts`.
 
 **`remark: true` is rundesk saying *this one is not the answer yet*.** It marks prose the agent
 finished saying on its way to answering, which is otherwise indistinguishable from the answer: both
@@ -1009,6 +1047,14 @@ does not offer search from one that offers it and broke.
 reports one there is split to it and one that does not gets a flat 2000. Declare your real limit
 anyway, and go on checking the text you are handed, because that check is what catches the day the
 two disagree.
+
+`address` is asked of `--capabilities` itself, at the moment somebody points a schedule at a
+destination on your channel, and **decides whether that destination may be written down**. It is a
+gate at write time and not a promise about delivery: rundesk asks it once, before anything is
+stored, so a channel whose adapter cannot resolve a destination refuses `--to` where it was typed
+rather than at two in the morning. What the adapter does with a `to` it later receives is still the
+adapter's — a destination it cannot reach then is answered `failed`, and nothing re-asks the
+capability or re-checks the allow list on the way.
 
 <a id="stream-decides-how-an-answer-is-composed"></a>
 `stream` is asked of `--capabilities` itself, once per gateway, and **decides how an answer is
