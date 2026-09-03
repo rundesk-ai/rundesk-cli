@@ -82,6 +82,28 @@ class NotASchedule(ValueError):
     """
 
 
+class Target(NamedTuple):
+    """The one destination a schedule reports to, instead of the agent's notified channel.
+
+    **Named the way an allow-list entry is named**, and that parity is the whole of the type: a
+    channel's allow list already says a bare id is one person and `place:<id>` is one place, and a
+    second vocabulary for the same two facts would be a second thing to keep true.
+    `docs/concepts/channels.md` is where that list is written down.
+
+    `channel` is the platform, spelled as `rundesk channels` lists it. Exactly one of `sender` and
+    `place` says anything: one person's direct message, or one place. The records refuse the pair,
+    `schedules.kept` refuses a channel with neither, and `target_of` refuses one it is handed.
+
+    **Read and carried, and never read on the way.** This module still knows only *when* — the type
+    lives here because `Schedule` is what carries it and because the layer that delivers may not
+    import `schedules`.
+    """
+
+    channel: str
+    sender: str = ""
+    place: str = ""
+
+
 class Schedule(NamedTuple):
     """One thing that should happen, and when.
 
@@ -103,6 +125,11 @@ class Schedule(NamedTuple):
     `expire_at` is the moment after which this is finished whatever it says. It is the only thing
     that can retire a repeating schedule, and it is read rather than stored as a flag for the reason
     `expired` gives.
+
+    `reports_to` is where this one's notice and report go, or `None` for the agent's notified
+    channel. **`None` is not a default written down** — it is *nobody chose*, which every schedule
+    written before this existed says and which has to stay tellable from a destination that happens
+    to be the same channel the agent is notified on.
     """
 
     name: str
@@ -114,8 +141,7 @@ class Schedule(NamedTuple):
     prompt: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
-    channel: Optional[str] = None
-    place: Optional[str] = None
+    reports_to: Optional[Target] = None
     fired_for: Optional[str] = None
     #: The five fields, each as the set of values it allows. Empty where this states one moment.
     fields: Tuple[frozenset, ...] = ()
@@ -142,6 +168,32 @@ class Schedule(NamedTuple):
         so no spelling of a minute can get this wrong.
         """
         return self.once and bool((self.fired_for or "").strip())
+
+
+def target_of(row: Dict[str, Any]) -> Optional[Target]:
+    """Where this row says it reports, or `None` where it says nothing. `NotASchedule` when broken.
+
+    **Three states and never two.** No channel and no id is *nobody chose*, which is the answer for
+    every schedule written before this existed and the one that keeps the agent's notified channel.
+    A channel with exactly one id is a destination. Anything else is a row nobody can act on, and it
+    is refused rather than quietly read as one of the other two — a report sent to the notified
+    channel because a target could not be understood is a retro posted where the owner was not
+    looking, which reads exactly like a schedule that never ran.
+    """
+    channel = _said(row.get("channel"))
+    sender = _said(row.get("channel_sender_id"))
+    place = _said(row.get("channel_place_id"))
+    if not channel and not sender and not place:
+        return None
+    if not channel:
+        raise NotASchedule(
+            "a schedule that reports somewhere of its own names the channel and the destination — "
+            "and this names the destination and no channel")
+    if bool(sender) == bool(place):
+        raise NotASchedule(
+            "a schedule reports to one person's direct message or to one place — "
+            + ("and this names both" if sender else "and this names neither"))
+    return Target(channel=channel, sender=sender, place=place)
 
 
 def understood(row: Dict[str, Any]) -> Schedule:
@@ -181,8 +233,7 @@ def understood(row: Dict[str, Any]) -> Schedule:
         prompt=prompt or None,
         provider=_said(row.get("provider_name")) or None,
         model=_said(row.get("model_name")) or None,
-        channel=_said(row.get("channel")) or None,
-        place=_said(row.get("channel_place_id")) or None,
+        reports_to=target_of(row),
         fired_for=_said(row.get("last_fired_for")) or None,
         fields=fields,
         anything=anything,

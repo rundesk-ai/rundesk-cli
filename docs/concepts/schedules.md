@@ -160,10 +160,54 @@ The other side of the same rule is that a gateway going down **does** take its w
 the window the supervisor allows before it kills the gateway outright. Work started in a session of
 its own is outside the supervisor's reach, so if the gateway does not stop it, nothing will.
 
+## Where a run reports, and the one destination it may name instead
+
+A schedule that **asks the agent** reports through the one channel marked `notified`, and that is
+still what a schedule with no destination of its own does. **One schedule may name its own instead**
+— `--channel` and `--to` together, one channel and one place or one person's direct message on it.
+Three states and never two:
+
+| What the row says | Where the run reports |
+|---|---|
+| no channel and no destination | the agent's notified channel and its recorded place, as before |
+| a channel and a place | that place, in a thread hanging off the notice |
+| a channel and a person | that person's direct message, with no thread |
+
+**Absence is not a default.** *Nobody chose* is what every schedule written before this existed says,
+and it stays tellable from a destination that happens to be the channel the agent is notified on —
+otherwise an owner cannot be shown, or asked, what a schedule is aimed at. Half a destination is a
+schedule nobody can act on: refused where it is typed, shown in a listing as a row that cannot be
+read, and **never** read as one of the other two. A report that reached the notified channel because
+its target could not be understood looks exactly like a schedule that never ran.
+
+**The destination is spelled the way an allow-list entry is spelled, and checked against that list.**
+A bare id is one person, `place:<id>` is one place, and an id on the list as the other kind is
+refused saying which. Who may reach an agent is [`channels.md`](./channels.md)'s answer; a schedule
+reporting to somebody that list does not name would be a way around it.
+
+**One resolver, and it asks nothing.** Everything unprompted goes through
+`channels.delivery.notice`, and a named destination replaces the notified channel *there* rather than
+anywhere nearer the schedule — one answer to *where does this go*. Deciding it starts no provider
+turn and reaches no platform: the row says a channel and an id, and the adapter turns the id into a
+conversation, because only the adapter holds a credential for that platform.
+
+**A firing keeps the destination it began with**, written beside it before the work starts exactly as
+the notice's own id is — so a gateway that came up after the one which started the work reports into
+the destination the notice is standing in, and two overlapping firings each keep their own. A record
+that says nothing about it, or half of it, reports to the notified channel.
+
+**A place target gets one thread per run.** The report, its files and any failure report stand in it,
+named for the schedule. A room is somebody else's, and a notice at noon with an answer twenty minutes
+later is one exchange rather than two loose messages. A platform that will not open one answers in
+the place and says so once — worse than a thread, far better than no report. A direct conversation
+*is* the exchange, so there is nothing to open.
+
+**A quiet run still reports.** Nothing between the two messages reaches a surface anyway, so the
+final report goes to the named destination whether or not anything happened out loud on the way.
+
 ## What a run says on a surface, and the two messages it is allowed
 
-A schedule that **asks the agent** reports through the one channel marked `notified`. On Discord,
-each allowed user receives both messages privately. Two messages per recipient, and never a third:
+Two messages per recipient, and never a third:
 
 | When | What goes out |
 |---|---|
@@ -188,7 +232,8 @@ is a property of where the work runs, not a filter anybody has to maintain.
 in that same minute before its adapters have finished connecting, so there was nobody to tell that the
 run had begun; its answer still goes out, standing on its own rather than under a notice. The same is
 true of an agent with no notified channel — nothing is said at either end, which is what somebody who
-configured no channel asked for.
+configured no channel asked for. A schedule that named its own destination is the exception and does
+not go through the notified channel at all, so there being none is beside the point.
 
 **A gateway that came up after the one which started the work still reports.** Both facts the report
 needs — that this run owes one, and the notice it goes under — are written beside the firing before
@@ -200,17 +245,20 @@ A schedule asks the agent with `--ask` or starts a program with `--run`, and exa
 the records hold that as a `CHECK` and the command says it in words. Every invocation of an
 agent-asking schedule gets **a fresh conversation and provider session**, so tonight cannot inherit
 last night's context and a run at three in the morning never lands in the exchange somebody types
-into. It may delegate to a named agent; that result returns to the same invocation session for review,
-and the reviewed final report goes through the agent's notified channel adapter. The schedule does
-not choose a caller's DM; the shipped Discord adapter privately sends it to every allowed user.
+into. It may delegate to a named agent; that result returns to the same invocation session for review, and
+the reviewed final report goes to the same destination the run's own report would have gone to —
+read off the row, because the review turn resumes an invocation long after the firing that started
+it and the row is the only thing that outlived the gateway. A run aimed at a named destination shows
+nothing on the way there either: no typing indicator, no delegation progress, no running remark.
+Those name a place directly and no adapter resolves a destination for one, and *the notice and the
+report and nothing else* is what this page already promises every scheduled run.
 
 `rundesk schedules run` takes either kind by hand, and neither uses up the minute it next falls due —
-testing a schedule must not be how you stop it happening.
+testing a schedule must not be how you stop it happening. **A run by hand reports in the terminal
+and on no surface**, whatever destination the schedule names, because the terminal is where the
+person who typed it is standing. The one exception is a hand-run turn that delegates: its review
+lands under the gateway later and goes to the schedule's own destination like any other.
 
 What is still not built: a schedule carries `provider_name` and `model_name` columns that nothing
 writes. A schedule runs on the agent's own brain, and a way to override that per schedule is a verb
-nobody has asked for. The `channel` and `channel_place_id` columns are the same — **where a run
-reports is the agent's notified channel adapter and is not stated per schedule**, so those two are
-still written by nothing. On Discord the adapter resolves the current allowlist to private DMs. A
-schedule that reports somewhere of its own is a verb nobody has asked for either, and the columns
-are what it would be built on.
+nobody has asked for.

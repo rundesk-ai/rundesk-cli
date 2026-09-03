@@ -67,6 +67,23 @@ shipped Discord adapter privately gives every user on that channel's allowlist o
 is moved in one transaction rather than set directly, because a caller that clears the old one and
 then fails to set the new leaves an agent that tells nobody anything.
 
+**One caller may name its own destination instead, and it is written the same way this list is.** A
+schedule may report to one place or one person's direct message on a channel of its own choosing —
+`docs/concepts/schedules.md` is what that is for. It reaches the same resolver everything unprompted
+reaches and replaces the notified channel there, so there is one answer to *where does this go*; it
+is checked against **this** list before it is written, because a destination the list does not name
+would be a way to reach a person around it; and it is never fanned out, because it is one
+destination somebody chose. `channels.kept.admitted_by` reads the string either way, so `place:C0OPS`
+means the same thing in both places.
+
+**Resolving one is the adapter's, and the reason is the credential.** A sender id names a person, not
+the conversation they read, and opening that conversation is a call only the adapter can make;
+the string an adapter composes for a place is its own, and rundesk never parses one. So the two ids
+cross the seam as themselves and the adapter answers *where* — behind
+`address` in its `--capabilities`, which is what lets rundesk refuse a destination it could not
+deliver at the moment somebody types it. [`../extending/adapters.md`](../extending/adapters.md) is
+the contract.
+
 ## The adapter is a child, and its claim is the check
 
 An adapter takes an exclusive `flock` on its own lock file and **the descriptor is passed to the

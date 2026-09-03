@@ -9,8 +9,8 @@ due. The gateway is the clock that fires it.
 |---|---|
 | `schedules` or `schedules list [<agent>]` | List schedules that can still run, for every agent or one. |
 | `schedules list [<agent>] --expired` | List only schedules that can never run again. |
-| `schedules add <agent> <schedule> (--when <cron> | --at <moment>) (--run <program> | --ask <prompt>) [--until <moment>] [--disabled]` | Create repeating or one-time work. |
-| `schedules update <agent> <schedule> [--when <cron> | --at <moment>] [--run <program> | --ask <prompt>] [--until <moment>] [--enable | --disable]` | Change stated fields and keep execution history. |
+| `schedules add <agent> <schedule> (--when <cron> | --at <moment>) (--run <program> | --ask <prompt>) [--until <moment>] [--disabled] [--channel <channel> --to <id>]` | Create repeating or one-time work. |
+| `schedules update <agent> <schedule> [--when <cron> | --at <moment>] [--run <program> | --ask <prompt>] [--until <moment>] [--enable | --disable] [--channel <channel> --to <id>]` | Change stated fields and keep execution history. |
 | `schedules show <agent> <schedule>` | Show the complete definition and state. |
 | `schedules run <agent> <schedule> [--wait <seconds>]` | Run now in this terminal; default wait is 3600 seconds. |
 | `schedules remove <agent> <schedule>` | Remove the schedule. This has no confirmation preview. |
@@ -35,6 +35,21 @@ evidence to use, and who should hear about success or failure. Ask the agent to 
 not merely remind the owner that a check was planned. Keep the check within the original authority;
 a schedule changes when work runs, not what changes it is allowed to make. Configure a notified
 channel when the result must reach the owner proactively.
+
+## Send one schedule's report somewhere of its own
+
+Name `--channel` and `--to` together to send that schedule's notice and report to one place or one
+person instead of the agent's notified channel. The agent's notified channel does not move. Omit
+both to keep it.
+
+- Write `--to` the way an allow-list entry is written: a bare sender id for that person's direct
+  message, `place:<id>` for that place. The destination must already be on that channel's allow
+  list, as the same kind of thing; check with `channels show <agent> <channel>` first, because a
+  destination held as the other kind is refused rather than reinterpreted.
+- One flag without the other is refused, and so is a channel the agent does not have or an adapter
+  that does not say it can address a destination. Every refusal happens before anything is written.
+- A place target puts the report in a thread on its own notice; a direct message does not. Neither
+  posts anything between the two messages.
 
 ## Time and execution rules
 

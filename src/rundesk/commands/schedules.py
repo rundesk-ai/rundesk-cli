@@ -34,6 +34,25 @@ morning never lands in the exchange somebody types into. `providers.answering` i
 turn; nothing here knows how, which is why this file gained two `add_argument` lines and one branch
 and nothing else moved.
 
+## A schedule may report somewhere of its own, and it takes both halves to say so
+
+`--channel` names the platform, spelled the way `rundesk messages --channel` spells it and the way
+`rundesk channels` lists it. `--to` names the destination on it, **written exactly as an allow-list
+entry is written**: a bare sender id is that person's direct message and `place:<id>` is that place,
+which is what `docs/concepts/channels.md` already says about the list itself. One spelling for one
+idea, and `channels.kept.admitted_by` is the one thing that reads it — a second parser here would be
+a second answer to *what does this string name*.
+
+**The two are a pair and neither stands alone.** A channel with nowhere to report is not half a
+destination, it is a schedule nobody can deliver, and the refusal names the flag that is missing.
+Naming neither is what every schedule written before this said, and it keeps the agent's notified
+channel exactly as it was.
+
+**Every refusal happens before anything is written, and names which check failed** — the channel is
+not one this install has, or is not this agent's; the destination is not on that channel's allow
+list, or is on it as the other kind of thing; the adapter cannot address a destination of its own.
+The free checks come first and the adapter is asked last, because asking it runs a program.
+
 ## Running one by hand is a person checking their own work
 
 `run` starts it in this terminal, waits, and prints what the program wrote. It takes the same lock
@@ -51,6 +70,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from rundesk.agents import directory, migration, records
+from rundesk.channels import adapters as channel_adapters
+from rundesk.channels import kept as channels
 from rundesk.commands import Subcommands, as_written, failed
 from rundesk.core import config, paths
 from rundesk.delegations import admitting
@@ -67,6 +88,18 @@ from rundesk.utils.terminal import as_table
 #: everywhere it appears.
 WAITING = 3600.0
 
+#: How `--to` names a place, spelled out of the module that reads an allow list rather than typed
+#: again. `place:C0OPS` here and `place:C0OPS` in `channels allow` are the same idea, and one of them
+#: drifting from the other is a destination somebody typed and rundesk read as a sender id.
+A_PLACE = f"{channels.PLACE}{channels.AS}"
+
+#: What an adapter must say it can do before a schedule may name a destination on its channel.
+#: A sender id is not a conversation on either shipped platform and a place id is not the string an
+#: adapter composed for a place, so resolving either needs the platform — and an adapter that never
+#: heard the question answers the least capable thing, which is *no*. `docs/extending/adapters.md`
+#: is where the field is published.
+ADDRESSES = "address"
+
 #: Everything the schedules layer hands back that a verb here has to turn into a sentence.
 #:
 #: Spelled out rather than caught as `Exception`, because these are different situations with
@@ -74,7 +107,10 @@ WAITING = 3600.0
 #: cannot be understood, an agent whose name reaches outside where agents are kept, a migration that
 #: has not run, the install lock held by something else, and the ordinary failures of a disk.
 TROUBLE = (kept.Refused, due.NotASchedule, directory.Refused, records.NotThere, records.Unreadable,
-           records.Refused, migration.Ahead, migration.Broken, locking.Stuck, OSError, sqlite3.Error)
+           records.Refused, migration.Ahead, migration.Broken, locking.Stuck, OSError, sqlite3.Error,
+           # A schedule may name a channel of its own, so what the channels store refuses is
+           # something this verb now has to turn into a sentence too.
+           channels.Refused)
 
 
 def register(sub: Subcommands) -> None:
@@ -149,6 +185,13 @@ def _stated(one: argparse.ArgumentParser, required: str) -> None:
     one.add_argument("--ask", metavar="<prompt>", dest="prompt", default=None,
                      help=f"{required}what to ask the agent, instead of --run — its own "
                           "conversation, so it never lands in the one somebody types into")
+    one.add_argument("--channel", metavar="<channel>", dest="channel", default=None,
+                     help="which channel this one reports to, as `rundesk channels` lists it — "
+                          "instead of the agent's notified channel, and only with --to")
+    one.add_argument("--to", metavar="<id>", dest="destination", default=None,
+                     help=f"where on that channel, written as an allow-list entry is: a bare "
+                          f"sender id for that person's direct message, or {A_PLACE}<id> for "
+                          "that place — only with --channel")
 
 
 def cmd_schedules(args: argparse.Namespace) -> int:
@@ -211,6 +254,14 @@ def _listed(agent: Optional[str], expired_only: bool = False) -> int:
                   "<agent> <schedule> --when '<cron>' --run '<program>'")
         return OK
     head = ("SCHEDULE", "WHEN", "NEXT", "LAST")
+    # **The column appears only where something is in it.** Every row already carries the answer, so
+    # this is what is *shown* rather than what is known: an install where nothing reports anywhere
+    # of its own prints exactly the four columns it has always printed, and one where something does
+    # gets a fifth rather than a fact buried in `show`.
+    if any(one[-1] for one in rows):
+        head = (*head, "REPORTS")
+    else:
+        rows = [one[:-1] for one in rows]
     as_table(("AGENT", *head) if agent is None else head, rows)
     return OK
 
@@ -223,7 +274,8 @@ def _rows_for(agent: str, showing_who: bool,
         found = kept.all(agent)
         standing = upkeep.state(agent)
     except TROUBLE as why:
-        return [((agent,) if showing_who else ()) + ("?", "?", "?", f"cannot be read — {why}")]
+        return [((agent,) if showing_who else ())
+                + ("?", "?", "?", f"cannot be read — {why}", "")]
 
     prefix = (agent,) if showing_who else ()
     last = "running" if standing["running"] else "never ran"
@@ -231,7 +283,10 @@ def _rows_for(agent: str, showing_who: bool,
         last = f"{standing['last_outcome']} {_as_local(standing['last_run_at'])}"
     rows = []
     if not expired_only and not standing["conflict"]:
-        rows.append((*prefix, upkeep.NAME, "after 7 usage dates", str(standing["next"]), last))
+        # Rundesk's own upkeep reports where the agent asked to be told, and there is no verb that
+        # would change that — so its cell is empty rather than absent, which is what keeps every row
+        # in this table the same width.
+        rows.append((*prefix, upkeep.NAME, "after 7 usage dates", str(standing["next"]), last, ""))
     for row in found:
         if row.get("name") == upkeep.NAME and row.get("provider_name") == kept.UPKEEP_PROVIDER:
             continue
@@ -246,8 +301,23 @@ def _rows_for(agent: str, showing_who: bool,
             # something to be done about, and a listing that left it out would say it is not there.
             when, following = str(row.get("cron") or row.get("run_at") or ""), f"cannot be read — {why}"
         rows.append(((agent,) if showing_who else ())
-                    + (str(row.get("name") or ""), when, following, _last(agent, row)))
+                    + (str(row.get("name") or ""), when, following, _last(agent, row),
+                       _reported_where(row)))
     return rows
+
+
+def _reported_where(row: Dict[str, Any]) -> str:
+    """This schedule's own destination for a listing cell, or `""` where it has none.
+
+    Empty for a row whose destination cannot be understood as well, because `NEXT` already says a
+    row cannot be read and `show` is where the reason belongs — a table cell carrying a sentence
+    would push every other column off the terminal.
+    """
+    try:
+        aimed = due.target_of(row)
+    except due.NotASchedule:
+        return ""
+    return f"{aimed.channel} {_as_typed(aimed)}" if aimed is not None else ""
 
 
 def _last(agent: str, row: Dict[str, Any]) -> str:
@@ -269,6 +339,88 @@ def _last(agent: str, row: Dict[str, Any]) -> str:
     return f"{outcome} {_as_local(row.get('last_run_at'))}"
 
 
+def reports_to(agent: str, channel: Optional[str], destination: Optional[str],
+               typed: str) -> Tuple[Dict[str, Any], str]:
+    """The three columns saying where this schedule reports, and why it may not — never both.
+
+    `({}, "")` where neither flag was named, which is what every schedule written before these
+    existed says and is *nobody chose* rather than a default: the agent's notified channel goes on
+    answering for it, and `docs/concepts/schedules.md` is where that is written down.
+
+    **Both halves are checked before anything is written and each refusal names its own check.** An
+    owner who typed the wrong thing has one mistake to correct, and a sentence about a constraint
+    they have never seen is a sentence they cannot act on. In order: the pair, the channel this
+    install can run, the channel this agent has, the destination as a string, the destination
+    against that channel's own allow list, and last the adapter. The adapter is last because asking
+    it starts a program and every check above it is free.
+
+    **The allow list is the authority and it is read, never re-decided.** Who may reach an agent is
+    `channels.kept`'s answer, and a schedule reporting to somebody that list does not name would be
+    a way to reach a person around it. `admitted_by` is what reads the string, so `place:C0OPS`
+    means here exactly what it means there.
+    """
+    if channel is None and destination is None:
+        return {}, ""
+    if destination is None:
+        return {}, (f"--channel {channel} says which channel and nothing said where on it — a "
+                    f"schedule's own destination is both, so say it with: {typed} --channel "
+                    f"{channel} --to <sender id>  or  {typed} --channel {channel} --to "
+                    f"{A_PLACE}<place id>")
+    if channel is None:
+        return {}, (f"--to {destination} says where and nothing said which channel — a schedule's "
+                    f"own destination is both, so say it with: {typed} --channel <channel> --to "
+                    f"{destination}")
+
+    named = (channel or "").strip()
+    if not named:
+        return {}, ("a channel with nothing in it is not one — say which channel with: "
+                    f"{typed} --channel <channel>")
+    if named not in channel_adapters.known():
+        return {}, (f"nothing on this install is a channel called {named} — "
+                    "see what there is with: rundesk channels")
+    try:
+        row = channels.one(agent, named)
+        admits = channels.admitting(row)
+    except records.NotThere:
+        return {}, (f"{agent} has no {named} channel, so a schedule of {agent}'s cannot report "
+                    f"through one — connect it with: rundesk channels add {agent} {named}")
+
+    reading = channels.admitted_by([destination])
+    sender = reading.senders[0] if reading.senders else ""
+    place = reading.places[0] if reading.places else ""
+    if not sender and not place:
+        return {}, (f"{destination!r} names nobody and nowhere — say a bare sender id for that "
+                    f"person's direct message, or {A_PLACE}<place id> for that place")
+    if sender and sender not in admits.senders:
+        # **The other kind is its own sentence.** An id that is on the list as a place is not a
+        # typo, it is somebody having said `--to X` where they meant `--to place:X` — and a refusal
+        # that only said *not on the allow list* would send them to look at a list the id is on.
+        if sender in admits.places:
+            return {}, (f"{sender} names a person and the {named} channel's allow list holds it as "
+                        f"a place — say {A_PLACE}{sender} to report there")
+        return {}, (f"{sender} is not on the {named} channel's allow list, so a schedule may not "
+                    f"report to them — see who is on it with: rundesk channels show {agent} {named}")
+    if place and place not in admits.places:
+        if place in admits.senders:
+            return {}, (f"{A_PLACE}{place} names a place and the {named} channel's allow list holds "
+                        f"{place} as a person — say --to {place} for their direct message")
+        return {}, (f"{place} is not a place on the {named} channel's allow list, so a schedule "
+                    f"may not report there — see what is on it with: rundesk channels show "
+                    f"{agent} {named}")
+
+    # Asked last, and asked of the adapter rather than of its name: an adapter somebody wrote
+    # themselves stands beside the shipped ones and answers for itself.
+    if channel_adapters.capabilities(named).get(ADDRESSES) is not True:
+        return {}, (f"the {named} adapter does not say it can address a destination of its own, so "
+                    f"a schedule cannot report anywhere but {agent}'s notified channel — see what "
+                    f"it can do with: rundesk channels doctor {agent}")
+
+    # All three, always. The records refuse a row naming a person *and* a place, so setting either
+    # has to clear the other or an update would be refused about a column nobody typed.
+    return {"channel": named, "channel_sender_id": sender or None,
+            "channel_place_id": place or None}, ""
+
+
 def _added(args: argparse.Namespace) -> int:
     """Write a new schedule down, or refuse having written nothing."""
     if args.schedule == upkeep.NAME:
@@ -281,9 +433,16 @@ def _added(args: argparse.Namespace) -> int:
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was added")
 
+    # After the agent is known to be one, because every check inside it asks that agent's own
+    # records what channels it has and who may reach them.
+    aimed, trouble = reports_to(args.agent, args.channel, args.destination,
+                                f"rundesk schedules add {args.agent} {args.schedule}")
+    if trouble:
+        return _failed(trouble, "nothing was added")
+
     values = {"cron": args.when, "run_at": args.at, "expire_at": args.until,
               "command": args.program, "prompt": args.prompt,
-              "enabled": 0 if args.disabled else 1}
+              "enabled": 0 if args.disabled else 1, **aimed}
     refusal = _self_resumption_refusal(args.agent, bool(values["enabled"]))
     if refusal:
         return _failed(refusal[0], refusal[1], "nothing was added")
@@ -335,7 +494,7 @@ def _changed(args: argparse.Namespace) -> int:
     if args.disable:
         values["enabled"] = 0
 
-    if not values:
+    if not values and args.channel is None and args.destination is None:
         return _failed(f"nothing was named to change about {args.schedule}",
                        "change one with: rundesk schedules update "
                        f"{args.agent} {args.schedule} --when '<cron>'",
@@ -344,6 +503,11 @@ def _changed(args: argparse.Namespace) -> int:
     gone_wrong = directory.not_an_agent(args.agent)
     if gone_wrong:
         return _failed(gone_wrong, "see what there is with: rundesk agents", "nothing was changed")
+    aimed, trouble = reports_to(args.agent, args.channel, args.destination,
+                                f"rundesk schedules update {args.agent} {args.schedule}")
+    if trouble:
+        return _failed(trouble, "nothing was changed")
+    values.update(aimed)
     # A prompt change clears the command column too, but that does not make it a program change.
     # Validate only a program the owner actually named with --run; otherwise --ask is refused as
     # though its missing program were an error.
@@ -432,6 +596,12 @@ def _described(agent: str, name: str) -> int:
         print(line)
     print(f"        until     {as_written(row.get('expire_at'))}")
     print(f"        enabled   {as_written(bool(row.get('enabled')))}")
+    # **Said only where there is something to say.** A line reading `reports   the notified channel`
+    # on every schedule that named nothing would turn *nobody chose* into a choice somebody made,
+    # which is the one distinction this whole readout has to keep — and it would change what every
+    # schedule on every install already prints.
+    for line in _where_it_reports(row):
+        print(line)
     try:
         one = due.understood(row)
         print(f"        next      {due.describe(one, now)}")
@@ -458,6 +628,28 @@ def _described_upkeep(agent: str) -> int:
     print(f"        logs      {directory.logs(agent)}")
     print(f"        output    {firing.output_of(agent, upkeep.NAME)}")
     return OK
+
+
+def _where_it_reports(row: Dict[str, Any]) -> List[str]:
+    """The one line saying where this schedule reports, or no line at all.
+
+    **The destination is shown the way it is typed**, so what a person reads back is what they would
+    type to set it again — a bare id for a direct message and `place:<id>` for a place. A row nobody
+    can understand says so in this line rather than replacing the readout with a refusal, for the
+    reason `_described` gives about `next`: it is on the disk and is something to be done about.
+    """
+    try:
+        aimed = due.target_of(row)
+    except due.NotASchedule as why:
+        return [f"        reports   cannot be worked out — {why}"]
+    if aimed is None:
+        return []
+    return [f"        reports   {aimed.channel} {_as_typed(aimed)}"]
+
+
+def _as_typed(aimed: "due.Target") -> str:
+    """One destination written the way `--to` takes it, and the only place that spelling is made."""
+    return f"{A_PLACE}{aimed.place}" if aimed.place else aimed.sender
 
 
 def _what_it_does(row: Dict[str, Any]) -> List[str]:

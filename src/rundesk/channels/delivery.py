@@ -56,12 +56,39 @@ RATHER_THAN_A_STUB = 0.5
 WHEN_UNSAID = 2000
 
 
+class Aimed(NamedTuple):
+    """One destination named the way an allow-list entry names one, for the caller that has one.
+
+    **The same two things an allow list may name and the same spelling**, because they are the same
+    two facts: `sender` is one person, whose direct message this is, and `place` is one place.
+    Exactly one of them says anything. `docs/concepts/channels.md` is where that vocabulary is
+    written down, and `channels.kept.admitted_by` is what reads it.
+
+    **An adapter resolves it, and rundesk does not.** A sender id is not a conversation id on either
+    shipped platform — Discord opens a direct message and Slack opens one, each behind a credential
+    only the adapter holds — and a place id is not the string an adapter composes for a place it
+    already wrote. So this crosses the seam as the two ids and the adapter answers *where*; the
+    alternative is rundesk composing an adapter's private conversation string, which
+    `docs/extending/adapters.md` says it never parses and must therefore never build.
+    """
+
+    sender: str = ""
+    place: str = ""
+
+
 class Telling(NamedTuple):
-    """One notice, and where it goes. `None` from `notice` when this agent tells nobody anything."""
+    """One notice, and where it goes. `None` from `notice` when this agent tells nobody anything.
+
+    `place` is the channel's own recorded destination and is what almost every notice uses. `to` is
+    the one that supersedes it: a destination named per caller rather than per agent, which the
+    adapter resolves. **Exactly one of the two decides where this lands** — `place` is `""` whenever
+    `to` says anything, so nothing downstream can send to both or fall back to the wrong one.
+    """
 
     kind: str
     place: str
     pieces: List[str]
+    to: Optional[Aimed] = None
 
 
 class Carrying(NamedTuple):
@@ -86,13 +113,40 @@ class Prepared(NamedTuple):
     refused: List[str]
 
 
-def notice(agent: str, saying: str, at_most: int = WHEN_UNSAID) -> Optional[Telling]:
+def notice(agent: str, saying: str, at_most: int = WHEN_UNSAID,
+           channel: str = "", sender: str = "", place: str = "") -> Optional[Telling]:
     """What to send where, for something nobody asked for. `None` when no channel is the told one.
 
     **`None` is an ordinary answer.** An agent with no notified channel is an agent that says
     nothing, which is what somebody who configured none asked for — so a caller writes nothing and
     reports nothing, rather than treating a quiet install as a failure.
+
+    **One resolver, and a caller may name its own destination instead of the agent's.** `channel`
+    with exactly one of `sender` and `place` is a destination stated by whoever is delivering — a
+    schedule that reports somewhere of its own — and it replaces the notified channel entirely
+    rather than standing beside it. Everything unprompted still comes through here, so there is one
+    answer to *where does this go* and not two: a second path would be a second place for the
+    decision to be made differently, and the two would disagree the day either was changed.
+
+    **Named as plain strings rather than as a type of this layer's**, because the caller that has
+    one is `schedules`, which this layer may not import and which may not import this layer. The
+    layer allowed to see both — `gateways.host` — is what carries the three across, exactly as it
+    already carries `firing.Telling`.
+
+    **A named destination is never widened into the notified channel.** Where `channel` says
+    something, that channel is the answer whatever the agent is notified on, and where it says
+    nothing the agent's own is. There is deliberately no fallback between them: a report that quietly
+    went to the notified channel because a target could not be used is a report the owner was not
+    looking for, which reads exactly like a schedule that never ran.
     """
+    if channel:
+        # Refused rather than guessed at. The records refuse both ids and `schedules.due.target_of`
+        # refuses neither, so reaching here with either is a caller that built one by hand.
+        if bool(sender) == bool(place):
+            raise ValueError(
+                "a named destination is one person's direct message or one place, never both and "
+                "never neither")
+        return Telling(channel, "", split(saying, at_most), Aimed(sender=sender, place=place))
     told = kept.told(agent)
     if told is None or not told.get("notify_place"):
         return None

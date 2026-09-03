@@ -1352,6 +1352,96 @@ class TalkingToOne(Hosting):
         self.assertEqual([False, False, True], [bool(one.get("files")) for one in delivered])
 
 
+class WhereADeliveryIsAimed(Hosting):
+    """R-CH-46. One destination named per delivery, superseding the channel's own recorded place.
+
+    rundesk holds no platform credential, so a sender id cannot be turned into the conversation that
+    person reads and a place id is not the string an adapter composed for a place. Both cross as the
+    ids themselves and the adapter answers *where* — which is why what these cases read is the
+    record the adapter really received.
+    """
+
+    def delivered(self, how_many=1):
+        """Every `deliver` record the adapter really got, once they have all arrived."""
+        self.assertTrue(support.waited_until(
+            lambda: len([one for one in self.what_it_was_told()
+                         if one.get("do") == "deliver"]) == how_many, PATIENCE),
+            "the deliveries never reached the adapter")
+        return [one for one in self.what_it_was_told() if one.get("do") == "deliver"]
+
+    def test_a_named_place_crosses_as_a_place(self):
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        self.assertTrue(hosting.told(self.agent, self.where, watching, "discord", "", ["the retro"],
+                                     to_place="C0OPS", notice=True))
+        self.assertEqual({"place": "C0OPS"}, self.delivered()[0]["to"])
+
+    def test_a_named_person_crosses_as_a_person(self):
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        hosting.told(self.agent, self.where, watching, "discord", "", ["the brief"],
+                     to_sender="2207", notice=True)
+        self.assertEqual({"sender": "2207"}, self.delivered()[0]["to"])
+
+    def test_an_ordinary_delivery_names_no_destination_at_all(self):
+        # Absent stays absent: an adapter that never heard of the field goes on delivering to
+        # `place`, which is every delivery this product made before the field existed.
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        hosting.told(self.agent, self.where, watching, "discord", "1180", ["gateway up"],
+                     notice=True)
+        self.assertNotIn("to", self.delivered()[0])
+
+    def test_every_piece_of_a_long_report_carries_the_destination(self):
+        # **The one thing a first-piece-only rule would get wrong.** The quote and the cost belong
+        # to the first message of an answer; *where the answer goes* belongs to all of them, and a
+        # second piece landing in the notified channel is the whole failure this prevents.
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        hosting.told(self.agent, self.where, watching, "discord", "", ["first", "second", "third"],
+                     to_place="C0OPS", notice=True)
+        for record in self.delivered(3):
+            self.assertEqual({"place": "C0OPS"}, record["to"])
+
+    def test_a_threaded_report_asks_for_a_thread_and_names_it(self):
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        hosting.told(self.agent, self.where, watching, "discord", "", ["the retro"],
+                     to_place="C0OPS", answering="8841", threaded="weekly-retro", notice=True)
+        record = self.delivered()[0]
+        self.assertEqual("weekly-retro", record["threaded"])
+        self.assertEqual("8841", record["reply_to"])
+
+    def test_a_thread_anchor_goes_on_every_piece_and_a_quote_does_not(self):
+        # A `reply_to` alone means *quote this*, which is worth saying once. Beside `threaded` it
+        # means *the thread hanging off this*, and a piece without it would leave half a report in
+        # the room the thread was opened out of.
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        hosting.told(self.agent, self.where, watching, "discord", "", ["first", "second"],
+                     to_place="C0OPS", answering="8841", threaded="weekly-retro", notice=True)
+        for record in self.delivered(2):
+            self.assertEqual("8841", record["reply_to"])
+            self.assertEqual("weekly-retro", record["threaded"])
+
+    def test_a_thread_is_never_asked_for_with_nothing_to_hang_it_off(self):
+        # A run that could not announce reports unanchored, which is survivable and documented. A
+        # thread anchored on nothing is a request no platform can answer, and sending it would turn
+        # that unanchored report into a refused one.
+        self.an_adapter()
+        self.a_channel(told=True)
+        watching = self.hosting_now()
+        hosting.told(self.agent, self.where, watching, "discord", "", ["the retro"],
+                     to_place="C0OPS", answering=None, threaded="weekly-retro", notice=True)
+        self.assertNotIn("threaded", self.delivered()[0])
+
+
 class WhatCredentialAnAdapterIsStartedWith(Hosting):
     """Per-agent resolution, proved through a real child's own environment.
 

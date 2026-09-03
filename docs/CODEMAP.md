@@ -47,12 +47,11 @@ Twenty-one public groups — `status`, `version`, `configure`, `agents`, `gatewa
 Flat, concrete, and product-agnostic. Imports only the standard library and its own siblings, carries
 no product terms, and keeps an accurate table in its `__init__.py`.
 
-## Migrations (src/rundesk/agents/steps/ — 13; src/rundesk/lifecycle/steps/ — 0)
+## Migrations (src/rundesk/agents/steps/ — 14; src/rundesk/lifecycle/steps/ — 0)
 
 Numbered, discovered, and **immutable once shipped** — never renumbered, renamed, or edited. The
 agent steps run from `0001_the_records_an_agent_keeps` to
-`0013_the_models_a_turn_knows_and_the_counters_it_keeps`. The lifecycle registry exists and holds no
-shipped step yet.
+`0014_where_one_schedule_reports`. The lifecycle registry exists and holds no shipped step yet.
 
 ## Adapters (src/ — 6)
 
@@ -69,7 +68,7 @@ Being extensionless is why a directory-scanning lint does not see them.
 | `src/skills/` | the bundled `rundesk` catalog: `manifest.json` and 4 packages — `delegating-work`, `managing-github`, `managing-rundesk`, `writing-skills` |
 | `src/templates/` | the agent home: an `AGENTS.md`/`CLAUDE.md` pair placed from one source, `MEMORY.md`, and purpose-named area templates for plans, research, retros, scripts, and tasks |
 
-## Tests (tests/ — 86 suites, 3 support modules)
+## Tests (tests/ — 87 suites, 3 support modules)
 
 Directly runnable `unittest` suites. `tests/support.py` gives every case a temporary root, asserts
 that Rundesk resolved that root before the case runs, and points the proxy variables at a closed port
@@ -86,7 +85,7 @@ agent-guide heading contract, and the repository template digests.
 ## Documentation (docs/)
 
 Three files at the root — `README.md`, `BRIEF.md`, `CODEMAP.md` — and every other page in a home:
-`api/` (10 pages), `concepts/` (12), `guides/` (8), `extending/` (3), `requirements/` (8),
+`api/` (10 pages), `concepts/` (12), `guides/` (8), `extending/` (3), `requirements/` (9),
 `research/` (33), plus `assets/`. Each home carries its own index.
 
 ## Repository configuration (root)
