@@ -9,11 +9,12 @@ half-written, or quietly absent has failed at the only moment it existed for.
 
 ## A copy that did not finish is never named like one that did
 
-Every data snapshot and archive is built under a `.incoming` name, and the archive is renamed into
-place only once all of it is there and verified. Nothing in `backups/` under a copy's name is ever
-partial. This is the layer's shared convention and the reasoning is in `lifecycle/__init__.py`; it
-matters more here than anywhere else it is used, because a half-copy that is *named* like a finished
-one is worse than no copy at all — it is the one that gets restored.
+Every data snapshot is built in a private directory on the configured backup filesystem. Its ZIP is
+written beside the destination under a `.incoming` name through an interface that cannot seek, then
+verified there and renamed into place. Nothing in `backups/` under a copy's name is ever partial.
+This is the layer's shared convention and the reasoning is in `lifecycle/__init__.py`; it matters
+more here than anywhere else it is used, because a half-copy that is *named* like a finished one is
+worse than no copy at all — it is the one that gets restored.
 
 ## Putting one back keeps what it replaces
 
@@ -99,7 +100,7 @@ import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Callable, ContextManager, Dict, Iterator, List, NamedTuple, Optional, Tuple
+from typing import BinaryIO, Callable, ContextManager, Dict, Iterator, List, NamedTuple, Optional, Tuple
 
 from rundesk.agents import directory, records
 from rundesk.agents import migration as agent_migration
@@ -296,9 +297,9 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
          when: Optional[datetime] = None, saying: Optional[Callable[[str], None]] = None) -> str:
     """Copy what the owner keeps, and hand back what the copy is called.
 
-    The consistent directory snapshot and its archive are staged under names no copy has. Only the
-    verified archive is renamed into place, so an interruption leaves litter rather than a copy that
-    is not one.
+    The consistent directory snapshot is staged on the backup filesystem. Its archive is written
+    there without seeking under a name no copy has, verified, and only then renamed into place, so
+    an interruption leaves litter rather than a copy that is not one.
 
     **Every agent's records in the copy are a snapshot SQLite itself took**, not the bytes of a file
     somebody may be writing to — see the module docstring on why this is consistent rather than
@@ -323,36 +324,72 @@ def save(data: Optional[Path] = None, backups: Optional[Path] = None,
 
     at.mkdir(parents=True, exist_ok=True)
     with _one_at_a_time(at.parent):
+        _destination_ready(at)
         # The name and the staging under it are one decision: worked out separately, two callers
         # land on the same second, stage into the same directory, and discard each other's work.
         name = named(when, at)
-        pending = files.incoming_of(at / name[:-4])
         archive = files.incoming_of(at / name)
-        files.discard(pending)
         files.discard(archive)
-        vanished: List[str] = []
         try:
-            shutil.copytree(
-                from_where, pending, symlinks=True,
-                ignore=_without_provider_accounts(from_where),
-                copy_function=_copying(from_where, vanished, said))
-            _without_update_intents(pending)
-            # **Before the rename, so a copy is never named like one until every database in it is
-            # a snapshot.** After it, the window between a copy appearing under its own name and
-            # its records being made consistent is a window a restore can happen in.
-            _snapshotted(from_where, pending, said)
-            _private_secrets(pending / "secrets")
-            _packed(pending, archive, when, vanished)
-            _verified(archive)
+            # Large staging belongs on the configured filesystem: relocating backups must also
+            # relocate the capacity boundary. The ZIP writer below does not seek, so this remains
+            # safe for cloud-backed destinations that reject ZIP's usual header rewrites.
+            with tempfile.TemporaryDirectory(
+                    prefix=".rundesk-backup-", dir=str(at)) as staging:
+                pending = Path(staging) / "data"
+                vanished: List[str] = []
+                shutil.copytree(
+                    from_where, pending, symlinks=True,
+                    ignore=_without_provider_accounts(from_where),
+                    copy_function=_copying(from_where, vanished, said))
+                _without_update_intents(pending)
+                # **Before the rename, so a copy is never named like one until every database in it
+                # is a snapshot.** After it, the window between a copy appearing under its own name
+                # and its records being made consistent is a window a restore can happen in.
+                _snapshotted(from_where, pending, said)
+                _private_secrets(pending / "secrets")
+                _packed(pending, archive, when, vanished)
+                _verified(archive)
+            # The staging directory owns cleanup through its context. Publish only after that
+            # cleanup succeeds, or a cleanup failure would report no copy while leaving this name.
             os.rename(archive, at / name)
         except BaseException:
-            # `BaseException`: a Ctrl-C, or a closed terminal turned into one, is not an
-            # `Exception`, and this leaves a staging entry rather than a copy either way.
-            files.discard(pending)
+            # A Ctrl-C or a destination failure may leave staging litter, but never a finished name.
             files.discard(archive)
             raise
-        files.discard(pending)
     return name
+
+
+def _destination_ready(at: Path) -> None:
+    """Prove a destination can write, reread and rename before the expensive snapshot begins.
+
+    A cloud-backed directory may be immediately listable and still refuse the final rename. A tiny
+    probe exercises the same destination-side operations first, so that refusal costs no archive
+    construction and tells the owner how to choose another location.
+    """
+    staged: Optional[Path] = None
+    landed: Optional[Path] = None
+    try:
+        descriptor, name = tempfile.mkstemp(
+            prefix=".rundesk-backup-probe.", suffix=".incoming", dir=str(at))
+        staged = Path(name)
+        landed = staged.with_suffix("")
+        with os.fdopen(descriptor, "w+b") as writing:
+            writing.write(b"rundesk backup destination probe\n")
+            writing.flush()
+            os.fsync(writing.fileno())
+        os.rename(staged, landed)
+        if landed.read_bytes() != b"rundesk backup destination probe\n":
+            raise OSError("the probe could not be read back")
+    except OSError as why:
+        raise Refused(
+            f"the backups location {location(at)} cannot finish a copy safely: {why} — choose "
+            "another with: rundesk backups set-location <path>") from why
+    finally:
+        if staged is not None:
+            files.discard(staged)
+        if landed is not None:
+            files.discard(landed)
 
 
 def _copying(from_where: Path, vanished: List[str], said: Callable[[str], None]
@@ -371,6 +408,19 @@ def _copying(from_where: Path, vanished: List[str], said: Callable[[str], None]
     return copy
 
 
+class _SequentialArchive:
+    """A write-only ZIP destination that cannot expose the seek operation cloud storage rejects."""
+
+    def __init__(self, stream: BinaryIO) -> None:
+        self.stream = stream
+
+    def write(self, content: bytes) -> int:
+        return self.stream.write(content)
+
+    def flush(self) -> None:
+        self.stream.flush()
+
+
 def _packed(data: Path, archive: Path, when: Optional[datetime], vanished: List[str]) -> None:
     """Pack a finished staged data tree with the metadata restore needs to reproduce it."""
     made = when or datetime.now(timezone.utc)
@@ -383,9 +433,13 @@ def _packed(data: Path, archive: Path, when: Optional[datetime], vanished: List[
     }
     # Private from the first byte, not tightened afterwards: this archive carries sealed values and
     # the key that opens them, so a permissive umask must never create a readable window.
-    descriptor = os.open(archive, os.O_CREAT | os.O_EXCL | os.O_RDWR, files.ONLY_MINE)
-    with os.fdopen(descriptor, "w+b") as stream:
-        with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as opened:
+    descriptor = os.open(archive, os.O_CREAT | os.O_EXCL | os.O_WRONLY, files.ONLY_MINE)
+    with os.fdopen(descriptor, "wb") as stream:
+        # Without tell or seek, ZipFile emits data descriptors and writes its central directory
+        # forward. Passing the filesystem stream itself makes it rewrite earlier headers, which
+        # cloud-backed files can reject with EDEADLK after accepting every write before it.
+        with zipfile.ZipFile(
+                _SequentialArchive(stream), "w", compression=zipfile.ZIP_DEFLATED) as opened:
             _written(opened, MANIFEST,
                      json.dumps(manifest, indent=2, sort_keys=True).encode() + b"\n",
                      stat.S_IFREG | 0o600, made)
@@ -402,6 +456,8 @@ def _packed(data: Path, archive: Path, when: Optional[datetime], vanished: List[
                     _written_file(opened, under, one, mode, made)
                 else:
                     raise Refused(f"{one} is not a file, directory or link and cannot be copied")
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 def _zip_time(stamp: float, fallback: datetime) -> Tuple[int, int, int, int, int, int]:
@@ -619,6 +675,9 @@ def prune(keeping: int, backups: Optional[Path] = None,
     What it could not remove is returned rather than raised: the copy the caller asked for has
     already landed, and turning that into a failure would report the wrong outcome for the operation
     somebody actually ran. It still has to be said out loud, which is what returning it is for.
+
+    Failure to finish the validation pass is different: nothing is removed, and the refusal lets the
+    command report that the copy was saved while retention was not applied.
     """
     if keeping < 1:
         raise Refused(f"keeping fewer than one copy is not a retention, and was {keeping}")
@@ -636,7 +695,12 @@ def prune(keeping: int, backups: Optional[Path] = None,
     # is not a decision this command is entitled to make. `save` says when it has made one.
     stuck = []
     with _one_at_a_time(at.parent):
-        for name in [one for one in kept(at) if restorable(at, one)][keeping:]:
+        try:
+            copies = [one for one in kept(at) if restorable(at, one)]
+        except OSError as why:
+            raise Refused(f"retention could not be applied because its temporary validation "
+                          f"copy could not be cleaned up: {why}") from why
+        for name in copies[keeping:]:
             try:
                 files.remove_one(at / name)
                 said(f"let go of {name}")
@@ -649,12 +713,14 @@ def restorable(at: Path, name: str) -> bool:
     """Whether this copy could actually be put back, as opposed to merely being named like one.
 
     The question retention has to ask before it lets anything go, and the question a listing has to
-    ask before it lets somebody believe they are covered.
+    ask before it lets somebody believe they are covered. A structural refusal answers ``False``;
+    an operational failure, including cleanup of a disposable extraction, remains a failure rather
+    than reclassifying a valid copy.
     """
     try:
         with _opened_copy(at, name):
             pass
-    except (Refused, OSError):
+    except Refused:
         return False
     return True
 
@@ -914,7 +980,10 @@ def _opened_copy(at: Path, name: str) -> Iterator[Path]:
         yield where
         return
 
-    with tempfile.TemporaryDirectory(prefix="rundesk-restore-") as held:
+    # Retention opens copies through this path immediately after a save. Keep that validation on
+    # the configured filesystem too, or pruning can consume a second snapshot's worth of ambient
+    # temporary space after the destination-side save has succeeded.
+    with tempfile.TemporaryDirectory(prefix=".rundesk-restore-", dir=str(at)) as held:
         root = Path(held)
         try:
             with zipfile.ZipFile(where) as opened:

@@ -15,11 +15,13 @@ Run directly: `python3 tests/test_backups.py`
 
 import argparse
 import contextlib
+import errno
 import io
 import json
 import os
 import shutil
 import sqlite3
+import tempfile
 import unittest
 import warnings
 import zipfile
@@ -322,10 +324,95 @@ class MakingOne(Copies):
         self.assertEqual([], self.entries())
 
     def test_a_copy_that_could_not_be_renamed_into_place_leaves_nothing_named(self):
-        with mock.patch.object(backups.os, "rename", side_effect=OSError("no")):
+        renamed = os.rename
+
+        def not_the_finished_name(source, target):
+            if Path(target) == self.at / ITS_ARCHIVE:
+                raise OSError("no")
+            return renamed(source, target)
+
+        with mock.patch.object(backups.os, "rename", side_effect=not_the_finished_name):
             with self.assertRaises(OSError):
                 backups.save(self.data, self.at, A_MOMENT)
         self.assertEqual([], self.entries())
+
+    def test_relocation_keeps_large_staging_off_an_exhausted_system_temporary_directory(self):
+        config.stated("backup_retention", 1, self.data)
+        self.given_copy("2026-08-03T03-00-00Z")
+        temporary_directory = tempfile.TemporaryDirectory
+
+        def destination_has_the_capacity(*args, dir=None, **options):
+            if dir is None:
+                raise OSError(errno.ENOSPC, "system temporary storage is full")
+            self.assertEqual(self.at.resolve(), Path(dir).resolve())
+            return temporary_directory(*args, dir=dir, **options)
+
+        with mock.patch.object(
+                backups.tempfile, "TemporaryDirectory", side_effect=destination_has_the_capacity):
+            code, out, err = self.rundesk("backups", "save")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("saved", out)
+        kept = backups.kept(self.at)
+        self.assertEqual(1, len(kept))
+        self.assertNotIn("2026-08-03T03-00-00Z", kept)
+        self.assertEqual(kept, self.entries())
+
+    def test_a_cloud_location_that_rejects_zip_seeks_receives_a_verified_copy(self):
+        fdopen = os.fdopen
+        seeks = []
+
+        class CloudFile:
+            def __init__(self, stream):
+                self.stream = stream
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, kind, value, traceback):
+                self.stream.close()
+
+            def __getattr__(self, name):
+                return getattr(self.stream, name)
+
+            def seek(self, offset, whence=0):
+                seeks.append((offset, whence))
+                if len(seeks) > 1:
+                    raise OSError(errno.EDEADLK, "Resource deadlock avoided")
+                return self.stream.seek(offset, whence)
+
+        def cloud_file(descriptor, mode, *args, **options):
+            stream = fdopen(descriptor, mode, *args, **options)
+            return CloudFile(stream) if mode == "wb" else stream
+
+        with mock.patch.object(backups.os, "fdopen", side_effect=cloud_file):
+            name = backups.save(self.data, self.at, A_MOMENT)
+
+        self.assertEqual([], seeks, "archive construction sought on its destination")
+        self.assertEqual([ITS_ARCHIVE], backups.kept(self.at))
+        with self.opened_copy(name) as copied:
+            self.assertEqual("what the owner keeps", (copied / "marker.txt").read_text())
+
+    def test_a_location_that_cannot_finalize_is_refused_before_archive_construction(self):
+        self.given_copy("2026-08-03T03-00-00Z")
+        renamed = os.rename
+
+        def cloud_refuses_rename(source, target):
+            if Path(source).name.startswith(".rundesk-backup-probe."):
+                raise OSError(errno.EDEADLK, "Resource deadlock avoided")
+            return renamed(source, target)
+
+        with mock.patch.object(backups.os, "rename", side_effect=cloud_refuses_rename), \
+             mock.patch.object(backups, "_packed", wraps=backups._packed) as packed:
+            code, out, err = self.rundesk("backups", "save")
+
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("cannot finish a copy safely", err)
+        self.assertIn("rundesk backups set-location <path>", err)
+        packed.assert_not_called()
+        self.assertEqual(["2026-08-03T03-00-00Z"], backups.kept(self.at))
+        self.assertEqual(["2026-08-03T03-00-00Z"], self.entries())
 
     def test_it_removes_nothing(self):
         # Letting go of old copies is `prune`, asked for separately — so that the copy a restore
@@ -924,9 +1011,12 @@ class WhenPuttingOneBackGoesWrong(Copies):
         really = os.rename
 
         def only_the_safety_copy_and_the_move_aside(src, dst):
-            # Three renames reach here: the safety copy landing, `data/` moving aside, and the
-            # restored copy moving in. Failing from the third on means the swap is half done *and*
-            # putting it back fails too, which is the only route to `HalfRestored`.
+            if Path(src).name.startswith(".rundesk-backup-probe."):
+                return really(src, dst)
+            # Apart from the early destination probe, three renames reach here: the safety copy
+            # landing, `data/` moving aside, and the restored copy moving in. Failing from the third
+            # on means the swap is half done *and* putting it back fails too, the only route to
+            # `HalfRestored`.
             calls.append(src)
             if len(calls) <= 2:
                 return really(src, dst)
@@ -1924,6 +2014,97 @@ class TheCommand(Copies):
         self.rundesk("backups", "save")
         self.assertEqual(1, len(backups.kept(self.at)))
         self.assertNotIn("2020-01-01T00-00-00Z", backups.kept(self.at))
+
+    def test_save_staging_cleanup_failure_leaves_no_finished_copy_or_retention_claim(self):
+        config.stated("backup_retention", 1, self.data)
+        old = self.given_copy("2020-01-01T00-00-00Z")
+        temporary_directory = tempfile.TemporaryDirectory
+
+        class CleanupFails:
+            def __init__(self, *args, **options):
+                self.temporary = temporary_directory(*args, **options)
+
+            def __enter__(self):
+                return self.temporary.__enter__()
+
+            def __exit__(self, kind, value, traceback):
+                self.temporary.__exit__(kind, value, traceback)
+                raise OSError("save staging cleanup failed")
+
+        def staging_cleanup_fails(*args, prefix=None, **options):
+            constructor = CleanupFails if prefix == ".rundesk-backup-" else temporary_directory
+            return constructor(*args, prefix=prefix, **options)
+
+        with mock.patch.object(
+                backups.tempfile, "TemporaryDirectory", side_effect=staging_cleanup_fails):
+            code, out, err = self.rundesk("backups", "save")
+
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("save staging cleanup failed", err)
+        self.assertIn("no copy was made", err)
+        self.assertTrue(old.is_dir(), "the existing copy was removed")
+        self.assertEqual([old.name], self.entries(), "a finished new copy was left behind")
+        self.assertNotIn("let go of", out + err)
+
+    def test_retention_cleanup_failure_reports_that_no_copy_was_let_go(self):
+        config.stated("backup_retention", 1, self.data)
+        old = self.given_copy("2020-01-01T00-00-00Z")
+        temporary_directory = tempfile.TemporaryDirectory
+
+        class CleanupFails:
+            def __init__(self, *args, **options):
+                self.temporary = temporary_directory(*args, **options)
+
+            def __enter__(self):
+                return self.temporary.__enter__()
+
+            def __exit__(self, kind, value, traceback):
+                self.temporary.__exit__(kind, value, traceback)
+                raise OSError("retention extraction cleanup failed")
+
+        def retention_cleanup_fails(*args, prefix=None, **options):
+            constructor = CleanupFails if prefix == ".rundesk-restore-" else temporary_directory
+            return constructor(*args, prefix=prefix, **options)
+
+        with mock.patch.object(
+                backups.tempfile, "TemporaryDirectory", side_effect=retention_cleanup_fails):
+            code, out, err = self.rundesk("backups", "save")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("saved", out)
+        self.assertIn("retention extraction cleanup failed", err)
+        self.assertIn("the copy was saved and nothing was let go", err)
+        self.assertTrue(old.is_dir(), "retention ran after its validation cleanup failed")
+        self.assertEqual(2, len(backups.kept(self.at)))
+        self.assertNotIn("let go of", out + err)
+
+    def test_retention_archive_read_failure_preserves_every_copy_and_reports_it(self):
+        config.stated("backup_retention", 1, self.data)
+        oldest = self.given_copy("2020-01-01T00-00-00Z")
+        newer = self.given_copy("2021-01-01T00-00-00Z")
+        zip_file = zipfile.ZipFile
+
+        def finished_archive_temporarily_unreadable(file, *args, **options):
+            if isinstance(file, (str, os.PathLike)):
+                path = Path(file)
+                if path.parent == self.at and path.name.endswith(".zip"):
+                    raise OSError("the finished archive is temporarily unreadable")
+            return zip_file(file, *args, **options)
+
+        with mock.patch.object(
+                backups.zipfile, "ZipFile", side_effect=finished_archive_temporarily_unreadable):
+            code, out, err = self.rundesk("backups", "save")
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("saved", out)
+        self.assertTrue(oldest.is_dir(), "the oldest copy was deleted after incomplete validation")
+        self.assertTrue(newer.is_dir(), "the newer existing copy was deleted")
+        saved = [one for one in self.entries() if one.endswith(".zip")]
+        self.assertEqual(1, len(saved), "the successfully saved copy was not preserved")
+        self.assertIn("the finished archive is temporarily unreadable", err)
+        self.assertIn("the copy was saved and nothing was let go", err)
+        self.assertNotIn("let go of", out + err)
 
     def test_save_reports_the_copy_even_when_the_retention_cannot_be_read(self):
         # The operation asked for was a copy, and the copy is there. Reporting a failure it did not
