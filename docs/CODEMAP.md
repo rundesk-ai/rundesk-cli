@@ -88,7 +88,7 @@ agent-guide heading contract, and the repository template digests.
 ## Documentation (docs/)
 
 Three files at the root — `README.md`, `BRIEF.md`, `CODEMAP.md` — and every other page in a home:
-`api/` (10 pages), `concepts/` (12), `guides/` (8), `extending/` (3), `requirements/` (11),
+`api/` (10 pages), `concepts/` (12), `guides/` (8), `extending/` (3), `requirements/` (12),
 `research/` (33), plus `assets/`. Each home carries its own index.
 
 ## Repository configuration (root)

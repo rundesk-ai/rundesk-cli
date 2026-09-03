@@ -364,7 +364,9 @@ def _needs_confirming(name: str, at: Path, data: Path) -> int:
     """
     try:
         backups._a_copy(at, name)
-    except backups.Refused as why:
+    except (backups.Refused, OSError) as why:
+        # `OSError` since a copy that cannot be reached for a moment stopped being read as *not a
+        # copy* — see `_a_copy`. Here the only honest answer is the same one: nothing was restored.
         return _failed(str(why), "nothing was restored")
 
     try:

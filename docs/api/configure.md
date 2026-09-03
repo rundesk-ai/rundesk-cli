@@ -121,12 +121,19 @@ saved 2026-08-04T03-00-00Z.zip
         let go of 2026-07-21T03-00-00Z.zip
 ```
 
-The data is first made consistent in a private staging directory, then written beneath `data/` in an
-archive with a root `manifest.json`. The manifest records the backup format and version, when it was
-made, and any source file removed by supported concurrent cleanup before its turn to be copied. That
-file is omitted and named in the command output rather than making every other healthy file go
-uncopied. Other read errors still fail the save. The archive is verified and renamed into place only
-once all of it is there, so an interruption never leaves a finished `.zip` name on a partial copy.
+The destination is first proved able to write, reread, and rename a small private file. A refusal is
+therefore reported before the expensive work, with the command for choosing another location. The
+data is then made consistent in a private directory on that destination, so moving the backup
+location also moves the storage capacity the save depends on. The archive has a root `manifest.json`.
+The manifest records the backup format and version, when it was made, and any source file removed by
+supported concurrent cleanup before its turn to be copied. That file is omitted and named in the
+command output rather than making every other healthy file go uncopied. Other read errors still fail
+the save.
+
+The archive is written forward without seeking under a private `.incoming` name at the destination,
+verified there, and renamed only after the complete copy has landed. This avoids the header rewrites
+cloud-backed storage can reject. A destination failure preserves every existing copy and never
+leaves a partial archive under a finished `.zip` name.
 
 File and directory modes are recorded explicitly, and symbolic links remain links rather than
 copies of what they point at.
@@ -138,7 +145,10 @@ somebody who can read it.
 It then lets go of the oldest past `backup_retention`. **This is the only thing in rundesk that
 removes a copy**, it considers only names that are copies, and a copy it could not remove is said out
 loud — but neither changes the exit code, because the operation asked for was a copy and the copy is
-there.
+there. Retention validates the copies before it removes any. If that validation cannot finish
+cleanly, including cleanup of its private extraction, it removes none and says that the copy was
+saved while nothing was let go; the operational failure is never treated as proof that a copy is
+unrestorable.
 
 ### backups restore
 

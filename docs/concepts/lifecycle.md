@@ -79,10 +79,23 @@ A copy is the whole of `data/` under a name that says when it was made. **A copy
 somebody reaches for on the worst day they have had with this product**, so anything that leaves one
 damaged, half-written or quietly absent has failed at the only moment it existed for.
 
-- **A copy that did not finish is never named like one that did.** Every snapshot is built under an
-  `.incoming` name and renamed into place only once all of it is there and verified. A half-copy
-  named like a finished one is worse than no copy — it is the one that gets restored.
+- **A copy that did not finish is never named like one that did.** The snapshot is staged privately
+  on the configured backup filesystem, keeping that location as the save's capacity boundary. Its
+  ZIP is written forward without seeking under an `.incoming` name, verified there, and renamed only
+  once all of it has landed. A half-copy named like a finished one is worse than no copy — it is the
+  one that gets restored.
+- **A destination that cannot safely finalize a copy is refused before construction.** A small
+  private probe proves write, reread, and rename first and points the owner to `backups set-location`
+  when any of them fails. Existing copies are untouched.
+- **Retention removes nothing unless its validation pass finishes cleanly.** A failure to clean up a
+  private extraction is reported as an operational failure, not as proof that the verified archive
+  is unrestorable; the new copy remains and the command says that nothing was let go.
 - **Putting one back keeps what it replaces**, so a restore from the wrong name is recoverable.
+- **A copy an update takes before carrying is pruned like any other, and only afterwards.** Retention
+  runs once the settle has succeeded, so the rollback copy stands for as long as anything could need
+  it and an install that keeps seven never holds fifty. A failed settle prunes nothing.
+- **A copy that cannot be reached for a moment is not a copy that failed.** Only the shape of the
+  bytes makes an archive unrestorable; a read error ends the retention pass with nothing removed.
 - New copies are compressed archives; v0.40 directory copies remain valid restore inputs.
 - **A backup excludes provider-owned credential homes**, and carries the sealed value store and its
   key. Protect its location as credential-bearing data.

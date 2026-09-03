@@ -508,6 +508,7 @@ def settle(gateways: Optional[Gateways] = None) -> int:
     somehow got here without saying ends loudly rather than booting out the owner's own jobs.
     """
     fresh = not config.where(paths.data()).exists()
+    kept = ""
     try:
         # Inside the guard, not before it. Laying the directories down is filesystem work like
         # everything below it — a stray *file* where a directory belongs raises, and outside the
@@ -541,6 +542,12 @@ def settle(gateways: Optional[Gateways] = None) -> int:
         scheduled = automatic_updates.reconcile()
         if scheduled.how == job.CANNOT_TELL:
             return _failed(f"automatic update scheduling could not be reconciled — {scheduled.why}")
+        # **Last, and only once everything above has succeeded.** The copy taken before carrying
+        # is the way back from every line between there and here, so it is let go of by retention
+        # only when nothing needs it any more — a failed settle returns above with every copy in
+        # place, and the one it names is still there to restore.
+        if kept:
+            _retention_applied()
     except (CouldNotKeep, config.Unreadable, config.Stuck, migration.Broken, OSError) as why:
         # Every write below `settle` goes through the configuration, including the stamp each
         # migration step lands with, so all of these are caught in one place rather than at each
@@ -697,6 +704,31 @@ def _said(gone_wrong: Dict[str, str]) -> str:
     an owner has to look at, and each of these sentences already begins with the agent's own name.
     """
     return "; ".join(gone_wrong[name] for name in sorted(gone_wrong))
+
+
+def _retention_applied() -> None:
+    """Let go of the oldest copies past `backup_retention`, now that the update has landed.
+
+    **The copy a settle takes is a copy like any other, and it counted against nothing** (R-BKP-5).
+    `backups save` prunes after it saves; the pre-migration copy was saved by `_kept_before_carrying`
+    and pruned by nobody, so an install configured to keep seven held fifty — one per update that
+    had a step to carry — and the setting that promised a bound was a bound on the manual path
+    alone. Applied here, after the whole settle succeeded, so the newest copy is the one just taken
+    and the rollback boundary is never pruned from under a settle still in flight (R-BKP-6).
+
+    **Never a failure of the update.** The update landed; what did not happen is housekeeping, and
+    a refusal — a copy that could not be checked, a retention nobody can read — is said in the
+    settle's own output, where `backups save` would have said it too, and changes nothing else.
+    """
+    data = paths.data()
+    try:
+        keeping = int(config.read(data)["backup_retention"])
+        stuck = backups.prune(keeping, saying=_out_loud)
+    except (config.Unreadable, backups.Refused, TypeError, ValueError, OSError) as why:
+        _out_loud(f"the copy was kept and nothing was let go — {why}")
+        return
+    for one in stuck:
+        _out_loud(f"{one} is past the {keeping} copies you keep and would not be removed")
 
 
 def _kept_before_carrying() -> str:

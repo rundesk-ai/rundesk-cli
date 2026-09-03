@@ -10,6 +10,7 @@ topic page — and it does not argue for the design. Every file takes the same c
 | Contract | What it owns |
 |---|---|
 | [agent-delegation.md](./agent-delegation.md) | One agent's ask of another, and the answer it returns |
+| [backup-copies.md](./backup-copies.md) | A copy of what the owner keeps, and how many of them stand |
 | [channel-adapter.md](./channel-adapter.md) | The seam a channel adapter is reached through |
 | [channel-messaging.md](./channel-messaging.md) | A channel conversation, and the work that arrives on it |
 | [channel-search.md](./channel-search.md) | Searching the platforms an agent is connected to |
