@@ -1657,6 +1657,10 @@ def _a_handle(said: Any) -> str:
     tokens of which at most one is a handle. So a handle is exactly one token inside the bound or it
     is nothing — and nothing means the brain is told the name alone, as it always was.
     """
+    if not isinstance(said, str):
+        # A list or a number would stringify into something with no space in it, and `str(["x"])`
+        # is not a handle for anybody — so the type is asked before the shape is.
+        return ""
     token = _flattened(said, A_MENTION_AT_MOST + 1)
     if not token or " " in token or len(token) > A_MENTION_AT_MOST:
         return ""
