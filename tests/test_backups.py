@@ -341,11 +341,11 @@ class MakingOne(Copies):
         self.given_copy("2026-08-03T03-00-00Z")
         temporary_directory = tempfile.TemporaryDirectory
 
-        def destination_has_the_capacity(*args, dir=None, **options):
-            if dir is None:
+        def destination_has_the_capacity(*args, **options):
+            if options.get("dir") is None:
                 raise OSError(errno.ENOSPC, "system temporary storage is full")
-            self.assertEqual(self.at.resolve(), Path(dir).resolve())
-            return temporary_directory(*args, dir=dir, **options)
+            self.assertEqual(self.at.resolve(), Path(options["dir"]).resolve())
+            return temporary_directory(*args, **options)
 
         with mock.patch.object(
                 backups.tempfile, "TemporaryDirectory", side_effect=destination_has_the_capacity):
